@@ -8,6 +8,8 @@ mongoose.plugin(mongooseLeanVirtuals);
 export * from './models';
 export * from './seeds/seedModelPrices';
 export * from './seeds/generateModelPriceSeed';
+export * from './seeds/seedModelCatalog';
+export * from './seeds/generateModelCatalogSeed';
 export * from './queries/fabFileSearchQuery';
 export * from './queries/collectionSearchQuery';
 export * from '@bike4mind/db-core';

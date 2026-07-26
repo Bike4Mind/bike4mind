@@ -1,0 +1,3651 @@
+{
+  "generatedAt": "2026-07-26T22:16:13.918Z",
+  "notice": "Fallback defaults last maintained on 2026-07-26. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "entries": [
+    {
+      "modelId": "ai21.j2-mid-v1",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "ai21.j2-mid-v1",
+        "vendor": "ai21",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Jurassic-2 Mid",
+        "contextWindow": 8192,
+        "maxOutputTokens": 8192,
+        "canStream": false,
+        "supportsVision": false,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "AI21 Labs' balanced Jurassic-2 model offering good performance at moderate cost. Great for everyday tasks and general content generation.",
+        "logoFile": "AI21Labs.png",
+        "rank": 50
+      }
+    },
+    {
+      "modelId": "ai21.j2-ultra-v1",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "ai21.j2-ultra-v1",
+        "vendor": "ai21",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Jurassic-2 Ultra",
+        "contextWindow": 8192,
+        "maxOutputTokens": 8192,
+        "canStream": false,
+        "supportsVision": false,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "AI21 Labs' most powerful Jurassic-2 model with strong reasoning capabilities. Good for complex reasoning, creative tasks, and detailed analysis.",
+        "logoFile": "AI21Labs.png",
+        "rank": 50
+      }
+    },
+    {
+      "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 3.5 Sonnet",
+        "contextWindow": 200000,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-10-22"
+        },
+        "description": "Anthropic's highly capable Claude 3.5 Sonnet model via AWS Bedrock. Excellent for complex tasks requiring nuanced understanding.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 2,
+        "trainingCutoff": "2024-04-01"
+      }
+    },
+    {
+      "modelId": "anthropic.claude-3-haiku-20240307-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "anthropic.claude-3-haiku-20240307-v1:0",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 3 Haiku",
+        "contextWindow": 200000,
+        "maxOutputTokens": 4096,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's fast and efficient Claude 3 Haiku model via AWS Bedrock. Good balance of speed and capability with vision support.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 6,
+        "trainingCutoff": "2023-08-01"
+      }
+    },
+    {
+      "modelId": "claude-3-5-haiku-20241022",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-3-5-haiku-20241022",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 3.5 Haiku",
+        "contextWindow": 200000,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-02-19"
+        },
+        "description": "Anthropic's fast and efficient Claude 3.5 Haiku model with improved reasoning capabilities. Cost-effective for high-volume tasks.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 5,
+        "trainingCutoff": "2024-07-01"
+      }
+    },
+    {
+      "modelId": "claude-3-5-sonnet-20241022",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-3-5-sonnet-20241022",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 3.5 Sonnet",
+        "contextWindow": 200000,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-10-22"
+        },
+        "description": "Anthropic's balanced Claude 3.5 Sonnet model with enhanced capabilities and improved reasoning. Great all-around performance.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 2,
+        "trainingCutoff": "2024-04-01"
+      }
+    },
+    {
+      "modelId": "claude-3-7-sonnet-20250219",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-3-7-sonnet-20250219",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 3.7 Sonnet",
+        "contextWindow": 200000,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-10-28"
+        },
+        "description": "Anthropic's highly capable Claude 3.7 model with excellent reasoning and tool use. Great for complex tasks requiring nuanced understanding.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2024-11-01"
+      }
+    },
+    {
+      "modelId": "claude-3-opus-20240229",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-3-opus-20240229",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 3 Opus",
+        "contextWindow": 200000,
+        "maxOutputTokens": 4096,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-06-30"
+        },
+        "description": "Anthropic's top-tier Claude 3 model with exceptional reasoning and analysis capabilities. Best for research and complex intellectual tasks.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 4,
+        "isSlowModel": true,
+        "trainingCutoff": "2023-08-01"
+      }
+    },
+    {
+      "modelId": "claude-fable-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-fable-5",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude Fable 5",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's most capable model, built for complex, long-running asynchronous tasks. Sustains days-long agentic work and delivers notably stronger vision than prior Claude models.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "isSlowModel": true,
+        "trainingCutoff": "2026-01-01",
+        "releaseDate": "2026-07-01"
+      }
+    },
+    {
+      "modelId": "claude-haiku-4-5-20251001",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-haiku-4-5-20251001",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 4.5 Haiku",
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Claude 4.5 Haiku with Anthropic. Latest iteration with the fastest performance and reliability.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2025-07-01",
+        "releaseDate": "2025-10-16"
+      }
+    },
+    {
+      "modelId": "claude-opus-4-1-20250805",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-opus-4-1-20250805",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 4.1 Opus",
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Claude 4.1 Opus with Anthropic. Iteration with improved performance and reliability.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "isSlowModel": true,
+        "trainingCutoff": "2025-08-01",
+        "releaseDate": "2025-08-06"
+      }
+    },
+    {
+      "modelId": "claude-opus-4-20250514",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-opus-4-20250514",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 4 Opus",
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's most advanced Claude 4 model with hybrid reasoning and frontier intelligence. Excellent for coding, agentic search, and creative writing.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "isSlowModel": true,
+        "trainingCutoff": "2024-10-01",
+        "releaseDate": "2025-05-23"
+      }
+    },
+    {
+      "modelId": "claude-opus-4-5-20251101",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-opus-4-5-20251101",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 4.5 Opus",
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Claude 4.5 Opus with Anthropic. Top-tier extended thinking model with excellent performance for complex reasoning, coding, and creative tasks.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "isSlowModel": true,
+        "trainingCutoff": "2025-07-01",
+        "releaseDate": "2025-11-25"
+      }
+    },
+    {
+      "modelId": "claude-opus-4-6",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-opus-4-6",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 4.6 Opus",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's earlier flagship model. Claude 4.6 Opus delivers frontier intelligence with extended thinking, coding, and agentic capabilities.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "isSlowModel": true,
+        "trainingCutoff": "2025-08-01",
+        "releaseDate": "2026-02-06"
+      }
+    },
+    {
+      "modelId": "claude-opus-4-7",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-opus-4-7",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 4.7 Opus",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's previous flagship model. Claude 4.7 Opus delivers frontier intelligence with extended thinking, coding, and agentic capabilities.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "isSlowModel": true,
+        "trainingCutoff": "2026-01-31",
+        "releaseDate": "2026-04-17"
+      }
+    },
+    {
+      "modelId": "claude-opus-4-8",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-opus-4-8",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 4.8 Opus",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's previous flagship model. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities over 4.7.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "isSlowModel": true,
+        "trainingCutoff": "2026-01-01",
+        "releaseDate": "2026-05-28"
+      }
+    },
+    {
+      "modelId": "claude-opus-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-opus-5",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 5 Opus",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's latest flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "isSlowModel": true,
+        "releaseDate": "2026-07-24"
+      }
+    },
+    {
+      "modelId": "claude-sonnet-4-20250514",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-sonnet-4-20250514",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 4 Sonnet",
+        "contextWindow": 200000,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-06-01"
+        },
+        "description": "Anthropic's high-performance Claude 4 model optimized for balanced speed and capability. Excellent for coding and production workloads.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2024-10-01",
+        "releaseDate": "2025-05-23"
+      }
+    },
+    {
+      "modelId": "claude-sonnet-4-5-20250929",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-sonnet-4-5-20250929",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 4.5 Sonnet",
+        "contextWindow": 200000,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's most intelligent model in the Claude 4 family. Delivers exceptional performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency. Ideal for production workloads requiring both power and reliability.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2025-07-01",
+        "releaseDate": "2025-09-30"
+      }
+    },
+    {
+      "modelId": "claude-sonnet-4-6",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-sonnet-4-6",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 4.6 Sonnet",
+        "contextWindow": 200000,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude 4.6 Sonnet model. Delivers enhanced performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2025-10-01",
+        "releaseDate": "2026-02-19"
+      }
+    },
+    {
+      "modelId": "claude-sonnet-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "claude-sonnet-5",
+        "vendor": "anthropic",
+        "backend": "anthropic",
+        "type": "text",
+        "name": "Claude 5 Sonnet",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's newest Claude 5 Sonnet model. Near-Opus quality on coding and agentic work at Sonnet cost, with adaptive extended thinking and a 1M-token context window.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "trainingCutoff": "2026-01-01",
+        "releaseDate": "2026-07-01"
+      }
+    },
+    {
+      "modelId": "deepseek.v3-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "deepseek.v3-v1:0",
+        "vendor": "deepseek",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "DeepSeek v3.1",
+        "contextWindow": 128000,
+        "maxOutputTokens": 32768,
+        "canStream": true,
+        "supportsVision": false,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "DeepSeek's latest model via AWS Bedrock. Large context window, strong reasoning, and high throughput.",
+        "logoFile": "deepseek-logo.png",
+        "rank": 10
+      }
+    },
+    {
+      "modelId": "flux-kontext-max",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-kontext-max",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX Kontext Max",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "BlackForest Labs FLUX Kontext Max - Premium image-to-image transformation with maximum quality and capabilities",
+        "rank": 5
+      }
+    },
+    {
+      "modelId": "flux-kontext-pro",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-kontext-pro",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX Kontext Pro",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX Kontext Max - Premium image-to-image transformation with maximum quality and advanced editing capabilities.",
+        "rank": 4
+      }
+    },
+    {
+      "modelId": "flux-pro",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-pro",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX Pro (Legacy)",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-12-01"
+        },
+        "description": "FLUX Pro - Legacy model. Please use FLUX Pro 1.1 for new generations.",
+        "rank": 99
+      }
+    },
+    {
+      "modelId": "flux-pro-1.0-fill",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation",
+        "availability"
+      ],
+      "patch": {
+        "id": "flux-pro-1.0-fill",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX Pro Fill",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": false,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX Pro Fill - Specialized model for image inpainting and completion tasks with precise detail.",
+        "rank": 3,
+        "private": true
+      }
+    },
+    {
+      "modelId": "flux-pro-1.1",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-pro-1.1",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX Pro 1.1",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX Kontext Pro - Advanced image-to-image transformation with high-quality output and versatile editing capabilities.",
+        "rank": 1
+      }
+    },
+    {
+      "modelId": "flux-pro-1.1-ultra",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "flux-pro-1.1-ultra",
+        "vendor": "black-forest-labs",
+        "backend": "bfl",
+        "type": "image",
+        "name": "FLUX Pro Ultra",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "FLUX Pro Ultra - Premium image generation with enhanced capabilities and exceptional quality output.",
+        "rank": 2
+      }
+    },
+    {
+      "modelId": "gemini-1.5-flash",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-1.5-flash",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 1.5 Flash",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-09-04"
+        },
+        "description": "Google's fast and versatile Gemini 1.5 model optimized for speed and efficiency. Excellent for everyday tasks and general content generation.",
+        "logoFile": "Google_logo.png",
+        "rank": 50
+      }
+    },
+    {
+      "modelId": "gemini-1.5-flash-8b",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-1.5-flash-8b",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 1.5 Flash 8B",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-09-04"
+        },
+        "description": "Google's lightweight Gemini 1.5 model with 8B parameters. Cost-effective option for high-volume tasks and lower-intelligence requirements.",
+        "logoFile": "Google_logo.png",
+        "rank": 50
+      }
+    },
+    {
+      "modelId": "gemini-1.5-pro",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-1.5-pro",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 1.5 Pro",
+        "contextWindow": 2097152,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-09-04"
+        },
+        "description": "Google's high-intelligence Gemini 1.5 model with 2M context window. Ideal for complex reasoning tasks requiring deep analysis and long-form content.",
+        "logoFile": "Google_logo.png",
+        "rank": 50
+      }
+    },
+    {
+      "modelId": "gemini-2.0-flash-exp",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-2.0-flash-exp",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 2.0 Flash Experimental",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-11-18"
+        },
+        "description": "Google's experimental Gemini 2.0 model with strong reasoning capabilities. Good for complex reasoning, creative tasks, and detailed analysis.",
+        "logoFile": "Google_logo.png",
+        "rank": 50
+      }
+    },
+    {
+      "modelId": "gemini-2.5-flash",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-2.5-flash",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 2.5 Flash",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65535,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-10-16"
+        },
+        "description": "Google's Gemini 2.5 Flash, offering well-rounded price-performance. Best for large scale processing, low-latency, high volume tasks that require thinking, and agentic use cases",
+        "logoFile": "Google_logo.png",
+        "rank": 8,
+        "trainingCutoff": "2025-01-31",
+        "releaseDate": "2025-06-01"
+      }
+    },
+    {
+      "modelId": "gemini-2.5-flash-image",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-2.5-flash-image",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "image",
+        "name": "Gemini 2.5 Flash Image",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 32768,
+        "canStream": false,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Google's Gemini 2.5 Flash image generation and editing model (Nano Banana). Supports text-to-image, image editing with natural language, multi-image composition, and character consistency.",
+        "logoFile": "Google_logo.png",
+        "rank": 15,
+        "trainingCutoff": "2025-05-01",
+        "releaseDate": "2025-08-26"
+      }
+    },
+    {
+      "modelId": "gemini-2.5-flash-lite",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-2.5-flash-lite",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 2.5 Flash Lite",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65535,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-10-16"
+        },
+        "description": "Google's fastest flash model optimized for cost-efficiency and high throughput.",
+        "logoFile": "Google_logo.png",
+        "rank": 12,
+        "trainingCutoff": "2025-01-31",
+        "releaseDate": "2025-07-01"
+      }
+    },
+    {
+      "modelId": "gemini-2.5-flash-preview-09-25",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-2.5-flash-preview-09-25",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 2.5 Flash Preview",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-02-17"
+        },
+        "description": "Preview version of Gemini 2.5 Flash with experimental features. Consider using the stable version for production use.",
+        "logoFile": "Google_logo.png",
+        "rank": 20,
+        "trainingCutoff": "2025-05-01"
+      }
+    },
+    {
+      "modelId": "gemini-2.5-pro",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-2.5-pro",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 2.5 Pro",
+        "contextWindow": 2097152,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-10-16"
+        },
+        "description": "Google's Gemini 2.5 Pro thinking model, capable of reasoning over complex problems in code, math, and STEM, as well as analyzing large datasets, codebases, and documents using long context",
+        "logoFile": "Google_logo.png",
+        "rank": 5,
+        "trainingCutoff": "2025-01-31",
+        "releaseDate": "2025-06-01"
+      }
+    },
+    {
+      "modelId": "gemini-2.5-pro-preview-05-06",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-2.5-pro-preview-05-06",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 2.5 Pro Preview",
+        "contextWindow": 2097152,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-12-02"
+        },
+        "description": "Preview version of Gemini 2.5 Pro with experimental features. Consider using the stable version for production use.",
+        "logoFile": "Google_logo.png",
+        "rank": 20,
+        "trainingCutoff": "2025-05-01"
+      }
+    },
+    {
+      "modelId": "gemini-3-flash-preview",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-3-flash-preview",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 3 Flash Preview",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Google's Gemini 3 Flash preview for fast, low-latency multimodal understanding, delivering richer visuals and deeper interactivity, built on a foundation of state-of-the-art reasoning.",
+        "logoFile": "Google_logo.png",
+        "rank": 5,
+        "trainingCutoff": "2025-01-31",
+        "releaseDate": "2025-11-30"
+      }
+    },
+    {
+      "modelId": "gemini-3-pro-image",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-3-pro-image",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "image",
+        "name": "Gemini 3 Pro Image",
+        "contextWindow": 131072,
+        "maxOutputTokens": 32768,
+        "canStream": false,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Google's state-of-the-art image generation and editing model (Nano Banana Pro). Best for complex, multi-turn image generation with reasoning, high accuracy, and up to 4K resolution.",
+        "logoFile": "Google_logo.png",
+        "rank": 13,
+        "trainingCutoff": "2025-01-31",
+        "releaseDate": "2026-05-28"
+      }
+    },
+    {
+      "modelId": "gemini-3-pro-image-preview",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-3-pro-image-preview",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "image",
+        "name": "Gemini 3 Pro Image Preview",
+        "contextWindow": 100000,
+        "maxOutputTokens": 32768,
+        "canStream": false,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Google's Gemini 3 Pro Image preview for high-quality image generation and editing. Superseded by the stable Gemini 3 Pro Image (Nano Banana Pro).",
+        "logoFile": "Google_logo.png",
+        "rank": 15,
+        "trainingCutoff": "2025-01-31",
+        "releaseDate": "2025-11-30"
+      }
+    },
+    {
+      "modelId": "gemini-3-pro-preview",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-3-pro-preview",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 3 Pro Preview",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-03-09"
+        },
+        "description": "Google's Gemini 3 Pro preview for multimodal understanding, delivering richer visuals and deeper interactivity, built on a foundation of state-of-the-art reasoning. Superseded by Gemini 3.1 Pro Preview.",
+        "logoFile": "Google_logo.png",
+        "rank": 5,
+        "trainingCutoff": "2025-01-31",
+        "releaseDate": "2025-11-30"
+      }
+    },
+    {
+      "modelId": "gemini-3.1-flash-image",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-3.1-flash-image",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "image",
+        "name": "Gemini 3.1 Flash Image",
+        "contextWindow": 131072,
+        "maxOutputTokens": 32768,
+        "canStream": false,
+        "supportsImageVariation": true,
+        "supportsSafetyTolerance": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Google's high-efficiency image generation and editing model (Nano Banana 2). Balances price and performance, and adds 0.5K resolution alongside 1K/2K/4K.",
+        "logoFile": "Google_logo.png",
+        "rank": 14,
+        "trainingCutoff": "2025-01-31",
+        "releaseDate": "2026-05-28"
+      }
+    },
+    {
+      "modelId": "gemini-3.1-flash-lite",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-3.1-flash-lite",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 3.1 Flash Lite",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Google's most cost-efficient Gemini model, optimized for low-latency, high-volume tasks while matching Gemini 2.5 Flash quality across key capabilities.",
+        "logoFile": "Google_logo.png",
+        "rank": 7,
+        "trainingCutoff": "2025-01-31",
+        "releaseDate": "2026-05-08"
+      }
+    },
+    {
+      "modelId": "gemini-3.1-pro-preview",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-3.1-pro-preview",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 3.1 Pro Preview",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Google's Gemini 3.1 Pro preview for multimodal understanding, delivering richer visuals and deeper interactivity, built on a foundation of state-of-the-art reasoning.",
+        "logoFile": "Google_logo.png",
+        "rank": 5,
+        "trainingCutoff": "2025-01-31",
+        "releaseDate": "2026-02-19"
+      }
+    },
+    {
+      "modelId": "gemini-3.5-flash",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gemini-3.5-flash",
+        "vendor": "google",
+        "backend": "gemini",
+        "type": "text",
+        "name": "Gemini 3.5 Flash",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Google's most intelligent Flash model, delivering sustained frontier performance on agentic and coding tasks, built on state-of-the-art reasoning.",
+        "logoFile": "Google_logo.png",
+        "rank": 4,
+        "trainingCutoff": "2025-01-31",
+        "releaseDate": "2026-05-19"
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 4.5 Opus",
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Claude 4.5 Opus via AWS Bedrock. Top-tier extended thinking model with excellent performance for complex reasoning, coding, and creative tasks.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "isSlowModel": true,
+        "trainingCutoff": "2025-03-01",
+        "releaseDate": "2025-11-25"
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-opus-4-6-v1",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-opus-4-6-v1",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 4.6 Opus",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's earlier flagship model via AWS Bedrock. Claude 4.6 Opus delivers frontier intelligence with extended thinking, coding, and agentic capabilities.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true,
+        "trainingCutoff": "2025-05-01",
+        "releaseDate": "2026-02-06"
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-opus-4-7",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-opus-4-7",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 4.7 Opus",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's previous flagship model via AWS Bedrock. Claude 4.7 Opus delivers frontier intelligence with extended thinking, coding, and agentic capabilities.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true,
+        "trainingCutoff": "2025-10-01",
+        "releaseDate": "2026-04-17"
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-opus-4-8",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-opus-4-8",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 4.8 Opus",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's latest flagship model via AWS Bedrock. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true,
+        "trainingCutoff": "2026-01-01",
+        "releaseDate": "2026-05-28"
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-sonnet-4-6",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-sonnet-4-6",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 4.6 Sonnet",
+        "contextWindow": 200000,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's Claude 4.6 Sonnet model via AWS Bedrock. Delivers enhanced performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2025-10-01",
+        "releaseDate": "2026-02-19"
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-sonnet-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "global.anthropic.claude-sonnet-5",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 5 Sonnet",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true,
+          "style": "anthropic-adaptive"
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's newest Claude 5 Sonnet model via AWS Bedrock. Near-Opus quality on coding and agentic work at Sonnet cost, with adaptive extended thinking and a 1M-token context window.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "trainingCutoff": "2026-01-01",
+        "releaseDate": "2026-07-01"
+      }
+    },
+    {
+      "modelId": "gpt-4",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-4",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-4",
+        "contextWindow": 8192,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "supportsVision": false,
+        "supportsTools": false,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-10-23"
+        },
+        "description": "OpenAI's original GPT-4 model. Legacy model good for basic tasks and content generation, but newer models offer better capabilities.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 11
+      }
+    },
+    {
+      "modelId": "gpt-4-turbo",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-4-turbo",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-4 Turbo",
+        "contextWindow": 128000,
+        "maxOutputTokens": 4096,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-10-23"
+        },
+        "description": "Delivers fast, efficient text generation with advanced reasoning, a large context window, and integrated vision and tool capabilities.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 10
+      }
+    },
+    {
+      "modelId": "gpt-4.1-2025-04-14",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-4.1-2025-04-14",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-4.1",
+        "contextWindow": 1047576,
+        "maxOutputTokens": 32768,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Reliable for general-purpose text generation and analysis with a standard context window, suitable for a wide range of applications.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 0,
+        "trainingCutoff": "2024-06-01"
+      }
+    },
+    {
+      "modelId": "gpt-4.1-mini-2025-04-14",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-4.1-mini-2025-04-14",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-4.1 Mini",
+        "contextWindow": 1047576,
+        "maxOutputTokens": 32768,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "OpenAI's balanced GPT-4.1 model offering optimal price-performance ratio. Ideal for tasks requiring intelligence and cost efficiency.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 0,
+        "trainingCutoff": "2024-06-01"
+      }
+    },
+    {
+      "modelId": "gpt-4.1-nano-2025-04-14",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-4.1-nano-2025-04-14",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-4.1 Nano",
+        "contextWindow": 1047576,
+        "maxOutputTokens": 32768,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-10-23"
+        },
+        "description": "Designed for high-volume, low-cost processing with rapid response times, ideal for budget-conscious applications.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 0,
+        "trainingCutoff": "2024-06-01"
+      }
+    },
+    {
+      "modelId": "gpt-4.5-preview-2025-02-27",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-4.5-preview-2025-02-27",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-4.5 Preview",
+        "contextWindow": 128000,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-08-01"
+        },
+        "description": "OpenAI's most advanced preview model with enhanced world knowledge and superior intent understanding. Excellent for creative tasks and complex reasoning.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 0
+      }
+    },
+    {
+      "modelId": "gpt-4o",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-4o",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-4o",
+        "contextWindow": 128000,
+        "maxOutputTokens": 4096,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "OpenAI's multimodal model with strong vision capabilities and reasoning. Good for tasks requiring image understanding and complex tool use.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 10
+      }
+    },
+    {
+      "modelId": "gpt-4o-mini",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-4o-mini",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-4o Mini",
+        "contextWindow": 128000,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "OpenAI's cost-effective multimodal model with vision capabilities. Good for routine tasks requiring image understanding at lower cost.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 10
+      }
+    },
+    {
+      "modelId": "gpt-5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5",
+        "contextWindow": 400000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "OpenAI's advanced language model with exceptional reasoning, creativity, and multimodal capabilities. Ideal for complex tasks requiring deep understanding.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 2,
+        "isSlowModel": true,
+        "trainingCutoff": "2024-10-01",
+        "releaseDate": "2025-08-07"
+      }
+    },
+    {
+      "modelId": "gpt-5-chat-latest",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5-chat-latest",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5 Chat Latest",
+        "contextWindow": 400000,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-07-23"
+        },
+        "description": "Continuously updated GPT-5 chat model with advanced conversational abilities and vision support, ideal for dynamic, real-time applications.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 3,
+        "trainingCutoff": "2024-09-30",
+        "releaseDate": "2025-08-07"
+      }
+    },
+    {
+      "modelId": "gpt-5-mini",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5-mini",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5 Mini",
+        "contextWindow": 400000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Efficient multimodal model with vision and tool support, suitable for cost-sensitive tasks requiring image analysis and extended context.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 2,
+        "trainingCutoff": "2024-05-31",
+        "releaseDate": "2025-08-07"
+      }
+    },
+    {
+      "modelId": "gpt-5-nano",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5-nano",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5 Nano",
+        "contextWindow": 400000,
+        "maxOutputTokens": 64000,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Ultra-efficient GPT-5 variant designed for lightweight tasks and edge deployment. Exceptional value for routine operations.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 3,
+        "trainingCutoff": "2024-05-31",
+        "releaseDate": "2025-08-07"
+      }
+    },
+    {
+      "modelId": "gpt-5.1",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5.1",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5.1",
+        "contextWindow": 400000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Early GPT-5 series model with solid reasoning and vision support. Reliable for general-purpose tasks at competitive pricing.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 1,
+        "isSlowModel": true,
+        "trainingCutoff": "2024-10-01",
+        "releaseDate": "2025-11-13"
+      }
+    },
+    {
+      "modelId": "gpt-5.1-chat-latest",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5.1-chat-latest",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5.1 Chat Latest",
+        "contextWindow": 400000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-07-23"
+        },
+        "description": "Continuously updated GPT-5.1 chat model with advanced conversational abilities and vision support, ideal for dynamic, real-time applications.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 1,
+        "trainingCutoff": "2024-09-30",
+        "releaseDate": "2025-11-13"
+      }
+    },
+    {
+      "modelId": "gpt-5.2",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5.2",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5.2",
+        "contextWindow": 400000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Previous-generation GPT-5 flagship with robust multimodal understanding and deep analytical capabilities.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 1,
+        "isSlowModel": true,
+        "trainingCutoff": "2025-08-31",
+        "releaseDate": "2025-12-12"
+      }
+    },
+    {
+      "modelId": "gpt-5.2-chat-latest",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5.2-chat-latest",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5.2 Chat Latest",
+        "contextWindow": 128000,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-08-10"
+        },
+        "description": "Latest GPT-5.2 model version. Automatically updated with improvements and optimizations.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 1,
+        "trainingCutoff": "2024-09-30",
+        "releaseDate": "2025-11-13"
+      }
+    },
+    {
+      "modelId": "gpt-5.4",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5.4",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5.4",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "High-performing GPT-5.4 model with strong reasoning, creativity, and vision understanding. A reliable workhorse in the GPT-5 family.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 1,
+        "trainingCutoff": "2025-08-31",
+        "releaseDate": "2026-03-05"
+      }
+    },
+    {
+      "modelId": "gpt-5.4-mini",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5.4-mini",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5.4 Mini",
+        "contextWindow": 400000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Compact GPT-5.4 variant balancing strong performance with lower cost. Great for everyday tasks needing solid reasoning and vision.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 1,
+        "trainingCutoff": "2025-08-31",
+        "releaseDate": "2026-03-17"
+      }
+    },
+    {
+      "modelId": "gpt-5.4-nano",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5.4-nano",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5.4 Nano",
+        "contextWindow": 400000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Ultra-lightweight GPT-5.4 model optimized for speed and cost efficiency. Ideal for high-volume workloads and quick interactions.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 1,
+        "trainingCutoff": "2025-08-31",
+        "releaseDate": "2026-03-17"
+      }
+    },
+    {
+      "modelId": "gpt-5.5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5.5",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5.5",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "OpenAI's next-generation flagship GPT-5.5 model. A new class of intelligence for coding and professional work with a 1M+ context window, advanced reasoning, vision, and tool use.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 0,
+        "trainingCutoff": "2025-12-01",
+        "releaseDate": "2026-04-27"
+      }
+    },
+    {
+      "modelId": "gpt-5.6-luna",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5.6-luna",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5.6 Luna",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "GPT-5.6 Luna - the fast, cost-efficient GPT-5.6 variant. Great for high-volume workloads that still need solid reasoning, vision, and tool use.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 1,
+        "trainingCutoff": "2026-01-01",
+        "releaseDate": "2026-06-23"
+      }
+    },
+    {
+      "modelId": "gpt-5.6-sol",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5.6-sol",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5.6 Sol",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "OpenAI's GPT-5.6 Sol - flagship of the 5.6 family. Top-tier reasoning, coding, and vision with a 1M+ context window and native tool use for the most demanding professional work.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 0,
+        "trainingCutoff": "2026-01-01",
+        "releaseDate": "2026-06-23"
+      }
+    },
+    {
+      "modelId": "gpt-5.6-terra",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-5.6-terra",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "GPT-5.6 Terra",
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "GPT-5.6 Terra - the balanced GPT-5.6 variant. Strong reasoning and vision at mid-tier cost, a reliable workhorse for everyday professional tasks.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 1,
+        "trainingCutoff": "2026-01-01",
+        "releaseDate": "2026-06-23"
+      }
+    },
+    {
+      "modelId": "gpt-image-1",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-image-1",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "image",
+        "name": "GPT-Image-1",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-10-23"
+        },
+        "description": "OpenAI GPT-Image-1 - Advanced multimodal image generation with text integration, supporting up to 2048x2048 resolution and image editing capabilities.",
+        "rank": 10
+      }
+    },
+    {
+      "modelId": "gpt-image-1-mini",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-image-1-mini",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "image",
+        "name": "GPT-Image-1 Mini",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-12-01"
+        },
+        "description": "OpenAI GPT-Image-1 Mini - Faster, cost-effective version of GPT-Image-1 with good quality image generation and text integration, supporting up to 2048x2048 resolution and image editing capabilities.",
+        "rank": 11
+      }
+    },
+    {
+      "modelId": "gpt-image-1.5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-image-1.5",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "image",
+        "name": "GPT-Image-1.5",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-12-01"
+        },
+        "description": "OpenAI GPT-Image-1.5 - Enhanced version of GPT-Image-1 with improved image generation quality and text integration, supporting up to 2048x2048 resolution and image editing capabilities.",
+        "rank": 9
+      }
+    },
+    {
+      "modelId": "gpt-image-2",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-image-2",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "image",
+        "name": "GPT-Image-2",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "OpenAI GPT-Image-2 - State-of-the-art image generation with flexible resolutions up to 4K, improved quality, and fast generation. Supports editing and multi-image reference inputs.",
+        "rank": 8,
+        "releaseDate": "2026-04-21"
+      }
+    },
+    {
+      "modelId": "grok-2-1212",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "grok-2-1212",
+        "vendor": "xai",
+        "backend": "xai",
+        "type": "text",
+        "name": "Grok 2",
+        "contextWindow": 131072,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-09-15"
+        },
+        "description": "xAI's legacy Grok 2 model with 131K context window. Consider using Grok 3 for better performance."
+      }
+    },
+    {
+      "modelId": "grok-2-vision-1212",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "grok-2-vision-1212",
+        "vendor": "xai",
+        "backend": "xai",
+        "type": "text",
+        "name": "Grok 2 Vision",
+        "contextWindow": 32768,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-09-15"
+        },
+        "description": "xAI's multimodal Grok 2 model with vision capabilities. Processes both images and text for tasks requiring visual understanding."
+      }
+    },
+    {
+      "modelId": "grok-3",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "grok-3",
+        "vendor": "xai",
+        "backend": "xai",
+        "type": "text",
+        "name": "Grok 3",
+        "contextWindow": 131072,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "xAI's flagship Grok 3 model that excels at enterprise use cases like data extraction, coding, and text summarization. Possesses deep domain knowledge in finance, healthcare, law, and science."
+      }
+    },
+    {
+      "modelId": "grok-3-fast",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "grok-3-fast",
+        "vendor": "xai",
+        "backend": "xai",
+        "type": "text",
+        "name": "Grok 3 Fast",
+        "contextWindow": 131072,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-09-15"
+        },
+        "description": "xAI's Grok 3 model optimized for speed. Same underlying capabilities as Grok 3 but served on faster infrastructure for significantly reduced response times."
+      }
+    },
+    {
+      "modelId": "grok-3-mini",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "grok-3-mini",
+        "vendor": "xai",
+        "backend": "xai",
+        "type": "text",
+        "name": "Grok 3 Mini",
+        "contextWindow": 131072,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "xAI's lightweight reasoning model with thinking capabilities. Fast, smart, and cost-effective for logic-based tasks. Raw thinking traces are accessible."
+      }
+    },
+    {
+      "modelId": "grok-3-mini-fast",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "grok-3-mini-fast",
+        "vendor": "xai",
+        "backend": "xai",
+        "type": "text",
+        "name": "Grok 3 Mini Fast",
+        "contextWindow": 131072,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-09-15"
+        },
+        "description": "xAI's speed-optimized Grok 3 Mini with thinking capabilities. Same model as Grok 3 Mini but with significantly faster response times."
+      }
+    },
+    {
+      "modelId": "grok-4-0709",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "grok-4-0709",
+        "vendor": "xai",
+        "backend": "xai",
+        "type": "text",
+        "name": "Grok 4",
+        "contextWindow": 256000,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "xAI's most capable reasoning model. Excels at complex problem-solving, coding, math, and multimodal understanding with 256K context window."
+      }
+    },
+    {
+      "modelId": "grok-4.5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "grok-4.5",
+        "vendor": "xai",
+        "backend": "xai",
+        "type": "text",
+        "name": "Grok 4.5",
+        "contextWindow": 500000,
+        "maxOutputTokens": 128000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "xAI's Grok 4.5 reasoning model. 500K context window with vision, tool use, and extended reasoning.",
+        "releaseDate": "2026-07-08"
+      }
+    },
+    {
+      "modelId": "grok-beta",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "grok-beta",
+        "vendor": "xai",
+        "backend": "xai",
+        "type": "text",
+        "name": "Grok Beta",
+        "contextWindow": 32768,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-09-15"
+        },
+        "description": "xAI's legacy beta text model. No longer recommended - use Grok 3 instead."
+      }
+    },
+    {
+      "modelId": "grok-imagine-image-quality",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "grok-imagine-image-quality",
+        "vendor": "xai",
+        "backend": "xai",
+        "type": "image",
+        "name": "Grok Imagine (Quality)",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "xAI Grok Imagine (Quality) - Text-to-image generation via the xAI Imagine API.",
+        "rank": 10
+      }
+    },
+    {
+      "modelId": "grok-vision-beta",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "grok-vision-beta",
+        "vendor": "xai",
+        "backend": "xai",
+        "type": "text",
+        "name": "Grok Vision Beta",
+        "contextWindow": 32768,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": false
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-09-15"
+        },
+        "description": "xAI's legacy beta multimodal model with vision capabilities. Use Grok 2 Vision for better performance."
+      }
+    },
+    {
+      "modelId": "meta.llama3-70b-instruct-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "meta.llama3-70b-instruct-v1:0",
+        "vendor": "meta",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Llama 3 Instruct 70B",
+        "contextWindow": 8000,
+        "maxOutputTokens": 2048,
+        "canStream": true,
+        "supportsVision": false,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Meta's powerful open-source Llama 3 model with 70B parameters. Excellent performance comparable to proprietary models with local deployment flexibility.",
+        "logoFile": "512px-Meta-Logo.svg",
+        "rank": 4
+      }
+    },
+    {
+      "modelId": "meta.llama3-8b-instruct-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "meta.llama3-8b-instruct-v1:0",
+        "vendor": "meta",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Llama 3 Instruct 8B",
+        "contextWindow": 8000,
+        "maxOutputTokens": 2048,
+        "canStream": true,
+        "supportsVision": false,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Meta's open-source Llama 3 model with 8B parameters. Optimized for high-volume tasks requiring good reasoning capabilities.",
+        "logoFile": "512px-Meta-Logo.svg",
+        "rank": 5
+      }
+    },
+    {
+      "modelId": "o1-2024-12-17",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "o1-2024-12-17",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "O1",
+        "contextWindow": 200000,
+        "maxOutputTokens": 100000,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-07-07"
+        },
+        "description": "OpenAI's flagship reasoning model with massive 200K context window. Ideal for extensive document analysis and complex reasoning tasks.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 0,
+        "isSlowModel": true
+      }
+    },
+    {
+      "modelId": "o1-mini-2024-09-12",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "o1-mini-2024-09-12",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "O1 Mini",
+        "contextWindow": 128000,
+        "maxOutputTokens": 65536,
+        "canStream": true,
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-10-27"
+        },
+        "description": "OpenAI's cost-effective reasoning model delivering strong performance for everyday tasks and general content generation.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 10,
+        "isSlowModel": true
+      }
+    },
+    {
+      "modelId": "o1-preview-2024-09-12",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "o1-preview-2024-09-12",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "O1 Preview",
+        "contextWindow": 128000,
+        "maxOutputTokens": 32768,
+        "canStream": true,
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-07-28"
+        },
+        "description": "OpenAI's reasoning model preview with advanced problem-solving capabilities. Ideal for complex analysis and logical reasoning tasks.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 1,
+        "isSlowModel": true
+      }
+    },
+    {
+      "modelId": "o3-2025-04-16",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "o3-2025-04-16",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "O3",
+        "contextWindow": 200000,
+        "maxOutputTokens": 100000,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-12-11"
+        },
+        "description": "OpenAI's O3 reasoning model with broad capabilities and up-to-date training data. Superseded by O4 Mini for most use cases.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 0,
+        "isSlowModel": true,
+        "trainingCutoff": "2024-06-01"
+      }
+    },
+    {
+      "modelId": "o3-mini-2025-01-31",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "o3-mini-2025-01-31",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "O3 Mini",
+        "contextWindow": 200000,
+        "maxOutputTokens": 100000,
+        "canStream": true,
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-07-18"
+        },
+        "description": "OpenAI's efficient O3 model with large context window. Great balance of performance and cost for extensive document processing.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 3,
+        "isSlowModel": true
+      }
+    },
+    {
+      "modelId": "o4-mini-2025-04-16",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "o4-mini-2025-04-16",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "text",
+        "name": "O4 Mini",
+        "contextWindow": 200000,
+        "maxOutputTokens": 100000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-10-23"
+        },
+        "description": "OpenAI's compact reasoning model optimized for fast, cost-efficient performance with strong multimodal and agentic capabilities. Excellent for STEM tasks and coding.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 10,
+        "isSlowModel": true,
+        "trainingCutoff": "2025-04-01"
+      }
+    },
+    {
+      "modelId": "sora-2",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "sora-2",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "video",
+        "name": "Sora",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "canStream": false,
+        "supportsVision": false,
+        "supportsTools": false,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-09-24"
+        },
+        "description": "OpenAI's Sora video generation model. Creates high-quality videos from text prompts with durations of 4, 8, or 12 seconds.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 1
+      }
+    },
+    {
+      "modelId": "sora-2-pro",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "sora-2-pro",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "video",
+        "name": "Sora Pro",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "canStream": false,
+        "supportsVision": false,
+        "supportsTools": false,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-09-24"
+        },
+        "description": "OpenAI's premium Sora video generation model. Produces the highest quality videos with enhanced detail, coherence, and visual fidelity.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 0
+      }
+    },
+    {
+      "modelId": "transcribe",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "transcribe",
+        "vendor": "amazon",
+        "backend": "aws",
+        "type": "speech-to-text",
+        "name": "Amazon Transcribe",
+        "contextWindow": 0,
+        "maxOutputTokens": 0,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Amazon Transcribe - Automatic speech recognition service that converts audio to text with support for multiple languages and formats.",
+        "rank": 1
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 3.5 Haiku",
+        "contextWindow": 200000,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2026-02-19"
+        },
+        "description": "Anthropic's Claude 3.5 Haiku model via AWS Bedrock. Fast and efficient with improved reasoning capabilities.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 5,
+        "trainingCutoff": "2024-07-01"
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 3.5 Sonnet V2",
+        "contextWindow": 200000,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-10-22"
+        },
+        "description": "Anthropic's Claude 3.5 Sonnet V2 model via AWS Bedrock. Designed for complex tasks with enhanced reasoning and vision capabilities.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2024-04-01"
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 3.7 Sonnet",
+        "contextWindow": 200000,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "deprecated",
+          "deprecationDate": "2025-10-28"
+        },
+        "description": "Anthropic's most advanced Claude 3.7 Sonnet model via AWS Bedrock. Highly capable with excellent reasoning, tool use, and thinking capabilities.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2024-11-01"
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 4.5 Haiku",
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Claude 4.5 Haiku via AWS Bedrock. Latest iteration with the fastest performance and reliability.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2025-07-01",
+        "releaseDate": "2025-10-16"
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-opus-4-1-20250805-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.anthropic.claude-opus-4-1-20250805-v1:0",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 4.1 Opus",
+        "contextWindow": 200000,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Claude 4.1 Opus via AWS Bedrock. Latest iteration with improved performance and reliability. Routes across us-east-1, us-east-2, us-west-2.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true,
+        "trainingCutoff": "2025-08-01",
+        "releaseDate": "2025-08-06"
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-opus-4-20250514-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.anthropic.claude-opus-4-20250514-v1:0",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 4 Opus",
+        "contextWindow": 200000,
+        "maxOutputTokens": 8192,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Claude 4 Opus via AWS Bedrock. Anthropic's most capable model with enhanced reasoning and multimodal capabilities. Routes across us-east-1, us-east-2, us-west-2.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 0,
+        "isSlowModel": true,
+        "trainingCutoff": "2025-05-01",
+        "releaseDate": "2025-05-23"
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 4 Sonnet",
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Claude 4 Sonnet via AWS Bedrock. Balanced model offering excellent performance at competitive pricing. Routes across us-east-1, us-east-2, us-west-2.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2025-05-01",
+        "releaseDate": "2025-05-23"
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "vendor": "anthropic",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Claude 4.5 Sonnet",
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Anthropic's most intelligent model hosted in AWS Bedrock. Delivers exceptional performance across coding, analysis, and complex reasoning tasks with improved speed and efficiency. Ideal for production workloads requiring both power and reliability.",
+        "logoFile": "Anthropic_logo.png",
+        "rank": 1,
+        "trainingCutoff": "2025-07-01",
+        "releaseDate": "2025-09-30"
+      }
+    },
+    {
+      "modelId": "us.deepseek.r1-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.deepseek.r1-v1:0",
+        "vendor": "deepseek",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "DeepSeek R1",
+        "contextWindow": 128000,
+        "maxOutputTokens": 32768,
+        "canStream": true,
+        "supportsVision": false,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "DeepSeek's R1 model via AWS Bedrock. Large context window, strong reasoning, and high throughput.",
+        "logoFile": "deepseek-logo.png",
+        "rank": 10
+      }
+    },
+    {
+      "modelId": "us.meta.llama4-maverick-17b-instruct-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.meta.llama4-maverick-17b-instruct-v1:0",
+        "vendor": "meta",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Llama 4 Maverick 17B Instruct",
+        "contextWindow": 8000,
+        "maxOutputTokens": 2048,
+        "canStream": true,
+        "supportsVision": false,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Llama 4 Maverick 17B via AWS Bedrock. Optimized for fast, efficient inference with strong instruction following. Routes across us-east-1, us-east-2, us-west-2.",
+        "logoFile": "512px-Meta-Logo.svg",
+        "rank": 3,
+        "trainingCutoff": "2025-05-01"
+      }
+    },
+    {
+      "modelId": "us.meta.llama4-scout-17b-instruct-v1:0",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "us.meta.llama4-scout-17b-instruct-v1:0",
+        "vendor": "meta",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Llama 4 Scout 17B Instruct",
+        "contextWindow": 8000,
+        "maxOutputTokens": 2048,
+        "canStream": true,
+        "supportsVision": false,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Llama 4 Scout 17B via AWS Bedrock. Specialized for exploration and reasoning tasks with enhanced analytical capabilities. Routes across us-east-1, us-east-2, us-west-2.",
+        "logoFile": "512px-Meta-Logo.svg",
+        "rank": 3,
+        "trainingCutoff": "2025-05-01"
+      }
+    },
+    {
+      "modelId": "whisper-1",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "whisper-1",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "speech-to-text",
+        "name": "Whisper-1",
+        "contextWindow": 25000000,
+        "maxOutputTokens": 448,
+        "canStream": false,
+        "supportsVision": false,
+        "supportsTools": false,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "OpenAI's speech-to-text model supporting multiple languages and audio formats. Optimized for transcription and translation tasks.",
+        "logoFile": "OpenAI_Logo.svg",
+        "rank": 11
+      }
+    }
+  ]
+}
