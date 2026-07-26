@@ -183,12 +183,12 @@ data: [DONE]
 
 ## Drive it with the CLI (`b4m`)
 
-Prefer the terminal? The [Bike4Mind CLI](./BIKE4MIND_CLI.md) talks to your self-hosted stack directly — the OAuth device-flow and chat APIs ship in the open core, so no hosted account or credits are involved.
+Prefer the terminal? The [Bike4Mind CLI](./BIKE4MIND_CLI.md) talks to your self-hosted stack directly - the OAuth device-flow and chat APIs ship in the open core, so no hosted account or credits are involved.
 
 ```bash
 npm install -g @bike4mind/cli        # requires Node.js 24+
 b4m --api-url http://localhost:3000  # point it at your stack (use your APP_HOST_PORT if remapped)
-b4m                                  # start, then /login — read the sign-in code from Mailpit at :8025
+b4m                                  # start, then /login - read the sign-in code from Mailpit at :8025
 ```
 
 Auth is cached per environment, so you can keep a separate hosted login and switch with `--prod` / `--api-url`. Full guide (hosted **and** self-host, switching, troubleshooting): [**BIKE4MIND_CLI.md**](./BIKE4MIND_CLI.md).
@@ -205,35 +205,85 @@ The stack bundles an optional `ollama` service. To enable it:
 
    ```bash
    OLLAMA_BASE_URL=http://ollama:11434
-   # General chat model + a coding-tuned model for artifacts + an embedder (offline file search):
-   OLLAMA_PULL_MODELS=qwen3.5:2b-q4_K_M qwen2.5-coder:3b qwen3-embedding:0.6b
+   # Default: one MoE model covering chat/tools/artifacts/vision, plus an embedder
+   # for offline file search.
+   OLLAMA_PULL_MODELS=gemma4:26b-a4b-it-q4_K_M qwen3-embedding:0.6b
    ```
 
-2. Bring the stack up with the `ollama` profile (this also downloads the model on first run):
+2. Bring the stack up with the `ollama` profile (this also downloads the model on first run). Include `compose.ollama-moe.yaml`, which the default model needs:
 
    ```bash
-   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d
+   docker compose -f compose.selfhost.yaml -f compose.ollama-moe.yaml \
+     --env-file .env.selfhost --profile ollama up -d
    ```
 
 That's it - open the model picker and select your model under **Local / Self-Hosted**. No keys, no admin settings to flip.
 
-### Choosing a model (Qwen menu + hardware)
+### Choosing a model
 
-Two families, pick by task. Qwen3.5 is the newer general line - multimodal (reads images, so no separate vision model is needed), native tool-calling, thinking mode - and the default for chat, agents, and vision. Qwen2.5-Coder is coding-tuned and writes cleaner, complete code and HTML/React artifacts, so select it for artifact/code work; the general qwen3.5 models emit incomplete or malformed markup at small sizes. "Min GPU VRAM" is what it takes to run fully on a GPU; with less, it still runs but spills to CPU RAM (slower). "CPU-only RAM" is what it needs with no GPU at all.
+There are two ways to run a local model here:
 
-| Model tag | Download | Min GPU VRAM | CPU-only RAM | Notes |
-|-----------|---------:|-------------:|-------------:|-------|
-| `qwen3.5:0.8b` | ~1.0 GB | ~2 GB | ~4 GB | Tiny; multimodal; fast on CPU too |
-| `qwen3.5:2b-q4_K_M` | ~2.0 GB | ~4 GB | ~8 GB | Default; general/vision/tools; fits a 4GB laptop GPU |
-| `qwen3.5:2b` | ~2.7 GB | ~5 GB | ~8 GB | Same 2b, full-precision Q8_0; better quality, wants 5GB+ |
-| `qwen3.5:4b` | ~3.4 GB | ~6 GB | ~8 GB | Higher-quality general; spills under 6GB |
-| `qwen3.5:9b` | ~6.6 GB | ~8 GB | ~16 GB | Strongest small general; needs a real GPU |
-| `qwen2.5-coder:3b` | ~2.0 GB | ~4 GB | ~8 GB | Coding-tuned; best for HTML/React artifacts on a small GPU |
-| `qwen2.5-coder:7b` | ~4.7 GB | ~6-8 GB | ~16 GB | Coding-tuned; stronger code/artifacts, needs more VRAM |
+- **A small dense model that fits entirely in VRAM.** Fast, but a 2-4B model writes incomplete HTML/React artifacts, so you end up keeping a second coding-tuned model alongside it and switching per task.
+- **A large sparse MoE model with its experts in system RAM.** Only 3-4B parameters of a 20-35B model activate per token, so throughput stays in the same range as a small dense model while quality is that of a much larger one. One model then covers chat, tools, artifacts, vision, and RAG.
 
-The plain `qwen3.5:2b` tag is the full-precision Q8_0 build (best 2b quality) and spills on a 4GB card; `qwen3.5:2b-q4_K_M` is the quantized build that fits a 4GB GPU fully, which is why it is the default - use the plain `:2b` if you have 5GB+. For building HTML/React artifacts, pull and select `qwen2.5-coder` - it writes complete files where the general qwen3.5 models leave markup half-finished at these sizes. Set one or more (space-separated) in `OLLAMA_PULL_MODELS`, e.g. `OLLAMA_PULL_MODELS=qwen3.5:2b-q4_K_M qwen2.5-coder:3b`. Re-running `up` pulls any new ones and skips already-present models. To pull one ad hoc without editing the env: `docker compose -f compose.selfhost.yaml exec ollama ollama pull qwen2.5-coder:3b`. No GPU? Everything runs on CPU - start with a 0.8b or 2b model.
+The second is the default. It trades system RAM (which is cheap) for VRAM (which is not), and it removes the per-task model switching. It requires the [MoE expert offload](#moe-expert-offload) override below.
 
-**Context window.** Requests are sized from the model's own reported context length, capped at 32768 tokens by `OLLAMA_MAX_NUM_CTX`. The cap exists because KV cache is not free - a model advertising a 262K window would try to allocate far more memory than a typical box has. Lower it if you are tight on VRAM/RAM (`OLLAMA_MAX_NUM_CTX=8192`), raise it if you have headroom and want longer conversations. Confirm what a loaded model actually got with `docker compose -f compose.selfhost.yaml exec ollama ollama ps` - the CONTEXT column shows the allocated window.
+`VRAM` below is what the model needs on the GPU with expert offload enabled; the experts sit in RAM, which is why the download is large and the VRAM figure is not. **Size the machine by the RAM column.** Throughput is indicative of an entry-level 4 GB discrete GPU with a modern laptop CPU, at Q4_K_M with one model loaded; faster hardware scales up. `prefill` is prompt processing - the wait before the first token on a tool or RAG turn.
+
+| Model tag | Download | VRAM | RAM | gen | prefill | Notes |
+|-----------|---------:|-----:|----:|----:|--------:|-------|
+| **MoE - one model for everything** ||||||
+| `gpt-oss:20b` | ~14 GB | ~3.3 GB | ~16 GB | 15/s | 481/s | 21B total / 3.6B active |
+| `gemma4:26b-a4b-it-q4_K_M` | ~17 GB | ~3.4 GB | ~24 GB | 19/s | 295/s | 26B/4B; **default**; multimodal |
+| `qwen3.6:35b-a3b-q4_K_M` | ~24 GB | ~2.9 GB | ~32 GB | 22/s | 279/s | 35B/3B; strongest coder |
+| **Small dense - needs a separate coder for artifacts** ||||||
+| `qwen3.5:0.8b` | ~1.0 GB | ~2 GB | ~4 GB | - | - | Tiny; multimodal |
+| `qwen3.5:2b-q4_K_M` | ~1.9 GB | ~3.0 GB | ~8 GB | 93/s | 3621/s | Fastest; general/vision/tools |
+| `qwen3.5:4b` | ~3.4 GB | ~6 GB | ~8 GB | - | - | Spills to CPU under 6 GB VRAM |
+| `qwen2.5-coder:3b` | ~1.9 GB | ~3.1 GB | ~8 GB | 73/s | 2309/s | Coding-tuned; artifacts |
+
+Pick by the hardware you have:
+
+| VRAM | RAM | Pick |
+|------|-----|------|
+| >=4 GB | >=32 GB | `qwen3.6:35b-a3b-q4_K_M` - best quality and coding |
+| >=4 GB | ~24 GB | `gemma4:26b-a4b-it-q4_K_M` - default; widest-working choice |
+| >=4 GB | ~16 GB | `gpt-oss:20b` |
+| >=4 GB | ~8 GB | `qwen3.5:2b-q4_K_M` + `qwen2.5-coder:3b` (dense pair, switch per task) |
+| none | >=24 GB | `gemma4:26b-a4b-it-q4_K_M` still runs, just slower (CPU only) |
+| none | ~8 GB | `qwen3.5:0.8b` or `qwen3.5:2b-q4_K_M` |
+
+`gemma4:26b-a4b` is the default because it is the broadest fit: it writes complete, working interactive HTML artifacts (which the 2-4B dense models do not), answers multi-chunk knowledge-base queries with correct citations, calls tools natively, and reads images - from a single model on an entry-level GPU. `qwen3.6:35b-a3b` is the better coder but wants 32 GB of RAM, so it is the step up rather than the default.
+
+Set one or more (space-separated) in `OLLAMA_PULL_MODELS`. Re-running `up` pulls any new ones and skips already-present models. To pull one ad hoc without editing the env: `docker compose -f compose.selfhost.yaml exec ollama ollama pull gpt-oss:20b`.
+
+> **Not every MoE model offloads.** `qwen3.5:27b` does not - llama.cpp does not match its expert tensors, so the loader attempts a ~15 GB VRAM allocation and fails outright. Verify any tag not listed above: pull it, send one request, and check `ollama ps` reports `100% GPU` with a `SIZE` of a few GB rather than the full model size.
+
+### MoE expert offload
+
+The MoE models above need `compose.ollama-moe.yaml` added as an extra `-f`:
+
+```bash
+docker compose -f compose.selfhost.yaml -f compose.ollama-gpu.yaml \
+  -f compose.ollama-moe.yaml --env-file .env.selfhost --profile ollama up -d
+```
+
+It sets `LLAMA_ARG_N_CPU_MOE`, which keeps the expert weights in system RAM and leaves only the attention layers and KV cache on the GPU. For a 26B MoE that is roughly 16 GB of experts in RAM against 1.6 GB of weights in VRAM.
+
+Ollama will run these models without the override - it spills to CPU on its own - but slower, and the gap is much wider on prefill than on generation (roughly 2.5x). That difference shows up directly as dead time before the first token on an agent turn carrying tool schemas and retrieved RAG chunks.
+
+The flag is inert for dense models, so it is safe to leave enabled for a mixed model set. Do not also pin `LLAMA_ARG_N_GPU_LAYERS`: that defeats llama.cpp's automatic layer placement and hard-OOMs any dense model too large for the card instead of letting it spill.
+
+**Context window.** Requests are sized from the model's own reported context length, capped by `OLLAMA_MAX_NUM_CTX` (default 32768). Budget this rather than maximising it - usable input is `OLLAMA_MAX_NUM_CTX - 8192 (reserved for the reply) - 1000 (safety buffer)`. A tool-enabled RAG turn spends roughly 2.2K tokens on the system prompt and 2.6K on tool schemas before any of your content, so 16384 leaves only about 2.4K for retrieved chunks and overflows; 32768 is the smallest value that comfortably fits tools plus RAG.
+
+| VRAM | Model class | Suggested | Usable input |
+|------|-------------|----------:|-------------:|
+| 4 GB | MoE 20-35B | 32768 | ~23.5K |
+| 4 GB | dense 2-4B | 16384 | ~7.2K |
+| 8 GB | MoE 20-35B | 65536 | ~56K |
+| 12 GB+ | MoE 20-35B | 131072 | ~122K |
+
+KV cache is what grows with this number, and MoE models are cheap here: at 32768 the default holds under 1 GB of KV. Do not assume KV scales linearly - `gemma4` uses sliding-window attention on most of its layers, so much of its cache is a fixed size. If you run out of VRAM, halve the KV cost with `OLLAMA_KV_CACHE_TYPE=q8_0` before lowering the context. Do not go below 8192: Ollama's own 4096 default is small enough to truncate the tool definitions out of a request and make a tool-capable model report it has no tools. Confirm what a loaded model actually got with `docker compose -f compose.selfhost.yaml exec ollama ollama ps` - the CONTEXT column shows the allocated window.
 
 ### GPU acceleration (NVIDIA)
 
@@ -266,7 +316,7 @@ Then bring the stack up with the GPU override added as a second `-f`:
 docker compose -f compose.selfhost.yaml -f compose.ollama-gpu.yaml --env-file .env.selfhost --profile ollama up -d
 ```
 
-The GPU needs enough free VRAM for your chosen model (see the table above); Ollama offloads as many layers as fit and runs the rest on CPU.
+The GPU needs enough free VRAM for your chosen model (see the table above). Ollama offloads as many layers as fit and runs the rest on CPU; with MoE expert offload the experts stay in system RAM by design, so only the attention layers and KV cache compete for VRAM.
 
 ### Using an Ollama you already run
 
