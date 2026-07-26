@@ -1,22 +1,81 @@
-import { Typography, Box, Stack, Alert, Chip, Accordion, AccordionSummary, AccordionDetails } from '@mui/joy';
+import {
+  Typography,
+  Box,
+  Stack,
+  Alert,
+  Chip,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Input,
+  Button,
+} from '@mui/joy';
 import {
   Science as JupyterIcon,
-  Terminal,
   PlayArrow,
   CheckCircle,
   ExpandMore,
   Code,
   Storage,
   Settings,
+  LinkOff,
 } from '@mui/icons-material';
+import { useState, useCallback } from 'react';
 import SectionContainer from '../SectionContainer';
 import { gray } from '../../../utils/themes/colors';
+import {
+  JupyterBrowserClient,
+  getStoredJupyterConfig,
+  setStoredJupyterConfig,
+  clearStoredJupyterConfig,
+} from '../../../utils/jupyterBrowserClient';
 
 /**
- * Setup guide for executing AI-generated Jupyter notebooks on the user's local
- * Jupyter server via the B4M CLI.
+ * Setup guide and configuration for executing AI-generated Jupyter notebooks
+ * on the user's local Jupyter server directly from the browser.
  */
 const JupyterIntegrationSection = () => {
+  const initialConfig = getStoredJupyterConfig();
+  const [serverUrl, setServerUrl] = useState(() => initialConfig?.serverUrl || '');
+  const [token, setToken] = useState(() => initialConfig?.token || '');
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [testError, setTestError] = useState('');
+  const [isConfigured, setIsConfigured] = useState(() => !!initialConfig);
+
+  const handleSave = useCallback(() => {
+    if (!serverUrl.trim()) return;
+    setStoredJupyterConfig({ serverUrl: serverUrl.trim(), token: token.trim() });
+    setIsConfigured(true);
+  }, [serverUrl, token]);
+
+  const handleDisconnect = useCallback(() => {
+    clearStoredJupyterConfig();
+    setServerUrl('');
+    setToken('');
+    setIsConfigured(false);
+    setTestStatus('idle');
+  }, []);
+
+  const handleTestConnection = useCallback(async () => {
+    if (!serverUrl.trim()) return;
+    setTestStatus('testing');
+    setTestError('');
+
+    try {
+      const client = new JupyterBrowserClient({
+        serverUrl: serverUrl.trim(),
+        token: token.trim() || undefined,
+      });
+      await client.checkStatus();
+      setTestStatus('success');
+      // Auto-save on successful test
+      handleSave();
+    } catch (err) {
+      setTestStatus('error');
+      setTestError(err instanceof Error ? err.message : 'Connection failed');
+    }
+  }, [serverUrl, token, handleSave]);
+
   return (
     <SectionContainer
       title={
@@ -27,12 +86,101 @@ const JupyterIntegrationSection = () => {
       }
       subtitle="Execute AI-generated Python notebooks on your local Jupyter server directly from the chat interface."
       action={
-        <Chip size="sm" variant="soft" color="primary" startDecorator={<Terminal sx={{ fontSize: 14 }} />}>
-          CLI Required
+        <Chip
+          size="sm"
+          variant="soft"
+          color={isConfigured ? 'success' : 'neutral'}
+          startDecorator={isConfigured ? <CheckCircle sx={{ fontSize: 14 }} /> : <LinkOff sx={{ fontSize: 14 }} />}
+        >
+          {isConfigured ? 'Connected' : 'Not configured'}
         </Chip>
       }
     >
       <Stack spacing={3}>
+        {/* Connection Config */}
+        <Box
+          sx={theme => ({
+            backgroundColor: theme.palette.mode === 'light' ? '#F7F9FB' : gray[850],
+            p: 2.5,
+            borderRadius: 'sm',
+          })}
+        >
+          <Typography level="title-sm" sx={{ mb: 2 }}>
+            Jupyter Server Connection
+          </Typography>
+          <Stack spacing={2}>
+            <Box>
+              <Typography level="body-xs" sx={{ mb: 0.5, fontWeight: 'bold' }}>
+                Server URL
+              </Typography>
+              <Input
+                size="sm"
+                placeholder="http://localhost:8888"
+                value={serverUrl}
+                onChange={e => {
+                  setServerUrl(e.target.value);
+                  setTestStatus('idle');
+                }}
+                sx={{ fontFamily: 'monospace' }}
+                data-testid="jupyter-server-url-input"
+              />
+            </Box>
+            <Box>
+              <Typography level="body-xs" sx={{ mb: 0.5, fontWeight: 'bold' }}>
+                Token (optional)
+              </Typography>
+              <Input
+                size="sm"
+                type="password"
+                placeholder="Leave empty if auth is disabled"
+                value={token}
+                onChange={e => {
+                  setToken(e.target.value);
+                  setTestStatus('idle');
+                }}
+                sx={{ fontFamily: 'monospace' }}
+                data-testid="jupyter-token-input"
+              />
+            </Box>
+
+            {testStatus === 'success' && (
+              <Alert variant="soft" color="success" size="sm">
+                Connected successfully
+              </Alert>
+            )}
+            {testStatus === 'error' && (
+              <Alert variant="soft" color="danger" size="sm">
+                {testError || 'Connection failed'}
+              </Alert>
+            )}
+
+            <Stack direction="row" spacing={1}>
+              <Button
+                size="sm"
+                variant="solid"
+                color="primary"
+                onClick={handleTestConnection}
+                loading={testStatus === 'testing'}
+                disabled={!serverUrl.trim()}
+                data-testid="jupyter-test-connection-btn"
+              >
+                Test & Save
+              </Button>
+              {isConfigured && (
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="danger"
+                  onClick={handleDisconnect}
+                  data-testid="jupyter-disconnect-btn"
+                >
+                  Disconnect
+                </Button>
+              )}
+            </Stack>
+          </Stack>
+        </Box>
+
         {/* Feature Overview */}
         <Box
           sx={theme => ({
@@ -56,15 +204,14 @@ const JupyterIntegrationSection = () => {
               <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
                 <CheckCircle sx={{ fontSize: 16, color: 'success.500', mt: 0.25 }} />
                 <Typography level="body-sm">
-                  <strong>One-click execution</strong> — Run generated notebooks with a single click using the &quot;Run
-                  Notebook&quot; button
+                  <strong>One-click execution</strong> — Run generated notebooks directly from the browser with a single
+                  click
                 </Typography>
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
                 <CheckCircle sx={{ fontSize: 16, color: 'success.500', mt: 0.25 }} />
                 <Typography level="body-sm">
-                  <strong>Real-time progress</strong> — Watch cell execution progress with live updates streamed to your
-                  browser
+                  <strong>Real-time progress</strong> — Watch cell execution progress with live updates
                 </Typography>
               </Box>
               <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
@@ -77,31 +224,6 @@ const JupyterIntegrationSection = () => {
             </Stack>
           </Stack>
         </Box>
-
-        {/* Requirements */}
-        <Alert
-          variant="soft"
-          color="neutral"
-          sx={{ borderRadius: 'sm' }}
-          startDecorator={<Settings sx={{ fontSize: 20 }} />}
-        >
-          <Box>
-            <Typography level="title-sm" sx={{ mb: 1 }}>
-              Requirements
-            </Typography>
-            <Stack spacing={0.5}>
-              <Typography level="body-xs">
-                <strong>1.</strong> B4M CLI installed and running on your machine
-              </Typography>
-              <Typography level="body-xs">
-                <strong>2.</strong> Jupyter server (JupyterLab or Jupyter Notebook) running locally
-              </Typography>
-              <Typography level="body-xs">
-                <strong>3.</strong> Python environment with your desired packages installed
-              </Typography>
-            </Stack>
-          </Box>
-        </Alert>
 
         {/* Setup Instructions */}
         <Accordion defaultExpanded sx={{ backgroundColor: 'transparent', boxShadow: 'none' }}>
@@ -132,7 +254,7 @@ const JupyterIntegrationSection = () => {
                 })}
               >
                 <Typography level="title-sm" sx={{ mb: 1 }}>
-                  Step 1: Start your Jupyter server
+                  Step 1: Start your Jupyter server with CORS enabled
                 </Typography>
                 <Box
                   component="pre"
@@ -146,19 +268,21 @@ const JupyterIntegrationSection = () => {
                     m: 0,
                   })}
                 >
-                  {`# Start JupyterLab (recommended)
-jupyter lab --NotebookApp.token='' --NotebookApp.password=''
+                  {`# JupyterLab (recommended)
+jupyter lab --ServerApp.allow_origin='*' \\
+  --ServerApp.token='' --ServerApp.password=''
 
-# Or use classic Jupyter Notebook
-jupyter notebook --NotebookApp.token='' --NotebookApp.password=''`}
+# Or classic Jupyter Notebook
+jupyter notebook --NotebookApp.allow_origin='*' \\
+  --NotebookApp.token='' --NotebookApp.password=''`}
                 </Box>
                 <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 1 }}>
-                  Disabling token/password allows the CLI to connect without authentication. For secure environments,
-                  configure a static token instead.
+                  The <code>allow_origin</code> flag lets the browser connect to your local Jupyter server. For secure
+                  environments, set a token and enter it above.
                 </Typography>
               </Box>
 
-              {/* Step 2: Configure CLI */}
+              {/* Step 2: Configure */}
               <Box
                 sx={theme => ({
                   backgroundColor: theme.palette.mode === 'light' ? '#F7F9FB' : gray[850],
@@ -169,35 +293,14 @@ jupyter notebook --NotebookApp.token='' --NotebookApp.password=''`}
                 })}
               >
                 <Typography level="title-sm" sx={{ mb: 1 }}>
-                  Step 2: Configure the B4M CLI
+                  Step 2: Enter your server URL above and click &quot;Test &amp; Save&quot;
                 </Typography>
-                <Typography level="body-sm" sx={{ mb: 1.5 }}>
-                  Set the following environment variables before starting the CLI:
+                <Typography level="body-sm">
+                  The default URL is <code>http://localhost:8888</code>. If you changed the port, update it accordingly.
                 </Typography>
-                <Box
-                  component="pre"
-                  sx={theme => ({
-                    backgroundColor: theme.palette.mode === 'light' ? gray[100] : gray[900],
-                    p: 1.5,
-                    borderRadius: 'xs',
-                    overflow: 'auto',
-                    fontSize: '0.75rem',
-                    fontFamily: 'monospace',
-                    m: 0,
-                  })}
-                >
-                  {`# Required: Jupyter server port (default: 8888)
-export JUPYTER_PORT=8888
-
-# Optional: Jupyter server host (default: localhost)
-export JUPYTER_HOST=localhost
-
-# Optional: Authentication token (if your server requires one)
-export JUPYTER_TOKEN=your-token-here`}
-                </Box>
               </Box>
 
-              {/* Step 3: Run CLI */}
+              {/* Step 3: Use */}
               <Box
                 sx={theme => ({
                   backgroundColor: theme.palette.mode === 'light' ? '#F7F9FB' : gray[850],
@@ -208,26 +311,11 @@ export JUPYTER_TOKEN=your-token-here`}
                 })}
               >
                 <Typography level="title-sm" sx={{ mb: 1 }}>
-                  Step 3: Start the B4M CLI
+                  Step 3: Generate and run notebooks from the chat
                 </Typography>
-                <Box
-                  component="pre"
-                  sx={theme => ({
-                    backgroundColor: theme.palette.mode === 'light' ? gray[100] : gray[900],
-                    p: 1.5,
-                    borderRadius: 'xs',
-                    overflow: 'auto',
-                    fontSize: '0.75rem',
-                    fontFamily: 'monospace',
-                    m: 0,
-                  })}
-                >
-                  {`# Start the CLI with Jupyter configured
-JUPYTER_PORT=8888 b4m
-
-# Or add to your shell profile for persistence
-echo 'export JUPYTER_PORT=8888' >> ~/.bashrc`}
-                </Box>
+                <Typography level="body-sm">
+                  Ask B4M to create a Python notebook, then click &quot;Execute Locally&quot; to run it on your machine.
+                </Typography>
               </Box>
             </Stack>
           </AccordionDetails>
@@ -277,13 +365,12 @@ echo 'export JUPYTER_PORT=8888' >> ~/.bashrc`}
                   </Box>
 
                   <Typography level="body-sm">
-                    <strong>2. Click &quot;Run Notebook&quot;</strong> — After B4M generates the notebook, you&apos;ll
-                    see a &quot;Run Notebook&quot; button below the code block.
+                    <strong>2. Click &quot;Execute Locally&quot;</strong> — After B4M generates the notebook, click the
+                    button below the code block to run it.
                   </Typography>
 
                   <Typography level="body-sm">
                     <strong>3. Monitor progress</strong> — Watch the progress indicator as each cell executes.
-                    You&apos;ll see the cell count and completion percentage.
                   </Typography>
 
                   <Typography level="body-sm">
@@ -292,13 +379,6 @@ echo 'export JUPYTER_PORT=8888' >> ~/.bashrc`}
                   </Typography>
                 </Stack>
               </Box>
-
-              <Alert variant="soft" color="primary" sx={{ borderRadius: 'sm' }}>
-                <Typography level="body-xs">
-                  <strong>Tip:</strong> Keep your Jupyter server running in the background. The CLI will automatically
-                  connect when you click &quot;Run Notebook&quot;.
-                </Typography>
-              </Alert>
             </Stack>
           </AccordionDetails>
         </Accordion>
@@ -331,21 +411,22 @@ echo 'export JUPYTER_PORT=8888' >> ~/.bashrc`}
                 <Stack spacing={2}>
                   <Box>
                     <Typography level="body-sm" fontWeight="bold" sx={{ mb: 0.5 }}>
-                      &quot;No active connections available&quot;
+                      &quot;WebSocket connection failed&quot; or CORS errors
                     </Typography>
                     <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                      The B4M CLI is not running or not connected. Start the CLI and ensure it shows &quot;Connected to
-                      B4M&quot;.
+                      Make sure you started Jupyter with <code>--ServerApp.allow_origin=&apos;*&apos;</code> (or{' '}
+                      <code>--NotebookApp.allow_origin=&apos;*&apos;</code> for classic Notebook). This allows the
+                      browser to connect.
                     </Typography>
                   </Box>
 
                   <Box>
                     <Typography level="body-sm" fontWeight="bold" sx={{ mb: 0.5 }}>
-                      &quot;Jupyter server not responding&quot;
+                      &quot;Jupyter API error: 403&quot;
                     </Typography>
                     <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                      Check that your Jupyter server is running and the JUPYTER_PORT matches. Verify with: curl
-                      http://localhost:8888/api
+                      Your Jupyter server requires a token. Either disable the token (
+                      <code>--ServerApp.token=&apos;&apos;</code>) or enter your token in the settings above.
                     </Typography>
                   </Box>
 
@@ -361,11 +442,11 @@ echo 'export JUPYTER_PORT=8888' >> ~/.bashrc`}
 
                   <Box>
                     <Typography level="body-sm" fontWeight="bold" sx={{ mb: 0.5 }}>
-                      &quot;Authentication required&quot;
+                      Connection times out
                     </Typography>
                     <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                      Your Jupyter server requires a token. Set the JUPYTER_TOKEN environment variable in your CLI
-                      session.
+                      Verify your Jupyter server is running: open the server URL in a new browser tab. You should see
+                      the Jupyter interface.
                     </Typography>
                   </Box>
                 </Stack>

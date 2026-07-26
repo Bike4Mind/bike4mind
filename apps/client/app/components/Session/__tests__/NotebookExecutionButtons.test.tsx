@@ -5,9 +5,10 @@ import { AxiosError, AxiosHeaders } from 'axios';
 import { NotebookExecutionButtons } from '../NotebookExecutionButtons';
 
 // Mock dependencies - use vi.hoisted() to ensure these are defined before vi.mock hoisting
-const { mockSubscribeToAction, mockPost } = vi.hoisted(() => ({
+const { mockSubscribeToAction, mockPost, mockGetStoredJupyterConfig } = vi.hoisted(() => ({
   mockSubscribeToAction: vi.fn(),
   mockPost: vi.fn(),
+  mockGetStoredJupyterConfig: vi.fn(),
 }));
 
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
@@ -22,6 +23,12 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   },
 }));
 
+vi.mock('@client/app/utils/jupyterBrowserClient', () => ({
+  getStoredJupyterConfig: mockGetStoredJupyterConfig,
+  JupyterBrowserClient: vi.fn(),
+  JupyterBrowserError: class extends Error {},
+}));
+
 describe('NotebookExecutionButtons', () => {
   const validNotebookContent = JSON.stringify({
     nbformat: 4,
@@ -34,6 +41,8 @@ describe('NotebookExecutionButtons', () => {
     vi.clearAllMocks();
     unsubscribeMock = vi.fn();
     mockSubscribeToAction.mockReturnValue(unsubscribeMock);
+    // Default: no browser Jupyter config, so tests use the CLI fallback path
+    mockGetStoredJupyterConfig.mockReturnValue(null);
     sessionStorage.clear();
   });
 
@@ -131,7 +140,9 @@ describe('NotebookExecutionButtons', () => {
       });
     });
 
-    it('shows error message when API call fails', async () => {
+    it('shows error message when CLI API call fails', async () => {
+      // Ensure CLI fallback path
+      mockGetStoredJupyterConfig.mockReturnValue(null);
       // Create a proper AxiosError to test isAxiosError() function correctly
       const axiosError = new AxiosError('Request failed', 'ERR_BAD_REQUEST', undefined, undefined, {
         data: {
@@ -182,7 +193,7 @@ describe('NotebookExecutionButtons', () => {
 
       // Button should show loading state
       await waitFor(() => {
-        expect(screen.getByText('Starting...')).toBeInTheDocument();
+        expect(screen.getByText('Executing...')).toBeInTheDocument();
       });
 
       resolvePost!({ data: { sent: true } });
