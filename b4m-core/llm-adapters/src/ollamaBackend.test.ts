@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { OllamaBackend } from './ollamaBackend';
 import type { ICompletionOptionTools } from './backend';
 
@@ -332,7 +332,20 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
     expect(info.can_think).toBe(true);
     expect(info.supportsVision).toBe(true);
     expect(info.supportsTools).toBe(true);
-    expect(info.contextWindow).toBe(262144);
+    // Advertised as the window we will actually allocate (see effectiveContextWindow),
+    // not the 262144 the model reports, so callers size history to what fits.
+    expect(info.contextWindow).toBe(32768);
+    expect(info.max_tokens).toBe(32768);
+  });
+
+  it('advertises a small model window verbatim', async () => {
+    const backend = new OllamaBackend('http://localhost:11434', silentLogger);
+    (backend as any)._api = {
+      list: vi.fn(async () => ({ models: [{ name: 'qwen2.5-coder:3b' }] })),
+      show: vi.fn(async () => ({ capabilities: ['tools'], model_info: { 'qwen2.context_length': 32768 } })),
+    };
+    const [info] = await backend.getModelInfo();
+    expect(info.contextWindow).toBe(32768);
   });
 
   it('leaves can_think false when the model does not report thinking', async () => {
@@ -417,5 +430,106 @@ describe('OllamaBackend.buildMessages image handling', () => {
       { type: 'image_url', image_url: { url: 'data:image/png;charset=utf-8;base64,CCC' } },
     ]);
     expect(msg.images).toEqual(['CCC']);
+  });
+});
+
+// Ollama applies its own 4096-token default when a request carries no `options`
+// object, truncating the prompt from the front - which drops the tool block out
+// of the chat template and makes a tool-capable model answer that it has no
+// tools. The backend must size num_ctx from the model's own window, and the
+// same object is what carries temperature / maxTokens.
+describe('OllamaBackend model options', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // Backend whose /api/show reports `contextWindow`; returns the options object
+  // the chat request was built with.
+  async function sentOptions(
+    contextWindow: number,
+    completionOptions: Record<string, unknown> = {}
+  ): Promise<Record<string, number> | undefined> {
+    const backend = new OllamaBackend('http://localhost:11434', silentLogger);
+    const chat = vi.fn(async () => ({
+      message: { content: 'ok', tool_calls: [] },
+      prompt_eval_count: 1,
+      eval_count: 1,
+    }));
+    (backend as any)._api = {
+      chat,
+      show: vi.fn(async () => ({ capabilities: ['tools'], model_info: { 'qwen35.context_length': contextWindow } })),
+    };
+    await run(backend, { tools: [], ...completionOptions });
+    return (chat.mock.calls[0][0] as { options?: Record<string, number> }).options;
+  }
+
+  it('caps num_ctx at the default ceiling for a huge advertised window', async () => {
+    expect((await sentOptions(262144))?.num_ctx).toBe(32768);
+  });
+
+  it('uses the model window verbatim when it is under the ceiling', async () => {
+    expect((await sentOptions(8192))?.num_ctx).toBe(8192);
+  });
+
+  it('honours an OLLAMA_MAX_NUM_CTX override', async () => {
+    vi.stubEnv('OLLAMA_MAX_NUM_CTX', '16384');
+    expect((await sentOptions(262144))?.num_ctx).toBe(16384);
+  });
+
+  it('ignores a non-positive OLLAMA_MAX_NUM_CTX and falls back to the default ceiling', async () => {
+    vi.stubEnv('OLLAMA_MAX_NUM_CTX', '0');
+    expect((await sentOptions(262144))?.num_ctx).toBe(32768);
+  });
+
+  it('forwards temperature and maxTokens (as num_predict)', async () => {
+    const options = await sentOptions(8192, { temperature: 0.2, maxTokens: 512 });
+    expect(options?.temperature).toBe(0.2);
+    expect(options?.num_predict).toBe(512);
+  });
+
+  it('clamps num_predict to num_ctx (the catalogue reports max_tokens as the whole window)', async () => {
+    expect((await sentOptions(262144, { maxTokens: 262144 }))?.num_predict).toBe(32768);
+  });
+
+  it('omits temperature and num_predict when the caller sets neither', async () => {
+    const options = await sentOptions(8192);
+    expect(options).toEqual({ num_ctx: 8192 });
+  });
+
+  it('still sends a num_ctx when /api/show is unavailable', async () => {
+    const backend = new OllamaBackend('http://localhost:11434', silentLogger);
+    const chat = vi.fn(async () => ({
+      message: { content: 'ok', tool_calls: [] },
+      prompt_eval_count: 1,
+      eval_count: 1,
+    }));
+    (backend as any)._api = {
+      chat,
+      show: vi.fn(async () => {
+        throw new Error('connection refused');
+      }),
+    };
+    await run(backend, { tools: [] });
+    expect((chat.mock.calls[0][0] as { options?: Record<string, number> }).options?.num_ctx).toBe(8192);
+  });
+
+  it('shows once across a multi-round tool loop', async () => {
+    const backend = new OllamaBackend('http://localhost:11434', silentLogger);
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        message: {
+          content: '',
+          tool_calls: [{ function: { name: 'math_evaluate', arguments: { expression: '2+2' } } }],
+        },
+        prompt_eval_count: 5,
+        eval_count: 1,
+      })
+      .mockResolvedValueOnce({ message: { content: '4', tool_calls: [] }, prompt_eval_count: 6, eval_count: 1 });
+    const show = vi.fn(async () => ({ capabilities: ['tools'], model_info: { 'qwen35.context_length': 8192 } }));
+    (backend as any)._api = { chat, show };
+    await run(backend, { tools: [mathTool(async () => '4')] });
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(show).toHaveBeenCalledTimes(1);
   });
 });

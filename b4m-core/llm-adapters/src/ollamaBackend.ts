@@ -12,7 +12,7 @@ import {
   ICompletionOptions,
   ICompletionOptionTools,
 } from './backend';
-import { Ollama, Message as OllamaMessage, ModelResponse, Tool, ToolCall } from 'ollama';
+import { Ollama, Message as OllamaMessage, ModelResponse, Options as OllamaOptions, Tool, ToolCall } from 'ollama';
 import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
@@ -72,7 +72,12 @@ export class OllamaBackend implements ICompletionBackend {
       // like Qwen) and a placeholder context size.
       return await Promise.all(
         models.models.map(async model => {
-          const { capabilities, contextWindow } = await this.getModelDetails(model.name);
+          const { capabilities, contextWindow: reportedContextWindow } = await this.getModelDetailsCached(model.name);
+          // Advertise the window we will actually allocate, not the one the
+          // model was trained for: callers size history against this number, so
+          // publishing an uncapped 262K would have them build prompts Ollama
+          // then truncates from the front.
+          const contextWindow = OllamaBackend.effectiveContextWindow(reportedContextWindow);
           const modelInfo = {
             id: model.name,
             type: 'text',
@@ -123,6 +128,35 @@ export class OllamaBackend implements ICompletionBackend {
   private static readonly DEFAULT_CONTEXT_WINDOW = 8192;
 
   /**
+   * Ceiling on the num_ctx we ask Ollama to allocate. Models advertise windows
+   * far larger than a dev box can hold in KV cache (262K on qwen3.5), so the
+   * useful value is the model's window capped at something affordable rather
+   * than the advertised maximum. Override with OLLAMA_MAX_NUM_CTX.
+   */
+  private static readonly DEFAULT_MAX_NUM_CTX = 32768;
+
+  /** A model's reported window clamped to what we are willing to allocate. */
+  private static effectiveContextWindow(reported: number): number {
+    const configuredCap = Number(process.env.OLLAMA_MAX_NUM_CTX);
+    const cap = Number.isFinite(configuredCap) && configuredCap > 0 ? configuredCap : OllamaBackend.DEFAULT_MAX_NUM_CTX;
+    return Math.min(reported, cap);
+  }
+
+  /** Per-model /api/show results, so the tool-call recursion shows once, not per round. */
+  private readonly _modelDetails = new Map<string, Promise<{ capabilities: string[]; contextWindow: number }>>();
+
+  private getModelDetailsCached(model: string): Promise<{ capabilities: string[]; contextWindow: number }> {
+    let details = this._modelDetails.get(model);
+    if (!details) {
+      // getModelDetails never rejects (it falls back on error), so caching the
+      // promise can't pin a rejection.
+      details = this.getModelDetails(model);
+      this._modelDetails.set(model, details);
+    }
+    return details;
+  }
+
+  /**
    * Fetch a model's capabilities and context window from Ollama (/api/show).
    * capabilities is e.g. ['completion', 'tools', 'vision']; the context length
    * lives in model_info under "<architecture>.context_length" (e.g.
@@ -147,6 +181,31 @@ export class OllamaBackend implements ICompletionBackend {
       this._logger.debug(`[OllamaBackend] Could not fetch details for ${model}:`, error);
       return { capabilities: [], contextWindow: OllamaBackend.DEFAULT_CONTEXT_WINDOW };
     }
+  }
+
+  /**
+   * Ollama model parameters for a request. Everything here is silently dropped
+   * if the `options` object is omitted, which is why num_ctx matters most:
+   * without it the server falls back to its own 4096 default and truncates the
+   * prompt from the front, taking the tool block with it - so a large turn
+   * makes a tool-capable model answer that it has no tools. Sizing from the
+   * model's own reported window keeps that consistent with the context length
+   * the picker advertises.
+   */
+  private async buildModelOptions(
+    model: string,
+    options: Partial<ICompletionOptions>
+  ): Promise<Partial<OllamaOptions>> {
+    const { contextWindow } = await this.getModelDetailsCached(model);
+    const numCtx = OllamaBackend.effectiveContextWindow(contextWindow);
+
+    return {
+      num_ctx: numCtx,
+      ...(typeof options.temperature === 'number' && { temperature: options.temperature }),
+      // The catalogue reports max_tokens as the whole context window, so cap
+      // the output budget at what we actually allocated.
+      ...(typeof options.maxTokens === 'number' && { num_predict: Math.min(options.maxTokens, numCtx) }),
+    };
   }
 
   async complete(
@@ -179,6 +238,7 @@ export class OllamaBackend implements ICompletionBackend {
     const baseRequest = {
       model,
       messages: this.buildMessages(messages),
+      options: await this.buildModelOptions(model, options),
       ...(formattedTools.length > 0 && { tools: formattedTools }),
       // Drive Ollama's reasoning from the Thinking toggle. Gated upstream by
       // can_think, so think:true only reaches thinking-capable models (a
@@ -319,7 +379,13 @@ export class OllamaBackend implements ICompletionBackend {
    * Returns the full text, any native tool calls, and token usage.
    */
   private async runChatRound(
-    baseRequest: { model: string; messages: OllamaMessage[]; tools?: Tool[]; think?: boolean },
+    baseRequest: {
+      model: string;
+      messages: OllamaMessage[];
+      options?: Partial<OllamaOptions>;
+      tools?: Tool[];
+      think?: boolean;
+    },
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>,
     { buffer }: { buffer: boolean }
