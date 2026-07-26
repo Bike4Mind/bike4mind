@@ -23,6 +23,9 @@ const updateSessionParamtersSchema = z.object({
   artifactIds: z.array(z.string()).optional(),
   tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
   lastUsedModel: z.string().optional(),
+  // Data Lake mode toggles this on an existing session. surface is intentionally left out
+  // (and unchanged) so the chat stays in the main sidebar list. See datalake-in-chat-mode design.
+  forceKnowledgeRetrieval: z.boolean().optional(),
 });
 
 type UpdateSessionParameters = z.infer<typeof updateSessionParamtersSchema>;
@@ -43,7 +46,7 @@ export const updateSession = async (
   adapters: UpdateSessionAdapters
 ) => {
   const { db } = adapters;
-  const { knowledgeIds, artifactIds, name, id, tags, lastUsedModel } = secureParameters(
+  const { knowledgeIds, artifactIds, name, id, tags, lastUsedModel, forceKnowledgeRetrieval } = secureParameters(
     parameters,
     updateSessionParamtersSchema
   );
@@ -63,6 +66,10 @@ export const updateSession = async (
   session.artifactIds = artifactIds || session.artifactIds;
   session.tags = tags || session.tags;
   session.lastUsedModel = lastUsedModel || session.lastUsedModel;
+  // Explicit undefined check (not `|| session.x`) so toggling OFF (false) actually persists.
+  if (forceKnowledgeRetrieval !== undefined) {
+    session.forceKnowledgeRetrieval = forceKnowledgeRetrieval;
+  }
   session.lastUpdated = new Date();
 
   await db.sessions.update(session);
