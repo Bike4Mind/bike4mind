@@ -378,6 +378,7 @@ export function useSendMessage({
         const res = await api.post<ISessionDocument>('/api/sessions/create', {
           name: 'New Notebook',
           forceKnowledgeRetrieval: true,
+          ...(routerProjectId ? { projectId: routerProjectId } : {}),
         });
         created = res.data;
       } catch (error) {
@@ -397,6 +398,15 @@ export function useSendMessage({
           search: routerProjectId ? { projectId: routerProjectId } : {},
           replace: true,
         });
+      }
+      // Match the invalidation set in `useGenerateNewSession.onSuccess` / the
+      // agent-executor branch below so a Data Lake seam session created while
+      // viewing a project refreshes that project's session list + activity
+      // feed immediately, instead of waiting for the next unrelated refetch.
+      if (routerProjectId) {
+        queryClient.invalidateQueries({ queryKey: ['sessions', 'projects', routerProjectId] });
+        queryClient.invalidateQueries({ queryKey: ['projects', routerProjectId] });
+        queryClient.invalidateQueries({ queryKey: ['activities'] });
       }
       dataLakeCreated = created;
     }
