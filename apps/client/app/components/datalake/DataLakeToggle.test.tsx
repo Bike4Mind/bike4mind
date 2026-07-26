@@ -6,10 +6,11 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeToggle from './DataLakeToggle';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
-const { isFeatureEnabled, setCurrentSession, updateSession } = vi.hoisted(() => ({
+const { isFeatureEnabled, setCurrentSession, updateSession, toastError } = vi.hoisted(() => ({
   isFeatureEnabled: vi.fn(() => true),
   setCurrentSession: vi.fn(),
   updateSession: vi.fn(),
+  toastError: vi.fn(),
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double for ISessionDocument
@@ -24,6 +25,7 @@ vi.mock('@client/app/contexts/SessionsContext', () => ({
 vi.mock('@client/app/hooks/data/sessions', () => ({
   useUpdateSession: () => ({ mutate: updateSession }),
 }));
+vi.mock('sonner', () => ({ toast: { error: toastError } }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const wrap = (ui: React.ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
@@ -67,9 +69,16 @@ describe('DataLakeToggle', () => {
   });
 
   it('rolls back the optimistic toggle when persistence fails', () => {
-    updateSession.mockImplementation((_session: unknown, opts?: { onError?: () => void }) => opts?.onError?.());
+    updateSession.mockImplementationOnce((_session: unknown, opts?: { onError?: () => void }) => opts?.onError?.());
     wrap(<DataLakeToggle />);
     fireEvent.click(screen.getByTestId('datalake-mode-toggle'));
+    expect(updateSession).toHaveBeenCalled();
+    // setCurrentSession is called twice: optimistic (forceKnowledgeRetrieval: true), then the rollback
+    // to the original pre-toggle session - assert the last call is the reverted one.
+    expect(setCurrentSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 's1', forceKnowledgeRetrieval: false })
+    );
+    expect(toastError).toHaveBeenCalled();
     expect(useDataLakeMode.getState().enabled).toBe(false); // rolled back from the optimistic true
   });
 
