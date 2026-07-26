@@ -17,6 +17,7 @@ import HorizontalRuleIcon from '@mui/icons-material/HorizontalRule';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import SessionOwnerBadge from './SessionOwnerBadge';
+import DataLakeToggle from '@client/app/components/datalake/DataLakeToggle';
 import BackgroundAgentBadge from './AgentExecution/BackgroundAgentBadge';
 import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import type { IChatHistoryItemDocument } from '@bike4mind/common';
@@ -87,6 +88,7 @@ const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidt
         })}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <DataLakeToggle />
           {project && (
             <Breadcrumbs
               items={[
