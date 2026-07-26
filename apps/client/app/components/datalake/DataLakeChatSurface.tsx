@@ -19,15 +19,5 @@ export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode })
 
   if (!enabled) return <>{chat}</>;
 
-  // onBack/onAskAbout are required by DataLakeExplorerProps but only used by the legacy
-  // (no-chatSlot) DataLakeArticle path, which never renders here; keep them as no-ops.
-  return (
-    <DataLakeExplorer
-      source="datalakes"
-      rootLabel="Data Lakes"
-      onBack={() => {}}
-      onAskAbout={() => {}}
-      chatSlot={chat}
-    />
-  );
+  return <DataLakeExplorer source="datalakes" rootLabel="Data Lakes" chatSlot={chat} />;
 }

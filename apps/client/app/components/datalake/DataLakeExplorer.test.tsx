@@ -31,7 +31,6 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
     data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
     isLoading: false,
   }),
-  useGetFabFileContent: () => ({ data: undefined, isLoading: false }),
 }));
 
 vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () => ({ default: () => null }));
@@ -59,9 +58,8 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 );
 
 const baseProps = {
-  onBack: vi.fn(),
-  onAskAbout: vi.fn(),
   source: 'datalakes' as const,
+  chatSlot: <div data-testid="my-chat" />,
 };
 
 const renderExplorer = (props: Partial<React.ComponentProps<typeof DataLakeExplorer>> = {}) =>
@@ -76,15 +74,13 @@ describe('DataLakeExplorer chat-first surface', () => {
     vi.clearAllMocks();
   });
 
-  it('renders chatSlot in the right pane and hides the markdown article', () => {
-    renderExplorer({ chatSlot: <div data-testid="my-chat" /> });
+  it('renders chatSlot in the right pane', () => {
+    renderExplorer();
     expect(screen.getByTestId('my-chat')).toBeInTheDocument();
-    expect(screen.queryByTestId('datalake-article')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('datalake-article-empty')).not.toBeInTheDocument();
   });
 
   it('opens a clicked file inline (workbench + vertical KnowledgeViewer) in chat mode', () => {
-    renderExplorer({ chatSlot: <div data-testid="my-chat" /> });
+    renderExplorer();
     fireEvent.click(screen.getByTestId('mock-select-file'));
     // Added to the session workbench so the KnowledgeViewer renders it.
     expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
@@ -95,17 +91,8 @@ describe('DataLakeExplorer chat-first surface', () => {
   });
 
   it('opens the deep-linked articleId inline once it resolves', () => {
-    renderExplorer({ chatSlot: <div data-testid="my-chat" />, articleId: 'deep-1' });
+    renderExplorer({ articleId: 'deep-1' });
     expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
     expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'deep-1' });
-  });
-
-  it('back-compat: with no chatSlot, renders DataLakeArticle and does NOT touch layout/workbench', () => {
-    renderExplorer();
-    expect(screen.getByTestId('datalake-article-empty')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('mock-select-file'));
-    expect(setWorkBenchFiles).not.toHaveBeenCalled();
-    expect(setSessionLayout).not.toHaveBeenCalled();
-    expect(screen.getByTestId('datalake-article')).toBeInTheDocument();
   });
 });

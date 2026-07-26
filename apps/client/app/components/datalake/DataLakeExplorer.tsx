@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Typography, useTheme } from '@mui/joy';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import DataLakeTree from './DataLakeTree';
-import DataLakeArticle from './DataLakeArticle';
 import { deckBackground } from '@client/app/components/datalake/deckChrome';
 import { useGetDataLakeArticles, useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import type { DataLakeBrowseSource } from '@client/app/hooks/data/fabFiles';
@@ -15,8 +14,12 @@ import { toast } from 'sonner';
 import type { IFabFileDocument } from '@bike4mind/common';
 
 interface DataLakeExplorerProps {
-  onBack: () => void;
-  onAskAbout: (prompt: string) => void;
+  /** Unused internally; kept optional for the premium overlay's QuantumPage, which still
+   *  passes it pending its own chat-only migration. */
+  onBack?: () => void;
+  /** Unused internally; kept optional for the premium overlay's QuantumPage, which still
+   *  passes it pending its own chat-only migration. */
+  onAskAbout?: (prompt: string) => void;
   /** When set (from URL param), auto-select and display this article on mount. */
   articleId?: string | null;
   /** Which browse backend to read (default 'opti'). The standalone Data Lakes home
@@ -29,10 +32,9 @@ interface DataLakeExplorerProps {
   /** When provided, the tree's blue + button opens the Create Lake wizard. */
   onCreateLake?: () => void;
   /**
-   * Chat-first surface: when provided, this node (a full `SessionContainer`) fills the RIGHT
-   * pane instead of `DataLakeArticle`, and file clicks open the rich `KnowledgeModal` viewer.
-   * The parent owns/pre-creates the session (see issue #836). When absent, the legacy
-   * markdown `DataLakeArticle` behavior is kept unchanged (back-compat for pinned consumers).
+   * `chatSlot` (a full `SessionContainer`) fills the right pane. Clicking a tree file opens it
+   * inline in the KnowledgeViewer split (layout `vertical`) by adding it to the session
+   * workbench, rather than a modal - the parent owns/pre-creates the session (see issue #836).
    */
   chatSlot?: React.ReactNode;
 }
@@ -41,7 +43,6 @@ interface DataLakeExplorerProps {
 const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []).includes('Files');
 
 export default function DataLakeExplorer({
-  onAskAbout,
   articleId,
   source = 'opti',
   rootLabel = 'Data Lake',
@@ -52,18 +53,16 @@ export default function DataLakeExplorer({
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
-  const [userSelectedFile, setUserSelectedFile] = useState<IFabFileDocument | null>(null);
 
-  // Chat-first mode: clicking a file opens it INLINE in the chat's KnowledgeViewer (the split
+  // Clicking a file opens it INLINE in the chat's KnowledgeViewer (the split
   // "knowledge-viewer-container") rather than a modal - by adding it to the session workbench and
   // switching the layout to `vertical` (KnowledgeViewer left, chat right). The parent's
   // SessionContainer drives the global session context, so `currentSessionId` here is the
   // datalake chat's session. (#836)
-  const usingChat = !!chatSlot;
   const { currentSessionId } = useSessions();
   const { setWorkBenchFiles } = useWorkBenchActions();
   // Id of the file most recently opened in the viewer, kept to highlight it in the tree.
-  const [viewerFileId, setViewerFileId] = useState<string | null>(usingChat ? (articleId ?? null) : null);
+  const [viewerFileId, setViewerFileId] = useState<string | null>(articleId ?? null);
   const openFileInViewer = useCallback(
     (file: IFabFileDocument) => {
       if (currentSessionId) {
@@ -133,64 +132,32 @@ export default function DataLakeExplorer({
   const leafArticles = leafTag ? (leafArticlesResult?.data ?? []) : [];
 
   // Deep-link: fetch the specific article by ID when URL param is present. The inline viewer
-  // needs the FabFile OBJECT (to add to the workbench), so chat mode fetches it too.
-  const { data: deepLinkResult } = useGetDataLakeArticles(
-    articleId && !userSelectedFile ? { id: articleId, limit: 1 } : null,
-    source
-  );
-  // Derive selectedFile (used by the legacy DataLakeArticle fallback): explicit click first,
-  // then the deep-link result. Pure derivation - no effects, no setState during render.
+  // needs the FabFile OBJECT to add to the workbench.
+  const { data: deepLinkResult } = useGetDataLakeArticles(articleId ? { id: articleId, limit: 1 } : null, source);
   const deepLinkTarget = deepLinkResult?.data?.[0] ?? null;
-  const selectedFile = userSelectedFile ?? (articleId ? deepLinkTarget : null);
 
-  // Chat mode deep-link: open the URL's article in the inline viewer once it resolves. Guarded
-  // so it fires once per id (closing the viewer or re-rendering won't reopen it).
+  // Open the URL's article in the inline viewer once it resolves. Guarded so it fires once per
+  // id (closing the viewer or re-rendering won't reopen it).
   const openedDeepLinkRef = useRef<string | null>(null);
   useEffect(() => {
-    if (usingChat && deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
+    if (deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
       openedDeepLinkRef.current = deepLinkTarget.id;
       openFileInViewer(deepLinkTarget);
     }
-  }, [usingChat, deepLinkTarget, openFileInViewer]);
+  }, [deepLinkTarget, openFileInViewer]);
 
-  const handleNavigate = useCallback(
-    (newBreadcrumb: string[]) => {
-      setBreadcrumb(newBreadcrumb);
-      setUserSelectedFile(null);
-      // Browsing away closes the inline file viewer, returning to the full-width chat.
-      if (usingChat) {
-        setSessionLayout({ layout: 'hide' });
-        setViewerFileId(null);
-      }
-    },
-    [usingChat]
-  );
+  const handleNavigate = useCallback((newBreadcrumb: string[]) => {
+    setBreadcrumb(newBreadcrumb);
+    // Browsing away closes the inline file viewer, returning to the full-width chat.
+    setSessionLayout({ layout: 'hide' });
+    setViewerFileId(null);
+  }, []);
 
   const handleSelectFile = useCallback(
     (file: IFabFileDocument) => {
-      if (usingChat) {
-        openFileInViewer(file);
-      } else {
-        setUserSelectedFile(file);
-      }
+      openFileInViewer(file);
     },
-    [usingChat, openFileInViewer]
-  );
-
-  // Quick dives for the empty state: richest second-level categories across prefixes
-  const quickDives = useMemo(
-    () =>
-      tree
-        .flatMap(prefix =>
-          prefix.children.map(child => ({
-            path: [prefix.segment, child.segment],
-            segment: child.segment,
-            count: child.fileCount,
-          }))
-        )
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 6),
-    [tree]
+    [openFileInViewer]
   );
 
   return (
@@ -246,7 +213,7 @@ export default function DataLakeExplorer({
           articles={leafArticles}
           breadcrumb={breadcrumb}
           onNavigate={handleNavigate}
-          selectedFileId={usingChat ? viewerFileId : (selectedFile?.id ?? null)}
+          selectedFileId={viewerFileId}
           onSelectFile={handleSelectFile}
           isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
           isError={tagCountsError}
@@ -254,18 +221,9 @@ export default function DataLakeExplorer({
           onManage={onManage}
           onCreateLake={onCreateLake}
         />
-        {chatSlot ? (
-          <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
-            {chatSlot}
-          </Box>
-        ) : (
-          <DataLakeArticle
-            file={selectedFile}
-            onAskAbout={onAskAbout}
-            quickDives={quickDives}
-            onDive={handleNavigate}
-          />
-        )}
+        <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+          {chatSlot}
+        </Box>
       </Box>
 
       {/* Drag-to-ingest: pick a destination lake, then the append wizard takes over.
