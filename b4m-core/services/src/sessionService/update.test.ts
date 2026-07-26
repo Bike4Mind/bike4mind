@@ -134,4 +134,17 @@ describe('updateSession - forceKnowledgeRetrieval passthrough', () => {
     await updateSession(user, { id: 'session-1', name: 'Renamed' }, adapters);
     expect(update.mock.calls[0][0]).toMatchObject({ forceKnowledgeRetrieval: true, name: 'Renamed' });
   });
+
+  it('ignores surface even if a caller passes it (allow-list strips it; sidebar visibility preserved)', async () => {
+    const { update, adapters } = makeAdapters({ surface: 'opti', forceKnowledgeRetrieval: false });
+    await updateSession(
+      user,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberately passing a field the allow-list must strip
+      { id: 'session-1', surface: 'datalake', forceKnowledgeRetrieval: true } as any,
+      adapters
+    );
+    const saved = update.mock.calls[0][0];
+    expect(saved.forceKnowledgeRetrieval).toBe(true);
+    expect(saved.surface).toBe('opti'); // unchanged - never overwritten by the update
+  });
 });

@@ -1,6 +1,7 @@
 import Button from '@mui/joy/Button';
 import Tooltip from '@mui/joy/Tooltip';
 import WaterOutlinedIcon from '@mui/icons-material/WaterOutlined';
+import { toast } from 'sonner';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useUpdateSession } from '@client/app/hooks/data/sessions';
@@ -26,7 +27,14 @@ export default function DataLakeToggle() {
     setEnabled(next);
     const updated = { ...currentSession, forceKnowledgeRetrieval: next };
     setCurrentSession(updated);
-    updateSession(updated);
+    updateSession(updated, {
+      onError: () => {
+        // Persist failed: roll back so the UI matches the server (grounding really off/on).
+        setEnabled(!next);
+        setCurrentSession(currentSession);
+        toast.error('Could not update Data Lake mode - please try again.');
+      },
+    });
   };
 
   return (

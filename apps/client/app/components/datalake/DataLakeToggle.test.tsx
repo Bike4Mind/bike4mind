@@ -48,7 +48,29 @@ describe('DataLakeToggle', () => {
     expect(setCurrentSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: 's1', forceKnowledgeRetrieval: true })
     );
-    expect(updateSession).toHaveBeenCalledWith(expect.objectContaining({ id: 's1', forceKnowledgeRetrieval: true }));
+    expect(updateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 's1', forceKnowledgeRetrieval: true }),
+      expect.objectContaining({ onError: expect.any(Function) })
+    );
+  });
+
+  it('turning off: flips the store back to false and persists forceKnowledgeRetrieval:false', () => {
+    useDataLakeMode.setState({ enabled: true, seededSessionId: 's1' });
+    currentSession = { id: 's1', name: 'Chat', forceKnowledgeRetrieval: true };
+    wrap(<DataLakeToggle />);
+    fireEvent.click(screen.getByTestId('datalake-mode-toggle'));
+    expect(useDataLakeMode.getState().enabled).toBe(false);
+    expect(updateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 's1', forceKnowledgeRetrieval: false }),
+      expect.objectContaining({ onError: expect.any(Function) })
+    );
+  });
+
+  it('rolls back the optimistic toggle when persistence fails', () => {
+    updateSession.mockImplementation((_session: unknown, opts?: { onError?: () => void }) => opts?.onError?.());
+    wrap(<DataLakeToggle />);
+    fireEvent.click(screen.getByTestId('datalake-mode-toggle'));
+    expect(useDataLakeMode.getState().enabled).toBe(false); // rolled back from the optimistic true
   });
 
   it('renders nothing when the admin flag is off', () => {
