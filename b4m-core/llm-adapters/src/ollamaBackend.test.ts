@@ -533,3 +533,119 @@ describe('OllamaBackend model options', () => {
     expect(show).toHaveBeenCalledTimes(1);
   });
 });
+
+// The ollama client takes no per-request AbortSignal, so the backend binds one
+// into the transport for that request. Without it a non-streaming round is a
+// single blocking request that cancellation cannot interrupt.
+describe('OllamaBackend request cancellation', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // Stub global fetch (the backend's client calls through to it) and return the
+  // RequestInit the /api/chat POST was issued with.
+  async function chatRequestInit(
+    completionOptions: Record<string, unknown>,
+    body: (url: string) => Response
+  ): Promise<RequestInit> {
+    let chatInit: RequestInit | undefined;
+    vi.stubGlobal('fetch', async (input: unknown, init: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/chat')) chatInit = init;
+      return body(url);
+    });
+    const backend = new OllamaBackend('http://localhost:11434', silentLogger);
+    await run(backend, completionOptions);
+    if (!chatInit) throw new Error('no /api/chat request was issued');
+    return chatInit;
+  }
+
+  const jsonBody = (url: string) =>
+    new Response(
+      url.endsWith('/api/show')
+        ? JSON.stringify({ capabilities: ['tools'], model_info: { 'qwen35.context_length': 8192 } })
+        : JSON.stringify({ message: { content: 'ok' }, prompt_eval_count: 1, eval_count: 1, done_reason: 'stop' }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+
+  it('attaches the caller signal to a non-streaming request', async () => {
+    const controller = new AbortController();
+    const init = await chatRequestInit({ tools: [], abortSignal: controller.signal }, jsonBody);
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it('sends no signal when the caller provides none', async () => {
+    const init = await chatRequestInit({ tools: [] }, jsonBody);
+    expect(init.signal).toBeUndefined();
+  });
+
+  it('combines the caller signal with the client stream controller, so either cancels', async () => {
+    const controller = new AbortController();
+    const streamBody = (url: string) =>
+      url.endsWith('/api/show')
+        ? jsonBody(url)
+        : new Response(
+            new ReadableStream<Uint8Array>({
+              start(c) {
+                c.enqueue(
+                  new TextEncoder().encode(
+                    `${JSON.stringify({ message: { content: 'ok' }, done: true, done_reason: 'stop' })}\n`
+                  )
+                );
+                c.close();
+              },
+            }),
+            { status: 200 }
+          );
+    const init = await chatRequestInit({ tools: [], stream: true, abortSignal: controller.signal }, streamBody);
+    // Not the caller's signal itself: the client's own per-stream controller is
+    // merged in, so aborting either one aborts the request.
+    expect(init.signal).toBeDefined();
+    expect(init.signal).not.toBe(controller.signal);
+    expect(init.signal!.aborted).toBe(false);
+    controller.abort();
+    expect(init.signal!.aborted).toBe(true);
+  });
+});
+
+// Pressing Stop now aborts the transport, so an AbortError is the expected
+// outcome of a cancelled request rather than a backend fault.
+describe('OllamaBackend abort logging', () => {
+  function backendThatAborts() {
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any;
+    const backend = new OllamaBackend('http://localhost:11434', logger);
+    const client = {
+      show: vi.fn(async () => ({ capabilities: [], model_info: {} })),
+      chat: vi.fn(async () => {
+        const err = new Error('This operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      }),
+    };
+    (backend as any)._api = client;
+    // A request carrying an abortSignal builds its own signal-bound client, so
+    // stubbing _api alone would let the call reach a real Ollama on this host.
+    (backend as any).createClient = () => client;
+    return { backend, logger };
+  }
+
+  it('does not log a user cancellation as an error, but still rethrows', async () => {
+    const { backend, logger } = backendThatAborts();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(run(backend, { tools: [], abortSignal: controller.signal })).rejects.toThrow(
+      'This operation was aborted'
+    );
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.debug).toHaveBeenCalled();
+  });
+
+  it('still logs an abort with no cancellation behind it as an error', async () => {
+    const { backend, logger } = backendThatAborts();
+    const controller = new AbortController();
+    await expect(run(backend, { tools: [], abortSignal: controller.signal })).rejects.toThrow(
+      'This operation was aborted'
+    );
+    expect(logger.error).toHaveBeenCalled();
+  });
+});

@@ -1,5 +1,6 @@
 import {
   IMessage,
+  isUserInitiatedAbort,
   ModelBackend,
   PermissionDeniedError,
   type MessageContentObject,
@@ -31,6 +32,9 @@ export class OllamaBackend implements ICompletionBackend {
   private _host: string;
   private _api: Ollama;
   private _logger: ILogger;
+  private _clientHost: string;
+  private _clientHeaders: Record<string, string>;
+  private _agent: Agent;
   public currentModel: string = '';
 
   constructor(host?: string, logger?: ILogger) {
@@ -47,13 +51,30 @@ export class OllamaBackend implements ICompletionBackend {
     // Local models processing large tool schemas can take several minutes to
     // produce the first token, exceeding undici's default 5-minute headersTimeout.
     // Scope this to Ollama requests only via the custom fetch option.
-    const agent = new Agent({ headersTimeout: 30 * 60_000, bodyTimeout: 60 * 60_000 });
+    this._agent = new Agent({ headersTimeout: 30 * 60_000, bodyTimeout: 60 * 60_000 });
+    this._clientHost = url.toString();
+    this._clientHeaders = headers;
+    this._api = this.createClient();
+  }
+
+  /**
+   * Build an Ollama client. The `ollama` package takes no per-request
+   * AbortSignal (it only attaches an internal controller to streaming requests
+   * and exposes a client-wide abort()), so cancellation has to be bound into
+   * the fetch of a client made for that one request - hence the optional
+   * `signal`. The undici Agent is shared across clients so connection pooling
+   * and the raised timeouts survive.
+   */
+  private createClient(signal?: AbortSignal): Ollama {
     const fetchWithTimeout: typeof globalThis.fetch = (input, init) =>
       (globalThis.fetch as (i: typeof input, o: object) => Promise<Response>)(input, {
         ...init,
-        dispatcher: agent,
+        dispatcher: this._agent,
+        // Streaming requests already carry the client's own controller signal;
+        // combine rather than replace so either source can cancel.
+        ...(signal && { signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal }),
       });
-    this._api = new Ollama({ host: url.toString(), headers, fetch: fetchWithTimeout });
+    return new Ollama({ host: this._clientHost, headers: this._clientHeaders, fetch: fetchWithTimeout });
   }
 
   async getModelInfo(): Promise<ModelInfo[]> {
@@ -367,7 +388,14 @@ export class OllamaBackend implements ICompletionBackend {
         callback
       );
     } catch (error) {
-      this._logger.error('[OllamaBackend] Error during Ollama API call:', error);
+      // Now that the abort signal reaches the transport, pressing Stop surfaces
+      // here as an AbortError. That is the request working as intended, not a
+      // fault, so don't log it at error level; the caller still needs the throw.
+      if (error instanceof Error && isUserInitiatedAbort(error, options.abortSignal)) {
+        this._logger.debug('[OllamaBackend] Ollama request cancelled by the caller');
+      } else {
+        this._logger.error('[OllamaBackend] Error during Ollama API call:', error);
+      }
       throw error;
     }
   }
@@ -396,8 +424,13 @@ export class OllamaBackend implements ICompletionBackend {
     let outputTokens = 0;
     let doneReason: string | undefined;
 
+    // A cancellable request needs the signal bound into the transport: the
+    // between-rounds abort check below can't interrupt a call already in
+    // flight, and a non-streaming round is one long blocking request.
+    const api = options.abortSignal ? this.createClient(options.abortSignal) : this._api;
+
     if (options.stream) {
-      const response = await this._api.chat({ ...baseRequest, stream: true as const });
+      const response = await api.chat({ ...baseRequest, stream: true as const });
       let startedThinking = false;
       let stoppedThinking = false;
       // Modern Ollama streams reasoning in a separate `thinking` field rather
@@ -453,7 +486,7 @@ export class OllamaBackend implements ICompletionBackend {
         }
       }
     } else {
-      const response = await this._api.chat({ ...baseRequest, stream: false as const });
+      const response = await api.chat({ ...baseRequest, stream: false as const });
       if (response.message.tool_calls?.length) {
         toolCalls.push(...response.message.tool_calls);
       }
