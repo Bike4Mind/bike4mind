@@ -18,6 +18,7 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
+import type { ColorPaletteProp } from '@mui/joy/styles';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import EditIcon from '@mui/icons-material/Edit';
 import HistoryIcon from '@mui/icons-material/History';
@@ -39,6 +40,34 @@ interface PriceRow {
 // it here would pull mongoose into the client bundle). Pinned by a test there.
 const SEED_NOTE = 'adapter-seed';
 const isSeedRow = (row: PriceRow) => row.note === SEED_NOTE;
+
+// Mirrors DISCOVERY_PRICE_NOTE_PREFIX in @bike4mind/common; discovery stamps
+// notes as 'discovery:<source>@<iso-date>'. Duplicated because every
+// @bike4mind import in this file is type-only, and a runtime one would drag
+// server code into the client bundle. Pinned by the model-prices API test.
+const DISCOVERY_NOTE_PREFIX = 'discovery:';
+const isDiscoveryRow = (row: PriceRow) => row.note?.startsWith(DISCOVERY_NOTE_PREFIX) === true;
+
+/** 'discovery:openrouter@2026-07-20' -> 'openrouter': which feed priced the row. */
+const discoverySource = (row: PriceRow): string | undefined =>
+  isDiscoveryRow(row) ? row.note?.slice(DISCOVERY_NOTE_PREFIX.length).split('@')[0] || undefined : undefined;
+
+type Provenance = 'seed' | 'discovery' | 'operator';
+const provenanceOf = (row: PriceRow): Provenance =>
+  isSeedRow(row) ? 'seed' : isDiscoveryRow(row) ? 'discovery' : 'operator';
+
+// Seed reads muted in the catalog but highlighted in the audit trail, so the
+// two chips keep separate color maps.
+const SOURCE_CHIP_COLOR: Record<Provenance, ColorPaletteProp> = {
+  seed: 'neutral',
+  discovery: 'warning',
+  operator: 'primary',
+};
+const HISTORY_CHIP_COLOR: Record<Provenance, ColorPaletteProp> = {
+  seed: 'primary',
+  discovery: 'warning',
+  operator: 'neutral',
+};
 
 /** Every rate field a tier can carry, in display order. */
 const RATE_FIELDS = [
@@ -255,6 +284,8 @@ export const ModelPricingCatalog: React.FC = () => {
             <tbody>
               {rows.map(row => {
                 const tier = firstTier(row);
+                const provenance = provenanceOf(row);
+                const source = discoverySource(row);
                 return (
                   <tr key={`${row.modelId}|${row.unit}`} data-testid={`model-pricing-row-${row.modelId}-${row.unit}`}>
                     <td>
@@ -274,11 +305,12 @@ export const ModelPricingCatalog: React.FC = () => {
                     <td>
                       <Chip
                         size="sm"
-                        color={isSeedRow(row) ? 'neutral' : 'primary'}
+                        color={SOURCE_CHIP_COLOR[provenance]}
                         variant="soft"
+                        title={source ? `priced by ${source}` : undefined}
                         data-testid={`model-pricing-source-${row.modelId}-${row.unit}`}
                       >
-                        {isSeedRow(row) ? 'seed' : 'operator'}
+                        {provenance}
                       </Chip>
                     </td>
                     <td>
@@ -442,11 +474,11 @@ export const ModelPricingCatalog: React.FC = () => {
                       <Typography level="body-sm">{new Date(row.effectiveFrom).toLocaleString()}</Typography>
                       <Chip
                         size="sm"
-                        color={isSeedRow(row) ? 'primary' : 'neutral'}
+                        color={HISTORY_CHIP_COLOR[provenanceOf(row)]}
                         variant="soft"
                         data-testid="history-who"
                       >
-                        {row.repricedBy ?? (isSeedRow(row) ? 'seed' : '-')}
+                        {row.repricedBy ?? (isSeedRow(row) ? 'seed' : isDiscoveryRow(row) ? 'discovery' : '-')}
                       </Chip>
                     </Stack>
                     <Typography level="body-sm" sx={{ fontStyle: 'italic' }}>

@@ -34,6 +34,15 @@ const ROWS = [
   },
 ];
 
+const DISCOVERY_ROW = {
+  modelId: 'gpt-z',
+  unit: 'per_token',
+  pricing: { '0': { input: 2e-6, output: 8e-6 } },
+  effectiveFrom: '2026-07-20T00:00:00.000Z',
+  note: 'discovery:openrouter@2026-07-20',
+  repricedBy: 'model-discovery',
+};
+
 function renderCatalog() {
   return render(
     <TestWrapper>
@@ -54,6 +63,49 @@ describe('ModelPricingCatalog', () => {
     expect(await screen.findByTestId('model-pricing-row-gpt-x-per_token')).toBeInTheDocument();
     expect(screen.getByTestId('model-pricing-source-gpt-x-per_token')).toHaveTextContent('seed');
     expect(screen.getByTestId('model-pricing-source-gpt-y-per_token')).toHaveTextContent('operator');
+  });
+
+  it('renders discovery rows as their own provenance, named by the feed that priced them', async () => {
+    mockGet.mockResolvedValue({ data: { rows: [...ROWS, DISCOVERY_ROW] } });
+    renderCatalog();
+    const chip = await screen.findByTestId('model-pricing-source-gpt-z-per_token');
+    expect(chip).toHaveTextContent('discovery');
+    expect(chip.className).toContain('colorWarning');
+    // Which feed priced it, without making an admin open history.
+    expect(chip.getAttribute('title')).toContain('openrouter');
+    // Seed and operator rows keep their existing chips.
+    expect(screen.getByTestId('model-pricing-source-gpt-x-per_token')).toHaveTextContent('seed');
+    expect(screen.getByTestId('model-pricing-source-gpt-y-per_token')).toHaveTextContent('operator');
+  });
+
+  it('marks a discovery row in history so an audit can tell automation from an operator', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    mockGet.mockResolvedValueOnce({
+      data: {
+        history: [
+          { ...DISCOVERY_ROW, modelId: 'gpt-x' },
+          {
+            modelId: 'gpt-x',
+            unit: 'per_token',
+            pricing: { '0': { input: 4e-6, output: 16e-6 } },
+            effectiveFrom: '2026-07-01T00:00:00.000Z',
+            note: 'adapter-seed',
+          },
+        ],
+      },
+    });
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+    const rows = await screen.findAllByTestId('history-row');
+
+    const newest = within(rows[0]);
+    const who = newest.getByTestId('history-who');
+    expect(who).toHaveTextContent('model-discovery');
+    expect(who.className).toContain('colorWarning');
+    expect(newest.getByText('discovery:openrouter@2026-07-20')).toBeInTheDocument();
+
+    // The seed row underneath keeps its own chip color.
+    expect(within(rows[1]).getByTestId('history-who').className).toContain('colorPrimary');
   });
 
   it('reprice requires a note before saving, then posts the new rates', async () => {
