@@ -7,7 +7,7 @@
 
 import { Box, Button, CircularProgress, Typography } from '@mui/joy';
 import { CheckCircleOutline, ErrorOutline, PlayArrow } from '@mui/icons-material';
-import { FC, useState, useEffect, useRef } from 'react';
+import { FC, useState, useEffect } from 'react';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
@@ -69,7 +69,6 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
   const [isExecuting, setIsExecuting] = useState(false);
   const [executionStarted, setExecutionStarted] = useState(() => parsedData?.started || false);
   const [error, setError] = useState<string | null>(() => parsedData?.error || null);
-  const abortRef = useRef(false);
 
   const [liveProgress, setLiveProgress] = useState<{
     status?: string;
@@ -144,7 +143,6 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
     setIsExecuting(true);
     setExecutionStarted(true);
     setError(null);
-    abortRef.current = false;
 
     if (storageKey) {
       sessionStorage.setItem(storageKey, JSON.stringify({ started: true }));
@@ -190,8 +188,6 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
       let cellsFailed = 0;
 
       for (let ci = 0; ci < codeCells.length; ci++) {
-        if (abortRef.current) break;
-
         const { cell } = codeCells[ci];
         const code = getCellSource(cell);
 
@@ -229,7 +225,7 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
         }
       }
 
-      if (cellsFailed === 0 && !abortRef.current) {
+      if (cellsFailed === 0) {
         setLiveProgress({ status: 'completed', cellIndex: totalCodeCells - 1, totalCells: totalCodeCells });
         await reportProgress('completed', totalCodeCells - 1, totalCodeCells);
         if (storageKey) {
@@ -256,6 +252,12 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
         } catch {
           // Ignore cleanup errors
         }
+      }
+      // Clean up the temp notebook file created on the Jupyter server
+      try {
+        await client.deleteContents(notebookPath);
+      } catch {
+        // Ignore cleanup errors
       }
       setIsExecuting(false);
     }
@@ -297,9 +299,10 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
     }
   };
 
+  const hasJupyterConfig = !!getStoredJupyterConfig()?.serverUrl;
+
   const handleExecute = async () => {
-    const jupyterConfig = getStoredJupyterConfig();
-    if (jupyterConfig?.serverUrl) {
+    if (hasJupyterConfig) {
       await handleBrowserExecute();
     } else {
       await handleCliExecute();
@@ -382,8 +385,6 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
       </Box>
     );
   }
-
-  const hasJupyterConfig = !!getStoredJupyterConfig()?.serverUrl;
 
   // Show execute button
   return (

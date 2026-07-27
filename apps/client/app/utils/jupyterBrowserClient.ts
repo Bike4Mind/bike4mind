@@ -179,12 +179,19 @@ export class JupyterBrowserClient {
     await this.request('DELETE', `/api/sessions/${sessionId}`);
   }
 
+  /**
+   * Delete a file from the Jupyter server via the Contents API.
+   */
+  async deleteContents(path: string): Promise<void> {
+    await this.request('DELETE', `/api/contents/${path}`);
+  }
+
   private getKernelWebSocketUrl(kernelId: string): string {
     const httpUrl = new URL(this.serverUrl);
     const wsProtocol = httpUrl.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${wsProtocol}//${httpUrl.host}/api/kernels/${kernelId}/channels`;
     if (this.token) {
-      return `${wsUrl}?token=${this.token}`;
+      return `${wsUrl}?token=${encodeURIComponent(this.token)}`;
     }
     return wsUrl;
   }
@@ -202,9 +209,12 @@ export class JupyterBrowserClient {
       let executionCount: number | null = null;
       let hasError = false;
       let errorInfo: { ename: string; evalue: string; traceback: string[] } | undefined;
+      let settled = false;
 
       const ws = new WebSocket(wsUrl);
       const timeoutHandle = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         cleanup();
         reject(new JupyterBrowserError(`Cell execution timed out after ${timeoutMs}ms`));
       }, timeoutMs);
@@ -217,6 +227,8 @@ export class JupyterBrowserClient {
       };
 
       ws.onerror = () => {
+        if (settled) return;
+        settled = true;
         cleanup();
         reject(
           new JupyterBrowserError('WebSocket connection failed. Is the Jupyter server running with CORS enabled?')
@@ -252,7 +264,13 @@ export class JupyterBrowserClient {
 
       ws.onmessage = (event: MessageEvent) => {
         try {
-          const msg = JSON.parse(typeof event.data === 'string' ? event.data : '');
+          // Binary frames (Blob/ArrayBuffer) are out-of-scope; skip with a warning
+          if (typeof event.data !== 'string') {
+            console.warn('[JupyterBrowserClient] Received binary WebSocket frame; skipping');
+            return;
+          }
+
+          const msg = JSON.parse(event.data);
 
           if (msg.parent_header?.msg_id !== msgId) return;
 
@@ -305,6 +323,8 @@ export class JupyterBrowserClient {
                 if (msg.content.execution_count !== undefined) {
                   executionCount = msg.content.execution_count;
                 }
+                if (settled) return;
+                settled = true;
                 cleanup();
                 resolve({
                   success: !hasError,
@@ -322,6 +342,9 @@ export class JupyterBrowserClient {
 
       ws.onclose = () => {
         clearTimeout(timeoutHandle);
+        if (settled) return;
+        settled = true;
+        reject(new JupyterBrowserError('WebSocket closed before execution completed'));
       };
     });
   }

@@ -13,7 +13,6 @@
  *     cellIndex?: number,
  *     totalCells?: number,
  *     error?: string,
- *     executedNotebook?: string,
  *   }
  */
 import { baseApi } from '@server/middlewares/baseApi';
@@ -27,7 +26,6 @@ const ProgressBody = z.object({
   cellIndex: z.number().optional(),
   totalCells: z.number().optional(),
   error: z.string().optional(),
-  executedNotebook: z.string().optional(),
 });
 
 const handler = baseApi({ auth: true }).post(async (req, res) => {
@@ -36,7 +34,7 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
     return res.status(400).json({ error: 'Invalid request body', details: parsed.error.flatten() });
   }
 
-  const { questId, status, cellIndex, totalCells, error: errorMsg, executedNotebook } = parsed.data;
+  const { questId, status, cellIndex, totalCells, error: errorMsg } = parsed.data;
   const userId = req.user!.id;
 
   const updateData: Record<string, unknown> = {};
@@ -48,6 +46,10 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
     }
     if (totalCells !== undefined) {
       updateData['jupyterNotebook.cellCount'] = totalCells;
+    }
+    // Set startedAt on the first executing report (when cellIndex is absent)
+    if (cellIndex === undefined) {
+      updateData['jupyterNotebook.startedAt'] = new Date();
     }
   } else if (status === 'completed') {
     updateData['jupyterNotebook.status'] = 'completed';
@@ -61,10 +63,6 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
     if (errorMsg) {
       updateData['jupyterNotebook.lastError'] = errorMsg;
     }
-  }
-
-  if (executedNotebook) {
-    updateData['jupyterNotebook.executedNotebookJson'] = executedNotebook;
   }
 
   const updated = await Quest.findOneAndUpdate({ _id: questId, userId }, { $set: updateData }, { new: true });

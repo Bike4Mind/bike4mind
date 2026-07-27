@@ -35,12 +35,11 @@ import {
  * on the user's local Jupyter server directly from the browser.
  */
 const JupyterIntegrationSection = () => {
-  const initialConfig = getStoredJupyterConfig();
-  const [serverUrl, setServerUrl] = useState(() => initialConfig?.serverUrl || '');
-  const [token, setToken] = useState(() => initialConfig?.token || '');
+  const [serverUrl, setServerUrl] = useState(() => getStoredJupyterConfig()?.serverUrl || '');
+  const [token, setToken] = useState(() => getStoredJupyterConfig()?.token || '');
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testError, setTestError] = useState('');
-  const [isConfigured, setIsConfigured] = useState(() => !!initialConfig);
+  const [isConfigured, setIsConfigured] = useState(() => !!getStoredJupyterConfig());
 
   const handleSave = useCallback(() => {
     if (!serverUrl.trim()) return;
@@ -269,12 +268,16 @@ const JupyterIntegrationSection = () => {
                   })}
                 >
                   {`# JupyterLab (recommended)
-jupyter lab --ServerApp.allow_origin='*' \\
+jupyter lab \\
+  --ServerApp.allow_origin='https://app.bike4mind.com' \\
   --ServerApp.token='' --ServerApp.password=''
 
 # Or classic Jupyter Notebook
-jupyter notebook --NotebookApp.allow_origin='*' \\
-  --NotebookApp.token='' --NotebookApp.password=''`}
+jupyter notebook \\
+  --NotebookApp.allow_origin='https://app.bike4mind.com' \\
+  --NotebookApp.token='' --NotebookApp.password=''
+
+# For local dev, use allow_origin='*' instead`}
                 </Box>
                 <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 1 }}>
                   The <code>allow_origin</code> flag lets the browser connect to your local Jupyter server. For secure
@@ -374,8 +377,8 @@ jupyter notebook --NotebookApp.allow_origin='*' \\
                   </Typography>
 
                   <Typography level="body-sm">
-                    <strong>4. View results</strong> — Once complete, you can download the executed notebook with all
-                    outputs, or view the results in your local Jupyter server.
+                    <strong>4. View results</strong> — Once complete, execution status is shown inline. You can also
+                    view outputs in your local Jupyter server.
                   </Typography>
                 </Stack>
               </Box>
