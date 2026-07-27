@@ -115,6 +115,7 @@ export function createGeminiSource(): DiscoverySource {
       const seenTokens = new Set<string>();
       let pageToken: string | undefined;
       let status: number | undefined;
+      let exhausted = false;
 
       for (let page = 0; page < GEMINI_MAX_PAGES; page += 1) {
         const url = new URL(GEMINI_MODELS_URL);
@@ -129,16 +130,30 @@ export function createGeminiSource(): DiscoverySource {
         pages.push(response.body);
 
         const next = text(response.body?.nextPageToken);
-        if (!next) break;
         // A token that repeats is a server-side loop; one more page would be
         // the same page, and the bound above would only slow the discovery of that.
-        if (seenTokens.has(next)) break;
+        if (!next || seenTokens.has(next)) {
+          exhausted = true;
+          break;
+        }
         seenTokens.add(next);
         pageToken = next;
 
         if (!hasTimeLeft(ctx)) {
           return { ok: false, error: 'ran out of budget mid-pagination', httpStatus: status };
         }
+      }
+
+      // Same reasoning as the deadline path: a live cursor at the cap means the
+      // tail of the list was never read, and this source claims authority over
+      // the backend, so a half listing would count the models it never saw as
+      // absent.
+      if (!exhausted) {
+        return {
+          ok: false,
+          error: `still paginating after GEMINI_MAX_PAGES (${GEMINI_MAX_PAGES}) pages`,
+          httpStatus: status,
+        };
       }
 
       const records = normalizeGeminiModels(pages);

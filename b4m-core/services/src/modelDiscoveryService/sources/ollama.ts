@@ -98,7 +98,11 @@ export function normalizeOllamaModels({ tags, shown }: OllamaFacts): DiscoveredM
         type: isEmbedding ? 'embedding' : 'text',
         // No display name exists locally; the tag IS the human-facing name.
         name: id,
-        contextWindow: contextWindow ?? 0,
+        // Omitted rather than zeroed when nothing supplied it: a provider record
+        // outranks every other source for a field, so a 0 written because an
+        // /api/show call did not land would beat the real value and flip back and
+        // forth between runs. Absent means the catalog's value carries forward.
+        contextWindow,
         canStream: true,
         supportsVision: capabilities.length > 0 ? capabilities.includes('vision') : undefined,
         supportsTools: capabilities.length > 0 ? capabilities.includes('tools') : undefined,

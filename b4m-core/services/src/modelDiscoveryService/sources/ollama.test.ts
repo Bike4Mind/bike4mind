@@ -37,12 +37,22 @@ describe('ollama normalization', () => {
 
   it('falls back to /api/show model_info for a tag that omits the context length', () => {
     const withoutShow = byId({ tags }).get('gemma4:26b-a4b-it-q4_K_M');
-    expect(withoutShow?.patch.contextWindow).toBe(0);
+    expect(withoutShow?.patch).not.toHaveProperty('contextWindow');
 
     const shown = new Map([['gemma4:26b-a4b-it-q4_K_M', show]]);
     const withShow = byId({ tags: legacyTags, shown }).get('gemma4:26b-a4b-it-q4_K_M');
     expect(withShow?.patch.contextWindow).toBe(262144);
     expect(withShow?.patch.supportsVision).toBe(true);
+  });
+
+  it('omits the context window for a model whose /api/show call never landed', () => {
+    // The deadline can end the show loop mid-batch. A provider record outranks
+    // every other source for a field, so writing 0 here would beat the real
+    // value and flip the catalog between 0 and the truth run over run.
+    const records = normalizeOllamaModels({ tags: legacyTags, shown: new Map() });
+
+    expect(records).toHaveLength(legacyTags.models.length);
+    for (const record of records) expect(record.patch).not.toHaveProperty('contextWindow');
   });
 
   it('finds the context length under whatever architecture prefix the model uses', () => {
@@ -55,7 +65,7 @@ describe('ollama normalization', () => {
   it('skips malformed entries and keeps the rest', () => {
     const records = normalizeOllamaModels({ tags: malformed });
     expect(records.map(record => record.modelId)).toEqual(['broken:latest', 'qwen3.5:2b-q4_K_M']);
-    expect(records.find(record => record.modelId === 'broken:latest')?.patch.contextWindow).toBe(0);
+    expect(records.find(record => record.modelId === 'broken:latest')?.patch).not.toHaveProperty('contextWindow');
   });
 
   it('tolerates capability values this build has never heard of', () => {

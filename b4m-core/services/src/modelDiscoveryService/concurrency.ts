@@ -14,7 +14,10 @@ export function limitConcurrency(limit: number): <T>(task: () => Promise<T>) => 
   const waiting: Array<() => void> = [];
 
   return async task => {
-    if (active >= cap) await new Promise<void>(resolve => waiting.push(resolve));
+    // A loop, not an if: a released waiter resumes one microtask after the slot
+    // was freed, and a task submitted in that window takes the slot first. The
+    // waiter has to re-verify rather than trust the release.
+    while (active >= cap) await new Promise<void>(resolve => waiting.push(resolve));
     active += 1;
     try {
       return await task();

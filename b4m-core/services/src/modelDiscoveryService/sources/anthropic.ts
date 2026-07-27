@@ -183,6 +183,7 @@ export function createAnthropicSource(): DiscoverySource {
       const pages: unknown[] = [];
       let afterId: string | undefined;
       let status: number | undefined;
+      let exhausted = false;
 
       for (let page = 0; page < ANTHROPIC_MAX_PAGES; page += 1) {
         const url = new URL(ANTHROPIC_MODELS_URL);
@@ -197,9 +198,23 @@ export function createAnthropicSource(): DiscoverySource {
         pages.push(response.body);
 
         const lastId = text(response.body?.last_id);
-        if (response.body?.has_more !== true || !lastId || lastId === afterId) break;
+        if (response.body?.has_more !== true || !lastId || lastId === afterId) {
+          exhausted = true;
+          break;
+        }
         afterId = lastId;
         if (!hasTimeLeft(ctx)) return { ok: false, error: 'ran out of budget mid-pagination', httpStatus: status };
+      }
+
+      // has_more still true at the cap: the tail was never read. This source
+      // claims authority over the backend, so reporting a partial listing as
+      // exhaustive would count the models it never saw as absent.
+      if (!exhausted) {
+        return {
+          ok: false,
+          error: `still paginating after ANTHROPIC_MAX_PAGES (${ANTHROPIC_MAX_PAGES}) pages`,
+          httpStatus: status,
+        };
       }
 
       const models = normalizeAnthropicModels(pages);

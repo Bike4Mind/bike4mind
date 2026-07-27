@@ -52,6 +52,7 @@ interface Harness {
   state: FakeDiscoveryStateRepository;
   runs: FakeRunRepository;
   warnings: string[];
+  infos: string[];
   advance: (ms: number) => void;
   options: RunModelDiscoveryOptions;
 }
@@ -65,7 +66,12 @@ function harness(sources: DiscoverySource[], settings: Partial<Record<SettingKey
   const state = new FakeDiscoveryStateRepository();
   const runs = new FakeRunRepository();
   const warnings: string[] = [];
-  const logger: DiscoveryLogger = { info: () => {}, warn: message => warnings.push(message), error: () => {} };
+  const infos: string[] = [];
+  const logger: DiscoveryLogger = {
+    info: message => infos.push(message),
+    warn: message => warnings.push(message),
+    error: () => {},
+  };
 
   return {
     cache,
@@ -74,6 +80,7 @@ function harness(sources: DiscoverySource[], settings: Partial<Record<SettingKey
     state,
     runs,
     warnings,
+    infos,
     advance: (ms: number) => {
       clock += ms;
     },
@@ -178,8 +185,11 @@ describe('runModelDiscovery', () => {
       { name: 'openai', reason: 'egress-disabled' },
       { name: 'models.dev', reason: 'egress-disabled' },
     ]);
-    // Nothing was verified, so the run must not read as a successful refresh.
-    expect(result.outcome).toBe('partial');
+    // Nothing failed, so nothing degrades the status; the empty source list and
+    // the skip counts in the summary are what say no data was refreshed.
+    expect(result.outcome).toBe('ok');
+    expect(result.sources).toEqual([]);
+    expect(walled.infos.some(message => message.includes('skipped=2(egress-disabled:2)'))).toBe(true);
     expect(walled.catalog.rows).toEqual([]);
   });
 
@@ -190,7 +200,24 @@ describe('runModelDiscovery', () => {
     const result = await runModelDiscovery(bench.adapters, { ...bench.options, minSourceIntervalMs: 30 * 60_000 });
 
     expect(result.skippedSources).toEqual([{ name: 'openai', reason: 'recently-fetched' }]);
-    expect(result.outcome).toBe('partial');
+    // A source skipped as fresh is fresh data, not a degraded run.
+    expect(result.outcome).toBe('ok');
+  });
+
+  it('fetches a recently-fetched source anyway when an operator asks for it', async () => {
+    await runModelDiscovery(bench.adapters, bench.options);
+    bench.advance(10 * 60_000);
+
+    const result = await runModelDiscovery(bench.adapters, {
+      ...bench.options,
+      trigger: 'manual',
+      minSourceIntervalMs: 60 * 60_000,
+    });
+
+    // Run now producing attempts=0 is the button reading as broken exactly when
+    // an operator wants a fetch.
+    expect(result.skippedSources).toEqual([]);
+    expect(result.sources.map(report => report.name)).toEqual(['openai']);
   });
 
   it('skips a source with no credential without failing the run', async () => {
@@ -199,7 +226,11 @@ describe('runModelDiscovery', () => {
     const result = await runModelDiscovery(partial.adapters, partial.options);
 
     expect(result.skippedSources).toEqual([{ name: 'xai', reason: 'not-configured' }]);
-    expect(result.outcome).toBe('partial');
+    // A structurally unconfigurable source (bedrock under self-host, xai with no
+    // key) must not make every run 'partial' forever: lastSuccessfulRun reads
+    // status === 'ok', and without one the startup staleness gate never trips.
+    expect(result.outcome).toBe('ok');
+    expect(partial.runs.docs[0].status).toBe('ok');
     expect(partial.catalog.rows).toHaveLength(1);
   });
 
@@ -888,6 +919,71 @@ describe('runModelDiscovery', () => {
       expect(bench.warnings.some(message => message.includes('convergence capped'))).toBe(true);
       // Every pass after the first repriced the model the next one disagreed with.
       expect(bench.prices.rows).toHaveLength(MAX_DISCOVERY_PASSES - 1);
+    });
+
+    it('bands every pass against the price in force when the run started', async () => {
+      // Two aggregators drifting 40% per fetch, in lockstep so their price is
+      // trusted. 40% clears the 50% band once; the second pass is another 40% on
+      // top, which is 96% against where the run began.
+      const quoting = (name: string) => {
+        let quote = 1;
+        return stubSource({
+          name,
+          kind: 'aggregator',
+          records: () => {
+            quote *= 1.4;
+            return [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: quote, outputPerMTok: quote } }];
+          },
+        });
+      };
+      const drifting = harness([
+        openaiSource([{ ...gpt6, pricing: undefined }]),
+        quoting('models.dev'),
+        quoting('litellm'),
+      ]);
+      await drifting.prices.append({
+        modelId: 'gpt-6',
+        unit: 'per_token',
+        pricing: { '0': { input: 1e-6, output: 1e-6 } },
+        effectiveFrom: new Date(START.getTime() - 60_000),
+        note: 'adapter-seed',
+      });
+
+      const result = await runModelDiscovery(drifting.adapters, drifting.options);
+
+      // Re-measuring each pass against the row the pass before it wrote would
+      // apply the whole 1.96x unattended, one band at a time.
+      expect(result.passes).toBe(2);
+      expect(drifting.prices.rows).toHaveLength(2);
+      expect(drifting.prices.rows[1].pricing['0'].input).toBe(1.4 / 1_000_000);
+      expect(result.prices.flags).toHaveLength(1);
+      expect(result.prices.flags[0]).toMatchObject({ modelId: 'gpt-6', kind: 'band-exceeded' });
+    });
+
+    it('keeps a source that succeeded in pass 1 when its refetch fails', async () => {
+      let fetches = 0;
+      const flakyAggregator: DiscoverySource = {
+        name: 'models.dev',
+        kind: 'aggregator',
+        isConfigured: () => true,
+        fetch: async () => {
+          fetches += 1;
+          return fetches === 1
+            ? { ok: true, records: [{ modelId: 'gpt-7', patch: { supportsTools: true } }] }
+            : { ok: false, error: 'HTTP 502' };
+        },
+      };
+      const flaky = harness([openaiSource([gpt7]), flakyAggregator]);
+
+      const result = await runModelDiscovery(flaky.adapters, flaky.options);
+
+      // Pass 1's records were committed; reporting the source as failed for the
+      // run would alarm on data the run actually used.
+      expect(fetches).toBeGreaterThan(1);
+      expect(result.sources.find(report => report.name === 'models.dev')).toMatchObject({ ok: true });
+      expect(result.metrics.SourceFailures).toEqual({ openai: 0, 'models.dev': 0 });
+      expect(result.outcome).toBe('ok');
+      expect(flaky.warnings.some(message => message.includes('refetch failed'))).toBe(true);
     });
 
     it('makes one pass and fetches each source once in report mode', async () => {

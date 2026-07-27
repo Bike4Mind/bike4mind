@@ -248,7 +248,7 @@ describe('anthropic source fetch', () => {
     }
   });
 
-  it('bounds pagination when has_more never goes false', async () => {
+  it('bounds pagination when has_more never goes false, and fails rather than half-listing', async () => {
     let pages = 0;
     const restore = stubFetch(url => {
       if (!url.startsWith(ANTHROPIC_MODELS_URL)) return route(url);
@@ -256,8 +256,13 @@ describe('anthropic source fetch', () => {
       return { body: { ...models, last_id: `cursor-${pages}` } };
     });
     try {
-      await createAnthropicSource().fetch(makeContext({ runStartedAt: RUN_AT }));
+      const result = await createAnthropicSource().fetch(makeContext({ runStartedAt: RUN_AT }));
+
       expect(pages).toBe(ANTHROPIC_MAX_PAGES);
+      // Authority over the backend is a claim of exhaustiveness: has_more still
+      // true at the cap means the tail was never read.
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain('ANTHROPIC_MAX_PAGES');
     } finally {
       restore();
     }

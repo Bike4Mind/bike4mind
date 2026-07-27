@@ -88,8 +88,16 @@ interface PriceObservation {
 export interface PricePlanInput {
   /** This run's successful sources, exactly as planCatalogWrites takes them. */
   contributions: readonly SourceContribution[];
-  /** Price rows in force at run start; only per_token rows are considered. */
+  /** Price rows in force as of this pass; only per_token rows are considered. */
   rowsInForce: readonly IModelPrice[];
+  /**
+   * Price rows in force when the RUN started, which is what the band measures
+   * against. A run makes several passes and re-reads `rowsInForce` at each one,
+   * so banding against the previous pass would let a drifting feed stack a band
+   * per pass (1.4x three times is 2.74x under a 50% band). Unset means a
+   * single-pass run, where the two reads are the same rows.
+   */
+  baselineRowsInForce?: readonly IModelPrice[];
   /** Ids the catalog covers, including the models this run's catalog plan adds. */
   knownModelIds: ReadonlySet<string>;
   /** modelDiscoveryPriceBandPct: the largest move, in percent, applied unattended. */
@@ -117,9 +125,10 @@ export interface PricePlan {
  */
 export function planPriceWrites(input: PricePlanInput): PricePlan {
   const observed = collectObservations(input.contributions);
-  const inForce = new Map(
-    input.rowsInForce.filter(row => row.unit === 'per_token').map(row => [row.modelId, row] as const)
-  );
+  const perTokenRows = (rows: readonly IModelPrice[]) =>
+    new Map(rows.filter(row => row.unit === 'per_token').map(row => [row.modelId, row] as const));
+  const inForce = perTokenRows(input.rowsInForce);
+  const atRunStart = input.baselineRowsInForce ? perTokenRows(input.baselineRowsInForce) : inForce;
 
   const rows: IModelPriceInput[] = [];
   const flags: PriceFlag[] = [];
@@ -143,7 +152,9 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
       flags.push({
         modelId,
         kind: 'source-disagreement',
-        proposed: perMTokOf(observations[0].price),
+        // One of the two sides the detail names: a third source's value would be
+        // a number the operator cannot find anywhere in the sentence.
+        proposed: perMTokOf(disagreeing[0].price),
         sources,
         detail:
           `sources disagree beyond ${pct(PRICE_AGREEMENT_TOLERANCE)}: ` +
@@ -225,15 +236,23 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
       continue;
     }
 
-    if (currentTier) {
+    // Measured against the run's opening position, not the row the previous pass
+    // of this same run wrote: the band is what one unattended run may move a
+    // price by, and a per-pass measurement would multiply it by the pass count.
+    // A model unpriced at run start falls back to the row in force, which is one
+    // this run wrote - its first write had nothing to band against either.
+    const openingRow = atRunStart.get(modelId);
+    const bandBaseline = (openingRow ? lowestTier(openingRow) : undefined) ?? currentTier;
+    if (bandBaseline) {
       const band = input.bandPct / 100;
-      const moves = bandMoves(proposed, currentTier);
+      const moves = bandMoves(proposed, bandBaseline);
       if (moves.some(move => move.move > band)) {
         flag(
           'band-exceeded',
           proposed,
           `${valueSources.join('+')} moves ${moves.map(move => `${move.rate} ${pct(move.move)}`).join(', ')} against ` +
-            `the row in force (band ${pct(band)}): ${describe(tierAsPrice(currentTier))} -> ${describe(proposed)}`
+            `the row this run started from (band ${pct(band)}): ${describe(tierAsPrice(bandBaseline))} -> ` +
+            `${describe(proposed)}`
         );
         continue;
       }

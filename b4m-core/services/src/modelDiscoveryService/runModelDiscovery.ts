@@ -8,6 +8,7 @@ import {
   type IModelDiscoveryState,
   type IModelCatalogRow,
   type IModelCatalogRowInput,
+  type IModelPrice,
   type IModelPriceInput,
 } from '@bike4mind/common';
 import { resolveCatalogRecords, type ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
@@ -195,7 +196,15 @@ async function executeRun(
   const skippedSources: Array<{ name: string; reason: SourceSkipReason }> = [];
   const attempts: DiscoverySource[] = [];
   for (const source of sources) {
-    const reason = skipReasonFor(source, { credentials, env, ctx, history, minInterval, startedAt });
+    const reason = skipReasonFor(source, {
+      credentials,
+      env,
+      ctx,
+      history,
+      minInterval,
+      startedAt,
+      trigger: options.trigger,
+    });
     if (reason) skippedSources.push({ name: source.name, reason });
     else attempts.push(source);
   }
@@ -217,6 +226,17 @@ async function executeRun(
             previous: history.validators.get(source.name),
             now: ctx.now,
           });
+          // A convergence refetch that fails leaves pass 1's answer standing: its
+          // records are already committed, and overwriting the entry would report
+          // the source as failed for a run it actually served.
+          const committed = results.get(source.name);
+          if (committed?.result.ok && !outcome.result.ok) {
+            logger.warn(
+              `${LOG_PREFIX} source ${source.name} refetch failed: ${outcome.report.error}; ` +
+                'keeping the earlier successful fetch for this run'
+            );
+            return;
+          }
           results.set(source.name, outcome);
         })
       )
@@ -259,6 +279,7 @@ async function executeRun(
         droppedDocsSources,
         effectiveAt: new Date(startedAt.getTime() + pass - 1),
         statesBeforeRun: passes[0]?.plan.statesBeforeRun,
+        priceRowsAtRunStart: passes[0]?.plan.priceRowsAtRunStart,
       });
 
       let appended = 0;
@@ -299,12 +320,12 @@ async function executeRun(
 
   const deadlineHit = globalDeadline.signal.aborted;
   const succeededCount = succeeded().length;
-  const status = runStatus(attempts.length, succeededCount, deadlineHit, skippedSources.length > 0);
+  const status = runStatus(attempts.length, succeededCount, deadlineHit);
   const merged = aggregate(passes);
   const summary = summarizeDiff(merged.diff);
   const added = [...new Set(summary.added)];
   const promoted = [...new Set(summary.promoted)];
-  const deprecated = merged.transitions.map(transition => transition.modelId);
+  const deprecated = [...new Set(merged.transitions.map(transition => transition.modelId))];
   const sourceReports = [...results.values()].map(entry => entry.report);
   const finishedAt = ctx.now();
 
@@ -332,6 +353,7 @@ async function executeRun(
 
   logger.info(
     `${LOG_PREFIX} run ${runId} ${status} mode=${ctx.mode} sources=${succeededCount}/${attempts.length} ` +
+      `skipped=${describeSkips(skippedSources)} ` +
       `passes=${passes.length} changes=${merged.diff.length} appended=${merged.appended} ` +
       `dropped=${merged.droppedRecords.length} prices=${merged.priceRows.length} priced=${merged.pricesAppended} ` +
       `flagged=${merged.priceFlags.length} deprecated=${deprecated.length} suggested=${merged.suggestions.length}`
@@ -396,6 +418,8 @@ interface PassInput {
   effectiveAt: Date;
   /** Pass 1's read; see LifecyclePlanInput.statesBeforeRun for why it is read once. */
   statesBeforeRun?: ReadonlyMap<string, IModelDiscoveryState>;
+  /** Pass 1's price read, which the band measures against; see PricePlanInput.baselineRowsInForce. */
+  priceRowsAtRunStart?: readonly IModelPrice[];
 }
 
 interface PassPlan {
@@ -404,6 +428,7 @@ interface PassPlan {
   lifecycle: LifecyclePlan;
   absence: AbsencePlan;
   statesBeforeRun: ReadonlyMap<string, IModelDiscoveryState>;
+  priceRowsAtRunStart: readonly IModelPrice[];
   joinCoverage: IDiscoveryJoinCoverage[];
   unmatchedIds: string[];
   rejected: number;
@@ -466,9 +491,11 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     runId,
   });
 
+  const priceRowsAtRunStart = input.priceRowsAtRunStart ?? priceRowsInForce;
   const prices = planPriceWrites({
     contributions,
     rowsInForce: priceRowsInForce,
+    baselineRowsInForce: priceRowsAtRunStart,
     // The models this run adds are known too: a new model's first price row
     // lands in the same run as the catalog row that makes it a model at all.
     knownModelIds: new Set([...base.keys(), ...operatorOwnedModelIds, ...catalog.rows.map(row => row.modelId)]),
@@ -510,6 +537,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     lifecycle,
     absence,
     statesBeforeRun,
+    priceRowsAtRunStart,
     joinCoverage: computeJoinCoverage(contributions, base),
     unmatchedIds: unmatchedIds(contributions, base),
     rejected,
@@ -808,6 +836,7 @@ interface SkipArgs {
   history: RunHistory;
   minInterval: number;
   startedAt: Date;
+  trigger: RunModelDiscoveryOptions['trigger'];
 }
 
 function skipReasonFor(source: DiscoverySource, args: SkipArgs): SourceSkipReason | null {
@@ -815,6 +844,10 @@ function skipReasonFor(source: DiscoverySource, args: SkipArgs): SourceSkipReaso
   // forbids egress means it.
   if (!args.ctx.allowEgress) return 'egress-disabled';
   if (!source.isConfigured(args.credentials, args.env)) return 'not-configured';
+  // The freshness guard exists to keep two scheduled stages off the same
+  // provider on the same 6h boundary. An operator standing at Run now is asking
+  // for a fetch, and an empty run is the button reading as broken.
+  if (args.trigger === 'manual') return null;
   const lastOk = args.history.lastOkAt.get(source.name);
   if (lastOk && args.startedAt.getTime() - lastOk.getTime() < args.minInterval) return 'recently-fetched';
   return null;
@@ -851,21 +884,28 @@ async function recentRunHistory(adapters: ModelDiscoveryAdapters, startedAt: Dat
 }
 
 /**
- * 'ok' only when everything attempted succeeded and nothing was cut short. A run
- * that verified nothing is 'partial', never 'ok': lastSuccessfulRun is derived
- * from this field, and an egress-disabled or keyless deployment must keep
- * reporting the fallback-seed banner rather than claiming live data.
+ * 'ok' when nothing FAILED: every source attempted came back and the run was not
+ * cut short. A skip is not a failure - a self-host install skips bedrock on
+ * every run for want of an IAM role, and a source skipped as recently-fetched is
+ * fresh data by definition - so skips may not degrade the run. They used to, and
+ * the cost was structural: lastSuccessfulRun is findOne({status:'ok'}), so a
+ * deployment that always skips something never had one, the startup staleness
+ * gate never tripped, and every container boot re-ran a full fan-out. A run with
+ * nothing but skips is 'ok' too, with an empty `sources` list and the skip
+ * counts in the summary line to tell it apart from a full one.
  */
-function runStatus(
-  attempted: number,
-  succeeded: number,
-  deadlineHit: boolean,
-  anySkipped: boolean
-): 'ok' | 'partial' | 'failed' {
-  if (attempted === 0) return 'partial';
-  if (succeeded === 0) return 'failed';
-  if (succeeded < attempted || deadlineHit || anySkipped) return 'partial';
+function runStatus(attempted: number, succeeded: number, deadlineHit: boolean): 'ok' | 'partial' | 'failed' {
+  if (attempted > 0 && succeeded === 0) return 'failed';
+  if (succeeded < attempted || deadlineHit) return 'partial';
   return 'ok';
+}
+
+/** Skip counts for the summary line: "ok with nothing attempted" has to be readable. */
+function describeSkips(skipped: ReadonlyArray<{ reason: SourceSkipReason }>): string {
+  if (skipped.length === 0) return '0';
+  const byReason = new Map<SourceSkipReason, number>();
+  for (const { reason } of skipped) byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
+  return `${skipped.length}(${[...byReason].map(([reason, count]) => `${reason}:${count}`).join(',')})`;
 }
 
 function computeJoinCoverage(

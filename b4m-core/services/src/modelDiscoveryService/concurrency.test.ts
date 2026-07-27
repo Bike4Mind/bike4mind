@@ -44,6 +44,49 @@ describe('limitConcurrency', () => {
     expect(await following).toBe('ran');
   });
 
+  it('re-checks the cap when a released waiter resumes', async () => {
+    const limit = limitConcurrency(1);
+    let active = 0;
+    let peak = 0;
+    const task = async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await tick();
+      active -= 1;
+    };
+
+    let release!: () => void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const first = limit(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await held;
+      active -= 1;
+    });
+    const queued = limit(task);
+    await tick();
+
+    // Freeing the slot only SCHEDULES the waiter; it resumes a microtask later.
+    // Submitting across the next few microtask depths puts one task squarely in
+    // that window, where the old gate let it take the slot the waiter was about
+    // to claim without the waiter re-checking.
+    release();
+    const submitted: Array<Promise<void>> = [];
+    for (let depth = 0; depth <= 4; depth += 1) {
+      const hop = (remaining: number) => {
+        if (remaining === 0) submitted.push(limit(task));
+        else queueMicrotask(() => hop(remaining - 1));
+      };
+      hop(depth);
+    }
+
+    await Promise.all([first, queued]);
+    await Promise.all(submitted);
+    expect(peak).toBe(1);
+  });
+
   it('treats a nonsensical cap as a cap of one', async () => {
     const limit = limitConcurrency(0);
     expect(await limit(async () => 'still runs')).toBe('still runs');

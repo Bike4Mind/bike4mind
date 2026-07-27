@@ -46,6 +46,33 @@ export interface HttpRequest {
 export const contentHashOf = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 /**
+ * Ceiling on one response body. Every read here is buffered whole and hashed, so
+ * without a cap a runaway or hostile endpoint is bounded only by the abort
+ * deadline. Generous on purpose: litellm's blob is already ~7 MB and grows every
+ * release, so this is a runaway guard, not a feed-size policy.
+ */
+export const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * A URL fit for an error string. Errors land in the run document and the admin
+ * UI, and a configured base URL can carry basic-auth credentials
+ * (https://user:pass@host) or a key in the query string, so neither survives.
+ */
+export function redactUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    return parsed.toString();
+  } catch {
+    // Not parseable, so strip the userinfo and query textually rather than
+    // letting an unparseable string be the one that leaks.
+    return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1').split('?')[0];
+  }
+}
+
+/**
  * GET a JSON document under the run's abort signal.
  *
  * 304 is a success carrying no body: the caller decides what an unchanged
@@ -67,6 +94,7 @@ export async function fetchText(request: HttpRequest, ctx: DiscoveryFetchContext
   const headers: Record<string, string> = { accept: 'application/json', ...request.headers };
   if (request.ifNoneMatch) headers['if-none-match'] = request.ifNoneMatch;
   if (request.body !== undefined) headers['content-type'] = 'application/json';
+  const safeUrl = redactUrl(request.url);
 
   try {
     const response = await fetch(request.url, {
@@ -79,22 +107,59 @@ export async function fetchText(request: HttpRequest, ctx: DiscoveryFetchContext
     const etag = response.headers.get('etag') ?? undefined;
     if (response.status === 304) return { ok: true, status: 304, notModified: true, etag };
     if (!response.ok) {
-      return { ok: false, status: response.status, error: `${request.url} responded ${response.status}` };
+      return { ok: false, status: response.status, error: `${safeUrl} responded ${response.status}` };
     }
     // Read the body as text first: the content hash must cover the exact bytes,
     // and re-serializing a parsed object would hash a different document.
-    const text = await response.text();
-    return { ok: true, status: response.status, text, etag };
+    const body = await readBounded(response, safeUrl);
+    if (!body.ok) return { ok: false, status: response.status, error: body.error };
+    return { ok: true, status: response.status, text: body.text, etag };
   } catch (error) {
-    return { ok: false, error: abortAware(error, request.url) };
+    return { ok: false, error: abortAware(error, safeUrl) };
   }
+}
+
+/**
+ * The body as text, refused past MAX_RESPONSE_BYTES. Streamed rather than read
+ * whole so an oversized body is abandoned at the cap instead of after it has
+ * already been buffered.
+ */
+async function readBounded(response: Response, safeUrl: string): Promise<{ ok: true; text: string } | HttpFailure> {
+  const tooLarge: HttpFailure = {
+    ok: false,
+    status: response.status,
+    error: `${safeUrl} exceeded the ${MAX_RESPONSE_BYTES}-byte response cap`,
+  };
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) return tooLarge;
+
+  const stream = response.body;
+  if (!stream) return { ok: true, text: await response.text() };
+
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => {});
+      return tooLarge;
+    }
+    // Streaming decode: a multi-byte character split across two chunks would
+    // otherwise decode as two replacement characters and change the hash.
+    text += decoder.decode(value, { stream: true });
+  }
+  return { ok: true, text: text + decoder.decode() };
 }
 
 const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-function abortAware(error: unknown, url: string): string {
+function abortAware(error: unknown, safeUrl: string): string {
   const isAbort = error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
-  return isAbort ? `${url} aborted at the deadline` : `${url} failed: ${describe(error)}`;
+  return isAbort ? `${safeUrl} aborted at the deadline` : `${safeUrl} failed: ${describe(error)}`;
 }
 
 /** True while there is still budget to issue another page (sec 6.3). */

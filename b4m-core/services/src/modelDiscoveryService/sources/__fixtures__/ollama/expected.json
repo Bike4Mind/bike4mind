@@ -25,7 +25,6 @@
       "backend": "ollama",
       "type": "text",
       "name": "gemma4:26b-a4b-it-q4_K_M",
-      "contextWindow": 0,
       "canStream": true,
       "supportsVision": false,
       "supportsTools": true,

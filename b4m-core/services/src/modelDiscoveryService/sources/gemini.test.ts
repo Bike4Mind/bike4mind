@@ -98,7 +98,7 @@ describe('gemini pagination', () => {
     }
   });
 
-  it('bounds the loop when the server keeps handing out fresh tokens', async () => {
+  it('fails rather than half-listing when the page cap is reached with a live cursor', async () => {
     let issued = 0;
     const restore = stubFetch(() => {
       issued += 1;
@@ -106,8 +106,13 @@ describe('gemini pagination', () => {
     });
     try {
       const result = await createGeminiSource().fetch(makeContext());
+
       expect(issued).toBe(GEMINI_MAX_PAGES);
-      expect(result.ok).toBe(true);
+      // This source claims authority over the backend, so reporting a listing
+      // that still had a next page as exhaustive would count the tail of the
+      // catalog as absent.
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain('GEMINI_MAX_PAGES');
     } finally {
       restore();
     }

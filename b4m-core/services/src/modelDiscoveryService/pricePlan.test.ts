@@ -177,6 +177,25 @@ describe('planPriceWrites guardrails', () => {
     expect(result.flags[0].detail).toContain('litellm');
   });
 
+  it('proposes one of the two values it names as disagreeing', () => {
+    // The provider agrees with both aggregators inside the tolerance while they
+    // disagree with each other, so the first disagreeing pair excludes it.
+    const result = plan({
+      contributions: [
+        provider({ inputPerMTok: 5, outputPerMTok: 25 }),
+        modelsDev({ inputPerMTok: 4.6, outputPerMTok: 25 }),
+        litellm({ inputPerMTok: 5.4, outputPerMTok: 25 }),
+      ],
+    });
+
+    expect(result.flags[0]).toMatchObject({ kind: 'source-disagreement' });
+    // A proposed value from neither side of the detail line is a number the
+    // operator cannot find in the sentence explaining it.
+    expect(result.flags[0].proposed.inputPerMTok).toBe(4.6);
+    expect(result.flags[0].detail).toContain('models.dev');
+    expect(result.flags[0].detail).toContain('litellm');
+  });
+
   it('applies neither side when a provider and an aggregator disagree', () => {
     const result = plan({
       contributions: [
@@ -227,6 +246,21 @@ describe('planPriceWrites guardrails', () => {
 
     expect(result.rows).toEqual([]);
     expect(result.flags[0]).toMatchObject({ kind: 'band-exceeded', proposed: { inputPerMTok: 50 } });
+  });
+
+  it('measures the band against the run-start row, not the one an earlier pass wrote', () => {
+    // Pass 2 of a run: $5 was in force when the run started, pass 1 wrote $7
+    // (40%, inside the band), and the feed has drifted to $9.8 - another 40%
+    // against pass 1's row, but 96% against where the run began.
+    const result = plan({
+      contributions: [provider({ inputPerMTok: 9.8, outputPerMTok: 25 })],
+      rowsInForce: [inForce({ '0': { input: 7e-6, output: 25e-6 } }, 'discovery:openai@2026-07-26T10:00:00.000Z')],
+      baselineRowsInForce: [inForce({ '0': FIVE_AND_TWENTY_FIVE })],
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'band-exceeded', proposed: { inputPerMTok: 9.8 } });
+    expect(result.flags[0].detail).toContain('run start');
   });
 
   it('drops a price for a model no catalog row covers', () => {
