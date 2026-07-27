@@ -5,26 +5,24 @@ import { User, userRepository } from '@bike4mind/database';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
+import * as z from 'zod';
+
+const tokenBodySchema = z.object({
+  token: z
+    .string()
+    .trim()
+    .regex(/^[A-Z0-9]{6,10}$/i, 'Invalid token format.'),
+});
 
 const handler = baseApi()
   // No rate limiting - using server-side lockout for stronger security
   .post(
     asyncHandler(async (req, res) => {
       const user = req.user;
-      const { token } = req.body as { token?: string };
+      const { token: cleanToken } = tokenBodySchema.parse(req.body);
 
       if (!user) {
         return res.status(401).json({ error: 'User not found' });
-      }
-
-      if (!token || typeof token !== 'string') {
-        return res.status(400).json({ error: 'Valid token is required' });
-      }
-
-      // Basic token format validation
-      const cleanToken = token.trim();
-      if (!/^[A-Z0-9]{6,10}$/i.test(cleanToken)) {
-        return res.status(400).json({ error: 'Invalid token format.' });
       }
 
       // Get fresh user data (incl. select:false MFA secrets) to verify setup + check lockout
