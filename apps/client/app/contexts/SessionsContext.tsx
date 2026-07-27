@@ -41,6 +41,14 @@ export interface SessionsContextProps {
 
   currentSession: ISessionDocument | null;
   setCurrentSession: Dispatch<SetStateAction<ISessionDocument | null>>;
+  /**
+   * Updates currentSession WITHOUT the knowledgeIds auto-persist that
+   * `setCurrentSession` performs. For callers that have already written to the
+   * server themselves - going through `setCurrentSession` instead would fire a
+   * second, redundant PUT that carries none of the first one's options
+   * (`propagateToProjects`, notably), silently undoing them.
+   */
+  setCurrentSessionRaw: Dispatch<SetStateAction<ISessionDocument | null>>;
 
   addMessageToSession: (message: IChatHistoryItem) => Promise<void>;
 
@@ -661,6 +669,7 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
       changeSession,
       currentSession,
       setCurrentSession: setCurrentSessionWithPersistence, // Use enhanced version
+      setCurrentSessionRaw: setCurrentSession,
       addMessageToSession,
       currentSessionId,
       setCurrentSessionId,
