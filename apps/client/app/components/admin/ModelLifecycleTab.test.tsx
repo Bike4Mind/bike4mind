@@ -43,6 +43,7 @@ const STATUS = {
   staleReferences: [
     { surface: 'fallback-chain', key: 'gpt-live', referencedId: 'gpt-sunset', problem: 'deprecated' },
     { surface: 'fallback-default', key: 'default', referencedId: 'gpt-ghost', problem: 'unknown' },
+    { surface: 'fallback-chain', key: 'gpt-live', referencedId: 'gpt-metadata-only', problem: 'not-invocable' },
   ],
 };
 
@@ -73,6 +74,14 @@ describe('ModelLifecycleTab', () => {
     expect(screen.getByTestId('model-lifecycle-horizon-row-gpt-soon')).toHaveTextContent('in 37d');
     expect(screen.getByTestId('model-lifecycle-stale-row-fallback-chain-gpt-sunset')).toHaveTextContent('deprecated');
     expect(screen.getByTestId('model-lifecycle-stale-row-fallback-default-gpt-ghost')).toHaveTextContent('unknown');
+  });
+
+  it('renders a not-invocable reference as its own readable problem kind', async () => {
+    renderTab();
+
+    expect(await screen.findByTestId('model-lifecycle-stale-row-fallback-chain-gpt-metadata-only')).toHaveTextContent(
+      'not invocable'
+    );
   });
 
   it('accept requires a note, then posts the suggested successor with it', async () => {
@@ -110,16 +119,46 @@ describe('ModelLifecycleTab', () => {
     expect(mockPost.mock.calls[0][1]).toMatchObject({ replacedBy: 'gpt-newer' });
   });
 
-  it('dismiss posts immediately and refetches', async () => {
+  it('dismiss confirms before posting, since the suggestion cannot be brought back', async () => {
     renderTab();
     fireEvent.click(await screen.findByTestId('model-lifecycle-dismiss-gpt-sunset'));
+
+    expect(screen.getByTestId('model-lifecycle-dismiss-modal')).toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('model-lifecycle-dismiss-confirm-btn'));
 
     await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
     expect(mockPost.mock.calls[0][1]).toEqual({ modelId: 'gpt-sunset', action: 'dismiss' });
     await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
   });
 
-  it('surfaces the server validation message inside the open accept modal', async () => {
+  it('cancelling the dismiss confirmation posts nothing', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId('model-lifecycle-dismiss-gpt-sunset'));
+    fireEvent.click(screen.getByTestId('model-lifecycle-dismiss-cancel-btn'));
+
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('a double-clicked dismiss confirmation sends exactly one request', async () => {
+    let settle = (_value: { data: Record<string, unknown> }) => {};
+    mockPost.mockReturnValue(new Promise(resolve => (settle = resolve)));
+    renderTab();
+    fireEvent.click(await screen.findByTestId('model-lifecycle-dismiss-gpt-sunset'));
+
+    const confirm = screen.getByTestId('model-lifecycle-dismiss-confirm-btn');
+    fireEvent.click(confirm);
+    await waitFor(() => expect(confirm).toHaveAttribute('disabled'));
+    fireEvent.click(confirm);
+    expect(screen.getByTestId('model-lifecycle-dismiss-gpt-sunset')).toHaveAttribute('disabled');
+
+    settle({ data: {} });
+    await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
+    expect(mockPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces the server validation message inside the open accept modal, and only there', async () => {
     mockPost.mockRejectedValue({
       message: 'Request failed with status code 400',
       response: { data: { message: 'replacedBy gpt-typo is unknown to the merged model list' } },
@@ -130,6 +169,21 @@ describe('ModelLifecycleTab', () => {
     fireEvent.click(screen.getByTestId('model-lifecycle-accept-confirm-btn'));
 
     expect(await screen.findByTestId('model-lifecycle-accept-error')).toHaveTextContent('unknown to the merged model');
+    expect(screen.queryByTestId('model-lifecycle-error')).not.toBeInTheDocument();
+
+    // Cancelling must not leave the failure behind as a page banner.
+    fireEvent.click(screen.getByTestId('model-lifecycle-accept-cancel-btn'));
+    await waitFor(() => expect(screen.queryByTestId('model-lifecycle-accept-error')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('model-lifecycle-error')).not.toBeInTheDocument();
+  });
+
+  it('labels the icon-only refresh control', async () => {
+    renderTab();
+    await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
+
+    expect(screen.getByRole('button', { name: 'Refresh model lifecycle status' })).toBe(
+      screen.getByTestId('model-lifecycle-refresh-btn')
+    );
   });
 
   it('says so when nothing is awaiting a decision', async () => {

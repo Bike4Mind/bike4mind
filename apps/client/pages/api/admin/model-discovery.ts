@@ -8,9 +8,9 @@ import { DiscoveryDispatchUnavailableError, dispatchDiscoveryRunNow } from '@ser
 /**
  * Discovery status card and its "Run now" (spec sec 7).
  *
- * GET  -> the last run's outcome plus the two settings that decide what a run
- *         is allowed to do, so an operator can read "did it work, and would it
- *         have written anything" off one card.
+ * GET  -> the last run's outcome plus the settings that decide whether a run
+ *         happens at all and what it is allowed to do, so an operator can read
+ *         "did it work, and would it have written anything" off one card.
  * POST -> trigger a run on whichever driver this deployment has.
  *
  * The run document is trimmed here rather than in the card: the full document
@@ -49,9 +49,10 @@ const handler = baseApi()
   .get(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
 
-    const [lastRun, lastSuccessful, mode, autoEnable] = await Promise.all([
+    const [lastRun, lastSuccessful, enabled, mode, autoEnable] = await Promise.all([
       modelDiscoveryRunRepository.latestRun(),
       modelDiscoveryRunRepository.lastSuccessfulRun(),
+      adminSettingsRepository.getSettingsValue('enableModelDiscovery'),
       adminSettingsRepository.getSettingsValue('modelDiscoveryMode'),
       adminSettingsRepository.getSettingsValue('modelDiscoveryAutoEnable'),
     ]);
@@ -59,6 +60,8 @@ const handler = baseApi()
     return res.json({
       lastRun: lastRun ? trimRun(lastRun) : null,
       lastSuccessfulRunAt: lastSuccessful?.startedAt ?? null,
+      // Same defaulting as the service's readMode: unset means on.
+      enabled: enabled !== false,
       mode: mode ?? 'report',
       autoEnable: autoEnable ?? 'priced',
       selfHost: process.env.B4M_SELF_HOST === 'true',
@@ -66,6 +69,16 @@ const handler = baseApi()
   })
   .post(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
+
+    // The service returns a 'skipped' result before it ever creates a run
+    // document, so dispatching with the master switch off would answer 202 and
+    // then never report anything. Refuse here instead.
+    if ((await adminSettingsRepository.getSettingsValue('enableModelDiscovery')) === false) {
+      return res.status(409).json({
+        code: 'discovery-disabled',
+        message: 'Model discovery is turned off (enableModelDiscovery); no run will start.',
+      });
+    }
 
     try {
       // No debounce: the service's lease turns a concurrent trigger into a

@@ -251,7 +251,13 @@ export const ModelPricingCatalog: React.FC = () => {
             edited.
           </Typography>
         </Box>
-        <IconButton size="sm" onClick={fetchRows} disabled={isLoading} data-testid="model-pricing-refresh-btn">
+        <IconButton
+          size="sm"
+          onClick={fetchRows}
+          disabled={isLoading}
+          aria-label="Refresh the price catalog"
+          data-testid="model-pricing-refresh-btn"
+        >
           <RefreshIcon />
         </IconButton>
       </Stack>
@@ -308,6 +314,8 @@ export const ModelPricingCatalog: React.FC = () => {
                         color={SOURCE_CHIP_COLOR[provenance]}
                         variant="soft"
                         title={source ? `priced by ${source}` : undefined}
+                        // The color is the visual cue; this is the assertable one.
+                        data-provenance={provenance}
                         data-testid={`model-pricing-source-${row.modelId}-${row.unit}`}
                       >
                         {provenance}
@@ -318,6 +326,7 @@ export const ModelPricingCatalog: React.FC = () => {
                         <IconButton
                           size="sm"
                           title="Reprice"
+                          aria-label={`Reprice ${row.modelId}`}
                           onClick={() => openReprice(row)}
                           data-testid={`model-pricing-reprice-${row.modelId}-${row.unit}`}
                         >
@@ -326,6 +335,7 @@ export const ModelPricingCatalog: React.FC = () => {
                         <IconButton
                           size="sm"
                           title="History"
+                          aria-label={`Price history for ${row.modelId}`}
                           onClick={() => openHistory(row.modelId)}
                           data-testid={`model-pricing-history-${row.modelId}-${row.unit}`}
                         >
@@ -335,6 +345,7 @@ export const ModelPricingCatalog: React.FC = () => {
                           <IconButton
                             size="sm"
                             title="Revert to seed pricing"
+                            aria-label={`Revert ${row.modelId} to seed pricing`}
                             onClick={() => setRevertTarget(row)}
                             data-testid={`model-pricing-revert-${row.modelId}-${row.unit}`}
                           >
@@ -476,6 +487,7 @@ export const ModelPricingCatalog: React.FC = () => {
                         size="sm"
                         color={HISTORY_CHIP_COLOR[provenanceOf(row)]}
                         variant="soft"
+                        data-provenance={provenanceOf(row)}
                         data-testid="history-who"
                       >
                         {row.repricedBy ?? (isSeedRow(row) ? 'seed' : isDiscoveryRow(row) ? 'discovery' : '-')}

@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ModelBackend, type LLMModelConfig } from '@bike4mind/common';
@@ -61,6 +61,11 @@ const inputIn = (testId: string) => {
 
 const search = (value: string) =>
   fireEvent.change(screen.getByTestId('llm-dashboard-search-input'), { target: { value } });
+
+const setStatusFilter = (label: string) => {
+  fireEvent.click(within(screen.getByTestId('llm-dashboard-status-filter')).getByRole('combobox'));
+  fireEvent.click(screen.getByRole('option', { name: label }));
+};
 
 const visibleModelIds = () =>
   screen
@@ -149,19 +154,64 @@ describe('LLMDashboardTab bulk selection', () => {
     ]);
   });
 
-  it('prunes the selection to the rows that survive a search change', () => {
+  it('keeps the selection across a search change and says how much of it the filter shows', () => {
     renderTab();
 
     fireEvent.click(inputIn('llm-dashboard-select-all'));
-    expect(screen.getByTestId('llm-dashboard-bulk-bar')).toHaveTextContent('4 selected');
+    expect(screen.getByTestId('llm-dashboard-bulk-count')).toHaveTextContent('4 selected');
 
     search('preview');
-    expect(screen.getByTestId('llm-dashboard-bulk-bar')).toHaveTextContent('2 selected');
+    expect(screen.getByTestId('llm-dashboard-bulk-count')).toHaveTextContent(
+      '2 of 4 selected models match this filter'
+    );
 
-    // The pruned rows stay deselected once they come back into view.
+    // Nothing was thrown away, so the hidden rows come back still selected.
     search('');
-    expect(screen.getByTestId('llm-dashboard-bulk-bar')).toHaveTextContent('2 selected');
-    expect(inputIn('llm-dashboard-select-gpt-5')).not.toBeChecked();
+    expect(screen.getByTestId('llm-dashboard-bulk-count')).toHaveTextContent('4 selected');
+    expect(inputIn('llm-dashboard-select-gpt-5')).toBeChecked();
+  });
+
+  it('a bulk action under a filter only touches the visible half of the selection', () => {
+    renderTab();
+
+    fireEvent.click(inputIn('llm-dashboard-select-all'));
+    search('preview');
+    fireEvent.click(screen.getByTestId('llm-dashboard-bulk-disable-btn'));
+    search('');
+
+    expect(inputIn('llm-dashboard-toggle-gpt-5-preview')).not.toBeChecked();
+    expect(inputIn('llm-dashboard-toggle-claude-opus-preview')).not.toBeChecked();
+    expect(inputIn('llm-dashboard-toggle-gpt-5')).toBeChecked();
+  });
+
+  it('unchecking select-all under a filter releases only the visible rows', () => {
+    renderTab();
+
+    fireEvent.click(inputIn('llm-dashboard-select-all'));
+    search('preview');
+    fireEvent.click(inputIn('llm-dashboard-select-all'));
+
+    expect(screen.queryByTestId('llm-dashboard-bulk-count')).toHaveTextContent(
+      '0 of 2 selected models match this filter'
+    );
+    search('');
+    expect(inputIn('llm-dashboard-select-gpt-5')).toBeChecked();
+    expect(inputIn('llm-dashboard-select-gpt-5-preview')).not.toBeChecked();
+  });
+
+  it('reports how many rows a bulk action moved out of the current status filter', () => {
+    renderTab();
+
+    fireEvent.click(inputIn('llm-dashboard-select-gpt-5-preview'));
+    fireEvent.click(inputIn('llm-dashboard-select-gpt-5'));
+    // "Enabled Only": disabling the selection empties those rows out of the table.
+    setStatusFilter('Enabled Only');
+    fireEvent.click(screen.getByTestId('llm-dashboard-bulk-disable-btn'));
+
+    expect(screen.getByTestId('llm-dashboard-bulk-notice')).toHaveTextContent(
+      'Disabled 2 models. 2 no longer match the current filter.'
+    );
+    expect(visibleModelIds()).toEqual(['claude-opus-preview']);
   });
 
   it('hides the bulk bar until something is selected', () => {

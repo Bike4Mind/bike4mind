@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Box, Button, Chip, CircularProgress, Link, Sheet, Stack, Typography } from '@mui/joy';
+import { Alert, Box, Button, Chip, CircularProgress, Link, Sheet, Stack, Tooltip, Typography } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import { api } from '@client/app/contexts/ApiContext';
 
@@ -31,6 +31,7 @@ interface DiscoveryRunSummary {
 interface DiscoveryStatus {
   lastRun: DiscoveryRunSummary | null;
   lastSuccessfulRunAt: string | null;
+  enabled: boolean;
   mode: string;
   autoEnable: string;
   selfHost: boolean;
@@ -39,6 +40,10 @@ interface DiscoveryStatus {
 const POLL_INTERVAL_MS = 5_000;
 /** Long enough for a full fan-out over every provider; past it, say so and stop. */
 const POLL_TIMEOUT_MS = 120_000;
+/** A flaky status read must not end a wait the run itself is still honouring. */
+const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+
+const DISABLED_HINT = 'Model discovery is turned off (enableModelDiscovery), so no run will start.';
 
 const STATUS_COLOR: Record<DiscoveryRunSummary['status'], ColorPaletteProp> = {
   ok: 'success',
@@ -60,6 +65,21 @@ const changeSummary = (changes: DiscoveryRunSummary['changes']) => {
     .filter(([, count]) => count > 0)
     .map(([name, count]) => `${count} ${name}`);
   return parts.length > 0 ? parts.join(', ') : 'no catalog changes';
+};
+
+/**
+ * Is this the run the button just asked for? A cron run can land mid-wait, so
+ * newer-than-baseline alone is not enough - only a manual trigger is ours.
+ */
+const isAwaitedRun = (run: DiscoveryRunSummary | null, baselineMs: number) => {
+  if (!run || new Date(run.startedAt).getTime() <= baselineMs) return false;
+  return run.trigger ? run.trigger === 'manual' : true;
+};
+
+const giveUpMessage = (sawNewRun: boolean, enabled: boolean) => {
+  if (sawNewRun) return 'The run is still going; this card has stopped waiting on it.';
+  if (!enabled) return `No new run reported within 2 minutes - ${DISABLED_HINT}`;
+  return 'No new run reported within 2 minutes - another run may already hold the lease.';
 };
 
 /**
@@ -101,32 +121,36 @@ export const DiscoveryStatusCard: React.FC = () => {
   }, [load]);
 
   const awaitRun = useCallback(
-    async (baselineStartedAt: string | null) => {
-      const baseline = baselineStartedAt ? new Date(baselineStartedAt).getTime() : 0;
+    async (baselineStatus: DiscoveryStatus) => {
+      const baselineMs = baselineStatus.lastRun ? new Date(baselineStatus.lastRun.startedAt).getTime() : 0;
       const deadline = Date.now() + POLL_TIMEOUT_MS;
+      let latest = baselineStatus;
+      let consecutiveFailures = 0;
       let sawNewRun = false;
       setIsWaiting(true);
       try {
         while (Date.now() < deadline && !unmounted.current) {
           await sleep(POLL_INTERVAL_MS);
           if (unmounted.current) return;
-          const run = (await load()).lastRun;
-          if (!run || new Date(run.startedAt).getTime() <= baseline) continue;
+          try {
+            latest = await load();
+            consecutiveFailures = 0;
+          } catch (err) {
+            consecutiveFailures += 1;
+            if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+              if (!unmounted.current) setError(apiErrorMessage(err, 'Lost track of the run'));
+              return;
+            }
+            continue;
+          }
+          if (!isAwaitedRun(latest.lastRun, baselineMs)) continue;
           sawNewRun = true;
-          if (run.finishedAt) {
-            setNotice(`Run finished: ${run.status}.`);
+          if (latest.lastRun?.finishedAt) {
+            if (!unmounted.current) setNotice(`Run finished: ${latest.lastRun.status}.`);
             return;
           }
         }
-        if (!unmounted.current) {
-          setNotice(
-            sawNewRun
-              ? 'The run is still going; this card has stopped waiting on it.'
-              : 'No new run reported within 2 minutes - another run may already hold the lease.'
-          );
-        }
-      } catch (err) {
-        if (!unmounted.current) setError(apiErrorMessage(err, 'Lost track of the run'));
+        if (!unmounted.current) setNotice(giveUpMessage(sawNewRun, latest.enabled !== false));
       } finally {
         if (!unmounted.current) setIsWaiting(false);
       }
@@ -135,14 +159,16 @@ export const DiscoveryStatusCard: React.FC = () => {
   );
 
   const runNow = async () => {
-    const baseline = status?.lastRun?.startedAt ?? null;
     setIsDispatching(true);
     setError(null);
     setNotice(null);
     try {
+      // Re-read the baseline immediately before dispatching: a cron run that landed
+      // while this tab sat open would otherwise be read as the answer to this click.
+      const baselineStatus = await load();
       const res = await api.post<{ dispatched: string }>('/api/admin/model-discovery');
       setNotice(`Dispatched (${res.data.dispatched}); waiting for the run to report.`);
-      void awaitRun(baseline);
+      void awaitRun(baselineStatus);
     } catch (err) {
       setError(apiErrorMessage(err, 'Run now failed'));
     } finally {
@@ -152,6 +178,10 @@ export const DiscoveryStatusCard: React.FC = () => {
 
   const lastRun = status?.lastRun ?? null;
   const failedSources = lastRun?.sources.filter(source => !source.ok) ?? [];
+  const discoveryDisabled = status?.enabled === false;
+  // One in-flight window covers dispatch plus the poll that follows it, so a
+  // second click cannot start a second poll loop racing the first.
+  const isBusy = isDispatching || isWaiting;
 
   return (
     <Sheet variant="outlined" sx={{ p: 1.5, borderRadius: 'sm' }} data-testid="discovery-status-card">
@@ -170,6 +200,11 @@ export const DiscoveryStatusCard: React.FC = () => {
           <Chip size="sm" variant="soft" color="neutral" data-testid="discovery-status-autoenable-chip">
             auto-enable: {status?.autoEnable ?? '...'}
           </Chip>
+          {discoveryDisabled && (
+            <Chip size="sm" variant="solid" color="danger" data-testid="discovery-status-disabled-chip">
+              disabled
+            </Chip>
+          )}
           {status?.selfHost && (
             <Chip size="sm" variant="outlined" color="neutral">
               self-host
@@ -178,17 +213,28 @@ export const DiscoveryStatusCard: React.FC = () => {
         </Stack>
         <Stack direction="row" spacing={1} alignItems="center">
           {isWaiting && <CircularProgress size="sm" data-testid="discovery-status-waiting" />}
-          <Button
-            size="sm"
-            onClick={runNow}
-            disabled={isDispatching}
-            loading={isDispatching}
-            data-testid="model-lifecycle-run-now-btn"
-          >
-            Run now
-          </Button>
+          {/* A disabled Joy button emits no pointer events, so the tooltip needs the span. */}
+          <Tooltip title={discoveryDisabled ? DISABLED_HINT : ''} variant="soft">
+            <span>
+              <Button
+                size="sm"
+                onClick={runNow}
+                disabled={isBusy || discoveryDisabled}
+                loading={isDispatching}
+                data-testid="model-lifecycle-run-now-btn"
+              >
+                Run now
+              </Button>
+            </span>
+          </Tooltip>
         </Stack>
       </Stack>
+
+      {discoveryDisabled && (
+        <Alert color="warning" size="sm" sx={{ mt: 1 }} data-testid="discovery-status-disabled-notice">
+          {DISABLED_HINT} Turn on Enable Model Discovery in Admin settings to run one.
+        </Alert>
+      )}
 
       {error && (
         <Alert color="danger" size="sm" sx={{ mt: 1 }} data-testid="discovery-status-error">

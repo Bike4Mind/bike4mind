@@ -95,6 +95,7 @@ const LLMDashboardTab: React.FC = () => {
   const [filterEnabled, setFilterEnabled] = useState<'all' | 'enabled' | 'disabled'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  const [bulkNotice, setBulkNotice] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [sortColumn, setSortColumn] = useState<
     'name' | 'type' | 'backend' | 'status' | 'rank' | 'createdAt' | 'updatedAt' | null
@@ -222,26 +223,21 @@ const LLMDashboardTab: React.FC = () => {
   const paginatedModels = filteredModels.slice(startIndex, endIndex);
 
   const selectedIdSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
-  // Selection is pruned to the filtered rows, so a length match means "all visible".
-  const allFilteredSelected = filteredModels.length > 0 && selectedModelIds.length === filteredModels.length;
-  const someFilteredSelected = selectedModelIds.length > 0 && !allFilteredSelected;
+  // The selection survives filter changes (narrowing a search must not silently
+  // throw work away), so every bulk action is scoped to selected AND visible.
+  const selectedFilteredIds = useMemo(
+    () => filteredModels.filter(model => selectedIdSet.has(model.id)).map(model => model.id),
+    [filteredModels, selectedIdSet]
+  );
+  const allFilteredSelected = filteredModels.length > 0 && selectedFilteredIds.length === filteredModels.length;
+  const someFilteredSelected = selectedFilteredIds.length > 0 && !allFilteredSelected;
+  const hiddenSelectedCount = selectedModelIds.length - selectedFilteredIds.length;
 
-  // Reset to first page when filters change
+  // Reset to first page and drop the last bulk-action receipt when filters change
   useEffect(() => {
     setCurrentPage(1);
+    setBulkNotice(null);
   }, [filterType, filterBackend, filterEnabled, searchQuery]);
-
-  // Selection only ever refers to rows the admin can currently see, so a bulk action
-  // can never touch a model that scrolled out of the filter set. Returning `prev`
-  // unchanged when nothing was pruned keeps this from re-rendering in a loop.
-  useEffect(() => {
-    setSelectedModelIds(prev => {
-      if (prev.length === 0) return prev;
-      const visibleIds = new Set<string>(filteredModels.map(model => model.id));
-      const pruned = prev.filter(id => visibleIds.has(id));
-      return pruned.length === prev.length ? prev : pruned;
-    });
-  }, [filteredModels]);
 
   const handlePageChange = (page: number) => {
     setCurrentPage(Math.max(1, Math.min(page, totalPages)));
@@ -269,15 +265,21 @@ const LLMDashboardTab: React.FC = () => {
     setSelectedModelIds(prev => (selected ? [...prev, modelId] : prev.filter(id => id !== modelId)));
   };
 
+  // Select-all is scoped to the filter, so its unchecked state only releases the
+  // visible rows - a selection made under a different filter is left alone.
   const handleToggleSelectAll = (selected: boolean) => {
-    setSelectedModelIds(selected ? filteredModels.map(model => model.id) : []);
+    const visibleIds = new Set<string>(filteredModels.map(model => model.id));
+    setSelectedModelIds(prev => {
+      if (!selected) return prev.filter(id => !visibleIds.has(id));
+      return [...new Set([...prev, ...visibleIds])];
+    });
   };
 
   // Writes through the same local state and dirty flag as the per-row switch, so the
   // existing Save Changes flow persists a bulk edit in one request.
   const handleBulkSetEnabled = (enabled: boolean) => {
-    if (selectedModelIds.length === 0) return;
-    const targetIds = new Set(selectedModelIds);
+    if (selectedFilteredIds.length === 0) return;
+    const targetIds = new Set(selectedFilteredIds);
     setLocalModels(prev => prev.map(model => (targetIds.has(model.id) ? { ...model, enabled } : model)));
     setHasUnsavedChanges(true);
     const now = new Date();
@@ -288,6 +290,13 @@ const LLMDashboardTab: React.FC = () => {
       });
       return next;
     });
+    // Under a status filter the changed rows leave the table on the spot, so say
+    // how many moved before the operator concludes the click did nothing.
+    const leavesFilter = filterEnabled === (enabled ? 'disabled' : 'enabled');
+    setBulkNotice(
+      `${enabled ? 'Enabled' : 'Disabled'} ${targetIds.size} model${targetIds.size === 1 ? '' : 's'}.` +
+        (leavesFilter ? ` ${targetIds.size} no longer match the current filter.` : '')
+    );
   };
 
   const handleFallbackModelChange = (modelId: string, fallbackModel: string) => {
@@ -557,6 +566,7 @@ const LLMDashboardTab: React.FC = () => {
                 value={filterEnabled}
                 onChange={(_, value) => setFilterEnabled(value as 'all' | 'enabled' | 'disabled')}
                 sx={{ minWidth: 120 }}
+                data-testid="llm-dashboard-status-filter"
               >
                 <Option value="all">All Models</Option>
                 <Option value="enabled">Enabled Only</Option>
@@ -589,13 +599,16 @@ const LLMDashboardTab: React.FC = () => {
             data-testid="llm-dashboard-bulk-bar"
           >
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-              <Typography level="title-sm" sx={{ mr: 1 }}>
-                {selectedModelIds.length} selected
+              <Typography level="title-sm" sx={{ mr: 1 }} data-testid="llm-dashboard-bulk-count">
+                {hiddenSelectedCount > 0
+                  ? `${selectedFilteredIds.length} of ${selectedModelIds.length} selected models match this filter`
+                  : `${selectedModelIds.length} selected`}
               </Typography>
               <Button
                 size="sm"
                 variant="solid"
                 color="success"
+                disabled={selectedFilteredIds.length === 0}
                 onClick={() => handleBulkSetEnabled(true)}
                 data-testid="llm-dashboard-bulk-enable-btn"
               >
@@ -605,6 +618,7 @@ const LLMDashboardTab: React.FC = () => {
                 size="sm"
                 variant="solid"
                 color="neutral"
+                disabled={selectedFilteredIds.length === 0}
                 onClick={() => handleBulkSetEnabled(false)}
                 data-testid="llm-dashboard-bulk-disable-btn"
               >
@@ -621,6 +635,12 @@ const LLMDashboardTab: React.FC = () => {
               </Button>
             </Stack>
           </Sheet>
+        )}
+
+        {bulkNotice && (
+          <Alert variant="soft" color="neutral" sx={{ mb: 3 }} data-testid="llm-dashboard-bulk-notice">
+            <Typography level="body-sm">{bulkNotice}</Typography>
+          </Alert>
         )}
       </Box>
 
@@ -645,6 +665,7 @@ const LLMDashboardTab: React.FC = () => {
                     indeterminate={someFilteredSelected}
                     onChange={e => handleToggleSelectAll(e.target.checked)}
                     size="sm"
+                    aria-label="Select every model matching the current filters"
                     data-testid="llm-dashboard-select-all"
                   />
                 </Tooltip>
@@ -960,6 +981,7 @@ const LLMDashboardTab: React.FC = () => {
                     checked={selectedIdSet.has(model.id)}
                     onChange={e => handleToggleSelected(model.id, e.target.checked)}
                     size="sm"
+                    aria-label={`Select ${model.name}`}
                     data-testid={`llm-dashboard-select-${model.id}`}
                   />
                 </td>

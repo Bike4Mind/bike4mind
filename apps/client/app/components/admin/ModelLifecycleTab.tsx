@@ -48,7 +48,9 @@ interface StaleReference {
   surface: string;
   key: string;
   referencedId: string;
-  problem: 'deprecated' | 'retired' | 'unknown';
+  // Mirrors StaleReferenceProblem in @bike4mind/llm-adapters - the two unions are
+  // independent, so a value added there compiles fine here and must be added by hand.
+  problem: 'deprecated' | 'retired' | 'not-invocable' | 'unknown';
 }
 
 interface LifecycleStatus {
@@ -63,7 +65,17 @@ interface LifecycleStatus {
 const PROBLEM_COLOR: Record<StaleReference['problem'], ColorPaletteProp> = {
   deprecated: 'warning',
   retired: 'danger',
+  // The catalog knows the id but the merged list does not carry it, so routing
+  // to it fails the same way an unknown id does.
+  'not-invocable': 'warning',
   unknown: 'neutral',
+};
+
+const PROBLEM_LABEL: Record<StaleReference['problem'], string> = {
+  deprecated: 'deprecated',
+  retired: 'retired',
+  'not-invocable': 'not invocable',
+  unknown: 'unknown',
 };
 
 // Axios errors carry the server's validation reason in response.data; err.message
@@ -102,9 +114,15 @@ export const ModelLifecycleTab: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   const [acceptTarget, setAcceptTarget] = useState<QueueItem | null>(null);
+  const [dismissTarget, setDismissTarget] = useState<QueueItem | null>(null);
+  // Modal failures stay inside the modal that caused them; the page banner is
+  // only for the fetch. Sharing one state painted a failed accept twice and
+  // left a stale banner behind after Cancel.
+  const [modalError, setModalError] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [replacedBy, setReplacedBy] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [pendingDismissId, setPendingDismissId] = useState<string | null>(null);
 
   const fetchStatus = useCallback(async () => {
     setIsLoading(true);
@@ -126,14 +144,19 @@ export const ModelLifecycleTab: React.FC = () => {
   const openAccept = (item: QueueItem) => {
     setNote('');
     setReplacedBy(item.suggestion?.replacedBy ?? '');
-    setError(null);
+    setModalError(null);
     setAcceptTarget(item);
+  };
+
+  const closeAccept = () => {
+    setAcceptTarget(null);
+    setModalError(null);
   };
 
   const submitAccept = async () => {
     if (!acceptTarget) return;
     setIsSaving(true);
-    setError(null);
+    setModalError(null);
     try {
       await api.post('/api/admin/model-deprecation-status', {
         modelId: acceptTarget.modelId,
@@ -144,19 +167,37 @@ export const ModelLifecycleTab: React.FC = () => {
       setAcceptTarget(null);
       await fetchStatus();
     } catch (err) {
-      setError(apiErrorMessage(err, 'Accept failed'));
+      setModalError(apiErrorMessage(err, 'Accept failed'));
     } finally {
       setIsSaving(false);
     }
   };
 
-  const dismiss = async (modelId: string) => {
-    setError(null);
+  const openDismiss = (item: QueueItem) => {
+    setModalError(null);
+    setDismissTarget(item);
+  };
+
+  const closeDismiss = () => {
+    setDismissTarget(null);
+    setModalError(null);
+  };
+
+  // Confirmed because it is final: the route rejects re-settling a suggestion and
+  // discovery will not re-suggest while the upstream signal is unchanged.
+  const confirmDismiss = async () => {
+    if (!dismissTarget || pendingDismissId) return;
+    const modelId = dismissTarget.modelId;
+    setPendingDismissId(modelId);
+    setModalError(null);
     try {
       await api.post('/api/admin/model-deprecation-status', { modelId, action: 'dismiss' });
+      setDismissTarget(null);
       await fetchStatus();
     } catch (err) {
-      setError(apiErrorMessage(err, 'Dismiss failed'));
+      setModalError(apiErrorMessage(err, 'Dismiss failed'));
+    } finally {
+      setPendingDismissId(null);
     }
   };
 
@@ -172,7 +213,13 @@ export const ModelLifecycleTab: React.FC = () => {
             list is a report - those chains live in code.
           </Typography>
         </Box>
-        <IconButton size="sm" onClick={fetchStatus} disabled={isLoading} data-testid="model-lifecycle-refresh-btn">
+        <IconButton
+          size="sm"
+          onClick={fetchStatus}
+          disabled={isLoading}
+          aria-label="Refresh model lifecycle status"
+          data-testid="model-lifecycle-refresh-btn"
+        >
           <RefreshIcon />
         </IconButton>
       </Stack>
@@ -236,6 +283,7 @@ export const ModelLifecycleTab: React.FC = () => {
                           <Button
                             size="sm"
                             onClick={() => openAccept(item)}
+                            disabled={pendingDismissId === item.modelId}
                             data-testid={`model-lifecycle-accept-${item.modelId}`}
                           >
                             Accept
@@ -244,7 +292,8 @@ export const ModelLifecycleTab: React.FC = () => {
                             size="sm"
                             variant="plain"
                             color="neutral"
-                            onClick={() => dismiss(item.modelId)}
+                            onClick={() => openDismiss(item)}
+                            disabled={pendingDismissId === item.modelId}
                             data-testid={`model-lifecycle-dismiss-${item.modelId}`}
                           >
                             Dismiss
@@ -309,8 +358,9 @@ export const ModelLifecycleTab: React.FC = () => {
                     <td>{ref.key}</td>
                     <td>{ref.referencedId}</td>
                     <td>
-                      <Chip size="sm" variant="soft" color={PROBLEM_COLOR[ref.problem]}>
-                        {ref.problem}
+                      {/* ?? covers a problem kind the classifier gains before this file does. */}
+                      <Chip size="sm" variant="soft" color={PROBLEM_COLOR[ref.problem] ?? 'neutral'}>
+                        {PROBLEM_LABEL[ref.problem] ?? ref.problem}
                       </Chip>
                     </td>
                   </tr>
@@ -321,12 +371,12 @@ export const ModelLifecycleTab: React.FC = () => {
         </Stack>
       )}
 
-      <Modal open={acceptTarget !== null} onClose={() => setAcceptTarget(null)}>
+      <Modal open={acceptTarget !== null} onClose={closeAccept}>
         <ModalDialog sx={{ minWidth: 420 }} data-testid="model-lifecycle-accept-modal">
           <Typography level="title-md">Accept lifecycle change for {acceptTarget?.modelId}</Typography>
-          {error && (
+          {modalError && (
             <Alert color="danger" size="sm" data-testid="model-lifecycle-accept-error">
-              {error}
+              {modalError}
             </Alert>
           )}
           <Typography level="body-sm" color="neutral">
@@ -353,7 +403,12 @@ export const ModelLifecycleTab: React.FC = () => {
               />
             </FormControl>
             <Stack direction="row" spacing={1} justifyContent="flex-end">
-              <Button variant="plain" color="neutral" onClick={() => setAcceptTarget(null)}>
+              <Button
+                variant="plain"
+                color="neutral"
+                onClick={closeAccept}
+                data-testid="model-lifecycle-accept-cancel-btn"
+              >
                 Cancel
               </Button>
               <Button
@@ -365,6 +420,40 @@ export const ModelLifecycleTab: React.FC = () => {
                 Append lifecycle row
               </Button>
             </Stack>
+          </Stack>
+        </ModalDialog>
+      </Modal>
+
+      <Modal open={dismissTarget !== null} onClose={closeDismiss}>
+        <ModalDialog sx={{ minWidth: 420 }} data-testid="model-lifecycle-dismiss-modal">
+          <Typography level="title-md">Dismiss the suggestion for {dismissTarget?.modelId}?</Typography>
+          {modalError && (
+            <Alert color="danger" size="sm" data-testid="model-lifecycle-dismiss-error">
+              {modalError}
+            </Alert>
+          )}
+          <Typography level="body-sm" color="neutral">
+            This retires the suggestion for good: it cannot be settled again, and discovery will not re-raise it while
+            the upstream signal is unchanged. There is no undo.
+          </Typography>
+          <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1 }}>
+            <Button
+              variant="plain"
+              color="neutral"
+              onClick={closeDismiss}
+              data-testid="model-lifecycle-dismiss-cancel-btn"
+            >
+              Cancel
+            </Button>
+            <Button
+              color="danger"
+              disabled={pendingDismissId !== null}
+              loading={pendingDismissId !== null}
+              onClick={confirmDismiss}
+              data-testid="model-lifecycle-dismiss-confirm-btn"
+            >
+              Dismiss suggestion
+            </Button>
           </Stack>
         </ModalDialog>
       </Modal>

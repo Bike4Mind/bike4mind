@@ -70,7 +70,7 @@ describe('ModelPricingCatalog', () => {
     renderCatalog();
     const chip = await screen.findByTestId('model-pricing-source-gpt-z-per_token');
     expect(chip).toHaveTextContent('discovery');
-    expect(chip.className).toContain('colorWarning');
+    expect(chip).toHaveAttribute('data-provenance', 'discovery');
     // Which feed priced it, without making an admin open history.
     expect(chip.getAttribute('title')).toContain('openrouter');
     // Seed and operator rows keep their existing chips.
@@ -101,11 +101,11 @@ describe('ModelPricingCatalog', () => {
     const newest = within(rows[0]);
     const who = newest.getByTestId('history-who');
     expect(who).toHaveTextContent('model-discovery');
-    expect(who.className).toContain('colorWarning');
+    expect(who).toHaveAttribute('data-provenance', 'discovery');
     expect(newest.getByText('discovery:openrouter@2026-07-20')).toBeInTheDocument();
 
-    // The seed row underneath keeps its own chip color.
-    expect(within(rows[1]).getByTestId('history-who').className).toContain('colorPrimary');
+    // The seed row underneath is still marked as its own provenance.
+    expect(within(rows[1]).getByTestId('history-who')).toHaveAttribute('data-provenance', 'seed');
   });
 
   it('reprice requires a note before saving, then posts the new rates', async () => {

@@ -28,7 +28,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SettingsIcon from '@mui/icons-material/Settings';
 import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useAdminModal } from '@client/app/components/admin/AdminPage';
+import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';

@@ -5,10 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, ModelName } from '@bike4mind/common';
 import { ModelBackend } from '@bike4mind/common';
 import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
+// The real store, not a stub: it must stay reachable from ModelSelection without
+// dragging in AdminPage (the import cycle this module split exists to prevent).
+import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import ModelSelection, { getModelBackend, SELF_HOSTED_BACKEND } from './ModelSelection';
 
 const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
-const admin = vi.hoisted(() => ({ isAdmin: false, setAdminTab: vi.fn(), navigate: vi.fn() }));
+const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
 
 const textModel = {
   id: 'gpt-text-model',
@@ -48,13 +51,6 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
 
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (state: { isAdmin: boolean }) => unknown) => selector({ isAdmin: admin.isAdmin }),
-}));
-
-// Only useAdminModal is needed here; stubbing the module also keeps the whole
-// admin-tab import graph out of this render.
-vi.mock('@client/app/components/admin/AdminPage', () => ({
-  useAdminModal: (selector: (state: { setActiveTab: typeof admin.setAdminTab }) => unknown) =>
-    selector({ setActiveTab: admin.setAdminTab }),
 }));
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => admin.navigate }));
@@ -146,8 +142,8 @@ describe('ModelSelection apply behavior', () => {
 describe('ModelSelection admin quick link', () => {
   beforeEach(() => {
     admin.isAdmin = false;
-    admin.setAdminTab.mockClear();
     admin.navigate.mockClear();
+    useAdminModal.setState({ activeTab: AdminTab.Users });
   });
 
   it('stays hidden for a non-admin user', () => {
@@ -163,7 +159,7 @@ describe('ModelSelection admin quick link', () => {
 
     fireEvent.click(screen.getByTestId('model-selection-manage-models-btn'));
 
-    expect(admin.setAdminTab).toHaveBeenCalledWith(AdminTab.LLMDashboard);
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.LLMDashboard);
     expect(onSelectionComplete).toHaveBeenCalledOnce();
     expect(admin.navigate).toHaveBeenCalledWith({ to: '/admin' });
   });

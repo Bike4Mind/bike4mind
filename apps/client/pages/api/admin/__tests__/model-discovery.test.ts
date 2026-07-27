@@ -127,6 +127,7 @@ describe('/api/admin/model-discovery', () => {
         changes: { added: 2, promoted: 1, deprecated: 0, repriced: 0, flagged: 0 },
       },
       lastSuccessfulRunAt: '2026-07-26T06:00:00.000Z',
+      enabled: true,
       mode: 'write',
       autoEnable: 'manual',
       selfHost: false,
@@ -144,9 +145,19 @@ describe('/api/admin/model-discovery', () => {
     expect(res._getJSONData()).toMatchObject({
       lastRun: null,
       lastSuccessfulRunAt: null,
+      enabled: true,
       mode: 'report',
       autoEnable: 'priced',
     });
+  });
+
+  it('reports the master switch as off so the card can say why nothing will run', async () => {
+    getSettingsValue.mockImplementation(async (key: string) => (key === 'enableModelDiscovery' ? false : 'report'));
+
+    const { run, res } = call({ method: 'GET' });
+    await run();
+
+    expect(res._getJSONData()).toMatchObject({ enabled: false });
   });
 
   it('async-invokes the discovery function with a manual trigger on hosted', async () => {
@@ -170,6 +181,18 @@ describe('/api/admin/model-discovery', () => {
     expect(res._getJSONData()).toEqual({ dispatched: 'in-process' });
     expect(runScheduledDiscovery).toHaveBeenCalledWith(expect.anything(), 'selfhost', { trigger: 'manual' });
     expect(lambdaSend).not.toHaveBeenCalled();
+  });
+
+  it('refuses with 409 instead of dispatching a run the service would skip', async () => {
+    getSettingsValue.mockImplementation(async (key: string) => (key === 'enableModelDiscovery' ? false : 'report'));
+
+    const { run, res } = call({ method: 'POST' });
+    await run();
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toMatchObject({ code: 'discovery-disabled' });
+    expect(lambdaSend).not.toHaveBeenCalled();
+    expect(runScheduledDiscovery).not.toHaveBeenCalled();
   });
 
   it('answers 503 when the discovery function is not linked', async () => {

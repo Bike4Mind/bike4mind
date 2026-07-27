@@ -129,7 +129,10 @@ const handler = baseApi()
       if (problem === 'unknown') {
         throw new BadRequestError(`replacedBy ${replacedBy} is unknown to the merged model list`);
       }
-      if (problem) {
+      // 'not-invocable' (the catalog knows the id but no configured key lists
+      // it) passes the gate: an operator may accept a successor before its key
+      // exists. The GET report still surfaces it as a stale reference.
+      if (problem && problem !== 'not-invocable') {
         throw new BadRequestError(`replacedBy ${replacedBy} is ${problem} and cannot replace ${modelId}`);
       }
     }

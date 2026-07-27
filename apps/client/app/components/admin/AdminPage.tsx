@@ -74,6 +74,7 @@ import {
   type SidebarGate,
   type SidebarItem,
 } from './adminSidebarConfig';
+import { useAdminModal } from './useAdminModal';
 
 export { AdminTab } from './adminSidebarConfig';
 
@@ -105,18 +106,6 @@ const SecopsTriageTab = dynamic(() => import('./SecopsTriageTab'), { ssr: false 
 const PublishedArtifactsTab = dynamic(() => import('./PublishedArtifactsTab'), { ssr: false });
 const ArchitectureDiagramsTab = dynamic(() => import('./ArchitectureDiagramsTab'), { ssr: false });
 const DependenciesTab = dynamic(() => import('./DependenciesTab'), { ssr: false });
-
-export const useAdminModal = create<{
-  open: boolean;
-  activeTab: AdminTab | string | null;
-  setOpen: (open: boolean | ((open: boolean) => boolean)) => void;
-  setActiveTab: (activeTab: AdminTab | string | null) => void;
-}>((set, get) => ({
-  open: true, // open by default
-  activeTab: AdminTab.Users, // defaults to Users; overridden when migration is available
-  setOpen: open => set({ open: typeof open === 'function' ? open(get().open) : open }),
-  setActiveTab: (activeTab: AdminTab | string | null) => set({ activeTab }),
-}));
 
 export const useAdminNotifications = create<{
   hiddenNotifications: string[];
