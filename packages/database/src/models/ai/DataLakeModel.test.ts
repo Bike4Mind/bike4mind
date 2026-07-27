@@ -327,6 +327,74 @@ describe('DataLakeRepository.findAccessible — management gate (entitlement-awa
   });
 });
 
+describe('DataLakeRepository.findPublicLakes — public discover catalog', () => {
+  setupMongoTest();
+
+  // Seed the catalog once per test: a mix that exercises every exclusion rule.
+  const seedMixed = async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'alpha', name: 'Alpha Lake', isPublic: true }));
+    await dataLakeRepository.create(
+      baseLake({ slug: 'beta', name: 'Beta Lake', description: 'about widgets', isPublic: true })
+    );
+    // Excluded: private (not public).
+    await dataLakeRepository.create(baseLake({ slug: 'private-lake', createdByUserId: 'alice' }));
+    // Excluded: public but gated after publishing (no longer open to everyone).
+    await dataLakeRepository.create(baseLake({ slug: 'gated', isPublic: true, requiredUserTag: 'Opti' }));
+    // Excluded: public but archived (browse is active-only).
+    await dataLakeRepository.create(baseLake({ slug: 'archived-pub', isPublic: true, status: 'archived' }));
+  };
+
+  it('returns only active, public, gate-less lakes', async () => {
+    await seedMixed();
+    const { lakes, total } = await dataLakeRepository.findPublicLakes();
+    expect(lakes.map(l => l.slug)).toEqual(['alpha', 'beta']); // sorted by name
+    expect(total).toBe(2);
+  });
+
+  it('search matches name OR description, case-insensitively', async () => {
+    await seedMixed();
+    expect((await dataLakeRepository.findPublicLakes({ search: 'alpha' })).lakes.map(l => l.slug)).toEqual(['alpha']);
+    // "widgets" only appears in beta's description.
+    expect((await dataLakeRepository.findPublicLakes({ search: 'WIDGETS' })).lakes.map(l => l.slug)).toEqual(['beta']);
+    expect((await dataLakeRepository.findPublicLakes({ search: 'lake' })).total).toBe(2);
+  });
+
+  it('paginates with limit/offset while total stays the full count', async () => {
+    await seedMixed();
+    const page1 = await dataLakeRepository.findPublicLakes({ limit: 1, offset: 0 });
+    expect(page1.lakes.map(l => l.slug)).toEqual(['alpha']);
+    expect(page1.total).toBe(2);
+    const page2 = await dataLakeRepository.findPublicLakes({ limit: 1, offset: 1 });
+    expect(page2.lakes.map(l => l.slug)).toEqual(['beta']);
+    expect(page2.total).toBe(2);
+  });
+
+  it('paginates deterministically across same-named lakes (no dup/skip between pages)', async () => {
+    // Same name on every lake -> name alone is not a total order; the _id tiebreaker is what
+    // keeps skip/limit pages disjoint and complete.
+    for (const slug of ['s1', 's2', 's3', 's4']) {
+      await dataLakeRepository.create(baseLake({ slug, name: 'Same', isPublic: true }));
+    }
+    const seen: string[] = [];
+    for (let offset = 0; offset < 4; offset += 2) {
+      const { lakes } = await dataLakeRepository.findPublicLakes({ limit: 2, offset });
+      seen.push(...lakes.map(l => l.slug));
+    }
+    // All four returned exactly once across the two pages - no overlap, nothing missed.
+    expect(seen.length).toBe(4);
+    expect(new Set(seen).size).toBe(4);
+    expect([...seen].sort()).toEqual(['s1', 's2', 's3', 's4']);
+  });
+
+  it('treats a regex-metacharacter search as a literal (no injection)', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'dotstar', name: 'a.b', isPublic: true }));
+    await dataLakeRepository.create(baseLake({ slug: 'plain', name: 'axb', isPublic: true }));
+    // ".*" must match the literal "a.b" name, not act as a wildcard matching "axb".
+    const { lakes } = await dataLakeRepository.findPublicLakes({ search: 'a.b' });
+    expect(lakes.map(l => l.slug)).toEqual(['dotstar']);
+  });
+});
+
 describe('DataLakeRepository — slug is unique per org', () => {
   setupMongoTest();
 

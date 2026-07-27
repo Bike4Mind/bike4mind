@@ -599,9 +599,11 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   atomicRecordMfaFailedAttempt: (userId: string) => Promise<IUserDocument | null>;
   findAllByEmailsOrUsernames: (emails: string[], usernames: string[]) => Promise<IUserDocument[]>;
   findByStripeCustomerId: (stripeCustomerId: string) => Promise<IUserDocument | null>;
+  // `id` is included so callers can map results back to the requested ids (Mongoose adds the
+  // id virtual regardless of the projection); other consumers already rely on it at runtime.
   findByIds: (
     ids: string[]
-  ) => Promise<Pick<IUserDocument, 'name' | 'email' | 'username' | 'lastActiveAt' | 'isOnline' | 'photoUrl'>[]>;
+  ) => Promise<Pick<IUserDocument, 'id' | 'name' | 'email' | 'username' | 'lastActiveAt' | 'isOnline' | 'photoUrl'>[]>;
   searchCollections: (
     userId: string,
     options: {
