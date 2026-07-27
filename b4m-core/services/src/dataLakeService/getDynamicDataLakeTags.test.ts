@@ -148,28 +148,28 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     expect(res.dataLakeTagPrefixes).toEqual([]);
   });
 
-  it('does not treat a creator-less lake as owned by an id-less caller', async () => {
-    // Both sides absent is the fail-open shape: comparing String(undefined) to String(undefined)
-    // would make every ownerless gated lake look owned by every anonymous caller. A blank creator
-    // is a real value - resolveFallbackLake mints one.
-    const blank = dbLake({ id: 'blank', createdByUserId: '', requiredUserTag: 'TagIDoNotHold' });
-    const absent = dbLake({ id: 'absent', requiredUserTag: 'TagIDoNotHold' });
-    delete (absent as { createdByUserId?: string }).createdByUserId;
+  it("does not match an id-less caller against a creator stored as the string 'undefined'", async () => {
+    // The fail-open shape is coercing BOTH sides: String(undefined) is 'undefined', which equals
+    // a creator field literally holding 'undefined' - a plausible bad-ingest value, and one the
+    // schema accepts since it is a non-empty string. Only the document side may be coerced.
+    const corrupt = dbLake({ id: 'corrupt', createdByUserId: 'undefined', requiredUserTag: 'TagIDoNotHold' });
 
-    const res = await getDynamicDataLakeAccess(ctx([blank, absent], { user: { tags: [] } }));
+    const res = await getDynamicDataLakeAccess(ctx([corrupt], { user: { tags: [] } }));
 
     expect(res.dataLakeTags).toEqual([]);
     expect(res.scopedTagPrefixes).toEqual([]);
   });
 
   it('strips the reserved meta-tag of a shadow lake even when the caller owns it', async () => {
-    // The exemption must not re-open the registry-shadow escalation: the re-add happens upstream
-    // of the reserved-tag drop, so an owned shadow lake keeps its own prefix and loses the tag.
-    const reserved = DATA_LAKES[0].datalakeTag;
+    // The exemption must not re-open the registry-shadow escalation. The reachable shadow is
+    // slug-based - a row slugged after a registry lake mints that lake's meta-tag and is
+    // therefore WELL-FORMED, so it passes the self-consistency check and really is restored.
+    // The re-add sits upstream of the reserved-tag drop, so it keeps its prefix and loses the tag.
     const ownedShadow = dbLake({
       id: 'owned-shadow',
+      slug: DATA_LAKES[0].slug,
       fileTagPrefix: 'mine:',
-      datalakeTag: reserved,
+      datalakeTag: DATA_LAKES[0].datalakeTag,
       createdByUserId: 'mallory',
       requiredUserTag: 'TagIDoNotHold',
     });
@@ -180,6 +180,45 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     // The prefix proves the lake WAS restored and then had its tag stripped, rather than the
     // exemption simply never running.
     expect(res.scopedTagPrefixes).toEqual(['mine:']);
+  });
+
+  it('refuses to restore an owned lake whose meta-tag its own slug would not mint', async () => {
+    // A row where datalakeTag and slug disagree did not come through createDataLake. The
+    // reserved-tag check only knows the registry this runtime can see, so well-formedness is the
+    // environment-independent half of that defense - it must gate the privileged restore.
+    const malformed = dbLake({
+      id: 'malformed',
+      slug: 'mine',
+      datalakeTag: 'datalake:something-else',
+      createdByUserId: 'owner',
+      requiredUserTag: 'TagIDoNotHold',
+    });
+
+    const res = await getDynamicDataLakeAccess(ctx([malformed], { user: { id: 'owner', tags: [] } }));
+
+    expect(res.dataLakeTags).toEqual([]);
+    expect(res.scopedTagPrefixes).toEqual([]);
+  });
+
+  it('restores an owned ORG lake, whose meta-tag is namespaced by org', async () => {
+    // Well-formedness must account for the org namespace, or the check would reject every
+    // legitimate org lake.
+    const orgLake = dbLake({
+      id: 'orgmine',
+      slug: 'handbook',
+      organizationId: 'orgA',
+      datalakeTag: 'datalake:orgA:handbook',
+      fileTagPrefix: 'hb:',
+      createdByUserId: 'owner',
+      requiredUserTag: 'TagIDoNotHold',
+    });
+
+    const res = await getDynamicDataLakeAccess(
+      ctx([orgLake], { user: { id: 'owner', tags: [], organizationId: 'orgA' } })
+    );
+
+    expect(res.dataLakeTags).toEqual(['datalake:orgA:handbook']);
+    expect(res.scopedTagPrefixes).toEqual(['hb:']);
   });
 
   it('lists an owned lake once when it also satisfies its own gate', async () => {

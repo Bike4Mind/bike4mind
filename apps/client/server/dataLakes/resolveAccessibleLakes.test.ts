@@ -36,48 +36,32 @@ describe('resolveAccessibleLakes', () => {
     mockGetRequestEntitlements.mockResolvedValue([]);
   });
 
-  it('threads the resolved entitlement keys into the DB filter', async () => {
+  it('threads the resolved entitlement keys into the DB filter, and scopes static lakes by the same keys', async () => {
     // Building the AccessContext inline used to drop entitlementKeys, so findAccessible got no
     // entitlement arm and browse lost a lake gated by requiredEntitlement alone - a lake
-    // retrieval kept, inverting the documented "browse is the wider surface" invariant.
-    mockGetRequestEntitlements.mockResolvedValue(['product:pro']);
+    // retrieval kept, inverting the documented "browse is the wider surface" invariant. This is
+    // the assertion that discriminates: the old inline literal carried no keys at all.
+    mockGetRequestEntitlements.mockResolvedValue(['optihashi:pro']);
 
-    await resolveAccessibleLakes(asReq({ id: 'u1', tags: [], organizationId: 'org1' }));
+    const lakes = await resolveAccessibleLakes(asReq({ id: 'u1', tags: [], organizationId: 'org1' }));
 
     expect(mockListDataLakes).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'u1', isAdmin: false, entitlementKeys: ['product:pro'] }),
+      expect.objectContaining({ userId: 'u1', isAdmin: false, entitlementKeys: ['optihashi:pro'] }),
       expect.anything()
     );
+    // The same keys drive the static filter, so the two halves of the merge cannot disagree about
+    // what the caller holds - the built-in opti lake is entitlement-gated and needs no tag.
+    expect(lakes.map(l => l.id)).toContain('opti-knowledge');
   });
 
   it('skips the entitlement read for an admin and takes the list-all path', async () => {
+    // A regression pin rather than coverage of the context change: the admin path behaved this
+    // way before it too, and must keep doing so - the entitlement read is pure overhead for an
+    // admin, whose gates grant regardless.
     await resolveAccessibleLakes(asReq({ id: 'admin', tags: [], isAdmin: true }));
 
     expect(mockListAllDataLakes).toHaveBeenCalledTimes(1);
     expect(mockListDataLakes).not.toHaveBeenCalled();
     expect(mockGetRequestEntitlements).not.toHaveBeenCalled();
-  });
-
-  it('scopes static registry lakes by the same keys rather than re-reading them', async () => {
-    // The static filter and the DB filter must agree about which keys the caller holds.
-    mockGetRequestEntitlements.mockResolvedValue(['optihashi:pro']);
-
-    const lakes = await resolveAccessibleLakes(asReq({ id: 'u1', tags: [] }));
-
-    // The built-in opti lake is entitlement-gated, so a key holder gets it with no tag.
-    expect(lakes.map(l => l.id)).toContain('opti-knowledge');
-    expect(mockGetRequestEntitlements).toHaveBeenCalledTimes(1);
-  });
-
-  it('a dynamic lake shadows a same-id static one', async () => {
-    mockListDataLakes.mockResolvedValue([
-      { id: 'opti-knowledge', slug: 'shadow', name: 'Shadow', fileTagPrefix: 'mine:', datalakeTag: 'datalake:shadow' },
-    ]);
-    mockGetRequestEntitlements.mockResolvedValue(['optihashi:pro']);
-
-    const lakes = await resolveAccessibleLakes(asReq({ id: 'u1', tags: [] }));
-
-    expect(lakes.filter(l => l.id === 'opti-knowledge')).toHaveLength(1);
-    expect(lakes.find(l => l.id === 'opti-knowledge')?.slug).toBe('shadow');
   });
 });

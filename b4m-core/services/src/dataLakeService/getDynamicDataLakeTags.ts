@@ -6,6 +6,7 @@ import {
   type IDataLakeRepository,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import { buildDatalakeTag } from './createDataLake';
 
 /**
  * The minimal context the data-lake access resolver needs. The knowledge tools
@@ -65,7 +66,9 @@ export async function getDynamicDataLakeTags(context: DataLakeAccessContext): Pr
  * The DB pre-filter's owner bypass is honoured too: a lake the caller created resolves even
  * when they do not hold its own declared gate. Ownership is re-verified here against the
  * persisted `createdByUserId` rather than assumed from the query, and stays bounded by the
- * pre-filter's `status: 'active'`, so a caller's own DRAFT lake remains browse-only.
+ * pre-filter's `status: 'active'`, so a caller's own DRAFT lake remains browse-only. The
+ * bypass is org-independent, matching browse: a creator who has since moved orgs still reaches
+ * a gated lake they made in the old one, and only they or an admin could have put files in it.
  */
 export async function getDynamicDataLakeAccess(
   context: DataLakeAccessContext
@@ -93,9 +96,11 @@ export async function getDynamicDataLakeAccess(
         userId
       );
       dynamicDataLakes = dbLakes.map(toDataLakeConfig);
-      // Guarded on userId: an id-less caller owns nothing. Without the guard, String(undefined)
-      // would compare the literal 'undefined' and match a row with a blank creator.
-      // (`createdByUserId: ''` is real - resolveFallbackLake mints it.)
+      // Only the document side is coerced. `userId` is already a string or undefined, so an
+      // id-less caller can never match: leave it uncoerced. Wrapping it too would compare the
+      // literal 'undefined' and hand every lake whose creator is the string 'undefined' - a
+      // plausible bad-ingest value - to every anonymous caller. The `if` is a cheap
+      // short-circuit, not the guard.
       if (userId) {
         for (const dl of dbLakes) {
           if (String(dl.createdByUserId) === userId) ownedDynamicIds.add(dl.id);
@@ -121,9 +126,16 @@ export async function getDynamicDataLakeAccess(
   //
   // Every set below derives from this union, so the provenance split and the reserved-tag drop
   // apply to re-added lakes too.
+  //
+  // Restoring also requires the row to be well-formed: its meta-tag must be the one its own
+  // slug/org would mint. Before this exemption a malformed row was dropped twice - by the gate
+  // filter AND by the reserved-tag check - and the reserved-tag check knows only the registry
+  // this runtime can see (the premium half arrives through an env seam). Requiring
+  // self-consistency keeps a second, environment-independent check on the privileged path.
   const accessibleIds = new Set(accessibleLakes.map(dl => dl.id));
+  const isWellFormed = (dl: DataLakeConfig) => dl.datalakeTag === buildDatalakeTag(dl.slug, dl.organizationId);
   const ownedGatedLakes = (dynamicDataLakes ?? []).filter(
-    dl => ownedDynamicIds.has(dl.id) && !accessibleIds.has(dl.id)
+    dl => ownedDynamicIds.has(dl.id) && !accessibleIds.has(dl.id) && isWellFormed(dl)
   );
   const resolvedLakes = [...accessibleLakes, ...ownedGatedLakes];
   // Split prefixes by provenance: static-registry lakes are OPEN (shared KB - ownership

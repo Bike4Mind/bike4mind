@@ -42,11 +42,13 @@ import { toAccessContext } from './toAccessContext';
  * (see getDynamicDataLakeAccess) - so if the two are ever unified, ownership must survive.
  */
 export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<DataLakeConfig[]> {
-  const user = req.user!;
   // toAccessContext, not a local literal: it is the one place this shape is built, and it is
   // what resolves entitlementKeys. Building it inline here silently dropped them, so
   // findAccessible saw no entitlement arm and browse lost a lake gated by requiredEntitlement
-  // alone - which retrieval kept. Memoized per request, and a no-op read for admins.
+  // alone - which retrieval kept. Memoized per request, and skipped entirely for admins.
+  // Costs a developer-tagged non-admin one subscription read they previously skipped: the old
+  // inline form resolved keys lazily and that branch short-circuits on the developer tag. Worth
+  // it to stop the two halves of the merge disagreeing about what the caller holds.
   const ctx = await toAccessContext(req);
 
   const dynamic = ctx.isAdmin
@@ -57,7 +59,7 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<D
   // requiredUserTag/requiredEntitlement filter, reusing the keys toAccessContext already
   // resolved so the static filter and the DB filter above cannot disagree about them.
   const staticLakes =
-    ctx.isAdmin || hasDeveloperUserTag(user.tags)
+    ctx.isAdmin || hasDeveloperUserTag(ctx.userTags)
       ? DATA_LAKES
       : getAccessibleDataLakes(ctx.userTags, undefined, ctx.entitlementKeys);
 
