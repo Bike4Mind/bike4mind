@@ -46,6 +46,7 @@ import {
   SupportedEmbeddingModel,
   ImageModerationIncident,
   isExperimentalFeatureEnabled,
+  resolveHistoryFetchLimit,
   buildMemoryContext,
 } from '@bike4mind/common';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
@@ -1493,7 +1494,9 @@ export class ContextSummarizationFeature implements ChatCompletionFeature {
   }): Promise<void> {
     // Only trigger when there's confirmed overflow AND we have a boundary
     if (!historyCount || !oldestIncludedQuestId) return;
-    if (!session.messageCount || session.messageCount <= historyCount) return;
+    // Compare against the resolved page size: the unlimited marker is negative, so comparing
+    // against it raw would read as "everything overflows" and summarize on every turn.
+    if (!session.messageCount || session.messageCount <= resolveHistoryFetchLimit(historyCount)) return;
 
     // Rate-limit: skip if summarized recently
     if (session.contextSummaryAt) {

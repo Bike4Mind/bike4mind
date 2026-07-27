@@ -7,6 +7,7 @@ import {
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
 } from './ChatCompletionFeatures';
+import { UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -81,6 +82,18 @@ describe('ContextSummarizationFeature', () => {
     it('does NOT call contextSummarizeSession when historyCount is 0', async () => {
       await feature.onComplete(makeArgs({ historyCount: 0 }));
       expect(contextSummarizeSession).not.toHaveBeenCalled();
+    });
+
+    it('treats unlimited history as the default page size rather than "everything overflows"', async () => {
+      await feature.onComplete(
+        makeArgs({ session: makeSession({ messageCount: 10 }), historyCount: UNLIMITED_HISTORY_COUNT })
+      );
+      expect(contextSummarizeSession).not.toHaveBeenCalled();
+
+      await feature.onComplete(
+        makeArgs({ session: makeSession({ messageCount: 100 }), historyCount: UNLIMITED_HISTORY_COUNT })
+      );
+      expect(contextSummarizeSession).toHaveBeenCalledOnce();
     });
 
     it('does NOT call contextSummarizeSession when oldestIncludedQuestId is null', async () => {
