@@ -8,7 +8,9 @@ import type {
   IModelCatalogRepository,
   IModelDiscoveryRunRepository,
   IModelDiscoveryStateRepository,
+  IModelPriceRepository,
   ModelBackend,
+  ModelPriceUnit,
   ModelRecord,
 } from '@bike4mind/common';
 
@@ -57,15 +59,20 @@ export interface DiscoveryCredentials {
 export type DiscoverySourceKind = 'provider' | 'aggregator';
 
 /**
- * A price a source observed, in the one unit the promotion predicate compares.
- * Phase 2 never writes it: pricing rows are Phase 3, and this exists only to
- * answer "is this model priced by a trusted tier" and to show up on the report.
+ * A price a source observed, in the one unit the promotion predicate compares
+ * and the price planner reasons in. ModelPrice tier rates are USD per SINGLE
+ * token, so pricePlan divides by 1e6 at the write boundary - crossing the two
+ * is a 1e6 billing error.
  */
 export interface DiscoveredPrice {
   /** USD per 1M input tokens. */
   inputPerMTok: number;
   /** USD per 1M output tokens. */
   outputPerMTok: number;
+  /** USD per 1M cached-read input tokens, when the source publishes it. */
+  cacheReadPerMTok?: number;
+  /** USD per 1M cache-write input tokens, when the source publishes it. */
+  cacheWritePerMTok?: number;
 }
 
 /** One model as a source saw it: our id plus the fields that source has authority for. */
@@ -75,6 +82,18 @@ export interface DiscoveredModel {
   /** Sparse ModelRecord fragment. Keys this build does not know are dropped by the merge. */
   patch: Partial<ModelRecord>;
   pricing?: DiscoveredPrice;
+}
+
+/**
+ * One successful source's records, as both planners consume them. Order carries
+ * meaning: the planners sort providers ahead of aggregators and keep
+ * registration order within a kind, which is how models.dev stays ahead of
+ * litellm without either planner naming a source.
+ */
+export interface SourceContribution {
+  name: string;
+  kind: DiscoverySourceKind;
+  records: DiscoveredModel[];
 }
 
 export interface DiscoverySourceOk {
@@ -191,6 +210,54 @@ export interface DroppedSourceRecord {
 }
 
 /**
+ * Why a discovered price was not written. Each one is a guardrail from sec 8;
+ * `band-exceeded` is the only one logged under the [PRICE_BAND] prefix.
+ */
+export type PriceFlagKind =
+  | 'band-exceeded'
+  | 'source-disagreement'
+  | 'single-source-untrusted'
+  | 'operator-owned-divergence'
+  | 'tiered-pricing-manual';
+
+/**
+ * A price discovery declined to write, with everything an operator needs to
+ * settle it. Report-mode exit criterion 2 is "every flag explainable line by
+ * line", so `detail` is that line and is never left to the reader to infer.
+ */
+export interface PriceFlag {
+  modelId: string;
+  kind: PriceFlagKind;
+  /** Per-MTok, the readable unit; the row it would have written is per token. */
+  proposed: { inputPerMTok: number; outputPerMTok: number };
+  /** The row in force, when there is one. */
+  current?: { inputPerMTok: number; outputPerMTok: number };
+  /** Every source that priced this model, so a disagreement names both sides. */
+  sources: string[];
+  detail: string;
+}
+
+/** Why a usable observation produced neither a row nor a flag. */
+export type PriceSkipReason = 'unknown-model' | 'operator-owned' | 'tiered-pricing' | 'untrusted' | 'unchanged';
+
+export interface PriceSkip {
+  modelId: string;
+  reason: PriceSkipReason;
+}
+
+/** A planned price row as the run report shows it, in per-MTok rather than per-token. */
+export interface PlannedPriceRow {
+  modelId: string;
+  unit: ModelPriceUnit;
+  inputPerMTok: number;
+  outputPerMTok: number;
+  effectiveFrom: Date;
+  /** The sources whose observations produced the value. */
+  sources: string[];
+  note: string;
+}
+
+/**
  * Run counters named 1:1 for the sec 10 CloudWatch metrics. The service never
  * calls CloudWatch - drivers publish these numbers.
  */
@@ -199,8 +266,9 @@ export interface ModelDiscoveryMetrics {
   ModelsPromoted: number;
   ModelsBlockedByDispatch: number;
   ModelsDeprecated: number;
-  /** Always 0 in Phase 2: pricing writes are Phase 3. */
+  /** Rows actually appended, so report mode reports a plan and counts zero. */
   PriceRowsAppended: number;
+  /** Counted in both modes: a flag is a work item whether or not writes are on. */
   PriceFlagged: number;
   CatalogRowsRejected: number;
   AggregatorJoinCoverage: Record<string, number>;
@@ -231,6 +299,11 @@ export interface ModelDiscoveryRunResult {
     /** Backends no successful source listed: their counters are frozen this run. */
     frozenBackends: string[];
   };
+  /** The price plan, reported identically in both modes; only writes differ. */
+  prices: {
+    rows: PlannedPriceRow[];
+    flags: PriceFlag[];
+  };
   metrics: ModelDiscoveryMetrics;
 }
 
@@ -242,6 +315,8 @@ export interface ModelDiscoveryAdapters {
     /** claimDedup is the lease; deleteByKey is the only release path it has. */
     cache: Pick<ICacheRepository, 'claimDedup' | 'deleteByKey'>;
     adminSettings: Pick<IAdminSettingsRepository, 'getSettingsValue'>;
+    /** Prices are appended to the EXISTING ModelPrice collection (sec 5.8). */
+    prices: Pick<IModelPriceRepository, 'append' | 'rowsInForce'>;
   };
   sources: readonly DiscoverySource[];
   /** Step 1 of the run (sec 5.7). A thunk so a driver wires its own auth adapters once. */
@@ -270,7 +345,11 @@ export interface RunModelDiscoveryOptions {
   concurrency?: number;
   /** Skip a source any host fetched successfully this recently (sec 6.1). */
   minSourceIntervalMs?: number;
-  /** Models the price catalog already covers. Phase 3 wires it; the predicate reads it. */
+  /**
+   * Extra ids to treat as priced, unioned with the models that have a per_token
+   * row in force. A driver pricing a model outside the ModelPrice collection is
+   * the only reason to set it.
+   */
   knownPricedModelIds?: ReadonlySet<string>;
   /** Injectable clock. Tests drive deadlines with it; production leaves it unset. */
   now?: () => Date;

@@ -55,10 +55,25 @@ describe('litellm normalization', () => {
     expect(result.records).toEqual(expected);
   });
 
-  it('converts per-token cost to $/MTok', () => {
+  it('converts per-token cost to $/MTok, cache rates included', () => {
     const opus = byId(result.records).get('claude-opus-4-5-20251101');
     expect(prices['claude-opus-4-5-20251101'].input_cost_per_token * TOKENS_PER_MTOK).toBe(5);
-    expect(opus?.pricing).toEqual({ inputPerMTok: 5, outputPerMTok: 25 });
+    // cache_creation_input_token_cost is litellm's name for the WRITE rate;
+    // crossing the two would bill every cache read at the write price.
+    expect(opus?.pricing).toEqual({
+      inputPerMTok: 5,
+      outputPerMTok: 25,
+      cacheReadPerMTok: 0.5,
+      cacheWritePerMTok: 6.25,
+    });
+  });
+
+  it('leaves a cache rate the entry does not carry unset', () => {
+    expect(byId(result.records).get('gpt-5')?.pricing).toEqual({
+      inputPerMTok: 1.25,
+      outputPerMTok: 10,
+      cacheReadPerMTok: 0.125,
+    });
   });
 
   it('joins FLUX and Whisper but carries no price, because theirs is not per token', () => {

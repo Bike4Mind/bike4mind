@@ -62,6 +62,17 @@ export const ModelPrice = z.object({
 
 export type IModelPrice = z.infer<typeof ModelPrice>;
 
+/**
+ * Note prefix stamped by model discovery on rows it appends (full form
+ * 'discovery:<source>@<iso-date>'). Rows carrying it are automation rows: a
+ * strictly newer price seed may supersede them, unlike operator reprices,
+ * which are immune forever. Must stay distinct from the seed note
+ * ('adapter-seed', pinned in packages/database seedModelPrices.SEED_NOTE) and
+ * is mirrored as a literal in ModelPricingCatalog.tsx, which cannot import
+ * server packages.
+ */
+export const DISCOVERY_PRICE_NOTE_PREFIX = 'discovery:';
+
 export type IModelPriceDocument = IModelPrice & IMongoDocument;
 
 /** Zod schema for appending a row (server sets id/timestamps). Repositories

@@ -22,6 +22,9 @@ interface LiteLlmEntry {
   max_tokens?: unknown;
   input_cost_per_token?: unknown;
   output_cost_per_token?: unknown;
+  cache_read_input_token_cost?: unknown;
+  /** litellm's name for the cache WRITE rate. */
+  cache_creation_input_token_cost?: unknown;
   supports_vision?: unknown;
   supports_function_calling?: unknown;
   supports_response_schema?: unknown;
@@ -40,16 +43,23 @@ export type LiteLlmDocument = Record<string, LiteLlmEntry>;
 /** litellm quotes cost per SINGLE token, so $/MTok is a factor of 1e6. */
 export const TOKENS_PER_MTOK = 1_000_000;
 
-const TOKEN_PRICE_KEYS = ['input_cost_per_token', 'output_cost_per_token'] as const;
+const perMTok = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value * TOKENS_PER_MTOK : undefined;
 
 function priceOf(entry: LiteLlmEntry): DiscoveredPrice | undefined {
-  const [input, output] = TOKEN_PRICE_KEYS.map(key => {
-    const value = entry[key];
-    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value * TOKENS_PER_MTOK : undefined;
+  const inputPerMTok = perMTok(entry.input_cost_per_token);
+  const outputPerMTok = perMTok(entry.output_cost_per_token);
+  if (inputPerMTok === undefined || outputPerMTok === undefined) return undefined;
+  if (inputPerMTok === 0 && outputPerMTok === 0) return undefined;
+  // The `_above_*_tokens` and `_priority` variants are deliberately ignored:
+  // DiscoveredPrice is one flat rate, and picking one of them would quote a
+  // long-context or priority-lane price as if it were the standard one.
+  return compact({
+    inputPerMTok,
+    outputPerMTok,
+    cacheReadPerMTok: perMTok(entry.cache_read_input_token_cost),
+    cacheWritePerMTok: perMTok(entry.cache_creation_input_token_cost),
   });
-  if (input === undefined || output === undefined) return undefined;
-  if (input === 0 && output === 0) return undefined;
-  return { inputPerMTok: input, outputPerMTok: output };
 }
 
 /** YYYY-MM-DD, which is how litellm writes deprecation_date. */

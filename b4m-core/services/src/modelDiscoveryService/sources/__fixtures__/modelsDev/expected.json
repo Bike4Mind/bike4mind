@@ -14,7 +14,9 @@
     },
     "pricing": {
       "inputPerMTok": 5,
-      "outputPerMTok": 25
+      "outputPerMTok": 25,
+      "cacheReadPerMTok": 0.5,
+      "cacheWritePerMTok": 6.25
     }
   },
   {
@@ -33,7 +35,9 @@
     },
     "pricing": {
       "inputPerMTok": 5,
-      "outputPerMTok": 25
+      "outputPerMTok": 25,
+      "cacheReadPerMTok": 0.5,
+      "cacheWritePerMTok": 6.25
     }
   },
   {
@@ -51,7 +55,9 @@
     },
     "pricing": {
       "inputPerMTok": 3,
-      "outputPerMTok": 15
+      "outputPerMTok": 15,
+      "cacheReadPerMTok": 0.3,
+      "cacheWritePerMTok": 3.75
     }
   },
   {
@@ -69,7 +75,8 @@
     },
     "pricing": {
       "inputPerMTok": 1.25,
-      "outputPerMTok": 10
+      "outputPerMTok": 10,
+      "cacheReadPerMTok": 0.125
     }
   },
   {
@@ -90,7 +97,8 @@
     },
     "pricing": {
       "inputPerMTok": 2,
-      "outputPerMTok": 12
+      "outputPerMTok": 12,
+      "cacheReadPerMTok": 0.2
     }
   },
   {
@@ -108,7 +116,9 @@
     },
     "pricing": {
       "inputPerMTok": 5,
-      "outputPerMTok": 25
+      "outputPerMTok": 25,
+      "cacheReadPerMTok": 0.5,
+      "cacheWritePerMTok": 6.25
     }
   },
   {
@@ -126,7 +136,8 @@
     },
     "pricing": {
       "inputPerMTok": 2,
-      "outputPerMTok": 8
+      "outputPerMTok": 8,
+      "cacheReadPerMTok": 0.5
     }
   },
   {
@@ -145,7 +156,8 @@
     },
     "pricing": {
       "inputPerMTok": 1.25,
-      "outputPerMTok": 10
+      "outputPerMTok": 10,
+      "cacheReadPerMTok": 0.125
     }
   },
   {
@@ -163,7 +175,8 @@
     },
     "pricing": {
       "inputPerMTok": 2,
-      "outputPerMTok": 6
+      "outputPerMTok": 6,
+      "cacheReadPerMTok": 0.3
     }
   },
   {
@@ -185,7 +198,8 @@
     },
     "pricing": {
       "inputPerMTok": 1.1,
-      "outputPerMTok": 4.4
+      "outputPerMTok": 4.4,
+      "cacheReadPerMTok": 0.275
     }
   },
   {
@@ -205,7 +219,9 @@
     },
     "pricing": {
       "inputPerMTok": 15,
-      "outputPerMTok": 75
+      "outputPerMTok": 75,
+      "cacheReadPerMTok": 1.5,
+      "cacheWritePerMTok": 18.75
     }
   }
 ]

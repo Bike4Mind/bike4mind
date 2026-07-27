@@ -12,13 +12,13 @@ import omit from 'lodash/omit.js';
 import { evaluatePromotion, isDispatchBlocked, type PromotionDecision } from './promotion';
 import type {
   CatalogDiffEntry,
-  DiscoveredModel,
   DiscoveredPrice,
   DiscoveryAutoEnablePolicy,
   DiscoveryCredentials,
   DiscoverySourceKind,
   DispatchResolver,
   DroppedSourceRecord,
+  SourceContribution,
 } from './types';
 
 /** Provenance marker for a group discovery derived rather than fetched. */
@@ -34,12 +34,6 @@ const FEED_FORBIDDEN_GROUPS: readonly FieldGroup[] = ['dispatch', 'presentation'
 
 /** Two aggregators inside this band agree; beyond it neither is trusted (sec 8). */
 export const PRICE_AGREEMENT_TOLERANCE = 0.1;
-
-interface SourceContribution {
-  name: string;
-  kind: DiscoverySourceKind;
-  records: DiscoveredModel[];
-}
 
 /** Provenance for a dispatch field the resolver derived rather than a feed reporting it. */
 export const DISPATCH_SEED_CONTRIBUTOR = 'seed';
@@ -352,13 +346,20 @@ export function hasTrustedPrice(
 }
 
 function withinTolerance(a: DiscoveredPrice, b: DiscoveredPrice): boolean {
-  return agrees(a.inputPerMTok, b.inputPerMTok) && agrees(a.outputPerMTok, b.outputPerMTok);
+  return (
+    relativeGap(a.inputPerMTok, b.inputPerMTok) <= PRICE_AGREEMENT_TOLERANCE &&
+    relativeGap(a.outputPerMTok, b.outputPerMTok) <= PRICE_AGREEMENT_TOLERANCE
+  );
 }
 
-function agrees(a: number, b: number): boolean {
+/**
+ * Fractional distance between two rates against the LARGER magnitude, so a
+ * $3 -> $6 move and a $6 -> $3 move both read as one move of the same size.
+ * Scale-invariant, so it is the same number in $/MTok and in $/token.
+ */
+export function relativeGap(a: number, b: number): number {
   const scale = Math.max(Math.abs(a), Math.abs(b));
-  if (scale === 0) return true;
-  return Math.abs(a - b) / scale <= PRICE_AGREEMENT_TOLERANCE;
+  return scale === 0 ? 0 : Math.abs(a - b) / scale;
 }
 
 /** Metric inputs the run report and the drivers both read off one plan. */

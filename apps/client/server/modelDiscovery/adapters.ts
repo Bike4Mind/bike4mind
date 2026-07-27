@@ -6,6 +6,7 @@ import {
   modelCatalogRepository,
   modelDiscoveryRunRepository,
   modelDiscoveryStateRepository,
+  modelPriceRepository,
 } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { resolveCatalogRecords, resolveDispatchForRecord } from '@bike4mind/llm-adapters';
@@ -149,6 +150,7 @@ export function buildModelDiscoveryAdapters(logger: Logger): ModelDiscoveryAdapt
       discoveryRuns: modelDiscoveryRunRepository,
       cache: cacheRepository,
       adminSettings: adminSettingsRepository,
+      prices: modelPriceRepository,
     },
     sources: buildSources(logger),
     resolveCredentials: () =>

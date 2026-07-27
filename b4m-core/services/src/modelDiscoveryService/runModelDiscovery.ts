@@ -4,11 +4,13 @@ import type {
   IModelDiscoveryRun,
   IModelDiscoveryRunDocument,
   IModelCatalogRowInput,
+  IModelPriceInput,
 } from '@bike4mind/common';
 import { resolveCatalogRecords, type ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 import pLimit from 'p-limit';
 import { applyAbsence, planAbsence } from './absence';
 import { planCatalogWrites, summarizeDiff } from './catalogWrite';
+import { describePriceRows, planPriceWrites } from './pricePlan';
 import type {
   DiscoveryAutoEnablePolicy,
   DiscoveryCredentials,
@@ -20,6 +22,7 @@ import type {
   ModelDiscoveryAdapters,
   ModelDiscoveryMetrics,
   ModelDiscoveryRunResult,
+  PriceFlag,
   RunModelDiscoveryOptions,
   SourceResult,
   SourceSkipReason,
@@ -54,7 +57,13 @@ export const DEFAULT_MIN_SOURCE_INTERVAL_MS = 60 * 60_000;
 /** How far back run reports are read for the interval guard and cached validators. */
 const RUN_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
 
+/** Applied when modelDiscoveryPriceBandPct is unset or unusable (sec 8). */
+export const DEFAULT_PRICE_BAND_PCT = 50;
+
 const LOG_PREFIX = '[model-discovery]';
+
+/** Its own prefix (sec 10) so a flagged price move alarms without a log filter. */
+const PRICE_BAND_PREFIX = '[PRICE_BAND]';
 
 const noopLogger: DiscoveryLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
@@ -117,6 +126,7 @@ interface RunContext {
   mode: DiscoveryMode;
   autoEnable: DiscoveryAutoEnablePolicy;
   allowEgress: boolean;
+  bandPct: number;
   startedAt: Date;
   globalDeadlineMs: number;
   logger: DiscoveryLogger;
@@ -193,6 +203,15 @@ async function executeRun(
   const base = resolveCatalogRecords(inForce.filter(row => row.source !== 'operator'));
   const operatorOwnedModelIds = new Set(inForce.filter(row => row.source === 'operator').map(row => row.modelId));
 
+  const priceRowsInForce = await db.prices.rowsInForce(startedAt);
+  // A price the catalog already holds satisfies the promotion predicate, so a
+  // model priced by an earlier run (or by an operator) is not re-blocked as
+  // unpriced on a run where no source happened to quote it.
+  const knownPricedModelIds = new Set([
+    ...priceRowsInForce.filter(row => row.unit === 'per_token').map(row => row.modelId),
+    ...(options.knownPricedModelIds ?? []),
+  ]);
+
   const plan = planCatalogWrites({
     contributions,
     resolveDispatch: adapters.resolveDispatch,
@@ -200,10 +219,21 @@ async function executeRun(
     operatorOwnedModelIds,
     credentials,
     policy: ctx.autoEnable,
-    knownPricedModelIds: options.knownPricedModelIds,
+    knownPricedModelIds,
     runStartedAt: startedAt,
     runId,
   });
+
+  const pricePlan = planPriceWrites({
+    contributions,
+    rowsInForce: priceRowsInForce,
+    // The models this run adds are known too: a new model's first price row
+    // lands in the same run as the catalog row that makes it a model at all.
+    knownModelIds: new Set([...base.keys(), ...operatorOwnedModelIds, ...plan.rows.map(row => row.modelId)]),
+    bandPct: ctx.bandPct,
+    runStartedAt: startedAt,
+  });
+  logPriceFlags(pricePlan.flags, logger);
 
   const coveredBackends = new Set<string>();
   for (const source of succeeded) {
@@ -213,8 +243,10 @@ async function executeRun(
   const absence = planAbsence({ coveredBackends, sightedModelIds: plan.sightedModelIds, base });
 
   let appended = 0;
+  let pricesAppended = 0;
   if (ctx.mode === 'write') {
     appended = await appendRows(plan.rows, adapters, logger);
+    pricesAppended = await appendPriceRows(pricePlan.rows, adapters, logger);
     await applyAbsence(absence, db.discoveryState, startedAt);
   }
 
@@ -234,15 +266,18 @@ async function executeRun(
     changes: {
       added: summary.added,
       promoted: summary.promoted,
-      // Phase 2 has no lifecycle transitions and writes no prices; `flagged`
-      // carries the operator-overlap work items report mode exists to surface.
-      flagged: summary.operatorConflicts,
+      // The plan, not the writes, in both modes - same as `added`.
+      repriced: pricePlan.rows.map(row => row.modelId),
+      // Operator overlaps and price flags are one queue: both are "a human has
+      // to look at this model", which is what report mode exists to surface.
+      flagged: [...new Set([...summary.operatorConflicts, ...pricePlan.flags.map(flag => flag.modelId)])],
     },
   } as Partial<IModelDiscoveryRunDocument>);
 
   logger.info(
     `${LOG_PREFIX} run ${runId} ${status} mode=${ctx.mode} sources=${succeeded.length}/${attempts.length} ` +
-      `changes=${plan.diff.length} appended=${appended} dropped=${plan.dropped.length}`
+      `changes=${plan.diff.length} appended=${appended} dropped=${plan.dropped.length} ` +
+      `prices=${pricePlan.rows.length} priced=${pricesAppended} flagged=${pricePlan.flags.length}`
   );
 
   return {
@@ -255,14 +290,15 @@ async function executeRun(
     diff: plan.diff,
     droppedRecords: plan.dropped,
     absence,
+    prices: { rows: describePriceRows(pricePlan.rows), flags: pricePlan.flags },
     metrics: {
       ModelsDiscovered: summary.added.length,
       ModelsPromoted: summary.promoted.length,
       ModelsBlockedByDispatch: summary.blockedByDispatch.length,
-      // Lifecycle transitions are Phase 4; Phase 2 only keeps the counters.
+      // Lifecycle transitions are Phase 4; this only keeps the counter.
       ModelsDeprecated: 0,
-      PriceRowsAppended: 0,
-      PriceFlagged: 0,
+      PriceRowsAppended: pricesAppended,
+      PriceFlagged: pricePlan.flags.length,
       CatalogRowsRejected: rejected,
       AggregatorJoinCoverage: Object.fromEntries(
         joinCoverage.map(entry => [entry.aggregator, entry.total === 0 ? 1 : entry.matched / entry.total])
@@ -291,6 +327,36 @@ async function appendRows(
     }
   }
   return appended;
+}
+
+async function appendPriceRows(
+  rows: readonly IModelPriceInput[],
+  adapters: ModelDiscoveryAdapters,
+  logger: DiscoveryLogger
+): Promise<number> {
+  let appended = 0;
+  for (const row of rows) {
+    try {
+      if (await adapters.db.prices.append(row)) appended += 1;
+    } catch (error) {
+      // Unlike the catalog, ModelPrice surfaces its unique index as a thrown
+      // E11000: another driver already priced this model for this run window,
+      // which is a skip. Everything else is a real failure worth a log line.
+      if (isDuplicateKey(error)) continue;
+      logger.error(`${LOG_PREFIX} price append failed for ${row.modelId}: ${describe(error)}`);
+    }
+  }
+  return appended;
+}
+
+const isDuplicateKey = (error: unknown): boolean =>
+  (error as { code?: unknown } | null)?.code === 11000 || describe(error).includes('E11000');
+
+function logPriceFlags(flags: readonly PriceFlag[], logger: DiscoveryLogger): void {
+  for (const flag of flags) {
+    const prefix = flag.kind === 'band-exceeded' ? PRICE_BAND_PREFIX : LOG_PREFIX;
+    logger.warn(`${prefix} ${flag.modelId} ${flag.kind}: ${flag.detail}`);
+  }
 }
 
 interface FetchArgs {
@@ -453,15 +519,20 @@ function unmatchedIds(
   return [...base.keys()].filter(modelId => !matched.has(modelId)).sort();
 }
 
-async function readMode(
-  adapters: ModelDiscoveryAdapters
-): Promise<{ enabled: boolean; mode: DiscoveryMode; autoEnable: DiscoveryAutoEnablePolicy; allowEgress: boolean }> {
+async function readMode(adapters: ModelDiscoveryAdapters): Promise<{
+  enabled: boolean;
+  mode: DiscoveryMode;
+  autoEnable: DiscoveryAutoEnablePolicy;
+  allowEgress: boolean;
+  bandPct: number;
+}> {
   const settings = adapters.db.adminSettings;
-  const [enabled, mode, autoEnable, allowEgress] = await Promise.all([
+  const [enabled, mode, autoEnable, allowEgress, bandPct] = await Promise.all([
     settings.getSettingsValue('enableModelDiscovery'),
     settings.getSettingsValue('modelDiscoveryMode'),
     settings.getSettingsValue('modelDiscoveryAutoEnable'),
     settings.getSettingsValue('modelDiscoveryAllowEgress'),
+    settings.getSettingsValue('modelDiscoveryPriceBandPct'),
   ]);
   return {
     enabled: enabled !== false,
@@ -469,6 +540,9 @@ async function readMode(
     mode: mode === 'write' ? 'write' : 'report',
     autoEnable: autoEnable === 'manual' || autoEnable === 'all' ? autoEnable : 'priced',
     allowEgress: allowEgress !== false,
+    // A band of 0 is legitimate ("flag every move"), so only an unusable value
+    // falls back; NaN or a negative one would let every move through.
+    bandPct: typeof bandPct === 'number' && Number.isFinite(bandPct) && bandPct >= 0 ? bandPct : DEFAULT_PRICE_BAND_PCT,
   };
 }
 
@@ -487,6 +561,7 @@ function skippedResult(
     diff: [],
     droppedRecords: [],
     absence: { sighted: [], missed: [], frozenBackends: [] },
+    prices: { rows: [], flags: [] },
     metrics: emptyMetrics(),
   };
 }

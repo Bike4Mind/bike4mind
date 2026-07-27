@@ -46,8 +46,23 @@ describe('models.dev normalization', () => {
     expect(result.unmatched).toEqual(['flux-pro-1.1', 'transcribe']);
   });
 
-  it('quotes cost in $/MTok with no conversion', () => {
-    expect(byId(result.records).get('claude-opus-5')?.pricing).toEqual({ inputPerMTok: 5, outputPerMTok: 25 });
+  it('quotes cost in $/MTok with no conversion, cache rates included', () => {
+    expect(byId(result.records).get('claude-opus-5')?.pricing).toEqual({
+      inputPerMTok: 5,
+      outputPerMTok: 25,
+      cacheReadPerMTok: 0.5,
+      cacheWritePerMTok: 6.25,
+    });
+  });
+
+  it('leaves a cache rate the entry does not carry unset', () => {
+    // grok-4.5 publishes cache_read and no cache_write. An invented rate would
+    // overwrite the one the price row in force already carries.
+    expect(byId(result.records).get('grok-4.5')?.pricing).toEqual({
+      inputPerMTok: 2,
+      outputPerMTok: 6,
+      cacheReadPerMTok: 0.3,
+    });
   });
 
   it('fills the AWS pricing hole for Bedrock', () => {

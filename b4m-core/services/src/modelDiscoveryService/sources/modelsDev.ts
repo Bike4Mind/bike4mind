@@ -14,6 +14,8 @@ export const MODELS_DEV_URL = 'https://models.dev/api.json';
 interface ModelsDevCost {
   input?: unknown;
   output?: unknown;
+  cache_read?: unknown;
+  cache_write?: unknown;
 }
 
 interface ModelsDevModel {
@@ -66,13 +68,21 @@ export function indexModelsDev(document: unknown, backends: Iterable<string>): M
   return entries;
 }
 
+const rate = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+
 /** models.dev already quotes $/MTok, so there is no unit conversion to get wrong. */
 function priceOf(cost: ModelsDevCost | undefined): DiscoveredPrice | undefined {
-  const inputPerMTok = typeof cost?.input === 'number' && Number.isFinite(cost.input) ? cost.input : undefined;
-  const outputPerMTok = typeof cost?.output === 'number' && Number.isFinite(cost.output) ? cost.output : undefined;
+  const inputPerMTok = rate(cost?.input);
+  const outputPerMTok = rate(cost?.output);
   if (inputPerMTok === undefined || outputPerMTok === undefined) return undefined;
   if (inputPerMTok === 0 && outputPerMTok === 0) return undefined;
-  return { inputPerMTok, outputPerMTok };
+  return compact({
+    inputPerMTok,
+    outputPerMTok,
+    cacheReadPerMTok: rate(cost?.cache_read),
+    cacheWritePerMTok: rate(cost?.cache_write),
+  });
 }
 
 function patchOf(model: ModelsDevModel): Partial<ModelRecord> {

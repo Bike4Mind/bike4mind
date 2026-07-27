@@ -29,7 +29,9 @@
     },
     "pricing": {
       "inputPerMTok": 10,
-      "outputPerMTok": 50
+      "outputPerMTok": 50,
+      "cacheReadPerMTok": 1,
+      "cacheWritePerMTok": 12.5
     }
   },
   {
@@ -54,7 +56,9 @@
     },
     "pricing": {
       "inputPerMTok": 15,
-      "outputPerMTok": 75
+      "outputPerMTok": 75,
+      "cacheReadPerMTok": 1.5,
+      "cacheWritePerMTok": 18.75
     }
   },
   {
@@ -75,7 +79,9 @@
     },
     "pricing": {
       "inputPerMTok": 5,
-      "outputPerMTok": 25
+      "outputPerMTok": 25,
+      "cacheReadPerMTok": 0.5,
+      "cacheWritePerMTok": 6.25
     }
   },
   {
@@ -104,7 +110,8 @@
     },
     "pricing": {
       "inputPerMTok": 2,
-      "outputPerMTok": 12
+      "outputPerMTok": 12,
+      "cacheReadPerMTok": 0.19999999999999998
     }
   },
   {
@@ -126,7 +133,9 @@
     },
     "pricing": {
       "inputPerMTok": 5,
-      "outputPerMTok": 25
+      "outputPerMTok": 25,
+      "cacheReadPerMTok": 0.5,
+      "cacheWritePerMTok": 6.25
     }
   },
   {
@@ -147,7 +156,8 @@
     },
     "pricing": {
       "inputPerMTok": 1.25,
-      "outputPerMTok": 10
+      "outputPerMTok": 10,
+      "cacheReadPerMTok": 0.125
     }
   },
   {
@@ -168,7 +178,8 @@
     },
     "pricing": {
       "inputPerMTok": 0.75,
-      "outputPerMTok": 4.5
+      "outputPerMTok": 4.5,
+      "cacheReadPerMTok": 0.075
     }
   },
   {
@@ -188,7 +199,8 @@
     },
     "pricing": {
       "inputPerMTok": 2,
-      "outputPerMTok": 6
+      "outputPerMTok": 6,
+      "cacheReadPerMTok": 0.5
     }
   },
   {
@@ -209,7 +221,8 @@
     },
     "pricing": {
       "inputPerMTok": 2,
-      "outputPerMTok": 8
+      "outputPerMTok": 8,
+      "cacheReadPerMTok": 0.5
     }
   },
   {

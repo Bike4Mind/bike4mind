@@ -320,6 +320,7 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryMode',
   'modelDiscoveryAutoEnable',
   'modelDiscoveryAllowEgress',
+  'modelDiscoveryPriceBandPct',
 ]);
 export type SettingKey = z.infer<typeof SettingKeySchema>;
 
@@ -1526,6 +1527,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'modelDiscoveryMode', order: 2 },
       { key: 'modelDiscoveryAutoEnable', order: 3 },
       { key: 'modelDiscoveryAllowEgress', order: 4 },
+      { key: 'modelDiscoveryPriceBandPct', order: 5 },
     ],
   },
   RATE_LIMITING: {
@@ -3516,6 +3518,18 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
     order: 4,
+  }),
+  modelDiscoveryPriceBandPct: makeNumberSetting({
+    key: 'modelDiscoveryPriceBandPct',
+    name: 'Model Discovery Price Band (%)',
+    defaultValue: 50,
+    description:
+      'The largest price move discovery applies without a human, in either direction, against the row it would supersede. A bigger move is flagged with both sources shown and the existing price keeps billing. 0 flags every move.',
+    min: 0,
+    max: 500,
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 5,
   }),
   // Add more settings as needed
 } satisfies {
