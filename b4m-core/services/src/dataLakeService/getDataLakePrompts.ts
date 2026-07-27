@@ -1,4 +1,4 @@
-import { getAccessibleDataLakes, toDataLakeConfig } from '@bike4mind/common';
+import { lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import type { IDataLakeDocument } from '@bike4mind/common';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
 
@@ -35,11 +35,13 @@ function isTrustedForInjection(
  * Resolves the per-lake system prompts to inject for a turn: the caller's active,
  * accessible, TRUSTED lakes that carry a non-empty `systemPrompt`.
  *
- * Applies the same accessibility rule as retrieval - the identical DB pre-filter plus
- * `getAccessibleDataLakes` pass that `getDynamicDataLakeAccess` runs - then narrows it with the
- * trust rule above. (That resolver additionally drops lakes whose `datalakeTag` shadows a static
- * registry tag; retrieval-specific, since it guards the tag-based file lookup and prompts never
- * use the tag.)
+ * Applies the same accessibility rule as retrieval - the identical DB pre-filter, then
+ * `lakeMatchesAccess`, the ONE shared access predicate that `getAccessibleDataLakes` itself
+ * applies - and narrows the result with the trust rule above. Calling the predicate directly
+ * rather than `getAccessibleDataLakes` avoids merging the static `DATA_LAKES` registry into a
+ * result this resolver only filters back out. (`getDynamicDataLakeAccess` additionally drops lakes
+ * whose `datalakeTag` shadows a registry tag; retrieval-specific, since it guards the tag-based
+ * file lookup and prompts never use the tag.)
  *
  * Prompt text is read off the raw lake documents ON PURPOSE: `DataLakeConfig` is the
  * client-facing projection returned by the list endpoints, so putting `systemPrompt` there
@@ -67,13 +69,18 @@ export async function getAccessibleDataLakePrompts(context: DataLakeAccessContex
   }
   if (lakes.length === 0) return [];
 
-  const accessibleIds = new Set(
-    getAccessibleDataLakes(userTags, lakes.map(toDataLakeConfig), entitlementKeys).map(lake => lake.id)
-  );
+  // lakeMatchesAccess takes PRE-NORMALIZED inputs (its documented contract): tags lowercased,
+  // entitlement keys through the canonical normalizer.
+  const normalizedTags = userTags.map(tag => tag.toLowerCase());
+  const normalizedKeys = entitlementKeys.map(normalizeEntitlementKey);
 
   return (
     lakes
-      .filter(lake => accessibleIds.has(lake.id) && isTrustedForInjection(lake, { userId, organizationId }))
+      .filter(
+        lake =>
+          lakeMatchesAccess(lake, normalizedTags, normalizedKeys) &&
+          isTrustedForInjection(lake, { userId, organizationId })
+      )
       .map(lake => ({ id: lake.id, name: lake.name, systemPrompt: (lake.systemPrompt ?? '').trim() }))
       .filter(lake => lake.systemPrompt.length > 0)
       // Stable order keeps the rendered prompt byte-identical across turns, so it stays
