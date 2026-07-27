@@ -20,15 +20,12 @@ import {
   getEmbeddingModelCost,
   ModelBackend,
   OpenAIEmbeddingModel,
-  DATA_LAKES,
-  getAccessibleDataLakes,
-  hasDeveloperUserTag,
   isSupportedEmbeddingModel,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { createTokenizer, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import { getRequestEntitlements } from '@server/entitlements';
+import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 
 // Reused across requests so the tiktoken encoder is resolved once, not per search.
 let sharedTokenizer: ITokenizer | undefined;
@@ -49,13 +46,22 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  * matches against fileName + tags + notes only. This endpoint reads the vector
  * field that the fabFileVectorize pipeline already populates per chunk.
  *
- * Auth: session/api-key auth, then scope is the lakes the caller can access per
- * each lake's own declared gate (`requiredUserTag`/`requiredEntitlement` on the
- * static registry). Zero accessible lakes -> empty result set before any
- * embedding cost is incurred. NOTE: deliberately scoped to the STATIC lake
- * registry for now - dynamic (user-created) lakes need the ownership
- * scoping that `queryDataLakeArticles` applies before they can join the search
- * scope here.
+ * Auth: session/api-key auth, then scope comes from `resolveRetrievalLakeScope`,
+ * which wraps the same `getDynamicDataLakeAccess` the chat `search_knowledge_base`
+ * tool uses - so both entry points search the same lakes for the same caller.
+ * Dynamic (user-created) lakes are included; their user-controlled tag prefixes
+ * ride the SCOPED bucket, matched only within owner/org access, while the static
+ * registry's reserved prefixes stay in the OPEN (ownership-bypass) bucket. Zero
+ * accessible lakes -> empty result set before any embedding cost is incurred.
+ *
+ * One deliberate difference from chat: admin/developer callers additionally get
+ * the whole static registry (see resolveRetrievalLakeScope), preserving the reach
+ * this endpoint has always given them.
+ *
+ * Unlike the chat tool this route passes no `retrievalFilter` - that filter is
+ * session-derived and there is no session here, so a file chat would exclude is
+ * still returned. Same lakes, wider file set; revisit if this route ever gains a
+ * session context.
  *
  * Body:
  *   - query: string                 (required) - natural-language search query
@@ -97,8 +103,6 @@ const handler = baseApi()
     asyncHandler(async (req: Request, res: Response) => {
       const t0 = Date.now();
 
-      const userTags: string[] = req.user.tags ?? [];
-
       // --- Validate input (safeParse - surfaces errors without leaking schema internals) ---
       const parsed = SemanticSearchInput.safeParse(req.body || {});
       if (!parsed.success) {
@@ -122,18 +126,12 @@ const handler = baseApi()
       const isAborted = () => clientAborted;
 
       // --- Resolve accessible data lakes (this IS the access gate) ---
-      // Each lake declares its own `requiredUserTag`/`requiredEntitlement`; the
-      // any-of filter below scopes the search to lakes the caller can access.
-      // Pass resolved entitlement keys so tag-less entitlement holders (e.g.
-      // email-domain grants) are scoped to the same lakes as tag holders. Keys
-      // are resolved only in the else branch - admin/developer short-circuit,
-      // so resolving up front would cost them a discarded subscription read.
-      const accessibleLakes =
-        req.user.isAdmin || hasDeveloperUserTag(req.user.tags)
-          ? DATA_LAKES
-          : getAccessibleDataLakes(userTags, undefined, await getRequestEntitlements(req));
+      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await resolveRetrievalLakeScope(req);
 
-      if (accessibleLakes.length === 0) {
+      // Every lake contributes exactly one meta-tag, so an empty tag list means zero
+      // accessible lakes. Gating on the prefixes instead would be wrong: a caller can
+      // legitimately hold only dynamic lakes, whose prefixes are all in the SCOPED bucket.
+      if (dataLakeTags.length === 0) {
         return res.json({
           results: [],
           total_chunks_searched: 0,
@@ -141,9 +139,6 @@ const handler = baseApi()
           latency_ms: Date.now() - t0,
         });
       }
-
-      const dataLakeTags = accessibleLakes.map(dl => dl.datalakeTag);
-      const dataLakeTagPrefixes = accessibleLakes.map(dl => dl.fileTagPrefix);
 
       // --- Get the embedding-provider API key (OpenAI or VoyageAI) for the requested model ---
       // embedding_model may be a VoyageAI model, so resolve the key for the model's actual
@@ -187,8 +182,8 @@ const handler = baseApi()
       if (isAborted()) return res.end();
 
       // --- Delegate to the shared in-process semantic search service ---
-      // (Same implementation the chat search_knowledge_base tool uses - single source of
-      // truth: embed query -> scope files -> bulk chunk vectors -> cosine rank -> top-K.)
+      // (Same implementation AND the same lake-scope resolution the chat search_knowledge_base
+      // tool uses: embed query -> scope files -> bulk chunk vectors -> cosine rank -> top-K.)
       const search = await dataLakeService.semanticDataLakeSearch(
         {
           userId: req.user.id,
@@ -201,6 +196,7 @@ const handler = baseApi()
           apiKeyTable: embeddingApiKeyTable,
           dataLakeTags,
           dataLakeTagPrefixes,
+          scopedTagPrefixes, // dynamic-lake prefixes - matched only within owner/org access
           logger: req.logger,
         },
         { db: { fabfiles: fabFileRepository, fabfilechunks: fabFileChunkRepository } }
