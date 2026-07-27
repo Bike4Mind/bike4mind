@@ -103,7 +103,8 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
  * Wire value for "no history window". It is the top mark on the client's history slider
  * (apps/client/app/components/FibonacciSlider.tsx), so it is a slider position rather than a
  * count, and clients keep sending it. The server translates it to UNLIMITED_HISTORY_COUNT once,
- * on ingress, and never compares a history count against it again.
+ * on ingress; after that only promptMeta.requestedHistoryCount, which records the raw request,
+ * still holds this value.
  */
 export const CLIENT_UNLIMITED_HISTORY_VALUE = 14;
 
