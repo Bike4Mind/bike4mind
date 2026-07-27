@@ -111,6 +111,7 @@ const FileBrowserContent = () => {
     data,
     isLoading: isLoadingAllFiles,
     isFetching,
+    isPlaceholderData,
   } = usePaginatedSearchFabFiles({
     ...filter,
     order: { by: sortField, direction: sortDirection },
@@ -703,7 +704,7 @@ const FileBrowserContent = () => {
                   sortDirection={sortDirection}
                   onSortChange={handleSortChange}
                   isLoading={isLoading}
-                  isFetching={isFetching}
+                  isPlaceholderData={isPlaceholderData}
                   fileFilterType={
                     filter.filters?.shared === true ? 'shared' : filter.filters?.curated === true ? 'curated' : 'all'
                   }
@@ -759,7 +760,7 @@ const FileBrowserContent = () => {
                   sortDirection={sortDirection}
                   onSortChange={handleSortChange}
                   isLoading={isLoading}
-                  isFetching={isFetching}
+                  isPlaceholderData={isPlaceholderData}
                   fileFilterType={
                     filter.filters?.shared === true ? 'shared' : filter.filters?.curated === true ? 'curated' : 'all'
                   }
