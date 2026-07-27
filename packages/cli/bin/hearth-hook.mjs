@@ -26,6 +26,10 @@ process.stdin.on('end', async () => {
         human: { text, format: 'text' },
         machine: { schema: 'hearth.claude-code-hook@1', payload: { hook_event_name: eventName, session_id: hook.session_id ?? null } },
         refs: {},
+        // Self-identify as an agent actor. Without this the hook resolved to the
+        // account's HUMAN actor, so every heartbeat rendered as if the person
+        // had posted it - the log could not distinguish operator from tooling.
+        actor: { kind: 'agent', displayName: 'Claude Code' },
       }),
       // Bounded so a hung request can never stall the session past 3s.
       signal: AbortSignal.timeout(3000),
