@@ -1179,13 +1179,29 @@ const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subs
 // 202 {runId}; this worker runs the ~60s five-persona panel and finalizes the doc. The
 // handler lives in the overlay and is re-exported into the stable premium-generated path
 // via b4mContributions.serverHandlerStubs (same pattern as optihashiRunCompletion above).
-const bobRunQueueDLQ = new sst.aws.Queue('bobRunQueueDLQ', {});
+// Bob is a paid premium AI feature whose messages carry user prompts and panel outputs, so it
+// matches the optihashi/agent-continuation sensitivity tier: KMS-at-rest on both queues, and an
+// extended DLQ retention so a stuck panel run is still debuggable beyond SQS's 4-day default
+// (e.g. a weekend + on-call handoff).
+const bobRunQueueDLQ = new sst.aws.Queue('bobRunQueueDLQ', {
+  transform: {
+    queue: {
+      kmsMasterKeyId: 'alias/aws/sqs',
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
 const bobRunQueue = new sst.aws.Queue('bobRunQueue', {
   // ≥ the worker timeout below (+ buffer) so an in-flight run isn't redelivered mid-panel.
   visibilityTimeout: '6 minutes',
   dlq: {
     queue: bobRunQueueDLQ.arn,
     retry: 2,
+  },
+  transform: {
+    queue: {
+      kmsMasterKeyId: 'alias/aws/sqs',
+    },
   },
 });
 const bobRunQueueSubscription = bobRunQueue.subscribe(
