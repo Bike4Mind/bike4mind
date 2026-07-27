@@ -205,7 +205,9 @@ describe('seedModelCatalog (round-trip)', () => {
     expect(history[0].note).toBe('pinned by an admin');
   });
 
-  it('never supersedes a discovery row: only seeding supersedes seeding', async () => {
+  it('supersedes an older discovery row with different content (the automation carve-out)', async () => {
+    // Without it, one automated row would freeze seed corrections for that model
+    // permanently: seeding used to read every non-seed row as an operator edit.
     const target = seed.entries[0];
     await modelCatalogRepository.append({
       modelId: target.modelId,
@@ -219,8 +221,50 @@ describe('seedModelCatalog (round-trip)', () => {
     await seedModelCatalog(modelCatalogRepository);
 
     const history = await modelCatalogRepository.historyForModel(target.modelId);
-    expect(history).toHaveLength(1);
-    expect(history[0].source).toBe('discovery');
+    expect(history).toHaveLength(2);
+    expect(history[0].source).toBe(CATALOG_SEED_SOURCE);
+    expect(history[0].patch.contextWindow).toBe(target.patch.contextWindow);
+  });
+
+  it('leaves a discovery row at or after the seed version alone (discovery is sticky against itself)', async () => {
+    for (const [entry, effectiveFrom] of [
+      [seed.entries[0], new Date(seed.generatedAt)],
+      [seed.entries[1], new Date(new Date(seed.generatedAt).getTime() + 86_400_000)],
+    ] as const) {
+      await modelCatalogRepository.append({
+        modelId: entry.modelId,
+        source: 'discovery',
+        patch: { ...entry.patch, contextWindow: 11 },
+        ownedGroups: entry.ownedGroups,
+        effectiveFrom,
+        note: `discovery:models.dev@${effectiveFrom.toISOString()}`,
+      });
+    }
+
+    await seedModelCatalog(modelCatalogRepository);
+
+    for (const entry of [seed.entries[0], seed.entries[1]]) {
+      const history = await modelCatalogRepository.historyForModel(entry.modelId);
+      expect(history).toHaveLength(1);
+      expect(history[0].source).toBe('discovery');
+    }
+  });
+
+  it('is idempotent over a superseded discovery row (no churn row per boot)', async () => {
+    const target = seed.entries[0];
+    await modelCatalogRepository.append({
+      modelId: target.modelId,
+      source: 'discovery',
+      patch: { ...target.patch, contextWindow: 11 },
+      ownedGroups: target.ownedGroups,
+      effectiveFrom: new Date('2020-01-01T00:00:00Z'),
+      note: 'discovery:models.dev@2020-01-01',
+    });
+
+    await seedModelCatalog(modelCatalogRepository);
+    await seedModelCatalog(modelCatalogRepository);
+
+    expect(await modelCatalogRepository.historyForModel(target.modelId)).toHaveLength(2);
   });
 
   it('treats a concurrent identical append as a skip (E11000 is a race, not an error)', async () => {

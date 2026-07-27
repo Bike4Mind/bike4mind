@@ -40,8 +40,8 @@ export const DEPRECATED_MODEL_MAP: Record<string, string> = {
 /**
  * Catalog-sourced successors, consulted ahead of the static map (sec 5.10).
  * Replaced wholesale on every refresh so a successor an operator reverted stops
- * redirecting; a failed catalog fetch simply never calls the updater, leaving
- * the previous overlay standing.
+ * redirecting; a catalog fetch that fails OR comes back empty simply never
+ * calls the updater, leaving the previous overlay standing.
  */
 let replacedByOverlay: ReadonlyMap<string, string> = new Map();
 

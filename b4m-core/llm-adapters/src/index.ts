@@ -379,7 +379,10 @@ export const getAvailableModels = async (
       // Catalog successors take precedence over the static sunset map (sec
       // 5.10). Refreshed here, so before the first catalog read - cold start,
       // no provider wired - resolution falls back to the static map alone.
-      updateReplacedByOverlay(catalogSuccessors(catalogLifecycles(rows)));
+      // Skipped on an empty read, mirroring mergeCatalog's early return: no rows
+      // is no information, and wiping the overlay would strand every
+      // catalog-sourced successor until the next non-empty read.
+      if (rows.length > 0) updateReplacedByOverlay(catalogSuccessors(catalogLifecycles(rows)));
       Logger.globalInstance.info(
         `[getAvailableModels] model catalog applied: ${rows.length} rows over ${backendModels.length} assembled models -> ${merged.length}`
       );

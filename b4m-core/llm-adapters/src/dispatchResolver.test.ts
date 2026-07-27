@@ -27,6 +27,10 @@ describe('resolveDispatchForRecord: Bedrock prefix map (sec 5.4)', () => {
     ['amazon.titan-text-premier-v1', 'titan is a legacy family with no new members'],
     ['mistral.mistral-large-2411-v1:0', 'no adapter for this vendor'],
     ['no-dots-at-all', 'not a bedrock id namespace'],
+    // Dropping the last character used to be read as the vendor segment, so a
+    // dotless id one character longer than a known vendor routed as that vendor.
+    ['anthropicX', 'a dotless id has no vendor segment to slice'],
+    ['.anthropic.claude-9', 'a leading dot names an empty vendor'],
   ])('%s resolves to null (%s)', id => {
     expect(resolve(id, ModelBackend.Bedrock)).toBeNull();
   });

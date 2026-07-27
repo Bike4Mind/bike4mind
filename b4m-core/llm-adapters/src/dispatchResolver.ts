@@ -55,8 +55,11 @@ export type ResolvedDispatch = Pick<ModelRecord, 'adapterFamily' | 'dispatchProf
 export function resolveDispatchForRecord(record: Pick<ModelRecord, 'id' | 'backend'>): ResolvedDispatch | null {
   if (record.backend === ModelBackend.Bedrock) {
     const withoutRegion = record.id.replace(BEDROCK_REGION_PREFIX, '');
-    const vendor = withoutRegion.slice(0, withoutRegion.indexOf('.'));
-    const adapterFamily = BEDROCK_FAMILY_BY_VENDOR[vendor];
+    const dot = withoutRegion.indexOf('.');
+    // Same guard as inferVendor (b4m-core/common/src/modelCatalog.ts): an id with
+    // no vendor segment names no family, and slicing on -1 would invent one.
+    if (dot <= 0) return null;
+    const adapterFamily = BEDROCK_FAMILY_BY_VENDOR[withoutRegion.slice(0, dot)];
     return adapterFamily ? { adapterFamily, dispatchProfile: PROVIDER_NATIVE_PROFILE } : null;
   }
 

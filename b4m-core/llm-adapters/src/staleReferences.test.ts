@@ -11,6 +11,8 @@ const LIFECYCLES = new Map([
   ['live-1', { status: 'active' }],
   ['sunset-1', { status: 'deprecated', deprecationDate: '2026-01-01' }],
   ['gone-1', { status: 'retired', retirementDate: '2025-12-01' }],
+  // Metadata-only: the merge never promotes it, so it is absent from MODELS.
+  ['found-1', { status: 'discovered' }],
 ]);
 
 const run = (input: Partial<Parameters<typeof checkStaleModelReferences>[0]> = {}): StaleModelReference[] =>
@@ -86,6 +88,16 @@ describe('checkStaleModelReferences', () => {
     // gone-1 is absent from `models` (filtered out) but present in the catalog.
     const found = run({ fallbackChains: { 'live-1': ['gone-1'] } });
     expect(forSurface(found, 'fallback-chain')[0].problem).toBe('retired');
+  });
+
+  it('flags a target the catalog knows but the merged list does not carry', () => {
+    // A 'discovered' model is metadata-only, so a chain pointing at it is an
+    // unreachable fallback - not the healthy reference it used to read as.
+    const found = run({ fallbackChains: { 'live-1': ['found-1'] }, defaultChain: ['found-1'] });
+    expect(forSurface(found, 'fallback-chain')).toEqual([
+      { surface: 'fallback-chain', key: 'live-1', referencedId: 'found-1', problem: 'not-invocable' },
+    ]);
+    expect(forSurface(found, 'fallback-default')[0].problem).toBe('not-invocable');
   });
 
   it('never rewrites its input: the report is the whole output', () => {

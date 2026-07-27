@@ -155,6 +155,28 @@ describe('ModelCatalogRowRead', () => {
     expect(parsed.patch.type).toBe('holograph');
   });
 
+  it('reads a nested object missing a field the WRITE schema requires', () => {
+    // The relaxation is only allowed to move one way, so a row a later build
+    // writes with a sparser lifecycle/reasoning/dispatch block must not shorten
+    // this build's model list. Every one of these is required on write.
+    const parsed = ModelCatalogRowRead.safeParse({
+      ...storedRow,
+      ownedGroups: ['identity', 'lifecycle', 'reasoning', 'caching', 'dispatch'],
+      patch: {
+        ...minimalRecord,
+        lifecycle: { deprecationDate: '2026-08-01' },
+        reasoning: { style: 'openai-effort' },
+        promptCaching: { tier: 'implicit' },
+        dispatchProfile: { betaHeaders: ['context-1m'] },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.patch.lifecycle).toEqual({ deprecationDate: '2026-08-01' });
+    expect(parsed.data?.patch.lifecycle?.status).toBeUndefined();
+    expect(parsed.data?.patch.promptCaching).toEqual({ tier: 'implicit' });
+  });
+
   it('still rejects a structurally corrupt row', () => {
     expect(
       ModelCatalogRowRead.safeParse({ ...storedRow, patch: { ...minimalRecord, contextWindow: 'lots' } }).success

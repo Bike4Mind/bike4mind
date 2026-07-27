@@ -83,16 +83,42 @@ describe('priceCatalogBootstrap.connectDB', () => {
     warn.mockRestore();
   });
 
-  it('degrades identically when the catalog seed is the one that fails: prices are skipped, the connect is not', async () => {
+  it('still seeds prices when the catalog seed fails, and reports the catalog as unseeded', async () => {
+    // The two collections have independent fallback tiers: a catalog write error
+    // must not cost the whole process its price rows.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     seedModelCatalog.mockRejectedValue(new Error('mongo down'));
 
-    const connectDB = await freshConnectDB();
-    await expect(connectDB('mongodb://x')).resolves.toBe('connection');
+    vi.resetModules();
+    const bootstrap = await import('./priceCatalogBootstrap');
+    await expect(bootstrap.connectDB('mongodb://x')).resolves.toBe('connection');
     await flushSeeding();
 
-    expect(seedModelPrices).not.toHaveBeenCalled();
+    expect(seedModelPrices).toHaveBeenCalledTimes(1);
+    await expect(bootstrap.whenCatalogSeeded()).resolves.toBe(false);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('seeding failed'), expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('reports the catalog as seeded only when its seed actually completed', async () => {
+    vi.resetModules();
+    const bootstrap = await import('./priceCatalogBootstrap');
+    await bootstrap.connectDB('mongodb://x');
+    await flushSeeding();
+
+    await expect(bootstrap.whenCatalogSeeded()).resolves.toBe(true);
+  });
+
+  it('reports the catalog as seeded when only the price seed fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    seedModelPrices.mockRejectedValue(new Error('mongo down'));
+
+    vi.resetModules();
+    const bootstrap = await import('./priceCatalogBootstrap');
+    await bootstrap.connectDB('mongodb://x');
+    await flushSeeding();
+
+    await expect(bootstrap.whenCatalogSeeded()).resolves.toBe(true);
     warn.mockRestore();
   });
 
@@ -113,8 +139,9 @@ describe('priceCatalogBootstrap.connectDB', () => {
     vi.resetModules();
     const bootstrap = await import('./priceCatalogBootstrap');
 
-    // Nothing in flight (connectDB never called): must not block callers.
-    await expect(bootstrap.whenCatalogSeeded()).resolves.toBeUndefined();
+    // Nothing in flight (connectDB never called): must not block callers, and
+    // an already-seeded deployment is not an unseeded one.
+    await expect(bootstrap.whenCatalogSeeded()).resolves.toBe(true);
 
     let release!: () => void;
     seedModelCatalog.mockImplementation(

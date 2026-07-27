@@ -57,9 +57,27 @@ const ModelDiscoveryStateSchema = new Schema<IModelDiscoveryStateDocument>(
   }
 );
 
-// The deprecation queue's only query. Sparse so the rows with no suggestion -
-// every model on a healthy deployment - stay out of the index.
-ModelDiscoveryStateSchema.index({ 'suggestion.resolution': 1 }, { sparse: true });
+/**
+ * The deprecation queue's only read. Exported so the index test can explain()
+ * what pendingSuggestions actually runs rather than a copy that drifts from it.
+ * The `suggestion: {$exists: true}` clause is not redundant: it is what makes
+ * the query a subset of the partial index below, and so what lets the planner
+ * use it at all.
+ */
+export const PENDING_SUGGESTIONS_QUERY = {
+  filter: { suggestion: { $exists: true }, 'suggestion.resolution': { $exists: false } },
+  sort: { 'suggestion.suggestedAt': 1 },
+} as const;
+
+// Serves the queue read above: keyed on suggestedAt so the index also provides
+// the sort, and PARTIAL rather than sparse on resolution - a sparse index on
+// suggestion.resolution omits exactly the unresolved rows the queue asks for,
+// so it can never serve them. The rows with no suggestion at all - every model
+// on a healthy deployment - stay out of the index either way.
+ModelDiscoveryStateSchema.index(
+  { 'suggestion.suggestedAt': 1 },
+  { partialFilterExpression: { suggestion: { $exists: true } } }
+);
 
 export type IModelDiscoveryStateModel = Model<IModelDiscoveryStateDocument>;
 
@@ -140,9 +158,7 @@ export class ModelDiscoveryStateRepository
   }
 
   async pendingSuggestions(): Promise<IModelDiscoveryState[]> {
-    const docs = await this.model
-      .find({ suggestion: { $exists: true }, 'suggestion.resolution': { $exists: false } })
-      .lean();
+    const docs = await this.model.find(PENDING_SUGGESTIONS_QUERY.filter).sort(PENDING_SUGGESTIONS_QUERY.sort).lean();
     return docs as IModelDiscoveryState[];
   }
 

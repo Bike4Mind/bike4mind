@@ -96,6 +96,25 @@ describe('catalogLifecycles', () => {
     // A row that never touched the lifecycle group contributes no entry.
     expect(lifecycles.has('gpt-y')).toBe(false);
   });
+
+  it('carries a lifecycle a later build wrote with no status', () => {
+    // The read schema is partial all the way down, so a status-less lifecycle
+    // reaches here instead of costing the row: the date still has to drive the
+    // picker filter and the EXPIRED view.
+    const lifecycles = catalogLifecycles([
+      makeRow({ modelId: 'gpt-x', patch: { lifecycle: { deprecationDate: '2026-08-01' } } }),
+    ]);
+
+    expect(lifecycles.get('gpt-x')).toEqual({
+      status: undefined,
+      deprecationDate: '2026-08-01',
+      retirementDate: undefined,
+      replacedBy: undefined,
+    });
+    expect(getExpiredCatalogModels(lifecycles, new Date('2026-09-01T00:00:00Z'))).toMatchObject([
+      { modelId: 'gpt-x', deprecationDate: '2026-08-01' },
+    ]);
+  });
 });
 
 describe('getExpiredCatalogModels', () => {

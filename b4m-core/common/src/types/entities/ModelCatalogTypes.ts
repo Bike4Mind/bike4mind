@@ -198,7 +198,12 @@ export type ModelDispatchProfile = NonNullable<ModelRecord['dispatchProfile']>;
  *
  * 1. Every field is optional and unknown keys pass through, so a row written by
  *    a newer build parses here instead of dropping. A dropped row shortens the
- *    model list, which is the worst failure this collection can have.
+ *    model list, which is the worst failure this collection can have. Optional
+ *    goes all the way down: a nested field the write schema requires today may
+ *    be relaxed tomorrow, and this build must still read the rows that produces
+ *    rather than shorten its list over a missing `lifecycle.status`. Consumers
+ *    treat a nested field as absent-by-default (see toModelInfo and
+ *    invocabilityBlocker, which fail closed on a lifecycle with no status).
  * 2. Enum-valued fields are read as free strings. A model type, backend, or
  *    adapter family this build does not know must be dropped AND COUNTED by the
  *    merge, not rejected by the parser - a parse rejection alarms
@@ -209,15 +214,17 @@ export const ModelRecordPatchRead = ModelRecordFields.extend({
   adapterFamily: z.string(),
   type: z.string(),
   temperatureMode: z.string(),
-  reasoning: ReasoningWrite.extend({ style: z.string().optional() }).loose(),
-  promptCaching: PromptCachingWrite.loose(),
+  reasoning: ReasoningWrite.extend({ style: z.string().optional() }).partial().loose(),
+  promptCaching: PromptCachingWrite.partial().loose(),
   dispatchProfile: DispatchProfileWrite.extend({
     maxTokensParam: z.string(),
     toolTransport: z.string(),
     effortMapVariant: z.string().optional(),
     messageFormat: z.string().optional(),
-  }).loose(),
-  lifecycle: LifecycleWrite.extend({ status: z.string() }).loose(),
+  })
+    .partial()
+    .loose(),
+  lifecycle: LifecycleWrite.extend({ status: z.string() }).partial().loose(),
 })
   .partial()
   .loose();
@@ -552,7 +559,7 @@ export interface IModelDiscoveryStateRepository extends IBaseRepository<IModelDi
     at?: Date
   ): Promise<IModelDiscoveryState>;
 
-  /** The deprecation queue: every model carrying a suggestion nobody has settled. */
+  /** The deprecation queue: every model carrying a suggestion nobody has settled, oldest first. */
   pendingSuggestions(): Promise<IModelDiscoveryState[]>;
 
   /** Null when the model has no suggestion to settle. */

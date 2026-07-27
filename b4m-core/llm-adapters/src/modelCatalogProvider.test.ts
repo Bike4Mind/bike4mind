@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ChatModels, ModelBackend } from '@bike4mind/common';
 import type { IModelCatalogRow } from '@bike4mind/common';
 import { getAvailableModels, setModelCatalogProvider, setModelPriceRowsProvider } from './index';
+import { replacedByOverlayEntries, resetReplacedByOverlay } from './resolveDeprecatedModel';
 
 // apiKeys=null assembles only the keyless backends (Bedrock/AWS/BFL), all
 // static - no network. Pick a Bedrock text model as the overlay target.
@@ -19,6 +20,7 @@ const row: IModelCatalogRow = {
 afterEach(() => {
   setModelCatalogProvider(null);
   setModelPriceRowsProvider(null);
+  resetReplacedByOverlay();
 });
 
 describe('getAvailableModels model catalog provider', () => {
@@ -93,6 +95,27 @@ describe('getAvailableModels model catalog provider', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('keeps the replacedBy overlay when a later read comes back empty', async () => {
+    // An empty read is no information, same as a failed one: wiping the overlay
+    // would strand every catalog successor until the next non-empty read.
+    const sunset: IModelCatalogRow = {
+      modelId: 'ancient-9',
+      schemaVersion: 1,
+      source: 'discovery',
+      ownedGroups: ['lifecycle'],
+      patch: { lifecycle: { status: 'deprecated', replacedBy: 'grok-9' } },
+      effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+    };
+
+    setModelCatalogProvider(async () => [sunset]);
+    await getAvailableModels(null);
+    expect(replacedByOverlayEntries().get('ancient-9')).toBe('grok-9');
+
+    setModelCatalogProvider(async () => []);
+    await getAvailableModels(null);
+    expect(replacedByOverlayEntries().get('ancient-9')).toBe('grok-9');
   });
 
   it('runs the catalog merge before the price overlay, so a catalog-only model can still be priced', async () => {

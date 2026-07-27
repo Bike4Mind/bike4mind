@@ -431,6 +431,22 @@ describe('mergeCatalog: lenient reads', () => {
     expect(seedWins.rank).toBe(8);
   });
 
+  it('keeps a seeded model on its adapter record when a row makes the merge unrenderable', () => {
+    // A feed reclassifying `type` must cost the row, not a working model: the
+    // seeded tier has a known-good base, unlike a catalog-only id.
+    const seed = seedModel();
+    const { models, dropped } = mergeCatalogWithDrops(
+      [seed],
+      [row({ modelId: seed.id, ownedGroups: ['identity'], patch: { type: 'video-preview' } })],
+      NO_KEYS
+    );
+
+    expect(models).toEqual([seed]);
+    expect(dropped).toEqual([
+      { modelId: seed.id, reason: expect.stringContaining('unsupported model type "video-preview"') },
+    ]);
+  });
+
   it('round-trips a seeded model through toModelRecord without losing what a row does not own', () => {
     const seed = seedModel();
     const record = toModelRecord(seed);

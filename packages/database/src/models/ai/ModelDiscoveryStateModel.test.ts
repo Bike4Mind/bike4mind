@@ -1,6 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ModelDiscoveryState, modelDiscoveryStateRepository } from './ModelDiscoveryStateModel';
+import {
+  ModelDiscoveryState,
+  PENDING_SUGGESTIONS_QUERY,
+  modelDiscoveryStateRepository,
+} from './ModelDiscoveryStateModel';
 import { setupMongoTest } from '../../__test__/utils';
+
+/** The stage the planner settled on, unwrapped from either explain shape. */
+function winningStage(plan: Record<string, unknown>): string {
+  const winning = (plan.queryPlanner as { winningPlan?: Record<string, unknown> })?.winningPlan ?? {};
+  const root = (winning.queryPlan as Record<string, unknown>) ?? winning;
+  let stage = root;
+  while (stage.inputStage) stage = stage.inputStage as Record<string, unknown>;
+  return String(stage.stage);
+}
 
 const firstMiss = new Date('2026-07-01T00:00:00Z');
 const secondMiss = new Date('2026-07-02T00:00:00Z');
@@ -106,6 +119,43 @@ describe('ModelDiscoveryStateRepository', () => {
       expect(rerun.suggestion?.resolution).toBeUndefined();
       expect(rerun.suggestion?.replacedBy).toBe('gpt-y');
       expect((await modelDiscoveryStateRepository.pendingSuggestions()).map(state => state.modelId)).toEqual(['gpt-x']);
+    });
+
+    it('lists the queue oldest first', async () => {
+      await modelDiscoveryStateRepository.recordSuggestion('gpt-new', deprecation, secondMiss);
+      await modelDiscoveryStateRepository.recordSuggestion('gpt-old', deprecation, firstMiss);
+
+      const pending = await modelDiscoveryStateRepository.pendingSuggestions();
+
+      expect(pending.map(state => state.modelId)).toEqual(['gpt-old', 'gpt-new']);
+    });
+
+    it('serves the queue read from an index instead of scanning the collection', async () => {
+      // A sparse index on suggestion.resolution omitted exactly these rows, so
+      // the admin queue scanned every model on the deployment.
+      await modelDiscoveryStateRepository.recordSuggestion('gpt-x', deprecation, firstMiss);
+      await modelDiscoveryStateRepository.recordSuggestion('gpt-y', deprecation, secondMiss);
+      await modelDiscoveryStateRepository.resolveSuggestion('gpt-y', 'dismissed', secondMiss);
+      await modelDiscoveryStateRepository.recordMiss('gpt-z', firstMiss);
+
+      const plan = await ModelDiscoveryState.find(PENDING_SUGGESTIONS_QUERY.filter)
+        .sort(PENDING_SUGGESTIONS_QUERY.sort)
+        .explain('queryPlanner');
+
+      expect(winningStage(plan as Record<string, unknown>)).toBe('IXSCAN');
+      // Index order is the sort order: no in-memory SORT stage on the queue.
+      expect(JSON.stringify(plan)).not.toContain('"stage":"SORT"');
+    });
+
+    it('reads and settles one model through the modelId index', async () => {
+      await modelDiscoveryStateRepository.recordSuggestion('gpt-x', deprecation, firstMiss);
+
+      // Newer servers answer a unique-key lookup with EXPRESS_IXSCAN, so match
+      // the family rather than the exact stage name.
+      for (const filter of [{ modelId: { $in: ['gpt-x'] } }, { modelId: 'gpt-x', suggestion: { $exists: true } }]) {
+        const plan = await ModelDiscoveryState.find(filter).explain('queryPlanner');
+        expect(winningStage(plan as Record<string, unknown>)).toContain('IXSCAN');
+      }
     });
 
     it('records the operator verdict and reports nothing to settle when there is none', async () => {

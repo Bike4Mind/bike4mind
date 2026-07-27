@@ -63,6 +63,9 @@ export interface CatalogMergeResult {
    * Contract failures: rows this build could not turn into an invocable model
    * (unreadable shape, a type it does not narrow on, no dispatchable family, a
    * lifecycle that is not invocable). Worth an alarm - these are work items.
+   * A catalog-only record is missing from `models` as well; a seeded one is
+   * still served from its adapter literal, so a drop here is not always an
+   * absence there.
    */
   dropped: CatalogMergeDrop[];
   /**
@@ -85,7 +88,9 @@ export interface CatalogMergeResult {
  * Catalog-only ids are appended only when the invocability contract holds (sec
  * 5.4): an active lifecycle, an adapter family this build can dispatch, a
  * dispatch profile, and a backend this caller could have constructed. Every
- * other outcome fails closed.
+ * other outcome fails closed. A SEEDED model is the exception, because it has a
+ * known-good base: a row that makes its merged record unrenderable is counted
+ * as a drop and the adapter record is served unchanged.
  *
  * Pricing is never sourced here. applyModelPriceCatalog is the only writer of
  * ModelInfo.pricing and runs after this merge; a seeded model keeps its adapter
@@ -117,7 +122,11 @@ export function mergeCatalogWithDrops(
     const { draft, owned } = mergeRows(bucket, toModelRecord(base));
     const parsed = asRenderableRecord(draft);
     if ('reason' in parsed) {
-      dropped.push({ modelId, reason: parsed.reason });
+      // A seeded model has a known-good adapter literal behind it, so a row that
+      // makes the merged record unrenderable costs the row, not the model. Still
+      // counted: the bad row has to stay visible in the run report.
+      dropped.push({ modelId, reason: `${parsed.reason}; kept the adapter record` });
+      models.push(base);
       continue;
     }
     models.push(overlayOwnedGroups(base, parsed.record, owned));
