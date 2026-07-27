@@ -181,6 +181,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'optihashiRunCompletionQueue',
   },
   {
+    label: 'bob-run',
+    displayName: 'Bob Panel Run',
+    application: 'BobIntegration',
+    sourceQueue: 'bobRunQueue',
+  },
+  {
     label: 'data-lake-cleanup',
     displayName: 'Data Lake Cleanup',
     application: 'DataLakeManagement',
