@@ -409,3 +409,20 @@ describe('DataLakeBatchRepository.findStuck — global cross-user stale scan', (
     expect((await dataLakeBatchRepository.findStuck(CUTOFF, 1)).map(b => b.id)).toEqual([older.id]);
   });
 });
+
+describe('DataLakeRepository — systemPrompt round-trip (#843)', () => {
+  setupMongoTest();
+
+  it('persists and reads back a systemPrompt uncapped (long value survives)', async () => {
+    const longPrompt = 'x'.repeat(20000);
+    const created = await dataLakeRepository.create(baseLake({ slug: 'prompted', systemPrompt: longPrompt }));
+    const found = await dataLakeRepository.findById(created.id);
+    expect(found?.systemPrompt).toBe(longPrompt);
+  });
+
+  it('omits systemPrompt when never set (feature is opt-in)', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'unprompted' }));
+    const found = await dataLakeRepository.findById(created.id);
+    expect(found?.systemPrompt).toBeUndefined();
+  });
+});
