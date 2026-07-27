@@ -1,5 +1,5 @@
 import { ModelBackend, type ModelRecord } from '@bike4mind/common';
-import pLimit from 'p-limit';
+import { limitConcurrency } from '../concurrency';
 import type {
   DiscoveredModel,
   DiscoveryCredentials,
@@ -215,7 +215,7 @@ async function checkAvailability(
     .filter((id): id is string => id !== undefined && !alreadyActive.has(id));
 
   const availability = new Map<string, BedrockAvailability>();
-  const limit = pLimit(BEDROCK_AVAILABILITY_CONCURRENCY);
+  const limit = limitConcurrency(BEDROCK_AVAILABILITY_CONCURRENCY);
   await Promise.all(
     pending.map(id =>
       limit(async () => {

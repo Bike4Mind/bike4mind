@@ -10,8 +10,8 @@ import {
   type IModelPriceInput,
 } from '@bike4mind/common';
 import { resolveCatalogRecords, type ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
-import pLimit from 'p-limit';
 import { applyAbsence, planAbsence } from './absence';
+import { limitConcurrency } from './concurrency';
 import { planCatalogWrites, summarizeDiff } from './catalogWrite';
 import {
   detectParserRowShifts,
@@ -184,7 +184,7 @@ async function executeRun(
   const globalDeadline = deadlineSignal(ctx.globalDeadlineMs);
   const results = new Map<string, { report: IDiscoverySourceReport; result: SourceResult }>();
   try {
-    const limit = pLimit(options.concurrency ?? DEFAULT_CONCURRENCY);
+    const limit = limitConcurrency(options.concurrency ?? DEFAULT_CONCURRENCY);
     await Promise.all(
       attempts.map(source =>
         limit(async () => {
