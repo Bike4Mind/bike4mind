@@ -89,7 +89,7 @@ Working from a checkout and want to run your own edits (or a freshly pulled `mai
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d --build
 ```
 
-`--build` rebuilds the `app` image from the Dockerfile before starting; only `app` rebuilds, the backing services just restart. Drop `--profile ollama` if you are not running local models. Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
+`--build` rebuilds the `app` image from the Dockerfile before starting; only `app` rebuilds, the backing services just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
 
 Confirm it came up, then follow the logs:
 
@@ -197,38 +197,59 @@ Want other MCP clients (Claude Desktop, editors) to drive your stack? Run `b4m m
 
 ## Local models with Ollama (no API keys)
 
-Run open-weight models (Qwen, Llama, etc.) on your own hardware with **no provider API keys** and, once a model is pulled, **no internet**. Local models appear in the model picker under a **Local / Self-Hosted** section and work in chat like any other model.
+Run open-weight models (Qwen, Llama, etc.) on your own hardware with **no provider API keys** and, once a model is pulled, **no internet**, using the stack's optional `ollama` service. Local models appear in the model picker under a **Local / Self-Hosted** section and work in chat like any other model.
 
-The stack bundles an optional `ollama` service. To enable it:
+### Start here: check your RAM
 
-1. In `.env.selfhost`, uncomment `OLLAMA_BASE_URL` and pick your model(s) in `OLLAMA_PULL_MODELS`:
+The template's default model needs **24 GB of system RAM**. Check what you have before the first `up` - if it is less, change one line in `.env.selfhost`, or the puller downloads ~17 GB of a model your machine cannot run well.
+
+```bash
+free -g | awk '/^Mem:/ {print $2, "GB RAM"}'                  # Linux
+sysctl -n hw.memsize | awk '{print $1/1073741824, "GB RAM"}'  # macOS
+```
+
+| System RAM | Set `OLLAMA_PULL_MODELS` to | Download | MoE override |
+|------------|-----------------------------|---------:|--------------|
+| **32 GB or more** | `qwen3.6:35b-a3b-q4_K_M qwen3-embedding:0.6b` | ~25 GB | required |
+| **24 GB** - template default | `gemma4:26b-a4b-it-q4_K_M qwen3-embedding:0.6b` | ~18 GB | required |
+| **16 GB** | `gpt-oss:20b qwen3-embedding:0.6b` | ~15 GB | required |
+| **8 GB** | `qwen3.5:2b-q4_K_M qwen2.5-coder:3b qwen3-embedding:0.6b` | ~5 GB | not used |
+| **4 GB** | `qwen3.5:0.8b qwen3-embedding:0.6b` | ~2 GB | not used |
+
+The first three rows are one sparse MoE model that handles chat, tools, artifacts, vision, and RAG on its own. The bottom two rows are small dense models: the 8 GB pair needs switching per task because a 2-4B model cannot finish an HTML artifact, and 4 GB is chat only. [Choosing a model](#choosing-a-model) has the full menu and the measured numbers behind these picks.
+
+**A GPU is optional at every row.** An NVIDIA card with >=4 GB VRAM roughly triples prompt-processing speed; with no GPU everything still runs on CPU, just slower. VRAM is not what gates the model choice here - the MoE experts live in system RAM, so a 26B model and a 2B model both need about 3 GB of VRAM.
+
+### Enable it
+
+1. In `.env.selfhost`, uncomment `OLLAMA_BASE_URL` and set `OLLAMA_PULL_MODELS` to your row above:
 
    ```bash
    OLLAMA_BASE_URL=http://ollama:11434
-   # Default: one MoE model covering chat/tools/artifacts/vision, plus an embedder
-   # for offline file search.
    OLLAMA_PULL_MODELS=gemma4:26b-a4b-it-q4_K_M qwen3-embedding:0.6b
    ```
 
-2. Bring the stack up with the `ollama` profile (this also downloads the model on first run). Include `compose.ollama-moe.yaml`, which the default model needs:
+2. Bring the stack up with the `ollama` profile (this also downloads the models on first run). This is the full command for the default - an NVIDIA GPU running the MoE model:
 
    ```bash
-   docker compose -f compose.selfhost.yaml -f compose.ollama-moe.yaml \
-     --env-file .env.selfhost --profile ollama up -d
+   docker compose -f compose.selfhost.yaml -f compose.ollama-gpu.yaml \
+     -f compose.ollama-moe.yaml --env-file .env.selfhost --profile ollama up -d
    ```
+
+   Adjust the override files for your setup:
+
+   | Your setup | Change |
+   |------------|--------|
+   | No NVIDIA GPU | drop `-f compose.ollama-gpu.yaml` |
+   | A dense model (the 8 GB or 4 GB row) | drop `-f compose.ollama-moe.yaml` |
+
+   The GPU override needs the [NVIDIA Container Toolkit](#gpu-acceleration-nvidia) installed first. The MoE override is what makes the large models fit - see [MoE expert offload](#moe-expert-offload). Pass the same `-f` set every time you bring the stack up: compose only applies overrides you name, so dropping one on a later `up` silently reconfigures the `ollama` service.
 
 That's it - open the model picker and select your model under **Local / Self-Hosted**. No keys, no admin settings to flip.
 
 ### Choosing a model
 
-There are two ways to run a local model here:
-
-- **A small dense model that fits entirely in VRAM.** Fast, but a 2-4B model writes incomplete HTML/React artifacts, so you end up keeping a second coding-tuned model alongside it and switching per task.
-- **A large sparse MoE model with its experts in system RAM.** Only 3-4B parameters of a 20-35B model activate per token, so throughput stays in the same range as a small dense model while quality is that of a much larger one. One model then covers chat, tools, artifacts, vision, and RAG.
-
-The second is the default. It trades system RAM (which is cheap) for VRAM (which is not), and it removes the per-task model switching. It requires the [MoE expert offload](#moe-expert-offload) override below.
-
-`VRAM` below is what the model needs on the GPU with expert offload enabled; the experts sit in RAM, which is why the download is large and the VRAM figure is not. **Size the machine by the RAM column.** Throughput is indicative of an entry-level 4 GB discrete GPU with a modern laptop CPU, at Q4_K_M with one model loaded; faster hardware scales up. `prefill` is prompt processing - the wait before the first token on a tool or RAG turn.
+The rows in [Start here](#start-here-check-your-ram) are the recommended pick per RAM tier; this is the full menu behind them. `VRAM` is what the model needs on the GPU with expert offload enabled; the experts sit in RAM, which is why the download is large and the VRAM figure is not. **Size the machine by the RAM column.** Throughput is indicative of an entry-level 4 GB discrete GPU with a modern laptop CPU, at Q4_K_M with one model loaded; faster hardware scales up. `prefill` is prompt processing - the wait before the first token on a tool or RAG turn.
 
 | Model tag | Download | VRAM | RAM | gen | prefill | Notes |
 |-----------|---------:|-----:|----:|----:|--------:|-------|
@@ -242,37 +263,23 @@ The second is the default. It trades system RAM (which is cheap) for VRAM (which
 | `qwen3.5:4b` | ~3.4 GB | ~6 GB | ~8 GB | - | - | Spills to CPU under 6 GB VRAM |
 | `qwen2.5-coder:3b` | ~1.9 GB | ~3.1 GB | ~8 GB | 73/s | 2309/s | Coding-tuned; artifacts |
 
-Pick by the hardware you have:
-
-| VRAM | RAM | Pick |
-|------|-----|------|
-| >=4 GB | >=32 GB | `qwen3.6:35b-a3b-q4_K_M` - best quality and coding |
-| >=4 GB | ~24 GB | `gemma4:26b-a4b-it-q4_K_M` - default; widest-working choice |
-| >=4 GB | ~16 GB | `gpt-oss:20b` |
-| >=4 GB | ~8 GB | `qwen3.5:2b-q4_K_M` + `qwen2.5-coder:3b` (dense pair, switch per task) |
-| none | >=24 GB | `gemma4:26b-a4b-it-q4_K_M` still runs, just slower (CPU only) |
-| none | ~8 GB | `qwen3.5:0.8b` or `qwen3.5:2b-q4_K_M` |
+Note the shape of those numbers: a 26B MoE generates at roughly a fifth the speed of a 2B dense model while fitting in the same VRAM. That trade is usually worth it, because the small dense models cannot finish an HTML artifact at all.
 
 `gemma4:26b-a4b` is the default because it is the broadest fit: it writes complete, working single-purpose HTML artifacts (which the 2-4B dense models do not), answers multi-chunk knowledge-base queries with correct citations, calls tools natively, and reads images - from a single model on an entry-level GPU. `qwen3.6:35b-a3b` is the better coder but wants 32 GB of RAM, so it is the step up rather than the default.
-
-Calibrate expectations on artifact complexity. A self-contained widget - a calculator, a form, a single chart - comes out working. A dashboard combining four interacting features will render and partly work, but expect a dead click handler or a CSS layout bug. Local models at this size are not one-shotting large UIs. Generation time scales with output: a widget is about a minute, a few-hundred-line dashboard is several.
-
-They do iterate, but they need precise direction. Reporting a symptom ("the chart is blank, the sort does nothing") is usually not enough - the model rewrites the whole file, misses the fix, and can introduce a fresh defect. Naming the actual cause ("each column div is 21px tall so the bar's percentage height collapses to 2px - give the column `height: 100%`"; "the `th` elements have no click listener attached") gets all of it fixed in one pass. Budget a full regeneration per follow-up: these models replace the artifact rather than patch it, so each round costs the same as the original generation.
 
 Set one or more (space-separated) in `OLLAMA_PULL_MODELS`. Re-running `up` pulls any new ones and skips already-present models. To pull one ad hoc without editing the env: `docker compose -f compose.selfhost.yaml exec ollama ollama pull gpt-oss:20b`.
 
 > **Not every MoE model offloads.** `qwen3.5:27b` does not - llama.cpp does not match its expert tensors, so the loader attempts a ~15 GB VRAM allocation and fails outright. Verify any tag not listed above: pull it, send one request, and check `ollama ps` reports `100% GPU` with a `SIZE` of a few GB rather than the full model size.
 
+#### What to expect from a local model
+
+Calibrate expectations on artifact complexity. A self-contained widget - a calculator, a form, a single chart - comes out working. A dashboard combining four interacting features will render and partly work, but expect a dead click handler or a CSS layout bug. Local models at this size are not one-shotting large UIs. Generation time scales with output: a widget is about a minute, a few-hundred-line dashboard is several.
+
+They do iterate, but they need precise direction. Reporting a symptom ("the chart is blank, the sort does nothing") is usually not enough - the model rewrites the whole file, misses the fix, and can introduce a fresh defect. Naming the actual cause ("each column div is 21px tall so the bar's percentage height collapses to 2px - give the column `height: 100%`"; "the `th` elements have no click listener attached") gets all of it fixed in one pass. Budget a full regeneration per follow-up: these models replace the artifact rather than patch it, so each round costs the same as the original generation.
+
 ### MoE expert offload
 
-The MoE models above need `compose.ollama-moe.yaml` added as an extra `-f`:
-
-```bash
-docker compose -f compose.selfhost.yaml -f compose.ollama-gpu.yaml \
-  -f compose.ollama-moe.yaml --env-file .env.selfhost --profile ollama up -d
-```
-
-It sets `LLAMA_ARG_N_CPU_MOE`, which keeps the expert weights in system RAM and leaves only the attention layers and KV cache on the GPU. For a 26B MoE that is roughly 16 GB of experts in RAM against 1.6 GB of weights in VRAM.
+`compose.ollama-moe.yaml` (added as an extra `-f`, see [Enable it](#enable-it)) sets `LLAMA_ARG_N_CPU_MOE`, which keeps the expert weights in system RAM and leaves only the attention layers and KV cache on the GPU. For a 26B MoE that is roughly 16 GB of experts in RAM against 1.6 GB of weights in VRAM - which is why every MoE row in the tables above needs about the same VRAM as a 2B dense model.
 
 Ollama will run these models without the override - it spills to CPU on its own - but slower, and the gap is much wider on prefill than on generation (roughly 2.5x). That difference shows up directly as dead time before the first token on an agent turn carrying tool schemas and retrieved RAG chunks.
 
@@ -314,14 +321,7 @@ docker info | grep -i Runtimes                    # should list "nvidia"
 docker run --rm --gpus all ubuntu nvidia-smi -L   # should print your GPU
 ```
 
-Then bring the stack up with the GPU override added as a second `-f` (keep `compose.ollama-moe.yaml` as well if you run an MoE model):
-
-```bash
-docker compose -f compose.selfhost.yaml -f compose.ollama-gpu.yaml \
-  -f compose.ollama-moe.yaml --env-file .env.selfhost --profile ollama up -d
-```
-
-The GPU needs enough free VRAM for your chosen model (see the table above). Ollama offloads as many layers as fit and runs the rest on CPU; with MoE expert offload the experts stay in system RAM by design, so only the attention layers and KV cache compete for VRAM.
+With the toolkit in place, `-f compose.ollama-gpu.yaml` in the [Enable it](#enable-it) command is all that is needed. The GPU needs enough free VRAM for your chosen model (see the table above). Ollama offloads as many layers as fit and runs the rest on CPU; with MoE expert offload the experts stay in system RAM by design, so only the attention layers and KV cache compete for VRAM.
 
 ### Using an Ollama you already run
 

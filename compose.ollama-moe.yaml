@@ -23,5 +23,9 @@ services:
       # Deliberately not setting LLAMA_ARG_N_GPU_LAYERS: pinning it defeats
       # llama.cpp's --fit auto-placement and hard-OOMs any dense model too large
       # for the card, instead of letting it spill to CPU.
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-10m}
+
+      # Not MoE-specific: a general throughput/KV-footprint win, and the KV cache is
+      # the one thing still on the GPU once the experts move to RAM.
       OLLAMA_FLASH_ATTENTION: '1'
+      # Reloading a 20-35B model is expensive, so hold it longer than Ollama's 5m default.
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-10m}
