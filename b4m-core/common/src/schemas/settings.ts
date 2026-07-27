@@ -314,6 +314,12 @@ export const SettingKeySchema = z.enum([
 
   // AGENT ORCHESTRATION DEFAULTS
   'orchestrationDefaults',
+
+  // MODEL DISCOVERY (live model registry)
+  'enableModelDiscovery',
+  'modelDiscoveryMode',
+  'modelDiscoveryAutoEnable',
+  'modelDiscoveryAllowEgress',
 ]);
 export type SettingKey = z.infer<typeof SettingKeySchema>;
 
@@ -1508,6 +1514,18 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableEnhancedDateTime', order: 1 },
       { key: 'EnableHistoricalFeatures', order: 2 },
       { key: 'EnableAstronomyFeatures', order: 3 },
+    ],
+  },
+  MODEL_DISCOVERY: {
+    id: 'modelDiscoveryService',
+    name: 'Model Discovery',
+    description: 'Scheduled provider and aggregator discovery of models, capabilities, and lifecycle',
+    icon: 'AutoAwesome',
+    settings: [
+      { key: 'enableModelDiscovery', order: 1 },
+      { key: 'modelDiscoveryMode', order: 2 },
+      { key: 'modelDiscoveryAutoEnable', order: 3 },
+      { key: 'modelDiscoveryAllowEgress', order: 4 },
     ],
   },
   RATE_LIMITING: {
@@ -3456,6 +3474,48 @@ export const settingsMap = {
     category: 'AI',
     order: 140,
     schema: OrchestrationDefaultsSchema,
+  }),
+  enableModelDiscovery: makeBooleanSetting({
+    key: 'enableModelDiscovery',
+    name: 'Enable Model Discovery',
+    defaultValue: true,
+    description:
+      'Master switch for scheduled model discovery. Off means no run starts on any driver; the catalog keeps serving the rows already in force.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 1,
+  }),
+  modelDiscoveryMode: makeStringSetting({
+    key: 'modelDiscoveryMode',
+    name: 'Model Discovery Mode',
+    defaultValue: 'report',
+    description:
+      '"report" runs the full discovery calculation and writes nothing but the run report - the soak default. "write" applies the diff to the model catalog.',
+    options: ['report', 'write'],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 2,
+  }),
+  modelDiscoveryAutoEnable: makeStringSetting({
+    key: 'modelDiscoveryAutoEnable',
+    name: 'Model Discovery Auto-Enable Policy',
+    defaultValue: 'priced',
+    description:
+      'When a newly discovered model becomes invocable. "priced": only with a trusted price. "manual": never without an admin click. "all": whenever the build can dispatch it. No policy can promote a model with no dispatch profile.',
+    options: ['priced', 'manual', 'all'],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 3,
+  }),
+  modelDiscoveryAllowEgress: makeBooleanSetting({
+    key: 'modelDiscoveryAllowEgress',
+    name: 'Allow Model Discovery Egress',
+    defaultValue: true,
+    description:
+      'Gates every network source, provider APIs included. Off means discovery makes no outbound request at all and each run reports "no new information".',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 4,
   }),
   // Add more settings as needed
 } satisfies {

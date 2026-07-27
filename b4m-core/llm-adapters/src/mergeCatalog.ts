@@ -23,7 +23,7 @@ import type { BackendGateContext } from './backendGate';
  * throw at dispatch. Phase 2 replaces the switch with adapterFamily dispatch and
  * moves those families in.
  */
-const DISPATCHABLE_ADAPTER_FAMILIES: readonly string[] = [
+export const DISPATCHABLE_ADAPTER_FAMILIES: readonly string[] = [
   'anthropic-messages',
   'openai-chat',
   'openai-responses',
@@ -94,12 +94,7 @@ export function mergeCatalogWithDrops(
   // An absent catalog must be byte-identical to today's output, not merely equal.
   if (rows.length === 0) return { models: seedModels, dropped: [], gated: 0 };
 
-  const rowsByModel = new Map<string, IModelCatalogRow[]>();
-  for (const row of rows) {
-    const bucket = rowsByModel.get(row.modelId);
-    if (bucket) bucket.push(row);
-    else rowsByModel.set(row.modelId, [row]);
-  }
+  const rowsByModel = bucketByModel(rows);
 
   const models: ModelInfo[] = [];
   const dropped: CatalogMergeDrop[] = [];
@@ -162,6 +157,39 @@ export function mergeCatalog(seedModels: ModelInfo[], rows: IModelCatalogRow[], 
     Logger.globalInstance.warn(`[modelCatalog] dropped ${dropped.length} catalog record(s): ${detail}`);
   }
   return models;
+}
+
+function bucketByModel(rows: IModelCatalogRow[]): Map<string, IModelCatalogRow[]> {
+  const rowsByModel = new Map<string, IModelCatalogRow[]>();
+  for (const row of rows) {
+    const bucket = rowsByModel.get(row.modelId);
+    if (bucket) bucket.push(row);
+    else rowsByModel.set(row.modelId, [row]);
+  }
+  return rowsByModel;
+}
+
+/** One model's rows resolved into the belief they express, with who owns what. */
+export interface ResolvedCatalogRecord {
+  modelId: string;
+  /** Sparse: only the keys some winning row actually carried. */
+  record: Record<string, unknown>;
+  ownedGroups: FieldGroup[];
+}
+
+/**
+ * Resolve rows into one belief per model, with no seed base and no rendering.
+ * Same per-group precedence mergeCatalogWithDrops uses - shared so the discovery
+ * service diffs against exactly the view the read path will produce, rather than
+ * a second implementation of the rule that can drift from this one.
+ */
+export function resolveCatalogRecords(rows: IModelCatalogRow[]): Map<string, ResolvedCatalogRecord> {
+  const resolved = new Map<string, ResolvedCatalogRecord>();
+  for (const [modelId, bucket] of bucketByModel(rows)) {
+    const { draft, owned } = mergeRows(bucket, null);
+    resolved.set(modelId, { modelId, record: draft, ownedGroups: [...owned] });
+  }
+  return resolved;
 }
 
 function outranks(candidate: IModelCatalogRow, incumbent: IModelCatalogRow): boolean {
