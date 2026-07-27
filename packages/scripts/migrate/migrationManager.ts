@@ -1,9 +1,25 @@
-import { AvailableMigrations } from './migrations';
+import { AvailableMigrations, type MigrationFile } from './migrations';
 import { Migration, connectDB, getDB } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { seeders } from '../seeders';
 import { Resource } from 'sst';
 import { Config } from '../utils/config';
+
+// Shared applied-SET selection (not a high-water-mark) - see up()'s comment for why. Exported so
+// `migrate/index.ts`'s `list --pending` preview uses the exact same semantics as `up()` actually
+// runs; the two drifting apart (list() kept the old high-water-mark filter after up()/down() moved
+// to applied-set) is what caused list() to report nothing pending while up() silently ran an
+// overlay migration - a real gap caught in review of the PR that introduced applied-set selection.
+export function selectPending(
+  available: MigrationFile[],
+  appliedIds: Set<number>,
+  target: number | null = null
+): MigrationFile[] {
+  return available
+    .filter(m => !appliedIds.has(m.id))
+    .filter(m => target === null || m.id <= target)
+    .sort((a, b) => a.id - b.id);
+}
 
 export class MigrationManager {
   private logger: Logger;
@@ -33,9 +49,7 @@ export class MigrationManager {
     const appliedIds = new Set(appliedMigrations.map(m => m.id));
     const lastAppliedId = appliedIds.size > 0 ? Math.max(...appliedIds) : null;
 
-    const migrations = AvailableMigrations.filter(m => !appliedIds.has(m.id))
-      .filter(m => target === null || m.id <= target)
-      .sort((a, b) => a.id - b.id);
+    const migrations = selectPending(AvailableMigrations, appliedIds, target);
 
     this.logger.log(`Total migrations known: ${AvailableMigrations.length}`);
     this.logger.log(`Last migration: ${lastAppliedId ?? 'none'}`);

@@ -2,7 +2,7 @@ import { connectDB } from '@bike4mind/database';
 import yargs from 'yargs';
 import { AvailableMigrations } from './migrations';
 import fs from 'fs';
-import { MigrationManager } from './migrationManager';
+import { MigrationManager, selectPending } from './migrationManager';
 import { Migration } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import path from 'path';
@@ -111,8 +111,10 @@ export class MigrationTool extends MigrationManager {
     }
 
     const completedMigrations = await Migration.find().sort({ id: 1 });
-    const lastMigration = completedMigrations[completedMigrations.length - 1];
-    const pendingMigrations = AvailableMigrations.filter(m => !lastMigration || m.id > lastMigration.id);
+    // Same applied-set semantics as up() (via the shared selectPending helper), so this preview
+    // matches what `up()` will actually run - see selectPending's comment in migrationManager.ts.
+    const appliedIds = new Set(completedMigrations.map(m => m.id));
+    const pendingMigrations = selectPending(AvailableMigrations, appliedIds);
 
     if (pending) console.log(`Pending: ${JSON.stringify(pendingMigrations, null, 2)}\n`);
     if (completed) console.log(`Completed: ${JSON.stringify(completedMigrations, null, 2)}\n`);

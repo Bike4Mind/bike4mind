@@ -55,11 +55,52 @@ vi.mock('../utils/config', () => ({ Config: {} }));
 
 // Imported after the mocks above so migrationManager.ts's top-level `import {
 // AvailableMigrations } from './migrations'` resolves to the mock.
-const { MigrationManager } = await import('./migrationManager');
+const { MigrationManager, selectPending } = await import('./migrationManager');
 
 function migration(id: number): FakeMigrationFile {
   return { id, name: `migration-${id}`, up: vi.fn(async () => undefined), down: vi.fn(async () => undefined) };
 }
+
+describe('selectPending - shared applied-set selection', () => {
+  // Regression test for a real bug caught in review of the PR that introduced applied-set
+  // selection: migrate/index.ts's `list --pending` kept its own inline high-water-mark filter
+  // after up()/down() moved to this shared helper, so `list` reported nothing pending while
+  // `up` silently ran an overlay migration - the exact gap case this whole change exists to fix.
+  // Both up() and list() now call selectPending() directly, so they cannot drift again.
+  it('matches the gap case: an id below the max applied id is still pending', () => {
+    const m1 = migration(1);
+    const m2 = migration(2);
+    const m3 = migration(3);
+    const appliedIds = new Set([1, 3]); // 2 was never applied, despite 3 > 2 being applied
+
+    const pending = selectPending([m1, m2, m3], appliedIds);
+
+    expect(pending).toEqual([m2]);
+  });
+
+  it('returns nothing when every migration is already applied', () => {
+    const m1 = migration(1);
+    const m2 = migration(2);
+
+    expect(selectPending([m1, m2], new Set([1, 2]))).toEqual([]);
+  });
+
+  it('respects an explicit target ceiling', () => {
+    const m1 = migration(1);
+    const m2 = migration(2);
+    const m3 = migration(3);
+
+    expect(selectPending([m1, m2, m3], new Set([1]), 2)).toEqual([m2]);
+  });
+
+  it('sorts pending migrations ascending by id regardless of input order', () => {
+    const m1 = migration(1);
+    const m2 = migration(2);
+    const m3 = migration(3);
+
+    expect(selectPending([m3, m1, m2], new Set())).toEqual([m1, m2, m3]);
+  });
+});
 
 describe('MigrationManager - applied-set selection (M0)', () => {
   beforeEach(() => {
