@@ -1,0 +1,81 @@
+[
+  {
+    "modelId": "amazon.nova-canvas-v1:0",
+    "patch": {
+      "id": "amazon.nova-canvas-v1:0",
+      "vendor": "amazon",
+      "backend": "bedrock",
+      "type": "image",
+      "name": "Nova Canvas",
+      "canStream": false,
+      "supportsVision": true,
+      "lifecycle": {
+        "status": "active"
+      }
+    }
+  },
+  {
+    "modelId": "amazon.titan-embed-text-v2:0",
+    "patch": {
+      "id": "amazon.titan-embed-text-v2:0",
+      "vendor": "amazon",
+      "backend": "bedrock",
+      "type": "embedding",
+      "name": "Titan Text Embeddings V2",
+      "canStream": false,
+      "supportsVision": false,
+      "lifecycle": {
+        "status": "active"
+      }
+    }
+  },
+  {
+    "modelId": "anthropic.claude-3-haiku-20240307-v1:0",
+    "patch": {
+      "id": "anthropic.claude-3-haiku-20240307-v1:0",
+      "vendor": "anthropic",
+      "backend": "bedrock",
+      "type": "text",
+      "name": "Claude 3 Haiku",
+      "canStream": true,
+      "supportsVision": true,
+      "lifecycle": {
+        "status": "legacy",
+        "deprecationDate": "2026-02-19",
+        "retirementDate": "2026-04-20"
+      }
+    }
+  },
+  {
+    "modelId": "anthropic.claude-opus-4-5-20251101-v1:0",
+    "patch": {
+      "id": "anthropic.claude-opus-4-5-20251101-v1:0",
+      "vendor": "anthropic",
+      "backend": "bedrock",
+      "type": "text",
+      "name": "Claude Opus 4.5",
+      "canStream": true,
+      "supportsVision": true,
+      "lifecycle": {
+        "status": "active"
+      }
+    }
+  },
+  {
+    "modelId": "meta.llama4-scout-17b-instruct-v1:0",
+    "patch": {
+      "id": "meta.llama4-scout-17b-instruct-v1:0",
+      "vendor": "meta",
+      "backend": "bedrock",
+      "type": "text",
+      "name": "Llama 4 Scout 17B Instruct",
+      "canStream": true,
+      "supportsVision": true,
+      "lifecycle": {
+        "status": "active"
+      },
+      "autoDisabled": true,
+      "autoDisabledReason": "not entitled in this AWS account"
+    }
+  }
+]

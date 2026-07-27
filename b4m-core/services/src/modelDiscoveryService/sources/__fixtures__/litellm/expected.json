@@ -1,0 +1,219 @@
+[
+  {
+    "modelId": "ai21.j2-mid-v1",
+    "patch": {
+      "contextWindow": 8191,
+      "maxOutputTokens": 8191
+    },
+    "pricing": {
+      "inputPerMTok": 12.5,
+      "outputPerMTok": 12.5
+    }
+  },
+  {
+    "modelId": "claude-fable-5",
+    "patch": {
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoning": {
+        "supported": true
+      },
+      "temperatureMode": "unsupported",
+      "supportsVision": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true,
+      "supportsPdfInput": true,
+      "promptCaching": {
+        "supported": true
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 10,
+      "outputPerMTok": 50
+    }
+  },
+  {
+    "modelId": "claude-opus-4-1-20250805",
+    "patch": {
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true,
+      "supportsPdfInput": true,
+      "promptCaching": {
+        "supported": true
+      },
+      "lifecycle": {
+        "status": "active",
+        "deprecationDate": "2026-08-05"
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 15,
+      "outputPerMTok": 75
+    }
+  },
+  {
+    "modelId": "claude-opus-4-5-20251101",
+    "patch": {
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true,
+      "supportsPdfInput": true,
+      "promptCaching": {
+        "supported": true
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 5,
+      "outputPerMTok": 25
+    }
+  },
+  {
+    "modelId": "flux-pro-1.1",
+    "patch": {}
+  },
+  {
+    "modelId": "gemini-3-pro-preview",
+    "patch": {
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65535,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true,
+      "supportsPdfInput": true,
+      "promptCaching": {
+        "supported": true
+      },
+      "lifecycle": {
+        "status": "deprecated",
+        "deprecationDate": "2026-03-26"
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 2,
+      "outputPerMTok": 12
+    }
+  },
+  {
+    "modelId": "global.anthropic.claude-opus-4-8",
+    "patch": {
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoning": {
+        "supported": true
+      },
+      "temperatureMode": "unsupported",
+      "supportsVision": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true,
+      "supportsPdfInput": true,
+      "promptCaching": {
+        "supported": true
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 5,
+      "outputPerMTok": 25
+    }
+  },
+  {
+    "modelId": "gpt-5",
+    "patch": {
+      "contextWindow": 272000,
+      "maxOutputTokens": 128000,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true,
+      "supportsPdfInput": true,
+      "promptCaching": {
+        "supported": true
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 1.25,
+      "outputPerMTok": 10
+    }
+  },
+  {
+    "modelId": "gpt-5.4-mini",
+    "patch": {
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true,
+      "supportsPdfInput": true,
+      "promptCaching": {
+        "supported": true
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 0.75,
+      "outputPerMTok": 4.5
+    }
+  },
+  {
+    "modelId": "grok-4.5",
+    "patch": {
+      "contextWindow": 500000,
+      "maxOutputTokens": 500000,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true,
+      "promptCaching": {
+        "supported": true
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 2,
+      "outputPerMTok": 6
+    }
+  },
+  {
+    "modelId": "o3-2025-04-16",
+    "patch": {
+      "contextWindow": 200000,
+      "maxOutputTokens": 100000,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true,
+      "supportsPdfInput": true,
+      "promptCaching": {
+        "supported": true
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 2,
+      "outputPerMTok": 8
+    }
+  },
+  {
+    "modelId": "whisper-1",
+    "patch": {}
+  }
+]

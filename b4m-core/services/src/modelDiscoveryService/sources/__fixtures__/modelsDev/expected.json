@@ -1,0 +1,211 @@
+[
+  {
+    "modelId": "claude-opus-4-5-20251101",
+    "patch": {
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsPdfInput": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true
+    },
+    "pricing": {
+      "inputPerMTok": 5,
+      "outputPerMTok": 25
+    }
+  },
+  {
+    "modelId": "claude-opus-5",
+    "patch": {
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoning": {
+        "supported": true
+      },
+      "temperatureMode": "unsupported",
+      "supportsVision": true,
+      "supportsPdfInput": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true
+    },
+    "pricing": {
+      "inputPerMTok": 5,
+      "outputPerMTok": 25
+    }
+  },
+  {
+    "modelId": "claude-sonnet-4-6",
+    "patch": {
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsPdfInput": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true
+    },
+    "pricing": {
+      "inputPerMTok": 3,
+      "outputPerMTok": 15
+    }
+  },
+  {
+    "modelId": "gemini-2.5-pro",
+    "patch": {
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsPdfInput": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true
+    },
+    "pricing": {
+      "inputPerMTok": 1.25,
+      "outputPerMTok": 10
+    }
+  },
+  {
+    "modelId": "gemini-3-pro-preview",
+    "patch": {
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsPdfInput": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true,
+      "lifecycle": {
+        "status": "deprecated"
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 2,
+      "outputPerMTok": 12
+    }
+  },
+  {
+    "modelId": "global.anthropic.claude-opus-4-8",
+    "patch": {
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "reasoning": {
+        "supported": true
+      },
+      "temperatureMode": "unsupported",
+      "supportsVision": true,
+      "supportsPdfInput": true,
+      "supportsTools": true
+    },
+    "pricing": {
+      "inputPerMTok": 5,
+      "outputPerMTok": 25
+    }
+  },
+  {
+    "modelId": "gpt-4.1-2025-04-14",
+    "patch": {
+      "contextWindow": 1047576,
+      "maxOutputTokens": 32768,
+      "reasoning": {
+        "supported": false
+      },
+      "supportsVision": true,
+      "supportsPdfInput": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true
+    },
+    "pricing": {
+      "inputPerMTok": 2,
+      "outputPerMTok": 8
+    }
+  },
+  {
+    "modelId": "gpt-5",
+    "patch": {
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "reasoning": {
+        "supported": true
+      },
+      "temperatureMode": "unsupported",
+      "supportsVision": true,
+      "supportsPdfInput": false,
+      "supportsTools": true,
+      "supportsStructuredOutput": true
+    },
+    "pricing": {
+      "inputPerMTok": 1.25,
+      "outputPerMTok": 10
+    }
+  },
+  {
+    "modelId": "grok-4.5",
+    "patch": {
+      "contextWindow": 500000,
+      "maxOutputTokens": 500000,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsPdfInput": true,
+      "supportsTools": true,
+      "supportsStructuredOutput": true
+    },
+    "pricing": {
+      "inputPerMTok": 2,
+      "outputPerMTok": 6
+    }
+  },
+  {
+    "modelId": "o4-mini-2025-04-16",
+    "patch": {
+      "contextWindow": 200000,
+      "maxOutputTokens": 100000,
+      "reasoning": {
+        "supported": true
+      },
+      "temperatureMode": "unsupported",
+      "supportsVision": true,
+      "supportsPdfInput": false,
+      "supportsTools": true,
+      "supportsStructuredOutput": true,
+      "lifecycle": {
+        "status": "deprecated"
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 1.1,
+      "outputPerMTok": 4.4
+    }
+  },
+  {
+    "modelId": "us.anthropic.claude-opus-4-1-20250805-v1:0",
+    "patch": {
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000,
+      "reasoning": {
+        "supported": true
+      },
+      "supportsVision": true,
+      "supportsPdfInput": true,
+      "supportsTools": true,
+      "lifecycle": {
+        "status": "deprecated"
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 15,
+      "outputPerMTok": 75
+    }
+  }
+]

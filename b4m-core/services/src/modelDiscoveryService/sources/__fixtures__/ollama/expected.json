@@ -1,0 +1,113 @@
+[
+  {
+    "modelId": "bge-m3:latest",
+    "patch": {
+      "id": "bge-m3:latest",
+      "vendor": "bert",
+      "backend": "ollama",
+      "type": "embedding",
+      "name": "bge-m3:latest",
+      "contextWindow": 8192,
+      "canStream": true,
+      "supportsVision": false,
+      "supportsTools": false,
+      "reasoning": {
+        "supported": false
+      },
+      "freeToRun": true
+    }
+  },
+  {
+    "modelId": "gemma4:26b-a4b-it-q4_K_M",
+    "patch": {
+      "id": "gemma4:26b-a4b-it-q4_K_M",
+      "vendor": "gemma4",
+      "backend": "ollama",
+      "type": "text",
+      "name": "gemma4:26b-a4b-it-q4_K_M",
+      "contextWindow": 0,
+      "canStream": true,
+      "supportsVision": false,
+      "supportsTools": true,
+      "reasoning": {
+        "supported": true,
+        "style": "ollama"
+      },
+      "freeToRun": true
+    }
+  },
+  {
+    "modelId": "nomic-embed-text:latest",
+    "patch": {
+      "id": "nomic-embed-text:latest",
+      "vendor": "nomic-bert",
+      "backend": "ollama",
+      "type": "embedding",
+      "name": "nomic-embed-text:latest",
+      "contextWindow": 2048,
+      "canStream": true,
+      "supportsVision": false,
+      "supportsTools": false,
+      "reasoning": {
+        "supported": false
+      },
+      "freeToRun": true
+    }
+  },
+  {
+    "modelId": "qwen3-embedding:0.6b",
+    "patch": {
+      "id": "qwen3-embedding:0.6b",
+      "vendor": "qwen3",
+      "backend": "ollama",
+      "type": "embedding",
+      "name": "qwen3-embedding:0.6b",
+      "contextWindow": 32768,
+      "canStream": true,
+      "supportsVision": false,
+      "supportsTools": false,
+      "reasoning": {
+        "supported": false
+      },
+      "freeToRun": true
+    }
+  },
+  {
+    "modelId": "qwen3.5:2b-q4_K_M",
+    "patch": {
+      "id": "qwen3.5:2b-q4_K_M",
+      "vendor": "qwen35",
+      "backend": "ollama",
+      "type": "text",
+      "name": "qwen3.5:2b-q4_K_M",
+      "contextWindow": 262144,
+      "canStream": true,
+      "supportsVision": true,
+      "supportsTools": true,
+      "reasoning": {
+        "supported": true,
+        "style": "ollama"
+      },
+      "freeToRun": true
+    }
+  },
+  {
+    "modelId": "qwen3.6:35b-a3b-q4_K_M",
+    "patch": {
+      "id": "qwen3.6:35b-a3b-q4_K_M",
+      "vendor": "qwen35moe",
+      "backend": "ollama",
+      "type": "text",
+      "name": "qwen3.6:35b-a3b-q4_K_M",
+      "contextWindow": 262144,
+      "canStream": true,
+      "supportsVision": true,
+      "supportsTools": true,
+      "reasoning": {
+        "supported": true,
+        "style": "ollama"
+      },
+      "freeToRun": true
+    }
+  }
+]
