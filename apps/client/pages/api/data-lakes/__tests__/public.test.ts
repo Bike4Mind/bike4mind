@@ -141,7 +141,8 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
 
   it('passes the repositories through by identity', async () => {
     await route(makeReq({}), makeRes());
-    expect(browseArgs()[2]).toEqual({ db: { dataLakes: LAKES_REPO, users: USERS_REPO } });
+    expect(browseArgs()[2].db.dataLakes).toBe(LAKES_REPO);
+    expect(browseArgs()[2].db.users).toBe(USERS_REPO);
   });
 
   it('returns the service result as JSON', async () => {

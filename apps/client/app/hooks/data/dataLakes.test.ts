@@ -116,11 +116,11 @@ describe('useBrowsePublicDataLakes', () => {
     const limits = requestedUrls().map(url => paramsOf(url).get('limit'));
     const offsets = requestedUrls().map(url => paramsOf(url).get('offset'));
 
-    expect(limits).toEqual(['24', '24', '24']);
     // The old bug summed the page size into `limit` (24 -> 48 -> 72), so the THIRD load-more blew
-    // past the route's max of 60. Assert the cap itself, not just equality, so the failure names
-    // the real consequence.
+    // past the route's max of 60 (public.ts:12). Assert the cap itself, before the exact-equality
+    // check below, so a regression fails on the real consequence rather than on equality alone.
     limits.forEach(limit => expect(Number(limit)).toBeLessThanOrEqual(60));
+    expect(limits).toEqual(['24', '24', '24']);
     expect(offsets).toEqual(['0', '24', '48']);
   });
 
