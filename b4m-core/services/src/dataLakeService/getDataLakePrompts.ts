@@ -22,13 +22,18 @@ export interface DataLakePrompt {
  *
  * Trusted = the caller's own lake, or a lake scoped to the caller's org (the org admin
  * governance path). Consumed by DataLakePromptFeature, which renders the surviving lakes.
+ *
+ * Both sides of each comparison are String-coerced (behind a truthiness guard, so an absent
+ * value never becomes the string "undefined"). The schema stores these as Strings today, but an
+ * ObjectId-vs-String comparison would fail SILENTLY - denying injection with no error - which is
+ * the hard failure mode to notice. Same reasoning as the actor-side coercion in the resolver.
  */
 function isTrustedForInjection(
   lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,
   actor: { userId?: string; organizationId?: string }
 ): boolean {
-  if (actor.userId && lake.createdByUserId === actor.userId) return true;
-  return !!lake.organizationId && !!actor.organizationId && lake.organizationId === actor.organizationId;
+  if (actor.userId && lake.createdByUserId && String(lake.createdByUserId) === actor.userId) return true;
+  return !!lake.organizationId && !!actor.organizationId && String(lake.organizationId) === actor.organizationId;
 }
 
 /**
