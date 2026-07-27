@@ -64,8 +64,8 @@ import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import ModelSelection from '../ModelSelection';
 import MetadataChip from './MetaDataChips';
 import {
+  buildModelSelectionPatch,
   ChipVariant,
-  computeDefaultMaxTokens,
   getModelPriceTier,
   getModelSpeedFromStats,
   getModelSpeedTooltip,
@@ -1689,11 +1689,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
       const newModelInfo = modelInfoRepo?.find(m => m.id === newModel);
       if (newModelInfo) {
         startTransition(() => {
-          setLLM({
-            model: newModel,
-            max_tokens: computeDefaultMaxTokens(newModelInfo),
-            ...(FIXED_TEMPERATURE_MODELS.has(newModel) && { temperature: 1.0 }),
-          });
+          setLLM(buildModelSelectionPatch(newModelInfo));
         });
         if (currentSessionId) {
           void updateSessionToServer({ id: currentSessionId, lastUsedModel: newModel }).catch(err =>

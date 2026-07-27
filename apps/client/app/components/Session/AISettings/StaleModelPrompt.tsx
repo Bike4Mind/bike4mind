@@ -7,11 +7,9 @@ import Snackbar from '@mui/joy/Snackbar';
 import Typography from '@mui/joy/Typography';
 import { Close } from '@mui/icons-material';
 
-import type { ModelName } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useModelInfo, useSupersededModels } from '@client/app/hooks/data/useModelInfo';
-import { computeDefaultMaxTokens } from '@client/app/utils/aiSettingsUtils';
-import { FIXED_TEMPERATURE_MODELS } from '@bike4mind/common';
+import { buildModelSelectionPatch } from '@client/app/utils/aiSettingsUtils';
 import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
 import { dismissStaleModelPrompt, isStaleModelPromptDismissed } from '@client/app/utils/staleModelPrompt';
 
@@ -41,6 +39,8 @@ const StaleModelPrompt: FC<StaleModelPromptProps> = ({ sessionId, pinnedModel })
     return supersededModels?.find(m => m.id === pinnedModel);
   }, [supersededModels, sessionId, pinnedModel]);
 
+  // The sessionId check is redundant with the memo above, but narrows it to string
+  // for the handlers, which persist against it.
   if (!superseded || !sessionId) return null;
 
   const promptKey = `${sessionId}::${superseded.id}`;
@@ -54,13 +54,8 @@ const StaleModelPrompt: FC<StaleModelPromptProps> = ({ sessionId, pinnedModel })
   const handleSwitch = () => {
     const replacement = modelInfoRepo?.find(m => m.id === superseded.replacementId);
     if (!replacement) return;
-    const newModel = replacement.id as ModelName;
-    setLLM({
-      model: newModel,
-      max_tokens: computeDefaultMaxTokens(replacement),
-      ...(FIXED_TEMPERATURE_MODELS.has(newModel) && { temperature: 1.0 }),
-    });
-    void updateSessionToServer({ id: sessionId, lastUsedModel: newModel }).catch(err =>
+    setLLM(buildModelSelectionPatch(replacement));
+    void updateSessionToServer({ id: sessionId, lastUsedModel: replacement.id }).catch(err =>
       console.error('Failed to persist model upgrade:', err)
     );
     setHandledKey(promptKey);
