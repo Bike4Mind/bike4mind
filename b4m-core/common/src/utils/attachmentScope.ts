@@ -9,9 +9,9 @@
  * message forever; a document's cost is bounded by chunk retrieval. Users can still
  * override either way.
  *
- * Must stay in sync with the upload paths that freeze a scope onto a pending file
- * (SessionFilePond, useChatPaste) and with the scope chips that report it back
- * (FilesSection, MessageFileThumbnails).
+ * `resolveAttachScope` has no callers yet. The upload paths still decide scope from a
+ * default-off toggle, which is why an uploaded file currently drops out of context after
+ * one turn; switching them over is a separate change.
  */
 export type AttachScopeMode = 'auto' | 'notebook' | 'message';
 export type AttachScope = 'notebook' | 'message';
