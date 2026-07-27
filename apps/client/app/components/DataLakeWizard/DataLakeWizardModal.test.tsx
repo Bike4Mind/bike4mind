@@ -19,6 +19,8 @@ const { toastMock, batchUploadMutate } = vi.hoisted(() => ({
 }));
 
 vi.mock('sonner', () => ({ toast: toastMock }));
+// Stub only the hooks; isValidDataLakeSlug comes from the unmocked dataLakeSlug
+// module so the config gate is checked against the real validation logic.
 vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
   useBatchUpload: () => ({ mutate: batchUploadMutate, isPending: false }),
   useComputeHashes: () => ({ mutate: vi.fn(), isPending: false }),
@@ -95,5 +97,21 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
 
     expect(batchUploadMutate).toHaveBeenCalledTimes(1);
     expect(toastMock.error).not.toHaveBeenCalled();
+  });
+
+  it('disables Start Upload when the name slugifies too short, and clicking it is a no-op', () => {
+    // "!!" slugifies to an empty string - shorter than the server's slug.min(2), which
+    // would otherwise be rejected only at the final upload step.
+    useDataLakeWizardStore.setState(state => ({ config: { ...state.config, name: '!!' } }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    const btn = screen.getByTestId('wizard-start-upload-btn') as HTMLButtonElement;
+    expect(btn).toBeDisabled();
+    btn.click();
+    expect(batchUploadMutate).not.toHaveBeenCalled();
   });
 });

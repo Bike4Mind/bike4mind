@@ -17,6 +17,7 @@ import {
   type UploadErrorKind,
 } from '@client/app/stores/useDataLakeWizardStore';
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';
+import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
 import type { WizardFile } from '@client/app/utils/folderTreeParser';
 import { computeFileHash } from '@client/app/utils/folderTreeParser';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -285,17 +286,6 @@ export const UPLOAD_ALL_FAILED_MESSAGE =
   'None of the files could be uploaded. This is usually a network or connection issue, not your data lake settings. Please try again.';
 
 /**
- * Slugify a string for use as a data lake slug.
- */
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 60);
-}
-
-/**
  * Translate an upload/create failure into a distinct kind + human message. The lake
  * config validates server-side with zod, whose raw text (e.g. "Too small: expected
  * string to have >=2 characters at 'slug'") must never reach the UI - so a 422 is
@@ -324,8 +314,8 @@ function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: 
   // rather than surfacing the raw validator string.
   if (status === 422) {
     const { config, targetLake } = useDataLakeWizardStore.getState();
-    const slug = targetLake ? targetLake.slug : slugify(config.name);
-    if (slug.length < 2) {
+    const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
+    if (slug.length < MIN_DATA_LAKE_SLUG_LENGTH) {
       return {
         kind: 'validation',
         message: 'The data lake name is too short. Use a name with at least 2 letters or numbers.',
@@ -450,7 +440,7 @@ export function useBatchUpload() {
       // Ensure tag prefix ends with ':'
       const tagPrefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : config.tagPrefix + ':';
       // Append mode reuses the target lake's slug; create mode derives it from the name.
-      const slug = targetLake ? targetLake.slug : slugify(config.name);
+      const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
 
       // Step 1: Create the data lake; skipped in append mode (upload into the existing lake).
       let dataLakeId: string;

@@ -152,7 +152,6 @@ interface DataLakeWizardStore {
   updateTag: (tagName: string, updates: Partial<TaxonomyTag>) => void;
   mergeTags: (sourceTagName: string, targetTagName: string) => void;
   deleteTag: (tagName: string) => void;
-  setTagPrefix: (prefix: string) => void;
 
   // Config step
   setConfig: (config: Partial<DataLakeFormValues>) => void;
@@ -301,12 +300,6 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
         ...state.taxonomy,
         tags: state.taxonomy.tags.map(t => (t.name === tagName ? { ...t, deleted: true } : t)),
       },
-    })),
-
-  setTagPrefix: prefix =>
-    set(state => ({
-      taxonomy: { ...state.taxonomy, prefix },
-      config: { ...state.config, tagPrefix: prefix },
     })),
 
   // ── Config Step ─────────────────────────────────────────────────────────
