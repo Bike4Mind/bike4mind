@@ -76,6 +76,16 @@ const openLake = {
   isPublic: false,
 };
 
+const entitlementGatedLake = {
+  id: 'lake-3',
+  name: 'Entitled Lake',
+  description: 'desc',
+  requiredUserTag: '',
+  requiredEntitlement: 'product:pro',
+  organizationId: '',
+  isPublic: false,
+};
+
 describe('DataLakeSettingsModal — clearing an access gate', () => {
   beforeEach(() => {
     updateMutate.mockReset();
@@ -98,6 +108,23 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
     // "leave unchanged", which is what made a mis-gated lake unfixable.
     expect(updateMutate).toHaveBeenCalledTimes(1);
     expect(updateMutate.mock.calls[0][0]).toMatchObject({ id: 'lake-1', requiredUserTag: '' });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('sends the empty clear-sentinel when the entitlement is blanked', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={entitlementGatedLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.clear(screen.getByPlaceholderText('e.g. product:pro'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    // Same sentinel contract as the tag gate - '' clears, an omitted field would leave it unchanged.
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ id: 'lake-3', requiredEntitlement: '' });
     expect(warn).not.toHaveBeenCalled();
   });
 
