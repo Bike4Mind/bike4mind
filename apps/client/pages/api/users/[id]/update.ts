@@ -17,7 +17,7 @@ import * as z from 'zod';
 
 const idParamSchema = z.object({ id: z.string() });
 
-async function resolveConsentTimestamp(
+async function getPreviousConsentLevel(
   userId: string,
   incomingLevel: string,
   prefs: { contextTelemetryConsentedAt?: Date } | null | undefined
@@ -127,7 +127,7 @@ const handler = baseApi().put(
 
       const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
       const previousTelemetryLevel = incomingTelemetryLevel
-        ? await resolveConsentTimestamp(userId, incomingTelemetryLevel, body.preferences)
+        ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
         : undefined;
 
       req.logger.updateMetadata({ body: req.body });
@@ -161,7 +161,7 @@ const handler = baseApi().put(
 
       const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
       const previousTelemetryLevel = incomingTelemetryLevel
-        ? await resolveConsentTimestamp(userId, incomingTelemetryLevel, body.preferences)
+        ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
         : undefined;
 
       await userService.updateUser(userId, body, {
