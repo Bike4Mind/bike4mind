@@ -5,18 +5,29 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
 
-// Manual credit movements only: admin adjustments/grants land here (both are
-// generic_*). Usage/purchase/subscription rows are excluded so the trail reads
-// as an audit of admin actions, not spend.
+// Default view: manual credit movements only (admin adjustments/grants, both
+// generic_*), so the trail reads as an audit of admin actions, not spend.
+// Support can opt in to purchase/subscription rows via ?types= to verify a
+// user's "did my payment go through?" claim. Usage rows stay excluded: they
+// have their own analytics views and would drown the ledger.
 const ADJUSTMENT_TYPES = ['generic_add', 'generic_deduct'] as const;
+const LEDGER_TYPES = [...ADJUSTMENT_TYPES, 'purchase', 'subscription'] as const;
 
 const QuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(365).optional().default(90),
+  // Comma-separated opt-in list; absent keeps the adjustments-only default.
+  types: z
+    .string()
+    .optional()
+    .transform(v => (v ? v.split(',') : [...ADJUSTMENT_TYPES]))
+    .pipe(z.array(z.enum(LEDGER_TYPES)).min(1)),
 });
 
-/** One admin credit adjustment, actor resolved to a display name for the UI. */
+/** One ledger row, actor resolved to a display name for the UI. */
 export interface IUserCreditAdjustment {
   id: string;
+  /** Which ledger row this is; the default view only returns generic_*. */
+  type: (typeof LEDGER_TYPES)[number];
   createdAt: string;
   /** Signed delta: positive for a grant, negative for a deduction. */
   credits: number;
@@ -25,21 +36,26 @@ export interface IUserCreditAdjustment {
   actorId?: string;
   actorName?: string;
   resultingBalance?: number;
+  /** Purchase rows only. */
+  status?: string;
+  stripePaymentIntentId?: string;
+  /** Purchase rows only: money paid, as recorded on the transaction. */
+  amount?: number;
 }
 
 const handler = baseApi().get(
   // `userId` is always present - it is the `[userId]` route segment.
-  asyncHandler<{}, unknown, unknown, { userId: string; days?: string }>(async (req, res) => {
+  asyncHandler<{}, unknown, unknown, { userId: string; days?: string; types?: string }>(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
     const userId = req.query.userId;
-    const { days } = QuerySchema.parse({ days: req.query.days });
+    const { days, types } = QuerySchema.parse({ days: req.query.days, types: req.query.types });
 
     const transactions = await creditTransactionRepository.findByOwnerWithFilters(userId, CreditHolderType.User, {
       days,
-      transactionTypes: [...ADJUSTMENT_TYPES],
+      transactionTypes: types,
     });
 
     // Resolve each distinct actor once for display.
@@ -60,6 +76,7 @@ const handler = baseApi().get(
       const actorId = tx.metadata?.actorId as string | undefined;
       return {
         id: tx.id,
+        type: tx.type as IUserCreditAdjustment['type'],
         createdAt: tx.createdAt.toISOString(),
         credits: tx.credits,
         description: tx.description,
@@ -67,6 +84,10 @@ const handler = baseApi().get(
         actorId,
         actorName: actorId ? actorNames.get(actorId) : undefined,
         resultingBalance: tx.metadata?.resultingBalance as number | undefined,
+        status: 'status' in tx ? (tx.status as string | undefined) : undefined,
+        stripePaymentIntentId:
+          'stripePaymentIntentId' in tx ? (tx.stripePaymentIntentId as string | undefined) : undefined,
+        amount: 'amount' in tx ? (tx.amount as number | undefined) : undefined,
       };
     });
 

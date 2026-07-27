@@ -35,8 +35,16 @@ vi.mock('@bike4mind/database', () => ({
 
 import handler from '../credit-transactions';
 
-const run = ({ user, userId = 'u1', days }: { user?: unknown; userId?: string; days?: string } = {}) => {
-  const { req, res } = createMocks({ method: 'GET', query: { userId, ...(days ? { days } : {}) } });
+const run = ({
+  user,
+  userId = 'u1',
+  days,
+  types,
+}: { user?: unknown; userId?: string; days?: string; types?: string } = {}) => {
+  const { req, res } = createMocks({
+    method: 'GET',
+    query: { userId, ...(days ? { days } : {}), ...(types ? { types } : {}) },
+  });
   if (user) (req as Record<string, unknown>).user = user;
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
@@ -100,5 +108,49 @@ describe('GET /api/admin/users/[userId]/credit-transactions', () => {
     const { promise } = run({ user: ADMIN });
     await promise;
     expect(mockFindByOwner.mock.calls[0][2].days).toBe(90);
+  });
+
+  it('passes an opt-in types filter through to the repository', async () => {
+    const { promise } = run({ user: ADMIN, types: 'purchase,subscription' });
+    await promise;
+    expect(mockFindByOwner.mock.calls[0][2].transactionTypes).toEqual(['purchase', 'subscription']);
+  });
+
+  it('rejects transaction types outside the ledger allowlist', async () => {
+    // Usage rows are deliberately not exposed here; they have their own views.
+    const { promise } = run({ user: ADMIN, types: 'text_generation_usage' });
+    await expect(promise).rejects.toThrow();
+    expect(mockFindByOwner).not.toHaveBeenCalled();
+  });
+
+  it('surfaces purchase fields so support can verify a payment claim', async () => {
+    mockFindByOwner.mockResolvedValue([
+      {
+        id: 'tx-2',
+        type: 'purchase',
+        credits: 1000,
+        description: 'Credit package',
+        createdAt: new Date('2026-07-20T00:00:00Z'),
+        status: 'completed',
+        stripePaymentIntentId: 'pi_123',
+        amount: 10,
+        metadata: {},
+      },
+    ]);
+
+    const { res, promise } = run({ user: ADMIN, types: 'purchase' });
+    await promise;
+
+    const { rows } = res._getJSONData();
+    expect(rows[0]).toMatchObject({
+      id: 'tx-2',
+      type: 'purchase',
+      credits: 1000,
+      status: 'completed',
+      stripePaymentIntentId: 'pi_123',
+      amount: 10,
+    });
+    // No actor on a purchase row: nothing to resolve.
+    expect(mockUserFind).not.toHaveBeenCalled();
   });
 });
