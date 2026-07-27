@@ -16,7 +16,21 @@
  *   SPA/nav   -> emit the file with an empty exported array
  *   API/handler stubs -> emit ZERO files (no file = no import of absent package)
  *
+ * A package that is hydrated but NOT resolvable from apps/client (no node_modules
+ * link) gets the ABSENT form for all bare-specifier glue, with a warning. Emitting
+ * real imports for an unlinked package fails typecheck/build repo-wide, which is
+ * worse than the overlay's features being un-wired until it is linked.
+ *
+ * Relative-import glue (infra + migrations) is exempt: it imports overlay source by
+ * relative path and needs no link. Note: infra glue itself is link-independent, but
+ * the handler stubs it references (from generateServerHandlerStubs) are bare-specifier
+ * and therefore omitted in the unlinked case. This is caught at deploy/bundle time
+ * rather than silently, and CI builds are always linked.
+ *
  * Run by: pnpm codegen (or automatically via predev/prebuild scripts)
+ * The turbo codegen task is cache:false - output depends on node_modules link state,
+ * which no turbo input glob can capture. codegen itself always re-runs; dependents
+ * are unaffected because both link states typecheck clean.
  * Turbo cache key: packages/premium/*\/package.json
  */
 
@@ -51,6 +65,15 @@ function discoverPremiumPackages() {
     }
   }
   return packages;
+}
+
+// Node resolves a bare specifier from apps/client by walking node_modules up the
+// tree, so the package must be linked at one of these roots. Being hydrated under
+// packages/premium/ is not enough: pnpm only links workspace packages somewhere a
+// package.json declares them.
+function isLinkedIntoClient(pkgName) {
+  const segments = pkgName.split('/');
+  return [CLIENT_ROOT, REPO_ROOT].some(root => existsSync(join(root, 'node_modules', ...segments)));
 }
 
 // --- Generate helpers ---
@@ -638,13 +661,39 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
 const packages = discoverPremiumPackages();
 console.log(`[codegen] found ${packages.length} premium package(s): ${packages.map(p => p.name).join(', ') || '(none)'}`);
 
+// Bare-specifier glue only for packages that will actually resolve. Unlinked
+// packages get the absent form so a hydrated-but-unlinked tree still typechecks,
+// instead of failing every build with cannot-find-module errors.
+const linkedPackages = [];
+for (const pkg of packages) {
+  if (isLinkedIntoClient(pkg.name)) { linkedPackages.push(pkg); continue; }
+  console.warn(
+    `[codegen] WARNING: packages/premium/${pkg.dir} is hydrated but "${pkg.name}" is not ` +
+      `resolvable from apps/client (no node_modules link). Emitting the ABSENT form for its ` +
+      `route/nav/API/tool glue so typecheck and builds stay green - its features will NOT be ` +
+      `wired. Link it (declare it in apps/client dependencies, or symlink packages/premium/` +
+      `${pkg.dir} to node_modules/${pkg.name}) and re-run: pnpm codegen`
+  );
+}
+
+// In CI, a hydrated-but-unlinked overlay means the pipeline would ship with features
+// silently un-wired (console.warn inside a turbo/Actions log is not a control).
+// Fail hard so the link breakage surfaces as a red pipeline, not a quiet regression.
+if (linkedPackages.length < packages.length && process.env.CI === 'true') {
+  console.error('[codegen] refusing to emit absent glue for a hydrated-but-unlinked overlay in CI');
+  process.exit(1);
+}
+
 ensureDir(GENERATED_DIR);
-generateSpaRoutes(packages);
-generateNavItems(packages);
-generateNotebookSidenav(packages);
-generateApiStubs(packages);
-generateServerHandlerStubs(packages);
-generateLlmTools(packages);
+// Bare-specifier glue: linked packages only (an unresolvable import fails every build).
+generateSpaRoutes(linkedPackages);
+generateNavItems(linkedPackages);
+generateNotebookSidenav(linkedPackages);
+generateApiStubs(linkedPackages);
+generateServerHandlerStubs(linkedPackages);
+generateLlmTools(linkedPackages);
+// Relative-import glue: needs no node_modules link, so it gets the full list.
+// Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
 generateInfraGlue(packages);
 
