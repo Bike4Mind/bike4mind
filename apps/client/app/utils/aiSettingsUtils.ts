@@ -314,19 +314,25 @@ export const computeDefaultMaxTokens = (modelInfo: Pick<ModelInfo, 'contextWindo
   return Math.floor(Math.min(modelMaxTokens, Math.max(LARGE_CONTEXT_FLOOR, contextWindow / 4)));
 };
 
-// Re-fit a persisted max_tokens onto a newly-selected model, in BOTH directions: a value carried
-// over from a bigger model would starve the new model's input budget, and one carried over from a
-// weaker model would cap a frontier model far below what it can emit (the client value is the
-// binding ceiling - the server only ever clamps down). Returns the unchanged value when it already
-// sits between the model's default and its advertised ceiling.
+// Re-fit a persisted max_tokens onto a model. An unset value, or one carried over from a bigger
+// model, is always replaced with this model's default - the former has no meaning and the latter
+// would starve the new model's input budget.
+//
+// Raising a below-default value is opt-in via `allowRaise`, because the two cases differ: on an
+// actual model SWITCH a low carry-over is stale (it would cap a frontier model far below what it
+// can emit - the client value is the binding ceiling, the server only clamps down), but for the
+// model the user is already on it is their own deliberate setting, and raising it there would
+// discard that choice on every page reload and catalog refetch.
 // Keep in sync with the model-change effect in contexts/LLMContext.tsx.
 export const refitMaxTokensForModel = (
   currentMaxTokens: number,
-  modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens'>
+  modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens'>,
+  { allowRaise = true }: { allowRaise?: boolean } = {}
 ): number => {
   const ceiling = modelInfo.max_tokens ?? 0;
   if (ceiling <= 0) return currentMaxTokens;
   const target = computeDefaultMaxTokens(modelInfo);
-  if (currentMaxTokens >= target && currentMaxTokens <= ceiling) return currentMaxTokens;
-  return target;
+  if (currentMaxTokens <= 0 || currentMaxTokens > ceiling) return target;
+  if (allowRaise && currentMaxTokens < target) return target;
+  return currentMaxTokens;
 };

@@ -75,9 +75,20 @@ describe('refitMaxTokensForModel', () => {
 
   it('replaces an unset value with the default', () => {
     expect(refitMaxTokensForModel(0, frontier)).toBe(128000);
+    expect(refitMaxTokensForModel(0, frontier, { allowRaise: false })).toBe(128000);
   });
 
   it('leaves the value alone when the model advertises no ceiling', () => {
     expect(refitMaxTokensForModel(8192, { contextWindow: 128000, max_tokens: 0 })).toBe(8192);
+  });
+
+  describe('allowRaise: false (same model - mount, reload, catalog refetch)', () => {
+    it('keeps a deliberately-lowered value instead of resetting it to the default', () => {
+      expect(refitMaxTokensForModel(2048, frontier, { allowRaise: false })).toBe(2048);
+    });
+
+    it('still lowers a value the model cannot accept', () => {
+      expect(refitMaxTokensForModel(128000, small, { allowRaise: false })).toBe(16384);
+    });
   });
 });

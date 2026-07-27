@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { computeDefaultMaxTokens } from '../utils/aiSettingsUtils';
 
 interface ModelInfoEntry {
   id: string;
@@ -25,9 +26,12 @@ export function useTokenLimits({ model, modelInfo, max_tokens, chatInputLength }
   const contextWindowLimit = activeModelEntry?.contextWindow ?? 0;
   const modelCatalogMaxOutput = activeModelEntry?.max_tokens ?? 0;
 
-  const getDefaultMaxOutputTokens = useMemo(() => {
-    return Math.min(modelCatalogMaxOutput, 16384);
-  }, [modelCatalogMaxOutput]);
+  // Must agree with the store's default (computeDefaultMaxTokens) - this only stands in for the
+  // window between mount and the model-change effect writing a real max_tokens.
+  const getDefaultMaxOutputTokens = useMemo(
+    () => computeDefaultMaxTokens({ contextWindow: contextWindowLimit, max_tokens: modelCatalogMaxOutput }),
+    [contextWindowLimit, modelCatalogMaxOutput]
+  );
 
   const effectiveMaxOutputTokens = useMemo(() => {
     const requested = max_tokens !== undefined && max_tokens > 0 ? max_tokens : getDefaultMaxOutputTokens;
