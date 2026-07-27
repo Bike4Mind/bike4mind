@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../../__test__/createMongoServer';
 import { UserApiKey } from '../UserApiKeyModel';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 
 let mongod: MongoMemoryServer;
 
@@ -128,5 +128,82 @@ describe('UserApiKeyRepository.findByAgentId', () => {
   it('returns empty for an agent with no keys', async () => {
     const { userApiKeyRepository } = await import('../UserApiKeyModel');
     await expect(userApiKeyRepository.findByAgentId('agent-none')).resolves.toEqual([]);
+  });
+});
+
+describe('UserApiKeyRepository.findByOrganizationIdsAndId', () => {
+  // Unique keyPrefix per test: the soft-delete plugin makes afterEach's deleteMany
+  // a soft delete, so the keyPrefix unique index still sees prior tests' docs.
+  async function seed(tag: string) {
+    const { userApiKeyRepository } = await import('../UserApiKeyModel');
+    const org1 = await UserApiKey.create({
+      ...base,
+      keyPrefix: `b4m_live_${tag}o1`,
+      agentId: 'agent-1',
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-1',
+    });
+    const org2 = await UserApiKey.create({
+      ...base,
+      keyPrefix: `b4m_live_${tag}o2`,
+      agentId: 'agent-1',
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-2',
+    });
+    // Personal (User-billed) key minted by a different user - the shape the guard must exclude.
+    const personal = await UserApiKey.create({
+      ...base,
+      userId: 'other-user',
+      keyPrefix: `b4m_live_${tag}p`,
+      agentId: 'agent-1',
+      billingOwnerType: CreditHolderType.User,
+    });
+    return { userApiKeyRepository, org1, org2, personal };
+  }
+
+  it('returns the key when it is org-billed to an org in the set', async () => {
+    const { userApiKeyRepository, org1 } = await seed('a');
+    const found = await userApiKeyRepository.findByOrganizationIdsAndId(['org-1'], org1.id);
+    expect(found?.id).toBe(org1.id);
+  });
+
+  it('excludes a personal (User-billed) key even if its id is passed', async () => {
+    const { userApiKeyRepository, personal } = await seed('b');
+    await expect(userApiKeyRepository.findByOrganizationIdsAndId(['org-1'], personal.id)).resolves.toBeNull();
+  });
+
+  // The billingOwnerType filter, not just the organizationId set, must exclude a
+  // key: a row with organizationId in-set but billingOwnerType User (a legacy /
+  // direct-DB shape the service invariant would reject at mint) must NOT resolve.
+  // Without this, deleting the billingOwnerType clause would still pass every
+  // other case, because they all differ on organizationId too.
+  it('excludes an in-set-org key whose billingOwnerType is User (not Organization)', async () => {
+    const { userApiKeyRepository } = await import('../UserApiKeyModel');
+    const divergent = await UserApiKey.create({
+      ...base,
+      keyPrefix: 'b4m_live_fowuser',
+      agentId: 'agent-1',
+      organizationId: 'org-1',
+      billingOwnerType: CreditHolderType.User,
+    });
+    await expect(userApiKeyRepository.findByOrganizationIdsAndId(['org-1'], divergent.id)).resolves.toBeNull();
+  });
+
+  it('returns null for a key billed to an org not in the set', async () => {
+    const { userApiKeyRepository, org2 } = await seed('c');
+    await expect(userApiKeyRepository.findByOrganizationIdsAndId(['org-1'], org2.id)).resolves.toBeNull();
+  });
+
+  it('short-circuits to null for an empty org set', async () => {
+    const { userApiKeyRepository, org1 } = await seed('d');
+    await expect(userApiKeyRepository.findByOrganizationIdsAndId([], org1.id)).resolves.toBeNull();
+  });
+
+  it('returns a hydrated doc (toJSON strips keyHash), matching findByUserIdAndId shape', async () => {
+    const { userApiKeyRepository, org1 } = await seed('e');
+    const found = await userApiKeyRepository.findByOrganizationIdsAndId(['org-1', 'org-2'], org1.id);
+    const json = found!.toJSON() as Record<string, unknown>;
+    expect(json.keyHash).toBeUndefined();
+    expect(json.organizationId).toBe('org-1');
   });
 });

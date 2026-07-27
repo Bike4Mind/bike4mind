@@ -75,7 +75,6 @@
 /infra/                                     @bike4mind/core-team
 /sst.config.ts                              @bike4mind/core-team
 /.github/                                   @bike4mind/core-team
-/premium-overlay.lock.json                  @bike4mind/core-team
 /pnpm-workspace.yaml                        @bike4mind/core-team
 /turbo.json                                 @bike4mind/core-team
 

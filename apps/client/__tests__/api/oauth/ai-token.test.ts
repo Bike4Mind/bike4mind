@@ -24,6 +24,9 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: (...args: any[]) => mockTryIncrement(...args),
   },
+  // Threaded into the revoke adapter; the exchange revokes the caller's own keys
+  // (minter path), so findIdsAdministeredBy is never consulted here.
+  organizationRepository: { findIdsAdministeredBy: vi.fn().mockResolvedValue([]) },
 }));
 
 const mockVerifyClientSecret = vi.fn();

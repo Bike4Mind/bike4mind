@@ -39,21 +39,25 @@ export interface IAgentOpsSettingsRepository {
 export enum AgentOpsLlmModel {
   // Modern models
   CLAUDE_FABLE_5 = 'claude-fable-5',
+  CLAUDE_OPUS_5 = 'claude-opus-5',
   CLAUDE_OPUS_4_8 = 'claude-opus-4-8',
   CLAUDE_OPUS_4_7 = 'claude-opus-4-7',
   CLAUDE_OPUS_4_6 = 'claude-opus-4-6',
   CLAUDE_SONNET_5 = 'claude-sonnet-5',
   CLAUDE_SONNET_4_6 = 'claude-sonnet-4-6',
   CLAUDE_OPUS_4 = 'claude-opus-4-20250514',
-  CLAUDE_SONNET_4 = 'claude-sonnet-4-20250514',
   CLAUDE_SONNET_4_5 = 'claude-sonnet-4-5-20250929',
   CLAUDE_HAIKU_4_5 = 'claude-haiku-4-5-20251001',
   O3 = 'o3-2025-04-16',
   GPT_4_1 = 'gpt-4.1-2025-04-14',
-  GROK_3 = 'grok-3',
+  GROK_4_5 = 'grok-4.5',
   GPT_4O = 'gpt-4o',
   GPT_4O_MINI = 'gpt-4o-mini',
-  // Deprecated - kept for Mongoose validation of existing DB documents
+  // Deprecated - kept for Mongoose validation of existing DB documents. Entries here must
+  // never be removed: an existing settings doc pinned to one would fail validation on read.
+  // resolveDeprecatedModelId upgrades them at call time instead.
+  GROK_3 = 'grok-3',
+  CLAUDE_SONNET_4 = 'claude-sonnet-4-20250514',
   GPT_4_TURBO = 'gpt-4-turbo',
   CLAUDE_3_7_SONNET = 'claude-3-7-sonnet-20250219',
   CLAUDE_3_5_SONNET = 'claude-3-5-sonnet-20241022',

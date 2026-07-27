@@ -10,6 +10,9 @@ export interface VoiceSynthesisOptions {
   // ElevenLabs voice_settings; other providers ignore these.
   stability?: number;
   similarityBoost?: number;
+  // ElevenLabs language_code (ISO 639-1). Pins the output language on models
+  // that support it; other providers ignore it.
+  language?: string;
 }
 
 export interface VoiceSynthesisResult {
