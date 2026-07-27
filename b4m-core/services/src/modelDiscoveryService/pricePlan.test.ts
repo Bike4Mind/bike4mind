@@ -422,6 +422,11 @@ describe('planPriceWrites idempotence and carry-forward', () => {
 
     expect(result.rows).toEqual([]);
     expect(result.flags[0]).toMatchObject({ kind: 'source-disagreement', sources: ['models.dev', 'litellm'] });
+    // The text rates are identical, so a detail that only printed input and
+    // output would show two equal prices "disagreeing" - the flag is only
+    // explainable if the cache rate that actually differs is on the line.
+    expect(result.flags[0].detail).toContain('cache_read 0.3');
+    expect(result.flags[0].detail).toContain('cache_read 0.5');
   });
 
   it('does not read a cache rate only one source publishes as a disagreement', () => {

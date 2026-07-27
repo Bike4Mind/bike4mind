@@ -485,8 +485,18 @@ const perMTokOf = (price: DiscoveredPrice): { inputPerMTok: number; outputPerMTo
 
 const readable = (rate: number): number => Number(rate.toPrecision(10));
 
-const describe = (price: DiscoveredPrice): string =>
-  `in ${readable(price.inputPerMTok)}/out ${readable(price.outputPerMTok)} $/MTok`;
+/**
+ * Every rate the observation carries, cache rates included: a disagreement can
+ * live entirely in cache_read, and a detail line that only prints input and
+ * output would then show two identical prices "disagreeing" - the opposite of
+ * the explainable-line-by-line contract the flags exist to meet.
+ */
+const describe = (price: DiscoveredPrice): string => {
+  const parts = [`in ${readable(price.inputPerMTok)}`, `out ${readable(price.outputPerMTok)}`];
+  if (price.cacheReadPerMTok !== undefined) parts.push(`cache_read ${readable(price.cacheReadPerMTok)}`);
+  if (price.cacheWritePerMTok !== undefined) parts.push(`cache_write ${readable(price.cacheWritePerMTok)}`);
+  return `${parts.join('/')} $/MTok`;
+};
 
 /** A move off a zero rate has no percentage; every other fraction is one. */
 const pct = (fraction: number): string => (Number.isFinite(fraction) ? `${Math.round(fraction * 100)}%` : 'unbounded');

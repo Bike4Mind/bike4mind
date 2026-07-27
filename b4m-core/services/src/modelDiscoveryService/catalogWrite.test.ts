@@ -156,6 +156,74 @@ describe('planCatalogWrites', () => {
     expect([...result.sightedModelIds]).toEqual([]);
   });
 
+  it('keeps the dates a status-only lifecycle patch never mentioned', () => {
+    const base = asBase(
+      [],
+      [
+        seedRow(
+          {
+            id: 'gpt-6',
+            vendor: 'openai',
+            backend: 'openai',
+            type: 'text',
+            name: 'GPT-6',
+            contextWindow: 400_000,
+            lifecycle: { status: 'deprecated', deprecationDate: '2026-10-23' },
+          },
+          ['identity', 'limits', 'lifecycle']
+        ),
+      ]
+    );
+    const result = plan({
+      base,
+      contributions: [
+        {
+          name: 'models.dev',
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'typed' }],
+        },
+      ],
+    });
+
+    // Same status, date carried forward: nothing changed, so nothing appends.
+    // Wholesale object replacement would erase the date instead - and a past
+    // date is what hides the model, so erasing it un-hides a sunset model.
+    expect(result.rows).toEqual([]);
+  });
+
+  it('appends a status transition without erasing the dates already in force', () => {
+    const base = asBase(
+      [],
+      [
+        seedRow(
+          {
+            id: 'gpt-6',
+            vendor: 'openai',
+            backend: 'openai',
+            type: 'text',
+            name: 'GPT-6',
+            contextWindow: 400_000,
+            lifecycle: { status: 'active', deprecationDate: '2026-10-23' },
+          },
+          ['identity', 'limits', 'lifecycle']
+        ),
+      ]
+    );
+    const result = plan({
+      base,
+      contributions: [
+        {
+          name: 'models.dev',
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'typed' }],
+        },
+      ],
+    });
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].patch.lifecycle).toMatchObject({ status: 'deprecated', deprecationDate: '2026-10-23' });
+  });
+
   it('lets an aggregator enrich a model a provider already sighted', () => {
     const result = plan({
       resolveDispatch: dispatchable,

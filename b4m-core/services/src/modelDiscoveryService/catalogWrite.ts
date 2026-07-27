@@ -212,6 +212,16 @@ function planOne(
   const draft: Record<string, unknown> = { ...base };
   for (const [key, value] of candidate.fields) draft[key] = value;
 
+  // A source's lifecycle is a sparse observation, not the whole story: absence
+  // of a date means "did not say", never "remove". Replacing the object
+  // wholesale would let a status-only feed (models.dev) erase a deprecation
+  // date the catalog already holds - and once past, that date is what hides
+  // the model, so erasing it un-hides a sunset model in every picker.
+  const lifecyclePatch = candidate.fields.get('lifecycle');
+  if (isPlainObject(lifecyclePatch) && isPlainObject(base.lifecycle)) {
+    draft.lifecycle = { ...base.lifecycle, ...lifecyclePatch };
+  }
+
   const ownedGroups = new Set<FieldGroup>();
   for (const key of candidate.fields.keys()) {
     const group = FIELD_GROUP_OF[key as keyof ModelRecord];
@@ -296,6 +306,9 @@ function planOne(
 
   return { entry, row };
 }
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** lifecycle.status off an unvalidated base record, or undefined when absent. */
 function statusOf(base: Record<string, unknown>): string | undefined {
