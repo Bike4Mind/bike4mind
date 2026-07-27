@@ -47,6 +47,14 @@ export interface IDataLake {
   slug: string;
   /** Optional description of the data lake's purpose and contents */
   description?: string;
+  /**
+   * Optional per-lake system prompt, so a lake can carry its own answering instructions.
+   * Not yet consumed: a later PR (#843) injects it as a labeled system message whenever this
+   * lake is active in a chat turn, refining behavior WITHIN the org prompt (which stays
+   * authoritative on conflict). Editable only by the lake creator or an admin (canManageLake);
+   * uncapped, matching the other system prompts in the codebase. Absent/empty = no per-lake prompt.
+   */
+  systemPrompt?: string;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */

@@ -35,6 +35,9 @@ const DataLakeSchema = new mongoose.Schema(
     // with each other on slug - this is the desired behavior.
     slug: { type: String, required: true },
     description: { type: String },
+    // Per-lake system prompt (see IDataLake.systemPrompt). Not yet consumed; a later PR (#843)
+    // injects it at answer time. Stored uncapped, matching the other system-prompt fields.
+    systemPrompt: { type: String },
     fileTagPrefix: { type: String, required: true },
     datalakeTag: { type: String, required: true },
     requiredUserTag: { type: String },
