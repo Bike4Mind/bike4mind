@@ -33,3 +33,9 @@ jobs:
             echo "Regenerate the lockfile under pnpm >=10.34.1 so a sha512 integrity hash is written."
             exit 1
           fi
+
+      # A pnpm install with a premium overlay hydrated writes the overlay's
+      # importer blocks into the tracked lockfile; committing that publishes
+      # private overlay structure to this public repo.
+      - name: Check for premium overlay paths in pnpm-lock.yaml
+        run: bash scripts/check-no-overlay-lockfile.sh
