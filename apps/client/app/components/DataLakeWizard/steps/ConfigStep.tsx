@@ -59,8 +59,10 @@ export default function ConfigStep() {
 
   // Client mirror of the server's slug.min(2) rule so a name that slugifies to
   // empty/too-short is caught here instead of failing at the final upload step.
-  // Append mode reuses the target lake's (already valid) slug, so only gate creates.
-  const slug = slugifyDataLakeName(config.name);
+  // Append mode reuses the target lake's real slug (which may be disambiguated,
+  // e.g. "niche-2"), so show that rather than what the locked name slugifies to,
+  // and only gate creates.
+  const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
   const slugTooShort = !targetLake && config.name.trim().length > 0 && slug.length < MIN_DATA_LAKE_SLUG_LENGTH;
 
   const autoTriggered = useRef(false);

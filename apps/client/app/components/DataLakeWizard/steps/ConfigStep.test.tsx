@@ -182,10 +182,12 @@ describe('ConfigStep - slug validation hint', () => {
     expect(screen.queryByTestId(SLUG_ERROR)).toBeNull();
   });
 
-  it('stays silent in append mode, where the slug comes from the target lake', () => {
-    setName('!!');
+  it('shows the target lake real slug in append mode, not what the name slugifies to', () => {
+    // The lake's stored slug can be disambiguated (e.g. "niche-2") and differ from
+    // slugify(name); the preview must show the real appended slug, and never flag it.
+    setName('Niche');
     useDataLakeWizardStore.setState({
-      targetLake: { id: 'lake-1', name: '!!', slug: 'niche', fileTagPrefix: 'niche:' },
+      targetLake: { id: 'lake-1', name: 'Niche', slug: 'niche-2', fileTagPrefix: 'niche:' },
     });
 
     render(
@@ -194,6 +196,7 @@ describe('ConfigStep - slug validation hint', () => {
       </TestWrapper>
     );
 
+    expect(screen.getByText('niche-2')).toBeInTheDocument();
     expect(screen.queryByTestId(SLUG_ERROR)).toBeNull();
   });
 });
