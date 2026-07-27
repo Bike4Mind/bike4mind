@@ -1,5 +1,11 @@
-import type { ModelRecord } from '@bike4mind/common';
-import type { DiscoveredModel, DiscoveredPrice, DiscoveryFetchContext, DiscoverySource, SourceResult } from '../types';
+import type {
+  DiscoveredModel,
+  DiscoveredPatch,
+  DiscoveredPrice,
+  DiscoveryFetchContext,
+  DiscoverySource,
+  SourceResult,
+} from '../types';
 import { joinTargets, logCoverage, type AggregatorSourceOptions, type JoinTarget } from './aggregator';
 import { boolean, compact, contentHashOf, count, fetchJson } from './http';
 
@@ -67,22 +73,24 @@ const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * litellm's `deprecation_date` is often in the FUTURE - it is the announced
- * date, not a state. A future date leaves the model active and records the date;
- * a past one is what makes it deprecated. Either way a provider's own lifecycle
- * feed outranks this, because providers are merged first.
+ * date, not a state. A future date therefore claims NO status: litellm does not
+ * know what the model is today, and 'active' here would walk a model the catalog
+ * holds as deprecated back into every picker. A past one is what makes it
+ * deprecated. Either way a provider's own lifecycle feed outranks this, because
+ * providers are merged first.
  */
-function lifecycleOf(entry: LiteLlmEntry, at: Date): ModelRecord['lifecycle'] | undefined {
+function lifecycleOf(entry: LiteLlmEntry, at: Date): DiscoveredPatch['lifecycle'] | undefined {
   const date = typeof entry.deprecation_date === 'string' ? entry.deprecation_date.trim() : '';
   if (!CALENDAR_DATE.test(date)) return undefined;
   const today = at.toISOString().slice(0, 10);
-  return { status: date <= today ? 'deprecated' : 'active', deprecationDate: date };
+  return date <= today ? { status: 'deprecated', deprecationDate: date } : { deprecationDate: date };
 }
 
-function patchOf(entry: LiteLlmEntry, at: Date): Partial<ModelRecord> {
+function patchOf(entry: LiteLlmEntry, at: Date): DiscoveredPatch {
   const reasoning = boolean(entry.supports_reasoning);
   const caching = boolean(entry.supports_prompt_caching);
 
-  return compact<Partial<ModelRecord>>({
+  return compact<DiscoveredPatch>({
     contextWindow: count(entry.max_input_tokens),
     maxOutputTokens: count(entry.max_output_tokens) ?? count(entry.max_tokens),
     reasoning: reasoning === undefined ? undefined : { supported: reasoning },

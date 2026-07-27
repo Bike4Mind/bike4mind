@@ -51,7 +51,6 @@
         "supported": true
       },
       "lifecycle": {
-        "status": "active",
         "deprecationDate": "2026-08-05"
       }
     },

@@ -113,16 +113,25 @@ export function planLifecycleSignals({ contributions, droppedDocsSources }: Life
       // A parser whose row count moved is not evidence of anything this run, not
       // even of a suggestion: the page it read is not the page it was written for.
       if (droppedDocsSources?.has(contribution.name)) return withoutLifecycle(record);
+      // Dates with no status are an announcement, and a parsed page announcing
+      // one is not a signal: only a stated status moves a model.
+      if (lifecycle.status === undefined) return withoutLifecycle(record);
+      const stated: NonNullable<ModelRecord['lifecycle']> = { ...lifecycle, status: lifecycle.status };
 
-      const corroborated = typedSunsets.has(record.modelId) && TERMINAL_STATUSES.has(lifecycle.status);
+      const corroborated = typedSunsets.has(record.modelId) && TERMINAL_STATUSES.has(stated.status);
       // First writer wins, same precedence the field overlay uses.
       if (!docs.has(record.modelId)) {
-        docs.set(record.modelId, { modelId: record.modelId, source: contribution.name, lifecycle, corroborated });
+        docs.set(record.modelId, {
+          modelId: record.modelId,
+          source: contribution.name,
+          lifecycle: stated,
+          corroborated,
+        });
       }
       // Corroborated docs stay because they carry the precise dates a typed feed
       // rarely publishes; only replacedBy is withheld for the remap gate.
       return corroborated
-        ? { ...record, patch: { ...record.patch, lifecycle: omit(lifecycle, 'replacedBy') } }
+        ? { ...record, patch: { ...record.patch, lifecycle: omit(stated, 'replacedBy') } }
         : withoutLifecycle(record);
     }),
   }));

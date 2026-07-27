@@ -1,4 +1,4 @@
-import type { IAdminSettings } from '@bike4mind/common';
+import { isPlaceholderValue, type IAdminSettings } from '@bike4mind/common';
 import { getEffectiveLLMApiKeys, type GetEffectiveLLMApiKeysAdapters } from '@bike4mind/auth/apiKeyService';
 import type { DiscoveryCredentials, DiscoveryEnv } from './types';
 
@@ -38,10 +38,16 @@ export interface DiscoveryCredentialAdapters extends GetEffectiveLLMApiKeysAdapt
   resolveLLMKeys?: LLMKeyResolver;
 }
 
-/** A value that is absent, blank, or the expiry sentinel is not a credential. */
+/**
+ * A value that is absent, blank, the expiry sentinel, or the unset-secret
+ * placeholder is not a credential. The placeholder matters most on the env tier:
+ * DISCOVERY_ENV_KEYS is live on hosted, so on a stage where `sst secret set`
+ * never ran the placeholder would beat the AdminSettings key and every request
+ * would go out as `Bearer not-configured`.
+ */
 const usable = (value: string | null | undefined): string | null => {
   const trimmed = value?.trim();
-  if (!trimmed || trimmed === EXPIRED_KEY_SENTINEL) return null;
+  if (!trimmed || trimmed === EXPIRED_KEY_SENTINEL || isPlaceholderValue(trimmed)) return null;
   return trimmed;
 };
 

@@ -47,6 +47,18 @@ describe('getDiscoveryCredentials', () => {
     expect(creds.openai).toBe('sk-openai');
   });
 
+  it('treats the unset-secret placeholder as unconfigured on either tier', async () => {
+    // DISCOVERY_ENV_KEYS is live on hosted, so on a stage where the secret was
+    // never set the placeholder would otherwise beat the AdminSettings key and
+    // every call would go out as `Bearer not-configured`.
+    const creds = await getDiscoveryCredentials(adapters(keys({ anthropic: 'not-configured' })), {
+      OPENAI_API_KEY: 'not-configured',
+    });
+
+    expect(creds.openai).toBe('sk-openai');
+    expect(creds.anthropic).toBeNull();
+  });
+
   it('resolves ElevenLabs from its own admin setting, not from the LLM key table', async () => {
     const withKey = await getDiscoveryCredentials(adapters(keys(), 'eleven-key'), {});
     const withoutKey = await getDiscoveryCredentials(adapters(keys()), {});

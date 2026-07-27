@@ -82,12 +82,23 @@ export interface DiscoveredPrice {
  */
 export type LifecycleEvidence = 'typed' | 'docs';
 
+/**
+ * Sparse ModelRecord fragment as a source reports it. Keys this build does not
+ * know are dropped by the merge. `lifecycle` is the one block a source may send
+ * WITHOUT a status: a date is an announcement (litellm publishes
+ * deprecation_date months ahead of the state change), and only the catalog knows
+ * what the model is today. planCatalogWrites merges such dates onto the status in
+ * force and refuses the block when there is no status to attach them to.
+ */
+export type DiscoveredPatch = Omit<Partial<ModelRecord>, 'lifecycle'> & {
+  lifecycle?: Partial<NonNullable<ModelRecord['lifecycle']>>;
+};
+
 /** One model as a source saw it: our id plus the fields that source has authority for. */
 export interface DiscoveredModel {
   /** Our canonical model id. Resolving an aggregator key to it is the source's job. */
   modelId: string;
-  /** Sparse ModelRecord fragment. Keys this build does not know are dropped by the merge. */
-  patch: Partial<ModelRecord>;
+  patch: DiscoveredPatch;
   pricing?: DiscoveredPrice;
   /**
    * Only meaningful when `patch.lifecycle` is set. Unmarked reads as 'docs': the

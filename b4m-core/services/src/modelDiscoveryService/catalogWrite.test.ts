@@ -224,6 +224,105 @@ describe('planCatalogWrites', () => {
     expect(result.rows[0].patch.lifecycle).toMatchObject({ status: 'deprecated', deprecationDate: '2026-10-23' });
   });
 
+  describe('a model the catalog holds as sunset', () => {
+    const deprecated = asBase(
+      [],
+      [
+        seedRow(
+          {
+            id: 'gpt-6',
+            vendor: 'openai',
+            backend: 'openai',
+            type: 'text',
+            name: 'GPT-6',
+            contextWindow: 400_000,
+            lifecycle: { status: 'deprecated', deprecationDate: '2026-06-01' },
+          },
+          ['identity', 'limits', 'lifecycle']
+        ),
+      ]
+    );
+
+    it('records an announced date without letting it reactivate the model', () => {
+      // litellm's shape for a future deprecation_date: a date and no status.
+      const result = plan({
+        base: deprecated,
+        contributions: [
+          {
+            name: 'litellm',
+            kind: 'aggregator',
+            records: [{ modelId: 'gpt-6', patch: { lifecycle: { deprecationDate: '2026-11-30' } } }],
+          },
+          { name: 'openai', kind: 'provider', records: [gpt6()] },
+        ],
+      });
+
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'deprecated', deprecationDate: '2026-11-30' });
+    });
+
+    it('refuses a typed active claim from a provider and reports the disagreement', () => {
+      const result = plan({
+        base: deprecated,
+        contributions: [
+          {
+            name: 'openai',
+            kind: 'provider',
+            records: [{ ...gpt6({ lifecycle: { status: 'active' } }), lifecycleEvidence: 'typed' }],
+          },
+        ],
+      });
+
+      // Resurrection is operator work: nothing changes, and the refusal is
+      // counted rather than swallowed.
+      expect(result.rows).toEqual([]);
+      expect(result.dropped).toContainEqual({
+        source: 'openai',
+        modelId: 'gpt-6',
+        reason:
+          'lifecycle status "active" would resurrect a model the catalog holds as "deprecated"; kept "deprecated"',
+      });
+    });
+
+    it('still lets one sunset status move to another', () => {
+      const result = plan({
+        base: deprecated,
+        contributions: [
+          {
+            name: 'openai',
+            kind: 'provider',
+            records: [{ ...gpt6({ lifecycle: { status: 'retired' } }), lifecycleEvidence: 'typed' }],
+          },
+        ],
+      });
+
+      expect(result.rows[0].patch.lifecycle).toEqual({ status: 'retired', deprecationDate: '2026-06-01' });
+    });
+  });
+
+  it('drops a lifecycle date no status in force can carry', () => {
+    const result = plan({
+      contributions: [
+        { name: 'openai', kind: 'provider', records: [gpt6()] },
+        {
+          name: 'litellm',
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: { lifecycle: { deprecationDate: '2026-11-30' } } }],
+        },
+      ],
+    });
+
+    // The model is new, so there is no status for the date to hide it at. The
+    // row still enters the model, at the status the promotion decision gives it,
+    // and the date is counted as refused rather than written.
+    expect(result.rows[0].patch.lifecycle).toEqual({ status: 'discovered' });
+    expect(result.dropped).toContainEqual({
+      source: 'litellm',
+      modelId: 'gpt-6',
+      reason: 'lifecycle dates with no status behind them, in the patch or in force',
+    });
+  });
+
   describe('a sunset declared while the model is still discovered', () => {
     /** gpt-6 as a previous run left it: entered, not yet promoted. */
     const discovered = asBase(

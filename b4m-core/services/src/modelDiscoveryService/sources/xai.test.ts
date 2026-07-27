@@ -163,5 +163,24 @@ describe('xai source fetch', () => {
     }
   });
 
+  it('drops the authority claim when a best-effort listing fails', async () => {
+    const restore = stubFetch(url => (url === XAI_IMAGE_MODELS_URL ? { status: 503, body: {} } : route(url)));
+    try {
+      const result = await createXaiSource().fetch(makeContext());
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        // The text models still land; what is refused is the claim that this
+        // listing is exhaustive. grok-imagine-image-quality comes only from the
+        // image endpoint, so absence bookkeeping over a partial sweep would
+        // count it as missing and eventually deprecate it.
+        expect(result.records.length).toBeGreaterThan(0);
+        expect(result.authoritativeFor).toEqual([]);
+      }
+    } finally {
+      restore();
+    }
+  });
+
   expectDegradesOnFailure(() => createXaiSource());
 });

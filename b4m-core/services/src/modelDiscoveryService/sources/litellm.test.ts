@@ -94,10 +94,11 @@ describe('litellm normalization', () => {
     expect(byId(result.records).get('gpt-5')?.patch).not.toHaveProperty('temperatureMode');
   });
 
-  it('keeps a future deprecation_date without declaring the model deprecated', () => {
-    // claude-opus-4-1-20250805 is dated 2026-08-05, ten days after the run.
+  it('keeps a future deprecation_date and claims no status at all', () => {
+    // claude-opus-4-1-20250805 is dated 2026-08-05, ten days after the run. An
+    // announced date is not a state: 'active' here would walk a model the
+    // catalog holds as deprecated back into every picker.
     expect(byId(result.records).get('claude-opus-4-1-20250805')?.patch.lifecycle).toEqual({
-      status: 'active',
       deprecationDate: '2026-08-05',
     });
   });

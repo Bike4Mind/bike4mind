@@ -119,7 +119,7 @@ export function planCatalogWrites(input: CatalogWriteInput): CatalogWritePlan {
       continue;
     }
 
-    const planned = planOne(candidate, existing, input);
+    const planned = planOne(candidate, existing, input, dropped);
     if ('reason' in planned) {
       dropped.push({ source: candidate.sourceNames.join('+'), modelId: candidate.modelId, reason: planned.reason });
       continue;
@@ -213,24 +213,30 @@ type PlanOneResult = { entry: CatalogDiffEntry; row: IModelCatalogRowInput } | {
 function planOne(
   candidate: Candidate,
   existing: ResolvedCatalogRecord | undefined,
-  input: CatalogWriteInput
+  input: CatalogWriteInput,
+  dropped: DroppedSourceRecord[]
 ): PlanOneResult {
   const base = existing?.record ?? {};
   const draft: Record<string, unknown> = { ...base };
   for (const [key, value] of candidate.fields) draft[key] = value;
 
-  // A source's lifecycle is a sparse observation, not the whole story: absence
-  // of a date means "did not say", never "remove". Replacing the object
-  // wholesale would let a status-only feed (models.dev) erase a deprecation
-  // date the catalog already holds - and once past, that date is what hides
-  // the model, so erasing it un-hides a sunset model in every picker.
   const lifecyclePatch = candidate.fields.get('lifecycle');
-  if (isPlainObject(lifecyclePatch) && isPlainObject(base.lifecycle)) {
-    draft.lifecycle = { ...base.lifecycle, ...lifecyclePatch };
+  let claimsLifecycle = candidate.fields.has('lifecycle');
+  if (claimsLifecycle && isPlainObject(lifecyclePatch)) {
+    const merged = mergeLifecycle(base, lifecyclePatch, candidate, dropped);
+    if (merged) {
+      draft.lifecycle = merged;
+    } else {
+      delete draft.lifecycle;
+      claimsLifecycle = false;
+    }
   }
 
   const ownedGroups = new Set<FieldGroup>();
   for (const key of candidate.fields.keys()) {
+    // A refused lifecycle block is not a claim: an ownedGroups entry no field
+    // backs is overclaiming, which the row schema rejects at append time.
+    if (key === 'lifecycle' && !claimsLifecycle) continue;
     const group = FIELD_GROUP_OF[key as keyof ModelRecord];
     if (group) ownedGroups.add(group);
   }
@@ -319,6 +325,54 @@ function planOne(
   };
 
   return { entry, row };
+}
+
+/**
+ * The lifecycle block an appended row would carry: what a source reported laid
+ * over what the catalog holds, never the source's object wholesale. Absence of a
+ * date means "did not say", never "remove" - a status-only feed (models.dev)
+ * replacing the block would erase a deprecation date already in force, and once
+ * past, that date is what hides the model, so erasing it un-hides a sunset model
+ * in every picker.
+ *
+ * Undefined means the block is refused: dates with no status anywhere have
+ * nothing to hide the model at.
+ */
+function mergeLifecycle(
+  base: Record<string, unknown>,
+  patch: Record<string, unknown>,
+  candidate: Candidate,
+  dropped: DroppedSourceRecord[]
+): Record<string, unknown> | undefined {
+  const held = isPlainObject(base.lifecycle) ? base.lifecycle : {};
+  const merged: Record<string, unknown> = { ...held, ...patch };
+  const heldStatus = statusOf(base);
+  const claimed = typeof patch.status === 'string' ? patch.status : undefined;
+  const source = candidate.sourceOfField.get('lifecycle') ?? DISCOVERY_CONTRIBUTOR;
+
+  // Leaving a sunset status is operator work. A feed that never marked the model
+  // deprecated (or that publishes a future date as if it were a state) would
+  // otherwise resurrect it into every picker - and, against the absence
+  // protocol, do it again on every run. The dates still merge; only the status
+  // claim is refused, and the disagreement is reported rather than swallowed.
+  if (heldStatus && SUNSET_STATUSES.has(heldStatus) && claimed && !SUNSET_STATUSES.has(claimed)) {
+    merged.status = heldStatus;
+    dropped.push({
+      source,
+      modelId: candidate.modelId,
+      reason: `lifecycle status "${claimed}" would resurrect a model the catalog holds as "${heldStatus}"; kept "${heldStatus}"`,
+    });
+  }
+
+  if (typeof merged.status !== 'string') {
+    dropped.push({
+      source,
+      modelId: candidate.modelId,
+      reason: 'lifecycle dates with no status behind them, in the patch or in force',
+    });
+    return undefined;
+  }
+  return merged;
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>

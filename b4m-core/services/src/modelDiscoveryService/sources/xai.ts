@@ -217,17 +217,29 @@ export function createXaiSource(): DiscoverySource {
         if (!result.ok) ctx.logger.warn(`[model-discovery] xai ${name} unavailable: ${result.error}`);
       }
 
+      const listedImages = imageModels.ok && !imageModels.notModified;
+      const listedEmbeddings = embeddingModels.ok && !embeddingModels.notModified;
       const records = normalizeXai({
         languageModels: languageModels.body,
         models: models.body,
-        imageModels: imageModels.ok && !imageModels.notModified ? imageModels.body : undefined,
-        embeddingModels: embeddingModels.ok && !embeddingModels.notModified ? embeddingModels.body : undefined,
+        imageModels: listedImages ? imageModels.body : undefined,
+        embeddingModels: listedEmbeddings ? embeddingModels.body : undefined,
       });
       if (records.length === 0) {
         return { ok: false, error: 'language-models listed nothing', httpStatus: languageModels.status };
       }
 
-      return { ok: true, records, authoritativeFor: [ModelBackend.XAI], httpStatus: languageModels.status };
+      // Authority is a claim of EXHAUSTIVENESS, so it needs every listing that
+      // contributes ids. grok-imagine-image-quality comes from the image
+      // endpoint alone: claiming the backend after a 5xx there would count every
+      // xAI image and embedding model as absent and eventually deprecate them.
+      const exhaustive = listedImages && listedEmbeddings;
+      return {
+        ok: true,
+        records,
+        authoritativeFor: exhaustive ? [ModelBackend.XAI] : [],
+        httpStatus: languageModels.status,
+      };
     },
   };
 }
