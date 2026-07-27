@@ -19,16 +19,9 @@ import { useEffect, useRef } from 'react';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
+import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
-
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 60);
-}
 
 function normalizeName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -63,6 +56,12 @@ export default function ConfigStep() {
           lake =>
             (lake.organizationId || undefined) === scopeOrgId && normalizeName(lake.name) === normalizeName(config.name)
         );
+
+  // Client mirror of the server's slug.min(2) rule so a name that slugifies to
+  // empty/too-short is caught here instead of failing at the final upload step.
+  // Append mode reuses the target lake's (already valid) slug, so only gate creates.
+  const slug = slugifyDataLakeName(config.name);
+  const slugTooShort = !targetLake && config.name.trim().length > 0 && slug.length < MIN_DATA_LAKE_SLUG_LENGTH;
 
   const autoTriggered = useRef(false);
 
@@ -123,7 +122,7 @@ export default function ConfigStep() {
         )}
 
         {/* Name */}
-        <FormControl required>
+        <FormControl required error={slugTooShort}>
           <FormLabel>{DATA_LAKE} Name</FormLabel>
           <Input
             data-testid="config-name-input"
@@ -133,8 +132,14 @@ export default function ConfigStep() {
             disabled={!!targetLake}
           />
           <FormHelperText>
-            Slug: <code>{slugify(config.name) || '...'}</code>
+            Slug: <code>{slug || '...'}</code>
           </FormHelperText>
+          {slugTooShort && (
+            <FormHelperText data-testid="config-name-slug-error">
+              This name needs at least {MIN_DATA_LAKE_SLUG_LENGTH} letters or numbers - it currently makes an invalid
+              URL slug.
+            </FormHelperText>
+          )}
           {duplicateNameLake && (
             <FormHelperText data-testid="config-name-duplicate-warning" sx={{ color: 'warning.plainColor' }}>
               A data lake named &ldquo;{duplicateNameLake.name}&rdquo; already exists here. You can still continue -
