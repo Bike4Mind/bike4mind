@@ -5,6 +5,7 @@ import type {
   DiscoveryCredentials,
   DiscoveryFetchContext,
   DiscoverySource,
+  DiscoverySourceOk,
   SourceResult,
 } from '../types';
 import {
@@ -155,6 +156,9 @@ export function mergeAnthropicFacts({ models, lifecycle, pricing, at }: Anthropi
             }),
           }
         : record.patch,
+      // Parsed out of a rendered markdown table, so it may raise the deprecation
+      // queue but may never hide a model on its own (sec 5.10 tier 2).
+      ...(row ? { lifecycleEvidence: 'docs' as const } : {}),
       ...(price ? { pricing: toPrice(price) } : {}),
     };
   });
@@ -206,12 +210,17 @@ export function createAnthropicSource(): DiscoverySource {
         readDoc(ANTHROPIC_PRICING_URL, parseAnthropicPricing, ctx),
       ]);
 
-      return {
+      // Only the parsers that actually ran: a page that failed to fetch has no
+      // count, and comparing against a missing one would read as a 100% move.
+      const parserRows = compact({ deprecations: lifecycle?.length, pricing: pricing?.length });
+
+      return compact<DiscoverySourceOk>({
         ok: true,
         records: mergeAnthropicFacts({ models, lifecycle, pricing, at: ctx.runStartedAt }),
         authoritativeFor: [ModelBackend.Anthropic],
         httpStatus: status,
-      };
+        parserRows: Object.keys(parserRows).length > 0 ? parserRows : undefined,
+      });
     },
   };
 }

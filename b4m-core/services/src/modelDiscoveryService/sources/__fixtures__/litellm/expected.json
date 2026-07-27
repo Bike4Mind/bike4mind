@@ -36,6 +36,7 @@
   },
   {
     "modelId": "claude-opus-4-1-20250805",
+    "lifecycleEvidence": "typed",
     "patch": {
       "contextWindow": 200000,
       "maxOutputTokens": 32000,
@@ -90,6 +91,7 @@
   },
   {
     "modelId": "gemini-3-pro-preview",
+    "lifecycleEvidence": "typed",
     "patch": {
       "contextWindow": 1048576,
       "maxOutputTokens": 65535,

@@ -321,6 +321,7 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryAutoEnable',
   'modelDiscoveryAllowEgress',
   'modelDiscoveryPriceBandPct',
+  'modelDiscoveryAutoRemap',
 ]);
 export type SettingKey = z.infer<typeof SettingKeySchema>;
 
@@ -1528,6 +1529,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'modelDiscoveryAutoEnable', order: 3 },
       { key: 'modelDiscoveryAllowEgress', order: 4 },
       { key: 'modelDiscoveryPriceBandPct', order: 5 },
+      { key: 'modelDiscoveryAutoRemap', order: 6 },
     ],
   },
   RATE_LIMITING: {
@@ -3530,6 +3532,17 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
     order: 5,
+  }),
+  modelDiscoveryAutoRemap: makeStringSetting({
+    key: 'modelDiscoveryAutoRemap',
+    name: 'Model Discovery Auto-Remap',
+    defaultValue: 'suggest',
+    description:
+      'What discovery does with the successor it computes for a model it deprecates. "suggest": record it for an admin to confirm. "apply": write it into the catalog, but only when the replacement exists, is active, is on the same backend, and does not cost more.',
+    options: ['suggest', 'apply'],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 6,
   }),
   // Add more settings as needed
 } satisfies {

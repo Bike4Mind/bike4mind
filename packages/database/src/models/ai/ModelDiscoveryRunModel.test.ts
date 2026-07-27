@@ -8,7 +8,9 @@ const run = (overrides: Record<string, unknown> = {}) => ({
   trigger: 'cron',
   host: 'hosted',
   status: 'ok',
-  sources: [{ name: 'anthropic', ok: true, durationMs: 120, httpStatus: 200 }],
+  sources: [
+    { name: 'anthropic', ok: true, durationMs: 120, httpStatus: 200, parserRows: { deprecations: 12, pricing: 30 } },
+  ],
   changes: { added: ['claude-y'] },
   ...overrides,
 });
@@ -26,6 +28,9 @@ describe('ModelDiscoveryRunRepository', () => {
     const latest = await modelDiscoveryRunRepository.latestRun();
     expect(latest).toMatchObject({ trigger: 'cron', host: 'hosted', status: 'ok', unmatchedIds: ['grok-z'] });
     expect(latest?.sources?.[0]).toMatchObject({ name: 'anthropic', ok: true, durationMs: 120 });
+    // The parser-shift guard compares against this on the next run, so a report
+    // that loses it silently disables the guard.
+    expect(latest?.sources?.[0].parserRows).toEqual({ deprecations: 12, pricing: 30 });
     expect(latest?.changes?.added).toEqual(['claude-y']);
   });
 

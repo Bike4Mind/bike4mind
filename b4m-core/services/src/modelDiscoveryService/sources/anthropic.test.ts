@@ -226,6 +226,28 @@ describe('anthropic source fetch', () => {
     }
   });
 
+  it('reports a row count per docs parser, and only for the ones that ran', async () => {
+    const restore = stubFetch(url => route(url));
+    try {
+      const result = await createAnthropicSource().fetch(makeContext({ runStartedAt: RUN_AT }));
+      expect(result.ok && result.parserRows).toEqual({ deprecations: expect.any(Number), pricing: expect.any(Number) });
+    } finally {
+      restore();
+    }
+
+    const withoutDeprecations = stubFetch(url =>
+      url === ANTHROPIC_DEPRECATIONS_URL ? { status: 500, body: {} } : route(url)
+    );
+    try {
+      const result = await createAnthropicSource().fetch(makeContext({ runStartedAt: RUN_AT }));
+      // A page that never parsed has no count: comparing against a missing one
+      // would read as a 100% move on the next run.
+      expect(result.ok && result.parserRows && 'deprecations' in result.parserRows).toBe(false);
+    } finally {
+      withoutDeprecations();
+    }
+  });
+
   it('bounds pagination when has_more never goes false', async () => {
     let pages = 0;
     const restore = stubFetch(url => {

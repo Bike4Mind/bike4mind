@@ -122,29 +122,35 @@ export function normalizeBedrockModels({ summaries, availability }: BedrockFacts
     const unauthorized =
       entitlement !== undefined &&
       (entitlement.authorizationStatus === 'NOT_AUTHORIZED' || entitlement.entitlementAvailability === 'NOT_AVAILABLE');
+    const lifecycle = lifecycleOf(summary);
 
-    records.push({
-      modelId: id,
-      patch: compact<Partial<ModelRecord>>({
-        id,
-        vendor: text(summary?.providerName)?.toLowerCase() ?? id.split('.')[0],
-        backend: ModelBackend.Bedrock,
-        type: inferType(summary),
-        name: text(summary?.modelName),
-        // Bedrock publishes no context window; leaving it out lets the catalog
-        // or an aggregator supply it instead of overwriting it with a zero.
-        canStream:
-          typeof summary?.responseStreamingSupported === 'boolean' ? summary.responseStreamingSupported : undefined,
-        supportsVision: inputs.length > 0 ? inputs.includes('IMAGE') : undefined,
-        lifecycle: lifecycleOf(summary),
-        // Only ever set true. An unentitled model is disabled with a reason; a
-        // model we never asked about, or one whose check failed, is left alone,
-        // because clearing this flag on no evidence would re-enable a model the
-        // account cannot call.
-        autoDisabled: unauthorized ? true : undefined,
-        autoDisabledReason: unauthorized ? 'not entitled in this AWS account' : undefined,
-      }),
-    });
+    records.push(
+      compact<DiscoveredModel>({
+        modelId: id,
+        // A typed feed: modelLifecycle is published as data, which is what lets
+        // it transition a model on the first run (sec 5.10 tier 1).
+        lifecycleEvidence: lifecycle ? 'typed' : undefined,
+        patch: compact<Partial<ModelRecord>>({
+          id,
+          vendor: text(summary?.providerName)?.toLowerCase() ?? id.split('.')[0],
+          backend: ModelBackend.Bedrock,
+          type: inferType(summary),
+          name: text(summary?.modelName),
+          // Bedrock publishes no context window; leaving it out lets the catalog
+          // or an aggregator supply it instead of overwriting it with a zero.
+          canStream:
+            typeof summary?.responseStreamingSupported === 'boolean' ? summary.responseStreamingSupported : undefined,
+          supportsVision: inputs.length > 0 ? inputs.includes('IMAGE') : undefined,
+          lifecycle,
+          // Only ever set true. An unentitled model is disabled with a reason; a
+          // model we never asked about, or one whose check failed, is left alone,
+          // because clearing this flag on no evidence would re-enable a model the
+          // account cannot call.
+          autoDisabled: unauthorized ? true : undefined,
+          autoDisabledReason: unauthorized ? 'not entitled in this AWS account' : undefined,
+        }),
+      })
+    );
   }
 
   return records.sort((a, b) => a.modelId.localeCompare(b.modelId));

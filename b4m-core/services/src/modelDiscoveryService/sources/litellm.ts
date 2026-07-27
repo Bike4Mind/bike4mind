@@ -117,6 +117,7 @@ export function normalizeLiteLlm(
 
   const records: DiscoveredModel[] = [];
   for (const [modelId, entry] of matched) {
+    const patch = patchOf(entry, at);
     // Emitted even when the patch comes out empty, which happens for the
     // per-image, per-character and per-second entries (FLUX, ElevenLabs,
     // Whisper): DiscoveredPrice models $/MTok only, so there is nothing to
@@ -124,7 +125,15 @@ export function normalizeLiteLlm(
     // computed from emitted records - dropping it would report a MATCHED id as
     // unmatched and alarm on a healthy run. The write path counts it as a
     // dropped record, which is the accurate statement: joined, nothing to say.
-    records.push(compact({ modelId, patch: patchOf(entry, at), pricing: priceOf(entry) }));
+    records.push(
+      compact<DiscoveredModel>({
+        modelId,
+        patch,
+        pricing: priceOf(entry),
+        // deprecation_date is a published field, not a scraped one.
+        lifecycleEvidence: patch.lifecycle ? 'typed' : undefined,
+      })
+    );
   }
 
   return { records: records.sort((a, b) => a.modelId.localeCompare(b.modelId)), unmatched: unmatched.sort() };

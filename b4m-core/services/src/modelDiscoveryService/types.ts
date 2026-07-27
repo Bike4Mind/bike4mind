@@ -75,6 +75,13 @@ export interface DiscoveredPrice {
   cacheWritePerMTok?: number;
 }
 
+/**
+ * How strong the evidence behind a `lifecycle` claim is (sec 5.10). 'typed' is a
+ * field a feed publishes as data; 'docs' is a value scraped out of a rendered
+ * page. Only 'typed' may hide a model on its own.
+ */
+export type LifecycleEvidence = 'typed' | 'docs';
+
 /** One model as a source saw it: our id plus the fields that source has authority for. */
 export interface DiscoveredModel {
   /** Our canonical model id. Resolving an aggregator key to it is the source's job. */
@@ -82,6 +89,13 @@ export interface DiscoveredModel {
   /** Sparse ModelRecord fragment. Keys this build does not know are dropped by the merge. */
   patch: Partial<ModelRecord>;
   pricing?: DiscoveredPrice;
+  /**
+   * Only meaningful when `patch.lifecycle` is set. Unmarked reads as 'docs': the
+   * write policy treats unmarked evidence as weak evidence, so a source that
+   * forgets to declare a typed feed loses a transition rather than hiding a
+   * model on a parse artifact.
+   */
+  lifecycleEvidence?: LifecycleEvidence;
 }
 
 /**
@@ -110,6 +124,13 @@ export interface DiscoverySourceOk {
   /** Recorded on the run report so "the aggregator changed under us" stays answerable. */
   etag?: string;
   contentHash?: string;
+  /**
+   * Rows each of this source's parsers produced, by parser name. Set only by
+   * sources that parse a rendered page: the runner compares the counts against
+   * the last successful run and drops that source's docs-derived signals when
+   * one moves, which is what catches a page restructure BEFORE it is actioned.
+   */
+  parserRows?: Record<string, number>;
 }
 
 export interface DiscoverySourceFailure {
@@ -172,6 +193,9 @@ export type DispatchResolver = (record: ModelRecord) => Pick<ModelRecord, 'adapt
 export type DiscoveryMode = 'report' | 'write';
 
 export type DiscoveryAutoEnablePolicy = 'priced' | 'manual' | 'all';
+
+/** modelDiscoveryAutoRemap: whether a computed successor is written or queued. */
+export type DiscoveryAutoRemapPolicy = 'suggest' | 'apply';
 
 /** Why a source contributed nothing this run, when it was not a fetch failure. */
 export type SourceSkipReason = 'not-configured' | 'egress-disabled' | 'recently-fetched' | 'global-deadline';
@@ -257,6 +281,39 @@ export interface PlannedPriceRow {
   note: string;
 }
 
+/** What moved a model's lifecycle: a feed that publishes it, or the K-miss protocol. */
+export type LifecycleSignalKind = 'typed' | 'absence';
+
+/** One model's lifecycle change, reported identically in both modes. */
+export interface LifecycleTransition {
+  modelId: string;
+  /** Absent when no row in force carried a lifecycle for this model. */
+  from?: string;
+  to: string;
+  signal: LifecycleSignalKind;
+  deprecationDate?: string;
+  retirementDate?: string;
+  /** Present only when auto-remap applied it; otherwise the successor is a suggestion. */
+  replacedBy?: string;
+  autoApplied: boolean;
+}
+
+/**
+ * A lifecycle change discovery is not allowed to apply, with everything an
+ * operator needs to settle it. Same contract as PriceFlag.detail: the reason is
+ * spelled out, never left to the reader to infer.
+ */
+export interface LifecycleSuggestion {
+  modelId: string;
+  status?: string;
+  deprecationDate?: string;
+  retirementDate?: string;
+  replacedBy?: string;
+  /** What raised it: a source name, or 'absence'. */
+  source: string;
+  detail: string;
+}
+
 /**
  * Run counters named 1:1 for the sec 10 CloudWatch metrics. The service never
  * calls CloudWatch - drivers publish these numbers.
@@ -271,6 +328,8 @@ export interface ModelDiscoveryMetrics {
   /** Counted in both modes: a flag is a work item whether or not writes are on. */
   PriceFlagged: number;
   CatalogRowsRejected: number;
+  /** Parsers whose row count moved past the tolerance; their docs signals were dropped. */
+  DocsParserRowShift: number;
   AggregatorJoinCoverage: Record<string, number>;
   SourceFailures: Record<string, number>;
   RunDuration: number;
@@ -304,13 +363,23 @@ export interface ModelDiscoveryRunResult {
     rows: PlannedPriceRow[];
     flags: PriceFlag[];
   };
+  /** The lifecycle plan, likewise: report mode declines to persist it, nothing more. */
+  lifecycle: {
+    transitions: LifecycleTransition[];
+    suggestions: LifecycleSuggestion[];
+    /** Models the absence protocol graduated this run, a subset of `transitions`. */
+    wouldDeprecate: string[];
+  };
   metrics: ModelDiscoveryMetrics;
 }
 
 export interface ModelDiscoveryAdapters {
   db: {
     catalog: Pick<IModelCatalogRepository, 'append' | 'rowsInForceWithRejects'>;
-    discoveryState: Pick<IModelDiscoveryStateRepository, 'recordSighting' | 'recordMiss'>;
+    discoveryState: Pick<
+      IModelDiscoveryStateRepository,
+      'recordSighting' | 'recordMiss' | 'findByModelIds' | 'recordSuggestion'
+    >;
     discoveryRuns: Pick<IModelDiscoveryRunRepository, 'create' | 'update' | 'find'>;
     /** claimDedup is the lease; deleteByKey is the only release path it has. */
     cache: Pick<ICacheRepository, 'claimDedup' | 'deleteByKey'>;

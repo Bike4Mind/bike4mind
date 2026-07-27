@@ -121,11 +121,20 @@ export function normalizeModelsDev(
 
   const records: DiscoveredModel[] = [];
   for (const [modelId, model] of matched) {
+    const patch = patchOf(model);
     // Emitted even when nothing usable came back: AggregatorJoinCoverage is
     // computed from the emitted records, so withholding a matched id would
     // report it as unmatched and alarm on a healthy run. The write path counts
     // an empty one as dropped, which is the accurate statement.
-    records.push(compact({ modelId, patch: patchOf(model), pricing: priceOf(model.cost) }));
+    records.push(
+      compact<DiscoveredModel>({
+        modelId,
+        patch,
+        pricing: priceOf(model.cost),
+        // `status` is a published field, not a scraped one.
+        lifecycleEvidence: patch.lifecycle ? 'typed' : undefined,
+      })
+    );
   }
 
   return { records: records.sort((a, b) => a.modelId.localeCompare(b.modelId)), unmatched: unmatched.sort() };

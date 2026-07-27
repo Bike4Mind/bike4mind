@@ -469,6 +469,34 @@ export interface IModelCatalogRepository extends IBaseRepository<IModelCatalogRo
 }
 
 /**
+ * A lifecycle change discovery believes in but is not allowed to apply: an
+ * uncorroborated docs signal (sec 5.10 tier 2, which may raise the queue but may
+ * never hide a model on its own) or a `replacedBy` that failed an auto-remap
+ * constraint. One live suggestion per model - the admin queue reads the
+ * unresolved ones and an operator's verdict is recorded in place.
+ */
+export const ModelLifecycleSuggestion = z.object({
+  /** Free string rather than the LifecycleWrite enum, for the same read-compat reason. */
+  status: z.string().optional(),
+  deprecationDate: z.string().optional(),
+  retirementDate: z.string().optional(),
+  replacedBy: z.string().optional(),
+  /** What raised it: a source name, or 'absence' for the K-miss protocol. */
+  source: z.string().min(1),
+  suggestedAt: z.date(),
+  resolvedAt: z.date().optional(),
+  resolution: z.enum(['accepted', 'dismissed']).optional(),
+});
+
+export type IModelLifecycleSuggestion = z.infer<typeof ModelLifecycleSuggestion>;
+
+/** What a run proposes, before the bookkeeping stamps the repository owns. */
+export type ModelLifecycleSuggestionInput = Omit<
+  IModelLifecycleSuggestion,
+  'suggestedAt' | 'resolvedAt' | 'resolution'
+>;
+
+/**
  * Mutable per-model discovery bookkeeping. Absence counters live here and not
  * in the catalog: a model missing from a provider list for months must not
  * append a row per run forever. Only the actual transition to deprecated
@@ -491,6 +519,8 @@ export const ModelDiscoveryState = z.object({
       litellm: z.string().optional(),
     })
     .optional(),
+  /** Optional: a state row written before Phase 4 has none, and must keep parsing. */
+  suggestion: ModelLifecycleSuggestion.optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -502,11 +532,35 @@ export type IModelDiscoveryStateDocument = IModelDiscoveryState & IMongoDocument
 export interface IModelDiscoveryStateRepository extends IBaseRepository<IModelDiscoveryStateDocument> {
   findByModelId(modelId: string): Promise<IModelDiscoveryState | null>;
 
+  /** One query for a whole run's worth of models; ids with no row are simply absent. */
+  findByModelIds(modelIds: readonly string[]): Promise<IModelDiscoveryState[]>;
+
   /** A sighting ends the streak: missCount back to 0 and firstMissAt cleared. */
   recordSighting(modelId: string, at?: Date): Promise<IModelDiscoveryState>;
 
   /** One more consecutive miss. firstMissAt is stamped once and then left alone. */
   recordMiss(modelId: string, at?: Date): Promise<IModelDiscoveryState>;
+
+  /**
+   * Store this run's suggestion. A rerun replaces an UNRESOLVED suggestion; one
+   * an operator already accepted or dismissed is replaced only when the content
+   * differs from what they settled, so a verdict is never silently undone.
+   */
+  recordSuggestion(
+    modelId: string,
+    suggestion: ModelLifecycleSuggestionInput,
+    at?: Date
+  ): Promise<IModelDiscoveryState>;
+
+  /** The deprecation queue: every model carrying a suggestion nobody has settled. */
+  pendingSuggestions(): Promise<IModelDiscoveryState[]>;
+
+  /** Null when the model has no suggestion to settle. */
+  resolveSuggestion(
+    modelId: string,
+    resolution: NonNullable<IModelLifecycleSuggestion['resolution']>,
+    at?: Date
+  ): Promise<IModelDiscoveryState | null>;
 }
 
 export const DISCOVERY_RUN_TRIGGERS = ['cron', 'startup', 'manual'] as const;
@@ -527,6 +581,12 @@ export const DiscoverySourceReport = z.object({
   etag: z.string().optional(),
   contentHash: z.string().optional(),
   error: z.string().optional(),
+  /**
+   * Rows each of this source's parsers produced, by parser name. Recorded so the
+   * next run can compare: a docs page that restructures shows up as a row-count
+   * move before its bad data is actioned (sec 5.10).
+   */
+  parserRows: z.record(z.string(), z.number()).optional(),
 });
 
 export const DiscoveryJoinCoverage = z.object({

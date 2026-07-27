@@ -38,6 +38,10 @@ const ModelDiscoveryRunSchema = new Schema<IModelDiscoveryRunDocument>(
             etag: { type: String, required: false },
             contentHash: { type: String, required: false },
             error: { type: String, required: false },
+            // Mixed rather than a Map of Number: the run-over-run parser-shift
+            // guard reads this back through a hydrated find(), where a Map would
+            // arrive as a Map and a plain record arrives as itself.
+            parserRows: { type: Schema.Types.Mixed, required: false },
           },
           { _id: false }
         ),

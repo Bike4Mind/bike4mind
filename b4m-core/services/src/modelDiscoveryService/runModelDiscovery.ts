@@ -1,24 +1,31 @@
-import type {
-  IDiscoveryJoinCoverage,
-  IDiscoverySourceReport,
-  IModelDiscoveryRun,
-  IModelDiscoveryRunDocument,
-  IModelCatalogRowInput,
-  IModelPriceInput,
+import {
+  isFieldGroup,
+  type FieldGroup,
+  type IDiscoveryJoinCoverage,
+  type IDiscoverySourceReport,
+  type IModelDiscoveryRun,
+  type IModelDiscoveryRunDocument,
+  type IModelCatalogRow,
+  type IModelCatalogRowInput,
+  type IModelPriceInput,
 } from '@bike4mind/common';
 import { resolveCatalogRecords, type ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 import pLimit from 'p-limit';
 import { applyAbsence, planAbsence } from './absence';
 import { planCatalogWrites, summarizeDiff } from './catalogWrite';
-import { describePriceRows, planPriceWrites } from './pricePlan';
+import { detectParserRowShifts, planLifecycle, planLifecycleSignals, type ParserRowShift } from './lifecyclePlan';
+import { describePriceRows, perTokenRatesInForce, planPriceWrites } from './pricePlan';
 import type {
   DiscoveryAutoEnablePolicy,
+  DiscoveryAutoRemapPolicy,
   DiscoveryCredentials,
   DiscoveryFetchContext,
   DiscoveryLogger,
   DiscoveryMode,
   DiscoverySource,
   DiscoverySourceOk,
+  LifecycleSuggestion,
+  LifecycleTransition,
   ModelDiscoveryAdapters,
   ModelDiscoveryMetrics,
   ModelDiscoveryRunResult,
@@ -64,6 +71,9 @@ const LOG_PREFIX = '[model-discovery]';
 
 /** Its own prefix (sec 10) so a flagged price move alarms without a log filter. */
 const PRICE_BAND_PREFIX = '[PRICE_BAND]';
+
+/** The repo's existing deprecation prefix, shared with the runtime sunset warnings. */
+const SUNSET_PREFIX = '[model-sunset]';
 
 const noopLogger: DiscoveryLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
@@ -125,6 +135,7 @@ interface RunContext {
   enabled: boolean;
   mode: DiscoveryMode;
   autoEnable: DiscoveryAutoEnablePolicy;
+  autoRemap: DiscoveryAutoRemapPolicy;
   allowEgress: boolean;
   bandPct: number;
   startedAt: Date;
@@ -199,9 +210,19 @@ async function executeRun(
     records: (results.get(source.name)?.result as DiscoverySourceOk).records ?? [],
   }));
 
+  // A parser whose row count moved is reading a restructured page, so this run
+  // trusts nothing that source scraped - suggestions included (sec 5.10).
+  const parserShifts = detectParserRowShifts(parserRowsOf(succeeded, results), history.parserRows);
+  logParserShifts(parserShifts, logger);
+  const signals = planLifecycleSignals({
+    contributions,
+    droppedDocsSources: new Set(parserShifts.map(shift => shift.source)),
+  });
+
   const { rows: inForce, rejected } = await db.catalog.rowsInForceWithRejects(startedAt);
   const base = resolveCatalogRecords(inForce.filter(row => row.source !== 'operator'));
   const operatorOwnedModelIds = new Set(inForce.filter(row => row.source === 'operator').map(row => row.modelId));
+  const priorDiscoveryGroups = discoveryGroupsInForce(inForce);
 
   const priceRowsInForce = await db.prices.rowsInForce(startedAt);
   // A price the catalog already holds satisfies the promotion predicate, so a
@@ -213,7 +234,7 @@ async function executeRun(
   ]);
 
   const plan = planCatalogWrites({
-    contributions,
+    contributions: signals.contributions,
     resolveDispatch: adapters.resolveDispatch,
     base,
     operatorOwnedModelIds,
@@ -242,16 +263,38 @@ async function executeRun(
   }
   const absence = planAbsence({ coveredBackends, sightedModelIds: plan.sightedModelIds, base });
 
+  // Read BEFORE applyAbsence: planLifecycle adds this run's miss itself, so the
+  // counters it reads must not already include it (the ordering invariant).
+  const statesBeforeRun = new Map(
+    (await db.discoveryState.findByModelIds(absence.missed)).map(state => [state.modelId, state] as const)
+  );
+  const lifecycle = planLifecycle({
+    catalogPlan: plan,
+    base,
+    docs: signals.docs,
+    missed: absence.missed,
+    statesBeforeRun,
+    ratesInForce: perTokenRatesInForce(priceRowsInForce),
+    priorDiscoveryGroups,
+    autoRemap: ctx.autoRemap,
+    operatorOwnedModelIds,
+    runStartedAt: startedAt,
+    runId,
+  });
+  logLifecycle(lifecycle.transitions, lifecycle.suggestions, logger);
+
   let appended = 0;
   let pricesAppended = 0;
   if (ctx.mode === 'write') {
-    appended = await appendRows(plan.rows, adapters, logger);
+    appended = await appendRows(lifecycle.rows, adapters, logger);
     pricesAppended = await appendPriceRows(pricePlan.rows, adapters, logger);
     await applyAbsence(absence, db.discoveryState, startedAt);
+    await recordSuggestions(lifecycle.suggestions, adapters, startedAt, logger);
   }
 
   const status = runStatus(attempts.length, succeeded.length, deadlineHit, skippedSources.length > 0);
-  const summary = summarizeDiff(plan.diff);
+  const summary = summarizeDiff(lifecycle.diff);
+  const deprecated = lifecycle.transitions.map(transition => transition.modelId);
   const joinCoverage = computeJoinCoverage(contributions, base);
   const sourceReports = [...results.values()].map(entry => entry.report);
   const finishedAt = ctx.now();
@@ -266,6 +309,7 @@ async function executeRun(
     changes: {
       added: summary.added,
       promoted: summary.promoted,
+      deprecated,
       // The plan, not the writes, in both modes - same as `added`.
       repriced: pricePlan.rows.map(row => row.modelId),
       // Operator overlaps and price flags are one queue: both are "a human has
@@ -276,8 +320,9 @@ async function executeRun(
 
   logger.info(
     `${LOG_PREFIX} run ${runId} ${status} mode=${ctx.mode} sources=${succeeded.length}/${attempts.length} ` +
-      `changes=${plan.diff.length} appended=${appended} dropped=${plan.dropped.length} ` +
-      `prices=${pricePlan.rows.length} priced=${pricesAppended} flagged=${pricePlan.flags.length}`
+      `changes=${lifecycle.diff.length} appended=${appended} dropped=${plan.dropped.length} ` +
+      `prices=${pricePlan.rows.length} priced=${pricesAppended} flagged=${pricePlan.flags.length} ` +
+      `deprecated=${deprecated.length} suggested=${lifecycle.suggestions.length}`
   );
 
   return {
@@ -287,19 +332,24 @@ async function executeRun(
     autoEnable: ctx.autoEnable,
     sources: sourceReports,
     skippedSources,
-    diff: plan.diff,
-    droppedRecords: plan.dropped,
+    diff: lifecycle.diff,
+    droppedRecords: [...plan.dropped, ...lifecycle.dropped],
     absence,
     prices: { rows: describePriceRows(pricePlan.rows), flags: pricePlan.flags },
+    lifecycle: {
+      transitions: lifecycle.transitions,
+      suggestions: lifecycle.suggestions,
+      wouldDeprecate: lifecycle.wouldDeprecate,
+    },
     metrics: {
       ModelsDiscovered: summary.added.length,
       ModelsPromoted: summary.promoted.length,
       ModelsBlockedByDispatch: summary.blockedByDispatch.length,
-      // Lifecycle transitions are Phase 4; this only keeps the counter.
-      ModelsDeprecated: 0,
+      ModelsDeprecated: deprecated.length,
       PriceRowsAppended: pricesAppended,
       PriceFlagged: pricePlan.flags.length,
       CatalogRowsRejected: rejected,
+      DocsParserRowShift: parserShifts.length,
       AggregatorJoinCoverage: Object.fromEntries(
         joinCoverage.map(entry => [entry.aggregator, entry.total === 0 ? 1 : entry.matched / entry.total])
       ),
@@ -359,6 +409,92 @@ function logPriceFlags(flags: readonly PriceFlag[], logger: DiscoveryLogger): vo
   }
 }
 
+/**
+ * Persist the queue items. Best-effort per model: a suggestion is advisory, and
+ * losing one must not fail a run that already committed its catalog rows.
+ */
+async function recordSuggestions(
+  suggestions: readonly LifecycleSuggestion[],
+  adapters: ModelDiscoveryAdapters,
+  at: Date,
+  logger: DiscoveryLogger
+): Promise<void> {
+  for (const suggestion of suggestions) {
+    try {
+      await adapters.db.discoveryState.recordSuggestion(
+        suggestion.modelId,
+        {
+          status: suggestion.status,
+          deprecationDate: suggestion.deprecationDate,
+          retirementDate: suggestion.retirementDate,
+          replacedBy: suggestion.replacedBy,
+          source: suggestion.source,
+        },
+        at
+      );
+    } catch (error) {
+      logger.error(`${LOG_PREFIX} suggestion for ${suggestion.modelId} failed: ${describe(error)}`);
+    }
+  }
+}
+
+function logLifecycle(
+  transitions: readonly LifecycleTransition[],
+  suggestions: readonly LifecycleSuggestion[],
+  logger: DiscoveryLogger
+): void {
+  for (const transition of transitions) {
+    const dates = [
+      transition.deprecationDate && `deprecated ${transition.deprecationDate}`,
+      transition.retirementDate && `retired ${transition.retirementDate}`,
+      transition.replacedBy && `replacedBy ${transition.replacedBy}`,
+    ].filter(Boolean);
+    logger.warn(
+      `${SUNSET_PREFIX} ${transition.modelId} ${transition.from ?? 'unknown'} -> ${transition.to} ` +
+        `via ${transition.signal} signal${dates.length > 0 ? ` (${dates.join(', ')})` : ''}`
+    );
+  }
+  for (const suggestion of suggestions) {
+    logger.info(`${LOG_PREFIX} ${suggestion.modelId} suggestion from ${suggestion.source}: ${suggestion.detail}`);
+  }
+}
+
+function logParserShifts(shifts: readonly ParserRowShift[], logger: DiscoveryLogger): void {
+  for (const shift of shifts) {
+    logger.warn(
+      `${LOG_PREFIX} ${shift.source} parser "${shift.parser}" returned ${shift.current} rows against ` +
+        `${shift.previous} last run; dropping that source's docs-derived signals this run`
+    );
+  }
+}
+
+/**
+ * The groups the discovery row in force claims, per model. rowsInForce is
+ * newest-first and holds one non-operator row per (modelId, source), so the
+ * first discovery row seen for a model is the one an appended row supersedes.
+ */
+function discoveryGroupsInForce(rows: readonly IModelCatalogRow[]): Map<string, FieldGroup[]> {
+  const groups = new Map<string, FieldGroup[]>();
+  for (const row of rows) {
+    if (row.source !== 'discovery' || groups.has(row.modelId)) continue;
+    groups.set(row.modelId, row.ownedGroups.filter(isFieldGroup));
+  }
+  return groups;
+}
+
+/** This run's parser row counts per source, for the run-over-run comparison. */
+function parserRowsOf(
+  succeeded: readonly DiscoverySource[],
+  results: ReadonlyMap<string, { result: SourceResult }>
+): Map<string, Record<string, number>> {
+  const counts = new Map<string, Record<string, number>>();
+  for (const source of succeeded) {
+    const parserRows = (results.get(source.name)?.result as DiscoverySourceOk).parserRows;
+    if (parserRows) counts.set(source.name, parserRows);
+  }
+  return counts;
+}
+
 interface FetchArgs {
   credentials: DiscoveryCredentials;
   env: DiscoveryFetchContext['env'];
@@ -386,7 +522,12 @@ async function fetchSource(
     ok: result.ok,
     durationMs: Math.max(args.now().getTime() - begunAt, 0),
     ...(result.ok
-      ? { httpStatus: result.httpStatus, etag: result.etag, contentHash: result.contentHash }
+      ? {
+          httpStatus: result.httpStatus,
+          etag: result.etag,
+          contentHash: result.contentHash,
+          parserRows: result.parserRows,
+        }
       : { httpStatus: result.httpStatus, error: result.error ?? 'source reported failure' }),
   };
   if (!result.ok) args.logger.warn(`${LOG_PREFIX} source ${source.name} failed: ${report.error}`);
@@ -456,6 +597,8 @@ interface RunHistory {
   lastOkAt: Map<string, Date>;
   /** Newest cached validators per source, for conditional GETs. */
   validators: Map<string, { etag?: string; contentHash?: string }>;
+  /** Newest parser row counts per source, for the docs-parser shift guard. */
+  parserRows: Map<string, Record<string, number>>;
 }
 
 async function recentRunHistory(adapters: ModelDiscoveryAdapters, startedAt: Date): Promise<RunHistory> {
@@ -465,6 +608,7 @@ async function recentRunHistory(adapters: ModelDiscoveryAdapters, startedAt: Dat
 
   const lastOkAt = new Map<string, Date>();
   const validators = new Map<string, { etag?: string; contentHash?: string }>();
+  const parserRows = new Map<string, Record<string, number>>();
   for (const run of ordered) {
     for (const report of run.sources ?? []) {
       if (!report.ok || lastOkAt.has(report.name)) continue;
@@ -472,9 +616,10 @@ async function recentRunHistory(adapters: ModelDiscoveryAdapters, startedAt: Dat
       if (report.etag || report.contentHash) {
         validators.set(report.name, { etag: report.etag, contentHash: report.contentHash });
       }
+      if (report.parserRows) parserRows.set(report.name, report.parserRows);
     }
   }
-  return { lastOkAt, validators };
+  return { lastOkAt, validators, parserRows };
 }
 
 /**
@@ -523,14 +668,16 @@ async function readMode(adapters: ModelDiscoveryAdapters): Promise<{
   enabled: boolean;
   mode: DiscoveryMode;
   autoEnable: DiscoveryAutoEnablePolicy;
+  autoRemap: DiscoveryAutoRemapPolicy;
   allowEgress: boolean;
   bandPct: number;
 }> {
   const settings = adapters.db.adminSettings;
-  const [enabled, mode, autoEnable, allowEgress, bandPct] = await Promise.all([
+  const [enabled, mode, autoEnable, autoRemap, allowEgress, bandPct] = await Promise.all([
     settings.getSettingsValue('enableModelDiscovery'),
     settings.getSettingsValue('modelDiscoveryMode'),
     settings.getSettingsValue('modelDiscoveryAutoEnable'),
+    settings.getSettingsValue('modelDiscoveryAutoRemap'),
     settings.getSettingsValue('modelDiscoveryAllowEgress'),
     settings.getSettingsValue('modelDiscoveryPriceBandPct'),
   ]);
@@ -539,6 +686,7 @@ async function readMode(adapters: ModelDiscoveryAdapters): Promise<{
     // Unrecognized values fail safe to the read-only mode.
     mode: mode === 'write' ? 'write' : 'report',
     autoEnable: autoEnable === 'manual' || autoEnable === 'all' ? autoEnable : 'priced',
+    autoRemap: autoRemap === 'apply' ? 'apply' : 'suggest',
     allowEgress: allowEgress !== false,
     // A band of 0 is legitimate ("flag every move"), so only an unusable value
     // falls back; NaN or a negative one would let every move through.
@@ -562,6 +710,7 @@ function skippedResult(
     droppedRecords: [],
     absence: { sighted: [], missed: [], frozenBackends: [] },
     prices: { rows: [], flags: [] },
+    lifecycle: { transitions: [], suggestions: [], wouldDeprecate: [] },
     metrics: emptyMetrics(),
   };
 }
@@ -575,6 +724,7 @@ function emptyMetrics(): ModelDiscoveryMetrics {
     PriceRowsAppended: 0,
     PriceFlagged: 0,
     CatalogRowsRejected: 0,
+    DocsParserRowShift: 0,
     AggregatorJoinCoverage: {},
     SourceFailures: {},
     RunDuration: 0,

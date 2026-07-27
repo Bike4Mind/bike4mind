@@ -70,8 +70,12 @@ describe('models.dev normalization', () => {
   });
 
   it('maps status: deprecated and ignores beta and alpha', () => {
-    expect(byId(result.records).get('o4-mini-2025-04-16')?.patch.lifecycle).toEqual({ status: 'deprecated' });
-    expect(byId(result.records).get('claude-opus-5')?.patch).not.toHaveProperty('lifecycle');
+    const deprecated = byId(result.records).get('o4-mini-2025-04-16');
+    expect(deprecated?.patch.lifecycle).toEqual({ status: 'deprecated' });
+    expect(deprecated?.lifecycleEvidence).toBe('typed');
+    const active = byId(result.records).get('claude-opus-5');
+    expect(active?.patch).not.toHaveProperty('lifecycle');
+    expect(active?.lifecycleEvidence).toBeUndefined();
   });
 
   it('never claims a reasoning style, only that the model reasons', () => {

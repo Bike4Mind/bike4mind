@@ -103,10 +103,10 @@ describe('litellm normalization', () => {
   });
 
   it('declares a past deprecation_date deprecated', () => {
-    expect(byId(result.records).get('gemini-3-pro-preview')?.patch.lifecycle).toEqual({
-      status: 'deprecated',
-      deprecationDate: '2026-03-26',
-    });
+    const record = byId(result.records).get('gemini-3-pro-preview');
+    expect(record?.patch.lifecycle).toEqual({ status: 'deprecated', deprecationDate: '2026-03-26' });
+    // deprecation_date is published as a field, so it is typed evidence.
+    expect(record?.lifecycleEvidence).toBe('typed');
   });
 
   it('resolves a provider-qualified first-party key onto our bare id', () => {

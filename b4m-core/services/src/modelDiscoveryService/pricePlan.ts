@@ -246,6 +246,27 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
   return { rows, flags, skipped };
 }
 
+/** One model's comparable cost: the lowest tier's rates, in USD per single token. */
+export interface PerTokenRates {
+  input: number;
+  output: number;
+}
+
+/**
+ * The per-token rates in force, by model. The auto-remap cost constraint
+ * compares two models against each other rather than against a published rate,
+ * so the stored unit is the right one and there is no 1e6 crossing to get wrong.
+ */
+export function perTokenRatesInForce(rows: readonly IModelPrice[]): Map<string, PerTokenRates> {
+  const rates = new Map<string, PerTokenRates>();
+  for (const row of rows) {
+    if (row.unit !== 'per_token') continue;
+    const tier = lowestTier(row);
+    if (tier) rates.set(row.modelId, { input: tier.input, output: tier.output });
+  }
+  return rates;
+}
+
 /** The planned rows as the run report shows them: per-MTok, no tier map. */
 export function describePriceRows(rows: readonly IModelPriceInput[]): PlannedPriceRow[] {
   return rows.map(row => {

@@ -9,6 +9,7 @@ import {
   FakeRunRepository,
   stubSource,
   testCredentials,
+  testRecord,
 } from './__fixtures__/fakes';
 import { DISCOVERY_LEASE_KEY, runModelDiscovery } from './runModelDiscovery';
 import type {
@@ -311,9 +312,250 @@ describe('runModelDiscovery', () => {
 
       expect(result.absence.missed).toEqual(['gpt-6']);
       expect(bench.state.misses).toEqual(['gpt-6']);
-      // Bookkeeping only: Phase 2 never transitions a lifecycle from absence.
+      // One miss is bookkeeping; the transition waits for K misses over 48h.
       expect(bench.catalog.rows).toHaveLength(1);
       expect(result.metrics.ModelsDeprecated).toBe(0);
+    });
+  });
+
+  describe('lifecycle', () => {
+    const DAY = 24 * 60 * 60_000;
+
+    /** A seed row for gpt-6, so a report-mode run has a catalog to diff against. */
+    const seedGpt6 = (harnessed: Harness) =>
+      harnessed.catalog.append({
+        modelId: 'gpt-6',
+        source: 'seed',
+        patch: testRecord({ id: 'gpt-6', name: 'GPT-6', contextWindow: 400_000, lifecycle: { status: 'active' } }),
+        ownedGroups: ['identity', 'limits', 'dispatch', 'lifecycle'],
+        effectiveFrom: new Date(START.getTime() - DAY),
+      });
+
+    /** Seed the catalog with gpt-6, then run again `misses` times without it. */
+    const missFor = async (harnessed: Harness, misses: number, gapMs = DAY) => {
+      let result = await runModelDiscovery(harnessed.adapters, harnessed.options);
+      harnessed.adapters.sources = [openaiSource([])];
+      for (let miss = 0; miss < misses; miss += 1) {
+        harnessed.advance(gapMs);
+        result = await runModelDiscovery(harnessed.adapters, harnessed.options);
+      }
+      return result;
+    };
+
+    describe('absence protocol', () => {
+      it('deprecates on the third miss of a streak spanning 48h', async () => {
+        const result = await missFor(bench, 3);
+
+        expect(result.lifecycle.transitions).toEqual([
+          {
+            modelId: 'gpt-6',
+            from: 'active',
+            to: 'deprecated',
+            signal: 'absence',
+            deprecationDate: '2026-07-29',
+            retirementDate: undefined,
+            replacedBy: undefined,
+            autoApplied: false,
+          },
+        ]);
+        expect(result.lifecycle.wouldDeprecate).toEqual(['gpt-6']);
+        expect(result.metrics.ModelsDeprecated).toBe(1);
+        expect(bench.runs.docs[3].changes?.deprecated).toEqual(['gpt-6']);
+        expect(bench.catalog.rows).toHaveLength(2);
+        expect(bench.catalog.rows[1].patch).toMatchObject({
+          id: 'gpt-6',
+          name: 'GPT-6',
+          lifecycle: { status: 'deprecated', deprecationDate: '2026-07-29' },
+        });
+      });
+
+      it('waits while only two misses have accrued', async () => {
+        const result = await missFor(bench, 2);
+
+        expect(result.lifecycle.transitions).toEqual([]);
+        expect(bench.catalog.rows).toHaveLength(1);
+      });
+
+      it('waits while three misses fit inside 48h', async () => {
+        const result = await missFor(bench, 3, 6 * 60 * 60_000);
+
+        expect(result.lifecycle.transitions).toEqual([]);
+      });
+
+      it('neither increments nor resets the streak on a failed fetch', async () => {
+        await runModelDiscovery(bench.adapters, bench.options);
+        bench.adapters.sources = [openaiSource([])];
+        bench.advance(DAY);
+        await runModelDiscovery(bench.adapters, bench.options);
+
+        bench.adapters.sources = [stubSource({ name: 'openai', result: { ok: false, error: 'HTTP 503' } })];
+        bench.advance(DAY);
+        const frozen = await runModelDiscovery(bench.adapters, bench.options);
+        expect(frozen.absence.frozenBackends).toEqual([ModelBackend.OpenAI]);
+        expect(bench.state.states.get('gpt-6')?.missCount).toBe(1);
+
+        bench.adapters.sources = [openaiSource([])];
+        bench.advance(DAY);
+        const third = await runModelDiscovery(bench.adapters, bench.options);
+        // Two misses so far: the failed run in the middle bought the provider a
+        // free pass rather than a strike.
+        expect(third.lifecycle.transitions).toEqual([]);
+
+        bench.advance(DAY);
+        const fourth = await runModelDiscovery(bench.adapters, bench.options);
+        expect(fourth.lifecycle.transitions).toHaveLength(1);
+      });
+
+      it('resets the streak on a sighting', async () => {
+        await missFor(bench, 2);
+        bench.adapters.sources = [openaiSource()];
+        bench.advance(DAY);
+        await runModelDiscovery(bench.adapters, bench.options);
+        expect(bench.state.states.get('gpt-6')?.missCount).toBe(0);
+
+        bench.adapters.sources = [openaiSource([])];
+        bench.advance(DAY);
+        const result = await runModelDiscovery(bench.adapters, bench.options);
+
+        expect(result.lifecycle.transitions).toEqual([]);
+      });
+
+      it('appends nothing more once the model is deprecated', async () => {
+        await missFor(bench, 3);
+        bench.advance(DAY);
+
+        const result = await runModelDiscovery(bench.adapters, bench.options);
+
+        expect(result.lifecycle.transitions).toEqual([]);
+        expect(bench.catalog.rows).toHaveLength(2);
+        // Still counted as missing, which is only possible if the graduation row
+        // kept the identity group it took over from the row it superseded.
+        expect(result.absence.missed).toEqual(['gpt-6']);
+      });
+
+      it('plans the graduation but writes nothing in report mode', async () => {
+        // Report mode never applies a miss, so the plan has to reach the same
+        // verdict from the counters as they stood when the run started.
+        const reporting = harness([openaiSource([])], { modelDiscoveryMode: 'report' });
+        await seedGpt6(reporting);
+        reporting.state.states.set('gpt-6', {
+          modelId: 'gpt-6',
+          missCount: 2,
+          firstMissAt: new Date(START.getTime() - 72 * 60 * 60_000),
+          createdAt: START,
+          updatedAt: START,
+        });
+
+        const result = await runModelDiscovery(reporting.adapters, reporting.options);
+
+        expect(result.lifecycle.wouldDeprecate).toEqual(['gpt-6']);
+        expect(result.lifecycle.transitions[0]).toMatchObject({ from: 'active', to: 'deprecated' });
+        expect(reporting.catalog.rows).toHaveLength(1);
+        expect(reporting.state.misses).toEqual([]);
+      });
+    });
+
+    describe('typed and docs signals', () => {
+      const sunset = (lifecycle: NonNullable<DiscoveredModel['patch']['lifecycle']>, evidence: 'typed' | 'docs') => ({
+        ...gpt6,
+        patch: { ...gpt6.patch, lifecycle },
+        lifecycleEvidence: evidence,
+      });
+
+      /** Seed gpt-6 as active, then report it again with the lifecycle under test. */
+      const secondRun = async (harnessed: Harness, sources: DiscoverySource[]) => {
+        await runModelDiscovery(harnessed.adapters, harnessed.options);
+        harnessed.adapters.sources = sources;
+        harnessed.advance(60_000);
+        return runModelDiscovery(harnessed.adapters, harnessed.options);
+      };
+
+      it('transitions on the first run a typed source reports it', async () => {
+        const result = await secondRun(bench, [
+          openaiSource([sunset({ status: 'legacy', deprecationDate: '2026-07-30' }, 'typed')]),
+        ]);
+
+        expect(result.lifecycle.transitions[0]).toMatchObject({
+          modelId: 'gpt-6',
+          from: 'active',
+          to: 'legacy',
+          signal: 'typed',
+          deprecationDate: '2026-07-30',
+        });
+        expect(bench.catalog.rows[1].patch).toMatchObject({ lifecycle: { status: 'legacy' } });
+        expect(bench.warnings.some(message => message.startsWith('[model-sunset]'))).toBe(true);
+      });
+
+      it('queues a docs-only deprecation instead of writing it', async () => {
+        const result = await secondRun(bench, [
+          openaiSource([sunset({ status: 'deprecated', deprecationDate: '2026-07-30' }, 'docs')]),
+        ]);
+
+        expect(result.lifecycle.transitions).toEqual([]);
+        expect(result.metrics.ModelsDeprecated).toBe(0);
+        expect(bench.catalog.rows).toHaveLength(1);
+        expect(result.lifecycle.suggestions[0]).toMatchObject({
+          modelId: 'gpt-6',
+          status: 'deprecated',
+          deprecationDate: '2026-07-30',
+          source: 'openai',
+        });
+        expect(bench.state.suggestions[0]).toMatchObject({
+          modelId: 'gpt-6',
+          suggestion: { status: 'deprecated', source: 'openai' },
+        });
+      });
+
+      it('records no suggestion in report mode', async () => {
+        const docs = sunset({ status: 'deprecated', deprecationDate: '2026-07-30' }, 'docs');
+        const reporting = harness([openaiSource([docs])], { modelDiscoveryMode: 'report' });
+        await seedGpt6(reporting);
+
+        const result = await runModelDiscovery(reporting.adapters, reporting.options);
+
+        expect(result.lifecycle.suggestions).toHaveLength(1);
+        expect(reporting.state.suggestions).toEqual([]);
+      });
+
+      it('writes the docs dates once a typed source corroborates the sunset', async () => {
+        const result = await secondRun(bench, [
+          openaiSource([sunset({ status: 'deprecated', deprecationDate: '2026-07-30' }, 'docs')]),
+          stubSource({
+            name: 'litellm',
+            kind: 'aggregator',
+            records: [{ modelId: 'gpt-6', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'typed' }],
+          }),
+        ]);
+
+        expect(result.lifecycle.transitions[0]).toMatchObject({ to: 'deprecated', deprecationDate: '2026-07-30' });
+        expect(bench.catalog.rows[1].patch).toMatchObject({
+          lifecycle: { status: 'deprecated', deprecationDate: '2026-07-30' },
+        });
+      });
+
+      it('drops a docs signal whose parser row count moved more than 20%', async () => {
+        const docsSource = (rows: number) =>
+          stubSource({
+            name: 'openai',
+            kind: 'provider',
+            result: {
+              ok: true,
+              records: [sunset({ status: 'deprecated', deprecationDate: '2026-07-30' }, 'docs')],
+              authoritativeFor: [ModelBackend.OpenAI],
+              parserRows: { deprecations: rows },
+            },
+          });
+        const shifting = harness([docsSource(10)]);
+
+        await runModelDiscovery(shifting.adapters, shifting.options);
+        shifting.adapters.sources = [docsSource(4)];
+        shifting.advance(60_000);
+        const result = await runModelDiscovery(shifting.adapters, shifting.options);
+
+        expect(result.metrics.DocsParserRowShift).toBe(1);
+        expect(result.lifecycle.suggestions).toEqual([]);
+        expect(shifting.warnings.some(message => message.includes('parser "deprecations"'))).toBe(true);
+      });
     });
   });
 

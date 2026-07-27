@@ -1,6 +1,7 @@
 [
   {
     "modelId": "amazon.nova-canvas-v1:0",
+    "lifecycleEvidence": "typed",
     "patch": {
       "id": "amazon.nova-canvas-v1:0",
       "vendor": "amazon",
@@ -16,6 +17,7 @@
   },
   {
     "modelId": "amazon.titan-embed-text-v2:0",
+    "lifecycleEvidence": "typed",
     "patch": {
       "id": "amazon.titan-embed-text-v2:0",
       "vendor": "amazon",
@@ -31,6 +33,7 @@
   },
   {
     "modelId": "anthropic.claude-3-haiku-20240307-v1:0",
+    "lifecycleEvidence": "typed",
     "patch": {
       "id": "anthropic.claude-3-haiku-20240307-v1:0",
       "vendor": "anthropic",
@@ -48,6 +51,7 @@
   },
   {
     "modelId": "anthropic.claude-opus-4-5-20251101-v1:0",
+    "lifecycleEvidence": "typed",
     "patch": {
       "id": "anthropic.claude-opus-4-5-20251101-v1:0",
       "vendor": "anthropic",
@@ -63,6 +67,7 @@
   },
   {
     "modelId": "meta.llama4-scout-17b-instruct-v1:0",
+    "lifecycleEvidence": "typed",
     "patch": {
       "id": "meta.llama4-scout-17b-instruct-v1:0",
       "vendor": "meta",

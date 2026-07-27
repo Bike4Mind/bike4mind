@@ -3,6 +3,7 @@ export * from './credentials';
 export * from './promotion';
 export * from './catalogWrite';
 export * from './pricePlan';
+export * from './lifecyclePlan';
 export * from './absence';
 export * from './runModelDiscovery';
 export * from './sources';

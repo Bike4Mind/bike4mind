@@ -81,6 +81,7 @@
   },
   {
     "modelId": "gemini-3-pro-preview",
+    "lifecycleEvidence": "typed",
     "patch": {
       "contextWindow": 1048576,
       "maxOutputTokens": 65536,
@@ -181,6 +182,7 @@
   },
   {
     "modelId": "o4-mini-2025-04-16",
+    "lifecycleEvidence": "typed",
     "patch": {
       "contextWindow": 200000,
       "maxOutputTokens": 100000,
@@ -204,6 +206,7 @@
   },
   {
     "modelId": "us.anthropic.claude-opus-4-1-20250805-v1:0",
+    "lifecycleEvidence": "typed",
     "patch": {
       "contextWindow": 200000,
       "maxOutputTokens": 32000,

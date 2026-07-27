@@ -43,6 +43,9 @@ describe('bedrock normalization', () => {
     expect(byId({ summaries }).get('meta.llama4-scout-17b-instruct-v1:0')?.patch.lifecycle).toEqual({
       status: 'active',
     });
+    // Marked typed, which is what lets it transition on the first run instead of
+    // being held back as a suggestion.
+    expect(legacy?.lifecycleEvidence).toBe('typed');
   });
 
   it('accepts a Date as readily as an ISO string, so a queued response still parses', () => {

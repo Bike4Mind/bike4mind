@@ -1,6 +1,7 @@
 [
   {
     "modelId": "claude-3-haiku-20240307",
+    "lifecycleEvidence": "docs",
     "patch": {
       "id": "claude-3-haiku-20240307",
       "vendor": "anthropic",
@@ -26,6 +27,7 @@
   },
   {
     "modelId": "claude-opus-5",
+    "lifecycleEvidence": "docs",
     "patch": {
       "id": "claude-opus-5",
       "vendor": "anthropic",
@@ -60,6 +62,7 @@
   },
   {
     "modelId": "claude-sonnet-4-5-20250929",
+    "lifecycleEvidence": "docs",
     "patch": {
       "id": "claude-sonnet-4-5-20250929",
       "vendor": "anthropic",
@@ -87,6 +90,7 @@
   },
   {
     "modelId": "claude-sonnet-5",
+    "lifecycleEvidence": "docs",
     "patch": {
       "id": "claude-sonnet-5",
       "vendor": "anthropic",
