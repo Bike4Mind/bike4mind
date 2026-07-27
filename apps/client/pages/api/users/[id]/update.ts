@@ -104,7 +104,7 @@ const handler = baseApi().put(
 
     if (currentUser.isAdmin) {
       // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
-      // id injected from the route param so callers cannot target a different user.
+      // id comes from the route param; the spread ensures it wins over any id in the body.
       const body = userService.adminUpdateUserSchema.parse({ ...(req.body as Record<string, unknown>), id: userId });
 
       // Lockout guard: an explicit demote (isAdmin -> false) must not remove the
@@ -157,7 +157,7 @@ const handler = baseApi().put(
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
-      const body = userService.updateUserSchema.parse(req.body);
+      const body = userService.updateUserSchema.parse(req.body ?? {});
 
       const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
       const previousTelemetryLevel = incomingTelemetryLevel
