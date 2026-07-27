@@ -23,6 +23,7 @@ import {
   ICreditHolder,
   ICreditHolderMethods,
   isExperimentalFeatureEnabled,
+  isImageAttachment,
   isImageServeable,
   QuestErrorCode,
   getQuestErrorCode,
@@ -4095,7 +4096,7 @@ export class ChatCompletionProcess {
     // Add file metadata system message if there are files (for tools like edit_image).
     // Also require serveable so the LLM is never told the fabFileId of a
     // held/blocked image (that ID is what makes it reachable via edit_image, etc.).
-    const imageFiles = convertedFabFiles.filter(file => file.mimeType.startsWith('image/') && isImageServeable(file));
+    const imageFiles = convertedFabFiles.filter(file => isImageAttachment(file.mimeType) && isImageServeable(file));
     if (imageFiles.length > 0) {
       const fileList = imageFiles
         .map(file => `- "${file.fileName}" (fabFileId: ${file.id}, type: ${file.mimeType})`)

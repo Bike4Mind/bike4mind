@@ -10,7 +10,7 @@ import {
   projectRepository,
   fabFileRepository,
 } from '@bike4mind/database';
-import { IAgent, IChatHistoryItemDocument, IFabFileDocument, Permission } from '@bike4mind/common';
+import { IAgent, IChatHistoryItemDocument, IFabFileDocument, Permission, isImageAttachment } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, getFileContent, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
@@ -51,7 +51,7 @@ async function extractFileContents(fabFiles: IFabFileDocument[], logger: Logger)
   if (fabFiles.length === 0) return '';
 
   const textFiles = fabFiles.filter(f => {
-    if (f.mimeType?.startsWith('image/')) {
+    if (isImageAttachment(f.mimeType)) {
       logger.info(`Skipping image file: ${f.fileName}`);
       return false;
     }

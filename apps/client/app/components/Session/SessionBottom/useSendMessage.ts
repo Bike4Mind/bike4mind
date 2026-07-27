@@ -46,7 +46,7 @@ import {
 } from '@client/app/hooks/useAgentMentions';
 import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
-import { classifyQueryComplexity, routeQuery } from '@bike4mind/common';
+import { classifyQueryComplexity, isImageAttachment, routeQuery } from '@bike4mind/common';
 import { pickOrchestrationAgent } from '@client/app/utils/agentOrchestration';
 import { evaluateShortCircuits, hasExplicitAgentLiteral } from '@client/app/utils/intentClassifierShortCircuits';
 import { useIntentClassifier } from '@client/app/hooks/useIntentClassifier';
@@ -616,8 +616,8 @@ export function useSendMessage({
     // (none set supportsVision), wrongly telling a Kontext user - a model that REQUIRES an
     // image - that their image "will not be visible".
     const hasImageFiles =
-      pendingMessageFiles.some(pf => pf.fabFile.mimeType?.startsWith('image/')) ||
-      workBenchFiles.some(f => f.mimeType?.startsWith('image/'));
+      pendingMessageFiles.some(pf => isImageAttachment(pf.fabFile.mimeType)) ||
+      workBenchFiles.some(f => isImageAttachment(f.mimeType));
     if (hasImageFiles && currentModelInfo?.type === 'text' && !currentModelInfo.supportsVision) {
       toast.warning(
         `${currentModelInfo.name || model} does not support image input. Your images will not be visible to the model.`
