@@ -29,6 +29,19 @@ function runCodegen() {
   return result;
 }
 
+// Explicit per-scenario link state, so neither describe depends on the other
+// having run first. Mirrors a pnpm workspace link: a real package dir (with
+// package.json) reachable from apps/client's node_modules chain.
+function linkOverlay() {
+  const pkgDir = join(clientRoot, 'node_modules', PKG_NAME);
+  mkdirSync(pkgDir, { recursive: true });
+  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: PKG_NAME }));
+}
+
+function unlinkOverlay() {
+  rmSync(join(clientRoot, 'node_modules'), { recursive: true, force: true });
+}
+
 beforeAll(() => {
   sandbox = mkdtempSync(join(tmpdir(), 'b4m-glue-test-'));
   clientRoot = join(sandbox, 'apps/client');
@@ -69,11 +82,14 @@ afterAll(() => {
 });
 
 describe('hydrated but UNLINKED overlay', () => {
+  beforeAll(() => {
+    unlinkOverlay();
+  });
+
   it('emits the absent form for bare-specifier glue and warns', () => {
     const { stderr } = runCodegen();
 
-    expect(stderr).toContain('not');
-    expect(stderr).toContain('resolvable from apps/client');
+    expect(stderr).toContain('is not resolvable from apps/client');
 
     const routes = readFileSync(join(clientRoot, 'app/premium-generated/premiumRoutes.generated.ts'), 'utf8');
     expect(routes).not.toContain(PKG_NAME);
@@ -95,14 +111,12 @@ describe('hydrated but UNLINKED overlay', () => {
 
 describe('hydrated AND linked overlay', () => {
   beforeAll(() => {
-    // A plain directory is enough: the script checks resolvability by presence in
-    // the node_modules chain, exactly where pnpm would place the workspace link.
-    mkdirSync(join(clientRoot, 'node_modules', PKG_NAME), { recursive: true });
+    linkOverlay();
   });
 
   it('emits real imports and no warning', () => {
     const { stderr } = runCodegen();
-    expect(stderr).not.toContain('resolvable from apps/client');
+    expect(stderr).not.toContain('is not resolvable from apps/client');
 
     const routes = readFileSync(join(clientRoot, 'app/premium-generated/premiumRoutes.generated.ts'), 'utf8');
     expect(routes).toContain(`from '${PKG_NAME}/routes'`);

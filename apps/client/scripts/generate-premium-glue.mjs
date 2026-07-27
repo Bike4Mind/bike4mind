@@ -31,7 +31,6 @@
  * The turbo codegen task is cache:false - output depends on node_modules link state,
  * which no turbo input glob can capture. codegen itself always re-runs; dependents
  * are unaffected because both link states typecheck clean.
- * Turbo cache key: packages/premium/*\/package.json
  */
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync } from 'node:fs';
@@ -73,7 +72,11 @@ function discoverPremiumPackages() {
 // package.json declares them.
 function isLinkedIntoClient(pkgName) {
   const segments = pkgName.split('/');
-  return [CLIENT_ROOT, REPO_ROOT].some(root => existsSync(join(root, 'node_modules', ...segments)));
+  // Check for package.json, not just the dir: an empty/broken dir would satisfy
+  // existsSync while still failing real module resolution.
+  return [CLIENT_ROOT, REPO_ROOT].some(root =>
+    existsSync(join(root, 'node_modules', ...segments, 'package.json'))
+  );
 }
 
 // --- Generate helpers ---
