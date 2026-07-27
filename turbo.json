@@ -13,7 +13,8 @@
         "app/premium-generated/**",
         "pages/api/premium-*/**",
         "server/premium-generated/**",
-        "../../infra/premium-generated/**"
+        "../../infra/premium-generated/**",
+        "../../packages/scripts/migrate/migrations/premium.generated.ts"
       ]
     },
     "build": {
@@ -38,6 +39,26 @@
     },
     "//#typecheck:fast": {
       "dependsOn": ["^build"]
+    },
+    // @bike4mind/scripts consumes packages/scripts/migrate/migrations/premium.generated.ts
+    // (written by @bike4mind/client's codegen task, see the "codegen" task above) even though
+    // it has no ordinary dependency on @bike4mind/client - the generic "typecheck" task above
+    // only depends on EACH package's own (same-package) "codegen" task, which is a no-op for
+    // @bike4mind/scripts. These package-specific overrides add the missing cross-package edge;
+    // package-specific config REPLACES the generic entry, so ^build is repeated here.
+    "@bike4mind/scripts#typecheck": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+    },
+    "@bike4mind/scripts#typecheck:native": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+    },
+    "@bike4mind/scripts#typecheck:fast": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+    },
+    // migrations/index.test.ts statically imports the same premium.generated.ts stub - same
+    // cross-package edge as the typecheck overrides above, for the same reason.
+    "@bike4mind/scripts#test": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"]
     },
     "test": {
       "dependsOn": ["^build"]

@@ -8,6 +8,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   IMessage,
+  isImageAttachment,
   isImageServeable,
   ISessionDocument,
   MessageContent,
@@ -757,7 +758,7 @@ export async function processFabFilesServer(
 
   const processFileInParallel = async (file: IFabFileDocument): Promise<void> => {
     try {
-      if (supportsVision && file.mimeType.startsWith('image/')) {
+      if (supportsVision && isImageAttachment(file.mimeType)) {
         // Never send a not-yet-clean or blocked uploaded image to the model.
         if (!isImageServeable(file)) {
           logger.warn(
@@ -896,7 +897,7 @@ export async function processFabFilesServer(
             logger.error(`Unsupported backend for model ${modelInfo.id} backend ${modelInfo?.backend ?? 'undefined'}`);
             break;
         }
-      } else if (!supportsVision && file.mimeType.startsWith('image/')) {
+      } else if (!supportsVision && isImageAttachment(file.mimeType)) {
         logger.warn(`File ${file.fileName} is an image but model does not support vision. Skipping...`);
       } else {
         if (file.vectorized) {

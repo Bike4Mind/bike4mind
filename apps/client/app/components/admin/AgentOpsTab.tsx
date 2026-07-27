@@ -51,7 +51,10 @@ interface AgentOpsSettings {
   isEnabled: boolean;
 }
 
-const LLM_MODELS = [
+// Must stay in sync with AGENT_OPS_VALID_MODELS in pages/api/admin/agent-ops-settings.ts --
+// anything offered here that the endpoint does not accept becomes a 400 on save. Exported so a
+// test can pin the two lists together.
+export const LLM_MODELS = [
   { value: 'claude-opus-5', label: 'Claude 5 Opus (SOTA Recommended)' },
   { value: 'claude-opus-4-8', label: 'Claude 4.8 Opus (Previous)' },
   { value: 'claude-opus-4-7', label: 'Claude 4.7 Opus' },
@@ -65,7 +68,7 @@ const LLM_MODELS = [
   { value: 'claude-haiku-4-5-20251001', label: 'Claude 4.5 Haiku (Fast)' },
   { value: 'o3-2025-04-16', label: 'OpenAI O3 (Reasoning)' },
   { value: 'gpt-4.1-2025-04-14', label: 'GPT-4.1 (Latest)' },
-  { value: 'grok-3', label: 'Grok 3 (xAI Latest)' },
+  { value: 'grok-4.5', label: 'Grok 4.5 (xAI Latest)' },
   { value: 'gpt-4o', label: 'GPT-4o' },
   { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Fast)' },
 ];

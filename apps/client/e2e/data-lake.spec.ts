@@ -229,10 +229,7 @@ test.describe('Data Lake - settings', () => {
     await expect(dataLakePage.card(lake.id)).toContainText(renamed, { timeout: TIMEOUTS.VISIBLE });
   });
 
-  test('an existing access gate cannot be cleared from settings (warning + kept)', async ({
-    request,
-    dataLakePage,
-  }) => {
+  test('an existing access gate can be cleared from settings', async ({ request, dataLakePage }) => {
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E Gate ${RUN}`,
       fileTagPrefix: `e2egate${RUN}:`,
@@ -240,13 +237,19 @@ test.describe('Data Lake - settings', () => {
     });
 
     await dataLakePage.openManagerFromHome();
-    await dataLakePage.openSettings(lake.id);
+    await expect(dataLakePage.card(lake.id)).toContainText('e2e-datalake', { timeout: TIMEOUTS.VISIBLE });
 
-    // Blank the previously-set access tag and save — the backend rejects clearing, and the
-    // UI warns that the existing tag was kept.
+    // Blank the previously-set access tag and save — an empty value removes the gate.
+    await dataLakePage.openSettings(lake.id);
     await dataLakePage.fillSettingsField('datalake-settings-usertag', '');
     await dataLakePage.saveSettings();
-    await dataLakePage.waitForToast('not cleared');
+    await dataLakePage.waitForToast('Data lake updated');
+
+    // The gate chip is gone, and the un-gated lake is now publishable (the server refuses
+    // publishing a gated lake, so this is the end-to-end proof the gate really cleared).
+    await expect(dataLakePage.card(lake.id)).not.toContainText('e2e-datalake', { timeout: TIMEOUTS.VISIBLE });
+    await dataLakePage.openSettings(lake.id);
+    await expect(dataLakePage.publicVisibilityRadioInput).toBeEnabled();
   });
 
   test('org visibility is disabled in a personal (non-team) context', async ({ request, dataLakePage }) => {

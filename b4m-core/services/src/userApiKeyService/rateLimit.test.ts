@@ -5,6 +5,9 @@ import { IUserApiKeyDocument, IUserApiKeyRepository } from '@bike4mind/common';
 const makeRepo = (stored: Partial<IUserApiKeyDocument> | null) =>
   ({
     findByUserIdAndId: vi.fn().mockResolvedValue(stored),
+    // Stubbed even though this surface must never reach for it, so the
+    // minter-only assertion below is a real check rather than a vacuous one.
+    findByOrganizationIdsAndId: vi.fn().mockResolvedValue(null),
     setRateLimit: vi.fn().mockResolvedValue(undefined),
   }) as unknown as IUserApiKeyRepository;
 
@@ -52,6 +55,23 @@ describe('userApiKeyService - updateApiKeyRateLimit', () => {
     await expect(
       updateApiKeyRateLimit('user2', { keyId: 'key-1', requestsPerMinute: 600 }, { db: { userApiKeys: repo } })
     ).rejects.toThrow(/API key not found/i);
+    expect(repo.setRateLimit).not.toHaveBeenCalled();
+  });
+
+  // Rate limits are not on the org-wide embed-key admin table, so this surface
+  // stays minter-only while its sibling embed-config/rotate/revoke paths resolve
+  // org-administered keys too. Pinned because broadening it would be silent -
+  // an org admin would just start succeeding, with no failing test to notice.
+  it('never falls back to the org-admin resolver for a key the caller did not mint', async () => {
+    const repo = makeRepo(null);
+    // Resolvable via the org path, so growing that fallback would make the call
+    // SUCCEED - failing the rejection assertion as well as the call assertion.
+    vi.mocked(repo.findByOrganizationIdsAndId).mockResolvedValue(storedKey() as IUserApiKeyDocument);
+
+    await expect(
+      updateApiKeyRateLimit('org-admin', { keyId: 'key-1', requestsPerMinute: 600 }, { db: { userApiKeys: repo } })
+    ).rejects.toThrow(/API key not found/i);
+    expect(repo.findByOrganizationIdsAndId).not.toHaveBeenCalled();
     expect(repo.setRateLimit).not.toHaveBeenCalled();
   });
 

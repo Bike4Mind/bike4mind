@@ -11,6 +11,14 @@ interface UpdateDataLakeAdapters {
   };
 }
 
+/**
+ * Metadata update (name/description/access gate) by the lake's creator or an admin.
+ *
+ * Gate semantics: an omitted gate field leaves the current value alone, while an empty string
+ * clears it. Clearing does NOT make the lake world-readable - an ungated lake falls back to its
+ * visibility (private to the owner, org-wide if org-scoped, everyone if public), per
+ * Private-by-default in canAccessLake.
+ */
 export const updateDataLake = async (
   actor: { userId: string; isAdmin: boolean },
   dataLakeId: string,
@@ -43,10 +51,8 @@ export const updateDataLake = async (
     id: dataLakeId,
     ...params,
     // Normalize the entitlement key at write time (Mongo $in is case-sensitive; the
-    // resolver produces lowercase keys). Only override when present so an absent field
-    // isn't written as undefined. NOTE: the gate can be set/changed but not CLEARED via this
-    // path (zod `.min(3)` also rejects ''); un-gating a lake is a deliberate non-affordance
-    // for v1 (the gate is a PHI boundary) - clear via a one-shot if ever needed.
+    // resolver produces lowercase keys). Only override when present so an absent field isn't
+    // written as undefined, and so the '' clear-sentinel passes through untouched.
     ...(params.requiredEntitlement ? { requiredEntitlement: normalizeEntitlementKey(params.requiredEntitlement) } : {}),
   });
 

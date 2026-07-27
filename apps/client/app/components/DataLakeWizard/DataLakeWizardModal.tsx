@@ -3,6 +3,7 @@ import { useTheme } from '@mui/joy/styles';
 import { toast } from 'sonner';
 import { useDataLakeWizardStore, type WizardStep } from '@client/app/stores/useDataLakeWizardStore';
 import { useBatchUpload, OFFLINE_MESSAGE } from '@client/app/hooks/data/dataLakeWizard';
+import { isValidDataLakeSlug } from '@client/app/hooks/data/dataLakeSlug';
 import WizardStepIndicator from './WizardStepIndicator';
 import SourceSelectionStep from './steps/SourceSelectionStep';
 import PreviewStep from './steps/PreviewStep';
@@ -43,7 +44,9 @@ export default function DataLakeWizardModal() {
       case 'taxonomy':
         return taxonomy.analyzed;
       case 'config':
-        return config.name.trim().length > 0 && config.tagPrefix.trim().length >= 2;
+        // Append mode reuses the target lake's (already valid) slug; create mode must
+        // produce a slug the server will accept (slug.min(2)) before Start Upload enables.
+        return (!!targetLake || isValidDataLakeSlug(config.name)) && config.tagPrefix.trim().length >= 2;
       case 'upload':
         return false; // No "next" on last step
     }

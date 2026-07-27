@@ -277,6 +277,11 @@ export class DataLakePage extends BasePage {
     return this.settingsModal.getByTestId('datalake-settings-visibility-org').locator('input');
   }
 
+  /** Inner radio <input> of the "Public" visibility option - disabled while the lake is gated. */
+  get publicVisibilityRadioInput(): Locator {
+    return this.settingsModal.getByTestId('datalake-settings-visibility-public').locator('input');
+  }
+
   async saveSettings() {
     await this.settingsModal.getByTestId('datalake-settings-save-btn').click();
   }

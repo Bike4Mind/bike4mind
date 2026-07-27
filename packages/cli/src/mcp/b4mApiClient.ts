@@ -60,7 +60,36 @@ interface SemanticSearchResponse {
 
 export interface RawFile {
   id: string;
+  fileName?: string;
   [key: string]: unknown;
+}
+
+export interface RawProject {
+  id: string;
+  name?: string;
+  [key: string]: unknown;
+}
+
+export interface RawArtifact {
+  id: string;
+  title?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * GET /api/artifacts answers with an offset-based envelope of its own rather than
+ * the `{ data, hasMore }` shape every other list route uses, so {@link ListEnvelope}
+ * and `toList` do not apply here.
+ */
+interface ArtifactListEnvelope {
+  artifacts: RawArtifact[];
+  pagination?: { total: number; limit: number; offset: number; hasMore: boolean };
+}
+
+/** GET /api/artifacts/:id response; `content` ships only when includeContent=true. */
+export interface ArtifactWithContent {
+  artifact: RawArtifact;
+  content?: unknown;
 }
 
 /**
@@ -148,6 +177,52 @@ export class B4mApiClient {
 
   async getFile(fileId: string): Promise<RawFile> {
     return this.client.get<RawFile>(`/api/files/${encodeURIComponent(fileId)}`);
+  }
+
+  async listProjects(args: {
+    search?: string;
+    limit: number;
+    page?: number;
+  }): Promise<{ data: RawProject[]; hasMore: boolean }> {
+    const result = await this.client.get<RawProject[] | ListEnvelope<RawProject>>('/api/projects', {
+      params: {
+        ...(args.search ? { search: args.search } : {}),
+        pagination: { page: args.page ?? 1, limit: args.limit },
+      },
+    });
+    return this.toList(result);
+  }
+
+  async getProject(projectId: string): Promise<RawProject> {
+    return this.client.get<RawProject>(`/api/projects/${encodeURIComponent(projectId)}`);
+  }
+
+  /**
+   * GET /api/artifacts takes flat `limit`/`offset` params (not the nested
+   * `pagination` object the session/file/project routes use) and hard-caps
+   * `limit` at 100 via a strict zod parse, so callers must not exceed it.
+   */
+  async listArtifacts(args: {
+    search?: string;
+    limit: number;
+    offset?: number;
+  }): Promise<{ data: RawArtifact[]; hasMore: boolean }> {
+    const result = await this.client.get<ArtifactListEnvelope>('/api/artifacts', {
+      params: {
+        ...(args.search ? { search: args.search } : {}),
+        limit: args.limit,
+        offset: args.offset ?? 0,
+      },
+    });
+    return { data: result.artifacts ?? [], hasMore: result.pagination?.hasMore ?? false };
+  }
+
+  async getArtifact(artifactId: string): Promise<ArtifactWithContent> {
+    // The route tests `req.query.includeContent === 'true'` as a string, and omits
+    // content entirely otherwise, so send the literal string.
+    return this.client.get<ArtifactWithContent>(`/api/artifacts/${encodeURIComponent(artifactId)}`, {
+      params: { includeContent: 'true' },
+    });
   }
 }
 

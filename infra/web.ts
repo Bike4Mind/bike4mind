@@ -70,6 +70,8 @@ import {
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueue,
   optihashiRunCompletionQueueDLQ,
+  bobRunQueue,
+  bobRunQueueDLQ,
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
@@ -112,6 +114,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'overwatch-analytics': overwatchAnalyticsQueueDLQ.url,
     'agent-continuation': agentContinuationQueueDLQ.url,
     'optihashi-run-completion': optihashiRunCompletionQueueDLQ.url,
+    'bob-run': bobRunQueueDLQ.url,
     'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
   },
 });
@@ -157,6 +160,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     overwatchAnalyticsQueue: overwatchAnalyticsQueue.url,
     agentContinuationQueue: agentContinuationQueue.url,
     optihashiRunCompletionQueue: optihashiRunCompletionQueue.url,
+    bobRunQueue: bobRunQueue.url,
     dataLakeCleanupQueue: dataLakeCleanupQueue.url,
   },
 });

@@ -1,9 +1,21 @@
-import { DataLakeConfig, getAccessibleDataLakes, toDataLakeConfig, type IDataLakeRepository } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  DataLakeConfig,
+  getAccessibleDataLakes,
+  toDataLakeConfig,
+  type IDataLakeRepository,
+} from '@bike4mind/common';
+import type { Logger } from '@bike4mind/observability';
 
 /**
- * The minimal context the data-lake access resolver needs. Both the knowledge tools
- * (ToolContext) and the forced-retrieval feature (ChatCompletionContext) satisfy this
+ * The minimal context the data-lake access resolver needs. The knowledge tools
+ * (ToolContext), the forced-retrieval feature (ChatCompletionContext), and the app-layer
+ * semantic-search route (via server/dataLakes/resolveRetrievalLakeScope) all satisfy this
  * structurally, so this is the ONE shared resolver - no per-call-site duplicate.
+ *
+ * Non-goal: this resolver has NO admin/developer bypass and must not grow one. A privileged
+ * widening here would reach every admin's chat session and pull other tenants' documents
+ * into the model context. Surfaces that need one apply it outside, on their own result.
  */
 export interface DataLakeAccessContext {
   db: {
@@ -22,13 +34,17 @@ export interface DataLakeAccessContext {
   };
   /** Caller's resolved entitlement keys; absent means tag-only matching. */
   entitlementKeys?: string[];
+  /** Optional; only used to report a swallowed dataLakes read failure (see below). */
+  logger?: Logger;
 }
 
 /**
  * Fetches dynamic data lake configs from DB (if available) and returns
  * the merged datalake: tags for the user.
  *
- * Shared helper used by both knowledgeBaseSearch and knowledgeBaseRetrieve tools.
+ * Tags-only convenience wrapper over getDynamicDataLakeAccess below. Currently has no
+ * production callers - every retrieval surface needs the prefixes too and calls the full
+ * resolver directly. Kept as part of the package's public surface.
  */
 export async function getDynamicDataLakeTags(context: DataLakeAccessContext): Promise<string[]> {
   return (await getDynamicDataLakeAccess(context)).dataLakeTags;
@@ -64,8 +80,11 @@ export async function getDynamicDataLakeAccess(
         userId
       );
       dynamicDataLakes = dbLakes.map(toDataLakeConfig);
-    } catch {
-      // DB collection may not exist yet - fall through to hardcoded
+    } catch (err) {
+      // Degrading to the static registry silently looks exactly like "this deployment has no
+      // dynamic lakes", so a read failure would quietly restore the pre-unification behavior.
+      // Still non-fatal: the collection may simply not exist yet.
+      context.logger?.warn('[dataLakes] dynamic lake lookup failed; falling back to the static registry', err);
     }
   }
   // Filter ONCE and derive every set from the single result (the meta-tags and the
@@ -76,8 +95,15 @@ export async function getDynamicDataLakeAccess(
   // matched ONLY within owner/org access, else a colliding prefix leaks another tenant's
   // files). A lake is dynamic iff it came from the DB set.
   const dynamicIds = new Set((dynamicDataLakes ?? []).map(d => d.id));
+  // The meta-tag arm is an ownership bypass, safe only because a lake's datalakeTag is
+  // globally unique. A DB row can still carry a tag the static registry owns (the registry
+  // has no documents, so the unique index never saw the collision), and that row would hand
+  // its creator every tenant's files in the registry lake. createDataLake now refuses to mint
+  // such a tag; this drops any row that predates that guard or was written around it.
+  const reservedTags = new Set(DATA_LAKES.map(lake => lake.datalakeTag));
+  const isShadowedRegistryTag = (dl: DataLakeConfig) => dynamicIds.has(dl.id) && reservedTags.has(dl.datalakeTag);
   return {
-    dataLakeTags: accessibleLakes.map(dl => dl.datalakeTag),
+    dataLakeTags: accessibleLakes.filter(dl => !isShadowedRegistryTag(dl)).map(dl => dl.datalakeTag),
     dataLakeTagPrefixes: accessibleLakes.filter(dl => !dynamicIds.has(dl.id)).map(dl => dl.fileTagPrefix),
     scopedTagPrefixes: accessibleLakes.filter(dl => dynamicIds.has(dl.id)).map(dl => dl.fileTagPrefix),
   };

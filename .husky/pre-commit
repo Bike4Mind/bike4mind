@@ -14,14 +14,20 @@ npx lint-staged
 # Initialize exit code
 FINAL_EXIT_CODE=0
 
+# Every check below runs as a SUBPROCESS, never with `.` / `source`. A sourced script that
+# calls `exit` terminates this hook, taking every later check with it -- and because the
+# first one exits 0 on success, the hook silently "passed" while skipping the no-baseApi,
+# user-lookup, account-id, deprecated-model, and gitleaks checks entirely. Keep these as
+# subprocess calls, and let each script use its own shebang shell.
+
 # Check for pnpm links in package.json
 echo "Running pnpm link check..."
-if ! . "$(dirname -- "$0")/check-pnpm-links.sh"; then
+if ! bash "$(dirname -- "$0")/check-pnpm-links.sh"; then
   FINAL_EXIT_CODE=1
 fi
 
 # Check if help articles changed without regenerating index/embeddings
-if ! . "$(dirname -- "$0")/check-help-content.sh"; then
+if ! sh "$(dirname -- "$0")/check-help-content.sh"; then
   FINAL_EXIT_CODE=1
 fi
 
@@ -62,9 +68,15 @@ if ! bash scripts/check-no-account-ids.sh; then
   FINAL_EXIT_CODE=1
 fi
 
+# Check the staged lockfile for premium overlay leakage
+echo "Running overlay lockfile check..."
+if ! bash scripts/check-no-overlay-lockfile.sh --staged; then
+  FINAL_EXIT_CODE=1
+fi
+
 # Run gitleaks to check for secrets
 echo "Running gitleaks check..."
-if ! . "$(dirname -- "$0")/gitleaks-pre-commit.sh"; then
+if ! sh "$(dirname -- "$0")/gitleaks-pre-commit.sh"; then
   FINAL_EXIT_CODE=1
 fi
 

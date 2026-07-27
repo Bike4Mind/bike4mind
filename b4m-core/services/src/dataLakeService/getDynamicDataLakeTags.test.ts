@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { IDataLakeDocument } from '@bike4mind/common';
+import { DATA_LAKES, type IDataLakeDocument } from '@bike4mind/common';
 import { getDynamicDataLakeAccess, type DataLakeAccessContext } from './getDynamicDataLakeTags';
 
 const dbLake = (overrides: Partial<IDataLakeDocument> & Pick<IDataLakeDocument, 'id'>): IDataLakeDocument =>
@@ -81,5 +81,56 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
       user: { id: { toString: () => 'user-oid' }, tags: [], organizationId: { toString: () => 'org-oid' } },
     });
     expect(spy).toHaveBeenCalledWith([], [], 'org-oid', 'user-oid');
+  });
+
+  it('drops a DB lake that carries a static-registry meta-tag, gate or no gate', async () => {
+    // The registry has no Mongo documents, so the unique index on datalakeTag cannot catch a
+    // row minting `datalake:<registry-slug>`. Its creator would otherwise reach every tenant's
+    // files in that registry lake, because the meta-tag arm bypasses ownership.
+    const reserved = DATA_LAKES[0].datalakeTag;
+    const shadow = dbLake({ id: 'db-oid', slug: 'shadow', fileTagPrefix: 'mine:', datalakeTag: reserved });
+
+    const res = await getDynamicDataLakeAccess(ctx([shadow], { user: { id: 'mallory', tags: [] } }));
+
+    expect(res.dataLakeTags).not.toContain(reserved);
+    expect(res.dataLakeTags).toEqual([]);
+    // Its own prefix is still scoped to the owner, which stays legitimate.
+    expect(res.scopedTagPrefixes).toEqual(['mine:']);
+    expect(res.dataLakeTagPrefixes).toEqual([]);
+  });
+
+  it('reports a swallowed dataLakes read failure instead of silently going static-only', async () => {
+    const warn = vi.fn();
+    const failing = { findActiveByUserTagsAndEntitlements: vi.fn().mockRejectedValue(new Error('mongo down')) };
+
+    const res = await getDynamicDataLakeAccess({
+      db: { dataLakes: failing as never },
+      user: { tags: ['Opti'] },
+      entitlementKeys: [],
+      logger: { warn } as never,
+    });
+
+    expect(warn).toHaveBeenCalled();
+    // Degrades to the static registry rather than throwing - narrowing, never widening.
+    expect(res.scopedTagPrefixes).toEqual([]);
+  });
+
+  it('keeps a normal DB lake tag - the drop targets registry collisions only', async () => {
+    const res = await getDynamicDataLakeAccess(ctx([dbLake({ id: 'ordinary' })], { user: { tags: [] } }));
+
+    expect(res.dataLakeTags).toEqual(['datalake:ordinary']);
+  });
+
+  it('KNOWN GAP: drops a gated lake the CALLER OWNS, because the in-memory filter has no owner arm', async () => {
+    // The DB layer returns it via the owner bypass, then getAccessibleDataLakes re-filters on
+    // tag/entitlement alone and discards it. The browse resolver (apps/client/server/dataLakes)
+    // deliberately skips that second pass for exactly this reason, so /articles lists a lake
+    // that retrieval cannot reach. Tracked in #976; pinned so the fix reads as a deliberate diff.
+    const own = dbLake({ id: 'mine', createdByUserId: 'owner', requiredUserTag: 'SomeTagIDoNotHold' });
+
+    const res = await getDynamicDataLakeAccess(ctx([own], { user: { id: 'owner', tags: [] } }));
+
+    expect(res.dataLakeTags).toEqual([]);
+    expect(res.scopedTagPrefixes).toEqual([]);
   });
 });

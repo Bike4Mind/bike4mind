@@ -57,6 +57,20 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         toolSchemas: { type: Number, required: false },
         userPrompt: { type: Number, required: false },
       },
+      // Assembled context-window usage for the completed turn. Like the billing
+      // audit fields above, this must be declared or Mongoose strict mode silently
+      // strips it on save (it is set in ChatCompletionProcess and read by the
+      // client's useSessionContextUsage to surface effective context size).
+      contextWindowUsage: {
+        contextLimit: { type: Number, required: false },
+        maxOutputTokens: { type: Number, required: false },
+        safeMaxInputTokens: { type: Number, required: false },
+        actualInputTokens: { type: Number, required: false },
+        bufferTokens: { type: Number, required: false },
+        utilizationPercentage: { type: Number, required: false },
+        overflowDetected: { type: Boolean, required: false },
+        overflowAmount: { type: Number, required: false },
+      },
     },
     functionCalls: [
       {

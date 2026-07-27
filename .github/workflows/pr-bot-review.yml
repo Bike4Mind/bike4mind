@@ -1,6 +1,7 @@
 name: pr-bot-review
 
-# Auto-reviews lumina5 PRs using the /bot-review skill.
+# Auto-reviews this repo's PRs using the bot-review skill (fetched at run time
+# from the private b4m-devtools repo; internal dev tooling is not committed here).
 #
 # Fires on:
 #   - opened (non-draft), ready_for_review, reopened → first auto-review
@@ -154,6 +155,45 @@ jobs:
             --repo ${{ github.repository }} \
             --body "🤖 Skipped re-review - the only new commits since the last bot review are the auto-generated changeset (no substantive changes). Push a code change and re-apply \`bot-review\` for a fresh review." || true
 
+      # The bot-review skill lives in the PRIVATE b4m-devtools repo (this public repo
+      # intentionally carries no .claude/ tooling). Mint a token scoped to ONLY
+      # b4m-devtools (the app has org-wide access, but a public workflow should hold
+      # the narrowest token possible), then fetch just the one skill file.
+      - name: Mint b4m-devtools read token
+        id: skill_token
+        if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.PREMIUM_OVERLAY_CLIENT_ID }}
+          private-key: ${{ secrets.PREMIUM_OVERLAY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: b4m-devtools
+
+      - name: Fetch bot-review skill from b4m-devtools (fail loud)
+        id: skill_fetch
+        if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ steps.skill_token.outputs.token }}
+          DEST: ${{ runner.temp }}/bot-review-skill.md
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # FAIL LOUD: a missing / unreadable / empty skill must RED this step, never
+          # silently fall back to a thinner inline review (the exact regression this
+          # replaced). Path is lowercase `skill.md` to match b4m-devtools' convention -
+          # the runner is case-sensitive, so this must stay in lockstep with that repo.
+          if ! gh api "repos/${OWNER}/b4m-devtools/contents/.claude/skills/bot-review/skill.md?ref=main" \
+                 --jq '.content' | base64 -d > "$DEST"; then
+            echo "::error::Could not fetch bot-review skill from b4m-devtools (token / access / path). Refusing to run a degraded review."
+            exit 1
+          fi
+          if [ ! -s "$DEST" ]; then
+            echo "::error::bot-review skill fetched from b4m-devtools is empty. Refusing to run a degraded review."
+            exit 1
+          fi
+          echo "skill_file=$DEST" >> "$GITHUB_OUTPUT"
+          echo "bot-review skill fetched ($(wc -l < "$DEST") lines) from b4m-devtools@main"
+
       - name: Run /bot-review
         id: bot_review
         if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
@@ -164,11 +204,13 @@ jobs:
             You are running in GitHub Actions to auto-review PR
             #${{ github.event.pull_request.number }} in ${{ github.repository }}.
 
-            Run `git show origin/main:.claude/skills/bot-review/SKILL.md` to
-            read the skill, then execute that workflow against PR
+            The bot-review skill has been fetched to
+            `${{ steps.skill_fetch.outputs.skill_file }}` from the private
+            b4m-devtools repo. Read that file with the Read tool to get the review
+            methodology, then execute that workflow against PR
             #${{ github.event.pull_request.number }}.
-            Always read the skill from origin/main — never from the checked-out
-            PR head — so a PR modifying the skill cannot alter its own review.
+            The skill lives in a separate repo this PR cannot modify, so a PR
+            cannot alter the methodology used to review it.
 
             Context for automation — these override the skill body where they conflict:
             - There is no human to interact with. Make reasonable defaults if
@@ -179,10 +221,10 @@ jobs:
             - The repo is already checked out at the PR's head SHA, so use
               `gh pr diff` and read files locally rather than `gh pr checkout`.
               Skip the force-sync git steps from the skill.
-            - Skip the "reinstall dependencies and rebuild core packages"
-              step from the skill (skill step 3, `pnpm i -r && pnpm core:build`).
-              The runner is ephemeral; we are not running typecheck or tests
-              as part of this review.
+            - Skip the skill's "reinstall dependencies and rebuild core
+              packages" step (`pnpm i -r && pnpm core:build`). The runner is
+              ephemeral; we are not running typecheck or tests as part of
+              this review.
             - Restoring the original branch at the end is unnecessary in CI — skip it.
           claude_args: |
             --model claude-opus-4-7
@@ -206,6 +248,18 @@ jobs:
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
             --body "🤖 Automated review did not complete — the run errored or exhausted its turn budget, so no review was posted. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details. Re-apply the \`bot-review\` label to retry, or request a human reviewer."
+
+      - name: Report skill-fetch failure
+        # Fail loud + visible: if the skill couldn't be fetched we skipped the review
+        # entirely (rather than degrade silently), so surface it on the PR, not just as
+        # a red check. Best-effort comment - never red the job further.
+        if: always() && steps.skill_fetch.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "🤖 bot-review could not fetch its review skill from b4m-devtools, so no review ran (failing loud rather than posting a degraded review). See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). This is an infra issue (token/access/path), not a problem with the PR." || true
 
       - name: Remove re-review label
         if: always() && github.event.action == 'labeled' && github.event.label.name == 'bot-review'

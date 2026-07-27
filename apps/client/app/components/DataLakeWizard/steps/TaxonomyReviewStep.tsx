@@ -1,5 +1,4 @@
 import { Box, Button, Chip, CircularProgress, IconButton, Input, Stack, Typography } from '@mui/joy';
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -162,7 +161,6 @@ const TagCard = memo(function TagCard({ tag, onUpdate, onDelete }: TagCardProps)
 export default function TaxonomyReviewStep() {
   const theme = useTheme();
   const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
-  const setTagPrefix = useDataLakeWizardStore(s => s.setTagPrefix);
   const updateTag = useDataLakeWizardStore(s => s.updateTag);
   const deleteTag = useDataLakeWizardStore(s => s.deleteTag);
   const inferTaxonomy = useInferTaxonomy();
@@ -218,21 +216,10 @@ export default function TaxonomyReviewStep() {
       data-testid="wizard-taxonomy-step"
       sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, p: 2, overflow: 'auto' }}
     >
-      {/* Header row: prefix input + re-analyze button */}
+      {/* Header row: suggested name + re-analyze button. Tag Prefix is edited on the
+          Config step (its single home) - it drives the submitted fileTagPrefix, so
+          duplicating an editable copy here only invited the two to drift out of sync. */}
       <Stack direction="row" gap={2} alignItems="flex-end" flexWrap="wrap">
-        <Box sx={{ flex: 1, minWidth: 200 }}>
-          <Typography level="body-xs" fontWeight="bold" sx={{ mb: 0.5 }}>
-            Tag Prefix
-          </Typography>
-          <Input
-            size="sm"
-            value={taxonomy.prefix}
-            onChange={e => setTagPrefix(e.target.value)}
-            placeholder="e.g. acme:"
-            startDecorator={<AutoAwesomeIcon sx={{ fontSize: 16 }} />}
-            sx={{ fontFamily: 'monospace' }}
-          />
-        </Box>
         <Box sx={{ flex: 1, minWidth: 200 }}>
           <Typography level="body-xs" fontWeight="bold" sx={{ mb: 0.5 }}>
             Suggested Name

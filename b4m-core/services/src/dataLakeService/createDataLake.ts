@@ -1,5 +1,5 @@
 import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
-import { CreateDataLakeRequestInput, normalizeEntitlementKey } from '@bike4mind/common';
+import { CreateDataLakeRequestInput, DATA_LAKES, normalizeEntitlementKey } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import type { z } from 'zod';
 
@@ -23,6 +23,12 @@ function buildDatalakeTag(slug: string, organizationId?: string): string {
 /**
  * Resolves a slug collision within the lake's scope (org) deterministically by
  * appending -1, -2, ... until free. Keeps create idempotent-ish instead of hard-failing.
+ *
+ * A slug is "taken" if a lake in the same scope holds it OR if it would mint a meta-tag the
+ * static registry already owns. The registry has no Mongo documents, so the unique index on
+ * `datalakeTag` cannot see that second collision - and the meta-tag is an ownership BYPASS in
+ * buildOwnershipConditions, so a lake minting `datalake:<registry-slug>` would read every
+ * tenant's files in that registry lake.
  */
 async function disambiguateSlug(
   db: CreateDataLakeAdapters['db'],
@@ -30,8 +36,10 @@ async function disambiguateSlug(
   organizationId?: string
 ): Promise<string> {
   const scope = organizationId ? { organizationId } : { organizationId: { $in: [null, ''] } };
+  const reservedTags = new Set(DATA_LAKES.map(lake => lake.datalakeTag));
   for (let attempt = 0; attempt < 50; attempt++) {
     const slug = attempt === 0 ? baseSlug : `${baseSlug}-${attempt}`;
+    if (reservedTags.has(buildDatalakeTag(slug, organizationId))) continue;
     const existing = await db.dataLakes.find({ ...scope, slug });
     if (existing.length === 0) return slug;
   }

@@ -52,16 +52,38 @@ export class OpenAIEmbeddingService implements EmbeddingService {
   }
 
   async generateEmbedding(text: string): Promise<number[]> {
-    const response = await this.client.embeddings.create({
-      model: this.model,
-      input: text,
-    });
+    const response = await this.client.embeddings
+      .create({
+        model: this.model,
+        input: text,
+      })
+      .catch((error: unknown) => {
+        throw this.toActionableAuthError(error);
+      });
 
     if (response.data && response.data.length > 0) {
       return response.data[0].embedding;
     }
 
     throw new Error('No embedding data received from OpenAI');
+  }
+
+  /**
+   * Turn a raw OpenAI 401 into an operator-actionable message. A missing/placeholder key is caught
+   * up front by EmbeddingFactory; this is the runtime backstop for a key that is invalid or revoked
+   * at call time, so a failed file reports what to fix instead of a bare AuthenticationError.
+   * Preserves the original message, and is a no-op for any non-auth error so the token-limit /
+   * rate-limit / server-error handling below is left untouched.
+   */
+  private toActionableAuthError(error: unknown): unknown {
+    if (error instanceof OpenAI.AuthenticationError) {
+      return new Error(
+        `OpenAI rejected the embedding request (401 Unauthorized): the OPENAI_API_KEY is invalid or expired. ` +
+          `Set a valid key, or for an airgapped self-host unset it and set OLLAMA_BASE_URL to use a local embedder. ` +
+          `(original: ${error.message})`
+      );
+    }
+    return error;
   }
 
   /**
@@ -291,6 +313,13 @@ export class OpenAIEmbeddingService implements EmbeddingService {
         throw new Error('No embedding data received from OpenAI');
       }
     } catch (error) {
+      // A 401 is an auth failure, not a token-limit or transient error: surface it actionably and
+      // do NOT fall through to the split / individual-fallback branches (which would either mask it
+      // or re-issue the same doomed request once per text).
+      if (error instanceof OpenAI.AuthenticationError) {
+        throw this.toActionableAuthError(error);
+      }
+
       // If API rejects due to token limit, split and retry recursively.
       // This handles cases where the local tokenizer underestimates the actual token count.
       if (this.isTokenLimitError(error)) {
@@ -352,8 +381,10 @@ export class OpenAIEmbeddingService implements EmbeddingService {
         const embedding = await this.generateEmbedding(text);
         embeddings.push(embedding);
       } catch (error) {
-        // If individual call fails, rethrow (no more fallback)
-        throw new Error(`Failed to generate embedding for text: ${error}`);
+        // No more fallback. generateEmbedding already surfaces an actionable message (e.g. the
+        // wrapped 401 for a mid-flight-revoked key), so rethrow it as-is rather than burying it
+        // under a generic prefix; only a non-Error throw gets the descriptive wrapper.
+        throw error instanceof Error ? error : new Error(`Failed to generate embedding for text: ${String(error)}`);
       }
     }
 
