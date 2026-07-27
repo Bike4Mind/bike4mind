@@ -11,7 +11,7 @@ import { Logger } from '@bike4mind/observability';
 import { AnthropicBackend } from './anthropicBackend';
 import { AWSBackend } from './awsBackend';
 import { ICompletionBackend } from './backend';
-import { resolveListingKey } from './backendGate';
+import { isBackendUsable, resolveListingKey } from './backendGate';
 import type { ApiKeyTable, BackendGateContext } from './backendGate';
 import { toProviderEndUserId } from './endUserId';
 import { mergeCatalog } from './mergeCatalog';
@@ -182,29 +182,105 @@ export function setModelCatalogProvider(provider: ModelCatalogProvider | null): 
   _modelCache = null;
 }
 
-function getModelCacheKey(apiKeys: ApiKeyTable | null): string {
-  if (!apiKeys) return 'null';
-  return Object.keys(apiKeys)
-    .sort()
-    .map(k => `${k}:${apiKeys[k as keyof ApiKeyTable] ? '1' : '0'}`)
-    .join(',');
+/**
+ * Backends whose credential is a base URL. Presence is not identity for these:
+ * two self-host callers pointing at different Ollama hosts serve different model
+ * lists, so the key hashes the value instead of collapsing it to a bit.
+ */
+const URL_VALUED_BACKENDS: readonly string[] = [ModelBackend.Ollama, ModelBackend.LocalImage];
+
+/** FNV-1a, so a base URL that embeds basic-auth credentials never lands in the key verbatim. */
+function hashKeyValue(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
 }
+
+/**
+ * Cache identity for one assembled model list. `includePrivate` is deliberately
+ * absent: the cache holds the private-inclusive list and the filter is applied on
+ * read, so the picker route and the private-model consumers share one entry
+ * instead of evicting each other's rebuild.
+ */
+function getModelCacheKey(
+  apiKeys: ApiKeyTable | null,
+  gate: { isSelfHost: boolean; perBackendTimeoutMs?: number }
+): string {
+  // isSelfHost decides which backends get constructed and perBackendTimeoutMs
+  // decides what a slow one contributes, so both are part of the identity.
+  const suffix = `|selfHost:${gate.isSelfHost ? '1' : '0'}|timeout:${gate.perBackendTimeoutMs ?? 0}`;
+  if (!apiKeys) return `null${suffix}`;
+  const keys = Object.keys(apiKeys)
+    .sort()
+    .map(k => {
+      const value = apiKeys[k as keyof ApiKeyTable];
+      if (value && URL_VALUED_BACKENDS.includes(k)) return `${k}:#${hashKeyValue(value)}`;
+      return `${k}:${value ? '1' : '0'}`;
+    })
+    .join(',');
+  return `${keys}${suffix}`;
+}
+
+export interface GetAvailableModelsOptions {
+  /**
+   * Deadline for one backend's listing call, in ms. A backend that misses it
+   * contributes nothing instead of holding up the whole fan-out. Omitted means no
+   * deadline, which is what every caller but the picker route wants.
+   */
+  perBackendTimeoutMs?: number;
+  /**
+   * Emit models flagged `private`. Defaults to true because the settlement and
+   * agent consumers resolve pinned private models by id and must keep seeing
+   * them; only /api/models, which feeds the picker, passes false.
+   */
+  includePrivate?: boolean;
+  /** Deployment self-host flag; defaults to B4M_SELF_HOST. See BackendGateContext. */
+  isSelfHost?: boolean;
+}
+
+/**
+ * Bound one backend's listing call. Rejects rather than resolving empty so the
+ * fan-out's existing catch performs the degradation and names the slow backend.
+ */
+function withListingTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+/** The caller's view of a cached list; the cache itself always holds every model. */
+const applyPrivateVisibility = (models: ModelInfo[], includePrivate: boolean): ModelInfo[] =>
+  includePrivate ? models : models.filter(m => !m.private);
 
 // Given Settings data, return a list of models that are available.  In the
 // future, we might consider using this to filter based on capability.
 // Only meant to be called from the server.
-export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<ModelInfo[]> => {
+export const getAvailableModels = async (
+  apiKeys: ApiKeyTable | null,
+  options: GetAvailableModelsOptions = {}
+): Promise<ModelInfo[]> => {
+  const { perBackendTimeoutMs } = options;
+  const includePrivate = options.includePrivate ?? true;
+  const isSelfHost = options.isSelfHost ?? process.env.B4M_SELF_HOST === 'true';
+
   // Check module-level cache first
-  const cacheKey = getModelCacheKey(apiKeys);
+  const cacheKey = getModelCacheKey(apiKeys, { isSelfHost, perBackendTimeoutMs });
   if (_modelCache && _modelCache.key === cacheKey && Date.now() < _modelCache.expiresAt) {
-    return _modelCache.models;
+    return applyPrivateVisibility(_modelCache.models, includePrivate);
   }
 
   // Every listing credential comes from resolveListingKey, the same predicate
   // the catalog merge gates catalog-only records with, so the two tiers cannot
   // disagree about which backends this caller can reach. The local-image env
   // fallback and BFL's demo key live in that predicate for the same reason.
-  const gateCtx: BackendGateContext = { apiKeys, isSelfHost: process.env.B4M_SELF_HOST === 'true' };
+  const gateCtx: BackendGateContext = { apiKeys, isSelfHost };
   const openaiKey = resolveListingKey(ModelBackend.OpenAI, gateCtx);
   const anthropicKey = resolveListingKey(ModelBackend.Anthropic, gateCtx);
   const geminiKey = resolveListingKey(ModelBackend.Gemini, gateCtx);
@@ -216,12 +292,17 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
   const backends = {
     [ModelBackend.OpenAI]: openaiKey ? new OpenAIBackend(openaiKey) : null,
     [ModelBackend.Anthropic]: anthropicKey ? new AnthropicBackend(anthropicKey) : null,
-    [ModelBackend.Bedrock]: /* TODO: feature flag */ new UndifferentiatedBedrockBackend(),
+    // The keyless AWS-credentialed pair goes through isBackendUsable so the
+    // self-host cutoff is stated once, in the same predicate the catalog tier
+    // reads, instead of once here and once in /api/models.
+    [ModelBackend.Bedrock]: isBackendUsable(ModelBackend.Bedrock, gateCtx)
+      ? new UndifferentiatedBedrockBackend()
+      : null,
     [ModelBackend.Gemini]: geminiKey ? new GeminiBackend(geminiKey) : null,
     [ModelBackend.Ollama]: ollamaKey ? new OllamaBackend(ollamaKey) : null,
     [ModelBackend.BFL]: bflKey ? new BFLBackend(bflKey) : null,
     [ModelBackend.XAI]: xaiKey ? new XAIBackend(xaiKey) : null,
-    [ModelBackend.AWS]: new AWSBackend(),
+    [ModelBackend.AWS]: isBackendUsable(ModelBackend.AWS, gateCtx) ? new AWSBackend() : null,
     [ModelBackend.LocalImage]: localImageBaseUrl
       ? new LocalImageBackend(localImageBaseUrl, Logger.globalInstance)
       : null,
@@ -231,7 +312,10 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
     if (!backend) return { backendName, models: [] };
 
     try {
-      const models = await backend.getModelInfo();
+      const listing = backend.getModelInfo();
+      const models = await (perBackendTimeoutMs
+        ? withListingTimeout(listing, perBackendTimeoutMs, backendName)
+        : listing);
       return { backendName, models };
     } catch (error) {
       Logger.globalInstance.error(`[getAvailableModels] Error fetching models from ${backendName}:`, error);
@@ -298,11 +382,12 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
     return today.getTime() < cutoff.getTime();
   });
 
-  // Store in module-level cache (short-lived when a catalog fetch failed).
+  // Store in module-level cache (short-lived when a catalog fetch failed). The
+  // cached list is always private-inclusive; see getModelCacheKey.
   const ttl = catalogFetchFailed ? MODEL_CACHE_RETRY_TTL_MS : MODEL_CACHE_TTL_MS;
   _modelCache = { key: cacheKey, models: filtered, expiresAt: Date.now() + ttl };
 
-  return filtered;
+  return applyPrivateVisibility(filtered, includePrivate);
 };
 
 // Types and core utils:

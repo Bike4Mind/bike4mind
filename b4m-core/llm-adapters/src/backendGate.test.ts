@@ -38,9 +38,14 @@ describe('resolveListingKey', () => {
 });
 
 describe('isBackendUsable', () => {
-  it('treats the keyless backends as always listable', () => {
+  it('treats the keyless backends as listable without a key', () => {
     expect(isBackendUsable(ModelBackend.Bedrock, { apiKeys: null, isSelfHost: false })).toBe(true);
     expect(isBackendUsable(ModelBackend.AWS, { apiKeys: null, isSelfHost: false })).toBe(true);
+  });
+
+  it('withholds the AWS-credentialed backends under self-host', () => {
+    expect(isBackendUsable(ModelBackend.Bedrock, { apiKeys: null, isSelfHost: true })).toBe(false);
+    expect(isBackendUsable(ModelBackend.AWS, { apiKeys: null, isSelfHost: true })).toBe(false);
   });
 
   it('fails closed for a backend this build cannot list at all', () => {

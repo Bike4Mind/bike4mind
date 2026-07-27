@@ -17,11 +17,19 @@ export type ApiKeyTable = {
  */
 export interface BackendGateContext {
   apiKeys: ApiKeyTable | null;
-  /** B4M_SELF_HOST; gates the IMAGE_GEN_BASE_URL fallback in resolveListingKey. */
+  /**
+   * B4M_SELF_HOST. Opens the IMAGE_GEN_BASE_URL fallback in resolveListingKey and
+   * closes the AWS-credentialed backends in isBackendUsable.
+   */
   isSelfHost: boolean;
 }
 
-/** Listing backends that take no credential: constructed unconditionally today. */
+/**
+ * Listing backends that take no credential. They still need real AWS credentials
+ * at dispatch, which a self-host install does not have (its AWS_ACCESS_KEY_ID is
+ * the local MinIO credential), so `isSelfHost` withholds them rather than
+ * offering choices that can only fail once selected.
+ */
 const KEYLESS_LISTING_BACKENDS: readonly string[] = [ModelBackend.Bedrock, ModelBackend.AWS];
 
 /**
@@ -67,7 +75,7 @@ export function resolveListingKey(backend: ModelBackend, ctx: BackendGateContext
  * build cannot list fail closed.
  */
 export function isBackendUsable(backend: string, ctx: BackendGateContext): boolean {
-  if (KEYLESS_LISTING_BACKENDS.includes(backend)) return true;
+  if (KEYLESS_LISTING_BACKENDS.includes(backend)) return !ctx.isSelfHost;
   if (!KEYED_LISTING_BACKENDS.includes(backend)) return false;
   return resolveListingKey(backend as ModelBackend, ctx) !== null;
 }
