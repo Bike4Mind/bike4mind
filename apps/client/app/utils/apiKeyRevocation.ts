@@ -21,8 +21,9 @@ interface RevocationFields {
  * revocation metadata existed carry no timestamp, and `updatedAt` is not a
  * substitute (any write to the document bumps it).
  *
- * `revokedBy` is deliberately not rendered - it is a raw user id that always
- * equals the key's minter while every revoke path is minter-scoped.
+ * `revokedBy` is deliberately not rendered - it is a raw user id, and it is not
+ * necessarily the minter (an org admin can revoke a key billed to an org they
+ * administer). Surfacing it would need a username lookup this helper does not do.
  */
 export function revocationTooltip(key: RevocationFields): string | null {
   if (!key.revokedAt) return null;
