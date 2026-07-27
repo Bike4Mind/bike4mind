@@ -5,14 +5,15 @@ import {
   type IDiscoverySourceReport,
   type IModelDiscoveryRun,
   type IModelDiscoveryRunDocument,
+  type IModelDiscoveryState,
   type IModelCatalogRow,
   type IModelCatalogRowInput,
   type IModelPriceInput,
 } from '@bike4mind/common';
 import { resolveCatalogRecords, type ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
-import { applyAbsence, planAbsence } from './absence';
+import { applyAbsence, planAbsence, type AbsencePlan } from './absence';
 import { limitConcurrency } from './concurrency';
-import { planCatalogWrites, summarizeDiff } from './catalogWrite';
+import { planCatalogWrites, summarizeDiff, type CatalogWritePlan } from './catalogWrite';
 import {
   detectParserRowShifts,
   planLifecycle,
@@ -20,8 +21,9 @@ import {
   type LifecyclePlan,
   type ParserRowShift,
 } from './lifecyclePlan';
-import { describePriceRows, perTokenRatesInForce, planPriceWrites } from './pricePlan';
+import { describePriceRows, perTokenRatesInForce, planPriceWrites, type PricePlan } from './pricePlan';
 import type {
+  CatalogDiffEntry,
   DiscoveryAutoEnablePolicy,
   DiscoveryAutoRemapPolicy,
   DiscoveryCredentials,
@@ -30,7 +32,10 @@ import type {
   DiscoveryMode,
   DiscoverySource,
   DiscoverySourceOk,
+  DroppedSourceRecord,
+  LifecycleDateChange,
   LifecycleSuggestion,
+  LifecycleTransition,
   ModelDiscoveryAdapters,
   ModelDiscoveryMetrics,
   ModelDiscoveryRunResult,
@@ -55,6 +60,20 @@ export const DEFAULT_SOURCE_DEADLINE_MS = 30_000;
 export const PAGINATED_SOURCE_DEADLINE_MS = 60_000;
 
 export const DEFAULT_CONCURRENCY = 4;
+
+/**
+ * Passes one run may make, the first included.
+ *
+ * A pass that writes changes what the next one computes: a model appended in
+ * pass 1 is a join target in pass 2, and the enrichment and prices that arrive
+ * then can promote or sunset it. The run therefore repeats itself until a pass
+ * appends nothing, which is what settles a new model inside ONE run instead of
+ * one 6h run per step. Steady state is three passes - one that writes, one that
+ * writes the join-dependent remainder, one that verifies zero - and the cap is
+ * what keeps a source that disagrees with itself on every fetch from turning
+ * that into an unbounded loop.
+ */
+export const MAX_DISCOVERY_PASSES = 4;
 
 /**
  * The retry attempt's own deadline. One retry per source, and it may not cost a
@@ -182,11 +201,11 @@ async function executeRun(
   }
 
   const globalDeadline = deadlineSignal(ctx.globalDeadlineMs);
+  const limit = limitConcurrency(options.concurrency ?? DEFAULT_CONCURRENCY);
   const results = new Map<string, { report: IDiscoverySourceReport; result: SourceResult }>();
-  try {
-    const limit = limitConcurrency(options.concurrency ?? DEFAULT_CONCURRENCY);
-    await Promise.all(
-      attempts.map(source =>
+  const fetchAll = (batch: readonly DiscoverySource[]): Promise<unknown> =>
+    Promise.all(
+      batch.map(source =>
         limit(async () => {
           const outcome = await fetchSource(source, {
             credentials,
@@ -202,137 +221,120 @@ async function executeRun(
         })
       )
     );
+  const succeeded = (): DiscoverySource[] => attempts.filter(source => results.get(source.name)?.result.ok === true);
+
+  const passes: CompletedPass[] = [];
+  let parserShifts: ParserRowShift[] = [];
+  try {
+    await fetchAll(attempts);
+
+    // A parser whose row count moved is reading a restructured page, so this run
+    // trusts nothing that source scraped - suggestions included (sec 5.10).
+    // Decided once: only providers parse a rendered page and providers are
+    // fetched once, so no later pass has a new row count to compare.
+    parserShifts = detectParserRowShifts(parserRowsOf(succeeded(), results), history.parserRows);
+    logParserShifts(parserShifts, logger);
+    const droppedDocsSources = new Set(parserShifts.map(shift => shift.source));
+
+    // The only sources whose answer this run's own writes can change: an
+    // aggregator joins against the catalog. One that was skipped or failed in
+    // pass 1 stays out - the convergence loop may not become a way around the
+    // interval guard or a second chance for a broken feed.
+    const rejoining = succeeded().filter(source => source.kind === 'aggregator');
+
+    for (let pass = 1; pass <= MAX_DISCOVERY_PASSES; pass += 1) {
+      if (pass > 1) {
+        adapters.refreshCatalogView?.();
+        await fetchAll(rejoining);
+      }
+
+      const plan = await planPass({
+        adapters,
+        ctx,
+        options,
+        runId,
+        credentials,
+        succeeded: succeeded(),
+        results,
+        droppedDocsSources,
+        effectiveAt: new Date(startedAt.getTime() + pass - 1),
+        statesBeforeRun: passes[0]?.plan.statesBeforeRun,
+      });
+
+      let appended = 0;
+      let pricesAppended = 0;
+      if (ctx.mode === 'write') {
+        appended = await appendRows(plan.lifecycle.rows, adapters, logger);
+        pricesAppended = await appendPriceRows(plan.prices.rows, adapters, logger);
+        // Per pass rather than once at the end: recordSuggestion is a
+        // same-content overwrite, so a queue item a later pass re-raises costs
+        // one redundant write instead of a lost one when a pass throws.
+        await recordSuggestions(plan.lifecycle.suggestions, adapters, startedAt, logger);
+      }
+      passes.push({ plan, appended, pricesAppended });
+      if (pass > 1) {
+        logger.info(
+          `${LOG_PREFIX} convergence pass ${pass}: appended=${appended} priced=${pricesAppended} ` +
+            `after refetching ${rejoining.length} aggregator(s)`
+        );
+      }
+
+      if (ctx.mode !== 'write' || appended + pricesAppended === 0 || globalDeadline.signal.aborted) break;
+      if (pass === MAX_DISCOVERY_PASSES) {
+        logger.warn(
+          `${LOG_PREFIX} convergence capped at ${MAX_DISCOVERY_PASSES} passes while pass ${pass} was still ` +
+            `appending (${appended} rows, ${pricesAppended} prices); the remainder settles on the next run`
+        );
+      }
+    }
+
+    // Once per run, after the last pass. Sightings are provider-only and
+    // providers are fetched once, so no later pass has anything different to
+    // record, and deferring the apply keeps the counters the graduation plan
+    // read (statesBeforeRun) valid for every pass.
+    if (ctx.mode === 'write') await applyAbsence(passes[0].plan.absence, db.discoveryState, startedAt);
   } finally {
     globalDeadline.cancel();
   }
 
   const deadlineHit = globalDeadline.signal.aborted;
-  const succeeded = attempts.filter(source => results.get(source.name)?.result.ok === true);
-
-  const contributions = succeeded.map(source => ({
-    name: source.name,
-    kind: source.kind,
-    records: (results.get(source.name)?.result as DiscoverySourceOk).records ?? [],
-  }));
-
-  // A parser whose row count moved is reading a restructured page, so this run
-  // trusts nothing that source scraped - suggestions included (sec 5.10).
-  const parserShifts = detectParserRowShifts(parserRowsOf(succeeded, results), history.parserRows);
-  logParserShifts(parserShifts, logger);
-  const signals = planLifecycleSignals({
-    contributions,
-    droppedDocsSources: new Set(parserShifts.map(shift => shift.source)),
-  });
-
-  const { rows: inForce, rejected } = await db.catalog.rowsInForceWithRejects(startedAt);
-  const base = resolveCatalogRecords(inForce.filter(row => row.source !== 'operator'));
-  // The catalog as the runtime sees it. The catalog plan diffs against `base` so
-  // it can never propose over an operator row, but the lifecycle constraints
-  // have to read what an operator decided (sec 8 auto-remap).
-  const resolvedInForce = resolveCatalogRecords(inForce);
-  const operatorOwnedModelIds = new Set(inForce.filter(row => row.source === 'operator').map(row => row.modelId));
-  const priorDiscoveryGroups = discoveryGroupsInForce(inForce);
-
-  const priceRowsInForce = await db.prices.rowsInForce(startedAt);
-  // A price the catalog already holds satisfies the promotion predicate, so a
-  // model priced by an earlier run (or by an operator) is not re-blocked as
-  // unpriced on a run where no source happened to quote it.
-  const knownPricedModelIds = new Set([
-    ...priceRowsInForce.filter(row => row.unit === 'per_token').map(row => row.modelId),
-    ...(options.knownPricedModelIds ?? []),
-  ]);
-
-  const plan = planCatalogWrites({
-    contributions: signals.contributions,
-    resolveDispatch: adapters.resolveDispatch,
-    base,
-    operatorOwnedModelIds,
-    credentials,
-    policy: ctx.autoEnable,
-    knownPricedModelIds,
-    runStartedAt: startedAt,
-    runId,
-  });
-
-  const pricePlan = planPriceWrites({
-    contributions,
-    rowsInForce: priceRowsInForce,
-    // The models this run adds are known too: a new model's first price row
-    // lands in the same run as the catalog row that makes it a model at all.
-    knownModelIds: new Set([...base.keys(), ...operatorOwnedModelIds, ...plan.rows.map(row => row.modelId)]),
-    bandPct: ctx.bandPct,
-    runStartedAt: startedAt,
-  });
-  logPriceFlags(pricePlan.flags, logger);
-
-  const coveredBackends = new Set<string>();
-  for (const source of succeeded) {
-    const ok = results.get(source.name)?.result as DiscoverySourceOk;
-    for (const backend of ok.authoritativeFor ?? []) coveredBackends.add(backend);
-  }
-  const absence = planAbsence({ coveredBackends, sightedModelIds: plan.sightedModelIds, base });
-
-  // Read BEFORE applyAbsence: planLifecycle adds this run's miss itself, so the
-  // counters it reads must not already include it (the ordering invariant).
-  const statesBeforeRun = new Map(
-    (await db.discoveryState.findByModelIds(absence.missed)).map(state => [state.modelId, state] as const)
-  );
-  const lifecycle = planLifecycle({
-    catalogPlan: plan,
-    base,
-    resolvedInForce,
-    docs: signals.docs,
-    missed: absence.missed,
-    statesBeforeRun,
-    ratesInForce: perTokenRatesInForce(priceRowsInForce),
-    priorDiscoveryGroups,
-    autoRemap: ctx.autoRemap,
-    operatorOwnedModelIds,
-    runStartedAt: startedAt,
-    runId,
-  });
-  logLifecycle(lifecycle, logger);
-
-  let appended = 0;
-  let pricesAppended = 0;
-  if (ctx.mode === 'write') {
-    appended = await appendRows(lifecycle.rows, adapters, logger);
-    pricesAppended = await appendPriceRows(pricePlan.rows, adapters, logger);
-    await applyAbsence(absence, db.discoveryState, startedAt);
-    await recordSuggestions(lifecycle.suggestions, adapters, startedAt, logger);
-  }
-
-  const status = runStatus(attempts.length, succeeded.length, deadlineHit, skippedSources.length > 0);
-  const summary = summarizeDiff(lifecycle.diff);
-  const deprecated = lifecycle.transitions.map(transition => transition.modelId);
-  const joinCoverage = computeJoinCoverage(contributions, base);
+  const succeededCount = succeeded().length;
+  const status = runStatus(attempts.length, succeededCount, deadlineHit, skippedSources.length > 0);
+  const merged = aggregate(passes);
+  const summary = summarizeDiff(merged.diff);
+  const added = [...new Set(summary.added)];
+  const promoted = [...new Set(summary.promoted)];
+  const deprecated = merged.transitions.map(transition => transition.modelId);
   const sourceReports = [...results.values()].map(entry => entry.report);
   const finishedAt = ctx.now();
+
+  logPriceFlags(merged.priceFlags, logger);
+  logLifecycle(merged, logger);
 
   await db.discoveryRuns.update({
     id: runId,
     status,
     finishedAt,
     sources: sourceReports,
-    joinCoverage,
-    unmatchedIds: unmatchedIds(contributions, base),
+    joinCoverage: merged.joinCoverage,
+    unmatchedIds: merged.unmatchedIds,
     changes: {
-      added: summary.added,
-      promoted: summary.promoted,
+      added,
+      promoted,
       deprecated,
       // The plan, not the writes, in both modes - same as `added`.
-      repriced: pricePlan.rows.map(row => row.modelId),
+      repriced: [...new Set(merged.priceRows.map(row => row.modelId))],
       // Operator overlaps and price flags are one queue: both are "a human has
       // to look at this model", which is what report mode exists to surface.
-      flagged: [...new Set([...summary.operatorConflicts, ...pricePlan.flags.map(flag => flag.modelId)])],
+      flagged: [...new Set([...summary.operatorConflicts, ...merged.priceFlags.map(flag => flag.modelId)])],
     },
   } as Partial<IModelDiscoveryRunDocument>);
 
   logger.info(
-    `${LOG_PREFIX} run ${runId} ${status} mode=${ctx.mode} sources=${succeeded.length}/${attempts.length} ` +
-      `changes=${lifecycle.diff.length} appended=${appended} dropped=${plan.dropped.length} ` +
-      `prices=${pricePlan.rows.length} priced=${pricesAppended} flagged=${pricePlan.flags.length} ` +
-      `deprecated=${deprecated.length} suggested=${lifecycle.suggestions.length}`
+    `${LOG_PREFIX} run ${runId} ${status} mode=${ctx.mode} sources=${succeededCount}/${attempts.length} ` +
+      `passes=${passes.length} changes=${merged.diff.length} appended=${merged.appended} ` +
+      `dropped=${merged.droppedRecords.length} prices=${merged.priceRows.length} priced=${merged.pricesAppended} ` +
+      `flagged=${merged.priceFlags.length} deprecated=${deprecated.length} suggested=${merged.suggestions.length}`
   );
 
   return {
@@ -342,34 +344,240 @@ async function executeRun(
     autoEnable: ctx.autoEnable,
     sources: sourceReports,
     skippedSources,
-    diff: lifecycle.diff,
-    droppedRecords: [...plan.dropped, ...lifecycle.dropped],
-    absence,
-    prices: { rows: describePriceRows(pricePlan.rows), flags: pricePlan.flags },
+    diff: merged.diff,
+    droppedRecords: merged.droppedRecords,
+    absence: passes[0].plan.absence,
+    prices: { rows: describePriceRows(merged.priceRows), flags: merged.priceFlags },
     lifecycle: {
-      transitions: lifecycle.transitions,
-      dateChanges: lifecycle.dateChanges,
-      suggestions: lifecycle.suggestions,
-      wouldDeprecate: lifecycle.wouldDeprecate,
+      transitions: merged.transitions,
+      dateChanges: merged.dateChanges,
+      suggestions: merged.suggestions,
+      wouldDeprecate: merged.wouldDeprecate,
     },
     metrics: {
-      ModelsDiscovered: summary.added.length,
-      ModelsPromoted: summary.promoted.length,
-      ModelsBlockedByDispatch: summary.blockedByDispatch.length,
+      ModelsDiscovered: added.length,
+      ModelsPromoted: promoted.length,
+      ModelsBlockedByDispatch: [...new Set(summary.blockedByDispatch)].length,
       ModelsDeprecated: deprecated.length,
-      PriceRowsAppended: pricesAppended,
-      PriceFlagged: pricePlan.flags.length,
-      CatalogRowsRejected: rejected,
+      PriceRowsAppended: merged.pricesAppended,
+      PriceFlagged: merged.priceFlags.length,
+      CatalogRowsRejected: merged.rejected,
       DocsParserRowShift: parserShifts.length,
       AggregatorJoinCoverage: Object.fromEntries(
-        joinCoverage.map(entry => [entry.aggregator, entry.total === 0 ? 1 : entry.matched / entry.total])
+        merged.joinCoverage.map(entry => [entry.aggregator, entry.total === 0 ? 1 : entry.matched / entry.total])
       ),
       SourceFailures: Object.fromEntries(
         [...results.values()].map(entry => [entry.report.name, entry.report.ok ? 0 : 1])
       ),
       RunDuration: finishedAt.getTime() - startedAt.getTime(),
     },
+    passes: passes.length,
   };
+}
+
+interface PassInput {
+  adapters: ModelDiscoveryAdapters;
+  ctx: RunContext;
+  options: RunModelDiscoveryOptions;
+  runId: string;
+  credentials: DiscoveryCredentials;
+  /** The sources whose fetch succeeded, in registration order. */
+  succeeded: readonly DiscoverySource[];
+  results: ReadonlyMap<string, { report: IDiscoverySourceReport; result: SourceResult }>;
+  /** Sources whose docs-derived signals this run drops, decided from pass 1. */
+  droppedDocsSources: ReadonlySet<string>;
+  /**
+   * When this pass's rows take effect: the run's startedAt plus one millisecond
+   * per pass. Both collections hold (modelId[, unit], effectiveFrom) unique and
+   * the read path keeps the newest row per (modelId, source), so a second row
+   * for the same model at the same instant would be refused by the index - and
+   * invisible to the merge even if it were not.
+   */
+  effectiveAt: Date;
+  /** Pass 1's read; see LifecyclePlanInput.statesBeforeRun for why it is read once. */
+  statesBeforeRun?: ReadonlyMap<string, IModelDiscoveryState>;
+}
+
+interface PassPlan {
+  catalog: CatalogWritePlan;
+  prices: PricePlan;
+  lifecycle: LifecyclePlan;
+  absence: AbsencePlan;
+  statesBeforeRun: ReadonlyMap<string, IModelDiscoveryState>;
+  joinCoverage: IDiscoveryJoinCoverage[];
+  unmatchedIds: string[];
+  rejected: number;
+  /** Whether an aggregator contributed: the join coverage of a pass without one says nothing. */
+  ranAggregators: boolean;
+}
+
+interface CompletedPass {
+  plan: PassPlan;
+  appended: number;
+  pricesAppended: number;
+}
+
+/**
+ * One pass: merge the sources that succeeded, diff them against the rows in
+ * force AS OF this pass, and return everything the run would write.
+ *
+ * Reads the database and writes nothing, so report mode is this same
+ * calculation with the caller declining to persist it - and so a second pass
+ * over what the first one wrote proposes only what is genuinely still missing.
+ */
+async function planPass(input: PassInput): Promise<PassPlan> {
+  const { adapters, ctx, options, runId, credentials, results, succeeded, effectiveAt } = input;
+  const { db } = adapters;
+
+  const contributions = succeeded.map(source => ({
+    name: source.name,
+    kind: source.kind,
+    records: (results.get(source.name)?.result as DiscoverySourceOk).records ?? [],
+  }));
+  const signals = planLifecycleSignals({ contributions, droppedDocsSources: input.droppedDocsSources });
+
+  const { rows: inForce, rejected } = await db.catalog.rowsInForceWithRejects(effectiveAt);
+  const base = resolveCatalogRecords(inForce.filter(row => row.source !== 'operator'));
+  // The catalog as the runtime sees it. The catalog plan diffs against `base` so
+  // it can never propose over an operator row, but the lifecycle constraints
+  // have to read what an operator decided (sec 8 auto-remap).
+  const resolvedInForce = resolveCatalogRecords(inForce);
+  const operatorOwnedModelIds = new Set(inForce.filter(row => row.source === 'operator').map(row => row.modelId));
+  const priorDiscoveryGroups = discoveryGroupsInForce(inForce);
+
+  const priceRowsInForce = await db.prices.rowsInForce(effectiveAt);
+  // A price the catalog already holds satisfies the promotion predicate, so a
+  // model priced by an earlier run (or by an operator) is not re-blocked as
+  // unpriced on a run where no source happened to quote it.
+  const knownPricedModelIds = new Set([
+    ...priceRowsInForce.filter(row => row.unit === 'per_token').map(row => row.modelId),
+    ...(options.knownPricedModelIds ?? []),
+  ]);
+
+  const catalog = planCatalogWrites({
+    contributions: signals.contributions,
+    resolveDispatch: adapters.resolveDispatch,
+    base,
+    operatorOwnedModelIds,
+    credentials,
+    policy: ctx.autoEnable,
+    knownPricedModelIds,
+    runStartedAt: effectiveAt,
+    runId,
+  });
+
+  const prices = planPriceWrites({
+    contributions,
+    rowsInForce: priceRowsInForce,
+    // The models this run adds are known too: a new model's first price row
+    // lands in the same run as the catalog row that makes it a model at all.
+    knownModelIds: new Set([...base.keys(), ...operatorOwnedModelIds, ...catalog.rows.map(row => row.modelId)]),
+    bandPct: ctx.bandPct,
+    runStartedAt: effectiveAt,
+  });
+
+  const coveredBackends = new Set<string>();
+  for (const source of succeeded) {
+    const ok = results.get(source.name)?.result as DiscoverySourceOk;
+    for (const backend of ok.authoritativeFor ?? []) coveredBackends.add(backend);
+  }
+  const absence = planAbsence({ coveredBackends, sightedModelIds: catalog.sightedModelIds, base });
+
+  // Read BEFORE applyAbsence: planLifecycle adds this run's miss itself, so the
+  // counters it reads must not already include it (the ordering invariant).
+  const statesBeforeRun =
+    input.statesBeforeRun ??
+    new Map((await db.discoveryState.findByModelIds(absence.missed)).map(state => [state.modelId, state] as const));
+
+  const lifecycle = planLifecycle({
+    catalogPlan: catalog,
+    base,
+    resolvedInForce,
+    docs: signals.docs,
+    missed: absence.missed,
+    statesBeforeRun,
+    ratesInForce: perTokenRatesInForce(priceRowsInForce),
+    priorDiscoveryGroups,
+    autoRemap: ctx.autoRemap,
+    operatorOwnedModelIds,
+    runStartedAt: effectiveAt,
+    runId,
+  });
+
+  return {
+    catalog,
+    prices,
+    lifecycle,
+    absence,
+    statesBeforeRun,
+    joinCoverage: computeJoinCoverage(contributions, base),
+    unmatchedIds: unmatchedIds(contributions, base),
+    rejected,
+    ranAggregators: contributions.some(contribution => contribution.kind === 'aggregator'),
+  };
+}
+
+interface RunAggregate {
+  diff: CatalogDiffEntry[];
+  droppedRecords: DroppedSourceRecord[];
+  priceRows: IModelPriceInput[];
+  priceFlags: PriceFlag[];
+  transitions: LifecycleTransition[];
+  dateChanges: LifecycleDateChange[];
+  suggestions: LifecycleSuggestion[];
+  wouldDeprecate: string[];
+  joinCoverage: IDiscoveryJoinCoverage[];
+  unmatchedIds: string[];
+  rejected: number;
+  appended: number;
+  pricesAppended: number;
+}
+
+/**
+ * Every pass as one report. The write plans concatenate - each pass proposes
+ * only what the pass before it did not already write - while the queues a pass
+ * did NOT settle (flags, refusals, suggestions) are re-raised verbatim by every
+ * pass and collapse to one item each, newest kept.
+ */
+function aggregate(passes: readonly CompletedPass[]): RunAggregate {
+  const plans = passes.map(pass => pass.plan);
+  const last = plans[plans.length - 1];
+  // The settled universe: a join measured before this run's own writes would
+  // report coverage against a catalog that no longer exists.
+  const joined = [...plans].reverse().find(plan => plan.ranAggregators) ?? last;
+
+  return {
+    diff: plans.flatMap(plan => plan.lifecycle.diff),
+    droppedRecords: lastPerKey(
+      plans.flatMap(plan => [...plan.catalog.dropped, ...plan.lifecycle.dropped]),
+      dropped => `${dropped.source} ${dropped.modelId} ${dropped.reason}`
+    ),
+    priceRows: plans.flatMap(plan => plan.prices.rows),
+    priceFlags: lastPerKey(
+      plans.flatMap(plan => plan.prices.flags),
+      flag => `${flag.modelId} ${flag.kind}`
+    ),
+    transitions: plans.flatMap(plan => plan.lifecycle.transitions),
+    dateChanges: plans.flatMap(plan => plan.lifecycle.dateChanges),
+    suggestions: lastPerKey(
+      plans.flatMap(plan => plan.lifecycle.suggestions),
+      suggestion => `${suggestion.modelId} ${suggestion.source}`
+    ),
+    wouldDeprecate: plans.flatMap(plan => plan.lifecycle.wouldDeprecate),
+    joinCoverage: joined.joinCoverage,
+    unmatchedIds: joined.unmatchedIds,
+    // The settled read too: a row this run appended is one the count covers.
+    rejected: last.rejected,
+    appended: passes.reduce((total, pass) => total + pass.appended, 0),
+    pricesAppended: passes.reduce((total, pass) => total + pass.pricesAppended, 0),
+  };
+}
+
+/** One entry per key, the last writer's, in first-seen order. */
+function lastPerKey<T>(items: readonly T[], keyOf: (item: T) => string): T[] {
+  const byKey = new Map<string, T>();
+  for (const item of items) byKey.set(keyOf(item), item);
+  return [...byKey.values()];
 }
 
 async function appendRows(
@@ -732,6 +940,7 @@ function skippedResult(
     prices: { rows: [], flags: [] },
     lifecycle: { transitions: [], dateChanges: [], suggestions: [], wouldDeprecate: [] },
     metrics: emptyMetrics(),
+    passes: 1,
   };
 }
 

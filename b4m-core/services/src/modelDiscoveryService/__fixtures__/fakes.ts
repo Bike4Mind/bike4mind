@@ -124,6 +124,39 @@ export class FakePriceRepository {
   }
 }
 
+/** The join targets a driver hands its aggregators, plus the runner's invalidation hook. */
+export interface FakeCatalogView {
+  targets: () => Promise<string[]>;
+  refresh: () => void;
+  /** Reads performed, for the one-read-per-pass property. */
+  reads: () => number;
+}
+
+/**
+ * The drivers' memoized catalog view (apps/client/server/modelDiscovery/adapters.ts)
+ * in miniature: every source that asks within one pass shares a single read, and
+ * refreshCatalogView drops the memo so the next convergence pass joins against
+ * the rows the previous one appended.
+ */
+export function fakeCatalogView(catalog: FakeCatalogRepository): FakeCatalogView {
+  let pending: Promise<string[]> | null = null;
+  let reads = 0;
+  const load = async (): Promise<string[]> => {
+    reads += 1;
+    // Read at the end of time, because the driver reads at wall clock: always
+    // past the instants a run stamps its own rows with.
+    const { rows } = await catalog.rowsInForceWithRejects(new Date(8_640_000_000_000_000));
+    return rows.map(row => row.modelId);
+  };
+  return {
+    targets: () => (pending ??= load()),
+    refresh: () => {
+      pending = null;
+    },
+    reads: () => reads,
+  };
+}
+
 /**
  * Mirrors the streak semantics the graduation predicate depends on: a miss
  * increments and stamps the start of the streak once, a sighting clears both. A
@@ -251,7 +284,12 @@ export interface StubSourceConfig {
   name: string;
   kind?: DiscoverySource['kind'];
   configured?: boolean;
-  records?: DiscoveredModel[];
+  /**
+   * A thunk stands in for a source whose answer depends on the catalog - an
+   * aggregator reads its join targets on every fetch, which is what makes it
+   * re-fetchable inside one run.
+   */
+  records?: DiscoveredModel[] | (() => DiscoveredModel[] | Promise<DiscoveredModel[]>);
   authoritativeFor?: readonly ModelBackend[];
   result?: SourceResult;
   /** Resolves only when the abort signal fires, standing in for a hung endpoint. */
@@ -275,7 +313,7 @@ export function stubSource(config: StubSourceConfig): DiscoverySource {
       void ctx;
       return {
         ok: true,
-        records: config.records ?? [],
+        records: typeof config.records === 'function' ? await config.records() : (config.records ?? []),
         authoritativeFor: config.authoritativeFor,
       };
     },

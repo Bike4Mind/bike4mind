@@ -29,6 +29,12 @@ interface CatalogView {
 
 const EMPTY_VIEW: CatalogView = { targets: [], activeModelIds: new Set() };
 
+interface CatalogViewReader {
+  read: () => Promise<CatalogView>;
+  /** Drops the memo, so the next read sees the rows this run has already appended. */
+  refresh: () => void;
+}
+
 /**
  * The catalog as the join and the Bedrock fan-out need to see it.
  *
@@ -40,9 +46,11 @@ const EMPTY_VIEW: CatalogView = { targets: [], activeModelIds: new Set() };
  * A failed read degrades to an empty view, which costs coverage (every id
  * unmatched, every Bedrock model probed) rather than correctness.
  */
-function readCatalogView(logger: Logger): () => Promise<CatalogView> {
-  // Memoized for the life of one adapters object, i.e. one run: three sources
-  // ask for this and none of them should trigger its own aggregation.
+function readCatalogView(logger: Logger): CatalogViewReader {
+  // Memoized per convergence pass: three sources ask for this and none of them
+  // should trigger its own aggregation, but a pass that re-joined against the
+  // run-start snapshot could only repeat the pass before it. The runner calls
+  // refresh() between passes; nothing refreshes it between runs.
   let pending: Promise<CatalogView> | null = null;
 
   const load = async (): Promise<CatalogView> => {
@@ -67,7 +75,12 @@ function readCatalogView(logger: Logger): () => Promise<CatalogView> {
     }
   };
 
-  return () => (pending ??= load());
+  return {
+    read: () => (pending ??= load()),
+    refresh: () => {
+      pending = null;
+    },
+  };
 }
 
 /**
@@ -75,9 +88,8 @@ function readCatalogView(logger: Logger): () => Promise<CatalogView> {
  * (no key, no egress, IAM-less self-host), so the registry itself is static
  * data and a source is never silently absent because of how a driver was wired.
  */
-function buildSources(logger: Logger): ModelDiscoveryAdapters['sources'] {
-  const catalogView = readCatalogView(logger);
-  const targets = async () => (await catalogView()).targets;
+function buildSources(catalogView: CatalogViewReader): ModelDiscoveryAdapters['sources'] {
+  const targets = async () => (await catalogView.read()).targets;
 
   return [
     modelDiscoveryService.createOpenAiSource(),
@@ -91,7 +103,7 @@ function buildSources(logger: Logger): ModelDiscoveryAdapters['sources'] {
       // A thunk: the SDK client is built when the source runs, so a deployment
       // whose credentials never reach Bedrock pays nothing for the wiring.
       client: () => createBedrockControlPlane(),
-      activeModelIds: async () => (await catalogView()).activeModelIds,
+      activeModelIds: async () => (await catalogView.read()).activeModelIds,
     }),
     modelDiscoveryService.createModelsDevSource({ targets, aliases: MODEL_ID_ALIASES }),
     modelDiscoveryService.createLiteLlmSource({ targets, aliases: MODEL_ID_ALIASES }),
@@ -139,10 +151,12 @@ export function discoveryEnv(): DiscoveryEnv {
  *
  * Call it once per run: the source registry it builds carries a memoized
  * catalog read, and reusing an adapters object across runs would reuse that
- * snapshot too.
+ * snapshot too. Inside a run the runner invalidates it per convergence pass
+ * through refreshCatalogView.
  */
 export function buildModelDiscoveryAdapters(logger: Logger): ModelDiscoveryAdapters {
   const env = discoveryEnv();
+  const catalogView = readCatalogView(logger);
   return {
     db: {
       catalog: modelCatalogRepository,
@@ -152,7 +166,8 @@ export function buildModelDiscoveryAdapters(logger: Logger): ModelDiscoveryAdapt
       adminSettings: adminSettingsRepository,
       prices: modelPriceRepository,
     },
-    sources: buildSources(logger),
+    sources: buildSources(catalogView),
+    refreshCatalogView: catalogView.refresh,
     resolveCredentials: () =>
       modelDiscoveryService.getDiscoveryCredentials(
         { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },

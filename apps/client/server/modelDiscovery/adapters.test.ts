@@ -192,6 +192,19 @@ describe('the shared catalog read', () => {
     expect(rowsInForce).toHaveBeenCalledTimes(1);
   });
 
+  it('re-reads the rows in force once a convergence pass refreshes it', async () => {
+    const adapters = buildModelDiscoveryAdapters(logger);
+    await captured.modelsDev!.targets();
+
+    // What the runner calls between passes: without it the extra pass joins
+    // against the catalog as it stood at run start and can only repeat itself.
+    adapters.refreshCatalogView!();
+    await Promise.all([captured.modelsDev!.targets(), captured.litellm!.targets()]);
+
+    // Two reads, not three: the pass after the refresh still shares one.
+    expect(rowsInForce).toHaveBeenCalledTimes(2);
+  });
+
   it('takes a fresh snapshot for the next run', async () => {
     await buildModelDiscoveryAdapters(logger).sources.length;
     await captured.modelsDev!.targets();

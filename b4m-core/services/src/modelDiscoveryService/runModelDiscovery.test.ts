@@ -7,11 +7,12 @@ import {
   FakeDiscoveryStateRepository,
   FakePriceRepository,
   FakeRunRepository,
+  fakeCatalogView,
   stubSource,
   testCredentials,
   testRecord,
 } from './__fixtures__/fakes';
-import { DISCOVERY_LEASE_KEY, runModelDiscovery } from './runModelDiscovery';
+import { DISCOVERY_LEASE_KEY, MAX_DISCOVERY_PASSES, runModelDiscovery } from './runModelDiscovery';
 import type {
   DiscoveredModel,
   DiscoveryLogger,
@@ -712,9 +713,15 @@ describe('runModelDiscovery', () => {
 
       const result = await runModelDiscovery(bench.adapters, bench.options);
 
+      // The collision is a skip: it neither throws nor fails the run. It costs
+      // pass 1 its price row, and the convergence pass re-plans the row against
+      // what is now in force and stamps it a millisecond later, which the
+      // unique index accepts - the same row the next run would have written.
       expect(result.outcome).toBe('ok');
-      expect(result.metrics.PriceRowsAppended).toBe(0);
-      expect(bench.prices.rows).toHaveLength(1);
+      expect(result.metrics.PriceRowsAppended).toBe(1);
+      expect(bench.prices.rows).toHaveLength(2);
+      expect(bench.prices.rows[1].effectiveFrom).toEqual(new Date(START.getTime() + 1));
+      expect(bench.prices.rows[1].pricing['0']).toEqual({ input: 2e-6, output: 8e-6 });
     });
 
     it('promotes a model whose only trusted price is the row already in force', async () => {
@@ -738,6 +745,205 @@ describe('runModelDiscovery', () => {
       expect(bench.prices.rows).toHaveLength(1);
       expect(bench.prices.rows[0].note).toBe('manual reprice');
       expect(result.prices.flags[0]).toMatchObject({ kind: 'operator-owned-divergence' });
+    });
+  });
+
+  describe('convergence', () => {
+    /** Only the provider lists it, so an aggregator can join it only once it is written. */
+    const gpt7: DiscoveredModel = {
+      modelId: 'gpt-7',
+      patch: {
+        id: 'gpt-7',
+        vendor: 'openai',
+        backend: ModelBackend.OpenAI,
+        type: 'text',
+        name: 'GPT-7',
+        contextWindow: 500_000,
+      },
+    };
+
+    /**
+     * A provider plus two aggregators that read their join targets on every
+     * fetch, through the same memoized view the drivers hand the real ones.
+     */
+    const convergent = (
+      records: DiscoveredModel[],
+      enrich: (modelId: string) => DiscoveredModel,
+      settings: Partial<Record<SettingKey, unknown>> = {}
+    ) => {
+      const bench = harness([], settings);
+      const view = fakeCatalogView(bench.catalog);
+      let fetches = 0;
+      const aggregator = (name: string) =>
+        stubSource({
+          name,
+          kind: 'aggregator',
+          onFetch: () => {
+            fetches += 1;
+          },
+          records: async () => (await view.targets()).map(enrich),
+        });
+      bench.adapters.sources = [openaiSource(records), aggregator('models.dev'), aggregator('litellm')];
+      bench.adapters.refreshCatalogView = view.refresh;
+      return { bench, view, aggregatorFetches: () => fetches };
+    };
+
+    /** Both aggregators quote the same price, which is what makes it trusted. */
+    const enriched = (modelId: string): DiscoveredModel => ({
+      modelId,
+      patch: { supportsTools: true },
+      pricing: { inputPerMTok: 3, outputPerMTok: 9 },
+    });
+
+    it('adds, enriches and prices a new model inside one run', async () => {
+      const { bench, view } = convergent([gpt7], enriched);
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      // Pass 1 can only write the identity the provider reported: the tools
+      // flag, the price and the promotion all wait on the join it enables.
+      expect(result.passes).toBeGreaterThanOrEqual(2);
+      expect(view.reads()).toBe(result.passes);
+      expect(bench.catalog.rows).toHaveLength(2);
+      expect(bench.catalog.rows[1].patch).toMatchObject({ supportsTools: true, lifecycle: { status: 'active' } });
+      expect(bench.prices.rows).toHaveLength(1);
+      expect(bench.prices.rows[0].pricing['0']).toEqual({ input: 3e-6, output: 9e-6 });
+      expect(result.metrics).toMatchObject({ ModelsDiscovered: 1, ModelsPromoted: 1, PriceRowsAppended: 1 });
+
+      // A run over the settled catalog has nothing left to converge on. The
+      // refresh stands in for the next run's fresh adapters object.
+      view.refresh();
+      bench.advance(60_000);
+      const second = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(second.passes).toBe(1);
+      expect(second.diff).toEqual([]);
+      expect(bench.catalog.rows).toHaveLength(2);
+      expect(bench.prices.rows).toHaveLength(1);
+    });
+
+    it('applies a sunset the re-join reported rather than promoting the model first', async () => {
+      const { bench } = convergent([gpt7], modelId => ({
+        modelId,
+        patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-01-15' } },
+        pricing: { inputPerMTok: 3, outputPerMTok: 9 },
+        lifecycleEvidence: 'typed',
+      }));
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      // The trusted price lands in the same pass as the sunset. Promoting on it
+      // would overwrite the declared status and cost the transition a whole run.
+      expect(result.lifecycle.transitions).toEqual([
+        {
+          modelId: 'gpt-7',
+          from: 'discovered',
+          to: 'deprecated',
+          signal: 'typed',
+          deprecationDate: '2026-01-15',
+          retirementDate: undefined,
+          replacedBy: undefined,
+          autoApplied: false,
+        },
+      ]);
+      expect(result.metrics.ModelsDeprecated).toBe(1);
+      expect(result.diff.some(entry => entry.promoted)).toBe(false);
+      expect(bench.catalog.rows[bench.catalog.rows.length - 1].patch).toMatchObject({
+        lifecycle: { status: 'deprecated', deprecationDate: '2026-01-15' },
+      });
+    });
+
+    it('stops at the pass cap when a source disagrees with itself on every fetch', async () => {
+      const bench = harness([]);
+      const view = fakeCatalogView(bench.catalog);
+      // Two aggregators drifting in lockstep: they always agree with each other,
+      // so the price is trusted, and never with the row the last pass wrote.
+      const drifting = (name: string) => {
+        let quote = 2;
+        return stubSource({
+          name,
+          kind: 'aggregator',
+          records: async () => {
+            quote += 0.02;
+            const targets = await view.targets();
+            return targets.map(modelId => ({
+              modelId,
+              patch: {},
+              pricing: { inputPerMTok: quote, outputPerMTok: 8 },
+            }));
+          },
+        });
+      };
+      bench.adapters.sources = [
+        openaiSource([{ ...gpt6, pricing: undefined }]),
+        drifting('models.dev'),
+        drifting('litellm'),
+      ];
+      bench.adapters.refreshCatalogView = view.refresh;
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(result.passes).toBe(MAX_DISCOVERY_PASSES);
+      expect(result.outcome).toBe('ok');
+      expect(bench.warnings.some(message => message.includes('convergence capped'))).toBe(true);
+      // Every pass after the first repriced the model the next one disagreed with.
+      expect(bench.prices.rows).toHaveLength(MAX_DISCOVERY_PASSES - 1);
+    });
+
+    it('makes one pass and fetches each source once in report mode', async () => {
+      const { bench, aggregatorFetches } = convergent([gpt7], enriched, { modelDiscoveryMode: 'report' });
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(result.passes).toBe(1);
+      // Two aggregators, one fetch each: an extra pass would re-download both
+      // feeds for a diff report mode is never going to apply.
+      expect(aggregatorFetches()).toBe(2);
+      expect(bench.catalog.rows).toEqual([]);
+      expect(bench.prices.rows).toEqual([]);
+      expect(result.diff).toHaveLength(1);
+    });
+
+    it('never re-fetches an aggregator the interval guard skipped', async () => {
+      const bench = harness([]);
+      let fetches = 0;
+      // A successful models.dev fetch a minute ago, on any host: the guard reads
+      // the run history rather than this process.
+      await bench.runs.create({
+        startedAt: new Date(START.getTime() - 60_000),
+        trigger: 'cron',
+        host: 'hosted',
+        status: 'ok',
+        sources: [{ name: 'models.dev', ok: true, durationMs: 12 }],
+      } as Parameters<FakeRunRepository['create']>[0]);
+      bench.adapters.sources = [
+        openaiSource([gpt7]),
+        stubSource({
+          name: 'models.dev',
+          kind: 'aggregator',
+          onFetch: () => {
+            fetches += 1;
+          },
+        }),
+      ];
+
+      const result = await runModelDiscovery(bench.adapters, { ...bench.options, minSourceIntervalMs: 30 * 60_000 });
+
+      expect(result.skippedSources).toEqual([{ name: 'models.dev', reason: 'recently-fetched' }]);
+      // Pass 1 appended, so a second pass ran - and re-fetched nothing.
+      expect(result.passes).toBe(2);
+      expect(fetches).toBe(0);
+    });
+
+    it('runs no further pass once the global deadline has fired', async () => {
+      const hung = harness([openaiSource([gpt7]), stubSource({ name: 'models.dev', kind: 'aggregator', hang: true })]);
+
+      const result = await runModelDiscovery(hung.adapters, { ...hung.options, budgetMs: 1_000 });
+
+      // The catalog row pass 1 wrote is exactly what would have made pass 2 due.
+      expect(hung.catalog.rows).toHaveLength(1);
+      expect(result.passes).toBe(1);
+      expect(result.outcome).toBe('partial');
     });
   });
 

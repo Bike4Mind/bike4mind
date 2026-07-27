@@ -390,6 +390,12 @@ export interface ModelDiscoveryRunResult {
     wouldDeprecate: string[];
   };
   metrics: ModelDiscoveryMetrics;
+  /**
+   * Convergence passes this run made (see MAX_DISCOVERY_PASSES). Always 1 in
+   * report mode and for a run that declined to start; more than 2 means a pass
+   * wrote something the pass before it could not have known about.
+   */
+  passes: number;
 }
 
 export interface ModelDiscoveryAdapters {
@@ -415,6 +421,15 @@ export interface ModelDiscoveryAdapters {
    * metadata-only, which is the fail-closed default (see DispatchResolver).
    */
   resolveDispatch?: DispatchResolver;
+  /**
+   * Drops the driver's memoized catalog view, called between convergence passes.
+   * A driver reads the rows in force ONCE per adapters object so its sources
+   * share one read; without an invalidation hook every extra pass would join
+   * against the catalog as it stood at run start and could only repeat the pass
+   * before it. Unset is safe: the extra passes degenerate to a re-plan over the
+   * same targets, which is what the multi-run convergence already did.
+   */
+  refreshCatalogView?: () => void;
   logger?: DiscoveryLogger;
   env?: DiscoveryEnv;
 }

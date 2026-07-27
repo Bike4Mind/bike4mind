@@ -224,6 +224,78 @@ describe('planCatalogWrites', () => {
     expect(result.rows[0].patch.lifecycle).toMatchObject({ status: 'deprecated', deprecationDate: '2026-10-23' });
   });
 
+  describe('a sunset declared while the model is still discovered', () => {
+    /** gpt-6 as a previous run left it: entered, not yet promoted. */
+    const discovered = asBase(
+      [],
+      [
+        seedRow(
+          {
+            id: 'gpt-6',
+            vendor: 'openai',
+            backend: 'openai',
+            type: 'text',
+            name: 'GPT-6',
+            contextWindow: 400_000,
+            lifecycle: { status: 'discovered' },
+          },
+          ['identity', 'limits', 'lifecycle']
+        ),
+      ]
+    );
+
+    /** A trusted price and a typed sunset arriving in the same run. */
+    const sunsetting = (base = discovered) =>
+      plan({
+        base,
+        resolveDispatch: dispatchable,
+        contributions: [
+          {
+            name: 'openai',
+            kind: 'provider',
+            records: [{ ...gpt6(), pricing: { inputPerMTok: 2, outputPerMTok: 8 } }],
+          },
+          {
+            name: 'litellm',
+            kind: 'aggregator',
+            records: [
+              {
+                modelId: 'gpt-6',
+                patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-01-15' } },
+                lifecycleEvidence: 'typed',
+              },
+            ],
+          },
+        ],
+      });
+
+    it('writes the declared status and dates instead of promoting the model', () => {
+      const result = sunsetting();
+
+      // The price would satisfy the promotion predicate, and promoting would
+      // overwrite the sunset with 'active' while keeping its dates.
+      expect(result.diff[0]).toMatchObject({
+        modelId: 'gpt-6',
+        lifecycleStatus: 'deprecated',
+        promoted: false,
+        blockedBy: [],
+      });
+      expect(result.rows[0].patch).toMatchObject({
+        lifecycle: { status: 'deprecated', deprecationDate: '2026-01-15' },
+      });
+      // Nothing decided availability, so the row claims nothing there either.
+      expect(result.rows[0].ownedGroups).not.toContain('availability');
+      expect(result.rows[0].patch).not.toHaveProperty('autoDisabled');
+    });
+
+    it('appends nothing on the next plan over the same sunset', () => {
+      const result = sunsetting(asBase(sunsetting().rows));
+
+      expect(result.rows).toEqual([]);
+      expect(result.diff).toEqual([]);
+    });
+  });
+
   it('lets an aggregator enrich a model a provider already sighted', () => {
     const result = plan({
       resolveDispatch: dispatchable,

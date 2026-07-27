@@ -32,6 +32,13 @@ export const DISCOVERY_CONTRIBUTOR = 'discovery';
  */
 const FEED_FORBIDDEN_GROUPS: readonly FieldGroup[] = ['dispatch', 'presentation'];
 
+/**
+ * Statuses a model is on its way out in, and therefore not promotable. MUST STAY
+ * IN SYNC WITH SUNSET_STATUSES in lifecyclePlan.ts, which decides what counts as
+ * a transition; importing it would make the two modules circular.
+ */
+const SUNSET_STATUSES: ReadonlySet<string> = new Set(['deprecated', 'legacy', 'retired']);
+
 /** Two aggregators inside this band agree; beyond it neither is trusted (sec 8). */
 export const PRICE_AGREEMENT_TOLERANCE = 0.1;
 
@@ -253,7 +260,14 @@ function planOne(
     }
   }
 
-  if (decides) {
+  // A model a source declares sunset THIS run is not a promotion candidate:
+  // deciding it again would overwrite the declared status with 'active' or
+  // 'discovered' while keeping its dates, and the transition would only land on
+  // a later run, once the status in force stopped reading 'discovered'. Only
+  // typed lifecycle reaches this overlay - planLifecycleSignals strips the
+  // uncorroborated docs kind first - so the status is a source's claim rather
+  // than a parse artifact.
+  if (decides && !SUNSET_STATUSES.has(record.lifecycle?.status ?? '')) {
     decision = evaluatePromotion({
       record,
       policy: input.policy,
