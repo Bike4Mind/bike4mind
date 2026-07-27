@@ -66,7 +66,8 @@ export interface SemanticDataLakeSearchParams {
    * Generic retrieval-exclusion filter forwarded to the scoped file set - drop files whose name
    * begins with a marker (case-insensitive, word-boundary) and/or unvectorized files, before any
    * chunk vectors are loaded or ranked. Caller-driven so the shared primitive (also backing
-   * /api/opti/semantic-search) stays un-regressed when omitted. See @bike4mind/utils/retrievalExclusion.
+   * the data-lake semantic-search endpoint) stays un-regressed when omitted. See
+   * @bike4mind/utils/retrievalExclusion.
    */
   retrievalFilter?: RetrievalExclusionOptions;
   logger?: Logger;

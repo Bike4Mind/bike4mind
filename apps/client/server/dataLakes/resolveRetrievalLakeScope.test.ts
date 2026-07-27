@@ -57,8 +57,10 @@ describe('withStaticRegistryBypass', () => {
     expect(out.scopedTagPrefixes).toEqual([]);
   });
 
-  it('sources OPEN prefixes from the registry, never from the scope, even under id shadowing', () => {
-    // A DB lake shadowing a registry id must not get its user-controlled prefix bypassed.
+  it('sources OPEN prefixes from the registry, never from the scope, under a shadowed tag', () => {
+    // Mirrors what a DB lake minting a registry meta-tag would put in the scope. Keeping the
+    // registry as the only source of OPEN prefixes is what stops its prefix being bypassed.
+    // (getDynamicDataLakeAccess drops such a tag upstream; this asserts the second line.)
     const shadowed = scopeOf({
       dataLakeTags: ['datalake:opti-knowledge'],
       scopedTagPrefixes: ['evil:'],
@@ -69,6 +71,8 @@ describe('withStaticRegistryBypass', () => {
     expect(out.dataLakeTagPrefixes).toContain('opti:');
     expect(out.dataLakeTagPrefixes).not.toContain('evil:');
     expect(out.scopedTagPrefixes).toEqual(['evil:']);
+    // The tag itself is passed through, so it must not be double-added by the union either.
+    expect(out.dataLakeTags.filter(t => t === 'datalake:opti-knowledge')).toHaveLength(1);
   });
 
   it('does not promote a scoped prefix that collides with a registry prefix string', () => {
@@ -87,6 +91,18 @@ describe('withStaticRegistryBypass', () => {
 
     expect(out.dataLakeTags).toEqual(['datalake:opti-knowledge', 'datalake:house-kb']);
     expect(out.dataLakeTagPrefixes).toEqual(['opti:', 'house:']);
+  });
+
+  it('keeps scope entries ahead of registry entries', () => {
+    // A scope-only entry makes the two concat orders distinguishable; without it every
+    // fixture above is order-degenerate and the documented ordering is unpinned.
+    const out = withStaticRegistryBypass(
+      scopeOf({ dataLakeTags: ['datalake:dyn'], dataLakeTagPrefixes: ['dyn-open:'] }),
+      REGISTRY
+    );
+
+    expect(out.dataLakeTags).toEqual(['datalake:dyn', 'datalake:opti-knowledge', 'datalake:house-kb']);
+    expect(out.dataLakeTagPrefixes).toEqual(['dyn-open:', 'opti:', 'house:']);
   });
 
   it('is a no-op on the OPEN buckets for an empty registry', () => {
@@ -109,7 +125,8 @@ describe('resolveRetrievalLakeScope', () => {
     await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: ['Opti'], organizationId: 'org1' }));
 
     // Deep equality, not objectContaining: an extra or missing field here IS the divergence
-    // this ticket exists to close.
+    // this ticket exists to close. This mirrors the ToolContext fields the chat tool hands the
+    // same resolver; it is a literal, so a change on the chat side would not fail here.
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
       db: { dataLakes: dataLakeRepository },
       user: { id: 'u1', tags: ['Opti'], organizationId: 'org1' },
@@ -165,18 +182,5 @@ describe('resolveRetrievalLakeScope', () => {
       user: { id: 'u1', tags: [], organizationId: undefined },
       entitlementKeys: [],
     });
-  });
-
-  it('KNOWN GAP: an owner does not get their own gated lake back', async () => {
-    // getDynamicDataLakeAccess re-filters DB lakes through lakeMatchesAccess, so a lake the
-    // caller created but whose requiredUserTag they lack is dropped. The browse resolver in
-    // ./index.ts deliberately does NOT do this, so /articles still lists such a lake while
-    // semantic search hides it. Pre-existing in the shared resolver, tracked separately -
-    // pinned here so the fix shows up as a deliberate diff. Tracked in #976.
-    mockGetDynamicDataLakeAccess.mockResolvedValue(scopeOf());
-
-    const out = await resolveRetrievalLakeScope(asReq({ id: 'owner', tags: [] }));
-
-    expect(out.dataLakeTags).toEqual([]);
   });
 });

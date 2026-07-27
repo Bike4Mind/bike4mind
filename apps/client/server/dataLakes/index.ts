@@ -6,10 +6,14 @@
  *
  * The RETRIEVAL surface (semantic-search) resolves scope separately, through
  * ./resolveRetrievalLakeScope, so it shares the core resolver with the chat
- * search_knowledge_base tool. The two are close but not identical, deliberately:
- * `resolveAccessibleLakes` below keeps an owner's own gated lake, while the retrieval path
- * drops it (the core resolver re-filters DB lakes by tag/entitlement). Tracked in #976;
- * until it is fixed, a caller can browse a lake that semantic search will not reach.
+ * search_knowledge_base tool. Browse is the WIDER of the two in every case; three known
+ * differences, all in that direction:
+ *  - an owner's own gated lake: browse keeps it, retrieval drops it (the core resolver
+ *    re-filters DB lakes by tag/entitlement). Tracked in #976.
+ *  - admin: browse returns `listAllDataLakes` - every lake of every tenant - while retrieval
+ *    gives an admin the static registry plus only the lakes they reach unprivileged.
+ *  - draft lakes: browse includes `draft`, retrieval is `active`-only.
+ * So a caller can browse a lake that semantic search will not reach; never the reverse.
  */
 import { DATA_LAKES, getAccessibleDataLakes, hasDeveloperUserTag, isImageServeable } from '@bike4mind/common';
 import type { DataLakeConfig, AccessContext } from '@bike4mind/common';
