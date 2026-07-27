@@ -44,6 +44,9 @@ export type CreateDataLakeRequestInputType = z.infer<typeof CreateDataLakeReques
 export const UpdateDataLakeRequestInput = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().max(2000).optional(),
+  // Per-lake system prompt (see IDataLake.systemPrompt). Uncapped, matching the other system
+  // prompts in the codebase. Edit is gated to creator/admin by updateDataLake (canManageLake).
+  systemPrompt: z.string().optional(),
   requiredUserTag: z.string().min(1).max(100).optional(),
   requiredEntitlement: z
     .string()
