@@ -19,7 +19,7 @@
  */
 
 import type { DiscoveryRunHost } from '@bike4mind/common';
-import { modelDiscoveryRunRepository } from '@bike4mind/database';
+import { modelDiscoveryRunRepository, whenCatalogSeeded } from '@bike4mind/database';
 import { modelDiscoveryService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { buildModelDiscoveryAdapters } from './adapters';
@@ -56,6 +56,10 @@ export async function runDiscoveryOnStartup(
 ): Promise<'ran' | 'not-a-driver' | 'recently-run'> {
   const { logger } = options;
   if (process.env[DISCOVERY_DRIVER_ENV] !== 'true') return 'not-a-driver';
+
+  // A fresh database seeds its catalog on this same boot; running before that
+  // settles plans against a half-inserted catalog (see runScheduledDiscovery).
+  await whenCatalogSeeded();
 
   const host: DiscoveryRunHost = options.host ?? (process.env.B4M_SELF_HOST === 'true' ? 'selfhost' : 'hosted');
 

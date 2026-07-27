@@ -30,6 +30,7 @@ const { runModelDiscovery, lastSuccessfulRun, sourceFactories } = vi.hoisted(() 
 
 vi.mock('@bike4mind/database', () => ({
   MODEL_ID_ALIASES: {},
+  whenCatalogSeeded: async () => {},
   modelDiscoveryRunRepository: { lastSuccessfulRun },
   modelCatalogRepository: { rowsInForce: vi.fn(async () => []) },
   modelPriceRepository: {},

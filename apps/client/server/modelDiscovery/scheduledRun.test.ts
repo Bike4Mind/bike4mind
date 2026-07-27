@@ -45,7 +45,12 @@ const { runModelDiscovery, repos, emitMetrics, connectDB, sourceFactories } = vi
   };
 });
 
-vi.mock('@bike4mind/database', () => ({ connectDB, MODEL_ID_ALIASES: {}, ...repos }));
+vi.mock('@bike4mind/database', () => ({
+  connectDB,
+  MODEL_ID_ALIASES: {},
+  whenCatalogSeeded: async () => {},
+  ...repos,
+}));
 vi.mock('@bike4mind/services', () => ({
   modelDiscoveryService: {
     runModelDiscovery,

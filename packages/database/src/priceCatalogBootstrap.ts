@@ -6,6 +6,17 @@ import { seedModelCatalog } from './seeds/seedModelCatalog';
 import { seedModelPrices } from './seeds/seedModelPrices';
 
 let catalogWired = false;
+let catalogSeedSettled: Promise<void> | null = null;
+
+/**
+ * Resolves once the boot-time catalog seed has settled (success or failure).
+ * The discovery drivers await this before their first run: on a fresh database
+ * the startup leg otherwise races seedCatalogs() and plans against a
+ * half-inserted catalog - observed live as aggregators joining 23 targets
+ * instead of 113. Resolved immediately when no bootstrap is in flight, so
+ * callers on an already-seeded deployment pay nothing.
+ */
+export const whenCatalogSeeded = (): Promise<void> => catalogSeedSettled ?? Promise.resolve();
 
 /**
  * Model catalog first, then prices: a model row always exists before a price row
@@ -45,7 +56,7 @@ export const connectDB: typeof baseConnectDB = async (url, logger) => {
     catalogWired = true;
     setModelCatalogProvider(() => modelCatalogRepository.rowsInForce());
     setModelPriceRowsProvider(() => modelPriceRepository.rowsInForce());
-    seedCatalogs().catch((error: unknown) => {
+    catalogSeedSettled = seedCatalogs().catch((error: unknown) => {
       console.warn('[modelCatalog] seeding failed; adapter tables remain the fallback', error);
     });
   }

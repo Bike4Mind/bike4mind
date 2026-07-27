@@ -25,6 +25,7 @@ const { rowsInForce, createBedrockControlPlane } = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   MODEL_ID_ALIASES,
+  whenCatalogSeeded: async () => {},
   modelCatalogRepository: { rowsInForce, append: vi.fn(), rowsInForceWithRejects: vi.fn() },
   modelDiscoveryStateRepository: { recordSighting: vi.fn(), recordMiss: vi.fn() },
   modelDiscoveryRunRepository: { create: vi.fn(), update: vi.fn(), find: vi.fn() },

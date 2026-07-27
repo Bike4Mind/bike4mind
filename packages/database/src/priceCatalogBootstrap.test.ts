@@ -108,4 +108,29 @@ describe('priceCatalogBootstrap.connectDB', () => {
     expect(setModelCatalogProvider).toHaveBeenCalledTimes(1);
     expect(setModelPriceRowsProvider).toHaveBeenCalledTimes(1);
   });
+
+  it('whenCatalogSeeded resolves immediately with no bootstrap in flight, and only after the seed settles with one', async () => {
+    vi.resetModules();
+    const bootstrap = await import('./priceCatalogBootstrap');
+
+    // Nothing in flight (connectDB never called): must not block callers.
+    await expect(bootstrap.whenCatalogSeeded()).resolves.toBeUndefined();
+
+    let release!: () => void;
+    seedModelCatalog.mockImplementation(
+      () => new Promise(resolve => (release = () => resolve({ inserted: 113, skipped: 0 })))
+    );
+    await bootstrap.connectDB('mongodb://x');
+
+    // The discovery drivers await this: resolving before the seed settles is
+    // the fresh-database race where a run plans against a half-inserted catalog.
+    let settled = false;
+    const waiter = bootstrap.whenCatalogSeeded().then(() => (settled = true));
+    await flushSeeding();
+    expect(settled).toBe(false);
+
+    release();
+    await waiter;
+    expect(settled).toBe(true);
+  });
 });
