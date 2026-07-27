@@ -10,6 +10,7 @@ import { createTokenizer, getProviderFromModel, getSettingsByNames, type ITokeni
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import { describeEmbeddingMismatch } from '../../../../dataLakeService/embeddingMismatch';
 import {
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
@@ -39,7 +40,7 @@ function prettyFileName(fn: string): string {
 }
 
 /** Format semantic passages WITH their content so the model can answer without retrieving. */
-function formatSemanticResults(results: SemanticChunkResult[]): string {
+function formatSemanticResults(results: SemanticChunkResult[], skipNotice?: string | null): string {
   const blocks = results.map((r, i) => {
     const text = r.chunkText.trim();
     const clipped = text.length > CHUNK_TEXT_CAP ? `${text.slice(0, CHUNK_TEXT_CAP)}…` : text;
@@ -47,8 +48,19 @@ function formatSemanticResults(results: SemanticChunkResult[]): string {
   });
   return (
     `Found ${results.length} relevant passage(s) in the knowledge base — the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
-    blocks.join('\n\n---\n\n')
+    blocks.join('\n\n---\n\n') +
+    formatSkipNotice(skipNotice)
   );
+}
+
+/**
+ * The tool's return string is the ONLY channel the model sees (statusUpdate reaches the UI, not
+ * the conversation), so a partial-results notice has to be part of it. Phrased as an instruction
+ * because a bare statement of fact tends to be dropped or paraphrased into a claim of completeness.
+ */
+function formatSkipNotice(skipNotice?: string | null): string {
+  if (!skipNotice) return '';
+  return `\n\n---\n\n⚠️ ${skipNotice} Tell the user the knowledge base may be returning partial results.`;
 }
 
 /**
@@ -127,7 +139,8 @@ async function recordQueryEmbeddingUsage(
 async function emitSemanticCitables(
   context: ToolContext,
   ranked: SemanticChunkResult[],
-  corpusLabel: string
+  corpusLabel: string,
+  skipNotice?: string | null
 ): Promise<void> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article)
   const seenFile = new Set<string>();
@@ -152,17 +165,35 @@ async function emitSemanticCitables(
   }
   const names = citables.slice(0, 3).map(c => prettyFileName(c.title));
   const more = citables.length > 3 ? ` +${citables.length - 3} more` : '';
+  // Appended to the one found-status rather than sent as a second update, which would read as
+  // a bug. warnings also accretes onto promptMeta so the notice survives in the quest record.
+  const partial = skipNotice ? ' - partial results, some content could not be searched' : '';
   await context.statusUpdate(
-    { promptMeta: { citables } } as any,
-    `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}`
+    { promptMeta: { citables, ...(skipNotice ? { warnings: [skipNotice] } : {}) } } as any,
+    `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
   );
 }
 
 /**
+ * What a semantic arm reports back. `output` is the formatted answer, or null to fall through to
+ * keyword search. `skipNotice` is carried SEPARATELY so it survives that fall-through: when every
+ * matching file was withheld the arm has no output at all, and without this the keyword answer
+ * would reach the model with no hint that the corpus was only partly searched - the exact silent
+ * partial result this reporting exists to prevent.
+ */
+interface SemanticArmResult {
+  output: string | null;
+  skipNotice: string | null;
+}
+
+/** Nothing to report: dependency missing, no accessible corpus, or the arm threw. */
+const NO_SEMANTIC_RESULT: SemanticArmResult = { output: null, skipNotice: null };
+
+/**
  * Semantic-first KB search: embed the query and cosine-rank against the pre-computed chunk
  * vectors (tag-independent, ranks by meaning), returning the matching passage TEXT inline so
- * the model answers without a search->retrieve-N loop. Returns null to fall through to the
- * keyword path when embedding deps are unavailable or nothing matches.
+ * the model answers without a search->retrieve-N loop. Returns null output to fall through to
+ * the keyword path when embedding deps are unavailable or nothing matches.
  *
  * UNSCOPED arm only - resolves owner-wide data-lake access. The agent-scoped arm is
  * tryScopedSemanticKbSearch below, which never consults getDynamicDataLakeAccess.
@@ -172,18 +203,19 @@ async function trySemanticKbSearch(
   query: string,
   tags: string[] | undefined,
   maxResults: number
-): Promise<string | null> {
+): Promise<SemanticArmResult> {
   const chunkRepo = context.db.fabfilechunks;
   if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
-    return null; // semantic deps not wired — use keyword
+    return NO_SEMANTIC_RESULT; // semantic deps not wired — use keyword
   }
   try {
     const embedCtx = await resolveEmbeddingContext(context);
-    if (!embedCtx) return null;
+    if (!embedCtx) return NO_SEMANTIC_RESULT;
     const { embeddingModel, provider, apiKeyTable } = embedCtx;
 
     const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
-    if (dataLakeTags.length === 0) return null; // no accessible data lake — keyword search owns the user's own files
+    // No accessible data lake - keyword search owns the user's own files.
+    if (dataLakeTags.length === 0) return NO_SEMANTIC_RESULT;
 
     const search = await semanticDataLakeSearch(
       {
@@ -207,22 +239,25 @@ async function trySemanticKbSearch(
 
     await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
 
-    if (search.results.length === 0) return null;
+    const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+    // No hits: the keyword arm answers, but it has to carry the notice with it.
+    if (search.results.length === 0) return { output: null, skipNotice };
 
     // Honor the max_results contract: topK fetches a wider pool (≥6) so cosine ranking has
     // candidates, but we return at most maxResults passages - parity with the keyword path's
     // .slice(0, max_results) so the tool output can't exceed what the caller asked for.
     const ranked = search.results.slice(0, maxResults);
 
-    await emitSemanticCitables(context, ranked, 'the data lake');
+    await emitSemanticCitables(context, ranked, 'the data lake', skipNotice);
     context.logger.log(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)})`
     );
 
-    return formatSemanticResults(ranked);
+    return { output: formatSemanticResults(ranked, skipNotice), skipNotice };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
-    return null;
+    // A genuine failure must not fabricate a mismatch notice.
+    return NO_SEMANTIC_RESULT;
   }
 }
 
@@ -237,14 +272,14 @@ async function tryScopedSemanticKbSearch(
   scopeFileIds: string[],
   query: string,
   maxResults: number
-): Promise<string | null> {
+): Promise<SemanticArmResult> {
   const chunkRepo = context.db.fabfilechunks;
   if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
-    return null;
+    return NO_SEMANTIC_RESULT;
   }
   try {
     const embedCtx = await resolveEmbeddingContext(context);
-    if (!embedCtx) return null;
+    if (!embedCtx) return NO_SEMANTIC_RESULT;
     const { embeddingModel, provider, apiKeyTable } = embedCtx;
 
     const search = await fileScopedSemanticSearch(
@@ -262,14 +297,15 @@ async function tryScopedSemanticKbSearch(
 
     await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
 
-    if (search.results.length === 0) return null;
+    const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+    if (search.results.length === 0) return { output: null, skipNotice };
 
     const ranked = search.results.slice(0, maxResults);
-    await emitSemanticCitables(context, ranked, "this agent's knowledge base");
-    return formatSemanticResults(ranked);
+    await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice);
+    return { output: formatSemanticResults(ranked, skipNotice), skipNotice };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
-    return null;
+    return NO_SEMANTIC_RESULT;
   }
 }
 
@@ -355,7 +391,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
         const semantic = scope
           ? await tryScopedSemanticKbSearch(context, scope.fileIds, query, max_results)
           : await trySemanticKbSearch(context, query, tags, max_results);
-        if (semantic) return semantic;
+        // Must test .output, not the object: the arm always resolves to a truthy result now, and
+        // `if (semantic)` would swallow the keyword fallback entirely.
+        if (semantic.output) return semantic.output;
 
         try {
           let searchResults;
@@ -518,7 +556,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             );
           }
 
-          return formatSearchResults(rankedResults);
+          return formatSearchResults(rankedResults) + formatSkipNotice(semantic.skipNotice);
         } catch (error) {
           context.logger.error('❌ Knowledge Base Search: Error during search:', error);
           return 'An error occurred while searching your knowledge base. Please try again.';

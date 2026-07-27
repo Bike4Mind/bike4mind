@@ -32,7 +32,33 @@ vi.mock('../../../../apiKeyService', () => ({
 }));
 
 import { knowledgeBaseSearchTool } from './index';
+import { emptyEmbeddingMismatchReport } from '../../../../dataLakeService/embeddingMismatch';
 import type { ToolContext } from '../../base/types';
+
+const ADA = 'text-embedding-ada-002';
+const SMALL_3 = 'text-embedding-3-small';
+
+const emptySearchResult = () => ({
+  results: [],
+  totalChunksSearched: 0,
+  filesInScope: 0,
+  chunksScored: 0,
+  embeddingModel: ADA,
+  embeddingMismatch: emptyEmbeddingMismatchReport(),
+});
+
+/** A report describing one file withheld for being embedded with another model. */
+const mismatchReport = () => {
+  const report = emptyEmbeddingMismatchReport();
+  report.excludedFiles = {
+    count: 1,
+    models: [SMALL_3],
+    estimatedChunks: 12,
+    sample: [{ fileId: 'f9', fileName: 'foreign.md', embeddingModel: SMALL_3 }],
+  };
+  report.partial = true;
+  return report;
+};
 
 const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 
@@ -68,8 +94,10 @@ async function run(context: ToolContext) {
 
 beforeEach(() => {
   getDynamicDataLakeAccessMock.mockClear();
-  semanticDataLakeSearchMock.mockClear().mockResolvedValue({ results: [], totalChunksSearched: 0, filesInScope: 0 });
-  fileScopedSemanticSearchMock.mockClear().mockResolvedValue({ results: [], totalChunksSearched: 0, filesInScope: 0 });
+  // Mirrors the real result shape (untyped mocks, so a missing field would only surface at
+  // runtime as a silent fall-through to keyword search).
+  semanticDataLakeSearchMock.mockClear().mockResolvedValue(emptySearchResult());
+  fileScopedSemanticSearchMock.mockClear().mockResolvedValue(emptySearchResult());
 });
 
 describe('search_knowledge_base keyword fallback retrieval exclusion', () => {
@@ -170,5 +198,110 @@ describe('search_knowledge_base agent kbScope enforcement', () => {
     const [, , filters, , , opts] = (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(filters.restrictToFileIds).toBeUndefined();
     expect(opts.includeShared).toBe(true);
+  });
+});
+
+describe('search_knowledge_base partial-result reporting', () => {
+  function makeSemanticContext(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'k', fileName: 'Keyword doc.pdf', tags: [], vectorized: true, mimeType: 'application/pdf' }],
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+    });
+  });
+
+  it('tells the MODEL about withheld content, in the string it actually receives', async () => {
+    // statusUpdate reaches the UI only, so the returned string is the sole channel the model
+    // reads. A notice that lives anywhere else cannot influence the answer.
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySearchResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+      embeddingMismatch: mismatchReport(),
+    });
+
+    const out = await run(makeSemanticContext());
+
+    expect(out).toContain('body');
+    expect(out).toContain(SMALL_3);
+    expect(out).toContain('partial');
+  });
+
+  it('says nothing extra when the corpus is consistent', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySearchResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+    });
+
+    const out = await run(makeSemanticContext());
+
+    expect(out).toContain('body');
+    expect(out).not.toContain('partial');
+  });
+
+  it('carries the notice through the keyword fall-through when everything was withheld', async () => {
+    // The worst case: no semantic hits BECAUSE every matching file was excluded. The arm has no
+    // output, keyword search answers instead, and the notice has to survive that hand-off or the
+    // model reports a complete answer over a partly-searched corpus.
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySearchResult(),
+      results: [],
+      embeddingMismatch: mismatchReport(),
+    });
+
+    const ctx = makeSemanticContext();
+    const out = await run(ctx);
+
+    expect(ctx.db.fabfiles!.search).toHaveBeenCalledTimes(1);
+    expect(out).toContain('Keyword doc.pdf');
+    expect(out).toContain(SMALL_3);
+    expect(out).toContain('partial');
+  });
+
+  it('does not invent a notice when the semantic arm throws', async () => {
+    semanticDataLakeSearchMock.mockRejectedValue(new Error('embedding provider down'));
+
+    const out = await run(makeSemanticContext());
+
+    expect(out).toContain('Keyword doc.pdf');
+    expect(out).not.toContain('partial');
+  });
+
+  it('accretes the warning onto promptMeta alongside the citables', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySearchResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+      embeddingMismatch: mismatchReport(),
+    });
+
+    const ctx = makeSemanticContext();
+    await run(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const withWarning = calls.find(c => (c[0] as { promptMeta?: { warnings?: string[] } })?.promptMeta?.warnings);
+    expect(withWarning).toBeDefined();
+    const changes = withWarning![0] as { promptMeta: { warnings: string[]; citables: unknown[] } };
+    expect(changes.promptMeta.warnings[0]).toContain(SMALL_3);
+    expect(changes.promptMeta.citables).toHaveLength(1);
+    // One status line, not two - a second would read as a bug to the user.
+    expect(String(withWarning![1])).toContain('partial results');
   });
 });
