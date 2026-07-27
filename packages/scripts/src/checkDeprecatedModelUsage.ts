@@ -50,6 +50,7 @@ const SKIP_PATTERNS = [
   /resolveDeprecatedModel\.ts$/, // the resolver itself
   /checkDeprecatedModelUsage\.ts$/, // this script
   /fallback\.ts$/, // fallback map keys intentionally reference deprecated models
+  /modelCatalog\.seed\.json$/, // catalog seed carries deprecated ids WITH their lifecycle so pinned sessions resolve
   /mocks\//, // test mock data
   /test-config\.ts$/, // test config fixtures
   /telemetryFingerprint\.ts$/, // normalization logic references old IDs in comments/examples

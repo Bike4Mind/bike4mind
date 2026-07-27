@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-07-26T22:16:13.918Z",
-  "notice": "Fallback defaults last maintained on 2026-07-26. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-07-27T23:40:30.881Z",
+  "notice": "Fallback defaults last maintained on 2026-07-27. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -2612,7 +2612,7 @@
           "status": "deprecated",
           "deprecationDate": "2025-09-15"
         },
-        "description": "xAI's legacy Grok 2 model with 131K context window. Consider using Grok 3 for better performance."
+        "description": "xAI's legacy Grok 2 model with a 131K context window. Superseded by Grok 4.5."
       }
     },
     {
@@ -2673,9 +2673,10 @@
         "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
-          "status": "active"
+          "status": "deprecated",
+          "deprecationDate": "2026-07-25"
         },
-        "description": "xAI's flagship Grok 3 model that excels at enterprise use cases like data extraction, coding, and text summarization. Possesses deep domain knowledge in finance, healthcare, law, and science."
+        "description": "xAI's legacy Grok 3 model. Superseded by Grok 4.5, which is cheaper and adds reasoning, vision, and a 500K context window. No longer recommended."
       }
     },
     {
@@ -2801,7 +2802,7 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "xAI's most capable reasoning model. Excels at complex problem-solving, coding, math, and multimodal understanding with 256K context window."
+        "description": "xAI's Grok 4 reasoning model. Strong at complex problem-solving, coding, math, and multimodal understanding with a 256K context window. Grok 4.5 is newer, cheaper, and has a larger context window."
       }
     },
     {
@@ -2865,7 +2866,7 @@
           "status": "deprecated",
           "deprecationDate": "2025-09-15"
         },
-        "description": "xAI's legacy beta text model. No longer recommended - use Grok 3 instead."
+        "description": "xAI's legacy beta text model. No longer recommended - use Grok 4.5 instead."
       }
     },
     {
@@ -2922,7 +2923,7 @@
           "status": "deprecated",
           "deprecationDate": "2025-09-15"
         },
-        "description": "xAI's legacy beta multimodal model with vision capabilities. Use Grok 2 Vision for better performance."
+        "description": "xAI's legacy beta multimodal model with vision capabilities. Use Grok 4.5 instead, which also supports vision."
       }
     },
     {
