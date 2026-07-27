@@ -10,6 +10,12 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: (...a: unknown[]) => mockGet(...a), post: (...a: unknown[]) => mockPost(...a) },
 }));
 
+// Stubbed: the card fetches and polls its own endpoint, which would otherwise
+// show up in this file's api.get assertions. Covered by DiscoveryStatusCard.test.tsx.
+vi.mock('./DiscoveryStatusCard', () => ({
+  DiscoveryStatusCard: () => <div data-testid="discovery-status-card" />,
+}));
+
 import { ModelLifecycleTab } from './ModelLifecycleTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -57,6 +63,7 @@ describe('ModelLifecycleTab', () => {
   it('renders the queue, the horizon and the stale references from one fetch', async () => {
     renderTab();
 
+    expect(screen.getByTestId('discovery-status-card')).toBeInTheDocument();
     const row = await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
     expect(row).toHaveTextContent('anthropic-docs');
     expect(row).toHaveTextContent('gpt-live');

@@ -20,6 +20,7 @@ import {
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { api } from '@client/app/contexts/ApiContext';
+import { DiscoveryStatusCard } from './DiscoveryStatusCard';
 
 /** Wire shapes of /api/admin/model-deprecation-status (dates arrive as strings). */
 interface QueueItem {
@@ -181,6 +182,10 @@ export const ModelLifecycleTab: React.FC = () => {
           {error}
         </Alert>
       )}
+
+      <Box sx={{ mb: 2 }}>
+        <DiscoveryStatusCard />
+      </Box>
 
       {isLoading && !status ? (
         <CircularProgress size="sm" />
