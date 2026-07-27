@@ -89,11 +89,16 @@ const KNOWLEDGE_FILE_TOKEN_ALLOCATION = 0.7;
 
 /**
  * Smallest share of the token budget an explicitly attached file is guaranteed when a finite
- * historyCount is set (35%). History used to have absolute priority here, so a long conversation
- * silently pushed the file the user just attached out of context entirely and the model answered
- * as though no file existed. History still keeps the majority, which the user did not ask to give
- * up. A fraction rather than a token count, so the reserve can never exceed the budget on a small
- * context window; unused reserve flows back to history.
+ * historyCount is set. History used to have absolute priority here, so a long conversation silently
+ * pushed the file the user just attached out of context entirely and the model answered as though no
+ * file existed.
+ *
+ * 0.35 is the largest share that still leaves history the clear majority, which the user did not ask
+ * to give up, while sitting at or above the per-file budget attachments effectively got already on
+ * every model class of 8k context and up - so it raises the floor without cutting what a file
+ * receives today. A fraction rather than a token count, so the reserve can never exceed the budget on
+ * a small context window. The exact figure is not load-bearing: unused reserve flows back to history,
+ * so over-reserving costs nothing and this only binds when content genuinely wants more.
  */
 const MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION = 0.35;
 
@@ -1623,6 +1628,10 @@ export async function buildAndSortMessages(
     // making the backstop the cause of the failure it exists to prevent.
     let reducedContentMessages = processedContentMessages;
     let currentTokenCount = finalTokenCount;
+    // Rebuilt up to twice per round so the real-token count is measured against the actual payload.
+    // Cheap at five rounds, but it is the place to extend if another source ever has to give up
+    // tokens here - images are the obvious candidate, since they are assembled in without ever
+    // being charged against the budget.
     const assemble = (content: IMessage[]) =>
       historyEndsWithToolUse && promptHasToolResult
         ? [...systemMessages, ...processedPreviousMessages, ...userPrompt, ...imageMessages, ...content]
@@ -1644,6 +1653,10 @@ export async function buildAndSortMessages(
         const before = reducedContentMessages;
         const reduced = processMessages(before, Math.max(0, estimateMessagesTokens(before) - excessInEstimateTokens));
         reducedContentMessages = reduced.messages;
+        // Reported like the history branch below. These are messages the pass dropped on top of
+        // whatever the primary allocation already removed, so they cannot be double-counted: this
+        // round only ever sees the content that survived to here.
+        allRemovedMessages.push(...reduced.removedMessages);
         if (reduced.messages.length < before.length) {
           logger.warn(
             `Final safety pass dropped ${before.length - reduced.messages.length} of ${before.length} ` +

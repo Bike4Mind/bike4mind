@@ -2057,6 +2057,34 @@ describe('final safety pass under a denser-than-estimated tokenizer', () => {
     expect(second?.originalMessageCount).toBe(41); // 40 windowed history + 1 attachment, not the first call/s 4
   });
 
+  it('reports content the safety pass dropped, not just what the primary allocation removed', async () => {
+    // Tuned so the primary allocation removes NOTHING: short history, and two attachments that fit
+    // their estimated budget exactly. Only the real tokenizer sees the overflow, so the safety pass is
+    // the sole thing that drops a message here - if it does not report that, removedMessages stays
+    // empty and the whole turn looks untruncated.
+    const tokenizer = createDenseTokenizer(2.0);
+
+    await buildAndSortMessages(
+      makeHistory(2, 350),
+      [
+        { role: 'user', content: 'A'.repeat(3143) },
+        { role: 'user', content: 'B'.repeat(3143) },
+      ],
+      [],
+      3000,
+      {},
+      2,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const debug = getLastBuildDebugInfo();
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('exceeds maxInputTokens'));
+    expect(debug?.removedMessages?.length).toBe(1);
+    expect(debug?.wasTruncated).toBe(true);
+    expect(debug?.truncationMethod).toBe('token-budget');
+  });
+
   it('keeps wasTruncated consistent with truncationMethod when content was cut mid-message', async () => {
     const tokenizer = createDenseTokenizer(3.5);
 
