@@ -392,7 +392,7 @@ You can also run any MCP server via npx or custom executables:
 
 #### Serve Bike4Mind itself as an MCP server (`b4m mcp serve`)
 
-The reverse of adding a server: `b4m mcp serve` exposes your Bike4Mind backend to any MCP client (Claude Desktop, editors, other agents). It advertises seven tools (`list_notebooks`, `get_notebook`, `create_notebook`, `send_message`, `search_knowledge_base`, `list_files`, `get_file`) plus a `b4m://notebook/{id}` resource.
+The reverse of adding a server: `b4m mcp serve` exposes your Bike4Mind backend to any MCP client (Claude Desktop, editors, other agents). It advertises seven tools (`list_notebooks`, `get_notebook`, `create_notebook`, `send_message`, `search_knowledge_base`, `list_files`, `get_file`) plus four resource templates (`b4m://notebook/{id}`, `b4m://file/{id}`, `b4m://project/{id}`, `b4m://artifact/{id}`), each listable and readable as JSON.
 
 ```bash
 b4m mcp serve                        # stdio (default) - for local clients that spawn the process

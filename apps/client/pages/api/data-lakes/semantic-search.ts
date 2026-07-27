@@ -20,15 +20,12 @@ import {
   getEmbeddingModelCost,
   ModelBackend,
   OpenAIEmbeddingModel,
-  DATA_LAKES,
-  getAccessibleDataLakes,
-  hasDeveloperUserTag,
   isSupportedEmbeddingModel,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { createTokenizer, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
-import { getRequestEntitlements } from '@server/entitlements';
+import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 
 // Reused across requests so the tiktoken encoder is resolved once, not per search.
 let sharedTokenizer: ITokenizer | undefined;
@@ -41,31 +38,39 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  * POST /api/data-lakes/semantic-search
  *
  * Vector-based semantic search across FabFile chunks in the user's accessible
- * data lakes. Embeds the query, cosine-sims against pre-computed chunk vectors
- * (currently text-embedding-ada-002), returns top-K chunks with parent file
- * metadata.
+ * data lakes. Embeds the query with the model the corpus was vectorized with,
+ * cosine-sims against the pre-computed chunk vectors, returns top-K chunks with
+ * parent file metadata.
  *
  * Complements the keyword-based `/api/data-lakes/articles?search=...` which
  * matches against fileName + tags + notes only. This endpoint reads the vector
  * field that the fabFileVectorize pipeline already populates per chunk.
  *
- * Auth: session/api-key auth, then scope is the lakes the caller can access per
- * each lake's own declared gate (`requiredUserTag`/`requiredEntitlement` on the
- * static registry). Zero accessible lakes -> empty result set before any
- * embedding cost is incurred. NOTE: deliberately scoped to the STATIC lake
- * registry for now - dynamic (user-created) lakes need the ownership
- * scoping that `queryDataLakeArticles` applies before they can join the search
- * scope here.
+ * Auth: session/api-key auth, then scope comes from `resolveRetrievalLakeScope`,
+ * which wraps the same `getDynamicDataLakeAccess` the chat `search_knowledge_base`
+ * tool uses - so both entry points search the same lakes for the same caller.
+ * Dynamic (user-created) lakes are included; their user-controlled tag prefixes
+ * ride the SCOPED bucket, matched only within owner/org access, while the static
+ * registry's reserved prefixes stay in the OPEN (ownership-bypass) bucket. Zero
+ * accessible lakes -> empty result set before any embedding cost is incurred.
+ *
+ * One deliberate difference from chat: admin/developer callers additionally get
+ * the whole static registry (see resolveRetrievalLakeScope), preserving the reach
+ * this endpoint has always given them.
+ *
+ * Unlike the chat tool this route passes no `retrievalFilter` - that filter is
+ * session-derived and there is no session here, so a file chat would exclude is
+ * still returned. Same lakes, wider file set; revisit if this route ever gains a
+ * session context.
  *
  * Body:
  *   - query: string                 (required) - natural-language search query
  *   - top_k: number = 10            - max results to return
  *   - min_score: number = 0.0       - discard results below this cosine score
  *   - tags: string[] = []           - optional tag filter on parent FabFile
- *   - embedding_model?: string      - override the query embedding model (defaults to the
- *                                     `defaultEmbeddingModel` admin setting, which is what the
- *                                     chunk pipeline stamps onto files; must be a known
- *                                     SupportedEmbeddingModel)
+ *   - embedding_model?: string      - override embedding model (defaults to the admin's
+ *                                     `defaultEmbeddingModel`, which is what the corpus was
+ *                                     vectorized with; must be a known SupportedEmbeddingModel)
  *
  * Returns:
  *   - results: Array<{ chunk_id, file_id, file_name, file_tags, chunk_text, score }>
@@ -73,7 +78,8 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  *   - files_in_scope: number
  *   - chunks_scored: number
  *   - partial_results: boolean     - true when anything was withheld from ranking
- *   - embedding_mismatch          - excluded_files / skipped_chunks / unlabeled / truncated
+ *   - embedding_mismatch          - excluded_files / skipped_chunks / unlabeled / truncated /
+ *                                   query_embedding_failed
  *   - warning?: string             - present only when partial_results is true
  *   - embedding_model: string
  *   - latency_ms: number
@@ -85,17 +91,42 @@ const SemanticSearchInput = z.object({
   min_score: z.number().min(-1).max(1).default(0.0),
   tags: z.array(z.string()).default([]),
   // Allowlisted via .refine() against `isSupportedEmbeddingModel` to prevent
-  // a caller from forcing a non-existent or unexpectedly-priced model. Left OPTIONAL rather than
-  // defaulted: the corpus is embedded with whatever `defaultEmbeddingModel` was set to (see the
-  // chunk queue handler), so a hardcoded default here would query a non-ada deployment in the
-  // wrong embedding space and report its entire lake as mismatched.
+  // a caller from forcing a non-existent or unexpectedly-priced model. Optional rather than
+  // defaulted: the fallback is the admin's configured model, which zod cannot read here.
   embedding_model: z
     .string()
-    .refine(isSupportedEmbeddingModel, {
-      message: 'embedding_model must be a known SupportedEmbeddingModel',
-    })
+    .refine(isSupportedEmbeddingModel, { message: 'embedding_model must be a known SupportedEmbeddingModel' })
     .optional(),
 });
+
+/**
+ * The model the corpus was actually embedded with. The vectorize pipeline
+ * (queueHandlers/fabFileChunk) and the chat KB tool both read `defaultEmbeddingModel`, so a
+ * query embedded with anything else either matches nothing (the ranker skips vectors of a
+ * different dimension) or ranks across two incompatible embedding spaces.
+ *
+ * Falls back to ada-002 when the setting is unset, names a model we no longer support, or
+ * cannot be read. Every fallback warns: the symptom is an empty result set rather than an
+ * error, so without a log an admin misconfiguration is indistinguishable from "nothing
+ * matched" and lands as a support ticket.
+ */
+async function resolveDefaultEmbeddingModel(logger: Logger): Promise<SupportedEmbeddingModel> {
+  try {
+    const configured = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
+    if (typeof configured === 'string' && isSupportedEmbeddingModel(configured)) {
+      return configured as SupportedEmbeddingModel;
+    }
+    if (configured !== undefined && configured !== null && configured !== '') {
+      logger?.warn(
+        `[semantic-search] defaultEmbeddingModel "${String(configured)}" is not a supported embedding model; ` +
+          'falling back to ada-002, which will not match a corpus vectorized with another model'
+      );
+    }
+  } catch (err) {
+    logger?.warn('[semantic-search] failed to read defaultEmbeddingModel; using ada-002', err);
+  }
+  return OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+}
 
 /**
  * Serialize the mismatch report for the wire. Snake_case throughout to match the rest of this
@@ -145,8 +176,6 @@ const handler = baseApi()
     asyncHandler(async (req: Request, res: Response) => {
       const t0 = Date.now();
 
-      const userTags: string[] = req.user.tags ?? [];
-
       // --- Validate input (safeParse - surfaces errors without leaking schema internals) ---
       const parsed = SemanticSearchInput.safeParse(req.body || {});
       if (!parsed.success) {
@@ -156,15 +185,7 @@ const handler = baseApi()
         });
       }
       const { query, top_k, min_score, tags } = parsed.data;
-
-      // Match the corpus: fall back to the same admin setting the chunk pipeline stamps onto
-      // files, and only then to ada-002 if it is unset or unrecognized.
-      const configuredModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
-      const embedding_model =
-        parsed.data.embedding_model ??
-        (configuredModel && isSupportedEmbeddingModel(configuredModel)
-          ? configuredModel
-          : OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+      const embedding_model = parsed.data.embedding_model ?? (await resolveDefaultEmbeddingModel(req.logger));
 
       // --- Request cancellation: bail out early if the client disconnects ---
       // Keeps the Lambda from continuing to embed + scan after the caller is
@@ -179,18 +200,12 @@ const handler = baseApi()
       const isAborted = () => clientAborted;
 
       // --- Resolve accessible data lakes (this IS the access gate) ---
-      // Each lake declares its own `requiredUserTag`/`requiredEntitlement`; the
-      // any-of filter below scopes the search to lakes the caller can access.
-      // Pass resolved entitlement keys so tag-less entitlement holders (e.g.
-      // email-domain grants) are scoped to the same lakes as tag holders. Keys
-      // are resolved only in the else branch - admin/developer short-circuit,
-      // so resolving up front would cost them a discarded subscription read.
-      const accessibleLakes =
-        req.user.isAdmin || hasDeveloperUserTag(req.user.tags)
-          ? DATA_LAKES
-          : getAccessibleDataLakes(userTags, undefined, await getRequestEntitlements(req));
+      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await resolveRetrievalLakeScope(req);
 
-      if (accessibleLakes.length === 0) {
+      // Every lake contributes exactly one meta-tag, so an empty tag list means zero
+      // accessible lakes. Gating on the prefixes instead would be wrong: a caller can
+      // legitimately hold only dynamic lakes, whose prefixes are all in the SCOPED bucket.
+      if (dataLakeTags.length === 0) {
         // Same shape as a real search: this response is passed through verbatim to the RLM
         // agent, so a narrower object here would read as a different contract.
         return res.json({
@@ -204,9 +219,6 @@ const handler = baseApi()
           latency_ms: Date.now() - t0,
         });
       }
-
-      const dataLakeTags = accessibleLakes.map(dl => dl.datalakeTag);
-      const dataLakeTagPrefixes = accessibleLakes.map(dl => dl.fileTagPrefix);
 
       // --- Get the embedding-provider API key (OpenAI or VoyageAI) for the requested model ---
       // embedding_model may be a VoyageAI model, so resolve the key for the model's actual
@@ -250,8 +262,8 @@ const handler = baseApi()
       if (isAborted()) return res.end();
 
       // --- Delegate to the shared in-process semantic search service ---
-      // (Same implementation the chat search_knowledge_base tool uses - single source of
-      // truth: embed query -> scope files -> bulk chunk vectors -> cosine rank -> top-K.)
+      // (Same implementation AND the same lake-scope resolution the chat search_knowledge_base
+      // tool uses: embed query -> scope files -> bulk chunk vectors -> cosine rank -> top-K.)
       const search = await dataLakeService.semanticDataLakeSearch(
         {
           userId: req.user.id,
@@ -264,6 +276,7 @@ const handler = baseApi()
           apiKeyTable: embeddingApiKeyTable,
           dataLakeTags,
           dataLakeTagPrefixes,
+          scopedTagPrefixes, // dynamic-lake prefixes - matched only within owner/org access
           logger: req.logger,
         },
         { db: { fabfiles: fabFileRepository, fabfilechunks: fabFileChunkRepository } }

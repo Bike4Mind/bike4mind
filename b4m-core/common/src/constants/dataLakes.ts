@@ -47,6 +47,38 @@ export interface DataLakeConfig {
 }
 
 /**
+ * A public data lake as it appears in the discover/browse surface: the lightweight card
+ * projection returned by the `/api/data-lakes/public` browse endpoint. Distinct from
+ * DataLakeConfig - it drops the access/gate internals (a browseable lake is gate-less by
+ * construction) and adds the human-facing preview metadata the catalog renders: owner
+ * display, file count, and total size. `ownerDisplayName` is deliberately name-or-username
+ * only (never the owner's email) so browsing a public lake can't leak a cross-org address.
+ */
+export interface PublicDataLakeSummary {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string;
+  fileTagPrefix: string;
+  /** name || username of the lake's creator; undefined if the owner could not be resolved. */
+  ownerDisplayName?: string;
+  /** Cached file count (0 when the lake has no files yet). */
+  fileCount: number;
+  /** Cached total size in bytes (0 when empty). */
+  totalSizeBytes: number;
+  /** True when the browsing caller created this lake (rendered as an "Owned by you" hint). */
+  isOwn: boolean;
+  /** True when the caller may manage the lake (admin or owner) - gates management affordances. */
+  canManage: boolean;
+}
+
+/** One page of public-lake browse results plus the unpaged total for "showing X of Y". */
+export interface BrowsePublicDataLakesResult {
+  data: PublicDataLakeSummary[];
+  total: number;
+}
+
+/**
  * Premium data lakes contributed by the private overlay via env, as JSON (open-core guard):
  * a customer-specific lake definition (its id/name/tag-prefix) names the customer and
  * doesn't belong in shippable code. Empty/unset in the open-core fork (or CI type-check)
@@ -157,7 +189,12 @@ export function toDataLakeConfig(dl: {
  * (matched against the caller's resolved `entitlementKeys`). A lake declaring an
  * entitlement but no tag is therefore NOT public (it is gated by the key).
  *
- * Data lakes without any requirement are accessible to all authenticated users.
+ * A requirement-less HARDCODED lake is accessible to all authenticated users - the registry
+ * is curated, owner-less config. This does NOT hold for DB lakes: a requirement-less one is
+ * owner-only unless org-scoped or public (Private-by-default, see canAccessLake). This
+ * predicate has no ownership rule, so callers passing `dynamicDataLakes` MUST pre-filter them
+ * through findAccessible / findActiveByUserTagsAndEntitlements, which enforce it datastore-side.
+ *
  * When dynamicDataLakes is provided (fetched from DB), those take precedence over
  * hardcoded DATA_LAKES entries with the same id. `entitlementKeys` is optional - callers
  * that don't resolve entitlements (tag-only surfaces) omit it and get tag-only matching.

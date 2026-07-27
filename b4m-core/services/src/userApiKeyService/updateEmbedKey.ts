@@ -1,4 +1,10 @@
-import { ApiKeyScope, EmbedBrandingSchema, EmbedOriginsSchema, IUserApiKeyRepository } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  EmbedBrandingSchema,
+  EmbedOriginsSchema,
+  IOrganizationRepository,
+  IUserApiKeyRepository,
+} from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -18,6 +24,7 @@ export type UpdateEmbedKeyParameters = z.infer<typeof updateEmbedKeySchema>;
 interface UpdateEmbedKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
+    organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
   };
 }
 
@@ -40,6 +47,11 @@ export interface UpdateEmbedKeyResult {
  * `embed:chat` scope can be configured - the embed fields are meaningless on any
  * other key (mirrors the create-side coherence invariant). Absent fields are
  * left untouched; `allowedOrigins: []` explicitly clears the allow-list.
+ *
+ * Resolvable by the key's minter OR by an admin of the org the key is billed to
+ * (owner or manager), mirroring the org-admin-aware LIST route - so an org admin
+ * can configure any key billed to an org they administer, not just keys they
+ * minted. The org-admin lookup is lazy: the minter path pays no extra query.
  */
 export const updateEmbedKey = async (
   userId: string,
@@ -49,7 +61,11 @@ export const updateEmbedKey = async (
   const { db } = adapters;
   const params = secureParameters(parameters, updateEmbedKeySchema);
 
-  const apiKey = await db.userApiKeys.findByUserIdAndId(userId, params.keyId);
+  let apiKey = await db.userApiKeys.findByUserIdAndId(userId, params.keyId);
+  if (!apiKey) {
+    const administeredOrgIds = await db.organizations.findIdsAdministeredBy(userId);
+    apiKey = await db.userApiKeys.findByOrganizationIdsAndId(administeredOrgIds, params.keyId);
+  }
   if (!apiKey) {
     throw new NotFoundError('API key not found');
   }

@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { Box, Button, Typography, useTheme } from '@mui/joy';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { OptiModeBreadcrumb } from '@client/app/components/datalake/OptiModeBreadcrumb';
 import DataLakeTree from './DataLakeTree';
 import DataLakeArticle from './DataLakeArticle';
@@ -29,6 +30,8 @@ interface DataLakeExplorerProps {
   rootLabel?: string;
   /** When provided, renders a "Manage" button that opens the lake management panel. */
   onManage?: () => void;
+  /** When provided, renders a "Discover" button that opens the public-lake browse catalog. */
+  onDiscover?: () => void;
 }
 
 /** True only for drags carrying real files (not text/image-from-page drags). */
@@ -41,6 +44,7 @@ export default function DataLakeExplorer({
   source = 'opti',
   rootLabel = '⛩ Mission Hub',
   onManage,
+  onDiscover,
 }: DataLakeExplorerProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
@@ -211,6 +215,19 @@ export default function DataLakeExplorer({
             sx={{ mb: 2 }}
           >
             Manage lakes
+          </Button>
+        )}
+        {onDiscover && (
+          <Button
+            data-testid="datalake-discover-btn"
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            startDecorator={<TravelExploreIcon sx={{ fontSize: 16 }} />}
+            onClick={onDiscover}
+            sx={{ mb: 2, ml: 1 }}
+          >
+            Discover
           </Button>
         )}
         <Box sx={{ ml: 'auto', mb: 2 }}>
