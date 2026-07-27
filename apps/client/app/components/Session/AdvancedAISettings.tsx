@@ -1,4 +1,4 @@
-import { ChangeEvent, FC, useEffect, useState } from 'react';
+import { ChangeEvent, FC, useCallback, useEffect, useState } from 'react';
 
 import { Badge, Box, IconButton, Input, Tooltip } from '@mui/joy';
 
@@ -13,6 +13,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useModelInfo } from '../../hooks/data/useModelInfo';
 import InspectableSettingsButton from './AISettings/InspectableSettingsButton';
 import { AdvancedAIModal } from './AISettings/AdvancedAIModal';
+import { useHydrateModelFromSession } from './AISettings/useHydrateModelFromSession';
 import { isImageModel } from '@client/app/utils/commands';
 import { keyframes } from '@mui/system';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
@@ -129,12 +130,11 @@ const AISettings: FC<AISettingsProps> = ({
     onRollDice();
   };
 
-  // Update the model when a session is loaded
-  useEffect(() => {
-    if (currentSession?.lastUsedModel) {
-      setLLM({ model: currentSession.lastUsedModel });
-    }
-  }, [currentSession, setLLM]);
+  // Adopt the session's pinned model once per session. Must NOT re-run on every
+  // `currentSession` identity change -- see useHydrateModelFromSession for why that
+  // silently reverted the user's model selection on send.
+  const applyModelFromSession = useCallback((nextModel: string) => setLLM({ model: nextModel }), [setLLM]);
+  useHydrateModelFromSession(currentSession, applyModelFromSession);
 
   // Reset QuestMaster to disabled when model changes
   useEffect(() => {
