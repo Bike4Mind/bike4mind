@@ -20,8 +20,8 @@
  * Turbo cache key: packages/premium/*\/package.json
  */
 
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
-import { resolve, dirname, join, sep } from 'node:path';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync } from 'node:fs';
+import { resolve, dirname, join, sep, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -66,7 +66,18 @@ function ensureDir(dir) {
 
 function writeFile(path, content) {
   ensureDir(dirname(path));
-  writeFileSync(path, content, 'utf8');
+  // Atomic write: write to a temp file in the same directory, then rename over the
+  // real path. A plain writeFileSync truncates the target before writing its new
+  // content, so a concurrent reader (e.g. another turbo task's test statically
+  // importing this exact generated file, in a different package with no ordering
+  // edge against THIS one - see @bike4mind/scripts's migrations/index.test.ts) can
+  // observe an empty or partial file mid-write. rename() is atomic as long as the
+  // temp file and the target share a directory (same filesystem), which this
+  // guarantees; the PID+random suffix avoids collisions between concurrent codegen
+  // runs writing the same file.
+  const tmpPath = join(dirname(path), `.${basename(path)}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  writeFileSync(tmpPath, content, 'utf8');
+  renameSync(tmpPath, path);
   console.log(`  wrote ${path.replace(REPO_ROOT + '/', '')}`);
 }
 
