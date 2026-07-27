@@ -135,4 +135,70 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     expect(res.scopedTagPrefixes).toEqual(['mine:']);
     expect(res.dataLakeTagPrefixes).toEqual([]);
   });
+
+  it('still drops a gated lake the caller does NOT own, even with a userId supplied', async () => {
+    // The exemption must key off the persisted creator, not off "the query returned it". This is
+    // the case that fails if the owned set is ever reduced to "everything the DB handed back".
+    const theirs = dbLake({ id: 'theirs', createdByUserId: 'someone-else', requiredUserTag: 'TagIDoNotHold' });
+
+    const res = await getDynamicDataLakeAccess(ctx([theirs], { user: { id: 'mallory', tags: [] } }));
+
+    expect(res.dataLakeTags).toEqual([]);
+    expect(res.scopedTagPrefixes).toEqual([]);
+    expect(res.dataLakeTagPrefixes).toEqual([]);
+  });
+
+  it('does not treat a creator-less lake as owned by an id-less caller', async () => {
+    // Both sides absent is the fail-open shape: comparing String(undefined) to String(undefined)
+    // would make every ownerless gated lake look owned by every anonymous caller. A blank creator
+    // is a real value - resolveFallbackLake mints one.
+    const blank = dbLake({ id: 'blank', createdByUserId: '', requiredUserTag: 'TagIDoNotHold' });
+    const absent = dbLake({ id: 'absent', requiredUserTag: 'TagIDoNotHold' });
+    delete (absent as { createdByUserId?: string }).createdByUserId;
+
+    const res = await getDynamicDataLakeAccess(ctx([blank, absent], { user: { tags: [] } }));
+
+    expect(res.dataLakeTags).toEqual([]);
+    expect(res.scopedTagPrefixes).toEqual([]);
+  });
+
+  it('strips the reserved meta-tag of a shadow lake even when the caller owns it', async () => {
+    // The exemption must not re-open the registry-shadow escalation: the re-add happens upstream
+    // of the reserved-tag drop, so an owned shadow lake keeps its own prefix and loses the tag.
+    const reserved = DATA_LAKES[0].datalakeTag;
+    const ownedShadow = dbLake({
+      id: 'owned-shadow',
+      fileTagPrefix: 'mine:',
+      datalakeTag: reserved,
+      createdByUserId: 'mallory',
+      requiredUserTag: 'TagIDoNotHold',
+    });
+
+    const res = await getDynamicDataLakeAccess(ctx([ownedShadow], { user: { id: 'mallory', tags: [] } }));
+
+    expect(res.dataLakeTags).toEqual([]);
+    // The prefix proves the lake WAS restored and then had its tag stripped, rather than the
+    // exemption simply never running.
+    expect(res.scopedTagPrefixes).toEqual(['mine:']);
+  });
+
+  it('lists an owned lake once when it also satisfies its own gate', async () => {
+    const own = dbLake({ id: 'mine', createdByUserId: 'owner', requiredUserTag: 'medlib' });
+
+    const res = await getDynamicDataLakeAccess(ctx([own], { user: { id: 'owner', tags: ['medlib'] } }));
+
+    // toEqual, not toContain: a duplicate re-add would slip past a containment check.
+    expect(res.dataLakeTags).toEqual(['datalake:mine']);
+    expect(res.scopedTagPrefixes).toEqual(['mine:']);
+  });
+
+  it('matches an ObjectId-like user.id against the string createdByUserId', async () => {
+    const own = dbLake({ id: 'mine', createdByUserId: 'user-oid', requiredUserTag: 'TagIDoNotHold' });
+
+    const res = await getDynamicDataLakeAccess(ctx([own], { user: { id: { toString: () => 'user-oid' }, tags: [] } }));
+
+    // Asserts the re-add outcome, not what was handed to the query - a raw === against the
+    // uncoerced context value would compare an object to a string and silently drop the lake.
+    expect(res.dataLakeTags).toEqual(['datalake:mine']);
+  });
 });
