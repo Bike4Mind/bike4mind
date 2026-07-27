@@ -31,6 +31,7 @@ import {
   ChevronRight as ChevronRightIcon,
   FirstPage as FirstPageIcon,
   LastPage as LastPageIcon,
+  Search as SearchIcon,
 } from '@mui/icons-material';
 import { LLMModelConfig, ModelBackend, normalizeEntitlementKey } from '@bike4mind/common';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
@@ -69,6 +70,17 @@ const getTagInfo = (tagValue: string, index: number = 0) => {
   };
 };
 
+// ModelInfo has no `vendor` field, but discovery-sourced rows may carry one - read it
+// structurally so the search covers it without asserting it onto the shared type.
+const getModelVendor = (model: LLMModelConfig): string => {
+  const vendor = (model as { vendor?: unknown }).vendor;
+  return typeof vendor === 'string' ? vendor : '';
+};
+
+// `query` must already be lowercased and trimmed.
+const matchesSearch = (model: LLMModelConfig, query: string): boolean =>
+  [model.id, model.name, model.backend, getModelVendor(model)].some(field => field.toLowerCase().includes(query));
+
 const LLMDashboardTab: React.FC = () => {
   const { data: modelInfos, isLoading: modelInfoLoading, error } = useModelInfo();
   const { data: models, isLoading: configLoading } = useLLMModelConfigurationsWithDefaults(modelInfos);
@@ -81,6 +93,8 @@ const LLMDashboardTab: React.FC = () => {
   const [filterType, setFilterType] = useState<'all' | 'text' | 'image'>('all');
   const [filterBackend, setFilterBackend] = useState<string>('all');
   const [filterEnabled, setFilterEnabled] = useState<'all' | 'enabled' | 'disabled'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [sortColumn, setSortColumn] = useState<
     'name' | 'type' | 'backend' | 'status' | 'rank' | 'createdAt' | 'updatedAt' | null
@@ -132,12 +146,14 @@ const LLMDashboardTab: React.FC = () => {
   };
 
   const filteredModels = useMemo(() => {
+    const search = searchQuery.trim().toLowerCase();
     const filtered = localModels.filter(model => {
       if (filterType !== 'all' && model.type !== filterType) return false;
       if (filterBackend !== 'all' && model.backend !== filterBackend) return false;
       if (filterEnabled === 'enabled' && !model.enabled) return false;
       if (filterEnabled === 'disabled' && model.enabled) return false;
       if (model.type === 'speech-to-text') return false;
+      if (search && !matchesSearch(model, search)) return false;
       return true;
     });
 
@@ -197,7 +213,7 @@ const LLMDashboardTab: React.FC = () => {
     }
 
     return filtered;
-  }, [localModels, filterType, filterBackend, filterEnabled, sortColumn, sortDirection, modelDates]);
+  }, [localModels, filterType, filterBackend, filterEnabled, searchQuery, sortColumn, sortDirection, modelDates]);
 
   // Pagination calculations
   const totalPages = Math.ceil(filteredModels.length / rowsPerPage);
@@ -205,10 +221,27 @@ const LLMDashboardTab: React.FC = () => {
   const endIndex = startIndex + rowsPerPage;
   const paginatedModels = filteredModels.slice(startIndex, endIndex);
 
+  const selectedIdSet = useMemo(() => new Set(selectedModelIds), [selectedModelIds]);
+  // Selection is pruned to the filtered rows, so a length match means "all visible".
+  const allFilteredSelected = filteredModels.length > 0 && selectedModelIds.length === filteredModels.length;
+  const someFilteredSelected = selectedModelIds.length > 0 && !allFilteredSelected;
+
   // Reset to first page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [filterType, filterBackend, filterEnabled]);
+  }, [filterType, filterBackend, filterEnabled, searchQuery]);
+
+  // Selection only ever refers to rows the admin can currently see, so a bulk action
+  // can never touch a model that scrolled out of the filter set. Returning `prev`
+  // unchanged when nothing was pruned keeps this from re-rendering in a loop.
+  useEffect(() => {
+    setSelectedModelIds(prev => {
+      if (prev.length === 0) return prev;
+      const visibleIds = new Set<string>(filteredModels.map(model => model.id));
+      const pruned = prev.filter(id => visibleIds.has(id));
+      return pruned.length === prev.length ? prev : pruned;
+    });
+  }, [filteredModels]);
 
   const handlePageChange = (page: number) => {
     setCurrentPage(Math.max(1, Math.min(page, totalPages)));
@@ -230,6 +263,31 @@ const LLMDashboardTab: React.FC = () => {
         updatedAt: new Date(),
       },
     }));
+  };
+
+  const handleToggleSelected = (modelId: string, selected: boolean) => {
+    setSelectedModelIds(prev => (selected ? [...prev, modelId] : prev.filter(id => id !== modelId)));
+  };
+
+  const handleToggleSelectAll = (selected: boolean) => {
+    setSelectedModelIds(selected ? filteredModels.map(model => model.id) : []);
+  };
+
+  // Writes through the same local state and dirty flag as the per-row switch, so the
+  // existing Save Changes flow persists a bulk edit in one request.
+  const handleBulkSetEnabled = (enabled: boolean) => {
+    if (selectedModelIds.length === 0) return;
+    const targetIds = new Set(selectedModelIds);
+    setLocalModels(prev => prev.map(model => (targetIds.has(model.id) ? { ...model, enabled } : model)));
+    setHasUnsavedChanges(true);
+    const now = new Date();
+    setModelDates(prev => {
+      const next = { ...prev };
+      targetIds.forEach(id => {
+        next[id] = { ...next[id], updatedAt: now };
+      });
+      return next;
+    });
   };
 
   const handleFallbackModelChange = (modelId: string, fallbackModel: string) => {
@@ -445,6 +503,16 @@ const LLMDashboardTab: React.FC = () => {
           sx={{ mb: 3 }}
         >
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'stretch', sm: 'center' }}>
+            <Input
+              size="sm"
+              placeholder="Search models"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              startDecorator={<SearchIcon fontSize="small" />}
+              slotProps={{ input: { 'data-testid': 'llm-dashboard-search-input' } }}
+              sx={{ minWidth: 200 }}
+            />
+
             <Stack direction="row" spacing={1} alignItems="center">
               <Typography level="title-sm" sx={{ alignSelf: 'center', whiteSpace: 'nowrap' }}>
                 Type:
@@ -512,6 +580,48 @@ const LLMDashboardTab: React.FC = () => {
             <ContextHelpButton helpId="admin/llm-dashboard" tooltipText="LLM Dashboard Help" />
           </Stack>
         </Stack>
+
+        {selectedModelIds.length > 0 && (
+          <Sheet
+            variant="soft"
+            color="primary"
+            sx={{ mb: 3, p: 1, borderRadius: 'sm' }}
+            data-testid="llm-dashboard-bulk-bar"
+          >
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+              <Typography level="title-sm" sx={{ mr: 1 }}>
+                {selectedModelIds.length} selected
+              </Typography>
+              <Button
+                size="sm"
+                variant="solid"
+                color="success"
+                onClick={() => handleBulkSetEnabled(true)}
+                data-testid="llm-dashboard-bulk-enable-btn"
+              >
+                Enable selected
+              </Button>
+              <Button
+                size="sm"
+                variant="solid"
+                color="neutral"
+                onClick={() => handleBulkSetEnabled(false)}
+                data-testid="llm-dashboard-bulk-disable-btn"
+              >
+                Disable selected
+              </Button>
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                onClick={() => setSelectedModelIds([])}
+                data-testid="llm-dashboard-bulk-clear-btn"
+              >
+                Clear selection
+              </Button>
+            </Stack>
+          </Sheet>
+        )}
       </Box>
 
       {/* Models Table */}
@@ -520,6 +630,25 @@ const LLMDashboardTab: React.FC = () => {
           <thead style={{ backgroundColor: theme.palette.background.level1 }}>
             {/* Headers */}
             <tr>
+              <th
+                style={{
+                  width: '40px',
+                  verticalAlign: 'top',
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 1001,
+                }}
+              >
+                <Tooltip title="Select every model matching the current filters">
+                  <Checkbox
+                    checked={allFilteredSelected}
+                    indeterminate={someFilteredSelected}
+                    onChange={e => handleToggleSelectAll(e.target.checked)}
+                    size="sm"
+                    data-testid="llm-dashboard-select-all"
+                  />
+                </Tooltip>
+              </th>
               <th
                 style={{
                   width: '15%',
@@ -827,6 +956,14 @@ const LLMDashboardTab: React.FC = () => {
             {paginatedModels.map(model => (
               <tr key={model.id}>
                 <td>
+                  <Checkbox
+                    checked={selectedIdSet.has(model.id)}
+                    onChange={e => handleToggleSelected(model.id, e.target.checked)}
+                    size="sm"
+                    data-testid={`llm-dashboard-select-${model.id}`}
+                  />
+                </td>
+                <td>
                   <Typography level="body-sm" fontWeight="md">
                     {model.name}
                   </Typography>
@@ -852,6 +989,7 @@ const LLMDashboardTab: React.FC = () => {
                       onChange={() => handleToggleModel(model.id)}
                       color={model.enabled ? 'success' : 'neutral'}
                       size="sm"
+                      data-testid={`llm-dashboard-toggle-${model.id}`}
                     />
                     <Typography level="body-xs" color={model.enabled ? 'success' : 'neutral'}>
                       {model.enabled ? 'Enabled' : 'Disabled'}

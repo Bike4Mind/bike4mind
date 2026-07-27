@@ -25,6 +25,11 @@ import {
 } from '@mui/icons-material';
 import ClearIcon from '@mui/icons-material/Clear';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import SettingsIcon from '@mui/icons-material/Settings';
+import { useNavigate } from '@tanstack/react-router';
+import { useUser } from '@client/app/contexts/UserContext';
+import { useAdminModal } from '@client/app/components/admin/AdminPage';
+import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
@@ -587,6 +592,9 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   const theme = useTheme();
   const mode = theme.palette.mode;
   const setLLM = useLLM(s => s.setLLM);
+  const isAdmin = useUser(s => s.isAdmin);
+  const setAdminTab = useAdminModal(s => s.setActiveTab);
+  const navigate = useNavigate();
   const {
     value: searchQuery,
     debouncedValue: debouncedSearchQuery,
@@ -830,6 +838,15 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     },
     [onSettingsClick, selectModel]
   );
+
+  // The admin page owns its active tab in a store rather than a route param, so the
+  // tab is set before navigating. The picker lives in a modal that would otherwise
+  // stay mounted over the admin page, hence the close callback.
+  const handleManageModels = useCallback(() => {
+    setAdminTab(AdminTab.LLMDashboard);
+    onSelectionComplete?.();
+    navigate({ to: '/admin' });
+  }, [navigate, onSelectionComplete, setAdminTab]);
 
   // Scroll the currently-selected model card into view on first paint so the
   // user doesn't have to hunt for the green checkmark across providers.
@@ -1083,6 +1100,27 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                 Video models
               </Option>
             </Select>
+          )}
+
+          {isAdmin && (
+            <Tooltip title="Manage models in the LLM Dashboard">
+              <IconButton
+                data-testid="model-selection-manage-models-btn"
+                onClick={handleManageModels}
+                aria-label="Manage models"
+                sx={{
+                  flexShrink: 0,
+                  width: '32px',
+                  height: '32px !important',
+                  minHeight: '32px !important',
+                  backgroundColor: 'var(--joy-palette-background-body)',
+                  border: '1px solid var(--joy-palette-divider)',
+                  borderRadius: '8px',
+                }}
+              >
+                <SettingsIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
+              </IconButton>
+            </Tooltip>
           )}
         </Stack>
       </Box>
