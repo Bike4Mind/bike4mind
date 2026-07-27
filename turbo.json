@@ -55,6 +55,11 @@
     "@bike4mind/scripts#typecheck:fast": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"]
     },
+    // migrations/index.test.ts statically imports the same premium.generated.ts stub - same
+    // cross-package edge as the typecheck overrides above, for the same reason.
+    "@bike4mind/scripts#test": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"]
+    },
     "test": {
       "dependsOn": ["^build"]
     },
