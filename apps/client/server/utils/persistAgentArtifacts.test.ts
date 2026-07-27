@@ -1,0 +1,253 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { collectDagChildArtifactBlocks } from '@server/queueHandlers/agentExecutor.dagArtifacts';
+import {
+  MAX_AGENT_ARTIFACTS_PER_RUN,
+  buildAgentArtifactPayloads,
+  persistAgentArtifacts,
+  type PersistAgentArtifactsDeps,
+} from './persistAgentArtifacts';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
+
+const QUEST_ID = 'quest-1';
+const QUEST_CREATED_AT_MS = 1700000000000;
+const SESSION_ID = 'session-1';
+const USER_ID = 'user-1';
+const EXECUTION_ID = 'exec-1';
+
+function reactArtifact(identifier: string, title = 'Foo') {
+  return `<artifact identifier="${identifier}" type="application/vnd.ant.react" title="${title}">
+export default function Foo() { return <div>hi</div>; }
+</artifact>`;
+}
+
+function stubDeps(overrides: Partial<PersistAgentArtifactsDeps> = {}): PersistAgentArtifactsDeps {
+  return {
+    isArtifactsEnabled: vi.fn().mockResolvedValue(true),
+    artifactExists: vi.fn().mockResolvedValue(false),
+    createArtifact: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+function persist(replyText: string, deps: PersistAgentArtifactsDeps) {
+  return persistAgentArtifacts({
+    replyText,
+    questId: QUEST_ID,
+    questCreatedAtMs: QUEST_CREATED_AT_MS,
+    sessionId: SESSION_ID,
+    userId: USER_ID,
+    executionId: EXECUTION_ID,
+    logger,
+    deps,
+  });
+}
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+describe('buildAgentArtifactPayloads', () => {
+  const build = (replyText: string) =>
+    buildAgentArtifactPayloads({
+      replyText,
+      questId: QUEST_ID,
+      questCreatedAtMs: QUEST_CREATED_AT_MS,
+      sessionId: SESSION_ID,
+    });
+
+  it('mints the client-compatible id for an explicit artifact tag', () => {
+    const payloads = build(`Here you go.\n\n${reactArtifact('foo')}`);
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].id).toBe(`artifact_react_foo_${QUEST_CREATED_AT_MS}_0`);
+    expect(payloads[0].type).toBe('react');
+    expect(payloads[0].title).toBe('Foo');
+  });
+
+  it('is deterministic across calls (no clock in the id)', () => {
+    const reply = `${reactArtifact('foo')}\n\n${reactArtifact('bar', 'Bar')}`;
+
+    const first = build(reply).map(p => p.id);
+    const second = build(reply).map(p => p.id);
+
+    expect(first).toEqual(second);
+  });
+
+  it('returns nothing for a reply with no artifact and no promotable fence', () => {
+    expect(build('Just prose, nothing to persist.')).toEqual([]);
+  });
+
+  // parseArtifacts returns its artifacts in reverse document order (it sorts by
+  // descending startIndex in place). Pinned because `_{index}` has to stay stable
+  // across re-parses of the same reply for the idempotency pre-check to hit.
+  it('indexes multiple artifacts in parse order', () => {
+    const payloads = build(`${reactArtifact('foo')}\n\n${reactArtifact('bar', 'Bar')}`);
+
+    expect(payloads.map(p => p.id)).toEqual([
+      `artifact_react_bar_${QUEST_CREATED_AT_MS}_0`,
+      `artifact_react_foo_${QUEST_CREATED_AT_MS}_1`,
+    ]);
+  });
+
+  it('drops an empty-bodied artifact without shifting the index of the others', () => {
+    const empty = '<artifact identifier="blank" type="application/vnd.ant.code" title="Blank">   </artifact>';
+    // `empty` is last in the reply, so it is index 0 after the parser's reverse sort.
+    const payloads = build(`${reactArtifact('foo')}\n\n${empty}`);
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].id).toBe(`artifact_react_foo_${QUEST_CREATED_AT_MS}_1`);
+  });
+
+  it('links the row back to the quest and session', () => {
+    const [payload] = build(reactArtifact('foo'));
+
+    expect(payload.sourceQuestId).toBe(QUEST_ID);
+    expect(payload.metadata.questId).toBe(QUEST_ID);
+    expect(payload.metadata.originalIdentifier).toBe('foo');
+    expect(payload.sessionId).toBe(SESSION_ID);
+  });
+
+  it('promotes a fenced tsx block (the fallback path runs)', () => {
+    const payloads = build('```tsx\nexport default function Widget() { return <div />; }\n```');
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].type).toBe('react');
+  });
+});
+
+describe('persistAgentArtifacts', () => {
+  it('creates one row per artifact for the run owner', async () => {
+    const deps = stubDeps();
+
+    await persist(reactArtifact('foo'), deps);
+
+    expect(deps.createArtifact).toHaveBeenCalledTimes(1);
+    const [userId, payload] = vi.mocked(deps.createArtifact).mock.calls[0];
+    expect(userId).toBe(USER_ID);
+    expect(payload.sessionId).toBe(SESSION_ID);
+    expect(payload.sourceQuestId).toBe(QUEST_ID);
+  });
+
+  it('skips the settings read entirely when the reply has no artifacts', async () => {
+    const deps = stubDeps();
+
+    await persist('Nothing to see here.', deps);
+
+    expect(deps.isArtifactsEnabled).not.toHaveBeenCalled();
+    expect(deps.createArtifact).not.toHaveBeenCalled();
+  });
+
+  it('persists nothing when EnableArtifacts is off', async () => {
+    const deps = stubDeps({ isArtifactsEnabled: vi.fn().mockResolvedValue(false) });
+
+    await persist(reactArtifact('foo'), deps);
+
+    expect(deps.createArtifact).not.toHaveBeenCalled();
+  });
+
+  it('skips an artifact that already exists', async () => {
+    const deps = stubDeps({ artifactExists: vi.fn().mockResolvedValue(true) });
+
+    await persist(reactArtifact('foo'), deps);
+
+    expect(deps.createArtifact).not.toHaveBeenCalled();
+  });
+
+  it('writes exactly one row when the same terminal write runs twice', async () => {
+    const persisted = new Set<string>();
+    const deps = stubDeps({
+      artifactExists: vi.fn(async (id: string) => persisted.has(id)),
+      createArtifact: vi.fn(async (_userId: string, payload: { id: string }) => {
+        persisted.add(payload.id);
+      }),
+    });
+
+    await persist(reactArtifact('foo'), deps);
+    await persist(reactArtifact('foo'), deps);
+
+    expect(deps.createArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a duplicate-key rejection as success, not an error', async () => {
+    const deps = stubDeps({
+      createArtifact: vi.fn().mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 })),
+    });
+
+    await expect(persist(reactArtifact('foo'), deps)).resolves.toBeUndefined();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('swallows a generic create failure and logs it', async () => {
+    const deps = stubDeps({ createArtifact: vi.fn().mockRejectedValue(new Error('boom')) });
+
+    await expect(persist(reactArtifact('foo'), deps)).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('caps the rows written per run and logs the drop', async () => {
+    const deps = stubDeps();
+    const reply = Array.from({ length: 30 }, (_, i) => reactArtifact(`foo-${i}`, `Foo ${i}`)).join('\n\n');
+
+    await persist(reply, deps);
+
+    expect(deps.createArtifact).toHaveBeenCalledTimes(MAX_AGENT_ARTIFACTS_PER_RUN);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('artifact cap'), expect.anything());
+  });
+
+  it('never throws, even when the gate read itself rejects', async () => {
+    const deps = stubDeps({ isArtifactsEnabled: vi.fn().mockRejectedValue(new Error('settings down')) });
+
+    await expect(persist(reactArtifact('foo'), deps)).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The parent's own final answer can drop the `<artifact>` blocks its DAG children
+ * produced; agentExecutor appends them back onto `replyText` before the terminal
+ * Quest write. These cases compose the reply exactly the way it does, so they fail
+ * if persistence ever reads the pre-bubble answer instead.
+ */
+describe('persistAgentArtifacts with DAG-bubbled child artifacts', () => {
+  const parentAnswer = 'Summary of the work. No artifact here.';
+  const childArtifact =
+    '<artifact identifier="child-chart" type="application/vnd.ant.mermaid" title="Child Chart">graph TD; A-->B;</artifact>';
+
+  const bubbleUp = (childAnswers: string[]) => {
+    const extraBlocks = collectDagChildArtifactBlocks({ parentAnswer, childAnswers });
+    return extraBlocks.length ? `${parentAnswer}\n\n${extraBlocks.join('\n\n')}` : parentAnswer;
+  };
+
+  it('persists an artifact only a child produced', async () => {
+    const deps = stubDeps();
+
+    await persist(bubbleUp([childArtifact]), deps);
+
+    expect(deps.createArtifact).toHaveBeenCalledTimes(1);
+    const [, payload] = vi.mocked(deps.createArtifact).mock.calls[0];
+    expect(payload.metadata.originalIdentifier).toBe('child-chart');
+    expect(payload.id).toContain('artifact_mermaid_child-chart_');
+  });
+
+  it('persists nothing from the parent answer alone', async () => {
+    const deps = stubDeps();
+
+    await persist(parentAnswer, deps);
+
+    expect(deps.createArtifact).not.toHaveBeenCalled();
+  });
+
+  it('persists a child artifact the parent also reproduced exactly once', async () => {
+    const deps = stubDeps();
+    const extraBlocks = collectDagChildArtifactBlocks({
+      parentAnswer: `${parentAnswer}\n\n${childArtifact}`,
+      childAnswers: [childArtifact],
+    });
+
+    await persist(`${parentAnswer}\n\n${childArtifact}${extraBlocks.map(b => `\n\n${b}`).join('')}`, deps);
+
+    expect(deps.createArtifact).toHaveBeenCalledTimes(1);
+  });
+});
