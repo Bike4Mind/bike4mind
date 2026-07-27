@@ -37,6 +37,7 @@ const { runModelDiscovery, repos, emitMetrics, connectDB, sourceFactories } = vi
       modelCatalogRepository: { append: vi.fn(), rowsInForceWithRejects: vi.fn(), rowsInForce: vi.fn(async () => []) },
       modelDiscoveryStateRepository: { recordSighting: vi.fn(), recordMiss: vi.fn() },
       modelDiscoveryRunRepository: { create: vi.fn(), update: vi.fn(), find: vi.fn(), lastSuccessfulRun: vi.fn() },
+      modelPriceRepository: { append: vi.fn(), rowsInForce: vi.fn(async () => []) },
       cacheRepository: { claimDedup: vi.fn(), deleteByKey: vi.fn() },
       adminSettingsRepository: { getSettingsValue: vi.fn(), findBySettingName: vi.fn(), findBySettingNames: vi.fn() },
       apiKeyRepository: { find: vi.fn() },
@@ -101,6 +102,7 @@ describe('runScheduledDiscovery', () => {
       catalog: repos.modelCatalogRepository,
       discoveryState: repos.modelDiscoveryStateRepository,
       discoveryRuns: repos.modelDiscoveryRunRepository,
+      prices: repos.modelPriceRepository,
       cache: repos.cacheRepository,
       adminSettings: repos.adminSettingsRepository,
     });

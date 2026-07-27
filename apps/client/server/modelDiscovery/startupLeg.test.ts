@@ -32,6 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   MODEL_ID_ALIASES: {},
   modelDiscoveryRunRepository: { lastSuccessfulRun },
   modelCatalogRepository: { rowsInForce: vi.fn(async () => []) },
+  modelPriceRepository: {},
   modelDiscoveryStateRepository: {},
   cacheRepository: {},
   adminSettingsRepository: {},

@@ -28,6 +28,7 @@ vi.mock('@bike4mind/database', () => ({
   modelCatalogRepository: { rowsInForce, append: vi.fn(), rowsInForceWithRejects: vi.fn() },
   modelDiscoveryStateRepository: { recordSighting: vi.fn(), recordMiss: vi.fn() },
   modelDiscoveryRunRepository: { create: vi.fn(), update: vi.fn(), find: vi.fn() },
+  modelPriceRepository: { append: vi.fn(), rowsInForce: vi.fn(async () => []) },
   cacheRepository: { claimDedup: vi.fn(), deleteByKey: vi.fn() },
   adminSettingsRepository: { getSettingsValue: vi.fn(), findBySettingName: vi.fn() },
   apiKeyRepository: { find: vi.fn() },
