@@ -1,4 +1,4 @@
-import { ChangeEvent, FC, useEffect, useState } from 'react';
+import { ChangeEvent, FC, useCallback, useEffect, useState } from 'react';
 
 import { Badge, Box, IconButton, Input, Tooltip } from '@mui/joy';
 
@@ -26,6 +26,7 @@ import { PromptBuilderModal } from './PromptBuilder/PromptBuilderModal';
 import { isImageGenerationModel } from './PromptBuilder/models';
 import { usePromptBuilderFirstRun } from './PromptBuilder/usePromptBuilderFirstRun';
 import { AutoAwesome as PromptBuilderIcon } from '@mui/icons-material';
+import { useHydrateSessionModel } from './AISettings/useHydrateSessionModel';
 
 // Re-export store for consumers that import from this file
 export { useAdvancedAISettings } from './AISettings/useAdvancedAISettingsStore';
@@ -129,12 +130,10 @@ const AISettings: FC<AISettingsProps> = ({
     onRollDice();
   };
 
-  // Update the model when a session is loaded
-  useEffect(() => {
-    if (currentSession?.lastUsedModel) {
-      setLLM({ model: currentSession.lastUsedModel });
-    }
-  }, [currentSession, setLLM]);
+  // Hydrate the picker from the session's saved model only when a different session
+  // loads -- guarding on session id so a refetch never clobbers the user's pick (#958).
+  const setModel = useCallback((newModel: string) => setLLM({ model: newModel }), [setLLM]);
+  useHydrateSessionModel(currentSession, setModel);
 
   // Reset QuestMaster to disabled when model changes
   useEffect(() => {
