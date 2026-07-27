@@ -16,10 +16,11 @@ const LEDGER_TYPES = [...ADJUSTMENT_TYPES, 'purchase', 'subscription'] as const;
 const QuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(365).optional().default(90),
   // Comma-separated opt-in list; absent keeps the adjustments-only default.
+  // Trimmed so a hand-typed "purchase, subscription" validates.
   types: z
     .string()
     .optional()
-    .transform(v => (v ? v.split(',') : [...ADJUSTMENT_TYPES]))
+    .transform(v => (v ? v.split(',').map(s => s.trim()) : [...ADJUSTMENT_TYPES]))
     .pipe(z.array(z.enum(LEDGER_TYPES)).min(1)),
 });
 
@@ -38,6 +39,7 @@ export interface IUserCreditAdjustment {
   resultingBalance?: number;
   /** Purchase rows only. */
   status?: string;
+  /** Purchase rows, and subscription rows when Stripe-linked. */
   stripePaymentIntentId?: string;
   /** Purchase rows only: money paid, as recorded on the transaction. */
   amount?: number;

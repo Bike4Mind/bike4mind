@@ -153,4 +153,32 @@ describe('GET /api/admin/users/[userId]/credit-transactions', () => {
     // No actor on a purchase row: nothing to resolve.
     expect(mockUserFind).not.toHaveBeenCalled();
   });
+
+  it('maps subscription rows, which carry no status or amount', async () => {
+    mockFindByOwner.mockResolvedValue([
+      {
+        id: 'tx-3',
+        type: 'subscription',
+        credits: 500,
+        description: 'Monthly plan credits',
+        createdAt: new Date('2026-07-21T00:00:00Z'),
+        stripePaymentIntentId: 'pi_456',
+        metadata: {},
+      },
+    ]);
+
+    const { res, promise } = run({ user: ADMIN, types: 'subscription' });
+    await promise;
+
+    const { rows } = res._getJSONData();
+    expect(rows[0]).toMatchObject({ id: 'tx-3', type: 'subscription', credits: 500, stripePaymentIntentId: 'pi_456' });
+    expect(rows[0].status).toBeUndefined();
+    expect(rows[0].amount).toBeUndefined();
+  });
+
+  it('trims whitespace in a hand-typed types list', async () => {
+    const { promise } = run({ user: ADMIN, types: 'purchase, subscription' });
+    await promise;
+    expect(mockFindByOwner.mock.calls[0][2].transactionTypes).toEqual(['purchase', 'subscription']);
+  });
 });
