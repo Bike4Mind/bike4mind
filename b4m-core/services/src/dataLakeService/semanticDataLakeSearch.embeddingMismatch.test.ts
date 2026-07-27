@@ -109,7 +109,8 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
     expect(result.results.map(r => r.chunkText)).toEqual(['the real answer']);
     expect(result.results[0].score).toBeCloseTo(0.72, 5);
     // The foreign file's vectors were never even loaded, so they cannot spend the chunk cap.
-    expect(findVectors).toHaveBeenCalledWith(['legit'], 10_000);
+    // cap + 1: the probe row that distinguishes a full page from a truncated one.
+    expect(findVectors).toHaveBeenCalledWith(['legit'], 10_001);
 
     const m = result.embeddingMismatch;
     expect(m.excludedFiles.count).toBe(1);
@@ -269,12 +270,21 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
   });
 
   it('flags a hit chunk-load cap so a truncated search is not reported as complete', async () => {
-    const findVectors = vi.fn().mockResolvedValue([chunk('c1', 'a', 'one', NEAR), chunk('c2', 'a', 'two', NEAR)]);
+    // cap+1 rows come back, so there genuinely is more than the cap.
+    const findVectors = vi
+      .fn()
+      .mockResolvedValue([
+        chunk('c1', 'a', 'one', NEAR),
+        chunk('c2', 'a', 'two', NEAR),
+        chunk('c3', 'a', 'three', NEAR),
+      ]);
     const result = await semanticDataLakeSearch(
       params({ chunkLoadCap: 2 }),
       adapters([{ id: 'a', fileName: 'a.md', embeddingModel: ADA }], findVectors)
     );
     expect(result.embeddingMismatch.truncated.chunkCapHit).toBe(true);
+    // The extra probe row is dropped, so the counts still reflect the cap.
+    expect(result.totalChunksSearched).toBe(2);
     // Recorded, but a cap is not an embedding-space problem: a large healthy lake hits it on
     // every search, so it must not raise the partial flag.
     expect(result.embeddingMismatch.partial).toBe(false);
@@ -328,7 +338,8 @@ describe('fileScopedSemanticSearch embedding-model mismatch', () => {
       )
     );
 
-    expect(findVectors).toHaveBeenCalledWith(['legit'], 10_000);
+    // cap + 1: the probe row that distinguishes a full page from a truncated one.
+    expect(findVectors).toHaveBeenCalledWith(['legit'], 10_001);
     expect(result.results.map(r => r.chunkText)).toEqual(['the real answer']);
     expect(result.embeddingMismatch.excludedFiles.count).toBe(1);
     expect(result.embeddingMismatch.excludedFiles.estimatedChunks).toBe(3);

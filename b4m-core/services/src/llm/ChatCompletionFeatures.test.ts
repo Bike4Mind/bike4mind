@@ -677,6 +677,32 @@ describe('KnowledgeRetrievalFeature embedding-model mismatch', () => {
     expect(warnings(quest)[0]).toContain('of a different vector size');
   });
 
+  it('bails out on an empty query embedding instead of blaming vector width', async () => {
+    // Every chunk would otherwise classify as a dimension mismatch, reporting a cause that is
+    // not the real one (the embedder failed).
+    const ctx = makeCtx([{ id: 'fileA', fileName: 'a.pdf', tags: [], embeddingModel: ADA }], {
+      fileA: [{ fabFileId: 'fileA', text: 'content', vector: [1, 0] }],
+    });
+    const emptyFactory = {
+      createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([]) }),
+      getDefaultEmbeddingModel: () => ADA,
+    };
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const quest = makeQuest();
+    const messages = await feature.getContextMessages(
+      quest,
+      emptyFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'stage III NSCLC treatment'
+    );
+
+    expect(messages).toEqual([]);
+    expect(ctx.db.fabfilechunks.findByFabFileId).not.toHaveBeenCalled();
+    expect(warnings(quest)).toEqual([]);
+    expect((ctx.logger as unknown as { error: ReturnType<typeof vi.fn> }).error).toHaveBeenCalled();
+  });
+
   it('keeps a warning another producer already recorded', async () => {
     const quest = makeQuest({
       promptMeta: { warnings: ['Response was truncated against the output-token limit.'] },

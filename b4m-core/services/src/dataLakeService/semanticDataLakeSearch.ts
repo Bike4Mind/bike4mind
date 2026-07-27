@@ -173,9 +173,15 @@ async function rankChunksForFiles(args: {
   }
 
   // --- Bulk-load vector-bearing chunks (single indexed query) and cosine-rank ---
+  // Ask for one past the cap so a corpus holding EXACTLY chunkLoadCap chunks is not reported as
+  // truncated. Same limit+1 probe the file search uses for hasMore.
   const rankableIds = rankable.map(f => f.id);
-  const chunks = rankableIds.length ? await args.fabfilechunks.findVectorsByFabFileIds(rankableIds, chunkLoadCap) : [];
-  mismatch.truncation({ chunkCapHit: chunks.length >= chunkLoadCap });
+  const loaded = rankableIds.length
+    ? await args.fabfilechunks.findVectorsByFabFileIds(rankableIds, chunkLoadCap + 1)
+    : [];
+  const chunkCapHit = loaded.length > chunkLoadCap;
+  const chunks = chunkCapHit ? loaded.slice(0, chunkLoadCap) : loaded;
+  mismatch.truncation({ chunkCapHit });
 
   const scored: SemanticChunkResult[] = [];
   let chunksScored = 0;

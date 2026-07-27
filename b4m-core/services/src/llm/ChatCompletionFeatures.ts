@@ -1368,6 +1368,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const queryVector = await embeddingService.generateEmbedding(query);
       const queryDim = queryVector.length;
 
+      // An empty embedding means the embedder failed, not that every chunk is the wrong width.
+      // Without this, each chunk classifies as a dimension mismatch and the report names a cause
+      // that is not the real one. Mirrors the same guard in rankChunksForFiles.
+      if (queryDim === 0) {
+        this.logger.error('🔒 Forced retrieval: query embedding came back empty, nothing can be ranked', {
+          queryEmbeddingModel: embeddingModel,
+          candidateFiles: files.length,
+        });
+        return [];
+      }
+
       // 3. Withhold files embedded with a different model, then score the rest. Skipping them
       //    before the chunk fan-out matters here: that load is uncapped across up to
       //    FORCED_RETRIEVAL_MAX_CANDIDATE_FILES files.
