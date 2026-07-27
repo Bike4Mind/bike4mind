@@ -102,6 +102,18 @@ export const agentCheckpointDepthExceededAlarm = isMonitoredStage
 
 export const websocketRouteOomAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WebSocketRouteOomAlarm') : undefined;
 
+export const modelDiscoveryFailureAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('ModelDiscoveryFailureAlarm')
+  : undefined;
+
+export const modelDiscoveryRowsRejectedAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('ModelDiscoveryRowsRejectedAlarm')
+  : undefined;
+
+export const modelDiscoveryPriceFlaggedAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('ModelDiscoveryPriceFlaggedAlarm')
+  : undefined;
+
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
@@ -788,4 +800,81 @@ if (isMonitoredStage) {
       },
     });
   }
+
+  /**
+   * Alarm: Model Discovery consecutive run failures
+   *
+   * Three failed runs in a row. The period is the 6-hour cadence, so three
+   * evaluation periods is three scheduled runs; a period with no run at all
+   * does not breach, which keeps a disabled or preview stage quiet.
+   *
+   * Metric emitted by: server/modelDiscovery/metrics.ts
+   * Namespace: Lumina5/ModelDiscovery / RunFailures
+   */
+  new aws.cloudwatch.MetricAlarm('modelDiscoveryRunFailures', {
+    name: `${$app.name}-${$app.stage}-model-discovery-run-failures`,
+    alarmDescription: 'Model discovery has failed 3 consecutive runs - the catalog is going stale',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    metricName: 'RunFailures',
+    namespace: 'Lumina5/ModelDiscovery',
+    period: 21600, // 6 hours, the run cadence
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    alarmActions: [modelDiscoveryFailureAlarm!.arn],
+    tags: {
+      Application: 'ModelDiscovery',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Catalog rows rejected
+   *
+   * A rejected row is a contract failure, not a data gap: the write schema
+   * refused something a source produced, so any occurrence is a work item.
+   */
+  new aws.cloudwatch.MetricAlarm('modelDiscoveryRowsRejected', {
+    name: `${$app.name}-${$app.stage}-model-discovery-rows-rejected`,
+    alarmDescription: 'Model discovery rejected one or more catalog rows - a source is producing invalid records',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'CatalogRowsRejected',
+    namespace: 'Lumina5/ModelDiscovery',
+    period: 21600,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    alarmActions: [modelDiscoveryRowsRejectedAlarm!.arn],
+    tags: {
+      Application: 'ModelDiscovery',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Price move flagged
+   *
+   * Notify, not page (sec 10): a flagged price was NOT applied, so the risk is
+   * a stale price rather than a wrong charge. Every entry has to be explainable
+   * line by line before discovery leaves report mode.
+   */
+  new aws.cloudwatch.MetricAlarm('modelDiscoveryPriceFlagged', {
+    name: `${$app.name}-${$app.stage}-model-discovery-price-flagged`,
+    alarmDescription: 'Model discovery flagged a price move or an aggregator disagreement - review before it applies',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'PriceFlagged',
+    namespace: 'Lumina5/ModelDiscovery',
+    period: 21600,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    alarmActions: [modelDiscoveryPriceFlaggedAlarm!.arn],
+    tags: {
+      Application: 'ModelDiscovery',
+      Severity: 'Low',
+    },
+  });
 }

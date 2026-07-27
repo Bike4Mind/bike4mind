@@ -9,6 +9,8 @@ import { sendToQueue } from '@server/utils/sqs';
 import { dispatch as researchEngineDispatch } from '@server/queueHandlers/researchEngineQueue';
 import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
+import { MODEL_DISCOVERY_INTERVAL_MS, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
+import { startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { buildFabFileChunkScanFilter, CHUNK_SCAN_BATCH, CHUNK_SCAN_MIN_AGE_MS } from './chunkScan';
@@ -124,7 +126,18 @@ async function main() {
     }
   });
 
+  // Remote-provider catalog freshness (sec 6.2). The enableModelDiscovery gate,
+  // the lease and the per-source minimum interval all live inside the service,
+  // so this closure is the same call the hosted cron makes.
+  worker.registerScheduledTask('modelDiscovery', MODEL_DISCOVERY_INTERVAL_MS, async () => {
+    await runScheduledDiscovery(bootLogger, 'selfhost');
+  });
+
   worker.start();
+
+  // registerScheduledTask arms an interval and does not fire on registration,
+  // so without this a fresh container waits a full interval for its first run.
+  startDiscoveryOnStartup({ logger: bootLogger, host: 'selfhost' });
 
   const shutdown = async (signal: string) => {
     bootLogger.info(`${signal} received - draining selfHostWorker (up to ${DRAIN_GRACE_MS}ms)`);
