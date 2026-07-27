@@ -1976,3 +1976,174 @@ describe('processFabFilesServer chunk retrieval', () => {
     expect(content).not.toContain('chunk-1-');
   });
 });
+
+// The default mock tokenizer is ceil(len / 3.5), byte-identical to the internal estimator, so any
+// "it fits" assertion made with it is close to a tautology. Real tokenizers disagree with the
+// estimate - code, CSV and CJK run denser - and that disagreement is the entire reason the final
+// safety pass exists. These cases use a denser tokenizer so the pass is actually exercised.
+describe('final safety pass under a denser-than-estimated tokenizer', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const createDenseTokenizer = (charsPerToken: number): ITokenizer => ({
+    countTokens: vi.fn(async (text: string) => Math.ceil(text.length / charsPerToken)),
+    encodeTokens: vi.fn(async (text: string) => Array(Math.ceil(text.length / charsPerToken)).fill(1)),
+    clearCache: vi.fn(),
+    getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+    warmUpCache: vi.fn(async () => {}),
+  });
+
+  const makeHistory = (count: number, charsEach: number): IMessage[] =>
+    Array.from({ length: count }, (_, i) => ({
+      role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `history-${i}-` + 'h'.repeat(Math.max(0, charsEach - `history-${i}-`.length)),
+    }));
+
+  it('brings a dense payload under the limit instead of handing the overflow to the caller', async () => {
+    // A small Bedrock-class window: 8000 context - 2048 max_tokens - 1000 reserve. CSV at 2.5
+    // chars/token means every budget decision upstream was made on numbers ~40% low, so the primary
+    // allocation cannot be trusted to have fit.
+    const maxInputTokens = 4952;
+    const tokenizer = createDenseTokenizer(2.5);
+
+    const result = await buildAndSortMessages(
+      makeHistory(60, 1000),
+      [
+        {
+          role: 'user',
+          content: 'Here is the content from the attached file "roster.csv" for context:\n\n' + 'C'.repeat(29930),
+        },
+      ],
+      [{ role: 'user', content: 'Summarize the attached file' }],
+      maxInputTokens,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    // The contract that matters: whatever it had to drop, the payload fits. Before this the pass
+    // could only shrink content, so a history-driven overflow passed straight through to the throw.
+    expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+      maxInputTokens
+    );
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('exceeds maxInputTokens'));
+    expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('could not bring the payload under'));
+  });
+
+  it('reports fresh truncation info on the overflow path, not the previous call/s', async () => {
+    // buildAndSortMessages returns early from the overflow block, and lastDebugInfo lives on the
+    // function object, so a warm container used to serve the previous request/s numbers here.
+    const clean = createDenseTokenizer(3.5);
+    await buildAndSortMessages(makeHistory(40, 100), [], [], 100000, {}, 2, mockLogger as any, clean);
+    const first = getLastBuildDebugInfo();
+    expect(first?.truncationMethod).toBe('history-limit');
+
+    const dense = createDenseTokenizer(2.5);
+    await buildAndSortMessages(
+      makeHistory(60, 1000),
+      [{ role: 'user', content: 'F'.repeat(30000) }],
+      [{ role: 'user', content: 'Summarize the attached file' }],
+      4952,
+      {},
+      20,
+      mockLogger as any,
+      dense
+    );
+
+    const second = getLastBuildDebugInfo();
+    expect(second?.truncationMethod).toBe('token-budget');
+    expect(second?.originalMessageCount).toBe(41); // 40 windowed history + 1 attachment, not the first call/s 4
+  });
+
+  it('keeps wasTruncated consistent with truncationMethod when content was cut mid-message', async () => {
+    const tokenizer = createDenseTokenizer(3.5);
+
+    await buildAndSortMessages(
+      makeHistory(4, 350),
+      [{ role: 'user', content: 'F'.repeat(35000) }],
+      [{ role: 'user', content: 'go' }],
+      4000,
+      {},
+      2,
+      mockLogger as any,
+      tokenizer
+    );
+
+    // No message was dropped, so removedMessages is empty - but the file WAS cut, and a consumer
+    // gating on wasTruncated would otherwise never look at truncationMethod at all.
+    const debug = getLastBuildDebugInfo();
+    expect(debug?.removedMessages).toBeUndefined();
+    expect(debug?.truncationMethod).toBe('token-budget');
+    expect(debug?.wasTruncated).toBe(true);
+  });
+});
+
+describe('history windowing edge cases', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('sends no history at all when historyCount is 0', async () => {
+    // slice(-0) is slice(0), which returns the WHOLE array. Image models set historyCount to 0
+    // specifically to keep history out of their small context windows, so this sent them everything.
+    const tokenizer = createMockTokenizer();
+    const previousMessages: IMessage[] = Array.from({ length: 30 }, (_, i) => ({
+      role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `history-${i}`,
+    }));
+
+    const result = await buildAndSortMessages(
+      previousMessages,
+      [],
+      [{ role: 'user', content: 'draw a cat' }],
+      10000,
+      {},
+      0,
+      mockLogger as any,
+      tokenizer
+    );
+
+    expect(result.filter(m => typeof m.content === 'string' && m.content.startsWith('history-'))).toHaveLength(0);
+    expect(result).toHaveLength(1);
+  });
+
+  it('never returns empty content when truncating array-content messages', async () => {
+    // Array content truncates by whole blocks, so flooring a single-block message to zero blocks
+    // produced an empty content array, which providers reject.
+    const tokenizer = createMockTokenizer();
+    const previousMessages: IMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'A'.repeat(50000) }] as any },
+      { role: 'assistant', content: [{ type: 'text', text: 'B'.repeat(50000) }] as any },
+    ];
+
+    const result = await buildAndSortMessages(previousMessages, [], [], 2000, {}, 4, mockLogger as any, tokenizer);
+
+    for (const message of result) {
+      if (Array.isArray(message.content)) expect(message.content.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('does not report an empty-content attachment as a budget truncation', async () => {
+    // maxInputTokens 500 minus the 1000-token buffer floor drives the budget negative, so the
+    // content pass gets a zero budget. A fab file whose extracted text is empty has nothing to lose,
+    // and counting it as removed would put 'token-budget' on an otherwise healthy turn. No history,
+    // so this attachment is the only thing that could report a loss.
+    const tokenizer = createMockTokenizer();
+
+    await buildAndSortMessages(
+      [],
+      [{ role: 'user', content: '' }],
+      [{ role: 'user', content: 'hello' }],
+      500,
+      {},
+      4,
+      mockLogger as any,
+      tokenizer
+    );
+
+    expect(getLastBuildDebugInfo()?.truncationMethod).toBeUndefined();
+    expect(getLastBuildDebugInfo()?.wasTruncated).toBe(false);
+  });
+});

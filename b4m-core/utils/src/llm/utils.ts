@@ -46,13 +46,16 @@ const EDITABLE_IMAGE_KEY_RE = /\.(jpe?g|png|webp|gif)$/i;
 const PREVIEW_CHUNK = 700;
 const CHARS_PER_TOKEN = 3.5;
 /**
- * Chunks per attached file that cosine retrieval feeds to the model. Matches the topK default in
- * semanticDataLakeSearch's rankChunksForFiles, so chat retrieval and data-lake search agree.
- * Three starved small embedders: a chunk is the embedding model's context window less a 20% buffer
- * (see SmartChunker), so three chunks is roughly 69k chars on an 8192-token embedder but only 4.3k
- * on a 512-token one, which answers a question about a 200-row table from 43 rows without saying so.
- * Raising the count is safe because the per-file character budget applied to these results, not the
- * count, is the binding constraint - see maxChars in processFabFilesServer.
+ * Chunks per attached file that cosine retrieval feeds to the model. Three starved small embedders: a
+ * chunk is the embedding model's context window less a 20% buffer (see SmartChunker), so three chunks
+ * is roughly 69k chars on an 8192-token embedder but only 4.3k on a 512-token one, which answers a
+ * question about a 200-row table from 43 rows without saying so.
+ *
+ * 10 is borrowed from rankChunksForFiles' topK default, but note the two caps differ in shape: that
+ * one is global across every file in the search, this one is PER FILE, so a multi-file attachment can
+ * yield more chunks here. What bounds the payload is the per-file character budget applied to these
+ * results (maxChars in processFabFilesServer), not this count - though that budget is derived from
+ * the model's OUTPUT token limit, which is its own separate defect.
  */
 const COSINE_SEARCH_TOP_K = 10;
 
@@ -94,15 +97,24 @@ const KNOWLEDGE_FILE_TOKEN_ALLOCATION = 0.7;
  */
 const MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION = 0.35;
 
+/**
+ * Rounds the final safety pass may spend shrinking the payload. It has to re-measure between rounds
+ * (see the pass for why one shot overshoots), and each round costs a real tokenizer call, so this
+ * bounds the work. Converges in one or two rounds in practice.
+ */
+const MAX_SAFETY_SHRINK_ROUNDS = 5;
+
 const estimateTokenLength = (text: string): number => {
   // Rough estimate: ~3.5 chars per token for English text
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 };
 
 /**
- * Flattens a message's content to the text the estimators measure. Note this deliberately omits
- * the role, unlike calculateTotalTokenLength which concatenates role + content: budget arithmetic
- * must compare estimates against estimates, never against a calculateTotalTokenLength total.
+ * Flattens a message's content to the text the estimators measure. Note this deliberately omits the
+ * role, unlike calculateTotalTokenLength which concatenates role + content and charges a flat rate
+ * per image. The two are therefore NOT interchangeable, which matters most for the squeeze check in
+ * buildAndSortMessages: comparing what content used against what it wanted has to use this estimator
+ * on both sides, or the role overhead alone would report every attachment as squeezed.
  */
 const messageContentText = (message: IMessage): string =>
   Array.isArray(message.content)
@@ -1183,7 +1195,10 @@ const truncateMessageContent = (message: IMessage, tokenLimit: number): IMessage
     const ratio = (0.9 * tokenLimit) / estimatedTokens;
 
     if (Array.isArray(content)) {
-      const truncatedLength = Math.floor(content.length * ratio);
+      // Array content truncates by whole blocks, so keep at least one: flooring to zero yields an
+      // empty content array, which providers reject. A single oversized block cannot be shrunk this
+      // way at all - the caller's budget check is what catches that.
+      const truncatedLength = Math.max(1, Math.floor(content.length * ratio));
       content = content.slice(0, truncatedLength);
     } else {
       const truncatedLength = Math.floor((content as string).length * ratio);
@@ -1209,8 +1224,12 @@ const processMessages = (
     priority: MESSAGE_PRIORITY[message.role as keyof typeof MESSAGE_PRIORITY] ?? 999,
   });
 
-  if (tokenBudget <= 0) {
-    return { messages: [], removedMessages: messages.map(describeRemoved) };
+  // Negated rather than `tokenBudget <= 0` so NaN lands here too: every `x > NaN` comparison below is
+  // false, so a NaN budget would otherwise reserve everything and silently defeat the whole cap.
+  if (!(tokenBudget > 0)) {
+    // Only messages that carry content count as a loss. An empty-content message is not a truncation
+    // event, and reporting it as one would flip truncationMethod to 'token-budget' on a healthy turn.
+    return { messages: [], removedMessages: messages.filter(m => estimateMessageTokens(m) > 0).map(describeRemoved) };
   }
 
   const messagesWithTokens = messages.map((message, index) => ({
@@ -1432,8 +1451,15 @@ export async function buildAndSortMessages(
 
   // TODO: also weight previousMessages by cosine score (not just fabMessages) - blocked on not
   // having vectors for previousMessages yet.
+  // The historyCount > 0 guard matters: slice(-0) is slice(0), which returns the WHOLE array, so
+  // asking for no history used to send all of it. Image models set historyCount to 0 precisely to
+  // keep history out of their small context windows.
   const historyMessages =
-    historyCount !== INFINITE_VALUE ? previousMessages.slice(-historyCount * 2) : previousMessages;
+    historyCount === INFINITE_VALUE
+      ? previousMessages
+      : historyCount > 0
+        ? previousMessages.slice(-historyCount * 2)
+        : [];
   const totalContentTokens = await calculateTotalTokenLength(nonImageMessages, { estimateOnly: true, tokenizer });
   const totalPreviousTokens = await calculateTotalTokenLength(historyMessages, { estimateOnly: true, tokenizer });
   let processedContentMessages: IMessage[] = [];
@@ -1558,6 +1584,27 @@ export async function buildAndSortMessages(
     ];
   }
 
+  // Budget loss outranks history windowing: reporting 'history-limit' whenever historyCount was
+  // finite - which is nearly always - made a file the budget had silently zeroed look identical in
+  // telemetry to history being windowed exactly as configured, which is why that bug went unnoticed
+  // for so long. `contentSqueezed` is needed alongside allRemovedMessages because content cut
+  // mid-message is a budget loss that drops no message and so leaves allRemovedMessages empty.
+  // Called on BOTH return paths: the overflow path below returns early, so assigning this only at
+  // the end left the worst-loss turn reporting the previous call's numbers from a warm container.
+  const recordDebugInfo = (finalContentMessages: IMessage[]) => {
+    const historyWindowed = previousMessages.length > historyMessages.length;
+    const budgetTruncated = allRemovedMessages.length > 0 || contentSqueezed;
+    (buildAndSortMessages as any).lastDebugInfo = {
+      messageTruncation: {
+        wasTruncated: budgetTruncated,
+        originalMessageCount: originalTotalMessageCount,
+        truncatedMessageCount: processedPreviousMessages.length + finalContentMessages.length,
+        truncationMethod: budgetTruncated ? 'token-budget' : historyWindowed ? 'history-limit' : undefined,
+        removedMessages: allRemovedMessages.length > 0 ? allRemovedMessages : undefined,
+      },
+    };
+  };
+
   // Final safety check - validate that messages don't exceed the safe token limit
   // Use actual tokenizer here for accurate count (not estimates) to prevent overflow
   const finalTokenCount = await calculateTotalTokenLength(messages, { estimateOnly: false, tokenizer });
@@ -1565,23 +1612,71 @@ export async function buildAndSortMessages(
     logger.warn(
       `⚠️ Final message token count (${finalTokenCount}) exceeds maxInputTokens (${maxInputTokens}). Truncating messages.`
     );
-    // If we still exceed limits, remove some processed content messages as last resort. This only
-    // works because processMessages now caps its recent-message reservation at the budget: content
+    // Shrink content first, then history, recomputing the real count each round until it fits. Three
+    // things stopped this pass from doing its job. processMessages ignored its own budget (content
     // messages are all role 'user' and there are usually only 1-3 of them, so every one counted as
-    // "recent" and the oversized set came back untouched, leaving the overflow to reach the caller's
-    // hard throw - the backstop causing the very failure it exists to prevent.
-    const excessTokens = finalTokenCount - maxInputTokens;
-    const reducedContentMessagesResult = processMessages(
-      processedContentMessages,
-      Math.max(
-        0,
-        (await calculateTotalTokenLength(processedContentMessages, { estimateOnly: false, tokenizer })) - excessTokens
-      )
-    );
-    if (reducedContentMessagesResult.messages.length < processedContentMessages.length) {
+    // "recent" and the oversized set came back untouched). It only ever touched content, yet the
+    // overflow usually lives in history, which holds the majority of the budget. And it never
+    // re-measured, while processMessages selects on the character estimate and this budget is in real
+    // tokenizer units - so a single pass overshoots on anything that tokenizes denser than ~3.5
+    // chars/token (code, CSV, CJK). Each of those left the excess to reach the caller's hard throw,
+    // making the backstop the cause of the failure it exists to prevent.
+    let reducedContentMessages = processedContentMessages;
+    let currentTokenCount = finalTokenCount;
+    const assemble = (content: IMessage[]) =>
+      historyEndsWithToolUse && promptHasToolResult
+        ? [...systemMessages, ...processedPreviousMessages, ...userPrompt, ...imageMessages, ...content]
+        : [...systemMessages, ...processedPreviousMessages, ...imageMessages, ...content, ...userPrompt];
+
+    // Content is asked to give first, but a round that frees nothing has to move on to history rather
+    // than retrying forever: processMessages is judging against the character estimate, so content
+    // that is oversized in real tokens can still look like it fits and come back untouched.
+    let contentExhausted = reducedContentMessages.length === 0;
+    for (let round = 0; round < MAX_SAFETY_SHRINK_ROUNDS && currentTokenCount > maxInputTokens; round++) {
+      // processMessages budgets in estimate tokens while the overage was measured by the real
+      // tokenizer, so convert before spending it and keep each round's arithmetic in one unit.
+      // Convergence is guaranteed by the loop and the no-progress check, not by this scaling.
+      const estimatedTotal = estimateMessagesTokens(assemble(reducedContentMessages));
+      const realPerEstimate = estimatedTotal > 0 ? currentTokenCount / estimatedTotal : 1;
+      const excessInEstimateTokens = Math.ceil((currentTokenCount - maxInputTokens) / realPerEstimate);
+
+      if (!contentExhausted) {
+        const before = reducedContentMessages;
+        const reduced = processMessages(before, Math.max(0, estimateMessagesTokens(before) - excessInEstimateTokens));
+        reducedContentMessages = reduced.messages;
+        if (reduced.messages.length < before.length) {
+          logger.warn(
+            `Final safety pass dropped ${before.length - reduced.messages.length} of ${before.length} ` +
+              `attached content message(s) to fit the context window.`
+          );
+        }
+      } else if (processedPreviousMessages.length > 0) {
+        const before = processedPreviousMessages;
+        const reduced = processMessages(before, Math.max(0, estimateMessagesTokens(before) - excessInEstimateTokens));
+        if (reduced.messages.length === before.length) break; // history cannot shrink further either
+        logger.warn(
+          `Final safety pass also dropped ${before.length - reduced.messages.length} of ${before.length} ` +
+            `history message(s): the attached content alone could not absorb the overflow.`
+        );
+        processedPreviousMessages = reduced.messages;
+        allRemovedMessages.push(...reduced.removedMessages);
+      } else {
+        // Only system messages and the user prompt remain, and neither is droppable here.
+        break;
+      }
+
+      const afterTokenCount = await calculateTotalTokenLength(assemble(reducedContentMessages), {
+        estimateOnly: false,
+        tokenizer,
+      });
+      if (afterTokenCount >= currentTokenCount && !contentExhausted) contentExhausted = true;
+      currentTokenCount = afterTokenCount;
+    }
+
+    if (currentTokenCount > maxInputTokens) {
       logger.warn(
-        `Final safety pass dropped ${processedContentMessages.length - reducedContentMessagesResult.messages.length} of ` +
-          `${processedContentMessages.length} attached content message(s) to fit the context window.`
+        `Final safety pass could not bring the payload under maxInputTokens (${currentTokenCount} > ${maxInputTokens}); ` +
+          `system messages and the user prompt alone exceed the window.`
       );
     }
 
@@ -1592,17 +1687,18 @@ export async function buildAndSortMessages(
         ...processedPreviousMessages,
         ...userPrompt,
         ...imageMessages,
-        ...reducedContentMessagesResult.messages,
+        ...reducedContentMessages,
       ];
     } else {
       truncatedMessages = [
         ...systemMessages,
         ...processedPreviousMessages,
         ...imageMessages,
-        ...reducedContentMessagesResult.messages,
+        ...reducedContentMessages,
         ...userPrompt,
       ];
     }
+    recordDebugInfo(reducedContentMessages);
     // Ensure tool_use/tool_result pairing integrity after truncation
     return ensureToolPairingIntegrity(truncatedMessages, logger);
   }
@@ -1627,29 +1723,7 @@ export async function buildAndSortMessages(
     logger.log('=== End of Verbose Message Building Log ===');
   }
 
-  // Store debug info for external access.
-  // Budget loss outranks history windowing: reporting 'history-limit' whenever historyCount was
-  // finite - which is nearly always - made a file the budget had silently zeroed look identical in
-  // telemetry to history being windowed exactly as configured, which is why that bug went unnoticed
-  // for so long. `contentSqueezed` is needed alongside allRemovedMessages because content cut
-  // mid-message is a budget loss that drops no message and so leaves allRemovedMessages empty.
-  const historyWindowed = previousMessages.length > historyMessages.length;
-  const budgetTruncated = allRemovedMessages.length > 0 || contentSqueezed;
-  const truncationMethod: 'priority' | 'token-budget' | 'history-limit' | undefined = budgetTruncated
-    ? 'token-budget'
-    : historyWindowed
-      ? 'history-limit'
-      : undefined;
-
-  (buildAndSortMessages as any).lastDebugInfo = {
-    messageTruncation: {
-      wasTruncated: allRemovedMessages.length > 0,
-      originalMessageCount: originalTotalMessageCount,
-      truncatedMessageCount: processedPreviousMessages.length + processedContentMessages.length,
-      truncationMethod,
-      removedMessages: allRemovedMessages.length > 0 ? allRemovedMessages : undefined,
-    },
-  };
+  recordDebugInfo(processedContentMessages);
 
   // Ensure tool_use/tool_result pairing integrity after any truncation
   return ensureToolPairingIntegrity(messages, logger);
