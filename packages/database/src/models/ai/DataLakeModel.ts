@@ -105,9 +105,14 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   }
 
   /**
-   * Returns active data lakes the user can access: those matching any of the
-   * user's tags (case-insensitive), plus any with no requiredUserTag restriction.
-   * The null/$exists/empty-string arms cover all representations of "no restriction."
+   * Legacy tag-only filter, currently UNUSED - prefer findActiveByUserTagsAndEntitlements.
+   * It predates entitlements, org scoping, and Private-by-default, so it returns every
+   * gateless lake to every caller (including other users' private ones). Don't wire it into
+   * a user-facing path without adding those constraints.
+   *
+   * Returns active data lakes matching any of the user's tags (case-insensitive), plus any
+   * with no requiredUserTag restriction. The null/empty-string arms cover both
+   * representations of "no restriction."
    */
   async findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]> {
     const normalizedTags = userTags.map(t => t.toLowerCase());

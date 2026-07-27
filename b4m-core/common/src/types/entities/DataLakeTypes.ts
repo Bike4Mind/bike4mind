@@ -51,15 +51,20 @@ export interface IDataLake {
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */
   datalakeTag: string;
-  /** User must have this tag to access the data lake's files. If absent, all authenticated users can access. */
+  /**
+   * User must have this tag to access the data lake's files. Absent/empty means no tag gate -
+   * NOT world-readable: access then falls back to visibility (owner-only, org, or public) per
+   * Private-by-default. Set at create, and changeable or removable later (updateDataLake takes
+   * '' as the clear sentinel).
+   */
   requiredUserTag?: string;
   /**
    * Generic capability: user must hold this entitlement key (e.g. "<product>:pro") to
    * access the lake's files, evaluated against the caller's RESOLVED entitlement keys
    * (subscription-derived + tag-derived). Independent of `requiredUserTag` - access is
    * granted if the user satisfies ANY declared requirement; a lake declaring neither is
-   * public. Values are namespaced (must contain ":") and stored normalized (lowercase).
-   * Product-neutral: any lake may set it.
+   * ungated, which is not the same as public (see `requiredUserTag`). Values are namespaced
+   * (must contain ":") and stored normalized (lowercase). Product-neutral: any lake may set it.
    */
   requiredEntitlement?: string;
   /** User who created this data lake */
@@ -118,9 +123,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**
-   * Datastore-side accessibility filter - owner OR (org-match AND tag-match).
-   * The org and tag constraints are BOTH required for a non-owner: a tag-holder in
-   * a different org is excluded. Defaults to the active+draft statuses.
+   * Datastore-side accessibility filter - owner OR public OR (org-match AND requirement-match
+   * AND not-private). The org and requirement constraints are BOTH required for a non-owner: a
+   * tag/entitlement-holder in a different org is excluded, and a lake with no org and no gate
+   * stays owner-only. Defaults to the active+draft statuses.
    */
   findAccessible(
     ctx: AccessContext,

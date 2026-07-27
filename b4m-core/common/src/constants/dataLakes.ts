@@ -157,7 +157,12 @@ export function toDataLakeConfig(dl: {
  * (matched against the caller's resolved `entitlementKeys`). A lake declaring an
  * entitlement but no tag is therefore NOT public (it is gated by the key).
  *
- * Data lakes without any requirement are accessible to all authenticated users.
+ * A requirement-less HARDCODED lake is accessible to all authenticated users - the registry
+ * is curated, owner-less config. This does NOT hold for DB lakes: a requirement-less one is
+ * owner-only unless org-scoped or public (Private-by-default, see canAccessLake). This
+ * predicate has no ownership rule, so callers passing `dynamicDataLakes` MUST pre-filter them
+ * through findAccessible / findActiveByUserTagsAndEntitlements, which enforce it datastore-side.
+ *
  * When dynamicDataLakes is provided (fetched from DB), those take precedence over
  * hardcoded DATA_LAKES entries with the same id. `entitlementKeys` is optional - callers
  * that don't resolve entitlements (tag-only surfaces) omit it and get tag-only matching.

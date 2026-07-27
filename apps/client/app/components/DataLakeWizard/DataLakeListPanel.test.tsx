@@ -82,7 +82,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
     warn.mockReset();
   });
 
-  it('warns and skips the no-op update when blanking the tag is the only change', async () => {
+  it('sends the empty clear-sentinel when the tag is blanked', async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     render(
@@ -94,16 +94,28 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
     await user.clear(screen.getByPlaceholderText('e.g. Opti'));
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
-    // Explicit message surfaced (the fix), not a silent success.
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toMatch(/cleared/i);
-    expect(warn.mock.calls[0][0]).toMatch(/tag was kept/i);
-    // Clearing is the only change -> skip the no-op update (avoids a contradictory success toast).
-    expect(updateMutate).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledTimes(1);
+    // '' is what tells the backend to remove the gate - omitting the field would be
+    // "leave unchanged", which is what made a mis-gated lake unfixable.
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ id: 'lake-1', requiredUserTag: '' });
+    expect(warn).not.toHaveBeenCalled();
   });
 
-  it('warns but still saves when the tag is blanked alongside another change', async () => {
+  it('warns in-form what clearing the gate leaves the lake reachable by', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={gatedLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(/must hold this tag/i);
+    await user.clear(screen.getByPlaceholderText('e.g. Opti'));
+    expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(/removes the “Opti” gate/i);
+    expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(/follows Visibility/i);
+  });
+
+  it('clears the tag alongside another change in one save', async () => {
     const user = userEvent.setup();
     render(
       <Wrapper>
@@ -117,14 +129,11 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
     await user.type(nameInput, 'Renamed Lake');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
-    expect(warn).toHaveBeenCalledTimes(1);
-    // Real change persists; the blanked gate is omitted so the backend keeps it.
     expect(updateMutate).toHaveBeenCalledTimes(1);
-    expect(updateMutate.mock.calls[0][0]).toMatchObject({ name: 'Renamed Lake' });
-    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('requiredUserTag');
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ name: 'Renamed Lake', requiredUserTag: '' });
   });
 
-  it('does not warn when the access tag is unchanged', async () => {
+  it('preserves an untouched gate on save', async () => {
     const user = userEvent.setup();
     render(
       <Wrapper>
@@ -134,9 +143,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
 
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
-    expect(warn).not.toHaveBeenCalled();
     expect(updateMutate).toHaveBeenCalledTimes(1);
-    // Unchanged gate is still sent so it's preserved.
     expect(updateMutate.mock.calls[0][0]).toMatchObject({ requiredUserTag: 'Opti' });
   });
 });
