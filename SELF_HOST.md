@@ -101,15 +101,23 @@ docker compose -f compose.selfhost.yaml logs -f app             # follow app log
 
 ### Frontend dev mode (host `next dev`)
 
-Want hot reload on the Next app while the backing services keep running in compose? Run the app on your host with `next dev` and point it at the compose services over their published `localhost` ports. The one wrinkle is chunking - read the note at the end before you upload files.
+Want hot reload on the Next app while the backing services keep running in compose? Run the app on your host with `next dev` and point it at the compose services over their published `localhost` ports. Two things need attention here - letting the host app reach Mailpit for sign-in, and how uploads get chunked - both covered below.
 
-Stop the compose `app` (it binds host port 3000, which `next dev` wants) and leave everything else up:
+**First, let the host app reach Mailpit for sign-in.** Sign-in emails a one-time code, and the app sends it over SMTP to `MAIL_HOST:MAIL_PORT`. In compose that host is the internal `mail` service and only Mailpit's web UI port (8025) is published, so a host-run app can't reach its SMTP port (1025) and no code is sent. Publish it with a small compose override (`compose.hostdev.yaml`):
 
-```bash
-docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop app
+```yaml
+services:
+  mail:
+    ports:
+      - '127.0.0.1:1025:1025'
 ```
 
-Keep the `worker` running. It is the piece that ingests uploads (queue consumers plus the safety-net scan), so chunking still happens even though the app itself now runs on your host.
+Bring the stack up with the override, then stop the compose `app` - it binds host port 3000, which `next dev` wants. Keep the `worker` running: it ingests uploads (queue consumers plus the safety-net scan), so chunking still happens even though the app now runs on your host.
+
+```bash
+docker compose -f compose.selfhost.yaml -f compose.hostdev.yaml --env-file .env.selfhost up -d
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop app
+```
 
 `next dev` reads `apps/client/.env.local` (gitignored), so create that file from your `.env.selfhost`, rewriting each compose service hostname to `localhost` and its published port:
 
@@ -119,6 +127,7 @@ B4M_SELF_HOST=true
 MONGODB_URI=mongodb://localhost:27017/bike4mind?replicaSet=rs0&directConnection=true
 AWS_ENDPOINT_URL_S3=http://localhost:9000       # was http://minio:9000
 AWS_ENDPOINT_URL_SQS=http://localhost:9324      # was http://sqs:9324
+MAIL_HOST=localhost                             # was mail (so sign-in codes reach Mailpit)
 # every *_QUEUE url: swap the `sqs` host for `localhost`, keep the path
 FAB_FILE_CHUNK_QUEUE=http://localhost:9324/000000000000/fabFileChunkQueue
 # ...the other *_QUEUE vars the same way
@@ -131,9 +140,11 @@ Then start the app from the repo root:
 pnpm --filter client dev      # http://localhost:3000
 ```
 
+Open http://localhost:3000 and sign in - the code lands in Mailpit at http://localhost:8025 (see [4. Sign in](#4-sign-in)).
+
 > **Match your published ports.** The values above use the compose defaults. If you set `MONGO_HOST_PORT` / `MINIO_HOST_PORT` / `SQS_HOST_PORT` in `.env.selfhost` (for example to dodge a port already in use on your host), use those host ports here instead.
 
-**Chunking in this mode.** MinIO's ObjectCreated webhook is wired to the compose `app` (`http://app:3000/...`), which your host `next dev` is not - so that notification dead-ends and never enqueues chunking. You do not have to fix this: the host upload route marks each file complete on its own, and the `worker`'s safety-net scan re-enqueues any complete-but-unchunked file once it is a couple of minutes old, so uploads still chunk (and become searchable) within a few minutes. To make chunking fire instantly instead, re-point the webhook at your host: set `MINIO_NOTIFY_WEBHOOK_ENDPOINT_primary=http://host.docker.internal:3000/api/internal/s3/object-created` (via a compose override file), then recreate MinIO with `docker compose -f compose.selfhost.yaml -f <override>.yaml --env-file .env.selfhost up -d minio`. On Linux, also add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `minio` service.
+**Chunking in this mode.** MinIO's ObjectCreated webhook is wired to the compose `app` (`http://app:3000/...`), which your host `next dev` is not - so that notification dead-ends and never enqueues chunking. You do not have to fix this: the host upload route marks each file complete on its own, and the `worker`'s safety-net scan re-enqueues any complete-but-unchunked file once it is a couple of minutes old, so uploads still chunk (and become searchable) within a few minutes. To make chunking fire instantly instead, re-point the webhook at your host by adding MinIO to the same `compose.hostdev.yaml` override - set `MINIO_NOTIFY_WEBHOOK_ENDPOINT_primary` to `http://host.docker.internal:3000/api/internal/s3/object-created`, then recreate MinIO with `docker compose -f compose.selfhost.yaml -f compose.hostdev.yaml --env-file .env.selfhost up -d minio`. On Linux, also add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `minio` service.
 
 ## 4. Sign in
 
