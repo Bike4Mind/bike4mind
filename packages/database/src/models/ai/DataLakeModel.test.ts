@@ -379,6 +379,43 @@ describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', ()
   });
 });
 
+describe('DataLakeBatchRepository.setStatusIfActive - guarded non-terminal transition', () => {
+  setupMongoTest();
+
+  const activeBatch = () => dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1' });
+
+  it('moves a non-terminal batch to the requested in-flight status', async () => {
+    const batch = await activeBatch();
+    const moved = await dataLakeBatchRepository.setStatusIfActive(batch.id, 'processing');
+    expect(moved?.status).toBe('processing');
+  });
+
+  it('is a no-op on a terminal batch, so a client flip cannot resurrect a finalized one', async () => {
+    const batch = await activeBatch();
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed_with_errors');
+
+    const moved = await dataLakeBatchRepository.setStatusIfActive(batch.id, 'processing');
+    expect(moved).toBeNull();
+    // The terminal status is untouched - no revival to 'processing'.
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.status).toBe('completed_with_errors');
+  });
+});
+
+describe('DataLakeBatchRepository.incrementCounter - additive, not clobbering', () => {
+  setupMongoTest();
+
+  // The client's browser-failure accounting and the pipeline's own failures both land on
+  // failedFiles; both must go through $inc so a later write never overwrites an earlier one
+  // (the bug a client-side $set would reintroduce).
+  it('accumulates concurrent-style increments on the same counter', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    await dataLakeBatchRepository.incrementCounter(batch.id, 'failedFiles', 2);
+    const after = await dataLakeBatchRepository.incrementCounter(batch.id, 'failedFiles', 1);
+    expect(after?.failedFiles).toBe(3);
+  });
+});
+
 describe('DataLakeBatchRepository.findStuck — global cross-user stale scan', () => {
   setupMongoTest();
 

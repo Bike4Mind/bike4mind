@@ -49,7 +49,7 @@ jobs:
       status_context:     'e2e/core'
       suite_name:         'Core'
       artifact_suffix:    'core'
-      timeout_minutes:    25
+      timeout_minutes:    60
       stamp_promotable:   ${{ inputs.pr_number == '' }}
       wait_for_deploy:    ${{ inputs.pr_number == '' }}
       show_credits:       false

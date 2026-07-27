@@ -105,9 +105,14 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   }
 
   /**
-   * Returns active data lakes the user can access: those matching any of the
-   * user's tags (case-insensitive), plus any with no requiredUserTag restriction.
-   * The null/$exists/empty-string arms cover all representations of "no restriction."
+   * Legacy tag-only filter, currently UNUSED - prefer findActiveByUserTagsAndEntitlements.
+   * It predates entitlements, org scoping, and Private-by-default, so it returns every
+   * gateless lake to every caller (including other users' private ones). Don't wire it into
+   * a user-facing path without adding those constraints.
+   *
+   * Returns active data lakes matching any of the user's tags (case-insensitive), plus any
+   * with no requiredUserTag restriction. The null/empty-string arms cover both
+   * representations of "no restriction."
    */
   async findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]> {
     const normalizedTags = userTags.map(t => t.toLowerCase());
@@ -451,6 +456,22 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     const doc = await this.batchModel.findOneAndUpdate(
       { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
       { $set: set },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  async setStatusIfActive(
+    batchId: string,
+    status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
+  ): Promise<IDataLakeBatchDocument | null> {
+    // Guarded non-terminal transition: never resurrect a batch the pipeline already
+    // finalized. The client flips a batch to 'processing' after the browser upload phase,
+    // but a fast pipeline can finalize it first - an unguarded $set would revive the dead
+    // batch and strand it (no further events arrive). Mirrors markTerminalIfActive.
+    const doc = await this.batchModel.findOneAndUpdate(
+      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
+      { $set: { status } },
       { new: true }
     );
     return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
