@@ -489,8 +489,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         setShowSlashSuggestions(shouldShowSlashSuggestions);
                       }}
                       onSubmit={async () => {
-                        // Block Enter-to-send while a response is still streaming.
-                        if (shouldShowStopButton || submitting) return;
+                        // Block Enter-to-send while a response is still streaming
+                        // or while files are still uploading/scanning.
+                        if (shouldShowStopButton || submitting || hasActiveUploads) return;
                         await handleSendClick();
                       }}
                       onPaste={handlePaste}
