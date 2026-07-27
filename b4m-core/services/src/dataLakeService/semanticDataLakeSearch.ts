@@ -1,4 +1,5 @@
 import {
+  defaultEmbeddingModelForEnv,
   FabFileChunkVector,
   IFabFileChunkRepository,
   IFabFileRepository,
@@ -7,6 +8,13 @@ import {
 import { computeCosineSimilarity, EmbeddingFactory, getProviderFromModel } from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { Logger } from '@bike4mind/observability';
+import {
+  classifyLoadedChunk,
+  createEmbeddingMismatchAccumulator,
+  emptyEmbeddingMismatchReport,
+  partitionFilesByEmbeddingModel,
+  type EmbeddingMismatchReport,
+} from './embeddingMismatch';
 
 /**
  * Shared vector/semantic search over FabFile chunks in a user's accessible data lakes.
@@ -34,8 +42,13 @@ export interface SemanticChunkResult {
 export interface SemanticDataLakeSearchResult {
   results: SemanticChunkResult[];
   totalChunksSearched: number;
+  /** Every file the scope resolved to, including any withheld as embedded with another model. */
   filesInScope: number;
+  /** Loaded chunks actually cosine-scored. With skippedChunks.total this sums to totalChunksSearched. */
+  chunksScored: number;
   embeddingModel: string;
+  /** What retrieval could not compare, so a caller never reports a partial result as complete. */
+  embeddingMismatch: EmbeddingMismatchReport;
 }
 
 export interface SemanticDataLakeSearchParams {
@@ -77,10 +90,17 @@ export interface SemanticDataLakeSearchAdapters {
   };
 }
 
-/** Shape both entrypoints need from a scoped file's metadata. */
+/**
+ * Shape both entrypoints need from a scoped file's metadata. Structural on purpose: the FabFile
+ * documents both projections return already carry these, so neither entrypoint needs a mapper.
+ * embeddingModel is the only record of which embedding space a file's chunks live in - chunks
+ * themselves carry no model or dimension - so it is what mismatch detection reads.
+ */
 interface RankableFile {
   fileName: string;
   tags?: { name: string }[];
+  embeddingModel?: string | null;
+  vectorizedChunkCount?: number;
 }
 
 /**
@@ -98,6 +118,9 @@ async function rankChunksForFiles(args: {
   embeddingModel: SupportedEmbeddingModel;
   apiKeyTable: SemanticDataLakeSearchParams['apiKeyTable'];
   chunkLoadCap: number;
+  /** Whether the caller's file scope was itself capped, and how many files matched in total. */
+  fileCapHit?: boolean;
+  filesTotal?: number | null;
   logger?: Logger;
   fabfilechunks: Pick<IFabFileChunkRepository, 'findVectorsByFabFileIds'>;
 }): Promise<SemanticDataLakeSearchResult> {
@@ -122,16 +145,63 @@ async function rankChunksForFiles(args: {
   const queryEmbedding = await embeddingService.generateEmbedding(query);
   const queryDim = queryEmbedding.length;
 
+  // --- Withhold files whose recorded model puts their vectors in another embedding space ---
+  // Done at the file level, before any vector load: foreign vectors then never enter memory and
+  // never spend the chunk cap, which is unordered and would otherwise let one large off-model
+  // file evict chunks that could have matched.
+  const scopedFiles = fileIds.map(id => ({ id, ...fileById.get(id) }));
+  const { rankable, foreign } = partitionFilesByEmbeddingModel(scopedFiles, embeddingModel);
+  const mismatch = createEmbeddingMismatchAccumulator(foreign, embeddingModel);
+  mismatch.truncation({ fileCapHit: args.fileCapHit ?? false, filesTotal: args.filesTotal ?? null });
+
+  // An empty query embedding would make every chunk look like a width mismatch and return
+  // nothing. Report it rather than ranking against a meaningless vector, and do not throw: a
+  // transient provider hiccup should not turn a search into a 500.
+  if (queryDim === 0) {
+    logger?.warn?.('[semanticSearch] query embedding came back empty, nothing can be ranked', {
+      queryEmbeddingModel: embeddingModel,
+      filesInScope: fileIds.length,
+    });
+    return {
+      results: [],
+      totalChunksSearched: 0,
+      filesInScope: fileIds.length,
+      chunksScored: 0,
+      embeddingModel,
+      embeddingMismatch: mismatch.report(),
+    };
+  }
+
   // --- Bulk-load vector-bearing chunks (single indexed query) and cosine-rank ---
-  const chunks = await args.fabfilechunks.findVectorsByFabFileIds(fileIds, chunkLoadCap);
+  const rankableIds = rankable.map(f => f.id);
+  const chunks = rankableIds.length ? await args.fabfilechunks.findVectorsByFabFileIds(rankableIds, chunkLoadCap) : [];
+  mismatch.truncation({ chunkCapHit: chunks.length >= chunkLoadCap });
 
   const scored: SemanticChunkResult[] = [];
+  let chunksScored = 0;
   for (const chunk of chunks as FabFileChunkVector[]) {
-    if (!chunk.vector || chunk.vector.length !== queryDim) continue; // skip dim mismatches (model changed)
-    const score = computeCosineSimilarity(queryEmbedding, chunk.vector);
-    if (score < minScore) continue;
+    // Resolve the parent first: it carries the embedding model, and an orphan chunk cannot be
+    // attributed to any model. Doing it before scoring is also what keeps the counts exact.
     const file = fileById.get(chunk.fabFileId);
-    if (!file) continue;
+    if (!file) {
+      mismatch.skip('unknownFile');
+      continue;
+    }
+    const skipReason = classifyLoadedChunk({
+      vector: chunk.vector,
+      queryDim,
+      parentFile: file,
+      queryModel: embeddingModel,
+    });
+    if (skipReason) {
+      mismatch.skip(skipReason);
+      continue;
+    }
+    chunksScored++;
+    mismatch.scored(file, chunk.fabFileId);
+    const score = computeCosineSimilarity(queryEmbedding, chunk.vector);
+    // Below the caller's floor: ranked and rejected on merit, so not a withheld chunk.
+    if (score < minScore) continue;
     scored.push({
       chunkId: chunk.id,
       fileId: chunk.fabFileId,
@@ -143,15 +213,44 @@ async function rankChunksForFiles(args: {
   }
 
   scored.sort((a, b) => b.score - a.score);
+  const report = mismatch.report();
   logger?.debug?.(
-    `[semanticSearch] ${fileIds.length} files, ${chunks.length} chunks → ${scored.length} above min ${minScore}, top score ${scored[0]?.score?.toFixed(3) ?? 'n/a'}`
+    `[semanticSearch] ${fileIds.length} files (${rankableIds.length} rankable), ${chunks.length} chunks -> ${chunksScored} scored, ${report.skippedChunks.total} skipped, ${scored.length} above min ${minScore}, top score ${scored[0]?.score?.toFixed(3) ?? 'n/a'}`
   );
+  if (report.partial) {
+    logger?.warn?.('[semanticSearch] retrieval returned partial results', {
+      queryEmbeddingModel: embeddingModel,
+      queryDim,
+      filesInScope: fileIds.length,
+      filesRanked: rankableIds.length,
+      excludedFiles: report.excludedFiles.count,
+      excludedModels: report.excludedFiles.models,
+      excludedChunksEstimated: report.excludedFiles.estimatedChunks,
+      chunksLoaded: chunks.length,
+      chunksScored,
+      skippedChunks: report.skippedChunks.byReason,
+      truncated: report.truncated,
+    });
+  }
+  // Unlabeled chunks are scored on the assumption that they were embedded with the deployment
+  // default. Under any other query model that assumption is probably wrong, and since we choose
+  // not to exclude them, the choice needs to be auditable.
+  if (report.unlabeled.chunks > 0 && embeddingModel !== defaultEmbeddingModelForEnv()) {
+    logger?.warn?.('[semanticSearch] scored chunks with no recorded embedding model', {
+      queryEmbeddingModel: embeddingModel,
+      assumedModel: defaultEmbeddingModelForEnv(),
+      unlabeledChunks: report.unlabeled.chunks,
+      unlabeledFiles: report.unlabeled.files,
+    });
+  }
 
   return {
     results: scored.slice(0, topK),
     totalChunksSearched: chunks.length,
     filesInScope: fileIds.length,
+    chunksScored,
     embeddingModel,
+    embeddingMismatch: report,
   };
 }
 
@@ -181,7 +280,9 @@ export async function semanticDataLakeSearch(
     results: [],
     totalChunksSearched: 0,
     filesInScope: 0,
+    chunksScored: 0,
     embeddingModel,
+    embeddingMismatch: emptyEmbeddingMismatchReport(),
   };
 
   if (!query.trim() || dataLakeTags.length === 0) return empty;
@@ -223,6 +324,12 @@ export async function semanticDataLakeSearch(
     embeddingModel,
     apiKeyTable,
     chunkLoadCap,
+    // fileName-ordered page: past maxFiles the tail never enters scope, so say so rather than
+    // letting the result read as a complete search of the lake. hasMore is the only sound
+    // signal here (it comes from a limit+1 probe); total counts before the in-memory retrieval
+    // filter, so comparing it against fileIds would flag a cap hit whenever that filter drops one.
+    fileCapHit: fileSearch.hasMore === true,
+    filesTotal: fileSearch.total ?? null,
     logger,
     fabfilechunks: adapters.db.fabfilechunks,
   });
@@ -278,7 +385,9 @@ export async function fileScopedSemanticSearch(
     results: [],
     totalChunksSearched: 0,
     filesInScope: 0,
+    chunksScored: 0,
     embeddingModel,
+    embeddingMismatch: emptyEmbeddingMismatchReport(),
   };
 
   if (!query.trim() || fileIds.length === 0) return empty;
