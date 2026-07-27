@@ -1,4 +1,5 @@
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
+import type { DiscoveryRunHost } from '@bike4mind/common';
 import type { modelDiscoveryService } from '@bike4mind/services';
 import { emitMetrics, type MetricDimensions } from '@server/utils/cloudwatch';
 
@@ -14,6 +15,15 @@ interface MetricDatum {
 }
 
 /**
+ * The dimension set every discovery datum carries. CloudWatch keys a custom
+ * metric by namespace + name + the exact dimension set and never rolls up, so
+ * any alarm on these metrics must repeat this set verbatim (infra/alarms.ts).
+ */
+function discoveryDimensions(stage: string, host: DiscoveryRunHost): MetricDimensions {
+  return { Stage: stage, Host: host };
+}
+
+/**
  * Run counters -> the sec 10 metric list. Pure so the mapping is testable
  * without AWS; the per-source and per-aggregator counters fan out to one datum
  * each, dimensioned by name, because "which source is failing" is the question
@@ -23,9 +33,13 @@ interface MetricDatum {
  * an alarm on "zero" are different alarms, and a metric that only appears when
  * something went wrong cannot alarm on the cron having stopped.
  */
-export function buildDiscoveryMetricData(result: ModelDiscoveryRunResult, stage: string): MetricDatum[] {
+export function buildDiscoveryMetricData(
+  result: ModelDiscoveryRunResult,
+  stage: string,
+  host: DiscoveryRunHost
+): MetricDatum[] {
   const { metrics } = result;
-  const dimensions: MetricDimensions = { Stage: stage, Host: 'hosted' };
+  const dimensions = discoveryDimensions(stage, host);
   const count = (name: string, value: number): MetricDatum => ({
     name,
     value,
@@ -81,6 +95,22 @@ export function buildDiscoveryMetricData(result: ModelDiscoveryRunResult, stage:
 }
 
 /** Publishes the run's counters. Never throws: emitMetrics swallows its own errors. */
-export async function emitDiscoveryMetrics(result: ModelDiscoveryRunResult, stage: string): Promise<void> {
-  await emitMetrics(MODEL_DISCOVERY_NAMESPACE, buildDiscoveryMetricData(result, stage));
+export async function emitDiscoveryMetrics(
+  result: ModelDiscoveryRunResult,
+  stage: string,
+  host: DiscoveryRunHost
+): Promise<void> {
+  await emitMetrics(MODEL_DISCOVERY_NAMESPACE, buildDiscoveryMetricData(result, stage, host));
+}
+
+/**
+ * RunFailures=1 for a driver that never got a result to map: an unreachable
+ * database, a throw inside the run, anything that skips emitDiscoveryMetrics.
+ * Without it the consecutive-failure alarm cannot see the failure modes that
+ * take discovery down hardest, because they all bypass the normal return.
+ */
+export async function emitDiscoveryRunFailure(stage: string, host: DiscoveryRunHost): Promise<void> {
+  await emitMetrics(MODEL_DISCOVERY_NAMESPACE, [
+    { name: 'RunFailures', value: 1, dimensions: discoveryDimensions(stage, host), unit: StandardUnit.Count },
+  ]);
 }

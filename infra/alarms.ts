@@ -11,6 +11,7 @@
  * that touch alarm/dashboard code).
  */
 
+import { modelDiscoveryFunction } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
@@ -806,6 +807,16 @@ if (isMonitoredStage) {
   }
 
   /**
+   * The dimension set server/modelDiscovery/metrics.ts stamps on every datum.
+   * CloudWatch keys a custom metric by namespace + name + the exact dimension
+   * set and never rolls up, so an alarm that omits these watches an empty
+   * series and sits in INSUFFICIENT_DATA forever. Host is the hosted lambda's
+   * label; a self-host worker publishes nothing to this account.
+   * MUST STAY IN SYNC with discoveryDimensions() in that file.
+   */
+  const modelDiscoveryDimensions = { Stage: $app.stage, Host: 'hosted' };
+
+  /**
    * Alarm: Model Discovery consecutive run failures
    *
    * Three failed runs in a row. The period is the 6-hour cadence, so three
@@ -826,6 +837,36 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0,
     treatMissingData: 'notBreaching',
+    dimensions: modelDiscoveryDimensions,
+    alarmActions: [modelDiscoveryFailureAlarm!.arn],
+    tags: {
+      Application: 'ModelDiscovery',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Model Discovery Lambda Errors
+   *
+   * Monitors the Lambda itself. The application-level RunFailures metric can
+   * only be published by a handler that reached its emit call, so a timeout or
+   * an init-time crash shows up here and nowhere else. Routed to the same topic
+   * as a failed run: both mean the catalog stopped refreshing.
+   */
+  new aws.cloudwatch.MetricAlarm('modelDiscoveryLambdaErrors', {
+    name: `${$app.name}-${$app.stage}-model-discovery-lambda-errors`,
+    alarmDescription: 'Model discovery Lambda has errors',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'Errors',
+    namespace: 'AWS/Lambda',
+    period: 300,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: {
+      FunctionName: modelDiscoveryFunction.name,
+    },
     alarmActions: [modelDiscoveryFailureAlarm!.arn],
     tags: {
       Application: 'ModelDiscovery',
@@ -850,6 +891,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0,
     treatMissingData: 'notBreaching',
+    dimensions: modelDiscoveryDimensions,
     alarmActions: [modelDiscoveryRowsRejectedAlarm!.arn],
     tags: {
       Application: 'ModelDiscovery',
@@ -875,6 +917,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0,
     treatMissingData: 'notBreaching',
+    dimensions: modelDiscoveryDimensions,
     alarmActions: [modelDiscoveryPriceFlaggedAlarm!.arn],
     tags: {
       Application: 'ModelDiscovery',
@@ -901,6 +944,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0,
     treatMissingData: 'notBreaching',
+    dimensions: modelDiscoveryDimensions,
     alarmActions: [modelDiscoveryDocsParserShiftAlarm!.arn],
     tags: {
       Application: 'ModelDiscovery',
