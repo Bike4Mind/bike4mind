@@ -7,6 +7,7 @@ import {
   fetchAgentConversationHistory,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
+import { DEFAULT_HISTORY_FETCH_LIMIT, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
 import type { IMessage, ISessionDocument } from '@bike4mind/common';
 
 // Define ITokenizer type locally since it's in @bike4mind/utils
@@ -1411,6 +1412,44 @@ describe('Context Management Tests', () => {
 
       // After reverse -> [1,2,3], pop -> [1,2], filter keeps id > "000...01" -> [2]
       expect(meta.oldestIncludedQuestId).toBe(makeItem(2).id);
+    });
+
+    describe('history window resolution', () => {
+      it('pages unlimited history at the default limit instead of reading it as "no history"', async () => {
+        const items = [makeItem(3), makeItem(2), makeItem(1)];
+        const getMostRecentChatHistory = vi.fn().mockResolvedValue(items);
+
+        const [messages, count] = await fetchAndProcessPreviousMessages(makeSession(), UNLIMITED_HISTORY_COUNT, {
+          db: { quests: { getMostRecentChatHistory } },
+        });
+
+        // The marker is negative, so an ordering slip would take the "<= 0 means no history" path.
+        expect(count).toBe(2);
+        expect(messages).toHaveLength(4);
+        expect(getMostRecentChatHistory).toHaveBeenCalledWith('session1', DEFAULT_HISTORY_FETCH_LIMIT + 1);
+      });
+
+      it('still returns no history for a zero window', async () => {
+        const getMostRecentChatHistory = vi.fn();
+
+        const [messages, count] = await fetchAndProcessPreviousMessages(makeSession(), 0, {
+          db: { quests: { getMostRecentChatHistory } },
+        });
+
+        expect(count).toBe(0);
+        expect(messages).toHaveLength(0);
+        expect(getMostRecentChatHistory).not.toHaveBeenCalled();
+      });
+
+      it('pages a bounded window at that window', async () => {
+        const getMostRecentChatHistory = vi.fn().mockResolvedValue([]);
+
+        await fetchAndProcessPreviousMessages(makeSession(), 30, {
+          db: { quests: { getMostRecentChatHistory } },
+        });
+
+        expect(getMostRecentChatHistory).toHaveBeenCalledWith('session1', 31);
+      });
     });
 
     describe('recentGeneratedImages', () => {
