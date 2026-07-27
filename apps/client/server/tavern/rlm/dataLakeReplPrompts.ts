@@ -16,7 +16,10 @@ export const DATA_LAKE_REPL_TOOLS: ReplToolDescriptor[] = [
     signature: '({ query, top_k = 10, min_score = 0, tags = [] })',
     description:
       'Vector / semantic search across chunked articles in the data lake. ' +
-      'Returns { results: [{ file_id, file_name, file_tags, chunk_text, score }, ...], total_chunks_searched, ... }.',
+      'Returns { results: [{ file_id, file_name, file_tags, chunk_text, score }, ...], total_chunks_searched, ' +
+      'files_in_scope, chunks_scored, partial_results, embedding_mismatch, ... }. ' +
+      'When partial_results is true some content could not be searched (embedding_mismatch says what ' +
+      'and why) - say so in your answer instead of presenting the result as complete.',
   },
   {
     name: 'keywordSearch',

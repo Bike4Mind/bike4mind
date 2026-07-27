@@ -68,6 +68,11 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  * Returns:
  *   - results: Array<{ chunk_id, file_id, file_name, file_tags, chunk_text, score }>
  *   - total_chunks_searched: number
+ *   - files_in_scope: number
+ *   - chunks_scored: number
+ *   - partial_results: boolean     - true when anything was withheld from ranking
+ *   - embedding_mismatch          - excluded_files / skipped_chunks / unlabeled / truncated
+ *   - warning?: string             - present only when partial_results is true
  *   - embedding_model: string
  *   - latency_ms: number
  */
@@ -83,6 +88,40 @@ const SemanticSearchInput = z.object({
     message: 'embedding_model must be a known SupportedEmbeddingModel',
   }),
 });
+
+/**
+ * Serialize the mismatch report for the wire. Snake_case throughout to match the rest of this
+ * response, and shared by both exits so the empty-scope path cannot drift from the search path.
+ */
+function serializeEmbeddingMismatch(report: dataLakeService.EmbeddingMismatchReport) {
+  return {
+    excluded_files: {
+      count: report.excludedFiles.count,
+      models: report.excludedFiles.models,
+      estimated_chunks: report.excludedFiles.estimatedChunks,
+      sample: report.excludedFiles.sample.map(f => ({
+        file_id: f.fileId,
+        file_name: f.fileName,
+        embedding_model: f.embeddingModel,
+      })),
+    },
+    skipped_chunks: {
+      total: report.skippedChunks.total,
+      by_reason: {
+        unknown_file: report.skippedChunks.byReason.unknownFile,
+        model_mismatch: report.skippedChunks.byReason.modelMismatch,
+        missing_vector: report.skippedChunks.byReason.missingVector,
+        dimension_mismatch: report.skippedChunks.byReason.dimensionMismatch,
+      },
+    },
+    unlabeled: { chunks: report.unlabeled.chunks, files: report.unlabeled.files },
+    truncated: {
+      chunk_cap_hit: report.truncated.chunkCapHit,
+      file_cap_hit: report.truncated.fileCapHit,
+      files_total: report.truncated.filesTotal,
+    },
+  };
+}
 
 const handler = baseApi()
   .use(
@@ -134,9 +173,15 @@ const handler = baseApi()
           : getAccessibleDataLakes(userTags, undefined, await getRequestEntitlements(req));
 
       if (accessibleLakes.length === 0) {
+        // Same shape as a real search: this response is passed through verbatim to the RLM
+        // agent, so a narrower object here would read as a different contract.
         return res.json({
           results: [],
           total_chunks_searched: 0,
+          files_in_scope: 0,
+          chunks_scored: 0,
+          partial_results: false,
+          embedding_mismatch: serializeEmbeddingMismatch(dataLakeService.emptyEmbeddingMismatchReport()),
           embedding_model,
           latency_ms: Date.now() - t0,
         });
@@ -243,6 +288,8 @@ const handler = baseApi()
 
       if (isAborted()) return res.end();
 
+      const warning = dataLakeService.describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+
       return res.json({
         results: search.results.map(r => ({
           chunk_id: r.chunkId,
@@ -254,6 +301,13 @@ const handler = baseApi()
         })),
         total_chunks_searched: search.totalChunksSearched,
         files_in_scope: search.filesInScope,
+        chunks_scored: search.chunksScored,
+        // The single flag a caller branches on to know this answer is incomplete.
+        partial_results: search.embeddingMismatch.partial,
+        embedding_mismatch: serializeEmbeddingMismatch(search.embeddingMismatch),
+        // Spread rather than `warning: warning ?? undefined`, so the key is genuinely absent on a
+        // healthy search instead of present-and-undefined.
+        ...(warning ? { warning } : {}),
         embedding_model: search.embeddingModel,
         latency_ms: Date.now() - t0,
       });
