@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   buildAndSortMessages,
+  calculateTotalTokenLength,
+  processFabFilesServer,
   computeCosineSimilarity,
   getLastBuildDebugInfo,
   fetchAndProcessPreviousMessages,
@@ -458,8 +460,13 @@ describe('Context Management Tests', () => {
         tokenizer
       );
 
-      // Both history and knowledge included; allocation ~70% knowledge / 30% history.
+      // Both history and knowledge included; allocation ~70% knowledge / 30% history. The cap is
+      // only real if the result actually fits: with recent-pair protection left on for the content
+      // pass, the oversized knowledge message came back untouched and blew the budget.
       expect(result.length).toBeGreaterThan(0);
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+        tokenBudget + 1000
+      );
     });
   });
 
@@ -487,9 +494,11 @@ describe('Context Management Tests', () => {
         tokenizer
       );
 
-      // Either logs an overflow warning or truncates; either way no crash and a result.
-      expect(result).toBeDefined();
-      expect(Array.isArray(result)).toBe(true);
+      // The point of the final safety pass: whatever it does, the result has to fit. It used to be
+      // unable to shrink at all, so the overflow reached the caller's hard throw instead.
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+        maxInputTokens
+      );
     });
 
     it('should handle edge cases near token limits without overflow', async () => {
@@ -680,6 +689,9 @@ describe('Context Management Tests', () => {
 
       // At least one of each type should be present when both are available
       expect(hasKnowledge || hasHistory).toBe(true);
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+        tokenBudget + 1000
+      );
     });
   });
 
@@ -1552,5 +1564,415 @@ describe('computeCosineSimilarity', () => {
     // e.g. an Ollama nomic-embed-text query (768) against an OpenAI chunk (1536).
     expect(computeCosineSimilarity([1, 2, 3], [1, 2])).toBe(0);
     expect(computeCosineSimilarity([1, 2], [1, 2, 3, 4])).toBe(0);
+  });
+});
+
+// Token-budget allocation. Every case here passes an explicit FINITE historyCount: the
+// INFINITE_VALUE sentinel is a magic 14 that a real computed history count can collide with, so
+// tests that mean "unlimited" must not be written as a bare 14.
+describe('Token budget allocation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Even index = user, odd = assistant, and each message carries an identifying prefix so tests can
+  // assert WHICH messages survived rather than just how many.
+  const makeHistory = (count: number, charsEach: number): IMessage[] =>
+    Array.from({ length: count }, (_, i) => {
+      const label = `history-${i}-`;
+      return {
+        role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+        content: label + 'h'.repeat(Math.max(0, charsEach - label.length)),
+      };
+    });
+
+  const ATTACHED_FILE_PREFIX = 'Here is the content from the attached file "quarterly.csv" for context:\n\n';
+  const makeAttachedFile = (totalChars: number): IMessage => ({
+    role: 'user',
+    content: ATTACHED_FILE_PREFIX + 'C'.repeat(totalChars - ATTACHED_FILE_PREFIX.length),
+  });
+
+  const findAttachedFile = (messages: IMessage[]) =>
+    messages.find(m => typeof m.content === 'string' && m.content.startsWith(ATTACHED_FILE_PREFIX));
+  const historyLabels = (messages: IMessage[]) =>
+    messages
+      .filter(m => typeof m.content === 'string' && (m.content as string).startsWith('history-'))
+      .map(m => (m.content as string).split('-').slice(0, 2).join('-'));
+
+  describe('processMessages honors its token budget', () => {
+    it('reserves recent messages only as far as the budget stretches', async () => {
+      // budget = 2000 - max(1000, 5%) = 1000; 8 history messages at 400 est. tokens each.
+      // Six would be "protected" (3 pairs) at 2400 tokens, which the budget cannot cover.
+      const tokenizer = createMockTokenizer();
+
+      const result = await buildAndSortMessages(
+        makeHistory(8, 1400),
+        [],
+        [],
+        2000,
+        {},
+        4,
+        mockLogger as any,
+        tokenizer
+      );
+
+      expect(historyLabels(result)).toEqual(['history-6', 'history-7']);
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(2000);
+    });
+
+    it('keeps older protected messages when the newest one alone busts the budget', async () => {
+      // budget = 1250 - 1000 = 250. The newest message is far too large to reserve; skipping it must
+      // not abandon the five smaller recent messages behind it.
+      const history = makeHistory(6, 350);
+      history[5] = { role: 'assistant', content: 'history-5-' + 'X'.repeat(99990) };
+      const tokenizer = createMockTokenizer();
+
+      const result = await buildAndSortMessages(history, [], [], 1250, {}, 4, mockLogger as any, tokenizer);
+
+      // history-3 is an assistant message. It survives only because the reservation walks
+      // newest-first past the oversized message; the priority-ordered greedy pass would have taken
+      // the older USER message history-2 instead.
+      expect(historyLabels(result)).toEqual(['history-3', 'history-4']);
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(1250);
+    });
+
+    it('truncates a single message that is larger than the entire budget', async () => {
+      const tokenizer = createMockTokenizer();
+
+      const result = await buildAndSortMessages(
+        [{ role: 'user', content: 'A'.repeat(100000) }],
+        [],
+        [],
+        2000,
+        {},
+        1,
+        mockLogger as any,
+        tokenizer
+      );
+
+      // ratio = (0.9 * 1000) / 28572, so 100000 chars becomes 3149.
+      expect(result).toHaveLength(1);
+      expect((result[0].content as string).length).toBe(3149);
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(2000);
+    });
+
+    it('drops messages rather than emitting empty content when the budget is under a token each', async () => {
+      // budget = 1005 - 1000 = 5 across 10 messages, i.e. 0 tokens each. Truncating to 0 tokens
+      // yields empty strings, which providers reject outright.
+      const tokenizer = createMockTokenizer();
+
+      const result = await buildAndSortMessages(
+        makeHistory(10, 350),
+        [],
+        [],
+        1005,
+        {},
+        10,
+        mockLogger as any,
+        tokenizer
+      );
+
+      expect(result.filter(m => m.content === '')).toHaveLength(0);
+      expect(result).toHaveLength(0);
+    });
+
+    it('keeps recent-pair protection on by default for history', async () => {
+      // budget 1000, 20 messages at 100 tokens. Protection reserves the 3 newest pairs (600), then
+      // the greedy pass fills the remaining 400 with older USER messages by priority. Without
+      // protection the greedy pass would spend the whole budget on user messages and return no
+      // assistant turns at all.
+      const tokenizer = createMockTokenizer();
+
+      const result = await buildAndSortMessages(
+        makeHistory(20, 350),
+        [],
+        [],
+        2000,
+        {},
+        10,
+        mockLogger as any,
+        tokenizer
+      );
+
+      const labels = historyLabels(result);
+      expect(labels).toHaveLength(10);
+      expect(labels).toContain('history-19');
+      expect(labels).toContain('history-17');
+      expect(labels).toContain('history-15');
+    });
+
+    it('does not throw on a message with undefined content', async () => {
+      const tokenizer = createMockTokenizer();
+
+      await expect(
+        buildAndSortMessages(
+          [{ role: 'user', content: undefined as unknown as string }],
+          [],
+          [],
+          2000,
+          {},
+          4,
+          mockLogger as any,
+          tokenizer
+        )
+      ).resolves.toBeDefined();
+    });
+  });
+
+  describe('attached content floor', () => {
+    it('delivers the attached file to the model even when history dwarfs the budget', async () => {
+      // The reported failure: a long conversation plus a freshly attached file on an 8k-class model.
+      // budget = 8000 - 1000 buffer - 8 prompt = 6992, while history alone estimates 16075 tokens.
+      // Before the floor, content was zeroed outright and the model answered as if no file existed.
+      const tokenizer = createMockTokenizer();
+
+      const result = await buildAndSortMessages(
+        makeHistory(40, 1400),
+        [makeAttachedFile(35000)],
+        [{ role: 'user', content: 'Summarize the attached file' }],
+        8000,
+        {},
+        20,
+        mockLogger as any,
+        tokenizer
+      );
+
+      // floor = floor(6992 * 0.35) = 2447, so the file is truncated to 7708 chars (~2203 tokens)
+      // rather than dropped.
+      const file = findAttachedFile(result);
+      expect(file).toBeDefined();
+      expect((file!.content as string).length).toBe(7708);
+
+      // History still holds the majority of the budget and keeps its newest exchange.
+      const labels = historyLabels(result);
+      expect(labels).toHaveLength(11);
+      expect(labels).toContain('history-39');
+      expect(labels).toContain('history-38');
+
+      // The primary allocation kept us in bounds, so the final safety net never had to fire.
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBe(6630);
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('exceeds maxInputTokens'));
+
+      // The squeeze is reported, and it names the file so a support engineer can see which one lost.
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('quarterly.csv'));
+      expect(getLastBuildDebugInfo()?.truncationMethod).toBe('token-budget');
+    });
+
+    it('leaves a fitting attachment untouched and stays silent', async () => {
+      const attached = makeAttachedFile(700);
+      const tokenizer = createMockTokenizer();
+
+      const result = await buildAndSortMessages([], [attached], [], 8000, {}, 10, mockLogger as any, tokenizer);
+
+      // Byte-identical, not merely present: the squeeze check compares estimates against estimates,
+      // so an attachment that fits can never be reported as squeezed.
+      expect(findAttachedFile(result)?.content).toBe(attached.content);
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    });
+
+    it('returns the unused part of the reserve to history', async () => {
+      // The file uses 2203 of its 2447-token reserve. The leftover 244 must go back to history,
+      // which is 16 more messages at 40 tokens each.
+      const tokenizer = createMockTokenizer();
+
+      const result = await buildAndSortMessages(
+        makeHistory(200, 140),
+        [makeAttachedFile(35000)],
+        [{ role: 'user', content: 'Summarize the attached file' }],
+        8000,
+        {},
+        100,
+        mockLogger as any,
+        tokenizer
+      );
+
+      expect(historyLabels(result)).toHaveLength(119);
+    });
+
+    it('gives history the whole budget when nothing is attached', async () => {
+      const tokenizer = createMockTokenizer();
+
+      const result = await buildAndSortMessages(
+        makeHistory(200, 140),
+        [],
+        [{ role: 'user', content: 'Summarize the attached file' }],
+        8000,
+        {},
+        100,
+        mockLogger as any,
+        tokenizer
+      );
+
+      // Reserving the floor unconditionally would cost history 61 of these messages.
+      expect(historyLabels(result)).toHaveLength(174);
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(8000);
+    });
+
+    it('keeps a small attachment whole even when history overflows', async () => {
+      const attached = makeAttachedFile(350);
+      const tokenizer = createMockTokenizer();
+
+      const result = await buildAndSortMessages(
+        makeHistory(200, 140),
+        [attached],
+        [{ role: 'user', content: 'Summarize the attached file' }],
+        8000,
+        {},
+        100,
+        mockLogger as any,
+        tokenizer
+      );
+
+      expect(findAttachedFile(result)?.content).toBe(attached.content);
+      expect(historyLabels(result)).toHaveLength(172);
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    });
+
+    it('survives a budget the buffer has driven negative', async () => {
+      const tokenizer = createMockTokenizer();
+
+      const result = await buildAndSortMessages(
+        makeHistory(4, 350),
+        [makeAttachedFile(3500)],
+        [{ role: 'user', content: 'Summarize the attached file' }],
+        500,
+        {},
+        4,
+        mockLogger as any,
+        tokenizer
+      );
+
+      expect(historyLabels(result)).toHaveLength(0);
+      expect(findAttachedFile(result)).toBeUndefined();
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(500);
+    });
+  });
+
+  describe('truncation reporting', () => {
+    it('reports a budget loss as token-budget, not as history windowing', async () => {
+      const tokenizer = createMockTokenizer();
+
+      await buildAndSortMessages(
+        makeHistory(40, 1400),
+        [makeAttachedFile(35000)],
+        [{ role: 'user', content: 'Summarize the attached file' }],
+        8000,
+        {},
+        20,
+        mockLogger as any,
+        tokenizer
+      );
+
+      // Previously this reported 'history-limit' for any finite historyCount, making a file the
+      // budget had silently zeroed indistinguishable from history being windowed as configured.
+      expect(getLastBuildDebugInfo()?.truncationMethod).toBe('token-budget');
+    });
+
+    it('reports token-budget when the attachment was cut mid-message and nothing was dropped', async () => {
+      // History fits comfortably, so no message is removed and removedMessages stays empty. The
+      // attachment is still cut down, which is a budget loss telemetry must not miss.
+      const tokenizer = createMockTokenizer();
+
+      await buildAndSortMessages(
+        makeHistory(4, 350),
+        [makeAttachedFile(35000)],
+        [{ role: 'user', content: 'go' }],
+        4000,
+        {},
+        2,
+        mockLogger as any,
+        tokenizer
+      );
+
+      const debug = getLastBuildDebugInfo();
+      expect(debug?.removedMessages).toBeUndefined();
+      expect(debug?.truncationMethod).toBe('token-budget');
+    });
+
+    it('reports history-limit when only the historyCount window dropped messages', async () => {
+      const tokenizer = createMockTokenizer();
+
+      await buildAndSortMessages(makeHistory(40, 100), [], [], 100000, {}, 2, mockLogger as any, tokenizer);
+
+      // slice(-4) drops 36 messages, and the generous budget removes nothing.
+      expect(getLastBuildDebugInfo()?.truncationMethod).toBe('history-limit');
+    });
+  });
+});
+
+// Chunk retrieval for a vectorized attachment. This path had no coverage, which is how a bare
+// `slice(0, 3)` survived long enough to starve small embedders.
+describe('processFabFilesServer chunk retrieval', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const makeChunks = (count: number, charsEach: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `chunk-${i}`,
+      text: `chunk-${i}-` + 'c'.repeat(Math.max(0, charsEach - `chunk-${i}-`.length)),
+      // Descending similarity to the query vector [1, 0], so ranking order is chunk-0 first.
+      vector: [1, i / count],
+    }));
+
+  const runRetrieval = async (chunks: ReturnType<typeof makeChunks>, maxTokens: number) => {
+    const embeddingFactory = {
+      getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+      createEmbeddingService: () => ({
+        getModelInfo: () => ({ model: 'text-embedding-ada-002', contextWindow: 8192 }),
+        generateEmbedding: async () => [1, 0],
+      }),
+    };
+
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory as any,
+      [
+        {
+          id: 'file-1',
+          fileName: 'roster.csv',
+          mimeType: 'text/csv',
+          vectorized: true,
+          embeddingModel: 'text-embedding-ada-002',
+        } as any,
+      ],
+      'who is on the roster',
+      maxTokens,
+      { supportsVision: false } as any,
+      async () => {},
+      {
+        logger: mockLogger as any,
+        storage: {} as any,
+        db: {
+          fabfilechunks: { findByFabFileId: vi.fn(async () => chunks) },
+          fabfiles: { update: vi.fn() },
+          caches: {} as any,
+        } as any,
+      }
+    );
+    return userMessages;
+  };
+
+  it('feeds more than three chunks to the model when the character budget allows', async () => {
+    // Ten 200-char chunks against a 4000-token budget (14000 chars): the count is the only thing
+    // that could hold this back, and three chunks would answer a 10-chunk question from 30% of it.
+    const messages = await runRetrieval(makeChunks(10, 200), 4000);
+
+    expect(messages).toHaveLength(1);
+    const content = messages[0].content as string;
+    expect(content).toContain('Data for roster.csv:');
+    for (let i = 0; i < 10; i++) {
+      expect(content).toContain(`chunk-${i}-`);
+    }
+  });
+
+  it('still stops at the per-file character budget rather than the chunk count', async () => {
+    // maxChars = 100 * 3.5 = 350, so only the first chunk fits and the rest are dropped. Raising the
+    // count cap must not let a file exceed its share of the context window.
+    const messages = await runRetrieval(makeChunks(10, 300), 100);
+
+    const content = messages[0].content as string;
+    expect(content).toContain('chunk-0-');
+    expect(content).not.toContain('chunk-1-');
   });
 });

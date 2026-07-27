@@ -45,6 +45,16 @@ const RECENT_IMAGE_PROMPT_PREVIEW_CHARS = 120;
 const EDITABLE_IMAGE_KEY_RE = /\.(jpe?g|png|webp|gif)$/i;
 const PREVIEW_CHUNK = 700;
 const CHARS_PER_TOKEN = 3.5;
+/**
+ * Chunks per attached file that cosine retrieval feeds to the model. Matches the topK default in
+ * semanticDataLakeSearch's rankChunksForFiles, so chat retrieval and data-lake search agree.
+ * Three starved small embedders: a chunk is the embedding model's context window less a 20% buffer
+ * (see SmartChunker), so three chunks is roughly 69k chars on an 8192-token embedder but only 4.3k
+ * on a 512-token one, which answers a question about a 200-row table from 43 rows without saying so.
+ * Raising the count is safe because the per-file character budget applied to these results, not the
+ * count, is the binding constraint - see maxChars in processFabFilesServer.
+ */
+const COSINE_SEARCH_TOP_K = 10;
 
 // Emergency token limits for embedding generation
 const EMBEDDING_TOKEN_LIMITS = {
@@ -70,13 +80,39 @@ const TOKEN_BUFFER_PERCENTAGE = 0.05;
 /**
  * Share of the token budget given to knowledge/fab files when history + files overflow: 70% files,
  * 30% history. Users attach files expecting them used; history can be pruned more aggressively.
+ * Applies only when historyCount is INFINITE_VALUE; a finite historyCount uses the floor below.
  */
 const KNOWLEDGE_FILE_TOKEN_ALLOCATION = 0.7;
+
+/**
+ * Smallest share of the token budget an explicitly attached file is guaranteed when a finite
+ * historyCount is set (35%). History used to have absolute priority here, so a long conversation
+ * silently pushed the file the user just attached out of context entirely and the model answered
+ * as though no file existed. History still keeps the majority, which the user did not ask to give
+ * up. A fraction rather than a token count, so the reserve can never exceed the budget on a small
+ * context window; unused reserve flows back to history.
+ */
+const MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION = 0.35;
 
 const estimateTokenLength = (text: string): number => {
   // Rough estimate: ~3.5 chars per token for English text
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 };
+
+/**
+ * Flattens a message's content to the text the estimators measure. Note this deliberately omits
+ * the role, unlike calculateTotalTokenLength which concatenates role + content: budget arithmetic
+ * must compare estimates against estimates, never against a calculateTotalTokenLength total.
+ */
+const messageContentText = (message: IMessage): string =>
+  Array.isArray(message.content)
+    ? message.content.map(obj => JSON.stringify(obj)).join('')
+    : ((message.content as string) ?? '');
+
+const estimateMessageTokens = (message: IMessage): number => estimateTokenLength(messageContentText(message));
+
+const estimateMessagesTokens = (messages: IMessage[]): number =>
+  messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
 
 /**
  * Safely generate embeddings for text that might exceed token limits
@@ -662,8 +698,7 @@ async function cosineSearch(
     })
     .filter((result: any) => result !== null);
 
-  // Sort the results based on similarity scores and return top 3
-  return searchResults.sort((a: any, b: any) => b.score - a.score).slice(0, 3);
+  return searchResults.sort((a: any, b: any) => b.score - a.score).slice(0, COSINE_SEARCH_TOP_K);
 }
 
 /**
@@ -1142,8 +1177,7 @@ const MESSAGE_PRIORITY = {
 const truncateMessageContent = (message: IMessage, tokenLimit: number): IMessage => {
   let content: MessageContent = message.content || '';
 
-  const contentText = Array.isArray(content) ? content.map(obj => JSON.stringify(obj)).join('') : (content as string);
-  const estimatedTokens = estimateTokenLength(contentText);
+  const estimatedTokens = estimateTokenLength(messageContentText(message));
 
   if (estimatedTokens > tokenLimit) {
     const ratio = (0.9 * tokenLimit) / estimatedTokens;
@@ -1160,7 +1194,8 @@ const truncateMessageContent = (message: IMessage, tokenLimit: number): IMessage
 };
 
 // Process messages, keeping complete ones over truncation to avoid mid-content cuts that cause
-// hallucinations.
+// hallucinations. Never returns more than `tokenBudget` worth of messages; the truncation fallback
+// at the bottom is the one exception and it stays under 90% of the budget.
 const processMessages = (
   messages: IMessage[],
   tokenBudget: number
@@ -1168,42 +1203,55 @@ const processMessages = (
   messages: IMessage[];
   removedMessages: Array<{ role: string; tokens: number; priority: number }>;
 } => {
-  if (tokenBudget <= 0) {
-    return { messages: [], removedMessages: [] };
-  }
-
-  const messagesWithTokens = messages.map((message, index) => {
-    const contentText = Array.isArray(message.content)
-      ? message.content.map(obj => JSON.stringify(obj)).join('')
-      : (message.content as string);
-    const tokens = estimateTokenLength(contentText);
-    const priority = MESSAGE_PRIORITY[message.role as keyof typeof MESSAGE_PRIORITY] ?? 999;
-    return { message, tokens, priority, originalIndex: index };
+  const describeRemoved = (message: IMessage) => ({
+    role: message.role,
+    tokens: estimateMessageTokens(message),
+    priority: MESSAGE_PRIORITY[message.role as keyof typeof MESSAGE_PRIORITY] ?? 999,
   });
 
-  // Protect the last N user+assistant exchange pairs from being dropped.
-  // These represent the most recent conversation context and are critical for coherence.
+  if (tokenBudget <= 0) {
+    return { messages: [], removedMessages: messages.map(describeRemoved) };
+  }
+
+  const messagesWithTokens = messages.map((message, index) => ({
+    message,
+    tokens: estimateMessageTokens(message),
+    priority: MESSAGE_PRIORITY[message.role as keyof typeof MESSAGE_PRIORITY] ?? 999,
+    originalIndex: index,
+  }));
+
+  // The last N user+assistant exchange pairs are the most recent conversation context and matter
+  // most for coherence, so they get first claim on the budget - but only as far as it stretches
+  // (see the reservation below). Collected newest-first so the oldest lose out first.
   const PROTECTED_RECENT_PAIRS = 3;
-  const protectedMessages = new Set<number>();
+  const protectedIndices: number[] = [];
   let pairsFound = 0;
   for (let i = messagesWithTokens.length - 1; i >= 0 && pairsFound < PROTECTED_RECENT_PAIRS; i--) {
     const role = messagesWithTokens[i].message.role;
     if (role === 'user' || role === 'assistant') {
-      protectedMessages.add(i);
+      protectedIndices.push(i);
       // Count a pair when we find a user message (user comes before assistant in history)
       if (role === 'user') pairsFound++;
     }
   }
 
-  // Pre-reserve protected messages and deduct their tokens from the budget
+  // Reserve protected messages only while they fit, so the reservation can never overshoot the
+  // budget. `continue` rather than `break`: one oversized recent message must not block the
+  // smaller ones behind it.
+  const reservedIndices = new Set<number>();
   const reservedMessages: typeof messagesWithTokens = [];
   let reservedTokens = 0;
-  for (const idx of protectedMessages) {
-    reservedMessages.push(messagesWithTokens[idx]);
-    reservedTokens += messagesWithTokens[idx].tokens;
+  for (const idx of protectedIndices) {
+    const item = messagesWithTokens[idx];
+    if (reservedTokens + item.tokens > tokenBudget) continue;
+    reservedIndices.add(idx);
+    reservedMessages.push(item);
+    reservedTokens += item.tokens;
   }
 
-  const unreservedMessages = messagesWithTokens.filter((_, idx) => !protectedMessages.has(idx));
+  // Keyed on what was actually reserved, so a protected message that missed out rejoins the
+  // candidate pool below instead of becoming unselectable.
+  const unreservedMessages = messagesWithTokens.filter((_, idx) => !reservedIndices.has(idx));
 
   // Sort by priority (keep high priority messages)
   // Within same priority, prefer newer messages (higher originalIndex) so oldest get dropped first
@@ -1237,10 +1285,17 @@ const processMessages = (
   // If we couldn't fit any messages but have budget, fall back to truncation
   if (selectedMessages.length === 0 && messages.length > 0) {
     const tokensPerMessage = Math.floor(tokenBudget / messages.length);
-    return {
-      messages: messages.map(message => truncateMessageContent(message, tokensPerMessage)),
-      removedMessages: [],
-    };
+    // Under 1 token each, truncation yields empty content that providers reject, so drop the
+    // messages instead and let the removal reporting below stand.
+    if (tokensPerMessage >= 1) {
+      return {
+        messages: messages.map(message => truncateMessageContent(message, tokensPerMessage)),
+        // Under-reports on purpose: content was cut mid-message but no message was dropped.
+        // Reporting these as removed would make truncationRate read 0% next to a truncation flag,
+        // so callers surface mid-message loss through their own warn instead.
+        removedMessages: [],
+      };
+    }
   }
 
   // Restore original chronological order
@@ -1384,38 +1439,50 @@ export async function buildAndSortMessages(
   let processedContentMessages: IMessage[] = [];
   let processedPreviousMessages: IMessage[] = [];
 
-  // Track removed messages for truncation visibility
+  // Track removed messages for truncation visibility. `contentSqueezed` covers the loss that
+  // `allRemovedMessages` structurally cannot: content cut mid-message rather than dropped.
   const allRemovedMessages: Array<{ role: string; tokens: number; priority: number }> = [];
+  let contentSqueezed = false;
   const originalTotalMessageCount = historyMessages.length + nonImageMessages.length;
 
   // If historyCount is explicitly set (not INFINITE_VALUE), allocate tokens accordingly.
   if (historyCount !== INFINITE_VALUE) {
-    // If the history fits within the budget, process it and allocate remaining tokens to content
-    if (totalPreviousTokens <= tokenBudget) {
-      const historyResult = processMessages(historyMessages, totalPreviousTokens);
-      processedPreviousMessages = historyResult.messages;
-      allRemovedMessages.push(...historyResult.removedMessages);
-      tokenBudget -= totalPreviousTokens;
+    // Content gets whatever history does not need, but never less than the floor. Both the fits and
+    // the overflow case run through this one expression: splitting them would put a cliff on the
+    // `totalPreviousTokens <= tokenBudget` boundary, where one more token of history flipped content
+    // between everything and nothing. Over-reserving here is harmless because history is sized from
+    // what content actually consumed, not from this figure.
+    const attachedContentTokens = estimateMessagesTokens(nonImageMessages);
+    const contentBudget =
+      tokenBudget <= 0
+        ? 0
+        : Math.max(Math.floor(tokenBudget * MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION), tokenBudget - totalPreviousTokens);
 
-      const contentResult = processMessages(nonImageMessages, tokenBudget);
-      processedContentMessages = contentResult.messages;
-      allRemovedMessages.push(...contentResult.removedMessages);
-    } else {
-      // If the history itself exceeds the budget, then we need to truncate and prioritize history
-      const historyResult = processMessages(historyMessages, tokenBudget);
-      processedPreviousMessages = historyResult.messages;
-      allRemovedMessages.push(...historyResult.removedMessages);
-      processedContentMessages = []; // No tokens left for contentMessages
-      // Mark all content messages as removed
-      allRemovedMessages.push(
-        ...nonImageMessages.map(msg => ({
-          role: msg.role,
-          tokens: estimateTokenLength(
-            Array.isArray(msg.content) ? msg.content.map(obj => JSON.stringify(obj)).join('') : (msg.content as string)
-          ),
-          priority: MESSAGE_PRIORITY[msg.role as keyof typeof MESSAGE_PRIORITY] ?? 999,
-        }))
+    // Content first: history's budget depends on what content actually used.
+    const contentResult = processMessages(nonImageMessages, contentBudget);
+    processedContentMessages = contentResult.messages;
+    allRemovedMessages.push(...contentResult.removedMessages);
+
+    // Unused reserve flows back, so a small attachment costs history nothing.
+    const contentTokensUsed = estimateMessagesTokens(processedContentMessages);
+    contentSqueezed = contentTokensUsed < attachedContentTokens;
+
+    const historyResult = processMessages(historyMessages, tokenBudget - contentTokensUsed);
+    processedPreviousMessages = historyResult.messages;
+    allRemovedMessages.push(...historyResult.removedMessages);
+
+    if (contentSqueezed) {
+      // Warned rather than logged because the symptom is a missing answer, not an error: the model
+      // says it cannot see the file and the user has no way to tell why. Compared estimate against
+      // estimate, so an attachment that fully fits can never trip this.
+      logger.warn(
+        `Attached content squeezed to fit the token budget: kept ${processedContentMessages.length}/${nonImageMessages.length} message(s), ` +
+          `${contentTokensUsed}/${attachedContentTokens} est. tokens (reserved ${contentBudget} of ${tokenBudget}, floor ` +
+          `${Math.round(MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION * 100)}%). Affected: ` +
+          nonImageMessages.map(msg => messageContentText(msg).split('\n')[0].slice(0, 120)).join(' | ')
       );
+    }
+    if (totalPreviousTokens > tokenBudget) {
       logger.log(`History exceeds token budget. Truncating history to ${processedPreviousMessages.length} messages.`);
     }
   } else {
@@ -1498,7 +1565,11 @@ export async function buildAndSortMessages(
     logger.warn(
       `⚠️ Final message token count (${finalTokenCount}) exceeds maxInputTokens (${maxInputTokens}). Truncating messages.`
     );
-    // If we still exceed limits, remove some processed content messages as last resort
+    // If we still exceed limits, remove some processed content messages as last resort. This only
+    // works because processMessages now caps its recent-message reservation at the budget: content
+    // messages are all role 'user' and there are usually only 1-3 of them, so every one counted as
+    // "recent" and the oversized set came back untouched, leaving the overflow to reach the caller's
+    // hard throw - the backstop causing the very failure it exists to prevent.
     const excessTokens = finalTokenCount - maxInputTokens;
     const reducedContentMessagesResult = processMessages(
       processedContentMessages,
@@ -1507,6 +1578,12 @@ export async function buildAndSortMessages(
         (await calculateTotalTokenLength(processedContentMessages, { estimateOnly: false, tokenizer })) - excessTokens
       )
     );
+    if (reducedContentMessagesResult.messages.length < processedContentMessages.length) {
+      logger.warn(
+        `Final safety pass dropped ${processedContentMessages.length - reducedContentMessagesResult.messages.length} of ` +
+          `${processedContentMessages.length} attached content message(s) to fit the context window.`
+      );
+    }
 
     let truncatedMessages: IMessage[];
     if (historyEndsWithToolUse && promptHasToolResult) {
@@ -1550,9 +1627,19 @@ export async function buildAndSortMessages(
     logger.log('=== End of Verbose Message Building Log ===');
   }
 
-  // Store debug info for external access
-  const truncationMethod: 'priority' | 'token-budget' | 'history-limit' | undefined =
-    historyCount !== INFINITE_VALUE ? 'history-limit' : allRemovedMessages.length > 0 ? 'token-budget' : undefined;
+  // Store debug info for external access.
+  // Budget loss outranks history windowing: reporting 'history-limit' whenever historyCount was
+  // finite - which is nearly always - made a file the budget had silently zeroed look identical in
+  // telemetry to history being windowed exactly as configured, which is why that bug went unnoticed
+  // for so long. `contentSqueezed` is needed alongside allRemovedMessages because content cut
+  // mid-message is a budget loss that drops no message and so leaves allRemovedMessages empty.
+  const historyWindowed = previousMessages.length > historyMessages.length;
+  const budgetTruncated = allRemovedMessages.length > 0 || contentSqueezed;
+  const truncationMethod: 'priority' | 'token-budget' | 'history-limit' | undefined = budgetTruncated
+    ? 'token-budget'
+    : historyWindowed
+      ? 'history-limit'
+      : undefined;
 
   (buildAndSortMessages as any).lastDebugInfo = {
     messageTruncation: {

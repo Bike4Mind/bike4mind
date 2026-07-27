@@ -165,8 +165,10 @@ const SYSTEM_PROMPT_RESERVE = 4000;
 const RESPONSE_RESERVE = 8000;
 
 /**
- * Percentage of context budget allocated to history (vs knowledge files).
- * The buildAndSortMessages function allocates 30% to history, 70% to files.
+ * Percentage of context budget allocated to history (vs knowledge files), used only to size the
+ * history count below. It does NOT mirror how buildAndSortMessages splits the budget: that depends
+ * on historyCount, giving files 70% when history is unlimited and guaranteeing them a 35% floor
+ * otherwise.
  */
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
 
