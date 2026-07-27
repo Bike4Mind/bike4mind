@@ -99,7 +99,7 @@ export default function ConfigStep() {
               <Typography level="body-xs">
                 These files join the existing lake (prefix <code>{targetLake.fileTagPrefix}</code>
                 {targetLake.requiredUserTag ? `, access tag “${targetLake.requiredUserTag}”` : ''}). Name, prefix, and
-                access tag can’t be changed here.
+                access tag can’t be changed here - edit them in the lake’s settings.
               </Typography>
             </Box>
           </Alert>
@@ -184,7 +184,8 @@ export default function ConfigStep() {
             disabled={!!targetLake}
           />
           <FormHelperText>
-            If set, only users with this tag can access this data lake. Leave blank to allow all authenticated users.
+            If set, only users with this tag can access this data lake. Leave blank to keep it private to you (share it
+            later from the lake&apos;s settings). Can be changed or removed there too.
           </FormHelperText>
         </FormControl>
 

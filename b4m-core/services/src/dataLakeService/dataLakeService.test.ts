@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AccessContext, IDataLakeDocument, IDataLakeBatchDocument } from '@bike4mind/common';
+import { UpdateDataLakeRequestInput } from '@bike4mind/common';
 import { canAccessLake, assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
 import { canManageLake, assertLakeWriteAccess, assertCanWriteDataLakeTags } from './authorizeLakeWrite';
 import { createDataLake } from './createDataLake';
@@ -389,6 +390,75 @@ describe('updateDataLake — per-lake systemPrompt (#843)', () => {
     await expect(
       updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { systemPrompt: '' }, { db })
     ).resolves.toMatchObject({ systemPrompt: '' });
+  });
+});
+
+describe('updateDataLake — clearing an access gate', () => {
+  const gated = () => lake({ createdByUserId: 'owner', requiredUserTag: 'Opti', requiredEntitlement: 'product:pro' });
+  const makeDb = (l: IDataLakeDocument) => {
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    return { db: { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } }, update };
+  };
+
+  it('writes the empty string so the gate is actually removed', async () => {
+    const { db, update } = makeDb(gated());
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { requiredUserTag: '', requiredEntitlement: '' },
+      { db }
+    );
+    // '' (not undefined) is what reaches Mongo: $set drops undefined, so an omitted field
+    // would silently leave the gate in place. Read paths already treat '' as ungated.
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lake1', requiredUserTag: '', requiredEntitlement: '' })
+    );
+  });
+
+  it('leaves an omitted gate field untouched (omit = unchanged, blank = clear)', async () => {
+    const { db, update } = makeDb(gated());
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db });
+    const written = update.mock.calls[0][0];
+    expect(written).toMatchObject({ requiredUserTag: '' });
+    expect(written).not.toHaveProperty('requiredEntitlement');
+  });
+
+  it('lets an admin clear a gate on someone else’s lake, and refuses a non-owner', async () => {
+    const { db, update } = makeDb(gated());
+    await expect(
+      updateDataLake({ userId: 'admin', isAdmin: true }, 'lake1', { requiredUserTag: '' }, { db })
+    ).resolves.toMatchObject({ requiredUserTag: '' });
+
+    const other = makeDb(gated());
+    await expect(
+      updateDataLake({ userId: 'stranger', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db: other.db })
+    ).rejects.toThrow(/only the creator/i);
+    expect(other.update).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('clearing a gate on a public lake is allowed (the guardrail only blocks ADDING one)', async () => {
+    const { db } = makeDb(lake({ createdByUserId: 'owner', isPublic: true, requiredUserTag: 'Opti' }));
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db })
+    ).resolves.toMatchObject({ requiredUserTag: '' });
+  });
+
+  it('an ungated, org-less lake is owner-only — clearing does not make it world-readable', async () => {
+    const cleared = lake({ createdByUserId: 'owner', requiredUserTag: '', requiredEntitlement: '' });
+    expect(canAccessLake(cleared, ctx({ userId: 'stranger' }))).toBe(false);
+    expect(canAccessLake(cleared, ctx({ userId: 'owner' }))).toBe(true);
+  });
+});
+
+describe('UpdateDataLakeRequestInput — gate clear sentinel', () => {
+  it('accepts the empty string for both gate fields', () => {
+    const parsed = UpdateDataLakeRequestInput.parse({ requiredUserTag: '', requiredEntitlement: '' });
+    expect(parsed).toEqual({ requiredUserTag: '', requiredEntitlement: '' });
+  });
+
+  it('still rejects a non-namespaced entitlement (the sentinel is not a validation hole)', () => {
+    expect(() => UpdateDataLakeRequestInput.parse({ requiredEntitlement: 'pro' })).toThrow();
   });
 });
 

@@ -47,15 +47,24 @@ export const UpdateDataLakeRequestInput = z.object({
   // Per-lake system prompt (see IDataLake.systemPrompt). Uncapped, matching the other system
   // prompts in the codebase. Edit is gated to creator/admin by updateDataLake (canManageLake).
   systemPrompt: z.string().optional(),
-  requiredUserTag: z.string().min(1).max(100).optional(),
+  // Empty string is the explicit "remove this gate" sentinel, accepted on UPDATE only (a
+  // create has no gate to clear). It is stored as-is rather than unset: every read path
+  // already treats '' as ungated - the access queries in DataLakeModel carry explicit
+  // `requiredUserTag: ''` arms, and lakeMatchesAccess/canAccessLake test truthiness.
+  // Omitting the field still means "leave unchanged" (Mongo $set strips undefined).
+  requiredUserTag: z.union([z.literal(''), z.string().min(1).max(100)]).optional(),
   requiredEntitlement: z
-    .string()
-    .min(3)
-    .max(100)
-    .refine(
-      s => s.includes(':') && s.split(':').every(part => part.length > 0),
-      'Entitlement key must be namespaced with non-empty parts (e.g. "product:pro")'
-    )
+    .union([
+      z.literal(''),
+      z
+        .string()
+        .min(3)
+        .max(100)
+        .refine(
+          s => s.includes(':') && s.split(':').every(part => part.length > 0),
+          'Entitlement key must be namespaced with non-empty parts (e.g. "product:pro")'
+        ),
+    ])
     .optional(),
   // NOTE: status is intentionally NOT updatable here. Lifecycle transitions
   // (archive/unarchive/delete/cleanup) go through their dedicated endpoints so the

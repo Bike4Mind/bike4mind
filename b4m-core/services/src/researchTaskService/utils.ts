@@ -1,5 +1,7 @@
 import {
   IFabFileDocument,
+  IFabFileRepository,
+  IFileTag,
   IFileTagRepository,
   IResearchData,
   IResearchDataRepository,
@@ -8,7 +10,9 @@ import {
   IUserDocument,
   isImageServeable,
 } from '@bike4mind/common';
+import type { ILogger } from '@bike4mind/observability';
 import { FunctionQueueRunner } from '@bike4mind/utils';
+import type { CreateFabFileAdapters } from '../fabFileService/create';
 import { tagService } from '..';
 
 /**
@@ -46,7 +50,7 @@ export async function findExistingResearchData(
  * @param user - The user who owns the research task
  * @param adapters - Service adapters containing repositories and storage
  * @param logger - Optional logger for tracking operations
- * @returns Promise<{ isExisting: boolean, file: IFabFileDocument }> - Whether data existed and the file reference
+ * @returns the file and matching research data if a duplicate already existed (content re-uploaded), or null when no existing record was found
  */
 export async function findOrUpdateExistingResearchData(
   url: string,
@@ -55,10 +59,10 @@ export async function findOrUpdateExistingResearchData(
   researchTask: IResearchTaskScrape,
   user: IUserDocument,
   adapters: {
-    db: { researchDatas: IResearchDataRepository; fabFiles: any };
-    storage: any;
+    db: { researchDatas: IResearchDataRepository; fabFiles: Pick<IFabFileRepository, 'findById' | 'update'> };
+    storage: CreateFabFileAdapters['storage'];
   },
-  logger?: any
+  logger?: Pick<ILogger, 'info'>
 ): Promise<{ file: IFabFileDocument; researchData: IResearchData } | null> {
   const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 
@@ -152,10 +156,10 @@ export async function prepareTagsForResearchTask(
   adapters: {
     db: { fileTags: IFileTagRepository };
   },
-  logger?: any
-): Promise<any[]> {
+  logger?: Pick<ILogger, 'info'>
+): Promise<IFileTag[]> {
   const { user, researchTask } = parameters;
-  const tagsToApply: any[] = [];
+  const tagsToApply: IFileTag[] = [];
 
   if (researchTask.fileTagId) {
     const tag = await adapters.db.fileTags.findByIdAndUserId(researchTask.fileTagId, user.id);
