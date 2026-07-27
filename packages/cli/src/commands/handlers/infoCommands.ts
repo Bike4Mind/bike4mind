@@ -30,6 +30,7 @@ Available commands:
   /save <name> - Save current session
   /resume - List and resume saved sessions
   /config - Show configuration
+  /model [id-or-name] - Switch the active model (opens a picker, or matches an argument)
 
 API Configuration:
   /set-api <url> - Connect to self-hosted Bike4Mind instance
