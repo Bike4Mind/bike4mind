@@ -128,6 +128,7 @@ function serializeEmbeddingMismatch(report: dataLakeService.EmbeddingMismatchRep
       file_cap_hit: report.truncated.fileCapHit,
       files_total: report.truncated.filesTotal,
     },
+    query_embedding_failed: report.queryEmbeddingFailed,
   };
 }
 

@@ -149,6 +149,7 @@ describe('POST /api/data-lakes/semantic-search mismatch reporting', () => {
     expect(body.partial_results).toBe(false);
     expect('warning' in body).toBe(false);
     expect(body.embedding_mismatch.skipped_chunks.total).toBe(0);
+    expect(body.embedding_mismatch.query_embedding_failed).toBe(false);
   });
 
   it('returns the same shape when the caller can reach no lakes', async () => {

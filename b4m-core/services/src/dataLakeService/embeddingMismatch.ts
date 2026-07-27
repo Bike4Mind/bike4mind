@@ -1,4 +1,4 @@
-import type { SupportedEmbeddingModel } from '@bike4mind/common';
+import { isSupportedEmbeddingModel, type SupportedEmbeddingModel } from '@bike4mind/common';
 
 /**
  * Detection and accounting for chunks that cannot be meaningfully cosine-compared to a query
@@ -66,6 +66,12 @@ export interface EmbeddingMismatchReport {
   /** A scope/load cap was hit, so the corpus was not fully considered regardless of model. */
   truncated: { chunkCapHit: boolean; fileCapHit: boolean; filesTotal: number | null };
   /**
+   * The query embedding came back empty, so nothing could be compared at all. Distinguished from
+   * a mismatch because otherwise the report reads as a normal search with some exclusions, and
+   * points the reader at re-embedding files when the embedder is what actually failed.
+   */
+  queryEmbeddingFailed: boolean;
+  /**
    * True when content was withheld because it could not be compared - the single flag a consumer
    * branches on. Deliberately NOT set by the scope/load caps in `truncated`: those bound every
    * search of a large lake, so folding them in would flag almost every query on a healthy corpus
@@ -87,6 +93,7 @@ export function emptyEmbeddingMismatchReport(): EmbeddingMismatchReport {
     },
     unlabeled: { chunks: 0, files: 0 },
     truncated: { chunkCapHit: false, fileCapHit: false, filesTotal: null },
+    queryEmbeddingFailed: false,
     partial: false,
   };
 }
@@ -159,12 +166,16 @@ export function resolveMajorityEmbeddingModel(
   files: EmbeddingLabeledFile[],
   fallbackModel: SupportedEmbeddingModel
 ): SupportedEmbeddingModel {
-  const tally = new Map<string, number>();
+  const tally = new Map<SupportedEmbeddingModel, number>();
   for (const file of files) {
-    const model = file.embeddingModel?.trim() || fallbackModel;
+    const label = file.embeddingModel?.trim();
+    // An unrecognized label is treated as unlabeled rather than tallied. Letting a corrupt value
+    // win the vote would hand it to createEmbeddingService, which throws on an unknown provider,
+    // and the callers swallow that into an empty result: the silent partial this module removes.
+    const model = label && isSupportedEmbeddingModel(label) ? label : fallbackModel;
     tally.set(model, (tally.get(model) ?? 0) + 1);
   }
-  let winner: string = fallbackModel;
+  let winner: SupportedEmbeddingModel = fallbackModel;
   let best = 0;
   // Insertion order breaks ties, so the first model seen wins a dead heat.
   for (const [model, count] of tally) {
@@ -173,7 +184,7 @@ export function resolveMajorityEmbeddingModel(
       best = count;
     }
   }
-  return winner as SupportedEmbeddingModel;
+  return winner;
 }
 
 /**
@@ -211,6 +222,8 @@ export interface EmbeddingMismatchAccumulator {
   scored(parentFile: { embeddingModel?: string | null } | undefined, fileId: string): void;
   /** Record that a scope/load cap bounded the corpus. */
   truncation(info: { chunkCapHit?: boolean; fileCapHit?: boolean; filesTotal?: number | null }): void;
+  /** Record that the query could not be embedded, so no comparison happened. */
+  queryEmbeddingFailed(): void;
   report(): EmbeddingMismatchReport;
 }
 
@@ -243,7 +256,7 @@ export function createEmbeddingMismatchAccumulator(
   }));
 
   const recomputePartial = () => {
-    report.partial = report.excludedFiles.count > 0 || report.skippedChunks.total > 0;
+    report.partial = report.queryEmbeddingFailed || report.excludedFiles.count > 0 || report.skippedChunks.total > 0;
   };
   recomputePartial();
 
@@ -258,6 +271,10 @@ export function createEmbeddingMismatchAccumulator(
       report.unlabeled.chunks += 1;
       unlabeledFileIds.add(fileId);
       report.unlabeled.files = unlabeledFileIds.size;
+    },
+    queryEmbeddingFailed() {
+      report.queryEmbeddingFailed = true;
+      recomputePartial();
     },
     truncation(info) {
       if (info.chunkCapHit !== undefined) report.truncated.chunkCapHit = info.chunkCapHit;
@@ -288,6 +305,11 @@ export function describeEmbeddingMismatch(
   queryModel: string
 ): string | null {
   if (!report || !report.partial) return null;
+  // The embedder failing is not a mismatch, and naming files to re-embed would send the reader
+  // after the wrong thing entirely.
+  if (report.queryEmbeddingFailed) {
+    return `Knowledge-base search could not run: the query could not be embedded with ${queryModel}, so no content was compared.`;
+  }
   const sentences: string[] = [];
 
   if (report.excludedFiles.count > 0) {

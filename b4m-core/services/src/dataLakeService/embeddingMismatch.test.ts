@@ -116,6 +116,35 @@ describe('resolveMajorityEmbeddingModel', () => {
     ).toBe('qwen3-embedding:0.6b');
   });
 
+  it('never returns an unrecognized label, even when it is the most common one', () => {
+    // A corrupt label reaching createEmbeddingService throws, and the callers swallow that into
+    // an empty result - the silent partial this module exists to remove. Counted as unlabeled, so
+    // these two vote for the fallback rather than for themselves.
+    expect(
+      resolveMajorityEmbeddingModel(
+        [
+          { id: 'a', embeddingModel: 'not-a-real-model' },
+          { id: 'b', embeddingModel: 'not-a-real-model' },
+          { id: 'c', embeddingModel: SMALL_3 },
+        ],
+        ADA
+      )
+    ).toBe(ADA);
+  });
+
+  it('still lets a real labeled majority win past a corrupt label', () => {
+    expect(
+      resolveMajorityEmbeddingModel(
+        [
+          { id: 'a', embeddingModel: 'not-a-real-model' },
+          { id: 'b', embeddingModel: SMALL_3 },
+          { id: 'c', embeddingModel: SMALL_3 },
+        ],
+        ADA
+      )
+    ).toBe(SMALL_3);
+  });
+
   it('breaks a tie on first-seen', () => {
     expect(
       resolveMajorityEmbeddingModel(
@@ -227,6 +256,19 @@ describe('createEmbeddingMismatchAccumulator', () => {
 });
 
 describe('describeEmbeddingMismatch', () => {
+  it('names the embedder as the cause, not a mismatch, when the query could not be embedded', () => {
+    // Otherwise the text reads as a normal search with exclusions and sends the reader off to
+    // re-embed files when the embedder is what failed.
+    const acc = createEmbeddingMismatchAccumulator([{ id: 'a', embeddingModel: SMALL_3 }], ADA);
+    acc.queryEmbeddingFailed();
+    const report = acc.report();
+    expect(report.queryEmbeddingFailed).toBe(true);
+    expect(report.partial).toBe(true);
+    const text = describeEmbeddingMismatch(report, ADA);
+    expect(text).toContain('could not be embedded');
+    expect(text).not.toContain('Re-embed');
+  });
+
   it('names both models and the remedy', () => {
     const report = createEmbeddingMismatchAccumulator(
       [{ id: 'a', fileName: 'a.md', embeddingModel: SMALL_3, vectorizedChunkCount: 4 }],

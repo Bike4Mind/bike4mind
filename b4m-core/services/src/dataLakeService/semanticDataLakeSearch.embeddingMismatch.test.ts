@@ -267,6 +267,9 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
     expect(findVectors).not.toHaveBeenCalled();
     expect(result.results).toEqual([]);
     expect(result.chunksScored).toBe(0);
+    // The report has to name the embedder, not blame the corpus.
+    expect(result.embeddingMismatch.queryEmbeddingFailed).toBe(true);
+    expect(result.embeddingMismatch.partial).toBe(true);
   });
 
   it('flags a hit chunk-load cap so a truncated search is not reported as complete', async () => {

@@ -101,6 +101,8 @@ interface RankableFile {
   tags?: { name: string }[];
   embeddingModel?: string | null;
   vectorizedChunkCount?: number;
+  /** Read when deciding whether an excluded file actually withheld any vectors. */
+  vectorized?: boolean;
 }
 
 /**
@@ -149,7 +151,18 @@ async function rankChunksForFiles(args: {
   // Done at the file level, before any vector load: foreign vectors then never enter memory and
   // never spend the chunk cap, which is unordered and would otherwise let one large off-model
   // file evict chunks that could have matched.
-  const scopedFiles = fileIds.map(id => ({ id, ...fileById.get(id) }));
+  // Pluck the declared fields rather than spreading the doc: RankableFile carries no `id`, so a
+  // spread would leave the partition input's shape resting on the runtime doc happening to have one.
+  const scopedFiles = fileIds.map(id => {
+    const file = fileById.get(id);
+    return {
+      id,
+      fileName: file?.fileName,
+      embeddingModel: file?.embeddingModel,
+      vectorizedChunkCount: file?.vectorizedChunkCount,
+      vectorized: file?.vectorized,
+    };
+  });
   const { rankable, foreign } = partitionFilesByEmbeddingModel(scopedFiles, embeddingModel);
   const mismatch = createEmbeddingMismatchAccumulator(foreign, embeddingModel);
   mismatch.truncation({ fileCapHit: args.fileCapHit ?? false, filesTotal: args.filesTotal ?? null });
@@ -162,6 +175,7 @@ async function rankChunksForFiles(args: {
       queryEmbeddingModel: embeddingModel,
       filesInScope: fileIds.length,
     });
+    mismatch.queryEmbeddingFailed();
     return {
       results: [],
       totalChunksSearched: 0,
