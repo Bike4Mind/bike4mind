@@ -5,9 +5,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Context } from 'aws-lambda';
 import type { Logger } from '@bike4mind/observability';
 
-const { runModelDiscovery, repos, emitMetrics, connectDB, sourceFactories } = vi.hoisted(() => {
+const { runModelDiscovery, repos, emitMetrics, connectDB, whenCatalogSeeded, sourceFactories } = vi.hoisted(() => {
   // One stub instance per source name, so two builds of the adapters produce
   // arrays that compare equal and the registry stays inspectable by name.
   const stubs = new Map<string, unknown>();
@@ -21,6 +22,7 @@ const { runModelDiscovery, repos, emitMetrics, connectDB, sourceFactories } = vi
     runModelDiscovery: vi.fn(),
     emitMetrics: vi.fn(async () => {}),
     connectDB: vi.fn(async () => undefined),
+    whenCatalogSeeded: vi.fn(async () => true),
     sourceFactories: {
       createOpenAiSource: factory('openai'),
       createAnthropicSource: factory('anthropic'),
@@ -48,7 +50,7 @@ const { runModelDiscovery, repos, emitMetrics, connectDB, sourceFactories } = vi
 vi.mock('@bike4mind/database', () => ({
   connectDB,
   MODEL_ID_ALIASES: {},
-  whenCatalogSeeded: async () => {},
+  whenCatalogSeeded,
   ...repos,
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -87,14 +89,20 @@ const runResult = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const { runScheduledDiscovery } = await import('./scheduledRun');
+const { runScheduledDiscovery, modelDiscoveryIntervalMs, MODEL_DISCOVERY_INTERVAL_ENV } =
+  await import('./scheduledRun');
 const { handler } = await import('@server/cron/modelDiscovery');
+
+const lambdaContext = (remainingMs: number) => ({ getRemainingTimeInMillis: () => remainingMs }) as unknown as Context;
 
 beforeEach(() => {
   runModelDiscovery.mockResolvedValue(runResult());
+  whenCatalogSeeded.mockResolvedValue(true);
 });
 
 afterEach(() => {
+  delete process.env[MODEL_DISCOVERY_INTERVAL_ENV];
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -127,6 +135,43 @@ describe('runScheduledDiscovery', () => {
   it('omits budgetMs rather than passing undefined, so the service default applies', async () => {
     await runScheduledDiscovery(logger, 'selfhost');
     expect('budgetMs' in runModelDiscovery.mock.calls[0][1]).toBe(false);
+  });
+
+  it('runs anyway when the boot catalog seed never settles', async () => {
+    vi.useFakeTimers();
+    whenCatalogSeeded.mockReturnValue(new Promise(() => {}));
+
+    const run = runScheduledDiscovery(logger, 'selfhost');
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(runModelDiscovery).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+    expect(runModelDiscovery).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalled();
+  });
+});
+
+describe('the worker interval', () => {
+  it('defaults to the 6-hour cadence', () => {
+    expect(modelDiscoveryIntervalMs()).toBe(6 * 60 * 60_000);
+  });
+
+  it('honors an env override', () => {
+    process.env[MODEL_DISCOVERY_INTERVAL_ENV] = String(30 * 60_000);
+    expect(modelDiscoveryIntervalMs()).toBe(30 * 60_000);
+  });
+
+  it('clamps up to the floor, so a typo cannot hot-loop the fan-out', () => {
+    process.env[MODEL_DISCOVERY_INTERVAL_ENV] = '1000';
+    expect(modelDiscoveryIntervalMs()).toBe(15 * 60_000);
+  });
+
+  it('falls back to the default for a non-numeric or empty value', () => {
+    process.env[MODEL_DISCOVERY_INTERVAL_ENV] = 'six hours';
+    expect(modelDiscoveryIntervalMs()).toBe(6 * 60 * 60_000);
+    process.env[MODEL_DISCOVERY_INTERVAL_ENV] = '';
+    expect(modelDiscoveryIntervalMs()).toBe(6 * 60 * 60_000);
   });
 });
 
@@ -177,5 +222,53 @@ describe('hosted cron handler', () => {
     runModelDiscovery.mockResolvedValue(runResult({ outcome: 'skipped', skipReason: 'lease-held' }));
     await handler({});
     expect(emitMetrics).not.toHaveBeenCalled();
+  });
+
+  it('dimensions its metrics with the host it ran as', async () => {
+    await handler({});
+    const [, data] = emitMetrics.mock.calls[0];
+    for (const datum of data as { dimensions: Record<string, string> }[]) {
+      expect(datum.dimensions).toMatchObject({ Host: 'hosted' });
+    }
+  });
+
+  it('derives the budget from the invocation time left, keeping headroom for the commit', async () => {
+    await handler({}, lambdaContext(300_000));
+    expect(runModelDiscovery.mock.calls[0][1]).toMatchObject({ budgetMs: 240_000 });
+  });
+
+  it('never budgets beyond the service default, however much time is left', async () => {
+    await handler({}, lambdaContext(900_000));
+    expect(runModelDiscovery.mock.calls[0][1]).toMatchObject({ budgetMs: 600_000 });
+  });
+
+  it('keeps a coherent budget on an invocation that is nearly out of time', async () => {
+    await handler({}, lambdaContext(10_000));
+    expect(runModelDiscovery.mock.calls[0][1]).toMatchObject({ budgetMs: 60_000 });
+  });
+
+  it('reports a run that threw as a failure, then rethrows it', async () => {
+    connectDB.mockRejectedValueOnce(new Error('mongo unreachable'));
+
+    await expect(handler({})).rejects.toThrow('mongo unreachable');
+
+    // Without this datum the consecutive-failure alarm cannot see the failure
+    // modes that never reach the result mapping.
+    const [namespace, data] = emitMetrics.mock.calls[0];
+    expect(namespace).toBe('Lumina5/ModelDiscovery');
+    expect(data).toEqual([
+      expect.objectContaining({
+        name: 'RunFailures',
+        value: 1,
+        dimensions: expect.objectContaining({ Host: 'hosted' }),
+      }),
+    ]);
+  });
+
+  it('rethrows the original error even when the failure metric cannot be published', async () => {
+    connectDB.mockRejectedValueOnce(new Error('mongo unreachable'));
+    emitMetrics.mockRejectedValueOnce(new Error('cloudwatch down'));
+
+    await expect(handler({})).rejects.toThrow('mongo unreachable');
   });
 });

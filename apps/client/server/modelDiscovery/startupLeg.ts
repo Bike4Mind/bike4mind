@@ -3,8 +3,11 @@
  *
  * `registerScheduledTask` arms an interval and nothing else, so a freshly
  * booted worker would otherwise wait a full interval before its first run. This
- * covers the fresh boot, and only that: it is gated on an explicit
- * B4M_DISCOVERY_DRIVER, set on long-lived processes only.
+ * covers the fresh boot, and only that.
+ *
+ * B4M_DISCOVERY_DRIVER gates the whole of discovery on a long-lived process -
+ * this leg and the recurring interval task alike (server/worker/main.ts) - so
+ * an install that never sets it makes no discovery request at all.
  *
  * Not B4M_SELF_HOST. "Is this a self-host install" and "is this process allowed
  * to drive discovery" are different questions, and a hosted long-lived
@@ -19,13 +22,22 @@
  */
 
 import type { DiscoveryRunHost } from '@bike4mind/common';
-import { modelDiscoveryRunRepository, whenCatalogSeeded } from '@bike4mind/database';
+import { modelDiscoveryRunRepository } from '@bike4mind/database';
 import { modelDiscoveryService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { buildModelDiscoveryAdapters } from './adapters';
-import { MODEL_DISCOVERY_INTERVAL_MS } from './scheduledRun';
+import { awaitCatalogSeed, modelDiscoveryIntervalMs } from './scheduledRun';
 
 export const DISCOVERY_DRIVER_ENV = 'B4M_DISCOVERY_DRIVER';
+
+/**
+ * Whether this process may drive discovery at all. Read by every discovery
+ * entry point on a long-lived process, so the flag is one opt-in rather than a
+ * per-leg one; unset means no scheduled run, no startup run, no egress.
+ */
+export function isDiscoveryDriver(): boolean {
+  return process.env[DISCOVERY_DRIVER_ENV] === 'true';
+}
 
 export interface StartupLegOptions {
   logger: Logger;
@@ -55,15 +67,15 @@ export async function runDiscoveryOnStartup(
   options: StartupLegOptions
 ): Promise<'ran' | 'not-a-driver' | 'recently-run'> {
   const { logger } = options;
-  if (process.env[DISCOVERY_DRIVER_ENV] !== 'true') return 'not-a-driver';
+  if (!isDiscoveryDriver()) return 'not-a-driver';
 
   // A fresh database seeds its catalog on this same boot; running before that
-  // settles plans against a half-inserted catalog (see runScheduledDiscovery).
-  await whenCatalogSeeded();
+  // settles plans against a half-inserted catalog (see awaitCatalogSeed).
+  await awaitCatalogSeed(logger);
 
   const host: DiscoveryRunHost = options.host ?? (process.env.B4M_SELF_HOST === 'true' ? 'selfhost' : 'hosted');
 
-  const intervalMs = options.intervalMs ?? MODEL_DISCOVERY_INTERVAL_MS;
+  const intervalMs = options.intervalMs ?? modelDiscoveryIntervalMs();
   const now = options.now?.() ?? new Date();
 
   const lastSuccess = await modelDiscoveryRunRepository.lastSuccessfulRun();
@@ -83,14 +95,21 @@ export async function runDiscoveryOnStartup(
 }
 
 /**
- * Fire-and-forget wrapper for a boot path that must not block on discovery.
- * The run's own lease is released on every terminal outcome, so a failure here
+ * Non-blocking wrapper for a boot path that must not wait on discovery. The
+ * run's own lease is released on every terminal outcome, so a failure here
  * costs one log line rather than a stuck lease.
+ *
+ * Returns a promise that never rejects, so a shutdown path can await it: a run
+ * abandoned mid-flight by process.exit leaves its lease held until the TTL and
+ * its run document at the pessimistic 'failed' placeholder.
  */
-export function startDiscoveryOnStartup(options: StartupLegOptions): void {
-  void runDiscoveryOnStartup(options).catch((error: unknown) => {
-    options.logger.error('[model-discovery] startup leg failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
+export function startDiscoveryOnStartup(options: StartupLegOptions): Promise<void> {
+  return runDiscoveryOnStartup(options).then(
+    () => {},
+    (error: unknown) => {
+      options.logger.error('[model-discovery] startup leg failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  );
 }

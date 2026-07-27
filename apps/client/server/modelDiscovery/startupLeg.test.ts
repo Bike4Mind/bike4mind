@@ -43,7 +43,8 @@ vi.mock('@bike4mind/services', () => ({
   modelDiscoveryService: { runModelDiscovery, getDiscoveryCredentials: vi.fn(), ...sourceFactories },
 }));
 
-const { DISCOVERY_DRIVER_ENV, runDiscoveryOnStartup, startDiscoveryOnStartup } = await import('./startupLeg');
+const { DISCOVERY_DRIVER_ENV, isDiscoveryDriver, runDiscoveryOnStartup, startDiscoveryOnStartup } =
+  await import('./startupLeg');
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
 const NOW = new Date('2026-07-26T12:00:00Z');
@@ -61,6 +62,18 @@ afterEach(() => {
 });
 
 describe('the driver-env gate', () => {
+  // server/worker/main.ts registers the recurring discovery task only when this
+  // is true, so an unflagged self-host schedules nothing and reaches no network.
+  it('answers no for an unset or non-"true" flag, and yes only for "true"', () => {
+    expect(isDiscoveryDriver()).toBe(true);
+    process.env[DISCOVERY_DRIVER_ENV] = '1';
+    expect(isDiscoveryDriver()).toBe(false);
+    delete process.env[DISCOVERY_DRIVER_ENV];
+    expect(isDiscoveryDriver()).toBe(false);
+    process.env.B4M_SELF_HOST = 'true';
+    expect(isDiscoveryDriver()).toBe(false);
+  });
+
   it('does nothing when B4M_DISCOVERY_DRIVER is unset', async () => {
     delete process.env[DISCOVERY_DRIVER_ENV];
     await expect(runDiscoveryOnStartup({ logger, now: () => NOW })).resolves.toBe('not-a-driver');
@@ -134,7 +147,26 @@ describe('run labelling', () => {
 describe('fire-and-forget wrapper', () => {
   it('swallows a failed run into a log line', async () => {
     runModelDiscovery.mockRejectedValueOnce(new Error('provider exploded'));
-    startDiscoveryOnStartup({ logger, now: () => NOW });
-    await vi.waitFor(() => expect(logger.error).toHaveBeenCalled());
+    await startDiscoveryOnStartup({ logger, now: () => NOW });
+    expect(logger.error).toHaveBeenCalled();
+  });
+
+  it('returns a promise that settles with the run, so shutdown can wait for it', async () => {
+    let finishRun: (() => void) | undefined;
+    runModelDiscovery.mockImplementationOnce(
+      () => new Promise(resolve => (finishRun = () => resolve({ outcome: 'ok' })))
+    );
+
+    let settled = false;
+    const leg = startDiscoveryOnStartup({ logger, now: () => NOW }).then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(runModelDiscovery).toHaveBeenCalled());
+    expect(settled).toBe(false);
+
+    finishRun?.();
+    await leg;
+    expect(settled).toBe(true);
   });
 });

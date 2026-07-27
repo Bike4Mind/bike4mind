@@ -3,7 +3,6 @@ import { connectDB, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
-import { startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
 import { registerWsCompletionRoutes } from './external/wsRoute';
@@ -109,13 +108,13 @@ async function main() {
   // listen on connectDB previously left :8080 closed during boot, so health checks timed
   // out and ECS restart-looped the task. processQuest connects-if-needed, so /process is
   // safe even if a request lands before this resolves.
+  // Deliberately does NOT drive model discovery: this service and the self-host
+  // worker share one env file, so a startup leg here would arm a second driver
+  // on the same flag and run a provider fan-out inside the inference process.
+  // The worker is the single discovery driver (server/worker/main.ts).
   connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), bootLogger)
     .then(() => {
       bootLogger.info('MongoDB connected at boot');
-      // Long-lived process, so it may drive discovery when B4M_DISCOVERY_DRIVER
-      // says so (sec 6.4). No-op on every other deployment, and after the DB is
-      // up because the staleness gate is a query.
-      startDiscoveryOnStartup({ logger: bootLogger });
     })
     .catch(err =>
       bootLogger.error('MongoDB connection failed at boot', {
