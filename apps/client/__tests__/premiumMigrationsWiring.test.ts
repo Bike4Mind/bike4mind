@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 
 /**
@@ -11,14 +10,21 @@ import { join } from 'node:path';
  *   overlay declares b4mContributions.migrationsExport -> spreads its migrations array
  *   no overlay declares it (open-core / not-yet-adopted) -> exports an empty array
  *
- * These tests re-run codegen (so the file reflects the CURRENT repo state rather than a
- * stale prior run) and verify the generated file matches whichever overlays currently
- * declare migrationsExport, catching: a present overlay silently producing the empty form
- * (e.g. a typo'd contribution key) and vice versa.
+ * These tests read the existing generated file (mirrors premiumInfraGlue.test.ts's trust
+ * model: turbo's codegen task - a dependency of typecheck/build - and pnpm postinstall both
+ * invoke the script before any test can run) and verify it matches whichever overlays
+ * currently declare migrationsExport, catching: a present overlay silently producing the
+ * empty form (e.g. a typo'd contribution key) and vice versa.
+ *
+ * Deliberately does NOT re-invoke generate-premium-glue.mjs itself: that script's
+ * generateApiStubs wipes and rebuilds the whole premium-namespaced pages/api tree, which
+ * raced with premiumToolsWiring.test.ts's directory scan of that same tree when both ran
+ * concurrently (no ordering edge between sibling test files) - a real, if low-probability,
+ * flake this file used to introduce. Reading the already-generated file avoids the race
+ * entirely.
  */
 
 const REPO_ROOT = join(__dirname, '../../..');
-const CLIENT_ROOT = join(REPO_ROOT, 'apps/client');
 const PREMIUM_DIR = join(REPO_ROOT, 'packages/premium');
 const GENERATED_FILE = join(REPO_ROOT, 'packages/scripts/migrate/migrations/premium.generated.ts');
 
@@ -43,14 +49,8 @@ function discoverMigrationsExportContributors(): { name: string; migrationsExpor
 describe('premium migrations codegen glue', () => {
   const contributors = discoverMigrationsExportContributors();
 
-  beforeAll(() => {
-    // Re-run codegen so the generated file reflects THIS test run's repo state, not
-    // whatever last wrote it (a stale postinstall run, a different branch, etc.).
-    execFileSync('node', ['scripts/generate-premium-glue.mjs'], { cwd: CLIENT_ROOT, stdio: 'pipe' });
-  });
-
-  it('generated file exists after codegen', () => {
-    expect(existsSync(GENERATED_FILE), 'premium.generated.ts not found after running codegen').toBe(true);
+  it('generated file exists', () => {
+    expect(existsSync(GENERATED_FILE), 'premium.generated.ts not found - run pnpm codegen').toBe(true);
   });
 
   it('is in the empty form when no overlay declares migrationsExport', () => {
