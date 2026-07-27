@@ -439,7 +439,12 @@ export class ReActAgent extends EventEmitter {
               enableCaching: true,
               cacheSystemPrompt: true,
               cacheTools: this.context.tools.length > 0,
-              cacheConversationHistory: false, // History changes each iteration
+              // Incrementally cache the growing history: the prefix through the
+              // prior turn is byte-stable, so a moving breakpoint on the last
+              // message lets the API re-read it (~0.1x) instead of re-sending the
+              // whole prefix at full input price each iteration. Skip the first
+              // call, when there is no prior prefix to reuse.
+              cacheConversationHistory: messages.length >= 2,
               cacheTTL: '5m',
             }
           : undefined;
@@ -1212,7 +1217,9 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
             enableCaching: true,
             cacheSystemPrompt: true,
             cacheTools: this.context.tools.length > 0,
-            cacheConversationHistory: false,
+            // See the streaming loop above: cache the stable history prefix with
+            // a moving breakpoint so it re-reads at ~0.1x instead of full price.
+            cacheConversationHistory: this.messages.length >= 2,
             cacheTTL: '5m',
           }
         : undefined;

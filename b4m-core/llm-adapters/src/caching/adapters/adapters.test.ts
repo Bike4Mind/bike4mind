@@ -116,6 +116,110 @@ describe('AnthropicCachingAdapter', () => {
       expect(stats.model).toBe('claude-4.5-sonnet');
     });
   });
+
+  describe('applyCaching', () => {
+    const cacheControl = { type: 'ephemeral' };
+
+    it('returns params unchanged when caching is disabled', () => {
+      const params = { messages: [{ role: 'user', content: 'hi' }] };
+      expect(adapter.applyCaching(params, { enableCaching: false })).toBe(params);
+    });
+
+    it('marks the last tool when cacheTools is set', () => {
+      const params = {
+        tools: [{ name: 'a' }, { name: 'b' }],
+      };
+      const result = adapter.applyCaching(params, {
+        enableCaching: true,
+        cacheTools: true,
+      });
+      const tools = result.tools as Record<string, unknown>[];
+      expect(tools[0].cache_control).toBeUndefined();
+      expect(tools[1].cache_control).toEqual(cacheControl);
+    });
+
+    it('marks the last system block when cacheSystemPrompt is set', () => {
+      const params = {
+        system: [
+          { type: 'text', text: 'first' },
+          { type: 'text', text: 'last' },
+        ],
+      };
+      const result = adapter.applyCaching(params, {
+        enableCaching: true,
+        cacheSystemPrompt: true,
+      });
+      const system = result.system as Record<string, unknown>[];
+      expect(system[0].cache_control).toBeUndefined();
+      expect(system[1].cache_control).toEqual(cacheControl);
+    });
+
+    it('places a moving breakpoint on the last message when history caching is on', () => {
+      const params = {
+        messages: [
+          { role: 'user', content: 'task' },
+          { role: 'assistant', content: [{ type: 'text', text: 'step 1' }] },
+          {
+            role: 'user',
+            content: [
+              { type: 'tool_result', tool_use_id: 't1', content: 'ok' },
+              { type: 'text', text: 'continue' },
+            ],
+          },
+        ],
+      };
+      const result = adapter.applyCaching(params, {
+        enableCaching: true,
+        cacheConversationHistory: true,
+      });
+      const messages = result.messages as { content: Record<string, unknown>[] }[];
+
+      // Only the final message's final block carries the breakpoint; earlier
+      // turns stay untouched so the API reads them as the cached prefix.
+      expect(messages[0].content).toBe('task');
+      expect(messages[1].content[0].cache_control).toBeUndefined();
+      expect(messages[2].content[0].cache_control).toBeUndefined();
+      expect(messages[2].content[1].cache_control).toEqual(cacheControl);
+    });
+
+    it('wraps a string-content last message into a marked text block', () => {
+      const params = {
+        messages: [
+          { role: 'user', content: 'first' },
+          { role: 'user', content: 'second' },
+        ],
+      };
+      const result = adapter.applyCaching(params, {
+        enableCaching: true,
+        cacheConversationHistory: true,
+      });
+      const messages = result.messages as { content: unknown }[];
+      expect(messages[1].content).toEqual([{ type: 'text', text: 'second', cache_control: cacheControl }]);
+    });
+
+    it('leaves messages untouched when history caching is off', () => {
+      const params = {
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      };
+      const result = adapter.applyCaching(params, {
+        enableCaching: true,
+        cacheConversationHistory: false,
+      });
+      const messages = result.messages as { content: Record<string, unknown>[] }[];
+      expect(messages[0].content[0].cache_control).toBeUndefined();
+    });
+
+    it('applies the 1h ttl to breakpoints when requested', () => {
+      const params = { tools: [{ name: 'only' }] };
+      const result = adapter.applyCaching(params, {
+        enableCaching: true,
+        cacheTools: true,
+        cacheTTL: '1h',
+      });
+      const tools = result.tools as Record<string, unknown>[];
+      expect(tools[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
+    });
+  });
 });
 
 describe('getCachingAdapter', () => {
