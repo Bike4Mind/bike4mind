@@ -110,7 +110,7 @@ export const MessageItem = React.memo(function MessageItem({ message, showThough
           {message.metadata?.permissionDenied ? (
             <Text color="yellow">⚠️ {message.content}</Text>
           ) : (
-            <MarkdownRenderer content={message.content} />
+            <MarkdownRenderer content={message.content} columns={terminalCols} />
           )}
         </Box>
       )}
