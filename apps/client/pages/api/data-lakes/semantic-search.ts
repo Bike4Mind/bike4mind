@@ -97,14 +97,24 @@ const SemanticSearchInput = z.object({
  * The model the corpus was actually embedded with. The vectorize pipeline
  * (queueHandlers/fabFileChunk) and the chat KB tool both read `defaultEmbeddingModel`, so a
  * query embedded with anything else either matches nothing (the ranker skips vectors of a
- * different dimension) or ranks across two incompatible embedding spaces. Falls back to
- * ada-002 only when the setting is unset or no longer a supported model.
+ * different dimension) or ranks across two incompatible embedding spaces.
+ *
+ * Falls back to ada-002 when the setting is unset, names a model we no longer support, or
+ * cannot be read. Every fallback warns: the symptom is an empty result set rather than an
+ * error, so without a log an admin misconfiguration is indistinguishable from "nothing
+ * matched" and lands as a support ticket.
  */
 async function resolveDefaultEmbeddingModel(logger: Logger): Promise<SupportedEmbeddingModel> {
   try {
     const configured = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
     if (typeof configured === 'string' && isSupportedEmbeddingModel(configured)) {
       return configured as SupportedEmbeddingModel;
+    }
+    if (configured !== undefined && configured !== null && configured !== '') {
+      logger?.warn(
+        `[semantic-search] defaultEmbeddingModel "${String(configured)}" is not a supported embedding model; ` +
+          'falling back to ada-002, which will not match a corpus vectorized with another model'
+      );
     }
   } catch (err) {
     logger?.warn('[semantic-search] failed to read defaultEmbeddingModel; using ada-002', err);

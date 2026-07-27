@@ -117,6 +117,25 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     expect(searchParams().embeddingModel).toBe('text-embedding-ada-002');
   });
 
+  it('warns when the configured model is unsupported, since the symptom is an empty result set', async () => {
+    mockGetSettingsValue.mockResolvedValue('some-retired-model');
+    const req = makeReq({ query: 'onboarding' });
+
+    await handler(req, makeRes());
+
+    expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('some-retired-model'));
+  });
+
+  it('does not warn when the setting is simply unset', async () => {
+    mockGetSettingsValue.mockResolvedValue(undefined);
+    const req = makeReq({ query: 'onboarding' });
+
+    await handler(req, makeRes());
+
+    expect(searchParams().embeddingModel).toBe('text-embedding-ada-002');
+    expect(req.logger.warn).not.toHaveBeenCalled();
+  });
+
   it('rejects an unsupported explicit embedding_model rather than silently falling back', async () => {
     const res = makeRes();
 
