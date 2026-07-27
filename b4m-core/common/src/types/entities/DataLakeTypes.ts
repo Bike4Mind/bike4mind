@@ -231,6 +231,15 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     status: Extract<BatchStatus, 'completed' | 'completed_with_errors' | 'failed' | 'cancelled'>,
     completionReason?: BatchCompletionReason
   ): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Guarded non-terminal transition: set the batch to a still-in-flight status only if it
+   * has not already reached a terminal state, so a client-driven 'processing' flip can never
+   * resurrect a batch the pipeline finalized first.
+   */
+  setStatusIfActive(
+    batchId: string,
+    status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
+  ): Promise<IDataLakeBatchDocument | null>;
 }
 
 // ── AI Taxonomy Inference ───────────────────────────────────────────────────
