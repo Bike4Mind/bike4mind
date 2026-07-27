@@ -131,7 +131,6 @@ describe('DataLakeWizardModal - taxonomy step is optional', () => {
       targetLake: null,
       taxonomy: {
         prefix: 'test:',
-        sourcePrefix: 'test:',
         suggestedName: '',
         tags,
         fileAssignments: [],
@@ -172,7 +171,7 @@ describe('DataLakeWizardModal - taxonomy step is optional', () => {
   it('labels the button Next once there are tags to apply', () => {
     const next = renderAtTaxonomyStep([
       {
-        name: 'test:type:contract',
+        suffix: 'type:contract',
         originalName: 'test:type:contract',
         strength: 0.9,
         source: 'ai',

@@ -69,19 +69,39 @@ const isNonEmptyString = (value: unknown): value is string => typeof value === '
 const clampStrength = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : fallback;
 
-/** Drop categories the model returned without a usable tag name; they can't be applied or reviewed. */
-function sanitizeCategories(categories: InferTaxonomyResponse['categories']): TaxonomyTag[] {
+/**
+ * The editable suffix is the tag name with its inferred prefix stripped, so the prefix is
+ * never stored per-tag (it lives once in taxonomy.prefix). A name that does not carry the
+ * inferred prefix keeps its whole text as the suffix.
+ */
+const deriveSuffix = (fullName: string, sourcePrefix: string): string => {
+  const trimmed = fullName.trim();
+  if (!sourcePrefix) return trimmed;
+  const p = sourcePrefix.endsWith(':') ? sourcePrefix : `${sourcePrefix}:`;
+  return trimmed.toLowerCase().startsWith(p.toLowerCase()) ? trimmed.slice(p.length) : trimmed;
+};
+
+/**
+ * Split each inferred category into its stable full name (originalName, the join key for
+ * per-file assignments) and its editable suffix. Drops entries the model returned without a
+ * usable tag name, or that reduce to an empty suffix (the tag was nothing but the prefix).
+ */
+function sanitizeCategories(categories: InferTaxonomyResponse['categories'], sourcePrefix: string): TaxonomyTag[] {
   if (!Array.isArray(categories)) return [];
   return categories
     .filter(cat => cat && isNonEmptyString(cat.tagName))
-    .map(cat => ({
-      name: cat.tagName.trim(),
-      originalName: cat.tagName.trim(),
-      strength: clampStrength(cat.confidence, 0.7),
-      source: 'ai' as const,
-      matchingFolders: Array.isArray(cat.matchingFolders) ? cat.matchingFolders.filter(isNonEmptyString) : [],
-      deleted: false,
-    }));
+    .map(cat => {
+      const originalName = cat.tagName.trim();
+      return {
+        suffix: deriveSuffix(originalName, sourcePrefix),
+        originalName,
+        strength: clampStrength(cat.confidence, 0.7),
+        source: 'ai' as const,
+        matchingFolders: Array.isArray(cat.matchingFolders) ? cat.matchingFolders.filter(isNonEmptyString) : [],
+        deleted: false,
+      };
+    })
+    .filter(t => t.suffix.length > 0);
 }
 
 function sanitizeFileAssignments(assignments: InferTaxonomyResponse['fileAssignments']): TaxonomyFileAssignment[] {
@@ -153,15 +173,15 @@ export function useInferTaxonomy() {
       // returns the model's raw JSON, so everything below is sanitized HERE, at the single
       // boundary where inference enters the store. Downstream (tagsForFile) runs mid-upload,
       // after the lake exists - a TypeError there would roll back a real upload.
-      const tags = sanitizeCategories(data.categories);
+      // Strip the inferred prefix off each tag into its suffix so the prefix is stored only
+      // once (in `prefix`); the cards render `prefix + suffix`.
+      const tags = sanitizeCategories(data.categories, data.suggestedPrefix || '');
       // An empty response (no API key configured) must not blank a prefix the user already
-      // has: config.tagPrefix keeps its old value regardless, and a blank sourcePrefix would
-      // make reprefixTag prepend instead of rewrite, producing "mine:acme:type:contract".
+      // has: config.tagPrefix keeps its old value regardless.
       const prefix = data.suggestedPrefix || previous.prefix;
 
       setTaxonomy({
         prefix,
-        sourcePrefix: data.suggestedPrefix || previous.sourcePrefix,
         suggestedName: typeof data.suggestedName === 'string' ? data.suggestedName : '',
         tags,
         fileAssignments: sanitizeFileAssignments(data.fileAssignments),

@@ -1,16 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import type { TaxonomyResult, TaxonomyTag } from '@client/app/stores/useDataLakeWizardStore';
-import { appliedTagsForBatch, folderMatches, reprefixTag, tagsForFile } from './dataLakeTaxonomy';
+import { appliedTagsForBatch, folderMatches, tagsForFile } from './dataLakeTaxonomy';
 
 /**
  * Regression coverage: the Taxonomy step used to be pure theater - inference returned
  * categories and per-file assignments, the user edited them, and the upload path threw
- * all of it away in favor of a folder slug. These tests pin the review edits (rename,
- * delete) to what actually ships in the presigned-URL request.
+ * all of it away in favor of a folder slug. These tests pin the review edits (edit, delete)
+ * to what actually ships in the presigned-URL request. The applied tag is `prefix + suffix`,
+ * so the prefix lives once (in taxonomy.prefix / the passed tagPrefix), never per-tag.
  */
 
-const tag = (overrides: Partial<TaxonomyTag> & { name: string }): TaxonomyTag => ({
-  originalName: overrides.name,
+const tag = (overrides: Partial<TaxonomyTag> & { suffix: string }): TaxonomyTag => ({
+  originalName: `acme:${overrides.suffix}`,
   strength: 0.9,
   source: 'ai',
   matchingFolders: [],
@@ -20,7 +21,6 @@ const tag = (overrides: Partial<TaxonomyTag> & { name: string }): TaxonomyTag =>
 
 const taxonomy = (overrides: Partial<TaxonomyResult> = {}): TaxonomyResult => ({
   prefix: 'acme:',
-  sourcePrefix: 'acme:',
   suggestedName: 'Acme',
   tags: [],
   fileAssignments: [],
@@ -51,37 +51,6 @@ describe('folderMatches', () => {
   });
 });
 
-describe('reprefixTag', () => {
-  it('swaps the inferred prefix for the one the user settled on', () => {
-    expect(reprefixTag('acme:type:contract', 'acme:', 'lake:')).toBe('lake:type:contract');
-  });
-
-  it('tolerates prefixes given without the trailing colon', () => {
-    expect(reprefixTag('acme:type:contract', 'acme', 'lake')).toBe('lake:type:contract');
-  });
-
-  it('prefixes rather than rewrites a tag that does not carry the inferred prefix', () => {
-    // Dropping the leading segment here would silently turn "type:contract" into
-    // "lake:contract" and lose the dimension.
-    expect(reprefixTag('type:contract', 'acme:', 'lake:')).toBe('lake:type:contract');
-  });
-
-  it('leaves an already-correct tag untouched', () => {
-    expect(reprefixTag('lake:type:contract', '', 'lake:')).toBe('lake:type:contract');
-  });
-
-  it('moves a bare-prefix tag into the final namespace', () => {
-    // A user can rename a tag down to just the prefix; returning it verbatim would leave
-    // the lake with the mixed namespaces this function exists to prevent.
-    expect(reprefixTag('acme:', 'acme:', 'lake:')).toBe('lake:');
-  });
-
-  it('normalizes the casing of a tag that already carries the final prefix', () => {
-    // Left uppercased, it would not match the lake's fileTagPrefix for filtering.
-    expect(reprefixTag('ACME:type:contract', '', 'acme:')).toBe('acme:type:contract');
-  });
-});
-
 describe('tagsForFile', () => {
   it('falls back to the folder tag when there is no taxonomy', () => {
     expect(tagsForFile('root/reports/q1.pdf', taxonomy(), 'lake:')).toEqual([{ name: 'lake:reports', strength: 1.0 }]);
@@ -92,8 +61,8 @@ describe('tagsForFile', () => {
       'root/legal/agreements/vendor.pdf',
       taxonomy({
         tags: [
-          tag({ name: 'acme:type:contract', matchingFolders: ['legal/agreements'] }),
-          tag({ name: 'acme:topic:finance', matchingFolders: ['finance'] }),
+          tag({ suffix: 'type:contract', matchingFolders: ['legal/agreements'] }),
+          tag({ suffix: 'topic:finance', matchingFolders: ['finance'] }),
         ],
       }),
       'acme:'
@@ -104,17 +73,18 @@ describe('tagsForFile', () => {
   it('drops categories the user deleted', () => {
     const result = tagsForFile(
       'root/legal/vendor.pdf',
-      taxonomy({ tags: [tag({ name: 'acme:type:contract', matchingFolders: ['legal'], deleted: true })] }),
+      taxonomy({ tags: [tag({ suffix: 'type:contract', matchingFolders: ['legal'], deleted: true })] }),
       'acme:'
     );
     expect(names(result)).toEqual(['acme:legal']);
   });
 
-  it('honors a rename, including for per-file assignments that reference the original name', () => {
+  it('honors an edited suffix, including for per-file assignments that reference the original name', () => {
     const result = tagsForFile(
       'root/legal/vendor.pdf',
       taxonomy({
-        tags: [tag({ name: 'acme:type:agreement', originalName: 'acme:type:contract', matchingFolders: ['legal'] })],
+        // originalName stays the inference id; the user edited the suffix to "type:agreement".
+        tags: [tag({ suffix: 'type:agreement', originalName: 'acme:type:contract', matchingFolders: ['legal'] })],
         fileAssignments: [
           { relativePath: 'root/legal/vendor.pdf', suggestedTags: [{ name: 'acme:type:contract', strength: 0.95 }] },
         ],
@@ -138,18 +108,29 @@ describe('tagsForFile', () => {
     expect(names(result)).toEqual(['acme:legal']);
   });
 
-  it('rewrites taxonomy tags to the final prefix so a lake never mixes namespaces', () => {
+  it('applies the passed prefix to every suffix so a lake never mixes namespaces', () => {
     const result = tagsForFile(
       'root/legal/vendor.pdf',
-      taxonomy({ tags: [tag({ name: 'acme:type:contract', matchingFolders: ['legal'] })] }),
+      taxonomy({ tags: [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })] }),
       'renamed:'
     );
     expect(names(result)).toEqual(['renamed:legal', 'renamed:type:contract']);
   });
 
+  it('applies the same prefix to folder tags and category tags even when it is bare', () => {
+    // Empty prefix is gated in the UI, but the pure fn must at least be consistent: folder
+    // tag and category tag both go through ensureColon, so both get the same leading colon.
+    const result = tagsForFile(
+      'root/legal/vendor.pdf',
+      taxonomy({ tags: [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })] }),
+      ''
+    );
+    expect(names(result)).toEqual([':legal', ':type:contract']);
+  });
+
   it('caps how many categories a single file can accumulate, keeping the strongest', () => {
     const many = Array.from({ length: 12 }, (_, i) =>
-      tag({ name: `acme:cat${i}`, matchingFolders: ['legal'], strength: i / 12 })
+      tag({ suffix: `cat${i}`, matchingFolders: ['legal'], strength: i / 12 })
     );
     const result = tagsForFile('root/legal/vendor.pdf', taxonomy({ tags: many }), 'acme:');
     expect(result).toHaveLength(9); // 8 taxonomy tags + the folder tag
@@ -160,7 +141,7 @@ describe('tagsForFile', () => {
   it('does not duplicate a taxonomy tag that equals the folder tag', () => {
     const result = tagsForFile(
       'root/legal/vendor.pdf',
-      taxonomy({ tags: [tag({ name: 'acme:legal', matchingFolders: ['legal'] })] }),
+      taxonomy({ tags: [tag({ suffix: 'legal', matchingFolders: ['legal'] })] }),
       'acme:'
     );
     expect(names(result)).toEqual(['acme:legal']);
@@ -175,7 +156,7 @@ describe('tagsForFile', () => {
     // compared raw segments, so any folder with a space silently lost its taxonomy tags.
     const result = tagsForFile(
       'root/Legal Docs/vendor.pdf',
-      taxonomy({ tags: [tag({ name: 'acme:type:contract', matchingFolders: ['Legal Docs'] })] }),
+      taxonomy({ tags: [tag({ suffix: 'type:contract', matchingFolders: ['Legal Docs'] })] }),
       'acme:'
     );
     expect(names(result)).toEqual(['acme:legal_docs', 'acme:type:contract']);
@@ -186,7 +167,7 @@ describe('appliedTagsForBatch', () => {
   it('unions every tag the batch will apply', () => {
     const result = appliedTagsForBatch(
       [{ relativePath: 'root/legal/a.pdf' }, { relativePath: 'root/finance/b.pdf' }],
-      taxonomy({ tags: [tag({ name: 'acme:type:contract', matchingFolders: ['legal'] })] }),
+      taxonomy({ tags: [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })] }),
       'acme:'
     );
     expect(names(result)).toEqual(['acme:finance', 'acme:legal', 'acme:type:contract']);

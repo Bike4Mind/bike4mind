@@ -17,11 +17,15 @@ export type WizardStep = 'source' | 'preview' | 'taxonomy' | 'config' | 'upload'
 export type ManagerTab = 'mine' | 'discover';
 
 export interface TaxonomyTag {
-  /** Full tag name, e.g. "acme:type:contract"; editable by the user */
-  name: string;
   /**
-   * The name inference assigned, kept stable across user renames. Per-file assignments
-   * reference it, so it is the join key when applying tags at upload time.
+   * The editable part of the tag AFTER the shared prefix, e.g. "type:contract". The full
+   * applied tag is `taxonomy.prefix + suffix`, so the prefix lives in exactly one place
+   * (taxonomy.prefix) and can never be duplicated or drift into a tag's own text.
+   */
+  suffix: string;
+  /**
+   * The full name inference assigned (incl. its original prefix), kept stable across user
+   * edits. Per-file assignments reference it, so it is the join key at upload time.
    */
   originalName: string;
   /** Confidence/relevance score 0.0-1.0 */
@@ -35,10 +39,11 @@ export interface TaxonomyTag {
 }
 
 export interface TaxonomyResult {
-  /** Tag prefix, editable by the user (kept in sync with config.tagPrefix) */
+  /**
+   * The single shared tag prefix (kept in sync with config.tagPrefix). Every tag is
+   * `prefix + tag.suffix`, so editing this one value re-namespaces every card at once.
+   */
   prefix: string;
-  /** Prefix as inference returned it; tag names embed it, so rewriting needs it unedited */
-  sourcePrefix: string;
   suggestedName: string;
   tags: TaxonomyTag[];
   /** Per-file tag suggestions for the sampled files (inference only samples a subset) */
@@ -83,7 +88,6 @@ export interface UploadProgress {
 
 const DEFAULT_TAXONOMY: TaxonomyResult = {
   prefix: '',
-  sourcePrefix: '',
   suggestedName: '',
   tags: [],
   fileAssignments: [],
@@ -283,8 +287,8 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   // otherwise the step shows a blank pane instead of its empty state + Re-analyze.
   markTaxonomyAttempted: () => set(state => ({ taxonomy: { ...state.taxonomy, attempted: true, analyzing: false } })),
 
-  // All three mutators key on originalName, never the user-editable name: renaming one tag
-  // onto another's name would otherwise make a single edit or delete hit both.
+  // All three mutators key on originalName (stable inference id), never the editable suffix:
+  // editing one tag's suffix to match another's would otherwise make a delete hit both.
   updateTag: (originalName, updates) =>
     set(state => ({
       taxonomy: {

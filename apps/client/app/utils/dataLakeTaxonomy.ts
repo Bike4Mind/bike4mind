@@ -57,40 +57,19 @@ export function folderMatches(fileFolderSegments: string[], matchingFolder: stri
 }
 
 /**
- * Inference embeds its own suggested prefix in every tag name, but the user can still
- * change the prefix on the Config step. Swap the inferred prefix for the final one so
- * a lake never ships two namespaces. Anything that doesn't carry the inferred prefix is
- * prefixed rather than rewritten - never drop a segment we can't confidently identify.
- */
-export function reprefixTag(tagName: string, sourcePrefix: string, finalPrefix: string): string {
-  if (!finalPrefix) return tagName;
-  const target = ensureColon(finalPrefix);
-  const source = sourcePrefix ? ensureColon(sourcePrefix) : '';
-
-  if (source && tagName.toLowerCase().startsWith(source.toLowerCase())) {
-    // A tag that is nothing but the prefix still has to end up in the final namespace.
-    return `${target}${tagName.slice(source.length)}`;
-  }
-  // Case-insensitive check, but rewrite rather than return as-is: "ACME:type:x" under final
-  // prefix "acme:" must come back lowercased, or it won't match the lake's fileTagPrefix.
-  if (tagName.toLowerCase().startsWith(target.toLowerCase())) {
-    return `${target}${tagName.slice(target.length)}`;
-  }
-  return `${target}${tagName}`;
-}
-
-/**
  * Tags to apply to one file at upload time: the folder tag (always, so folder structure
  * stays queryable and every nested file gets at least one tag) plus the reviewed taxonomy
  * categories covering it. This is what makes the Taxonomy step's edits/deletes real -
- * deleted categories are dropped and renames are honored via each tag's originalName,
- * which is also what inference's per-file assignments reference.
+ * deleted categories are dropped, and each category's applied name is `prefix + suffix`, so
+ * the shared prefix (also the folder tag's) guarantees one namespace per lake. Per-file
+ * assignments are matched via each tag's originalName (the inference join key).
  */
 export function tagsForFile(relativePath: string, taxonomy: TaxonomyResult, tagPrefix: string): AppliedTag[] {
   const folderTags = folderTagForFile(relativePath, tagPrefix);
   const active = taxonomy.tags.filter(t => !t.deleted);
   if (active.length === 0) return folderTags;
 
+  const prefix = ensureColon(tagPrefix);
   const byOriginalName = new Map(active.map(t => [t.originalName.toLowerCase(), t]));
   const fileFolderSegments = normalizeSegments(relativePath.split('/').slice(0, -1).join('/'));
   const strongest = new Map<string, number>();
@@ -106,12 +85,12 @@ export function tagsForFile(relativePath: string, taxonomy: TaxonomyResult, tagP
   for (const suggested of assignment?.suggestedTags ?? []) {
     const tag = byOriginalName.get(suggested.name.toLowerCase());
     if (!tag) continue; // deleted by the user, or a tag the model never declared as a category
-    add(reprefixTag(tag.name, taxonomy.sourcePrefix, tagPrefix), suggested.strength);
+    add(`${prefix}${tag.suffix}`, suggested.strength);
   }
 
   for (const tag of active) {
     if (tag.matchingFolders.some(folder => folderMatches(fileFolderSegments, folder))) {
-      add(reprefixTag(tag.name, taxonomy.sourcePrefix, tagPrefix), tag.strength);
+      add(`${prefix}${tag.suffix}`, tag.strength);
     }
   }
 

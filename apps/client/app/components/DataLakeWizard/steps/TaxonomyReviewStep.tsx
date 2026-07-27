@@ -1,4 +1,16 @@
-import { Box, Button, Chip, CircularProgress, IconButton, Input, Stack, Typography } from '@mui/joy';
+import {
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  FormControl,
+  FormHelperText,
+  FormLabel,
+  IconButton,
+  Input,
+  Stack,
+  Typography,
+} from '@mui/joy';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
@@ -44,23 +56,31 @@ function getTierLabel(tier: 'high' | 'medium' | 'low'): string {
 
 interface TagCardProps {
   tag: TaxonomyTag;
+  /** Shared tag prefix (taxonomy.prefix); fixed in the card, editable only on the header input. */
+  prefix: string;
   onUpdate: (originalName: string, updates: Partial<TaxonomyTag>) => void;
   onDelete: (originalName: string) => void;
 }
 
-const TagCard = memo(function TagCard({ tag, onUpdate, onDelete }: TagCardProps) {
+const TagCard = memo(function TagCard({ tag, prefix, onUpdate, onDelete }: TagCardProps) {
   const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(tag.name);
+  const [editSuffix, setEditSuffix] = useState(tag.suffix);
+
+  // Only the suffix is editable; the prefix is fixed, so a rename can never inject a second
+  // namespace. An empty suffix is invalid - block save (and exit) until it has a value.
+  const trimmedSuffix = editSuffix.trim();
+  const canSave = trimmedSuffix.length > 0;
 
   const handleSave = () => {
-    if (editName.trim() && editName !== tag.name) {
-      onUpdate(tag.originalName, { name: editName.trim() });
+    if (!canSave) return;
+    if (trimmedSuffix !== tag.suffix) {
+      onUpdate(tag.originalName, { suffix: trimmedSuffix });
     }
     setIsEditing(false);
   };
 
   const handleCancel = () => {
-    setEditName(tag.name);
+    setEditSuffix(tag.suffix);
     setIsEditing(false);
   };
 
@@ -86,21 +106,35 @@ const TagCard = memo(function TagCard({ tag, onUpdate, onDelete }: TagCardProps)
         {Math.round(tag.strength * 100)}%
       </Chip>
 
-      {/* Tag name (editable) */}
+      {/* Tag suffix (editable); the prefix is fixed and shared across all cards */}
       {isEditing ? (
         <Stack direction="row" gap={0.5} sx={{ flex: 1 }}>
           <Input
             size="sm"
-            value={editName}
-            onChange={e => setEditName(e.target.value)}
+            data-testid="taxonomy-tag-suffix-input"
+            value={editSuffix}
+            error={!canSave}
+            onChange={e => setEditSuffix(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter') handleSave();
               if (e.key === 'Escape') handleCancel();
             }}
+            startDecorator={
+              <Box component="span" sx={{ fontFamily: 'monospace', color: 'text.tertiary' }}>
+                {prefix}
+              </Box>
+            }
             autoFocus
-            sx={{ flex: 1 }}
+            sx={{ flex: 1, fontFamily: 'monospace' }}
           />
-          <IconButton size="sm" variant="soft" color="success" onClick={handleSave}>
+          <IconButton
+            size="sm"
+            variant="soft"
+            color="success"
+            disabled={!canSave}
+            data-testid="taxonomy-tag-save"
+            onClick={handleSave}
+          >
             <CheckIcon sx={{ fontSize: 14 }} />
           </IconButton>
           <IconButton size="sm" variant="soft" color="neutral" onClick={handleCancel}>
@@ -114,7 +148,10 @@ const TagCard = memo(function TagCard({ tag, onUpdate, onDelete }: TagCardProps)
           sx={{ flex: 1, cursor: 'pointer' }}
           onClick={() => setIsEditing(true)}
         >
-          {tag.name}
+          <Box component="span" sx={{ color: 'text.tertiary' }}>
+            {prefix}
+          </Box>
+          {tag.suffix}
         </Typography>
       )}
 
@@ -173,6 +210,10 @@ export default function TaxonomyReviewStep() {
     inferTaxonomy.mutate({ existingPrefix: taxonomy.prefix || undefined });
   }, [inferTaxonomy, taxonomy.prefix]);
 
+  // Tag Prefix is required: Config gates Start Upload on length >= 2. Warn here early, since
+  // this is its editable home, so the user isn't surprised by a blocked gate two steps later.
+  const prefixInvalid = taxonomy.prefix.trim().length < 2;
+
   // Auto-trigger inference on first mount if not yet attempted
   const [autoTriggered, setAutoTriggered] = useState(false);
   if (!taxonomy.attempted && !taxonomy.analyzing && !autoTriggered) {
@@ -221,24 +262,31 @@ export default function TaxonomyReviewStep() {
       sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, p: 2, overflow: 'auto' }}
     >
       {/* Header row: Tag Prefix input + re-analyze button. Tag Prefix's single editable home
-          is HERE (#829): the prefix is embedded in every applied tag name and consumed by
-          Re-analyze, so this is where it drives behavior. The Config step shows it read-only
-          (append mode) rather than as a second editable copy that could drift out of sync. */}
-      <Stack direction="row" gap={2} alignItems="flex-end" flexWrap="wrap">
-        <Box sx={{ flex: 1, minWidth: 200 }}>
-          <Typography level="body-xs" fontWeight="bold" sx={{ mb: 0.5 }}>
-            Tag Prefix
-          </Typography>
+          is HERE (#829): every card renders `prefix + suffix`, so editing this one value
+          re-namespaces them all. The Config step shows it read-only (create) / locked
+          (append) rather than as a second editable copy that could drift out of sync. */}
+      <Stack direction="row" gap={2} alignItems="flex-start" flexWrap="wrap">
+        <FormControl error={prefixInvalid} sx={{ flex: 1, minWidth: 200 }}>
+          <FormLabel>Tag Prefix</FormLabel>
           <Input
             size="sm"
             data-testid="taxonomy-tag-prefix-input"
             value={taxonomy.prefix}
             onChange={e => setTagPrefix(e.target.value)}
+            onBlur={e => {
+              const v = e.target.value.trim();
+              if (v && !v.endsWith(':')) setTagPrefix(v + ':');
+            }}
             placeholder="e.g. acme:"
             startDecorator={<AutoAwesomeIcon sx={{ fontSize: 16 }} />}
             sx={{ fontFamily: 'monospace' }}
           />
-        </Box>
+          {prefixInvalid && (
+            <FormHelperText data-testid="taxonomy-tag-prefix-error">
+              A tag prefix is required (at least 2 characters). It is applied to every tag.
+            </FormHelperText>
+          )}
+        </FormControl>
         <Box sx={{ flex: 1, minWidth: 200 }}>
           <Typography level="body-xs" fontWeight="bold" sx={{ mb: 0.5 }}>
             Suggested Name
@@ -289,7 +337,13 @@ export default function TaxonomyReviewStep() {
             }}
           >
             {tags.map(tag => (
-              <TagCard key={tag.originalName} tag={tag} onUpdate={updateTag} onDelete={deleteTag} />
+              <TagCard
+                key={tag.originalName}
+                tag={tag}
+                prefix={taxonomy.prefix}
+                onUpdate={updateTag}
+                onDelete={deleteTag}
+              />
             ))}
           </Box>
         </Box>

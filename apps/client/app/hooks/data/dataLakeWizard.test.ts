@@ -291,14 +291,14 @@ describe('useBatchUpload onError', () => {
       ],
       taxonomy: {
         prefix: 'test:',
-        sourcePrefix: 'acme:',
         suggestedName: 'Acme',
         attempted: true,
         analyzing: false,
         fileAssignments: [],
         tags: [
           {
-            name: 'acme:type:agreement',
+            // User edited the suffix to "type:agreement"; originalName stays the inference id.
+            suffix: 'type:agreement',
             originalName: 'acme:type:contract',
             strength: 0.95,
             source: 'ai',
@@ -306,7 +306,7 @@ describe('useBatchUpload onError', () => {
             deleted: false,
           },
           {
-            name: 'acme:topic:hr',
+            suffix: 'topic:hr',
             originalName: 'acme:topic:hr',
             strength: 0.8,
             source: 'ai',
@@ -328,7 +328,7 @@ describe('useBatchUpload onError', () => {
 
     const presign = apiPost.mock.calls.find(([url]) => url === '/api/files/generate-presigned-urls-batch');
     const tagNames = (presign?.[1] as { files: { tags: { name: string }[] }[] }).files[0].tags.map(t => t.name).sort();
-    // Renamed tag applied under the user's config prefix; deleted tag gone; folder tag kept.
+    // Applied tag = prefix + edited suffix; deleted tag gone; folder tag kept.
     expect(tagNames).toEqual(['test:legal', 'test:type:agreement']);
   });
 
@@ -534,15 +534,17 @@ describe('useInferTaxonomy response handling', () => {
     useDataLakeWizardStore.getState().resetWizard();
   });
 
-  it('drops malformed categories and assignments instead of storing unusable tags', async () => {
+  it('splits each category into a stable originalName and an editable suffix, dropping malformed ones', async () => {
     apiPost.mockResolvedValue({
       data: {
         suggestedPrefix: 'acme:',
         suggestedName: 'Acme',
         categories: [
-          { tagName: 'acme:type:contract', confidence: 0.9, matchingFolders: ['legal'] },
+          { tagName: 'acme:type:contract', confidence: 0.9, matchingFolders: ['legal'] }, // carries prefix
+          { tagName: 'topic:finance', confidence: 0.85, matchingFolders: ['finance'] }, // no prefix -> whole name is suffix
           { confidence: 0.8, matchingFolders: ['finance'] }, // no tagName
           { tagName: '  ', confidence: 0.8 }, // blank tagName
+          { tagName: 'acme:', confidence: 0.8 }, // nothing but the prefix -> empty suffix, dropped
         ],
         fileAssignments: { nope: true }, // not an array
       },
@@ -557,26 +559,25 @@ describe('useInferTaxonomy response handling', () => {
     await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.attempted).toBe(true));
 
     const { taxonomy } = useDataLakeWizardStore.getState();
-    expect(taxonomy.tags.map(t => t.name)).toEqual(['acme:type:contract']);
-    expect(taxonomy.tags[0].originalName).toBe('acme:type:contract');
+    expect(taxonomy.prefix).toBe('acme:');
+    // Prefix stripped into suffix; a category without the prefix keeps its whole name as suffix.
+    expect(taxonomy.tags.map(t => t.suffix)).toEqual(['type:contract', 'topic:finance']);
+    // originalName stays the full inferred name (the per-file-assignment join key).
+    expect(taxonomy.tags.map(t => t.originalName)).toEqual(['acme:type:contract', 'topic:finance']);
     expect(taxonomy.fileAssignments).toEqual([]);
     // The toast must reflect what was kept, not what the model claimed to send.
-    expect(toastMock.success).toHaveBeenCalledWith('AI suggested 1 tag categories');
+    expect(toastMock.success).toHaveBeenCalledWith('AI suggested 2 tag categories');
   });
 
   it('keeps the existing prefix when the endpoint returns an empty taxonomy', async () => {
-    // No API key configured -> emptyTaxonomy with a blank suggestedPrefix. Blanking
-    // sourcePrefix would make reprefixTag prepend, yielding "mine:acme:type:contract".
+    // No API key configured -> emptyTaxonomy with a blank suggestedPrefix. It must not blank
+    // a prefix the user already has, or Config's tagPrefix>=2 gate would strand them.
     apiPost.mockResolvedValue({
       data: { suggestedPrefix: '', suggestedName: '', categories: [], fileAssignments: [] },
     });
     seedFolderTree();
     useDataLakeWizardStore.setState({
-      taxonomy: {
-        ...useDataLakeWizardStore.getState().taxonomy,
-        prefix: 'mine:',
-        sourcePrefix: 'acme:',
-      },
+      taxonomy: { ...useDataLakeWizardStore.getState().taxonomy, prefix: 'mine:' },
     });
 
     const { result } = mountHook(useInferTaxonomy);
@@ -586,9 +587,7 @@ describe('useInferTaxonomy response handling', () => {
 
     await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.attempted).toBe(true));
 
-    const { taxonomy } = useDataLakeWizardStore.getState();
-    expect(taxonomy.prefix).toBe('mine:');
-    expect(taxonomy.sourcePrefix).toBe('acme:');
+    expect(useDataLakeWizardStore.getState().taxonomy.prefix).toBe('mine:');
     expect(toastMock.success).not.toHaveBeenCalled();
   });
 });
