@@ -11,15 +11,17 @@ import { Logger } from '@bike4mind/observability';
 /**
  * Shared vector/semantic search over FabFile chunks in a user's accessible data lakes.
  *
- * Extracted from POST /api/opti/semantic-search so the endpoint, the chat KB tool, and the
- * RLM tools all run ONE implementation in-process (no HTTP loopback). Modeled on the
- * dependency-injected getRelevantMementos pattern: pure, adapter-injected, never imports
- * @bike4mind/database. Reuses EmbeddingFactory (query embed) + computeCosineSimilarity
- * (ranking) + the chunk vectors the fabFileVectorize pipeline already populates.
+ * Extracted from the semantic-search endpoint so it and the chat KB tool run ONE
+ * implementation in-process. (The RLM tools reach the same code, but over an HTTP loopback
+ * to the endpoint rather than in-process.) Modeled on the dependency-injected
+ * getRelevantMementos pattern: pure, adapter-injected, never imports @bike4mind/database.
+ * Reuses EmbeddingFactory (query embed) + computeCosineSimilarity (ranking) + the chunk
+ * vectors the fabFileVectorize pipeline already populates.
  *
- * Data-lake SCOPING is the caller's concern (passed as dataLakeTags + dataLakeTagPrefixes):
- * the endpoint computes it from DATA_LAKES, the chat tool from getDynamicDataLakeAccess,
- * so this stays a single retrieval primitive.
+ * Data-lake SCOPING is the caller's concern (passed as dataLakeTags + the two prefix
+ * buckets). Both the endpoint and the chat tool now compute it from
+ * getDynamicDataLakeAccess, so this stays a single retrieval primitive fed by a single
+ * access resolver.
  */
 
 export interface SemanticChunkResult {

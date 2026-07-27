@@ -1,12 +1,15 @@
 /**
- * Data Lakes server module - shared lake-scope resolution for the browse surfaces.
+ * Data Lakes server module - shared lake-scope resolution for the BROWSE surfaces
+ * (articles, tag-counts, and the rlm-answer access gate). Content is scoped by the lakes a
+ * caller can access - files tagged with a lake's `datalakeTag` / `fileTagPrefix` - and access
+ * is defined per-lake (`requiredUserTag`/`requiredEntitlement`), not per-product.
  *
- * The consolidated `/api/data-lakes/*` browse endpoints (articles, tag-counts,
- * semantic-search, rlm-answer) all serve content scoped by the lakes a caller
- * can access - files tagged with a lake's `datalakeTag` / `fileTagPrefix`.
- * Access is defined per-lake (`requiredUserTag`/`requiredEntitlement` on the
- * lake config), not per-product. This module owns the one thing every browse
- * surface must share: resolving WHICH lakes a user can see.
+ * The RETRIEVAL surface (semantic-search) resolves scope separately, through
+ * ./resolveRetrievalLakeScope, so it shares the core resolver with the chat
+ * search_knowledge_base tool. The two are close but not identical, deliberately:
+ * `resolveAccessibleLakes` below keeps an owner's own gated lake, while the retrieval path
+ * drops it (the core resolver re-filters DB lakes by tag/entitlement). Tracked in #976;
+ * until it is fixed, a caller can browse a lake that semantic search will not reach.
  */
 import { DATA_LAKES, getAccessibleDataLakes, hasDeveloperUserTag, isImageServeable } from '@bike4mind/common';
 import type { DataLakeConfig, AccessContext } from '@bike4mind/common';
@@ -47,7 +50,9 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<D
   // Admin/developer see every static lake; everyone else is scoped by the any-of
   // requiredUserTag/requiredEntitlement filter (resolved entitlement keys included so
   // tag-less domain grants match). Entitlements are resolved lazily - only when
-  // we actually need the non-privileged static filter.
+  // we actually need the non-privileged static filter. That laziness is sound HERE because
+  // the privileged branch short-circuits the whole filter; the retrieval resolver resolves
+  // them unconditionally because it threads the keys into a DB query as well.
   const staticLakes =
     ctx.isAdmin || hasDeveloperUserTag(user.tags)
       ? DATA_LAKES

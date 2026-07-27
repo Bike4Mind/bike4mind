@@ -172,7 +172,7 @@ describe('resolveRetrievalLakeScope', () => {
     // caller created but whose requiredUserTag they lack is dropped. The browse resolver in
     // ./index.ts deliberately does NOT do this, so /articles still lists such a lake while
     // semantic search hides it. Pre-existing in the shared resolver, tracked separately -
-    // pinned here so the fix shows up as a deliberate diff.
+    // pinned here so the fix shows up as a deliberate diff. Tracked in #976.
     mockGetDynamicDataLakeAccess.mockResolvedValue(scopeOf());
 
     const out = await resolveRetrievalLakeScope(asReq({ id: 'owner', tags: [] }));

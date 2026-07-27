@@ -9,7 +9,7 @@
  *
  * The two resolvers still differ for an owner's own gated lake: browse keeps it, retrieval
  * drops it (the core resolver re-filters DB lakes through `lakeMatchesAccess`). That is a
- * known gap in the core resolver, tracked separately - do not paper over it here.
+ * known gap in the core resolver, tracked in #976 - do not paper over it here.
  */
 import { DATA_LAKES, hasDeveloperUserTag, type DataLakeConfig } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';

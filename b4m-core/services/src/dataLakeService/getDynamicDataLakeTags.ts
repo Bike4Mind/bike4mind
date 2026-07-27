@@ -1,9 +1,14 @@
 import { DataLakeConfig, getAccessibleDataLakes, toDataLakeConfig, type IDataLakeRepository } from '@bike4mind/common';
 
 /**
- * The minimal context the data-lake access resolver needs. Both the knowledge tools
- * (ToolContext) and the forced-retrieval feature (ChatCompletionContext) satisfy this
+ * The minimal context the data-lake access resolver needs. The knowledge tools
+ * (ToolContext), the forced-retrieval feature (ChatCompletionContext), and the app-layer
+ * semantic-search route (via server/dataLakes/resolveRetrievalLakeScope) all satisfy this
  * structurally, so this is the ONE shared resolver - no per-call-site duplicate.
+ *
+ * Non-goal: this resolver has NO admin/developer bypass and must not grow one. A privileged
+ * widening here would reach every admin's chat session and pull other tenants' documents
+ * into the model context. Surfaces that need one apply it outside, on their own result.
  */
 export interface DataLakeAccessContext {
   db: {
@@ -28,7 +33,8 @@ export interface DataLakeAccessContext {
  * Fetches dynamic data lake configs from DB (if available) and returns
  * the merged datalake: tags for the user.
  *
- * Shared helper used by both knowledgeBaseSearch and knowledgeBaseRetrieve tools.
+ * Tags-only convenience wrapper over getDynamicDataLakeAccess below, which is what the
+ * knowledge tools and the semantic-search route actually call (they need the prefixes too).
  */
 export async function getDynamicDataLakeTags(context: DataLakeAccessContext): Promise<string[]> {
   return (await getDynamicDataLakeAccess(context)).dataLakeTags;

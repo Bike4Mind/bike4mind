@@ -82,6 +82,8 @@ export function buildDataLakeTools(deps: DataLakeToolDeps): ReplToolMap {
   const baseUrl = deps.baseUrl.replace(/\/+$/, '');
   const headers = { 'x-api-key': deps.apiKey, 'Content-Type': 'application/json' } as const;
 
+  // HTTP loopback to the semantic-search route, which resolves dynamic + static lakes - so
+  // this now covers the same set rlm-answer's own resolveAccessibleLakes gate checks.
   const semanticSearch = async (...args: unknown[]) => {
     const a = (args[0] ?? {}) as SemanticSearchArgs;
     if (!a.query) throw new Error('semanticSearch: query is required');

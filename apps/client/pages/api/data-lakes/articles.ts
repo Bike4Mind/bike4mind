@@ -12,6 +12,9 @@ import { resolveAccessibleLakes, queryDataLakeArticles, type DataLakeArticlesQue
  * means empty results. Deliberately NOT gated on the `EnableDataLakes` admin
  * flag: that flag gates the lake-management/ingestion surface, and the former
  * product-namespace twin was reachable without it.
+ *
+ * Browse scope is resolved separately from semantic-search's retrieval scope, and can still
+ * differ for an owner's own gated lake - see the note in server/dataLakes/index.ts.
  */
 const handler = baseApi().get(async (req: Request<{}, unknown, unknown, DataLakeArticlesQuery>, res) => {
   const lakes = await resolveAccessibleLakes(req);
