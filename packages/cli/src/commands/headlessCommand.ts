@@ -20,7 +20,7 @@ import { buildSystemPrompt } from '../core/prompts';
 import { generateCliTools, PermissionManager, type AgentContext, requireApiUrl, loadContextFiles } from '../utils';
 import { McpManager } from '../utils/mcpAdapter';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
-import { ServerLlmBackend } from '../llm/ServerLlmBackend';
+import { createSseBackend } from '../bootstrap/sseTransport.js';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
 import { ApiClient } from '../auth/ApiClient';
@@ -173,7 +173,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       process.exit(1);
     }
 
-    // Initialize LLM backend - WebSocket preferred, SSE fallback.
+    // Initialize the LLM backend (HTTP+SSE).
     // Fail loud when unconfigured rather than handing axios an empty baseURL.
     let apiBaseURL: string;
     try {
@@ -199,22 +199,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       }
     }
 
-    // SSE-only transport. The WebSocket path was removed; the CLI always uses the
-    // HTTP+SSE ServerLlmBackend. sseCompletionsUrl comes from server config (empty
-    // -> ServerLlmBackend uses its default same-origin completions path).
-    let sseCompletionsUrl: string | undefined;
-
-    try {
-      const serverConfig = await apiClient.get<{ sseCompletionsUrl?: string }>('/api/settings/serverConfig');
-      sseCompletionsUrl = serverConfig?.sseCompletionsUrl;
-    } catch {
-      // Headless prefers silent degradation - fall through to the default completions path.
-    }
-
-    setWebSocketToolExecutor(null);
-    const llm: ICompletionBackend & { currentModel: string; getModelInfo: () => Promise<{ id: string }[]> } =
-      new ServerLlmBackend({ apiClient, model: config.defaultModel, sseCompletionsUrl });
-    logger.debug('[headless] Using SSE transport');
+    // SSE-only transport, via the same seam interactive bootstrap uses so the two
+    // can't drift. Headless never opens the feature-event socket: no feature
+    // modules are registered in a `-p` run.
+    const { llm } = await createSseBackend({ apiClient, model: config.defaultModel });
 
     // Resolve model
     const models = await llm.getModelInfo();

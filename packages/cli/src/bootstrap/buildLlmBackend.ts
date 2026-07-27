@@ -8,8 +8,7 @@ import { WebSocketLlmBackend } from '../llm/WebSocketLlmBackend';
 import { MultiLlmBackend } from '../llm/MultiLlmBackend.js';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
 import { WebSocketConnectionManager } from '../ws/WebSocketConnectionManager';
-import { WebSocketToolExecutor } from '../ws/WebSocketToolExecutor';
-import { registerKeepHandlers } from './registerKeepHandlers.js';
+import { createSseBackend } from './sseTransport.js';
 
 /** The concrete backend types this builder can produce. */
 export type CliLlmBackend = ServerLlmBackend | WebSocketLlmBackend | MultiLlmBackend;
@@ -17,7 +16,7 @@ export type CliLlmBackend = ServerLlmBackend | WebSocketLlmBackend | MultiLlmBac
 export interface BuildLlmBackendInput {
   config: CliConfig;
   apiClient: ApiClient;
-  /** Token getter for WebSocket auth (shared by WS manager and backend). */
+  /** Token getter for the feature-event WebSocket auth. */
   tokenGetter: () => Promise<string | null>;
   /** Startup log collected for the two-column banner; pushed into, not owned. */
   startupLog: string[];
@@ -27,7 +26,11 @@ export interface BuildLlmBackendInput {
 
 export interface BuildLlmBackendResult {
   llm: CliLlmBackend;
-  /** WebSocket connection manager (null if using SSE fallback). */
+  /**
+   * Realtime socket for feature-module events only - completions always use SSE.
+   * Null unless a WS-consuming feature is enabled and the server advertises a
+   * `websocketUrl` (and null if that connect failed).
+   */
   wsManager: WebSocketConnectionManager | null;
   models: ModelInfo[];
   /** The resolved default model (falls back to models[0] if requested model is unavailable). */
@@ -35,32 +38,27 @@ export interface BuildLlmBackendResult {
 }
 
 /**
- * Side-effecting collaborators, injected so the transport-selection and
- * fallback control flow can be unit-tested with fakes (no real WebSocket,
- * SSE, or Ollama). Production callers omit this - `defaultLlmBackendDeps` is
- * used, which wires the real classes and the `setWebSocketToolExecutor`
- * singleton exactly as before.
+ * Side-effecting collaborators, injected so the transport wiring can be
+ * unit-tested with fakes (no real WebSocket, SSE, or Ollama). Production callers
+ * omit this - `defaultLlmBackendDeps` is used, which wires the real classes and
+ * the `setWebSocketToolExecutor` singleton.
  */
 export interface BuildLlmBackendDeps {
   /**
-   * Create + connect a WebSocket manager. Rejects if the socket can't connect.
-   * `verifySession` is called when a connect ATTEMPT fails to open (a 401 handshake
-   * refusal never fires onopen) - see WebSocketConnectionManager for why this is the only
-   * way to tell "session revoked" apart from "transient network issue" on a WS close.
+   * Create + connect a WebSocket manager for feature-module events. Rejects if the
+   * socket can't connect. `verifySession` is called when a connect ATTEMPT fails to
+   * open (a 401 handshake refusal never fires onopen) - see WebSocketConnectionManager
+   * for why this is the only way to tell "session revoked" apart from "transient
+   * network issue" on a WS close.
    */
   connectWebSocket: (
     wsUrl: string,
     tokenGetter: () => Promise<string | null>,
     verifySession: () => Promise<boolean>
   ) => Promise<WebSocketConnectionManager>;
-  /** Install the server-tool executor for the connected socket (sets the ToolRouter singleton). */
-  installWebSocketToolExecutor: (ws: WebSocketConnectionManager, tokenGetter: () => Promise<string | null>) => void;
-  /** Clear the server-tool executor (used on SSE fallback). */
+  /** Clear the server-tool executor: with SSE completions, tools run CLI-side. */
   clearWebSocketToolExecutor: () => void;
-  createWebSocketBackend: (opts: ConstructorParameters<typeof WebSocketLlmBackend>[0]) => CliLlmBackend;
   createServerBackend: (opts: ConstructorParameters<typeof ServerLlmBackend>[0]) => CliLlmBackend;
-  /** Register the Keep command handler on the connected socket. */
-  registerKeepHandlers: (ws: WebSocketConnectionManager) => void;
   createOllamaBackend: (host: string) => OllamaBackend;
   createMultiBackend: (
     server: CliLlmBackend,
@@ -89,13 +87,8 @@ export const defaultLlmBackendDeps: BuildLlmBackendDeps = {
     }
     return ws;
   },
-  installWebSocketToolExecutor: (ws, tokenGetter) => {
-    setWebSocketToolExecutor(new WebSocketToolExecutor(ws, tokenGetter));
-  },
   clearWebSocketToolExecutor: () => setWebSocketToolExecutor(null),
-  createWebSocketBackend: opts => new WebSocketLlmBackend(opts),
   createServerBackend: opts => new ServerLlmBackend(opts),
-  registerKeepHandlers,
   createOllamaBackend: host =>
     new OllamaBackend(host, {
       debug: (...args: unknown[]) => logger.debug(args.map(String).join(' ')),
@@ -106,6 +99,44 @@ export const defaultLlmBackendDeps: BuildLlmBackendDeps = {
   createMultiBackend: (server, ollama, serverModels, ollamaModels, defaultModel) =>
     new MultiLlmBackend(server, ollama, serverModels, ollamaModels, defaultModel),
 };
+
+/**
+ * True when some enabled feature module consumes realtime server events. Only
+ * Tavern does today (TavernModule.registerWsHandlers -> TavernActivityStream);
+ * keep this in sync with the module registration in index.tsx. Everything else
+ * runs socket-free, so the common path never opens a WebSocket.
+ */
+function needsFeatureEventSocket(config: CliConfig): boolean {
+  return config.features?.tavern === true;
+}
+
+/**
+ * Connect the events-only socket that feature modules register handlers on.
+ * Returns null when it isn't needed, isn't advertised, or won't connect - a
+ * feature's live updates degrading is never a reason to fail startup, since
+ * completions no longer depend on this socket at all.
+ */
+async function connectFeatureEventSocket(
+  config: CliConfig,
+  websocketUrl: string | undefined,
+  deps: BuildLlmBackendDeps,
+  auth: { tokenGetter: () => Promise<string | null>; verifySession: () => Promise<boolean> }
+): Promise<WebSocketConnectionManager | null> {
+  if (!needsFeatureEventSocket(config)) return null;
+  if (!websocketUrl) {
+    logger.debug('[WS] No websocketUrl in server config - feature live updates disabled');
+    return null;
+  }
+
+  try {
+    return await deps.connectWebSocket(websocketUrl, auth.tokenGetter, auth.verifySession);
+  } catch (err) {
+    logger.warn(
+      `Realtime socket unavailable - live feature updates are disabled: ${err instanceof Error ? err.message : String(err)}`
+    );
+    return null;
+  }
+}
 
 /**
  * Resolve the model to use from the available list: the requested default if
@@ -119,10 +150,11 @@ export function resolveModelInfo(models: ModelInfo[], defaultModel: string): Mod
  * Build the LLM backend: HTTP+SSE transport (ServerLlmBackend), optional Ollama
  * multiplexing. Resolves the default model and pins it on the backend.
  *
- * The WebSocket transport was removed - the CLI always uses SSE. `sseCompletionsUrl`
- * is read from server config; when empty the backend falls back to its default
- * same-origin `/api/ai/v1/completions` path. `wsManager` is always null so callers
- * that still branch on it transparently take their no-socket path.
+ * The WebSocket COMPLETION transport was removed - completions always use SSE,
+ * because relays that emit the generic `streamed_chat_completion` action drop
+ * every CLI chunk. The socket itself is still connected, but only when a
+ * WS-consuming feature module is enabled, and only to carry that module's events
+ * (see `wsManager`); Keep relay and WS server-side tool execution stay off.
  *
  * Pure bootstrap seam: no React hooks, no Zustand state.
  */
@@ -130,30 +162,18 @@ export async function buildLlmBackend(
   input: BuildLlmBackendInput,
   deps: BuildLlmBackendDeps = defaultLlmBackendDeps
 ): Promise<BuildLlmBackendResult> {
-  const { config, apiClient, startupLog } = input;
+  const { config, apiClient, startupLog, tokenGetter } = input;
 
-  const wsManager: WebSocketConnectionManager | null = null;
+  const sse = await createSseBackend(
+    { apiClient, model: config.defaultModel },
+    { createServerBackend: deps.createServerBackend, clearWebSocketToolExecutor: deps.clearWebSocketToolExecutor }
+  );
+  let llm: CliLlmBackend = sse.llm;
 
-  let sseCompletionsUrl: string | undefined;
-  try {
-    const serverConfig = await apiClient.get<{ sseCompletionsUrl?: string }>('/api/settings/serverConfig');
-    sseCompletionsUrl = serverConfig?.sseCompletionsUrl;
-  } catch (err) {
-    logger.debug(
-      `[SSE] serverConfig fetch failed; using default completions endpoint: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-
-  // No WebSocket relay: ensure any previously-installed server-tool executor is
-  // cleared so tools resolve to the local (CLI-side) executor.
-  deps.clearWebSocketToolExecutor();
-
-  let llm: CliLlmBackend = deps.createServerBackend({
-    apiClient,
-    model: config.defaultModel,
-    sseCompletionsUrl,
+  const wsManager = await connectFeatureEventSocket(config, sse.serverConfig.websocketUrl, deps, {
+    tokenGetter,
+    verifySession: () => apiClient.checkSessionValid(),
   });
-  logger.debug('Using SSE transport');
 
   // Optionally wrap with Ollama backend if --ollama-host was provided
   const ollamaHost = input.ollamaHost ?? process.env.B4M_OLLAMA_HOST;

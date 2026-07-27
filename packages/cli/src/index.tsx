@@ -230,7 +230,7 @@ interface CliState {
   contextContent: string; // Raw CLAUDE.md content for compact instructions extraction
   backgroundManager: BackgroundAgentManager | null; // Background agent manager for grouped notifications
   sandboxOrchestrator: import('./sandbox/SandboxOrchestrator.js').SandboxOrchestrator | null; // Sandbox orchestrator for OS-level isolation
-  wsManager: WebSocketConnectionManager | null; // WebSocket connection manager for streaming
+  wsManager: WebSocketConnectionManager | null; // Feature-event socket; completions use SSE
   checkpointStore: CheckpointStore | null; // File change checkpointing for undo/restore
   additionalDirectories: string[]; // Additional directories for file access (from --add-dir or /add-dir)
   featureRegistry: FeatureModuleRegistry | null; // Opt-in feature module registry
@@ -587,16 +587,16 @@ function CliApp() {
         }
       }
 
-      // Token getter for WebSocket auth (shared by WS manager and backend)
+      // Token getter for the feature-event WebSocket auth
       const tokenGetter = async (): Promise<string | null> => {
         const tokens = await state.configStore.getAuthTokens();
         return tokens?.accessToken ?? null;
       };
 
-      // Build the LLM backend: WebSocket-first transport (bypasses CloudFront
-      // 20s timeout) with SSE fallback, optional Ollama multiplexing, and the
-      // resolved default model. The Keep handler is registered inside the WS
-      // path (see buildLlmBackend).
+      // Build the LLM backend: HTTP+SSE completions, optional Ollama
+      // multiplexing, and the resolved default model. `wsManager` comes back
+      // non-null only when a WS-consuming feature (Tavern) is enabled; it
+      // carries feature events, never completions (see buildLlmBackend).
       const { llm, wsManager, models, modelInfo } = await buildLlmBackend({
         config,
         apiClient,
@@ -1023,7 +1023,7 @@ function CliApp() {
         contextContent: contextResult.mergedContent, // Store raw context for compact instructions
         backgroundManager, // Store for grouped notification turn tracking
         sandboxOrchestrator, // Store sandbox orchestrator for /sandbox commands
-        wsManager, // WebSocket connection manager (null if using SSE fallback)
+        wsManager, // Feature-event socket (null unless a WS-consuming feature is on)
         checkpointStore, // File change checkpointing for undo/restore
         additionalDirectories, // Store additional directories for file access
         featureRegistry, // Feature module registry for opt-in modules
@@ -3496,7 +3496,9 @@ function CliApp() {
         registerFeatureModuleTools(newToolNames);
       }
 
-      // Register new WS handlers
+      // Register new WS handlers. The feature-event socket is only opened at
+      // startup (see buildLlmBackend), so enabling a WS-consuming feature here
+      // gets its tools and commands but no live events until the next launch.
       if (state.wsManager && newFeatureRegistry.hasModules) {
         newFeatureRegistry.registerAllWsHandlers(state.wsManager);
       }

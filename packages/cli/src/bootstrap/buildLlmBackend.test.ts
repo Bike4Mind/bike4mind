@@ -13,20 +13,16 @@ function fakeBackend(models: ModelInfo[]) {
 /** A fully-spied deps object; override individual members per test. */
 function makeDeps(over: Partial<BuildLlmBackendDeps> = {}) {
   const fakeWs = { tag: 'ws' };
-  const wsBackend = fakeBackend([model('m1'), model('m2')]);
   const serverBackend = fakeBackend([model('m1')]);
   const deps: BuildLlmBackendDeps = {
     connectWebSocket: vi.fn(async () => fakeWs as never),
-    installWebSocketToolExecutor: vi.fn(),
     clearWebSocketToolExecutor: vi.fn(),
-    createWebSocketBackend: vi.fn(() => wsBackend),
     createServerBackend: vi.fn(() => serverBackend),
-    registerKeepHandlers: vi.fn(),
     createOllamaBackend: vi.fn(() => fakeBackend([model('ollama1')])),
     createMultiBackend: vi.fn((_s, _o, sm, om) => fakeBackend([...sm, ...om])),
     ...over,
   };
-  return { deps, fakeWs, wsBackend, serverBackend };
+  return { deps, fakeWs, serverBackend };
 }
 
 const fakeApiClient = (serverConfig: unknown) => ({ get: vi.fn(async () => serverConfig) }) as never;
@@ -50,15 +46,12 @@ describe('resolveModelInfo', () => {
   });
 });
 
-describe('buildLlmBackend — SSE-only transport', () => {
-  it('always uses SSE and never attempts a WebSocket connection', async () => {
+describe('buildLlmBackend — SSE-only completions', () => {
+  it('always uses SSE and opens no socket when no WS-consuming feature is enabled', async () => {
     const { deps, serverBackend } = makeDeps();
     const res = await buildLlmBackend(makeInput(), deps);
 
     expect(deps.connectWebSocket).not.toHaveBeenCalled();
-    expect(deps.installWebSocketToolExecutor).not.toHaveBeenCalled();
-    expect(deps.createWebSocketBackend).not.toHaveBeenCalled();
-    expect(deps.registerKeepHandlers).not.toHaveBeenCalled();
     expect(deps.clearWebSocketToolExecutor).toHaveBeenCalledOnce();
     expect(deps.createServerBackend).toHaveBeenCalledOnce();
     expect(res.wsManager).toBeNull();
@@ -87,8 +80,49 @@ describe('buildLlmBackend — SSE-only transport', () => {
     const res = await buildLlmBackend(makeInput({ apiClient }), deps);
 
     expect(deps.createServerBackend).toHaveBeenCalledWith(expect.objectContaining({ sseCompletionsUrl: undefined }));
+    expect(deps.clearWebSocketToolExecutor).toHaveBeenCalledOnce();
     expect(res.llm).toBe(serverBackend);
     expect(res.wsManager).toBeNull();
+  });
+});
+
+describe('buildLlmBackend — feature-event socket', () => {
+  const tavernConfig = () => createMockConfig({ defaultModel: 'm1', features: { tavern: true } });
+
+  // Completions moved to SSE, but Tavern's activity stream still needs the
+  // socket - without it /tavern silently shows "No activity yet" forever.
+  it('connects the socket when a WS-consuming feature is enabled', async () => {
+    const { deps, fakeWs, serverBackend } = makeDeps();
+    const res = await buildLlmBackend(makeInput({ config: tavernConfig() }), deps);
+
+    expect(deps.connectWebSocket).toHaveBeenCalledWith('wss://x', expect.any(Function), expect.any(Function));
+    expect(res.wsManager).toBe(fakeWs);
+    // Completions still go over SSE, and server-side tool execution stays off.
+    expect(res.llm).toBe(serverBackend);
+    expect(deps.clearWebSocketToolExecutor).toHaveBeenCalledOnce();
+  });
+
+  it('skips the socket when the server advertises no websocketUrl', async () => {
+    const { deps } = makeDeps();
+    const res = await buildLlmBackend(
+      makeInput({ config: tavernConfig(), apiClient: fakeApiClient({ sseCompletionsUrl: 'https://x' }) }),
+      deps
+    );
+
+    expect(deps.connectWebSocket).not.toHaveBeenCalled();
+    expect(res.wsManager).toBeNull();
+  });
+
+  it('degrades to no socket instead of failing startup when the connect throws', async () => {
+    const { deps, serverBackend } = makeDeps({
+      connectWebSocket: vi.fn(async () => {
+        throw new Error('socket refused');
+      }),
+    });
+    const res = await buildLlmBackend(makeInput({ config: tavernConfig() }), deps);
+
+    expect(res.wsManager).toBeNull();
+    expect(res.llm).toBe(serverBackend);
   });
 });
 
@@ -117,7 +151,7 @@ describe('buildLlmBackend — model resolution', () => {
   it('falls back to the first available model when the default is missing', async () => {
     const { deps } = makeDeps();
     const res = await buildLlmBackend(makeInput({ config: createMockConfig({ defaultModel: 'nonexistent' }) }), deps);
-    // WebSocket backend exposes [m1, m2]; nonexistent -> first
+    // SSE backend exposes [m1]; nonexistent -> first
     expect(res.modelInfo.id).toBe('m1');
     expect(res.llm.currentModel).toBe('m1');
   });
