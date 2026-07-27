@@ -41,6 +41,9 @@ export function buildDiscoveryMetricData(result: ModelDiscoveryRunResult, stage:
     count('PriceRowsAppended', metrics.PriceRowsAppended),
     count('PriceFlagged', metrics.PriceFlagged),
     count('CatalogRowsRejected', metrics.CatalogRowsRejected),
+    // A docs parser whose row count moved sharply run-over-run is the signature
+    // of a page restructure, and it must alarm before the bad data is actioned.
+    count('DocsParserRowShift', metrics.DocsParserRowShift),
     {
       name: 'RunDuration',
       value: metrics.RunDuration,

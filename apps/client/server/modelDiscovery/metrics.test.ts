@@ -30,6 +30,7 @@ const result = (overrides: Partial<RunResult> = {}, metrics: Partial<RunResult['
       PriceRowsAppended: 0,
       PriceFlagged: 4,
       CatalogRowsRejected: 5,
+      DocsParserRowShift: 0,
       AggregatorJoinCoverage: {},
       SourceFailures: {},
       RunDuration: 4321,
@@ -52,8 +53,14 @@ describe('buildDiscoveryMetricData', () => {
       PriceRowsAppended: 0,
       PriceFlagged: 4,
       CatalogRowsRejected: 5,
+      DocsParserRowShift: 0,
       RunDuration: 4321,
     });
+  });
+
+  it('publishes the docs-parser row shift the page-restructure alarm watches', () => {
+    const data = buildDiscoveryMetricData(result({}, { DocsParserRowShift: 2 }), 'production');
+    expect(byName(data, 'DocsParserRowShift')[0].value).toBe(2);
   });
 
   it('dimensions every datum by stage and host', () => {

@@ -88,6 +88,7 @@ const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: 
 const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
+const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
 const SecurityDashboardMock = dynamic(() => import('./SecurityDashboardMock'), { ssr: false });
 const Team = lazy(() => import('./Team'));
@@ -563,6 +564,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.ModelLogs}>{activeTab === AdminTab.ModelLogs && <ModelLogsTab />}</TabPanel>
               <TabPanel value={AdminTab.ModelMetrics}>
                 {activeTab === AdminTab.ModelMetrics && <ModelMetricsTab />}
+              </TabPanel>
+              <TabPanel value={AdminTab.ModelLifecycle}>
+                {activeTab === AdminTab.ModelLifecycle && <ModelLifecycleTab />}
               </TabPanel>
               <TabPanel value={AdminTab.ContextInspector}>
                 {activeTab === AdminTab.ContextInspector && <ContextInspectorTab />}

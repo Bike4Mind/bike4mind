@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getExpiringModels, logExpiringModels } from './deprecationHorizon';
-import type { ModelInfo } from '@bike4mind/common';
+import { catalogLifecycles, getExpiredCatalogModels, getExpiringModels, logExpiringModels } from './deprecationHorizon';
+import type { IModelCatalogRow, ModelInfo } from '@bike4mind/common';
 
 function makeModel(overrides: Partial<ModelInfo>): ModelInfo {
   return {
@@ -63,6 +63,69 @@ describe('getExpiringModels', () => {
     const result = getExpiringModels(models, 30);
     expect(result[0].modelId).toBe('sooner');
     expect(result[1].modelId).toBe('later');
+  });
+});
+
+function makeRow(overrides: Partial<IModelCatalogRow> & { modelId: string }): IModelCatalogRow {
+  return {
+    schemaVersion: 1,
+    source: 'discovery',
+    ownedGroups: ['lifecycle'],
+    patch: {},
+    effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+    ...overrides,
+  } as IModelCatalogRow;
+}
+
+const NOW = new Date('2026-07-26T00:00:00Z');
+
+describe('catalogLifecycles', () => {
+  it('reads the lifecycle the merge would apply, operator row over discovery row', () => {
+    const lifecycles = catalogLifecycles([
+      makeRow({ modelId: 'gpt-x', patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-08-01' } } }),
+      makeRow({
+        modelId: 'gpt-x',
+        source: 'operator',
+        effectiveFrom: new Date('2026-07-02T00:00:00Z'),
+        patch: { lifecycle: { status: 'active' } },
+      }),
+      makeRow({ modelId: 'gpt-y', patch: { contextWindow: 1000 } }),
+    ]);
+
+    expect(lifecycles.get('gpt-x')).toMatchObject({ status: 'active' });
+    // A row that never touched the lifecycle group contributes no entry.
+    expect(lifecycles.has('gpt-y')).toBe(false);
+  });
+});
+
+describe('getExpiredCatalogModels', () => {
+  it('lists what the picker filter hides: passed dates and sunset statuses', () => {
+    const expired = getExpiredCatalogModels(
+      new Map([
+        ['live', { status: 'active' }],
+        ['scheduled', { status: 'active', deprecationDate: '2026-12-01' }],
+        ['past-date', { status: 'active', deprecationDate: '2026-07-01' }],
+        ['status-only', { status: 'retired' }],
+      ]),
+      NOW
+    );
+
+    expect(expired.map(m => m.modelId)).toEqual(['past-date', 'status-only']);
+    expect(expired[0].daysRemaining).toBe(-25);
+    // Nothing to rank a status-only entry by, so it carries no day count.
+    expect(expired[1].daysRemaining).toBeUndefined();
+  });
+
+  it('ranks by the earliest date that has passed, most overdue first', () => {
+    const expired = getExpiredCatalogModels(
+      new Map([
+        ['recent', { status: 'deprecated', deprecationDate: '2026-07-20' }],
+        ['ancient', { status: 'retired', deprecationDate: '2025-01-01', retirementDate: '2025-06-01' }],
+      ]),
+      NOW
+    );
+
+    expect(expired.map(m => m.modelId)).toEqual(['ancient', 'recent']);
   });
 });
 

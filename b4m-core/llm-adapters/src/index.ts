@@ -14,8 +14,10 @@ import { AWSBackend } from './awsBackend';
 import { ICompletionBackend } from './backend';
 import { isBackendUsable, resolveListingKey } from './backendGate';
 import type { ApiKeyTable, BackendGateContext } from './backendGate';
+import { catalogLifecycles } from './deprecationHorizon';
 import { toProviderEndUserId } from './endUserId';
 import { mergeCatalog } from './mergeCatalog';
+import { catalogSuccessors, resolveDeprecatedModelId, updateReplacedByOverlay } from './resolveDeprecatedModel';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
@@ -55,6 +57,14 @@ export function getLlmByModel(
     return null;
   }
 
+  // Central invoke coverage (sec 5.10): the ~80 lookup sites that never learned
+  // to resolve a sunset id all end here, so one resolve covers them. Identity
+  // for every live id, and the 8 sites that do resolve just resolve twice.
+  const resolvedId = resolveDeprecatedModelId(String(modelInfo.id), 'getLlmByModel');
+  // Cast: catalog ids outrun the ModelName union, which is why the record's own
+  // id is a free string in the catalog schema.
+  const dispatchInfo = resolvedId === modelInfo.id ? modelInfo : { ...modelInfo, id: resolvedId as ModelInfo['id'] };
+
   if (isModelDeprecated(modelInfo)) {
     Logger.globalInstance.warn(
       `[model-sunset] getLlmByModel invoked with deprecated model: ${modelInfo.id} (deprecationDate: ${modelInfo.deprecationDate})`
@@ -68,24 +78,24 @@ export function getLlmByModel(
   // changes behavior. The family path is the only one that can fail loudly:
   // an unknown family throws instead of returning the null that would be
   // indistinguishable from a missing credential (sec 9 item 3).
-  if (modelInfo.adapterFamily) {
-    backend = backendForAdapterFamily(modelInfo.adapterFamily, {
+  if (dispatchInfo.adapterFamily) {
+    backend = backendForAdapterFamily(dispatchInfo.adapterFamily, {
       apiKeyTable,
-      modelId: String(modelInfo.id),
+      modelId: String(dispatchInfo.id),
       logger,
       providerEndUserId,
     });
-    backend?.setDispatchModel?.(modelInfo);
+    backend?.setDispatchModel?.(dispatchInfo);
     return backend;
   }
 
-  switch (modelInfo.backend) {
+  switch (dispatchInfo.backend) {
     case 'openai':
       if (apiKeyTable.openai === 'expired') throw new Error('OpenAI API key is expired');
       backend = apiKeyTable.openai ? new OpenAIBackend(apiKeyTable.openai, logger, providerEndUserId) : null;
       break;
     case 'bedrock':
-      switch (modelInfo.id) {
+      switch (dispatchInfo.id) {
         case ChatModels.CLAUDE_3_HAIKU_BEDROCK:
         case ChatModels.CLAUDE_3_5_HAIKU_BEDROCK:
         case ChatModels.CLAUDE_3_5_SONNET_BEDROCK:
@@ -156,7 +166,7 @@ export function getLlmByModel(
   // The seeded tier gets the record too: its thinking style and slow-model flag
   // are catalog-owned once a row claims those groups, and a builder that finds
   // the id in its own table still prefers the table (no behavior change).
-  backend?.setDispatchModel?.(modelInfo);
+  backend?.setDispatchModel?.(dispatchInfo);
 
   return backend;
 }
@@ -370,11 +380,17 @@ export const getAvailableModels = async (
     try {
       const rows = await _catalogProvider();
       merged = mergeCatalog(backendModels, rows, gateCtx);
+      // Catalog successors take precedence over the static sunset map (sec
+      // 5.10). Refreshed here, so before the first catalog read - cold start,
+      // no provider wired - resolution falls back to the static map alone.
+      updateReplacedByOverlay(catalogSuccessors(catalogLifecycles(rows)));
       Logger.globalInstance.info(
         `[getAvailableModels] model catalog applied: ${rows.length} rows over ${backendModels.length} assembled models -> ${merged.length}`
       );
     } catch (error) {
       catalogFetchFailed = true;
+      // The replacedBy overlay is deliberately left as it was: yesterday's
+      // successors beat none while the catalog is unreachable.
       Logger.globalInstance.warn('[getAvailableModels] model catalog unavailable; using adapter tables', error);
     }
   }
@@ -447,4 +463,5 @@ export * from './PipelineTimer';
 export * from './realtimeVoicePricing';
 export * from './resolveDeprecatedModel';
 export * from './deprecationHorizon';
+export * from './staleReferences';
 export * from './toolPairingUtils';

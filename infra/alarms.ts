@@ -114,6 +114,10 @@ export const modelDiscoveryPriceFlaggedAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('ModelDiscoveryPriceFlaggedAlarm')
   : undefined;
 
+export const modelDiscoveryDocsParserShiftAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('ModelDiscoveryDocsParserShiftAlarm')
+  : undefined;
+
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
@@ -872,6 +876,32 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     alarmActions: [modelDiscoveryPriceFlaggedAlarm!.arn],
+    tags: {
+      Application: 'ModelDiscovery',
+      Severity: 'Low',
+    },
+  });
+
+  /**
+   * Alarm: Docs parser row-count shift
+   *
+   * Notify, not page (sec 5.10): a parser whose row count moved sharply
+   * run-over-run is the signature of a page restructure. It fires before the
+   * bad data is actioned - a docs signal cannot hide a model on its own, so the
+   * damage is still only a queue item at this point.
+   */
+  new aws.cloudwatch.MetricAlarm('modelDiscoveryDocsParserShift', {
+    name: `${$app.name}-${$app.stage}-model-discovery-docs-parser-shift`,
+    alarmDescription: 'A model discovery docs parser changed row count sharply - the source page likely restructured',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'DocsParserRowShift',
+    namespace: 'Lumina5/ModelDiscovery',
+    period: 21600,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    alarmActions: [modelDiscoveryDocsParserShiftAlarm!.arn],
     tags: {
       Application: 'ModelDiscovery',
       Severity: 'Low',

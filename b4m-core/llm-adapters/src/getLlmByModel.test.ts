@@ -72,7 +72,13 @@ vi.mock('./bedrockBackend/deepseek', () => ({
   }),
 }));
 
-import { getLlmByModel, UnsupportedAdapterFamilyError, type ApiKeyTable } from './index';
+import {
+  getLlmByModel,
+  resetReplacedByOverlay,
+  updateReplacedByOverlay,
+  UnsupportedAdapterFamilyError,
+  type ApiKeyTable,
+} from './index';
 
 function makeModelInfo(overrides: Partial<ModelInfo> & { backend: ModelInfo['backend'] }): ModelInfo {
   return {
@@ -353,6 +359,35 @@ describe('getLlmByModel', () => {
     it('does not require the hook: a backend without it still dispatches', () => {
       const modelInfo = makeModelInfo({ backend: 'openai' });
       expect((getLlmByModel(fullApiKeys, { modelInfo, logger }) as any)._mock).toBe('openai');
+    });
+  });
+
+  describe('central deprecated-id resolution', () => {
+    afterEach(() => resetReplacedByOverlay());
+
+    it('is identity for a live id: the same record object reaches the backend', () => {
+      const modelInfo = makeModelInfo({ backend: 'anthropic', id: 'claude-sonnet-4-6' as ModelInfo['id'] });
+      const backend = getLlmByModel(fullApiKeys, { modelInfo, logger }) as any;
+      expect(backend.setDispatchModel).toHaveBeenCalledWith(modelInfo);
+      expect(backend.setDispatchModel.mock.calls[0][0]).toBe(modelInfo);
+    });
+
+    it('routes a sunset id to its successor backend, which the raw id cannot reach', () => {
+      // The bedrock switch knows the successor id and not the retired one, so
+      // without the resolve this call returns null.
+      const modelInfo = makeModelInfo({
+        backend: 'bedrock',
+        id: 'anthropic.claude-3-5-sonnet-20240620-v1:0' as ModelInfo['id'],
+      });
+      const backend = getLlmByModel({}, { modelInfo, logger }) as any;
+      expect(backend._mock).toBe('bedrock-anthropic');
+    });
+
+    it('dispatches the successor id, so the provider call names a model that still exists', () => {
+      updateReplacedByOverlay({ 'claude-retired-9': 'claude-sonnet-4-6' });
+      const modelInfo = makeModelInfo({ backend: 'anthropic', id: 'claude-retired-9' as ModelInfo['id'] });
+      const backend = getLlmByModel(fullApiKeys, { modelInfo, logger }) as any;
+      expect(backend.setDispatchModel).toHaveBeenCalledWith(expect.objectContaining({ id: 'claude-sonnet-4-6' }));
     });
   });
 
