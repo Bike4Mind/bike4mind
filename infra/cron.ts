@@ -607,7 +607,7 @@ const modelDiscoveryFunction = new sst.aws.Function('modelDiscoveryFunction', {
  * Minute offsets (:20 / :50) also keep discovery off the top of the hour, where
  * every other cron in this file starts.
  */
-const MODEL_DISCOVERY_SCHEDULE_BY_STAGE: Record<string, string> = {
+const MODEL_DISCOVERY_SCHEDULE_BY_STAGE: Record<string, `cron(${string})`> = {
   production: 'cron(20 0,6,12,18 * * ? *)', // 00:20, 06:20, 12:20, 18:20 UTC
   dev: 'cron(50 3,9,15,21 * * ? *)', // 03:50, 09:50, 15:50, 21:50 UTC
 };
