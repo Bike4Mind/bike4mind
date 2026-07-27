@@ -204,6 +204,8 @@ describe('planPriceWrites guardrails', () => {
   });
 
   it('applies the same move once the band is widened past it', () => {
+    // The band is a multiple of the rate in force, so 200% passes anything up to
+    // 3x: $5 -> $12 is a 140% move.
     const result = plan({
       contributions: [provider({ inputPerMTok: 12, outputPerMTok: 25 })],
       rowsInForce: [inForce({ '0': FIVE_AND_TWENTY_FIVE })],
@@ -212,6 +214,19 @@ describe('planPriceWrites guardrails', () => {
 
     expect(result.flags).toEqual([]);
     expect(result.rows[0].pricing['0'].input).toBe(12e-6);
+  });
+
+  it('still flags a 10x move against a widened band', () => {
+    // A symmetric distance saturates at 100%, which would make every band of 100
+    // or more a no-op; against the rate in force this is a 900% move.
+    const result = plan({
+      contributions: [provider({ inputPerMTok: 50, outputPerMTok: 25 })],
+      rowsInForce: [inForce({ '0': FIVE_AND_TWENTY_FIVE })],
+      bandPct: 200,
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'band-exceeded', proposed: { inputPerMTok: 50 } });
   });
 
   it('drops a price for a model no catalog row covers', () => {
@@ -294,16 +309,28 @@ describe('planPriceWrites provenance', () => {
     expect(agreeing.skipped).toEqual([{ modelId: 'gpt-6', reason: 'tiered-pricing' }]);
   });
 
-  it('treats a single tier keyed above zero as a ladder too', () => {
-    // The seed keys its single tier at the context window, so this is the
-    // common shape: a flat '0' row would drop a threshold we cannot re-derive.
+  it('treats a single tier keyed above zero as flat, not as a ladder', () => {
+    // The seed keys its single tier at the context window, so reading '0' as the
+    // only flat shape would leave nearly every seeded model unrepricable forever.
     const result = plan({
       contributions: [provider({ inputPerMTok: 8, outputPerMTok: 25 })],
       rowsInForce: [inForce({ '200000': FIVE_AND_TWENTY_FIVE })],
     });
 
     expect(result.rows).toEqual([]);
-    expect(result.flags[0].kind).toBe('tiered-pricing-manual');
+    expect(result.flags[0].kind).toBe('band-exceeded');
+  });
+
+  it('supersedes a seed-keyed row under the same key it already uses', () => {
+    const result = plan({
+      contributions: [provider({ inputPerMTok: 6, outputPerMTok: 25 })],
+      rowsInForce: [inForce({ '200000': FIVE_AND_TWENTY_FIVE })],
+    });
+
+    expect(result.flags).toEqual([]);
+    // Re-keying to '0' would churn the seed's threshold convention on every run.
+    expect(Object.keys(result.rows[0].pricing)).toEqual(['200000']);
+    expect(result.rows[0].pricing['200000'].input).toBe(6e-6);
   });
 });
 
@@ -381,6 +408,77 @@ describe('planPriceWrites idempotence and carry-forward', () => {
       cache_read: 0.25e-6,
       cache_write: 5e-6,
     });
+  });
+
+  it('flags a cache rate the two sources disagree about', () => {
+    // The repo's own aggregator fixtures do exactly this for grok-4.5: the text
+    // rates match to the cent and the cache rates are 0.5 against 0.3.
+    const result = plan({
+      contributions: [
+        modelsDev({ inputPerMTok: 2, outputPerMTok: 6, cacheReadPerMTok: 0.3 }),
+        litellm({ inputPerMTok: 2, outputPerMTok: 6, cacheReadPerMTok: 0.5 }),
+      ],
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'source-disagreement', sources: ['models.dev', 'litellm'] });
+  });
+
+  it('does not read a cache rate only one source publishes as a disagreement', () => {
+    const result = plan({
+      contributions: [
+        modelsDev({ inputPerMTok: 2, outputPerMTok: 6, cacheReadPerMTok: 0.3 }),
+        litellm({ inputPerMTok: 2, outputPerMTok: 6 }),
+      ],
+    });
+
+    expect(result.flags).toEqual([]);
+    expect(result.rows[0].pricing['0'].cache_read).toBe(0.3e-6);
+  });
+
+  it('writes the one cache rate a source publishes and carries the other forward', () => {
+    const result = plan({
+      contributions: [provider({ inputPerMTok: 5, outputPerMTok: 25, cacheReadPerMTok: 0.25 })],
+      rowsInForce: [
+        inForce(
+          { '0': { ...FIVE_AND_TWENTY_FIVE, cache_read: 0.5e-6, cache_write: 6.25e-6 } },
+          'discovery:openai@2026-01-01T00:00:00.000Z'
+        ),
+      ],
+    });
+
+    expect(result.rows[0].pricing['0']).toEqual({
+      input: 5e-6,
+      output: 25e-6,
+      cache_read: 0.25e-6,
+      cache_write: 6.25e-6,
+    });
+  });
+
+  it('bands a cache rate against the row in force like any other rate', () => {
+    const result = plan({
+      contributions: [provider({ inputPerMTok: 5, outputPerMTok: 25, cacheReadPerMTok: 5 })],
+      rowsInForce: [
+        inForce({ '0': { ...FIVE_AND_TWENTY_FIVE, cache_read: 0.5e-6 } }, 'discovery:openai@2026-01-01T00:00:00.000Z'),
+      ],
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0].kind).toBe('band-exceeded');
+    expect(result.flags[0].detail).toContain('cache_read');
+  });
+
+  it('drops a published cache rate of zero and keeps the carried one', () => {
+    // A stored cache_read of 0 would defeat getTextModelCost's fallback to
+    // input * CACHE_READ_MULTIPLIER and settle every cached read free.
+    const result = plan({
+      contributions: [provider({ inputPerMTok: 6, outputPerMTok: 25, cacheReadPerMTok: 0 })],
+      rowsInForce: [
+        inForce({ '0': { ...FIVE_AND_TWENTY_FIVE, cache_read: 0.5e-6 } }, 'discovery:openai@2026-01-01T00:00:00.000Z'),
+      ],
+    });
+
+    expect(result.rows[0].pricing['0']).toEqual({ input: 6e-6, output: 25e-6, cache_read: 0.5e-6 });
   });
 
   it('treats a cache-rate-only change as a change', () => {

@@ -163,6 +163,51 @@ describe('POST /api/admin/model-deprecation-status', () => {
     expect(mockResolveSuggestion).toHaveBeenCalledWith('gpt-sunset', 'accepted');
   });
 
+  it('keeps the lifecycle fields a remap-only suggestion says nothing about', async () => {
+    // The operator row owns the whole group and the merge swaps it wholesale, so
+    // dropping the date here would un-hide the model.
+    mockFindByModelId.mockResolvedValue({
+      modelId: 'gpt-sunset',
+      suggestion: { replacedBy: 'gpt-live', source: 'anthropic-docs', suggestedAt: new Date() },
+    });
+    const { run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'successor confirmed' },
+    });
+    await run();
+
+    expect(mockAppend.mock.calls[0][0].patch.lifecycle).toEqual({
+      status: 'deprecated',
+      deprecationDate: '2026-01-01',
+      replacedBy: 'gpt-live',
+    });
+  });
+
+  it('lets the suggestion date win over the one already in force', async () => {
+    const { run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'anthropic deprecation page 2026-07' },
+    });
+    await run();
+
+    // The catalog carries 2026-01-01; the suggestion is the newer evidence.
+    expect(mockAppend.mock.calls[0][0].patch.lifecycle.deprecationDate).toBe('2026-08-01');
+  });
+
+  it('rejects a suggestion whose date is not a calendar date', async () => {
+    mockFindByModelId.mockResolvedValue({
+      modelId: 'gpt-sunset',
+      suggestion: { ...SUGGESTION, deprecationDate: 'early 2027' },
+    });
+    const { run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'parsed from the deprecations page' },
+    });
+
+    await expect(run()).rejects.toThrow(/not a YYYY-MM-DD calendar date/);
+    expect(mockAppend).not.toHaveBeenCalled();
+  });
+
   it('rejects an accept without a note (the note IS the audit trail)', async () => {
     const { run } = call({ method: 'POST', body: { modelId: 'gpt-sunset', action: 'accept', note: '   ' } });
     await expect(run()).rejects.toThrow(/note/i);

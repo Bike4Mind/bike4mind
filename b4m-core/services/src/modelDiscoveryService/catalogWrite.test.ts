@@ -141,6 +141,21 @@ describe('planCatalogWrites', () => {
     ]);
   });
 
+  it('does not count an aggregator listing as a sighting', () => {
+    const base = asBase(
+      [],
+      [seedRow({ id: 'gpt-6', vendor: 'openai', backend: 'openai', type: 'text' }, ['identity'])]
+    );
+    const result = plan({
+      base,
+      contributions: [{ name: 'models.dev', kind: 'aggregator', records: [{ modelId: 'gpt-6', patch: {} }] }],
+    });
+
+    // The aggregators keep retired ids forever; treating one as evidence the
+    // model still exists would freeze the absence protocol permanently.
+    expect([...result.sightedModelIds]).toEqual([]);
+  });
+
   it('lets an aggregator enrich a model a provider already sighted', () => {
     const result = plan({
       resolveDispatch: dispatchable,

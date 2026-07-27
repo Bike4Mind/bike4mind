@@ -316,6 +316,42 @@ describe('runModelDiscovery', () => {
       expect(bench.catalog.rows).toHaveLength(1);
       expect(result.metrics.ModelsDeprecated).toBe(0);
     });
+
+    it('still counts a miss while an aggregator lists a model the provider dropped', async () => {
+      await runModelDiscovery(bench.adapters, bench.options);
+      bench.advance(60_000);
+      // litellm and models.dev keep retired ids forever, so an aggregator record
+      // must neither reset the streak nor prevent the miss.
+      bench.adapters.sources = [
+        openaiSource([]),
+        stubSource({
+          name: 'models.dev',
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: { supportsTools: true } }],
+        }),
+      ];
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(result.absence.missed).toEqual(['gpt-6']);
+      expect(result.absence.sighted).toEqual([]);
+      expect(bench.state.misses).toEqual(['gpt-6']);
+    });
+
+    it('resets the streak the moment the provider lists it again', async () => {
+      await runModelDiscovery(bench.adapters, bench.options);
+      bench.adapters.sources = [openaiSource([])];
+      bench.advance(60_000);
+      await runModelDiscovery(bench.adapters, bench.options);
+      expect(bench.state.states.get('gpt-6')?.missCount).toBe(1);
+
+      bench.adapters.sources = [openaiSource()];
+      bench.advance(60_000);
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(result.absence.sighted).toEqual(['gpt-6']);
+      expect(bench.state.states.get('gpt-6')?.missCount).toBe(0);
+    });
   });
 
   describe('lifecycle', () => {
@@ -483,6 +519,29 @@ describe('runModelDiscovery', () => {
           deprecationDate: '2026-07-30',
         });
         expect(bench.catalog.rows[1].patch).toMatchObject({ lifecycle: { status: 'legacy' } });
+        expect(bench.warnings.some(message => message.startsWith('[model-sunset]'))).toBe(true);
+      });
+
+      it('reports and logs a future date a typed source set without a status change', async () => {
+        const result = await secondRun(bench, [
+          openaiSource([sunset({ status: 'active', deprecationDate: '2026-12-01' }, 'typed')]),
+        ]);
+
+        // Not a deprecation this run, but the picker drops the model the day the
+        // date passes, so it cannot be invisible until then.
+        expect(result.lifecycle.transitions).toEqual([]);
+        expect(result.metrics.ModelsDeprecated).toBe(0);
+        expect(result.lifecycle.dateChanges).toEqual([
+          {
+            modelId: 'gpt-6',
+            status: 'active',
+            signal: 'typed',
+            previousDeprecationDate: undefined,
+            deprecationDate: '2026-12-01',
+            previousRetirementDate: undefined,
+            retirementDate: undefined,
+          },
+        ]);
         expect(bench.warnings.some(message => message.startsWith('[model-sunset]'))).toBe(true);
       });
 

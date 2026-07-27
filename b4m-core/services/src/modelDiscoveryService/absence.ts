@@ -18,7 +18,7 @@ export interface AbsencePlan {
 export interface AbsenceInput {
   /** Union of authoritativeFor across the sources that SUCCEEDED this run. */
   coveredBackends: ReadonlySet<string>;
-  /** Every model id a source reported this run. */
+  /** Every model id a PROVIDER reported this run (planCatalogWrites decides that). */
   sightedModelIds: ReadonlySet<string>;
   /** Catalog belief per model, for the backend each one belongs to. */
   base: ReadonlyMap<string, ResolvedCatalogRecord>;
@@ -46,8 +46,8 @@ export function planAbsence({ coveredBackends, sightedModelIds, base }: AbsenceI
     if (backend && coveredBackends.has(backend)) missed.push(modelId);
   }
 
-  // A model a source reported that the catalog has never held is still a sighting:
-  // its state row is what a later miss streak counts against.
+  // A model a provider reported that the catalog has never held is still a
+  // sighting: its state row is what a later miss streak counts against.
   for (const modelId of sightedModelIds) {
     if (!base.has(modelId)) sighted.push(modelId);
   }

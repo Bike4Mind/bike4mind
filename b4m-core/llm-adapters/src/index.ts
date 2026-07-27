@@ -17,7 +17,7 @@ import type { ApiKeyTable, BackendGateContext } from './backendGate';
 import { catalogLifecycles } from './deprecationHorizon';
 import { toProviderEndUserId } from './endUserId';
 import { mergeCatalog } from './mergeCatalog';
-import { catalogSuccessors, resolveDeprecatedModelId, updateReplacedByOverlay } from './resolveDeprecatedModel';
+import { catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
@@ -57,14 +57,10 @@ export function getLlmByModel(
     return null;
   }
 
-  // Central invoke coverage (sec 5.10): the ~80 lookup sites that never learned
-  // to resolve a sunset id all end here, so one resolve covers them. Identity
-  // for every live id, and the 8 sites that do resolve just resolve twice.
-  const resolvedId = resolveDeprecatedModelId(String(modelInfo.id), 'getLlmByModel');
-  // Cast: catalog ids outrun the ModelName union, which is why the record's own
-  // id is a free string in the catalog schema.
-  const dispatchInfo = resolvedId === modelInfo.id ? modelInfo : { ...modelInfo, id: resolvedId as ModelInfo['id'] };
-
+  // No id resolution here: callers complete() with the id they passed, so a
+  // record swapped in at this point would drop the catalog dispatch profile for
+  // the id actually sent. Resolution belongs at the call sites, which already do
+  // it through resolveDeprecatedModelId (now catalog-backed).
   if (isModelDeprecated(modelInfo)) {
     Logger.globalInstance.warn(
       `[model-sunset] getLlmByModel invoked with deprecated model: ${modelInfo.id} (deprecationDate: ${modelInfo.deprecationDate})`
@@ -78,24 +74,24 @@ export function getLlmByModel(
   // changes behavior. The family path is the only one that can fail loudly:
   // an unknown family throws instead of returning the null that would be
   // indistinguishable from a missing credential (sec 9 item 3).
-  if (dispatchInfo.adapterFamily) {
-    backend = backendForAdapterFamily(dispatchInfo.adapterFamily, {
+  if (modelInfo.adapterFamily) {
+    backend = backendForAdapterFamily(modelInfo.adapterFamily, {
       apiKeyTable,
-      modelId: String(dispatchInfo.id),
+      modelId: String(modelInfo.id),
       logger,
       providerEndUserId,
     });
-    backend?.setDispatchModel?.(dispatchInfo);
+    backend?.setDispatchModel?.(modelInfo);
     return backend;
   }
 
-  switch (dispatchInfo.backend) {
+  switch (modelInfo.backend) {
     case 'openai':
       if (apiKeyTable.openai === 'expired') throw new Error('OpenAI API key is expired');
       backend = apiKeyTable.openai ? new OpenAIBackend(apiKeyTable.openai, logger, providerEndUserId) : null;
       break;
     case 'bedrock':
-      switch (dispatchInfo.id) {
+      switch (modelInfo.id) {
         case ChatModels.CLAUDE_3_HAIKU_BEDROCK:
         case ChatModels.CLAUDE_3_5_HAIKU_BEDROCK:
         case ChatModels.CLAUDE_3_5_SONNET_BEDROCK:
@@ -166,7 +162,7 @@ export function getLlmByModel(
   // The seeded tier gets the record too: its thinking style and slow-model flag
   // are catalog-owned once a row claims those groups, and a builder that finds
   // the id in its own table still prefers the table (no behavior change).
-  backend?.setDispatchModel?.(dispatchInfo);
+  backend?.setDispatchModel?.(modelInfo);
 
   return backend;
 }

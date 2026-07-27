@@ -122,14 +122,18 @@ export class ModelDiscoveryStateRepository
   ): Promise<IModelDiscoveryState> {
     const existing = (await this.model.findOne({ modelId }).lean()) as IModelDiscoveryState | null;
     const held = existing?.suggestion;
+    const unchanged = held !== undefined && sameSuggestionContent(held, suggestion);
     // Re-raising what an operator already settled would put a dismissed model
     // back in the queue every run. Different content is a NEW proposal and does
     // go back, unresolved.
-    if (held?.resolution && sameSuggestionContent(held, suggestion)) return existing as IModelDiscoveryState;
+    if (held?.resolution && unchanged) return existing as IModelDiscoveryState;
 
+    // Every run re-raises the same unresolved item, so re-stamping it would make
+    // the queue's age read as today forever and hide how long it has waited.
+    const suggestedAt = unchanged ? held.suggestedAt : at;
     const doc = await this.model.findOneAndUpdate(
       { modelId },
-      { $set: { suggestion: { ...suggestion, suggestedAt: at } } },
+      { $set: { suggestion: { ...suggestion, suggestedAt } } },
       { upsert: true, new: true }
     );
     return doc.toJSON() as IModelDiscoveryState;

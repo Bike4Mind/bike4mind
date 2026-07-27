@@ -362,32 +362,28 @@ describe('getLlmByModel', () => {
     });
   });
 
-  describe('central deprecated-id resolution', () => {
+  describe('deprecated ids at the entry point', () => {
     afterEach(() => resetReplacedByOverlay());
 
-    it('is identity for a live id: the same record object reaches the backend', () => {
-      const modelInfo = makeModelInfo({ backend: 'anthropic', id: 'claude-sonnet-4-6' as ModelInfo['id'] });
-      const backend = getLlmByModel(fullApiKeys, { modelInfo, logger }) as any;
-      expect(backend.setDispatchModel).toHaveBeenCalledWith(modelInfo);
-      expect(backend.setDispatchModel.mock.calls[0][0]).toBe(modelInfo);
-    });
-
-    it('routes a sunset id to its successor backend, which the raw id cannot reach', () => {
-      // The bedrock switch knows the successor id and not the retired one, so
-      // without the resolve this call returns null.
+    it('does not resolve a retired bedrock id: the null probe is the legacy behavior', () => {
+      // The static map sends this id to an Opus the switch does know, so
+      // resolving here would turn a null every caller handles into a constructed
+      // backend. Resolution belongs at the call sites.
       const modelInfo = makeModelInfo({
         backend: 'bedrock',
-        id: 'anthropic.claude-3-5-sonnet-20240620-v1:0' as ModelInfo['id'],
+        id: 'anthropic.claude-3-opus-20240229-v1:0' as ModelInfo['id'],
       });
-      const backend = getLlmByModel({}, { modelInfo, logger }) as any;
-      expect(backend._mock).toBe('bedrock-anthropic');
+      expect(getLlmByModel({}, { modelInfo, logger })).toBeNull();
     });
 
-    it('dispatches the successor id, so the provider call names a model that still exists', () => {
+    it('hands the backend the record it was called with even when an overlay names a successor', () => {
+      // DispatchModel.for() is keyed by the id the caller completes with, so a
+      // swapped record would silently drop the catalog dispatch profile.
       updateReplacedByOverlay({ 'claude-retired-9': 'claude-sonnet-4-6' });
       const modelInfo = makeModelInfo({ backend: 'anthropic', id: 'claude-retired-9' as ModelInfo['id'] });
       const backend = getLlmByModel(fullApiKeys, { modelInfo, logger }) as any;
-      expect(backend.setDispatchModel).toHaveBeenCalledWith(expect.objectContaining({ id: 'claude-sonnet-4-6' }));
+      expect(backend.setDispatchModel).toHaveBeenCalledWith(modelInfo);
+      expect(backend.setDispatchModel.mock.calls[0][0]).toBe(modelInfo);
     });
   });
 

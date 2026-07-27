@@ -299,6 +299,23 @@ export interface LifecycleTransition {
 }
 
 /**
+ * A lifecycle date a typed feed moved without moving the status. It is NOT a
+ * transition and must not count as one, but a catalog deprecationDate is a
+ * delayed picker hide, so a date landing months ahead of its status change
+ * cannot be invisible to the report.
+ */
+export interface LifecycleDateChange {
+  modelId: string;
+  /** The status the model keeps; a move into a sunset status is a transition instead. */
+  status: string;
+  signal: LifecycleSignalKind;
+  previousDeprecationDate?: string;
+  deprecationDate?: string;
+  previousRetirementDate?: string;
+  retirementDate?: string;
+}
+
+/**
  * A lifecycle change discovery is not allowed to apply, with everything an
  * operator needs to settle it. Same contract as PriceFlag.detail: the reason is
  * spelled out, never left to the reader to infer.
@@ -366,6 +383,8 @@ export interface ModelDiscoveryRunResult {
   /** The lifecycle plan, likewise: report mode declines to persist it, nothing more. */
   lifecycle: {
     transitions: LifecycleTransition[];
+    /** Date moves with no status transition behind them; never counted as deprecations. */
+    dateChanges: LifecycleDateChange[];
     suggestions: LifecycleSuggestion[];
     /** Models the absence protocol graduated this run, a subset of `transitions`. */
     wouldDeprecate: string[];

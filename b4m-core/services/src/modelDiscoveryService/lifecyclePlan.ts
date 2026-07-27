@@ -17,6 +17,7 @@ import type {
   DiscoveredModel,
   DiscoveryAutoRemapPolicy,
   DroppedSourceRecord,
+  LifecycleDateChange,
   LifecycleEvidence,
   LifecycleSignalKind,
   LifecycleSuggestion,
@@ -39,10 +40,10 @@ export const DOCS_PARSER_SHIFT_TOLERANCE = 0.2;
 /** Note prefix on the row the absence protocol appends; mirrors catalogWrite's shape. */
 export const ABSENCE_NOTE_PREFIX = 'discovery:absence@';
 
-/** Suggestion `source` when the successor came from our own family heuristic. */
+/** Suggestion `source` when a typed sunset's successor came from our own family heuristic. */
 export const HEURISTIC_SOURCE = 'heuristic';
 
-/** Suggestion `source` when the K-miss protocol raised it. */
+/** Suggestion `source` for everything the K-miss protocol raised, successor included. */
 export const ABSENCE_SOURCE = 'absence';
 
 /** Statuses a model is out of the pickers in. Entering one is what the report calls a transition. */
@@ -177,6 +178,14 @@ export interface LifecyclePlanInput {
   catalogPlan: CatalogWritePlan;
   /** Belief per model from the NON-operator rows in force, as planCatalogWrites took it. */
   base: ReadonlyMap<string, ResolvedCatalogRecord>;
+  /**
+   * Belief per model from EVERY row in force, operator rows included. The remap
+   * constraints and the docs-redundancy check read THIS view: an operator who
+   * deprecated a model has ruled it out as a successor, and a lifecycle an
+   * operator already recorded is not a queue item. Absent means the base view,
+   * which is what it resolves to on a deployment with no operator rows.
+   */
+  resolvedInForce?: ReadonlyMap<string, ResolvedCatalogRecord>;
   /** Docs signals from planLifecycleSignals, keyed by model. */
   docs: ReadonlyMap<string, DocsLifecycleSignal>;
   /** planAbsence's missed ids: the only models the absence protocol can graduate. */
@@ -212,10 +221,15 @@ export interface LifecyclePlan {
   diff: CatalogDiffEntry[];
   dropped: DroppedSourceRecord[];
   transitions: LifecycleTransition[];
+  /** Date moves with no status transition behind them; see LifecycleDateChange. */
+  dateChanges: LifecycleDateChange[];
   suggestions: LifecycleSuggestion[];
   /** Models the absence protocol graduated; in report mode, the ones it would have. */
   wouldDeprecate: string[];
 }
+
+/** LifecyclePlanInput with the operator-inclusive view resolved, as the helpers read it. */
+type PlanContext = LifecyclePlanInput & { resolvedInForce: ReadonlyMap<string, ResolvedCatalogRecord> };
 
 /** One model's lifecycle move before the remap decision has been made about it. */
 interface PendingTransition {
@@ -237,11 +251,12 @@ interface PendingTransition {
  * as deprecated produces no second row, so a permanently missing model costs one
  * append and then nothing.
  */
-export function planLifecycle(input: LifecyclePlanInput): LifecyclePlan {
+export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
+  const input: PlanContext = { ...plannerInput, resolvedInForce: plannerInput.resolvedInForce ?? plannerInput.base };
   const dropped: DroppedSourceRecord[] = [];
-  const typed = typedTransitions(input.catalogPlan, input.base);
+  const typed = typedSignals(input.catalogPlan, input.base);
   const graduated = absenceGraduations(input, dropped);
-  const pending = [...typed, ...graduated];
+  const pending = [...typed.transitions, ...graduated];
 
   // Nothing this run is retiring may be proposed as somebody else's successor.
   const sunsetting = new Set(pending.map(entry => entry.modelId));
@@ -258,8 +273,7 @@ export function planLifecycle(input: LifecyclePlanInput): LifecyclePlan {
       suggestions.push({
         modelId: entry.modelId,
         replacedBy: remap.candidate,
-        source:
-          remap.origin === 'declared' ? (input.docs.get(entry.modelId)?.source ?? HEURISTIC_SOURCE) : HEURISTIC_SOURCE,
+        source: suggestionSource(entry, remap, input),
         detail: describeRemap(remap, entry.modelId, input.autoRemap),
       });
     }
@@ -315,31 +329,72 @@ export function planLifecycle(input: LifecyclePlanInput): LifecyclePlan {
     });
   }
 
-  return { rows, diff, dropped, transitions, suggestions, wouldDeprecate: graduated.map(entry => entry.modelId) };
+  return {
+    rows,
+    diff,
+    dropped,
+    transitions,
+    dateChanges: typed.dateChanges,
+    suggestions,
+    wouldDeprecate: graduated.map(entry => entry.modelId),
+  };
 }
 
 /**
- * Transitions the catalog plan already carries. Read off the planned rows rather
- * than recomputed from the sources, so the report can never name a change the
- * run would not actually append.
+ * What the queue credits for raising the item. A graduation belongs to the
+ * absence protocol whoever named the successor - the operator is being asked
+ * about a model that vanished - and the detail line says how it was picked.
  */
-function typedTransitions(
+function suggestionSource(entry: PendingTransition, remap: RemapDecision, input: PlanContext): string {
+  if (entry.signal === 'absence') return ABSENCE_SOURCE;
+  return remap.origin === 'declared' ? (input.docs.get(entry.modelId)?.source ?? HEURISTIC_SOURCE) : HEURISTIC_SOURCE;
+}
+
+/**
+ * Lifecycle moves the catalog plan already carries. Read off the planned rows
+ * rather than recomputed from the sources, so the report can never name a change
+ * the run would not actually append.
+ */
+function typedSignals(
   plan: CatalogWritePlan,
   base: ReadonlyMap<string, ResolvedCatalogRecord>
-): PendingTransition[] {
+): { transitions: PendingTransition[]; dateChanges: LifecycleDateChange[] } {
   const transitions: PendingTransition[] = [];
+  const dateChanges: LifecycleDateChange[] = [];
+
   for (const row of plan.rows) {
     if (row.source !== 'discovery') continue;
     const lifecycle = row.patch.lifecycle;
-    if (!lifecycle || !SUNSET_STATUSES.has(lifecycle.status)) continue;
-    const from = statusOf(base.get(row.modelId));
-    if (from === lifecycle.status) continue;
-    transitions.push({ modelId: row.modelId, from, to: lifecycle.status, signal: 'typed', lifecycle });
+    if (!lifecycle) continue;
+    const held = lifecycleOf(base.get(row.modelId));
+    const from = held?.status;
+
+    if (SUNSET_STATUSES.has(lifecycle.status) && from !== lifecycle.status) {
+      transitions.push({ modelId: row.modelId, from, to: lifecycle.status, signal: 'typed', lifecycle });
+      continue;
+    }
+    // No transition, but a date the catalog did not carry IS a delayed hide: the
+    // picker drops the model the day it passes, so it has to reach the report.
+    if (sameDates(held, lifecycle)) continue;
+    dateChanges.push({
+      modelId: row.modelId,
+      status: lifecycle.status,
+      signal: 'typed',
+      previousDeprecationDate: held?.deprecationDate,
+      deprecationDate: lifecycle.deprecationDate,
+      previousRetirementDate: held?.retirementDate,
+      retirementDate: lifecycle.retirementDate,
+    });
   }
-  return transitions;
+
+  return { transitions, dateChanges };
 }
 
-function absenceGraduations(input: LifecyclePlanInput, dropped: DroppedSourceRecord[]): PendingTransition[] {
+const sameDates = (held: HeldLifecycle | undefined, next: NonNullable<ModelRecord['lifecycle']>): boolean =>
+  (held?.deprecationDate ?? null) === (next.deprecationDate ?? null) &&
+  (held?.retirementDate ?? null) === (next.retirementDate ?? null);
+
+function absenceGraduations(input: PlanContext, dropped: DroppedSourceRecord[]): PendingTransition[] {
   const graduated: PendingTransition[] = [];
   const deprecationDate = input.runStartedAt.toISOString().slice(0, 10);
 
@@ -387,7 +442,7 @@ interface RemapDecision {
  */
 function planRemap(
   entry: PendingTransition,
-  input: LifecyclePlanInput,
+  input: PlanContext,
   sunsetting: ReadonlySet<string>
 ): RemapDecision | undefined {
   const declared = input.docs.get(entry.modelId)?.lifecycle.replacedBy;
@@ -407,18 +462,18 @@ function planRemap(
 function verifyReplacement(
   candidateId: string,
   modelId: string,
-  input: LifecyclePlanInput,
+  input: PlanContext,
   sunsetting: ReadonlySet<string>
 ): RemapBlocker[] {
   if (candidateId === modelId) return ['deprecating-too'];
-  const candidate = input.base.get(candidateId);
+  const candidate = input.resolvedInForce.get(candidateId);
   // Nothing else can be read off a model the catalog does not hold, and an
   // unverifiable clause is a failed clause.
   if (!candidate) return ['unknown-model'];
 
   const blockers: RemapBlocker[] = [];
   if (statusOf(candidate) !== 'active') blockers.push('not-active');
-  if (backendOf(candidate) !== backendOf(input.base.get(modelId))) blockers.push('different-backend');
+  if (backendOf(candidate) !== backendOf(input.resolvedInForce.get(modelId))) blockers.push('different-backend');
   if (sunsetting.has(candidateId)) blockers.push('deprecating-too');
   const cost = costClause(candidateId, modelId, input.ratesInForce);
   if (cost) blockers.push(cost);
@@ -448,12 +503,8 @@ function costClause(
  * `claude-3-opus` and `claude-opus-4-5` both read as claude/opus. Longest shared
  * family wins, then the nearest rank, then the id, so a run is reproducible.
  */
-function heuristicSuccessor(
-  modelId: string,
-  input: LifecyclePlanInput,
-  sunsetting: ReadonlySet<string>
-): string | undefined {
-  const target = input.base.get(modelId);
+function heuristicSuccessor(modelId: string, input: PlanContext, sunsetting: ReadonlySet<string>): string | undefined {
+  const target = input.resolvedInForce.get(modelId);
   if (!target) return undefined;
   const segments = familySegments(modelId);
   const backend = backendOf(target);
@@ -461,7 +512,7 @@ function heuristicSuccessor(
   const rank = numberOf(target.record.rank);
 
   let best: { id: string; shared: number; distance: number } | undefined;
-  for (const [candidateId, candidate] of input.base) {
+  for (const [candidateId, candidate] of input.resolvedInForce) {
     if (candidateId === modelId || sunsetting.has(candidateId)) continue;
     if (statusOf(candidate) !== 'active') continue;
     if (backendOf(candidate) !== backend || candidate.record.type !== type) continue;
@@ -486,12 +537,14 @@ function heuristicSuccessor(
  * Docs signals nothing acted on. They are the queue item sec 5.10 asks for: the
  * page says a model is going away, no typed feed agrees, so an operator decides.
  */
-function docsSuggestions(input: LifecyclePlanInput, sunsetting: ReadonlySet<string>): LifecycleSuggestion[] {
+function docsSuggestions(input: PlanContext, sunsetting: ReadonlySet<string>): LifecycleSuggestion[] {
   const suggestions: LifecycleSuggestion[] = [];
   for (const signal of input.docs.values()) {
     if (signal.corroborated || sunsetting.has(signal.modelId)) continue;
-    if (!TERMINAL_STATUSES.has(signal.lifecycle.status)) continue;
-    const existing = input.base.get(signal.modelId);
+    // Every sunset status, 'legacy' included: a docs row nothing corroborates is
+    // a queue item, and a legacy one that raised nothing simply vanished.
+    if (!SUNSET_STATUSES.has(signal.lifecycle.status)) continue;
+    const existing = input.resolvedInForce.get(signal.modelId);
     // A model the catalog does not hold has no lifecycle to move, and one the
     // catalog already agrees with would re-queue the same item every run.
     if (!existing || agreesWith(existing, signal.lifecycle)) continue;

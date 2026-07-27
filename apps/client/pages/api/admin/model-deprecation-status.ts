@@ -29,6 +29,9 @@ import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 /** Lifecycle statuses a row may carry; a suggestion outside them cannot be appended. */
 const LIFECYCLE_STATUSES = ['discovered', 'active', 'legacy', 'deprecated', 'retired', 'unlisted'] as const;
 
+/** The catalog's date format. A docs parser can produce anything, and the append throws on it. */
+const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
 const ResolveBody = z.object({
   modelId: z.string().min(1),
   action: z.enum(['accept', 'dismiss']),
@@ -90,21 +93,39 @@ const handler = baseApi()
     const note = parsed.data.note?.trim() ?? '';
     if (!note) throw new BadRequestError('note is required: it is the audit trail for this lifecycle change');
 
-    const status = suggestion.status ?? 'deprecated';
+    const [live, rows] = await Promise.all([
+      getAvailableModels(null, { includePrivate: true }),
+      modelCatalogRepository.rowsInForce(),
+    ]);
+    const lifecycles = catalogLifecycles(rows);
+    // This row owns the whole lifecycle group and the merge swaps the object
+    // wholesale, so every field the suggestion is silent about has to be
+    // restated: accepting a remap-only suggestion must not drop the dates that
+    // hide the model. The view is operator-inclusive, i.e. what is in force now.
+    const current = lifecycles.get(modelId);
+
+    const status = suggestion.status ?? current?.status ?? 'deprecated';
     if (!(LIFECYCLE_STATUSES as readonly string[]).includes(status)) {
       throw new BadRequestError(`suggested status '${status}' is not a lifecycle status this build can write`);
     }
 
-    const replacedBy = parsed.data.replacedBy ?? suggestion.replacedBy;
+    const deprecationDate = suggestion.deprecationDate ?? current?.deprecationDate;
+    const retirementDate = suggestion.retirementDate ?? current?.retirementDate;
+    for (const [field, value] of [
+      ['deprecationDate', deprecationDate],
+      ['retirementDate', retirementDate],
+    ] as const) {
+      if (value !== undefined && !CALENDAR_DATE.test(value)) {
+        throw new BadRequestError(`${field} '${value}' is not a YYYY-MM-DD calendar date`);
+      }
+    }
+
+    const replacedBy = parsed.data.replacedBy ?? suggestion.replacedBy ?? current?.replacedBy;
     if (replacedBy) {
-      // A successor must not itself be a stale reference - the same clauses the
-      // run's auto-remap has to pass (sec 8). Checked through the report's own
-      // predicate so the queue cannot accept what the report would then flag.
-      const [live, rows] = await Promise.all([
-        getAvailableModels(null, { includePrivate: true }),
-        modelCatalogRepository.rowsInForce(),
-      ]);
-      const problem = classifyModelReference(replacedBy, { models: live, lifecycles: catalogLifecycles(rows) });
+      // An operator override is sovereign: the only clauses it has to pass are
+      // that the successor exists and is not itself sunset. Checked through the
+      // report's own predicate so the queue cannot accept what it would flag.
+      const problem = classifyModelReference(replacedBy, { models: live, lifecycles });
       if (problem === 'unknown') {
         throw new BadRequestError(`replacedBy ${replacedBy} is unknown to the merged model list`);
       }
@@ -119,8 +140,8 @@ const handler = baseApi()
       patch: {
         lifecycle: {
           status: status as (typeof LIFECYCLE_STATUSES)[number],
-          ...(suggestion.deprecationDate ? { deprecationDate: suggestion.deprecationDate } : {}),
-          ...(suggestion.retirementDate ? { retirementDate: suggestion.retirementDate } : {}),
+          ...(deprecationDate ? { deprecationDate } : {}),
+          ...(retirementDate ? { retirementDate } : {}),
           ...(replacedBy ? { replacedBy } : {}),
         },
       },

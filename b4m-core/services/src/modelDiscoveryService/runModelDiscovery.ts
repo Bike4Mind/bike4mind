@@ -13,7 +13,13 @@ import { resolveCatalogRecords, type ResolvedCatalogRecord } from '@bike4mind/ll
 import pLimit from 'p-limit';
 import { applyAbsence, planAbsence } from './absence';
 import { planCatalogWrites, summarizeDiff } from './catalogWrite';
-import { detectParserRowShifts, planLifecycle, planLifecycleSignals, type ParserRowShift } from './lifecyclePlan';
+import {
+  detectParserRowShifts,
+  planLifecycle,
+  planLifecycleSignals,
+  type LifecyclePlan,
+  type ParserRowShift,
+} from './lifecyclePlan';
 import { describePriceRows, perTokenRatesInForce, planPriceWrites } from './pricePlan';
 import type {
   DiscoveryAutoEnablePolicy,
@@ -25,7 +31,6 @@ import type {
   DiscoverySource,
   DiscoverySourceOk,
   LifecycleSuggestion,
-  LifecycleTransition,
   ModelDiscoveryAdapters,
   ModelDiscoveryMetrics,
   ModelDiscoveryRunResult,
@@ -221,6 +226,10 @@ async function executeRun(
 
   const { rows: inForce, rejected } = await db.catalog.rowsInForceWithRejects(startedAt);
   const base = resolveCatalogRecords(inForce.filter(row => row.source !== 'operator'));
+  // The catalog as the runtime sees it. The catalog plan diffs against `base` so
+  // it can never propose over an operator row, but the lifecycle constraints
+  // have to read what an operator decided (sec 8 auto-remap).
+  const resolvedInForce = resolveCatalogRecords(inForce);
   const operatorOwnedModelIds = new Set(inForce.filter(row => row.source === 'operator').map(row => row.modelId));
   const priorDiscoveryGroups = discoveryGroupsInForce(inForce);
 
@@ -271,6 +280,7 @@ async function executeRun(
   const lifecycle = planLifecycle({
     catalogPlan: plan,
     base,
+    resolvedInForce,
     docs: signals.docs,
     missed: absence.missed,
     statesBeforeRun,
@@ -281,7 +291,7 @@ async function executeRun(
     runStartedAt: startedAt,
     runId,
   });
-  logLifecycle(lifecycle.transitions, lifecycle.suggestions, logger);
+  logLifecycle(lifecycle, logger);
 
   let appended = 0;
   let pricesAppended = 0;
@@ -338,6 +348,7 @@ async function executeRun(
     prices: { rows: describePriceRows(pricePlan.rows), flags: pricePlan.flags },
     lifecycle: {
       transitions: lifecycle.transitions,
+      dateChanges: lifecycle.dateChanges,
       suggestions: lifecycle.suggestions,
       wouldDeprecate: lifecycle.wouldDeprecate,
     },
@@ -439,10 +450,10 @@ async function recordSuggestions(
 }
 
 function logLifecycle(
-  transitions: readonly LifecycleTransition[],
-  suggestions: readonly LifecycleSuggestion[],
+  lifecycle: Pick<LifecyclePlan, 'transitions' | 'dateChanges' | 'suggestions'>,
   logger: DiscoveryLogger
 ): void {
+  const { transitions, dateChanges, suggestions } = lifecycle;
   for (const transition of transitions) {
     const dates = [
       transition.deprecationDate && `deprecated ${transition.deprecationDate}`,
@@ -452,6 +463,15 @@ function logLifecycle(
     logger.warn(
       `${SUNSET_PREFIX} ${transition.modelId} ${transition.from ?? 'unknown'} -> ${transition.to} ` +
         `via ${transition.signal} signal${dates.length > 0 ? ` (${dates.join(', ')})` : ''}`
+    );
+  }
+  // Same prefix as a transition: a future deprecationDate hides the model on the
+  // day it passes, so it is a sunset an operator has to see coming.
+  for (const change of dateChanges) {
+    logger.warn(
+      `${SUNSET_PREFIX} ${change.modelId} stays ${change.status} but its dates moved via ${change.signal} signal: ` +
+        `deprecation ${change.previousDeprecationDate ?? 'none'} -> ${change.deprecationDate ?? 'none'}, ` +
+        `retirement ${change.previousRetirementDate ?? 'none'} -> ${change.retirementDate ?? 'none'}`
     );
   }
   for (const suggestion of suggestions) {
@@ -710,7 +730,7 @@ function skippedResult(
     droppedRecords: [],
     absence: { sighted: [], missed: [], frozenBackends: [] },
     prices: { rows: [], flags: [] },
-    lifecycle: { transitions: [], suggestions: [], wouldDeprecate: [] },
+    lifecycle: { transitions: [], dateChanges: [], suggestions: [], wouldDeprecate: [] },
     metrics: emptyMetrics(),
   };
 }

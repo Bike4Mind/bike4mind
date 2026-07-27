@@ -89,8 +89,13 @@ export class FakePriceRepository {
 
   async append(row: IModelPriceInput): Promise<IModelPriceDocument | null> {
     const parsed = ModelPriceInput.parse(row);
+    // Both refusals mirror ModelPriceRepository.append: a test must not be able
+    // to pass against a row the collection would reject.
     if (Object.keys(parsed.pricing).length === 0) {
-      throw new Error(`ModelPrice.append rejected ${parsed.modelId}: empty pricing map`);
+      throw new Error(`ModelPrice.append rejected ${parsed.modelId}: empty pricing map would settle calls free`);
+    }
+    if (!Object.values(parsed.pricing).some(tier => tier.input > 0 || tier.output > 0)) {
+      throw new Error(`ModelPrice.append rejected ${parsed.modelId}: all-zero pricing would settle calls free`);
     }
     const collides = this.rows.some(
       existing =>

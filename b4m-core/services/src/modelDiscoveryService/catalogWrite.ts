@@ -63,7 +63,7 @@ export interface CatalogWritePlan {
   /** Rows to append, index-aligned with `diff`. */
   rows: IModelCatalogRowInput[];
   dropped: DroppedSourceRecord[];
-  /** Every model id a source reported, for absence bookkeeping. */
+  /** Every model id a PROVIDER reported, for absence bookkeeping. */
   sightedModelIds: Set<string>;
 }
 
@@ -94,7 +94,11 @@ export function planCatalogWrites(input: CatalogWriteInput): CatalogWritePlan {
   const sightedModelIds = new Set<string>();
 
   for (const candidate of candidates.values()) {
-    sightedModelIds.add(candidate.modelId);
+    // Only a provider listing is a sighting. litellm and models.dev keep retired
+    // ids in their tables forever, so counting an aggregator record would reset
+    // the absence streak of every provider-dropped model and the K-miss protocol
+    // (sec 5.10) could never fire.
+    if (candidate.sawProvider) sightedModelIds.add(candidate.modelId);
     const existing = input.base.get(candidate.modelId);
 
     // An aggregator alone can neither add nor retire a model: without a provider

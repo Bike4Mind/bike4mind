@@ -56,6 +56,18 @@ const TIER_RATE_FIELDS = [
 const AUDIO_RATE_FIELDS = ['audio_input', 'audio_cache_read', 'audio_output'] as const;
 
 /**
+ * Every rate a feed can publish, paired with the tier field it lands in. The
+ * agreement check, the band and the write all walk this list, so a cache rate
+ * cannot reach a row through a guardrail that only knew about input and output.
+ */
+const OBSERVED_RATES = [
+  ['inputPerMTok', 'input'],
+  ['outputPerMTok', 'output'],
+  ['cacheReadPerMTok', 'cache_read'],
+  ['cacheWritePerMTok', 'cache_write'],
+] as const;
+
+/**
  * Who owns the row in force. Anything unrecognized, a missing note included, is
  * an operator row: automation may only supersede what it can prove it wrote.
  */
@@ -142,7 +154,8 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
     }
 
     const current = inForce.get(modelId);
-    const currentTier = current ? lowestTier(current) : undefined;
+    const currentEntry = current ? lowestTierEntry(current) : undefined;
+    const currentTier = currentEntry?.[1];
     const currentPrice = currentTier ? perMTokOf(tierAsPrice(currentTier)) : undefined;
     const flag = (kind: PriceFlagKind, price: DiscoveredPrice, detail: string) =>
       flags.push({ modelId, kind, proposed: perMTokOf(price), current: currentPrice, sources, detail });
@@ -214,14 +227,13 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
 
     if (currentTier) {
       const band = input.bandPct / 100;
-      const inputMove = relativeGap(proposed.inputPerMTok, currentTier.input * TOKENS_PER_MTOK);
-      const outputMove = relativeGap(proposed.outputPerMTok, currentTier.output * TOKENS_PER_MTOK);
-      if (inputMove > band || outputMove > band) {
+      const moves = bandMoves(proposed, currentTier);
+      if (moves.some(move => move.move > band)) {
         flag(
           'band-exceeded',
           proposed,
-          `${valueSources.join('+')} moves input ${pct(inputMove)} and output ${pct(outputMove)} against the row ` +
-            `in force (band ${pct(band)}): ${describe(tierAsPrice(currentTier))} -> ${describe(proposed)}`
+          `${valueSources.join('+')} moves ${moves.map(move => `${move.rate} ${pct(move.move)}`).join(', ')} against ` +
+            `the row in force (band ${pct(band)}): ${describe(tierAsPrice(currentTier))} -> ${describe(proposed)}`
         );
         continue;
       }
@@ -236,7 +248,10 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
     rows.push({
       modelId,
       unit: 'per_token',
-      pricing: { '0': tier },
+      // Keyed like the row it supersedes: the seed keys its single tier at the
+      // model's context window, and re-keying it to '0' would churn a threshold
+      // convention this planner has no way to re-derive.
+      pricing: { [currentEntry?.[0] ?? '0']: tier },
       effectiveFrom: input.runStartedAt,
       note: `${DISCOVERY_PRICE_NOTE_PREFIX}${valueSources.join('+')}@${input.runStartedAt.toISOString()}`,
       repricedBy: DISCOVERY_REPRICED_BY,
@@ -270,7 +285,9 @@ export function perTokenRatesInForce(rows: readonly IModelPrice[]): Map<string, 
 /** The planned rows as the run report shows them: per-MTok, no tier map. */
 export function describePriceRows(rows: readonly IModelPriceInput[]): PlannedPriceRow[] {
   return rows.map(row => {
-    const tier = row.pricing['0'];
+    // Read off the tier, not the key: a planned row is keyed like the row it
+    // supersedes, which is rarely '0'.
+    const tier = lowestTierEntry(row)?.[1] ?? { input: 0, output: 0 };
     return {
       modelId: row.modelId,
       unit: row.unit,
@@ -297,7 +314,11 @@ function collectObservations(contributions: readonly SourceContribution[]): Map<
       const modelId = typeof record?.modelId === 'string' ? record.modelId.trim() : '';
       if (!modelId || !record.pricing || !isUsable(record.pricing)) continue;
       const existing = observed.get(modelId);
-      const observation = { source: contribution.name, kind: contribution.kind, price: record.pricing };
+      const observation = {
+        source: contribution.name,
+        kind: contribution.kind,
+        price: withUsableCacheRates(record.pricing),
+      };
       if (existing) existing.push(observation);
       else observed.set(modelId, [observation]);
     }
@@ -316,6 +337,21 @@ function isUsable(price: DiscoveredPrice): boolean {
   return rates.some(rate => rate > 0);
 }
 
+/**
+ * The observation as every guardrail below reads it: a cache rate published as 0
+ * is dropped, so it neither disagrees, nor bands, nor writes, and the rate in
+ * force is carried forward instead. Zero is a claim no feed gets to make - see
+ * perToken for what a stored 0 would do to settlement.
+ */
+function withUsableCacheRates(price: DiscoveredPrice): DiscoveredPrice {
+  const usable: DiscoveredPrice = { inputPerMTok: price.inputPerMTok, outputPerMTok: price.outputPerMTok };
+  const cacheRead = positiveRate(price.cacheReadPerMTok);
+  const cacheWrite = positiveRate(price.cacheWritePerMTok);
+  if (cacheRead !== undefined) usable.cacheReadPerMTok = cacheRead;
+  if (cacheWrite !== undefined) usable.cacheWritePerMTok = cacheWrite;
+  return usable;
+}
+
 /** The first pair that disagrees, so the flag can name both sides. */
 function firstDisagreement(observations: readonly PriceObservation[]): [PriceObservation, PriceObservation] | null {
   for (let i = 0; i < observations.length; i += 1) {
@@ -328,23 +364,62 @@ function firstDisagreement(observations: readonly PriceObservation[]): [PriceObs
   return null;
 }
 
-const diverges = (a: DiscoveredPrice, b: DiscoveredPrice, tolerance: number): boolean =>
-  relativeGap(a.inputPerMTok, b.inputPerMTok) > tolerance || relativeGap(a.outputPerMTok, b.outputPerMTok) > tolerance;
-
 /**
- * The row's cheapest-threshold tier, the only one a single observed rate could
- * correspond to. Used for the flag comparisons and for carrying forward the
- * rates no feed publishes.
+ * Disagreement over any rate BOTH sides publish. A rate only one of them carries
+ * is silence rather than a contradiction: models.dev quoting cache_read where
+ * litellm does not is the ordinary case and may not read as a conflict.
  */
-function lowestTier(row: IModelPrice): IModelPriceTier | undefined {
-  const [threshold] = Object.keys(row.pricing).sort((a, b) => Number(a) - Number(b));
-  return threshold === undefined ? undefined : row.pricing[threshold];
+function diverges(a: DiscoveredPrice, b: DiscoveredPrice, tolerance: number): boolean {
+  return OBSERVED_RATES.some(([rate]) => {
+    const left = a[rate];
+    const right = b[rate];
+    return left !== undefined && right !== undefined && relativeGap(left, right) > tolerance;
+  });
 }
 
-/** A ladder discovery must not flatten. An empty map counts, and fails closed. */
-const isTiered = (row: IModelPrice): boolean => {
-  const keys = Object.keys(row.pricing);
-  return keys.length !== 1 || keys[0] !== '0';
+/**
+ * The row's cheapest-threshold tier and the key it sits under, the only tier a
+ * single observed rate could correspond to. Used for the flag comparisons, for
+ * carrying forward the rates no feed publishes, and for keying the row that
+ * supersedes this one.
+ */
+function lowestTierEntry(row: Pick<IModelPrice, 'pricing'>): [string, IModelPriceTier] | undefined {
+  const [threshold] = Object.keys(row.pricing).sort((a, b) => Number(a) - Number(b));
+  return threshold === undefined ? undefined : [threshold, row.pricing[threshold]];
+}
+
+const lowestTier = (row: Pick<IModelPrice, 'pricing'>): IModelPriceTier | undefined => lowestTierEntry(row)?.[1];
+
+/**
+ * A ladder discovery must not flatten: more than one threshold. A single tier is
+ * flat whatever key it carries - the seed keys its one tier at the model's
+ * context window, so reading '0' as the only flat shape would freeze nearly
+ * every seeded row. An empty map counts as a ladder, which fails closed.
+ */
+const isTiered = (row: IModelPrice): boolean => Object.keys(row.pricing).length !== 1;
+
+/**
+ * Every rate the band applies to: the two text rates, plus a cache rate when the
+ * row in force carries it AND this observation quotes it. Each move is measured
+ * against the CURRENT rate rather than symmetrically, so the setting reads as a
+ * multiple of what we bill today (200% is "up to 3x") instead of saturating at
+ * 100%, where relativeGap would silently disable the band.
+ */
+function bandMoves(proposed: DiscoveredPrice, current: IModelPriceTier): Array<{ rate: string; move: number }> {
+  const moves: Array<{ rate: string; move: number }> = [];
+  for (const [observed, field] of OBSERVED_RATES) {
+    const next = proposed[observed];
+    const held = current[field];
+    if (next === undefined || held === undefined) continue;
+    moves.push({ rate: field, move: baselineMove(next, held * TOKENS_PER_MTOK) });
+  }
+  return moves;
+}
+
+/** Leaving a zero rate for a real one exceeds any band: nothing is a multiple of 0. */
+const baselineMove = (proposed: number, current: number): number => {
+  if (proposed === current) return 0;
+  return current === 0 ? Number.POSITIVE_INFINITY : Math.abs(proposed - current) / current;
 };
 
 /**
@@ -369,8 +444,18 @@ function buildTier(price: DiscoveredPrice, carry: IModelPriceTier | undefined): 
   return tier;
 }
 
-const perToken = (perMTok: number | undefined): number | undefined =>
-  perMTok === undefined || !Number.isFinite(perMTok) || perMTok < 0 ? undefined : perMTok / TOKENS_PER_MTOK;
+/**
+ * Per single token, with a rate of 0 read as UNPUBLISHED rather than free:
+ * getTextModelCost falls back to input * CACHE_READ_MULTIPLIER only while
+ * cache_read is ABSENT, so a stored 0 would settle every cached read at nothing.
+ */
+const perToken = (perMTok: number | undefined): number | undefined => {
+  const rate = positiveRate(perMTok);
+  return rate === undefined ? undefined : rate / TOKENS_PER_MTOK;
+};
+
+const positiveRate = (rate: number | undefined): number | undefined =>
+  rate !== undefined && Number.isFinite(rate) && rate > 0 ? rate : undefined;
 
 /** Only the declared rates, so a stored row's extra keys cannot read as a change. */
 function rateFields(tier: IModelPriceTier): Record<string, number> {
@@ -382,10 +467,15 @@ function rateFields(tier: IModelPriceTier): Record<string, number> {
   return out;
 }
 
-const tierAsPrice = (tier: IModelPriceTier): DiscoveredPrice => ({
-  inputPerMTok: tier.input * TOKENS_PER_MTOK,
-  outputPerMTok: tier.output * TOKENS_PER_MTOK,
-});
+const tierAsPrice = (tier: IModelPriceTier): DiscoveredPrice => {
+  const price: DiscoveredPrice = {
+    inputPerMTok: tier.input * TOKENS_PER_MTOK,
+    outputPerMTok: tier.output * TOKENS_PER_MTOK,
+  };
+  if (tier.cache_read !== undefined) price.cacheReadPerMTok = tier.cache_read * TOKENS_PER_MTOK;
+  if (tier.cache_write !== undefined) price.cacheWritePerMTok = tier.cache_write * TOKENS_PER_MTOK;
+  return price;
+};
 
 /** Trims the float noise a 1e6 round trip leaves, which no report should show. */
 const perMTokOf = (price: DiscoveredPrice): { inputPerMTok: number; outputPerMTok: number } => ({
@@ -398,7 +488,8 @@ const readable = (rate: number): number => Number(rate.toPrecision(10));
 const describe = (price: DiscoveredPrice): string =>
   `in ${readable(price.inputPerMTok)}/out ${readable(price.outputPerMTok)} $/MTok`;
 
-const pct = (fraction: number): string => `${Math.round(fraction * 100)}%`;
+/** A move off a zero rate has no percentage; every other fraction is one. */
+const pct = (fraction: number): string => (Number.isFinite(fraction) ? `${Math.round(fraction * 100)}%` : 'unbounded');
 
 /** 'discovery:<sources>@<iso>' back to its source list, for the run report. */
 function sourcesOfNote(note: string | undefined): string[] {

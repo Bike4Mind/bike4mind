@@ -268,12 +268,18 @@ describe('planLifecycle typed transitions', () => {
   const base = new Map([active('gpt-5')]);
 
   const typedRun = (patch: ModelRecord['lifecycle'], overrides: Partial<LifecyclePlanInput> = {}) => {
+    const view = overrides.base ?? base;
     const signals = planLifecycleSignals({
       contributions: [
         provider('openai', [{ modelId: 'gpt-5', patch: { lifecycle: patch }, lifecycleEvidence: 'typed' }]),
       ],
     });
-    return plan({ ...overrides, catalogPlan: catalogPlan(signals.contributions, base), base, docs: signals.docs });
+    return plan({
+      ...overrides,
+      catalogPlan: catalogPlan(signals.contributions, view),
+      base: view,
+      docs: signals.docs,
+    });
   };
 
   it('transitions on the first run a typed source reports a sunset', () => {
@@ -302,6 +308,42 @@ describe('planLifecycle typed transitions', () => {
     );
 
     expect(result.suggestions).toEqual([]);
+  });
+
+  it('reports a future date a typed source set without moving the status', () => {
+    // A catalog deprecationDate hides the model the day it passes, so this is a
+    // sunset in slow motion, not a no-op run.
+    const result = typedRun({ status: 'active', deprecationDate: '2026-12-01', retirementDate: '2027-06-01' });
+
+    expect(result.transitions).toEqual([]);
+    expect(result.dateChanges).toEqual([
+      {
+        modelId: 'gpt-5',
+        status: 'active',
+        signal: 'typed',
+        previousDeprecationDate: undefined,
+        deprecationDate: '2026-12-01',
+        previousRetirementDate: undefined,
+        retirementDate: '2027-06-01',
+      },
+    ]);
+  });
+
+  it('reports nothing when the dates the source publishes are the ones in force', () => {
+    const held = new Map([active('gpt-5', { lifecycle: { status: 'active', deprecationDate: '2026-12-01' } })]);
+    const result = typedRun({ status: 'active', deprecationDate: '2026-12-01' }, { base: held });
+
+    expect(result.dateChanges).toEqual([]);
+  });
+
+  it('credits the heuristic for a typed sunset it computed a successor for', () => {
+    const base = new Map([active('gpt-5'), active('gpt-6')]);
+    const result = typedRun(
+      { status: 'deprecated' },
+      { base, ratesInForce: rates({ 'gpt-5': [2e-6, 8e-6], 'gpt-6': [1e-6, 4e-6] }) }
+    );
+
+    expect(result.suggestions[0]).toMatchObject({ modelId: 'gpt-5', replacedBy: 'gpt-6', source: 'heuristic' });
   });
 });
 
@@ -340,6 +382,34 @@ describe('planLifecycle docs suggestions', () => {
 
     expect(result.suggestions).toEqual([]);
   });
+
+  it('stops re-queueing once an OPERATOR row says the same thing', () => {
+    const signals = planLifecycleSignals({
+      contributions: [
+        provider('anthropic', [
+          { modelId: 'gpt-5', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'docs' },
+        ]),
+      ],
+    });
+    const base = new Map([active('gpt-5')]);
+
+    const result = plan({
+      catalogPlan: catalogPlan(signals.contributions, base),
+      base,
+      // The operator settled this exact item; the discovery tier still says active.
+      resolvedInForce: new Map([active('gpt-5', { lifecycle: { status: 'deprecated' } })]),
+      docs: signals.docs,
+    });
+
+    expect(result.suggestions).toEqual([]);
+  });
+
+  it('queues a docs legacy row rather than dropping it', () => {
+    const result = docsRun(new Map([active('gpt-5')]), { status: 'legacy', retirementDate: '2027-01-01' });
+
+    expect(result.transitions).toEqual([]);
+    expect(result.suggestions[0]).toMatchObject({ modelId: 'gpt-5', status: 'legacy', source: 'anthropic' });
+  });
 });
 
 describe('planLifecycle replacedBy', () => {
@@ -362,8 +432,22 @@ describe('planLifecycle replacedBy', () => {
     const result = sunset(withSuccessor());
 
     expect(result.transitions[0]).toMatchObject({ replacedBy: undefined, autoApplied: false });
-    expect(result.suggestions[0]).toMatchObject({ modelId: 'gpt-5', replacedBy: 'gpt-6', source: 'heuristic' });
+    // The K-miss protocol raised this item, so that is what the queue credits;
+    // the detail line says the successor came from the family heuristic.
+    expect(result.suggestions[0]).toMatchObject({ modelId: 'gpt-5', replacedBy: 'gpt-6', source: 'absence' });
+    expect(result.suggestions[0].detail).toContain('the family heuristic picks');
     expect(result.rows[0].patch).not.toHaveProperty('lifecycle.replacedBy');
+  });
+
+  it('keeps a candidate an operator row deprecated out of the pool, whatever the discovery tier says', () => {
+    const result = sunset(withSuccessor(), {
+      autoRemap: 'apply',
+      // The discovery-tier view still has gpt-6 active; the operator has spoken.
+      resolvedInForce: new Map([active('gpt-5'), active('gpt-6', { lifecycle: { status: 'deprecated' } })]),
+    });
+
+    expect(result.transitions[0]).toMatchObject({ replacedBy: undefined, autoApplied: false });
+    expect(result.suggestions).toEqual([]);
   });
 
   it('writes the successor into the same row under the apply policy', () => {
@@ -440,6 +524,28 @@ describe('planLifecycle replacedBy', () => {
       const base = new Map([active('gpt-5'), active('gpt-6', { lifecycle: { status: 'discovered' } })]);
       const result = declaring('gpt-6', base, { 'gpt-6': [1e-6, 4e-6] });
 
+      expect(result.suggestions[0].detail).toContain('it is not active');
+    });
+
+    it('refuses a declared replacement an OPERATOR row deprecated', () => {
+      const result = sunset(new Map([active('gpt-5'), active('gpt-6')]), {
+        autoRemap: 'apply',
+        resolvedInForce: new Map([active('gpt-5'), active('gpt-6', { lifecycle: { status: 'deprecated' } })]),
+        ratesInForce: rates({ 'gpt-5': [2e-6, 8e-6], 'gpt-6': [1e-6, 4e-6] }),
+        docs: new Map([
+          [
+            'gpt-5',
+            {
+              modelId: 'gpt-5',
+              source: 'openai-docs',
+              lifecycle: { status: 'deprecated' as const, replacedBy: 'gpt-6' },
+              corroborated: false,
+            },
+          ],
+        ]),
+      });
+
+      expect(result.transitions[0].autoApplied).toBe(false);
       expect(result.suggestions[0].detail).toContain('it is not active');
     });
 

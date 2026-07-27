@@ -74,6 +74,15 @@ describe('ModelDiscoveryStateRepository', () => {
       expect(await ModelDiscoveryState.countDocuments({})).toBe(1);
     });
 
+    it('keeps the original suggestedAt while an unresolved item says the same thing', async () => {
+      await modelDiscoveryStateRepository.recordSuggestion('gpt-x', deprecation, firstMiss);
+
+      const rerun = await modelDiscoveryStateRepository.recordSuggestion('gpt-x', deprecation, secondMiss);
+
+      // Re-stamping every run would make the queue age read as today forever.
+      expect(rerun.suggestion).toMatchObject({ suggestedAt: firstMiss });
+    });
+
     it('leaves a settled suggestion settled while the content is unchanged', async () => {
       await modelDiscoveryStateRepository.recordSuggestion('gpt-x', deprecation, firstMiss);
       await modelDiscoveryStateRepository.resolveSuggestion('gpt-x', 'dismissed', secondMiss);
