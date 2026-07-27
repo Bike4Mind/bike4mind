@@ -9,6 +9,9 @@ name: Lockfile Integrity
 #   3. bare tarball, no integrity, no commit pin: {tarball: ...} <- the hole
 # The grep below matches only shape 3, where `tarball` is the first (and
 # only) key in the resolution flow-map.
+#
+# A second step blocks premium-overlay paths from the lockfile (see
+# scripts/check-no-overlay-lockfile.sh).
 
 on:
   pull_request:

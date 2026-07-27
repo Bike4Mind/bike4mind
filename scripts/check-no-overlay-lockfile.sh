@@ -22,9 +22,16 @@ if [ "${1:-}" = "--staged" ]; then
 fi
 
 if [ "$MODE" = "staged" ]; then
-  # Only relevant when the commit actually touches the lockfile.
-  if ! git diff --cached --name-only | grep -qx "$LOCKFILE"; then
+  # Only relevant when the commit actually touches the lockfile. --quiet exits
+  # nonzero when staged changes exist; unlike piping --name-only into grep -q,
+  # it cannot be flipped by an early-exit SIGPIPE under pipefail.
+  if git diff --cached --quiet -- "$LOCKFILE"; then
     echo "✅ Lockfile not staged; overlay lockfile check skipped."
+    exit 0
+  fi
+  # A staged deletion leaves no index blob to scan (git show would die).
+  if ! git ls-files --error-unmatch --cached "$LOCKFILE" >/dev/null 2>&1; then
+    echo "✅ Lockfile staged for deletion; nothing to scan."
     exit 0
   fi
   matches=$(git show ":$LOCKFILE" | grep -n "packages/premium/" || true)
