@@ -170,6 +170,12 @@ const RESPONSE_RESERVE = 8000;
  * The buildAndSortMessages function allocates 30% to history, 70% to files.
  */
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
+/**
+ * Share of the usable input window that attached-file content may be extracted into.
+ * Kept a minority share so conversational history, which is what users notice losing
+ * first, keeps the majority. See attachedFileTokenBudget at its only use site.
+ */
+const ATTACHED_CONTENT_SHARE = 0.35;
 
 /**
  * Conservative fallback for simple query max history.
@@ -1404,6 +1410,36 @@ export class ChatCompletionProcess {
       // Step 3: Fetching and Converting Fab Files (Feature contexts already loaded above)
       timer.phase('data_sources');
       this.sendStatusUpdate(quest, 'Gathering data sources...', { statusAt: new Date() });
+      // Input-window limits, needed BEFORE building messages because the amount of
+      // attached-file content we extract has to be derived from them.
+      const contextLimit = modelInfo.contextWindow ?? 200000;
+      const modelMaxOutputTokens = modelInfo.max_tokens ?? 16384;
+      let safeMaxTokens = maxTokens;
+
+      if (maxTokens > modelMaxOutputTokens) {
+        safeMaxTokens = modelMaxOutputTokens;
+      }
+
+      const safetyBuffer = 1000; // Emergency buffer
+      const maxSafeInputTokens = contextLimit - safeMaxTokens - safetyBuffer;
+
+      // How much attached-file content may be extracted this turn.
+      //
+      // This used to be `max_tokens`, the model's OUTPUT cap, which is unrelated to how
+      // much of a file can be read and is often far smaller: a caller asking for short
+      // answers silently shrank its own retrieval, and a caller that omitted max_tokens
+      // fell back to a flat 6000 characters. Deriving it from the input window instead
+      // means a large-context model can actually use one, and a small local model is
+      // handed less than before rather than being pushed into a hard context overflow.
+      //
+      // Held below the assembly budget on purpose. Extraction estimates at
+      // CHARS_PER_TOKEN while assembly re-counts with the real tokenizer, so leaving
+      // headroom keeps anything extracted from being dropped again downstream.
+      const attachedFileTokenBudget = Math.max(
+        0,
+        Math.floor((maxSafeInputTokens - SYSTEM_PROMPT_RESERVE) * ATTACHED_CONTENT_SHARE)
+      );
+
       const dataSources = await this.buildDataSources({
         defaultAdminSettings,
         sessionFabFileIds,
@@ -1411,6 +1447,7 @@ export class ChatCompletionProcess {
         sessionKnowledgeIds: session.knowledgeIds ?? [],
         message,
         maxTokens,
+        attachedFileTokenBudget,
         quest,
         embeddingFactory,
         modelInfo,
@@ -1627,18 +1664,6 @@ export class ChatCompletionProcess {
       // Step 6: Building and Sorting Messages
       timer.phase('message_building');
       const messageBuildingStartTime = Date.now();
-      // Calculate safe input token limits BEFORE building messages
-      const contextLimit = modelInfo.contextWindow ?? 200000;
-      const modelMaxOutputTokens = modelInfo.max_tokens ?? 16384;
-      let safeMaxTokens = maxTokens;
-
-      if (maxTokens > modelMaxOutputTokens) {
-        safeMaxTokens = modelMaxOutputTokens;
-      }
-
-      const safetyBuffer = 1000; // Emergency buffer
-      const maxSafeInputTokens = contextLimit - safeMaxTokens - safetyBuffer;
-
       // Generate current date context for the AI.
       // Use user's browser timezone if available, otherwise fall back to server timezone.
       //
@@ -4064,7 +4089,7 @@ export class ChatCompletionProcess {
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
     message: string,
-    max_tokens: number,
+    attachedFileTokenBudget: number,
     modelInfo: ModelInfo
   ) {
     const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
@@ -4080,7 +4105,7 @@ export class ChatCompletionProcess {
       embeddingFactory,
       convertedFabFiles,
       message,
-      max_tokens,
+      attachedFileTokenBudget,
       modelInfo,
       async status => {
         this.sendStatusUpdate(quest, status, { statusAt: new Date() });
@@ -4391,6 +4416,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     sessionKnowledgeIds,
     message,
     maxTokens,
+    attachedFileTokenBudget,
     quest,
     embeddingFactory,
     modelInfo,
@@ -4403,6 +4429,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     sessionKnowledgeIds: string[];
     message: string;
     maxTokens: number;
+    attachedFileTokenBudget: number;
     quest: IChatHistoryItemDocument;
     embeddingFactory: EmbeddingFactory;
     modelInfo: ModelInfo;
@@ -4424,7 +4451,14 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       Array.from(this.features.entries()).map(async ([key, feature]) => {
         const featureContextIndividualStartTime = Date.now();
         try {
-          const messages = await feature.getContextMessages(quest, embeddingFactory, message, maxTokens, modelInfo);
+          const messages = await feature.getContextMessages(
+            quest,
+            embeddingFactory,
+            message,
+            maxTokens,
+            modelInfo,
+            attachedFileTokenBudget
+          );
 
           const elapsed = Date.now() - featureContextIndividualStartTime;
           logger.info(
@@ -4519,7 +4553,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
         quest,
         embeddingFactory,
         message,
-        maxTokens,
+        attachedFileTokenBudget,
         modelInfo
       ).then(result => {
         logger.info(
