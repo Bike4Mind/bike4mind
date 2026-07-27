@@ -45,6 +45,17 @@ describe('extractLoadedProblem', () => {
       extractLoadedProblem('populateDecomposition', { instances: [{ problem: { family: 'scheduling' } }] })
     ).toEqual({ family: 'scheduling' });
   });
+  it('unwraps a populateProblem payload that nests the problem alongside solve outputs', () => {
+    const problem = { name: 'S', jobs: [], machines: [] };
+    // A solve tool wraps the problem with solver-run outputs; extract the problem itself,
+    // not the envelope (otherwise the whole wrapper would be injected as the brief).
+    expect(extractLoadedProblem('populateProblem', { problem, results: [{ objective: 1 }], solvedAt: 'x' })).toEqual(
+      problem
+    );
+    // A bare scheduling problem (carries `jobs`, no `problem` key) is returned as-is.
+    expect(extractLoadedProblem('populateProblem', problem)).toEqual(problem);
+  });
+
   it('returns null for plan-only decomposition (instances[0] === null) and unknown types', () => {
     expect(extractLoadedProblem('populateDecomposition', { instances: [null] })).toBeNull();
     expect(extractLoadedProblem('somethingElse', { problem: {} })).toBeNull();
