@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import type { ModelInfo, SupersededModelInfo } from '@bike4mind/common';
 /**
  * Runtime safety net for deprecated model IDs.
  *
@@ -104,7 +105,12 @@ const MAX_RESOLUTION_HOPS = 5;
 const successorOf = (modelId: string): string | undefined =>
   replacedByOverlay.get(modelId) ?? DEPRECATED_MODEL_MAP[modelId];
 
-export function resolveDeprecatedModelId(modelId: string, context?: string): string {
+/**
+ * The resolution walk without the operator warning. Index builders resolve every
+ * known sunset id at once, and emitting a `[model-sunset]` line per entry would
+ * bury the ones that mark real traffic being redirected.
+ */
+export function resolveSuccessorChain(modelId: string): string {
   let resolved = modelId;
   const visited = new Set<string>([modelId]);
 
@@ -114,6 +120,12 @@ export function resolveDeprecatedModelId(modelId: string, context?: string): str
     visited.add(next);
     resolved = next;
   }
+
+  return resolved;
+}
+
+export function resolveDeprecatedModelId(modelId: string, context?: string): string {
+  const resolved = resolveSuccessorChain(modelId);
 
   if (resolved === modelId) return modelId;
 
@@ -143,4 +155,36 @@ export function catalogSuccessors(
     }
   }
   return successors;
+}
+
+/**
+ * The client-facing view of both successor tables: every id that resolves to
+ * something else, with display names for the pin and its replacement.
+ *
+ * The picker hides retired models, but a session's pinned `lastUsedModel` can
+ * still point at one (or at a model that is merely superseded, not yet retired),
+ * so the client needs to name that pin and offer its replacement rather than
+ * silently resuming on it.
+ *
+ * Sources ids from the catalog overlay AND the static map, and resolves through
+ * the same `successorOf` chain the server uses, so the replacement offered here
+ * cannot diverge from the one a pinned request actually lands on.
+ *
+ * @param allModels pre-deprecation-filter list, used only to name pins the
+ *   filter has already removed; an id absent here falls back to its raw id.
+ * @param currentModels what the caller can actually run. A mapping whose target
+ *   is missing from it (backend not configured, itself retired, private to
+ *   someone else) is dropped rather than surfaced as a dead prompt.
+ */
+export function buildSupersededIndex(allModels: ModelInfo[], currentModels: ModelInfo[]): SupersededModelInfo[] {
+  const nameOf = (id: string) => allModels.find(m => m.id === id)?.name ?? id;
+  const sunsetIds = new Set([...replacedByOverlay.keys(), ...Object.keys(DEPRECATED_MODEL_MAP)]);
+
+  return [...sunsetIds].flatMap(id => {
+    const replacementId = resolveSuccessorChain(id);
+    if (replacementId === id) return [];
+    const replacement = currentModels.find(m => m.id === replacementId);
+    if (!replacement) return [];
+    return [{ id, name: nameOf(id), replacementId, replacementName: replacement.name }];
+  });
 }
