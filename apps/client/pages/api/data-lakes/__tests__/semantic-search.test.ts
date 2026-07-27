@@ -1,14 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
-const { mockResolveScope, mockSemanticSearch, mockGetEffectiveApiKey, mockGetEffectiveLLMApiKeys, mockFindUserById } =
-  vi.hoisted(() => ({
-    mockResolveScope: vi.fn(),
-    mockSemanticSearch: vi.fn(),
-    mockGetEffectiveApiKey: vi.fn(),
-    mockGetEffectiveLLMApiKeys: vi.fn(),
-    mockFindUserById: vi.fn(),
-  }));
+const {
+  mockResolveScope,
+  mockSemanticSearch,
+  mockGetEffectiveApiKey,
+  mockGetEffectiveLLMApiKeys,
+  mockFindUserById,
+  mockGetSettingsValue,
+} = vi.hoisted(() => ({
+  mockResolveScope: vi.fn(),
+  mockSemanticSearch: vi.fn(),
+  mockGetEffectiveApiKey: vi.fn(),
+  mockGetEffectiveLLMApiKeys: vi.fn(),
+  mockFindUserById: vi.fn(),
+  mockGetSettingsValue: vi.fn(),
+}));
 
 // Only the middleware chain and the seams below are mocked; @bike4mind/common stays real so
 // the embedding-model allowlist and provider enums behave as they do in production.
@@ -34,7 +41,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   fabFileChunkRepository: {},
   apiKeyRepository: {},
-  adminSettingsRepository: {},
+  adminSettingsRepository: { getSettingsValue: mockGetSettingsValue },
   creditTransactionRepository: {},
   organizationRepository: { findById: vi.fn() },
   usageEventRepository: {},
@@ -79,9 +86,44 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
     mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
     mockGetEffectiveApiKey.mockResolvedValue('test-openai-key');
+    mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
     // Null user short-circuits the best-effort usage recording, keeping these tests on the
     // search path only.
     mockFindUserById.mockResolvedValue(null);
+  });
+
+  it('embeds the query with the model the corpus was vectorized with, not a hardcoded default', async () => {
+    // The vectorize pipeline and the chat tool both use defaultEmbeddingModel; querying in a
+    // different space returns nothing (dimension skip) or nonsense (same dim, other space).
+    mockGetSettingsValue.mockResolvedValue('voyage-3-large');
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(searchParams().embeddingModel).toBe('voyage-3-large');
+  });
+
+  it('still honours an explicit embedding_model without reading the admin setting', async () => {
+    await handler(makeReq({ query: 'onboarding', embedding_model: 'text-embedding-3-small' }), makeRes());
+
+    expect(searchParams().embeddingModel).toBe('text-embedding-3-small');
+    expect(mockGetSettingsValue).not.toHaveBeenCalled();
+  });
+
+  it('falls back to ada-002 when the admin setting is unset or no longer supported', async () => {
+    mockGetSettingsValue.mockResolvedValue('some-retired-model');
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(searchParams().embeddingModel).toBe('text-embedding-ada-002');
+  });
+
+  it('rejects an unsupported explicit embedding_model rather than silently falling back', async () => {
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding', embedding_model: 'not-a-model' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
   });
 
   it('forwards all three lake buckets to the search service verbatim', async () => {
@@ -95,11 +137,23 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     });
   });
 
-  it('passes scopedTagPrefixes at all - the service silently defaults it to []', async () => {
+  it('forwards an EMPTY scopedTagPrefixes rather than omitting it', async () => {
+    // The service defaults the field to [], so omission is invisible unless the empty case is
+    // asserted for presence rather than truthiness.
+    mockResolveScope.mockResolvedValue({ ...DYNAMIC_SCOPE, scopedTagPrefixes: [] });
+
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
-    // Presence, not truthiness: [] is a legitimate value that a truthy check would miss.
-    expect(searchParams().scopedTagPrefixes).not.toBeUndefined();
+    expect(searchParams()).toHaveProperty('scopedTagPrefixes');
+    expect(searchParams().scopedTagPrefixes).toEqual([]);
+  });
+
+  it('hands the live request to the scope resolver, preserving its entitlement memo', async () => {
+    const req = makeReq({ query: 'onboarding' });
+
+    await handler(req, makeRes());
+
+    expect(mockResolveScope).toHaveBeenCalledWith(req);
   });
 
   it('never lets a dynamic prefix reach the ownership-bypassing OPEN param', async () => {

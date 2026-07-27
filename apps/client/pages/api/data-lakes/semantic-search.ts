@@ -68,8 +68,9 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  *   - top_k: number = 10            - max results to return
  *   - min_score: number = 0.0       - discard results below this cosine score
  *   - tags: string[] = []           - optional tag filter on parent FabFile
- *   - embedding_model?: string      - override embedding model (defaults to ada-002,
- *                                     must be a known SupportedEmbeddingModel)
+ *   - embedding_model?: string      - override embedding model (defaults to the admin's
+ *                                     `defaultEmbeddingModel`, which is what the corpus was
+ *                                     vectorized with; must be a known SupportedEmbeddingModel)
  *
  * Returns:
  *   - results: Array<{ chunk_id, file_id, file_name, file_tags, chunk_text, score }>
@@ -84,11 +85,32 @@ const SemanticSearchInput = z.object({
   min_score: z.number().min(-1).max(1).default(0.0),
   tags: z.array(z.string()).default([]),
   // Allowlisted via .refine() against `isSupportedEmbeddingModel` to prevent
-  // a caller from forcing a non-existent or unexpectedly-priced model.
-  embedding_model: z.string().default(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002).refine(isSupportedEmbeddingModel, {
-    message: 'embedding_model must be a known SupportedEmbeddingModel',
-  }),
+  // a caller from forcing a non-existent or unexpectedly-priced model. Optional rather than
+  // defaulted: the fallback is the admin's configured model, which zod cannot read here.
+  embedding_model: z
+    .string()
+    .refine(isSupportedEmbeddingModel, { message: 'embedding_model must be a known SupportedEmbeddingModel' })
+    .optional(),
 });
+
+/**
+ * The model the corpus was actually embedded with. The vectorize pipeline
+ * (queueHandlers/fabFileChunk) and the chat KB tool both read `defaultEmbeddingModel`, so a
+ * query embedded with anything else either matches nothing (the ranker skips vectors of a
+ * different dimension) or ranks across two incompatible embedding spaces. Falls back to
+ * ada-002 only when the setting is unset or no longer a supported model.
+ */
+async function resolveDefaultEmbeddingModel(logger: Logger): Promise<SupportedEmbeddingModel> {
+  try {
+    const configured = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
+    if (typeof configured === 'string' && isSupportedEmbeddingModel(configured)) {
+      return configured as SupportedEmbeddingModel;
+    }
+  } catch (err) {
+    logger?.warn('[semantic-search] failed to read defaultEmbeddingModel; using ada-002', err);
+  }
+  return OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+}
 
 const handler = baseApi()
   .use(
@@ -111,7 +133,8 @@ const handler = baseApi()
           details: parsed.error.flatten(),
         });
       }
-      const { query, top_k, min_score, tags, embedding_model } = parsed.data;
+      const { query, top_k, min_score, tags } = parsed.data;
+      const embedding_model = parsed.data.embedding_model ?? (await resolveDefaultEmbeddingModel(req.logger));
 
       // --- Request cancellation: bail out early if the client disconnects ---
       // Keeps the Lambda from continuing to embed + scan after the caller is
