@@ -353,6 +353,16 @@ export interface ICompletionBackend {
    * Get the supported models' info for this backend
    */
   getModelInfo(): Promise<ModelInfo[]>;
+
+  /**
+   * Hand the backend the catalog view of the model it was just resolved for.
+   * Called once by getLlmByModel, before `complete()`. A builder that reads it
+   * prefers `dispatchProfile` over its hardcoded id tables, which is what lets a
+   * model this build has no id knowledge of get a correctly shaped request
+   * instead of a 400. Optional: a backend whose request shape is id-independent
+   * has nothing to read.
+   */
+  setDispatchModel?(info: ModelInfo): void;
 }
 
 /**

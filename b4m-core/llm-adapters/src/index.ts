@@ -8,6 +8,7 @@ import {
   isModelDeprecated,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { backendForAdapterFamily } from './adapterFamilyDispatch';
 import { AnthropicBackend } from './anthropicBackend';
 import { AWSBackend } from './awsBackend';
 import { ICompletionBackend } from './backend';
@@ -62,6 +63,22 @@ export function getLlmByModel(
 
   let backend: ICompletionBackend | null = null;
 
+  // A record the catalog resolved routes on its family; everything else falls
+  // through to the id switch below, which is why no currently-dispatched id
+  // changes behavior. The family path is the only one that can fail loudly:
+  // an unknown family throws instead of returning the null that would be
+  // indistinguishable from a missing credential (sec 9 item 3).
+  if (modelInfo.adapterFamily) {
+    backend = backendForAdapterFamily(modelInfo.adapterFamily, {
+      apiKeyTable,
+      modelId: String(modelInfo.id),
+      logger,
+      providerEndUserId,
+    });
+    backend?.setDispatchModel?.(modelInfo);
+    return backend;
+  }
+
   switch (modelInfo.backend) {
     case 'openai':
       if (apiKeyTable.openai === 'expired') throw new Error('OpenAI API key is expired');
@@ -85,7 +102,8 @@ export function getLlmByModel(
         case ChatModels.CLAUDE_4_6_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_7_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_8_OPUS_BEDROCK:
-          return new AnthropicBedrockBackend();
+          backend = new AnthropicBedrockBackend();
+          break;
         case ChatModels.LLAMA3_INSTRUCT_8B_V1:
         case ChatModels.LLAMA3_INSTRUCT_70B_V1:
         case ChatModels.LLAMA4_MAVERICK_17B_INSTRUCT_BEDROCK:
@@ -134,6 +152,11 @@ export function getLlmByModel(
     default:
       backend = null;
   }
+
+  // The seeded tier gets the record too: its thinking style and slow-model flag
+  // are catalog-owned once a row claims those groups, and a builder that finds
+  // the id in its own table still prefers the table (no behavior change).
+  backend?.setDispatchModel?.(modelInfo);
 
   return backend;
 }
@@ -391,8 +414,11 @@ export const getAvailableModels = async (
 };
 
 // Types and core utils:
+export * from './adapterFamilyDispatch';
 export * from './backend';
 export * from './backendGate';
+export * from './dispatchModel';
+export * from './dispatchResolver';
 export * from './endUserId';
 export * from './mergeCatalog';
 

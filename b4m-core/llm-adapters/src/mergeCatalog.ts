@@ -13,20 +13,25 @@ import { isBackendUsable } from './backendGate';
 import type { BackendGateContext } from './backendGate';
 
 /**
- * Adapter families getLlmByModel can route from the record alone. Everything
- * here dispatches on `modelInfo.backend` and needs no per-id knowledge, so a
- * catalog-only id in one of these families reaches a real backend.
+ * Adapter families getLlmByModel can route from the record alone, so a
+ * catalog-only id in one of these reaches a real backend.
  *
- * MUST STAY IN SYNC WITH getLlmByModel (./index.ts). The bedrock-* families are
- * absent on purpose: that branch is a 26-case id switch whose default is
- * `backend = null`, so a catalog-only Bedrock id would construct nothing and
- * throw at dispatch. Phase 2 replaces the switch with adapterFamily dispatch and
- * moves those families in.
+ * MUST STAY IN SYNC WITH backendForAdapterFamily (./adapterFamilyDispatch.ts):
+ * every family here needs a constructor there, and every family there belongs
+ * here. The bedrock-* families joined the list when family dispatch replaced the
+ * 26-case id switch as the route for records that carry a family. `voyageai` is
+ * the only member of ADAPTER_FAMILIES that is absent, and stays absent while it
+ * has no completion backend.
  */
 export const DISPATCHABLE_ADAPTER_FAMILIES: readonly string[] = [
   'anthropic-messages',
   'openai-chat',
   'openai-responses',
+  'bedrock-anthropic',
+  'bedrock-llama',
+  'bedrock-deepseek',
+  'bedrock-jurassic',
+  'bedrock-titan',
   'gemini',
   'xai',
   'ollama',

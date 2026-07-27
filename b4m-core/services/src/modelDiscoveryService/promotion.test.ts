@@ -27,10 +27,17 @@ describe('evaluatePromotion', () => {
   });
 
   it('blocks a family this build cannot dispatch', () => {
-    // Bedrock families stay out until adapterFamily dispatch replaces the id switch.
-    const record = testRecord({ backend: ModelBackend.Bedrock, adapterFamily: 'bedrock-anthropic' });
+    // voyageai is the one declared family with no completion backend; the
+    // bedrock-* families became dispatchable when family dispatch shipped.
+    const record = testRecord({ backend: ModelBackend.Bedrock, adapterFamily: 'voyageai' });
 
     expect(evaluate({ record }).blockedBy).toEqual(['family-not-dispatchable']);
+  });
+
+  it('promotes a Bedrock record now that family dispatch routes it', () => {
+    const record = testRecord({ backend: ModelBackend.Bedrock, adapterFamily: 'bedrock-anthropic' });
+
+    expect(evaluate({ record })).toEqual({ promote: true, blockedBy: [] });
   });
 
   it('blocks a record with no dispatch profile', () => {

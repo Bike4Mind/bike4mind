@@ -257,13 +257,30 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
   });
 
   it('drops and counts a record whose adapterFamily this build cannot dispatch', () => {
+    // voyageai is the one ADAPTER_FAMILIES member with no completion backend.
+    const { models, dropped } = mergeCatalogWithDrops([], [catalogOnly({ ...invocable, adapterFamily: 'voyageai' })], {
+      apiKeys: { xai: 'xai-key' },
+      isSelfHost: false,
+    });
+    expect(models).toEqual([]);
+    expect(dropped).toEqual([{ modelId: 'grok-9', reason: expect.stringContaining('voyageai') }]);
+  });
+
+  it('emits a bedrock-anthropic record now that family dispatch routes it', () => {
     const { models, dropped } = mergeCatalogWithDrops(
       [],
-      [catalogOnly({ ...invocable, backend: ModelBackend.Bedrock, adapterFamily: 'bedrock-anthropic' })],
-      { apiKeys: { xai: 'xai-key' }, isSelfHost: false }
+      [
+        catalogOnly({
+          ...invocable,
+          id: 'global.anthropic.claude-sonnet-9',
+          backend: ModelBackend.Bedrock,
+          adapterFamily: 'bedrock-anthropic',
+        }),
+      ],
+      { apiKeys: {}, isSelfHost: false }
     );
-    expect(models).toEqual([]);
-    expect(dropped).toEqual([{ modelId: 'grok-9', reason: expect.stringContaining('bedrock-anthropic') }]);
+    expect(dropped).toEqual([]);
+    expect(models.map(m => m.id)).toEqual(['global.anthropic.claude-sonnet-9']);
   });
 
   it('drops and counts a record with no adapterFamily at all', () => {

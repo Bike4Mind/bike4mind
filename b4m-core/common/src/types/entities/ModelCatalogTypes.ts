@@ -187,6 +187,13 @@ export const ModelRecordWrite = ModelRecordFields.refine(hasFixedTemperatureWhen
 export type ModelRecord = z.infer<typeof ModelRecordFields>;
 
 /**
+ * The dispatch group as the request builders read it. Named separately from the
+ * record because ModelInfo carries it too: the builders take a ModelInfo, and a
+ * profile that reached them through the merge must be the same shape a row wrote.
+ */
+export type ModelDispatchProfile = NonNullable<ModelRecord['dispatchProfile']>;
+
+/**
  * Read side of the strict/lenient pair. Two deliberate relaxations:
  *
  * 1. Every field is optional and unknown keys pass through, so a row written by
@@ -313,6 +320,9 @@ export const MODEL_INFO_FIELD_GROUP_OF: Record<
   supportsSafetyTolerance: 'modalities',
 
   deprecationDate: 'lifecycle',
+
+  adapterFamily: 'dispatch',
+  dispatchProfile: 'dispatch',
 
   description: 'presentation',
   logoFile: 'presentation',

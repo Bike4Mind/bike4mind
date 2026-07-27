@@ -75,6 +75,12 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
     can_stream: record.canStream,
     can_think: record.reasoning?.supported ?? false,
     thinkingStyle: toThinkingStyle(record),
+    // The dispatch group rides through to the runtime unchanged: getLlmByModel
+    // routes on adapterFamily and the request builders read dispatchProfile.
+    // Absent stays absent - that is what keeps a seeded model on the adapter
+    // tables' behavior.
+    adapterFamily: record.adapterFamily,
+    dispatchProfile: record.dispatchProfile,
     supportsVision: record.supportsVision,
     supportsTools: record.supportsTools,
     supportsImageVariation: record.supportsImageVariation ?? false,
@@ -155,10 +161,11 @@ export function inferVendor(info: Pick<ModelInfo, 'id' | 'backend'>): string {
  * base tier (a seeded model becomes a record that a catalog row can then claim
  * groups of).
  *
- * Two fields have no ModelInfo spelling and are deliberately absent rather than
- * guessed: `pricing` (catalog rows never carry it) and the dispatch group
- * (`adapterFamily` / `dispatchProfile`) - a wrong guess there mis-routes a
- * request once dispatch consumes it, so it stays seed- or operator-authored.
+ * `pricing` has no ModelInfo spelling here and is deliberately absent rather
+ * than guessed: catalog rows never carry it. The dispatch group round-trips
+ * (ModelInfo carries it since dispatch consumes it), but no feed may author it -
+ * a wrong value there mis-routes a request, so it stays seed- or
+ * operator-sourced, or comes from the seed-side DispatchResolver.
  *
  * Round-tripping normalizes the optional booleans toModelInfo defaults
  * (can_think, private, disabled, supportsImageVariation): undefined becomes an
@@ -182,6 +189,8 @@ export function toModelRecord(info: ModelInfo): RenderableModelRecord {
       info.can_think === undefined && info.thinkingStyle === undefined
         ? undefined
         : { supported: info.can_think === true, style: fromThinkingStyle(info.thinkingStyle) },
+    adapterFamily: info.adapterFamily,
+    dispatchProfile: info.dispatchProfile,
     supportsVision: info.supportsVision,
     supportsTools: info.supportsTools,
     supportsImageVariation: info.supportsImageVariation,
