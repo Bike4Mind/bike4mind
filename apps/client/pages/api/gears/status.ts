@@ -21,6 +21,7 @@ import {
   creditTransactionRepository,
   gearStampRepository,
   gearOverrideRepository,
+  hearthRepository,
   importHistoryJobRepository,
   rapidReplyAuditLogRepository,
   researchDataRepository,
@@ -66,6 +67,7 @@ export type GearKey =
   | 'datalakes'
   | 'files'
   | 'published'
+  | 'hearth'
   // skills (achievements)
   | 'apikey'
   | 'apicall'
@@ -165,6 +167,14 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await PublishedArtifact.exists({ ownerId: userId, deletedAt: null })),
     rewardCheck: async ({ userId }) =>
       !!(await PublishedArtifact.exists({ ownerId: userId, deletedAt: null, externalViewCount: { $gte: 1 } })),
+  },
+  {
+    // Derived, not stamped: a channel is the durable trace of using Hearth, and
+    // channels are how a user reaches the log at all - so owning one is the unlock.
+    key: 'hearth',
+    credits: 1000,
+    kind: 'destination',
+    check: async ({ userId }) => (await hearthRepository.listChannelsForUser(userId)).length > 0,
   },
   // --- Skills ---
   {

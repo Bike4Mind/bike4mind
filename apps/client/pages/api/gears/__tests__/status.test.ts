@@ -19,6 +19,7 @@ const { mocks } = vi.hoisted(() => ({
     importFindOne: vi.fn(),
     overridesByKey: vi.fn(),
     claimOnce: vi.fn(),
+    hearthListChannels: vi.fn(),
   },
 }));
 
@@ -61,6 +62,7 @@ vi.mock('@bike4mind/database', () => ({
     claimOnce: (...a: unknown[]) => mocks.claimOnce(...a),
   },
   gearOverrideRepository: { byKey: (...a: unknown[]) => mocks.overridesByKey(...a) },
+  hearthRepository: { listChannelsForUser: (...a: unknown[]) => mocks.hearthListChannels(...a) },
   importHistoryJobRepository: { findOne: (...a: unknown[]) => mocks.importFindOne(...a) },
   rapidReplyAuditLogRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
   researchDataRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
@@ -99,6 +101,7 @@ const lockEverything = () => {
   mocks.importFindOne.mockResolvedValue(null);
   mocks.overridesByKey.mockResolvedValue(new Map());
   mocks.claimOnce.mockResolvedValue(true);
+  mocks.hearthListChannels.mockResolvedValue([]);
   mocks.txFind.mockResolvedValue([]);
 };
 
@@ -121,7 +124,7 @@ describe('GET /api/gears/status', () => {
 
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData() as { gears: Array<{ unlocked: boolean }>; totalUnlocked: number };
-    expect(body.gears).toHaveLength(31);
+    expect(body.gears).toHaveLength(32);
     expect(body.gears.every(g => !g.unlocked)).toBe(true);
     expect(body.totalUnlocked).toBe(0);
     expect(mocks.addCredits).not.toHaveBeenCalled();
@@ -217,6 +220,27 @@ describe('GET /api/gears/status - skill gears', () => {
   });
 });
 
+describe('GET /api/gears/status - hearth destination', () => {
+  it('is derived from owning at least one channel, not from a stamp', async () => {
+    mocks.hearthListChannels.mockResolvedValue([{ _id: 'ch1' }]);
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as { gears: Array<{ key: string; kind: string; unlocked: boolean }> };
+    const hearth = body.gears.find(g => g.key === 'hearth')!;
+    expect(hearth.unlocked).toBe(true);
+    expect(hearth.kind).toBe('destination');
+    expect(mocks.hearthListChannels).toHaveBeenCalledWith('u1');
+  });
+
+  it('stays locked with zero channels', async () => {
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+    const body = res._getJSONData() as { gears: Array<{ key: string; unlocked: boolean }> };
+    expect(body.gears.find(g => g.key === 'hearth')!.unlocked).toBe(false);
+  });
+});
+
 describe('GET /api/gears/status - stamp-backed gears', () => {
   it('unlocks download/fork from first-use stamps', async () => {
     mocks.stampedKeys.mockResolvedValue(new Set(['forknotebook']));
@@ -297,7 +321,7 @@ describe('GET /api/gears/status - Manage Gears admin overrides', () => {
 
     const body = res._getJSONData() as { gears: Array<{ key: string }> };
     expect(body.gears.some(g => g.key === 'image')).toBe(false);
-    expect(body.gears).toHaveLength(30);
+    expect(body.gears).toHaveLength(31);
   });
 
   it('credits and copy overrides are ABSOLUTE and ride the response', async () => {
