@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { AccessContext, IDataLakeDocument, IDataLakeBatchDocument } from '@bike4mind/common';
+import { DATA_LAKES, type AccessContext, type IDataLakeDocument, type IDataLakeBatchDocument } from '@bike4mind/common';
 import { canAccessLake, assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
 import { canManageLake, assertLakeWriteAccess, assertCanWriteDataLakeTags } from './authorizeLakeWrite';
 import { createDataLake } from './createDataLake';
@@ -442,6 +442,32 @@ describe('createDataLake', () => {
     // org comes from the principal (4th arg), never the request body.
     await createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db }, 'orgA');
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: 'xy-1', datalakeTag: 'datalake:orgA:xy-1' }));
+  });
+
+  it('refuses to mint a meta-tag the static registry owns, even though no document holds it', () => {
+    // The meta-tag is an ownership bypass downstream, and the registry has no Mongo row for
+    // the unique index to collide with - so a lake slugged after a registry lake would read
+    // every tenant's files in it.
+    const registrySlug = DATA_LAKES[0].slug;
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    const db = { dataLakes: { create, find: vi.fn().mockResolvedValue([]) } };
+
+    return createDataLake('mallory', { name: 'X', slug: registrySlug, fileTagPrefix: 'mine:' }, { db }).then(() => {
+      const written = create.mock.calls[0][0] as IDataLakeDocument;
+      expect(written.datalakeTag).not.toBe(DATA_LAKES[0].datalakeTag);
+      expect(written.slug).toBe(`${registrySlug}-1`);
+    });
+  });
+
+  it('still allows a registry slug inside an org, where the minted tag cannot collide', async () => {
+    // An org lake mints `datalake:<org>:<slug>`, which no registry entry can equal.
+    const registrySlug = DATA_LAKES[0].slug;
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    const db = { dataLakes: { create, find: vi.fn().mockResolvedValue([]) } };
+
+    await createDataLake('owner', { name: 'X', slug: registrySlug, fileTagPrefix: 'mine:' }, { db }, 'orgA');
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: registrySlug }));
   });
 });
 

@@ -7,14 +7,18 @@
  * `getDynamicDataLakeAccess` - the SAME core function the chat `search_knowledge_base` tool
  * calls - so a caller's semantic-search scope and their chat-retrieval scope cannot drift.
  *
- * The two resolvers still differ for an owner's own gated lake: browse keeps it, retrieval
- * drops it (the core resolver re-filters DB lakes through `lakeMatchesAccess`). That is a
- * known gap in the core resolver, tracked in #976 - do not paper over it here.
+ * Browse stays the wider of the two - see the difference list in ./index.ts (an owner's own
+ * gated lake, tracked in #976; admin reach; draft lakes). Retrieval is a subset in every
+ * case, never the reverse. Do not paper those over here.
  */
 import { DATA_LAKES, hasDeveloperUserTag, type DataLakeConfig } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository } from '@bike4mind/database';
 import { getRequestEntitlements, type EntitlementRequest } from '@server/entitlements';
+import type { Logger } from '@bike4mind/observability';
+
+/** EntitlementRequest carries no logger; the routes calling this are Express requests that do. */
+type RetrievalScopeRequest = EntitlementRequest & { logger?: Logger };
 
 /** The tag/prefix triple `semanticDataLakeSearch` scopes on. Mirrors the core resolver's return. */
 export type RetrievalLakeScope = Awaited<ReturnType<typeof dataLakeService.getDynamicDataLakeAccess>>;
@@ -59,7 +63,7 @@ export function withStaticRegistryBypass(
  * in the core resolver on purpose: pushing it down would hand every admin's chat session
  * cross-tenant retrieval.
  */
-export async function resolveRetrievalLakeScope(req: EntitlementRequest): Promise<RetrievalLakeScope> {
+export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Promise<RetrievalLakeScope> {
   const user = req.user!;
   // Resolved for every caller, including admins. The bypass above covers only STATIC lakes,
   // so an admin given no keys would lose an entitlement-gated DYNAMIC lake that a plain
@@ -76,6 +80,7 @@ export async function resolveRetrievalLakeScope(req: EntitlementRequest): Promis
       organizationId: user.organizationId ?? undefined,
     },
     entitlementKeys,
+    logger: req.logger,
   });
 
   const isPrivileged = !!user.isAdmin || hasDeveloperUserTag(user.tags);
