@@ -22,7 +22,7 @@ import { persist } from 'zustand/middleware';
 import { useAccessibleModels } from '../hooks/useAccessibleModels';
 import { useModelInfo } from '../hooks/data/useModelInfo';
 import { ResearchModeState, ResearchModeConfiguration } from '../types/ResearchMode';
-import { computeDefaultMaxTokens } from '../utils/aiSettingsUtils';
+import { computeDefaultMaxTokens, refitMaxTokensForModel } from '../utils/aiSettingsUtils';
 import { useAdminSettings } from './AdminSettingsContext';
 
 export interface LLMContextProps {
@@ -483,20 +483,19 @@ export const LLMProvider: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setState, adminDefaultTextModel, isAdminSettingsLoading, accessibleModels]);
 
-  // Re-clamp max_tokens whenever the active text/chat model changes. Without this, a value
-  // persisted from a previously-selected larger-context model can leak into a smaller-context
-  // model and zero out the input budget. Skip image models: their
+  // Re-fit max_tokens whenever the active text/chat model changes (see refitMaxTokensForModel -
+  // it corrects both a too-high carry-over and a too-low one). Raising does override a
+  // deliberately-lowered value on model switch; we don't track that intent separately, and
+  // silently truncating a frontier model is the worse failure. Skip image models: their
   // catalog max_tokens is unrelated to text-output budgets and would silently lower it.
   useEffect(() => {
     if (!activeModel || !modelInfoRepo) return;
     if (isImageModel(activeModel)) return;
     const info = modelInfoRepo.find(m => m.id === activeModel);
     if (!info) return;
-    const ceiling = info.max_tokens ?? 0;
-    if (ceiling <= 0) return;
     setState(state => {
-      if (state.max_tokens > 0 && state.max_tokens <= ceiling) return state;
-      return { ...state, max_tokens: computeDefaultMaxTokens(info) };
+      const refitted = refitMaxTokensForModel(state.max_tokens, info);
+      return refitted === state.max_tokens ? state : { ...state, max_tokens: refitted };
     });
     // setState from Zustand is stable by reference - matches the convention used by the
     // other effects in this file.
