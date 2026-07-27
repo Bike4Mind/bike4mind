@@ -223,10 +223,20 @@ describe('describeEmbeddingMismatch', () => {
     expect(text).toContain('Re-embed');
   });
 
-  it('flags unlabeled chunks as unverified even when nothing was withheld', () => {
+  it('stays silent for an unlabeled-but-included corpus', () => {
+    // Most legacy lakes are entirely unlabeled. Those chunks WERE searched, so calling that a
+    // partial result would warn on nearly every search and train the reader to ignore it.
     const acc = createEmbeddingMismatchAccumulator([], ADA);
     acc.scored({}, 'legacy');
-    expect(describeEmbeddingMismatch(acc.report(), ADA)).toContain('unverified');
+    expect(describeEmbeddingMismatch(acc.report(), ADA)).toBeNull();
+  });
+
+  it('mentions unlabeled chunks once there IS a genuine withholding to explain', () => {
+    const acc = createEmbeddingMismatchAccumulator([{ id: 'a', embeddingModel: SMALL_3 }], ADA);
+    acc.scored({}, 'legacy');
+    const text = describeEmbeddingMismatch(acc.report(), ADA);
+    expect(text).toContain('unverified');
+    expect(text).toContain(SMALL_3);
   });
 
   it('returns null for a missing report rather than throwing', () => {

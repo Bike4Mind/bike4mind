@@ -42,13 +42,19 @@ import {
   IDataLakeRepository,
   IFabFileChunkDocument,
   CitableSource,
-  OpenAIEmbeddingModel,
-  SupportedEmbeddingModel,
   ImageModerationIncident,
   isExperimentalFeatureEnabled,
   buildMemoryContext,
 } from '@bike4mind/common';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
+import {
+  classifyLoadedChunk,
+  createEmbeddingMismatchAccumulator,
+  describeEmbeddingMismatch,
+  partitionFilesByEmbeddingModel,
+  resolveMajorityEmbeddingModel,
+  type EmbeddingMismatchReport,
+} from '../dataLakeService/embeddingMismatch';
 import { getRelevantMementos } from '../mementoService';
 import {
   BaseStorage,
@@ -1263,6 +1269,35 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     return getDynamicDataLakeAccess({ db, user, entitlementKeys });
   }
 
+  /**
+   * Record anything retrieval could not compare, and return the notice (or null when the corpus
+   * is consistent). Warnings accrete onto promptMeta, which the Prompt Meta inspector renders;
+   * the caller also sends the notice as a status update, since that is what reaches the quest's
+   * status log and therefore the user.
+   */
+  private reportRetrievalMismatch(
+    quest: IChatHistoryItemDocument,
+    report: EmbeddingMismatchReport,
+    embeddingModel: string
+  ): string | null {
+    const notice = describeEmbeddingMismatch(report, embeddingModel);
+    if (!notice) return null;
+
+    this.logger.warn('🔒 Forced retrieval: partial grounding (embedding-space mismatch)', {
+      queryEmbeddingModel: embeddingModel,
+      excludedFiles: report.excludedFiles.count,
+      excludedModels: report.excludedFiles.models,
+      excludedChunksEstimated: report.excludedFiles.estimatedChunks,
+      skippedChunks: report.skippedChunks.byReason,
+      unlabeledChunks: report.unlabeled.chunks,
+    });
+
+    // promptMeta may not exist yet - this runs before the citables block that normally creates it.
+    quest.promptMeta = quest.promptMeta || {};
+    quest.promptMeta.warnings = [...new Set([...(quest.promptMeta.warnings ?? []), notice])];
+    return notice;
+  }
+
   async getContextMessages(
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
@@ -1321,23 +1356,49 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       }
       const fileById = new Map(files.map(f => [f.id, f]));
 
-      // 2. Embed the query with the lake's embedding model (must match the chunks').
-      const embeddingModel = (files.find(f => f.embeddingModel)?.embeddingModel ||
-        OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002) as SupportedEmbeddingModel;
+      // 2. Embed the query with the model most of the corpus actually used. Picking the first
+      //    labelled file (the old behavior) let filename sort order decide, so on a mixed lake
+      //    the majority of chunks could end up in the wrong embedding space.
+      const embeddingModel = resolveMajorityEmbeddingModel(files);
       const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
       const queryVector = await embeddingService.generateEmbedding(query);
+      const queryDim = queryVector.length;
 
-      // 3. Score every chunk across candidate files by cosine similarity to the query.
-      const chunkLists = await Promise.all(files.map(f => db.fabfilechunks!.findByFabFileId(f.id)));
+      // 3. Withhold files embedded with a different model, then score the rest. Skipping them
+      //    before the chunk fan-out matters here: that load is uncapped across up to
+      //    FORCED_RETRIEVAL_MAX_CANDIDATE_FILES files.
+      const { rankable, foreign } = partitionFilesByEmbeddingModel(files, embeddingModel);
+      const mismatch = createEmbeddingMismatchAccumulator(foreign, embeddingModel);
+      const chunkLists = await Promise.all(rankable.map(f => db.fabfilechunks!.findByFabFileId(f.id)));
       const scored: { chunk: IFabFileChunkDocument; score: number }[] = [];
       for (const chunks of chunkLists) {
         for (const chunk of chunks) {
-          if (!chunk.vector || chunk.vector.length === 0) continue;
+          const parentFile = fileById.get(chunk.fabFileId);
+          const skipReason = classifyLoadedChunk({
+            vector: chunk.vector,
+            queryDim,
+            parentFile,
+            queryModel: embeddingModel,
+          });
+          // The vector check is redundant with classifyLoadedChunk's missingVector case; it is
+          // here so the type narrows without an assertion.
+          if (skipReason || !chunk.vector) {
+            mismatch.skip(skipReason ?? 'missingVector');
+            continue;
+          }
+          mismatch.scored(parentFile, chunk.fabFileId);
           scored.push({ chunk, score: computeCosineSimilarity(queryVector, chunk.vector) });
         }
       }
+
+      // Report before the two empty-handed exits below, not after: the worst case is a lake
+      // where EVERYTHING was withheld, and that is exactly the case that would otherwise
+      // return silently.
+      const skipNotice = this.reportRetrievalMismatch(quest, mismatch.report(), embeddingModel);
+
       if (scored.length === 0) {
-        this.logger.log('🔒 Forced retrieval: candidate files have no vectorized chunks');
+        this.logger.log('🔒 Forced retrieval: candidate files have no comparable vectorized chunks');
+        if (skipNotice) await this.chatCompletion.sendStatusUpdate(quest, skipNotice);
         return [];
       }
       scored.sort((a, b) => b.score - a.score);
@@ -1374,6 +1435,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         this.logger.log(
           `🔒 Forced retrieval: no chunk cleared the similarity floor (top=${scored[0].score.toFixed(3)})`
         );
+        if (skipNotice) await this.chatCompletion.sendStatusUpdate(quest, skipNotice);
         return [];
       }
 
@@ -1434,7 +1496,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         });
         quest.promptMeta.citables = [...existingCitables, ...newCitables];
       }
-      await this.chatCompletion.sendStatusUpdate(quest, 'Grounded in the knowledge base');
+      await this.chatCompletion.sendStatusUpdate(
+        quest,
+        skipNotice
+          ? 'Grounded in the knowledge base - partial results, some content could not be searched'
+          : 'Grounded in the knowledge base'
+      );
 
       this.logger.log(
         `🔒 Forced retrieval: injected ${sections.length} chunk(s) from ${sourceFileIds.length} document(s), ` +

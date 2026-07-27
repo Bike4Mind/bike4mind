@@ -535,3 +535,158 @@ describe('SessionPromptFeature (#9405 — engine still consumes systemPromptText
     expect(await new SessionPromptFeature(makeCtx(), '   ').getContextMessages()).toEqual([]);
   });
 });
+
+describe('KnowledgeRetrievalFeature embedding-model mismatch', () => {
+  const ADA = 'text-embedding-ada-002';
+  const SMALL_3 = 'text-embedding-3-small';
+
+  // 2-dim vectors keep the cosine readable; this suite does not mock @bike4mind/utils, so the
+  // real computeCosineSimilarity runs. QUERY is [1, 0].
+  const makeCtx = (files: Array<Record<string, unknown>>, chunksByFile: Record<string, unknown[]>) => ({
+    logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+    user: { id: 'u1', tags: [], groups: [] },
+    db: {
+      fabfiles: { search: vi.fn().mockResolvedValue({ data: files }) },
+      fabfilechunks: { findByFabFileId: vi.fn((id: string) => Promise.resolve(chunksByFile[id] ?? [])) },
+    },
+    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+  });
+
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+  };
+
+  const run = async (ctx: ReturnType<typeof makeCtx>, quest = makeQuest()) => {
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'stage III NSCLC treatment'
+    );
+    return { quest, content: messages[0]?.content ?? '', messages };
+  };
+
+  const warnings = (quest: IChatHistoryItemDocument) =>
+    (quest.promptMeta as { warnings?: string[] } | undefined)?.warnings ?? [];
+  const statuses = (ctx: ReturnType<typeof makeCtx>) =>
+    (ctx.sendStatusUpdate as ReturnType<typeof vi.fn>).mock.calls.map(c => String(c[1]));
+
+  it('does not ground in a same-width foreign chunk, even at a perfect cosine', async () => {
+    // fileB's vector IS the query, so on main it ranks first and gets injected. Both vectors are
+    // 2-dim here, mirroring ada-002 vs 3-small both being 1536: width cannot separate them.
+    const ctx = makeCtx(
+      [
+        { id: 'fileA', fileName: 'ada.pdf', tags: [], embeddingModel: ADA },
+        { id: 'fileB', fileName: 'foreign.pdf', tags: [], embeddingModel: SMALL_3, vectorizedChunkCount: 1 },
+      ],
+      {
+        fileA: [{ fabFileId: 'fileA', text: 'the real answer', vector: [0.8, 0.6] }],
+        fileB: [{ fabFileId: 'fileB', text: 'cross-space noise', vector: [1, 0] }],
+      }
+    );
+
+    const { quest, content } = await run(ctx);
+
+    expect(content).toContain('the real answer');
+    expect(content).not.toContain('cross-space noise');
+    // Its chunks were never even loaded.
+    expect(ctx.db.fabfilechunks.findByFabFileId).not.toHaveBeenCalledWith('fileB');
+    const citables = (quest.promptMeta as { citables?: Array<{ id: string }> }).citables ?? [];
+    expect(citables.map(c => c.id)).toEqual(['fileA']);
+    expect(warnings(quest)[0]).toContain(SMALL_3);
+    expect(statuses(ctx).some(st => st.includes('partial results'))).toBe(true);
+  });
+
+  it('reports the mismatch even when nothing at all could be grounded', async () => {
+    // The case that stays silent if reporting happens after the empty-handed returns. The
+    // unlabeled majority sets the query model, and the only file holding chunks is the foreign
+    // one, so every available chunk is withheld and there is nothing left to inject.
+    const ctx = makeCtx(
+      [
+        { id: 'l1', fileName: 'l1.pdf', tags: [] },
+        { id: 'l2', fileName: 'l2.pdf', tags: [] },
+        { id: 'fileB', fileName: 'foreign.pdf', tags: [], embeddingModel: SMALL_3 },
+      ],
+      { fileB: [{ fabFileId: 'fileB', text: 'cross-space noise', vector: [1, 0] }] }
+    );
+
+    const { quest, messages } = await run(ctx);
+
+    expect(messages).toEqual([]);
+    expect(warnings(quest)[0]).toContain(SMALL_3);
+    expect(statuses(ctx).some(st => /partial/i.test(st))).toBe(true);
+  });
+
+  it('grounds an all-unlabeled corpus normally, with the status unchanged', async () => {
+    // Every legacy lake looks like this. It must not read as a partial result.
+    const ctx = makeCtx([{ id: 'fileA', fileName: 'legacy.pdf', tags: [] }], {
+      fileA: [{ fabFileId: 'fileA', text: 'legacy content', vector: [1, 0] }],
+    });
+
+    const { quest, content } = await run(ctx);
+
+    expect(content).toContain('legacy content');
+    expect(warnings(quest)).toEqual([]);
+    expect(statuses(ctx)).toEqual(['Grounded in the knowledge base']);
+  });
+
+  it('lets an unlabeled majority pick the query model instead of one labeled outlier', async () => {
+    // 3 legacy files plus one voyage-3 file. Choosing voyage-3 would put every legacy chunk on
+    // the wrong side of the width check and ground nothing.
+    const files = [
+      { id: 'l1', fileName: 'l1.pdf', tags: [] },
+      { id: 'l2', fileName: 'l2.pdf', tags: [] },
+      { id: 'l3', fileName: 'l3.pdf', tags: [] },
+      { id: 'newcomer', fileName: 'a-newcomer.pdf', tags: [], embeddingModel: 'voyage-3' },
+    ];
+    const ctx = makeCtx(files, {
+      l1: [{ fabFileId: 'l1', text: 'legacy one', vector: [1, 0] }],
+      l2: [{ fabFileId: 'l2', text: 'legacy two', vector: [0.9, 0.1] }],
+      l3: [{ fabFileId: 'l3', text: 'legacy three', vector: [0.85, 0.15] }],
+      newcomer: [{ fabFileId: 'newcomer', text: 'newcomer', vector: [1, 0] }],
+    });
+
+    const { quest, content } = await run(ctx);
+
+    expect(content).toContain('legacy one');
+    expect(content).not.toContain('newcomer');
+    expect(warnings(quest)[0]).toContain('voyage-3');
+  });
+
+  it('counts an unlabeled chunk of the wrong width as a dimension mismatch', async () => {
+    const ctx = makeCtx([{ id: 'fileA', fileName: 'legacy.pdf', tags: [] }], {
+      fileA: [
+        { fabFileId: 'fileA', text: 'wrong width', vector: [1, 0, 0] },
+        { fabFileId: 'fileA', text: 'right width', vector: [1, 0] },
+      ],
+    });
+
+    const { quest, content } = await run(ctx);
+
+    expect(content).toContain('right width');
+    expect(content).not.toContain('wrong width');
+    expect(warnings(quest)[0]).toContain('dimensionMismatch');
+  });
+
+  it('keeps a warning another producer already recorded', async () => {
+    const quest = makeQuest({
+      promptMeta: { warnings: ['Response was truncated against the output-token limit.'] },
+    } as Partial<IChatHistoryItemDocument>);
+    const ctx = makeCtx(
+      [
+        { id: 'l1', fileName: 'l1.pdf', tags: [] },
+        { id: 'l2', fileName: 'l2.pdf', tags: [] },
+        { id: 'fileB', fileName: 'foreign.pdf', tags: [], embeddingModel: SMALL_3 },
+      ],
+      { fileB: [{ fabFileId: 'fileB', text: 'noise', vector: [1, 0] }] }
+    );
+
+    await run(ctx, quest);
+
+    expect(warnings(quest)).toHaveLength(2);
+    expect(warnings(quest)[0]).toContain('truncated');
+  });
+});

@@ -256,12 +256,18 @@ export function totalWithheldChunks(report: EmbeddingMismatchReport): number {
  * Single wording source for the API response, the chat status line and the quest warning, so the
  * three cannot describe the same event differently. The chat tool adds its own instruction to the
  * model on top of this.
+ *
+ * Returns null unless something was actually withheld. In particular an unlabeled-but-included
+ * corpus is NOT a partial result: most legacy lakes are entirely unlabeled, so reporting them
+ * here would fire a warning on nearly every search and teach the reader to ignore it. That case
+ * is a log-level concern (see the callers' unlabeled warn); it only joins this text when there is
+ * a genuine withholding to give it context.
  */
 export function describeEmbeddingMismatch(
   report: EmbeddingMismatchReport | undefined,
   queryModel: string
 ): string | null {
-  if (!report) return null;
+  if (!report || !report.partial) return null;
   const sentences: string[] = [];
 
   if (report.excludedFiles.count > 0) {
