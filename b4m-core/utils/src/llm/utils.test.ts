@@ -137,7 +137,7 @@ describe('Context Management Tests', () => {
         [],
         tokenBudget + 1000, // Add buffer back
         {},
-        14, // INFINITE_VALUE
+        14,
         mockLogger as any,
         tokenizer
       );
@@ -405,7 +405,7 @@ describe('Context Management Tests', () => {
       expect(historyInResult).toBeLessThanOrEqual(historyCount * 2 + 1); // +1 for current prompt
     });
 
-    it('should use full history for complex queries (INFINITE_VALUE)', async () => {
+    it('should keep the whole history when no window is set', async () => {
       const previousMessages: IMessage[] = Array(10)
         .fill(null)
         .map((_, i) => ({
@@ -413,7 +413,6 @@ describe('Context Management Tests', () => {
           content: `Message ${i}`,
         }));
 
-      const INFINITE_VALUE = 14;
       const tokenizer = createMockTokenizer();
 
       const result = await buildAndSortMessages(
@@ -422,45 +421,71 @@ describe('Context Management Tests', () => {
         [{ role: 'user', content: 'Current prompt' }],
         10000,
         {},
-        INFINITE_VALUE,
+        UNLIMITED_HISTORY_COUNT,
         mockLogger as any,
         tokenizer
       );
 
-      // Should include all previous messages (budget permitting)
       const historyInResult = result
         .filter(m => m.role === 'user' || m.role === 'assistant')
-        .filter(m => m.content !== 'Current prompt').length;
+        .filter(m => m.content !== 'Current prompt');
 
-      expect(historyInResult).toBeGreaterThan(0);
+      expect(historyInResult).toHaveLength(previousMessages.length);
+      expect(getLastBuildDebugInfo()?.truncationMethod).not.toBe('history-limit');
     });
 
-    it('should allocate tokens proportionally when both history and content are large', async () => {
-      const previousMessages: IMessage[] = Array(20)
+    // The pair below is the allocation policy the old in-range sentinel could flip by accident:
+    // same oversubscribed inputs, and the only difference is whether a window was requested.
+    const oversubscribed = () => ({
+      previousMessages: Array(20)
         .fill(null)
         .map((_, i) => ({
           role: i % 2 === 0 ? 'user' : 'assistant',
-          content: `Previous message ${i}`,
-        }));
+          content: `Previous message ${i} ${'H'.repeat(330)}`,
+        })) as IMessage[],
+      fabMessages: [{ role: 'user', content: 'File content: ' + 'X'.repeat(1390) }] as IMessage[],
+      maxInputTokens: 1100,
+    });
 
-      const fabMessages: IMessage[] = [{ role: 'user', content: 'Large knowledge file content: ' + 'X'.repeat(5000) }];
+    const hasFileContent = (messages: IMessage[]) =>
+      messages.some(m => typeof m.content === 'string' && m.content.startsWith('File content:'));
 
-      const tokenBudget = 1000;
-      const tokenizer = createMockTokenizer();
+    it('should split the budget between files and history when no window is set', async () => {
+      const { previousMessages, fabMessages, maxInputTokens } = oversubscribed();
 
       const result = await buildAndSortMessages(
         previousMessages,
         fabMessages,
         [{ role: 'user', content: 'Current prompt' }],
-        tokenBudget + 1000,
+        maxInputTokens,
+        {},
+        UNLIMITED_HISTORY_COUNT,
+        mockLogger as any,
+        createMockTokenizer()
+      );
+
+      expect(hasFileContent(result)).toBe(true);
+      expect(result.some(m => typeof m.content === 'string' && m.content.startsWith('Previous message'))).toBe(true);
+    });
+
+    it('should treat a history count of 14 as an ordinary window, not a request for unlimited history', async () => {
+      const { previousMessages, fabMessages, maxInputTokens } = oversubscribed();
+
+      // 14 is what a 128k model's simple-query ceiling computes to, and it used to mean "unlimited".
+      const result = await buildAndSortMessages(
+        previousMessages,
+        fabMessages,
+        [{ role: 'user', content: 'Current prompt' }],
+        maxInputTokens,
         {},
         14,
         mockLogger as any,
-        tokenizer
+        createMockTokenizer()
       );
 
-      // Both history and knowledge included; allocation ~70% knowledge / 30% history.
-      expect(result.length).toBeGreaterThan(0);
+      // A window gives history absolute priority, so an oversubscribed turn drops file content.
+      expect(hasFileContent(result)).toBe(false);
+      expect(getLastBuildDebugInfo()?.truncationMethod).toBe('history-limit');
     });
   });
 
