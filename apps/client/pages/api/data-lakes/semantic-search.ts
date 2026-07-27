@@ -38,9 +38,9 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  * POST /api/data-lakes/semantic-search
  *
  * Vector-based semantic search across FabFile chunks in the user's accessible
- * data lakes. Embeds the query, cosine-sims against pre-computed chunk vectors
- * (currently text-embedding-ada-002), returns top-K chunks with parent file
- * metadata.
+ * data lakes. Embeds the query with the model the corpus was vectorized with,
+ * cosine-sims against the pre-computed chunk vectors, returns top-K chunks with
+ * parent file metadata.
  *
  * Complements the keyword-based `/api/data-lakes/articles?search=...` which
  * matches against fileName + tags + notes only. This endpoint reads the vector
