@@ -13,9 +13,10 @@ const dbLake = (overrides: Partial<IDataLakeDocument> & Pick<IDataLakeDocument, 
     ...overrides,
   }) as IDataLakeDocument;
 
-// Mocks the DB pre-filter, then asserts the in-memory filter (getAccessibleDataLakes) is
-// the real authority - even when the DB layer over-returns, an entitlement-gated lake is
-// only surfaced to a key holder.
+// Mocks the DB pre-filter, then asserts the in-memory filter (getAccessibleDataLakes) is the
+// real authority for lakes the caller does NOT own - even when the DB layer over-returns, an
+// entitlement-gated lake is only surfaced to a key holder. A lake the caller created is the one
+// exception, and its ownership is re-verified in memory rather than taken from the query.
 const ctx = (lakes: IDataLakeDocument[], over: Partial<DataLakeAccessContext> = {}): DataLakeAccessContext => ({
   db: { dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(lakes) } as never },
   user: { tags: [] },
@@ -121,16 +122,17 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     expect(res.dataLakeTags).toEqual(['datalake:ordinary']);
   });
 
-  it('KNOWN GAP: drops a gated lake the CALLER OWNS, because the in-memory filter has no owner arm', async () => {
-    // The DB layer returns it via the owner bypass, then getAccessibleDataLakes re-filters on
-    // tag/entitlement alone and discards it. The browse resolver (apps/client/server/dataLakes)
-    // deliberately skips that second pass for exactly this reason, so /articles lists a lake
-    // that retrieval cannot reach. Tracked in #976; pinned so the fix reads as a deliberate diff.
+  it('restores a gated lake the CALLER OWNS - the DB owner bypass survives the in-memory filter', async () => {
+    // The DB layer returns it via the owner arm; getAccessibleDataLakes has no ownership rule
+    // and would drop it, so the resolver re-adds it. Browse (apps/client/server/dataLakes) never
+    // ran that second pass, so this is what makes /articles and retrieval agree on an owner's
+    // own gated lake.
     const own = dbLake({ id: 'mine', createdByUserId: 'owner', requiredUserTag: 'SomeTagIDoNotHold' });
 
     const res = await getDynamicDataLakeAccess(ctx([own], { user: { id: 'owner', tags: [] } }));
 
-    expect(res.dataLakeTags).toEqual([]);
-    expect(res.scopedTagPrefixes).toEqual([]);
+    expect(res.dataLakeTags).toEqual(['datalake:mine']);
+    expect(res.scopedTagPrefixes).toEqual(['mine:']);
+    expect(res.dataLakeTagPrefixes).toEqual([]);
   });
 });
