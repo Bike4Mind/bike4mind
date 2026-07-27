@@ -39,3 +39,4 @@ export {
 export { formatStep } from './formatStep';
 export { matchModel, type ModelMatch } from './matchModel';
 export { resolveModelCommand, type ModelCommandResult } from './resolveModelCommand';
+export { performModelSwitch, MODEL_SWITCH_BUSY_MESSAGE, type ModelSwitchDeps } from './performModelSwitch';

@@ -52,6 +52,8 @@ import {
   processFileReferences,
   formatStep,
   resolveModelCommand,
+  performModelSwitch,
+  MODEL_SWITCH_BUSY_MESSAGE,
 } from './utils';
 import { getTokenCounter } from './utils/tokenCounter.js';
 import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
@@ -3453,12 +3455,11 @@ function CliApp() {
       }
 
       case 'model': {
-        // A switch mutates agent.context.model and the LLM backend, and
-        // ReActAgent re-reads context.model every loop iteration, so switching
-        // mid-run would split a single multi-step response across two models
-        // with inconsistent token accounting. Block until the run finishes.
+        // performModelSwitch guards the switch itself; this early check also
+        // keeps the no-arg picker from opening mid-run, where a selection would
+        // just be rejected anyway.
         if (useCliStore.getState().isThinking) {
-          console.log('Agent is busy - wait for the current response to finish before switching models.');
+          console.log(MODEL_SWITCH_BUSY_MESSAGE);
           break;
         }
 
@@ -3502,7 +3503,7 @@ function CliApp() {
   /**
    * Handle saving config from the interactive editor
    */
-  const handleSaveConfig = async (updatedConfig: CliConfig): Promise<void> => {
+  const handleSaveConfig = async (updatedConfig: CliConfig, options?: { skipModelApply?: boolean }): Promise<void> => {
     await state.configStore.save(updatedConfig);
 
     // Check if model changed
@@ -3593,10 +3594,10 @@ function CliApp() {
     });
 
     // Propagate a config-driven model change to the live session. `/model`
-    // drives its own session switch via applyModelSwitch (it must fire even
-    // when config.defaultModel already equals the target), so here we react
-    // only to an actual change in the saved config field.
-    if (modelChanged) {
+    // opts out (skipModelApply) and applies it itself, so that path owns the
+    // single mutation point and can re-check the in-flight-request guard after
+    // this save resolves.
+    if (modelChanged && !options?.skipModelApply) {
       applyModelToSession(updatedConfig.defaultModel);
     }
   };
@@ -3633,23 +3634,26 @@ function CliApp() {
 
   /**
    * Persist and apply a `/model` switch. Both the argument dispatcher and the
-   * interactive picker funnel through here so the config save, session apply,
-   * success message, and save-failure handling live in one place.
+   * interactive picker funnel through here, so the busy guard, save, session
+   * apply, and messaging are identical from either entry point.
    *
-   * handleSaveConfig only propagates to the session when the saved config field
-   * changes, so we force the session onto the target afterwards: `/model X`
-   * must still switch when config.defaultModel already equalled X but the live
-   * session had diverged (fresh session / `--resume`).
+   * The session apply is unconditional (handleSaveConfig is told to skip it):
+   * `/model X` must still switch when config.defaultModel already equalled X
+   * but the live session had diverged (fresh session / `--resume`).
    */
-  const applyModelSwitch = async (model: ModelInfo): Promise<void> => {
-    try {
-      await handleSaveConfig({ ...(state.config as CliConfig), defaultModel: model.id });
-      applyModelToSession(model.id);
-      console.log(`✅ Switched to ${model.name} (${model.id})`);
-    } catch (error) {
-      console.error(`Failed to switch model: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
+  const applyModelSwitch = async (model: ModelInfo): Promise<void> =>
+    performModelSwitch(model, {
+      isBusy: () => useCliStore.getState().isThinking,
+      saveModel: async modelId => {
+        if (!state.config) {
+          throw new Error('no CLI config is loaded');
+        }
+        await handleSaveConfig({ ...state.config, defaultModel: modelId }, { skipModelApply: true });
+      },
+      applyToSession: applyModelToSession,
+      log: message => console.log(message),
+      error: message => console.error(message),
+    });
 
   if (initError) {
     return (
