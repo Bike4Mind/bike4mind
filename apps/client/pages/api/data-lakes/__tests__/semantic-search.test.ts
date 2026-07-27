@@ -44,7 +44,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   fabFileChunkRepository: {},
   apiKeyRepository: {},
-  adminSettingsRepository: {},
+  adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
   creditTransactionRepository: {},
   organizationRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: {},
@@ -60,6 +60,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   };
 });
 
+import { adminSettingsRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { emptyEmbeddingMismatchReport } from '../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch';
 import '../semantic-search';
@@ -179,6 +180,52 @@ describe('POST /api/data-lakes/semantic-search mismatch reporting', () => {
 
   it('rejects an invalid body before any search', async () => {
     const { body } = await invoke({ query: '' });
+    expect(body.error).toBe('Invalid request body');
+    expect(searchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/data-lakes/semantic-search query model', () => {
+  beforeEach(() => {
+    searchSpy.mockReset().mockResolvedValue(searchResult());
+    (adminSettingsRepository.getSettingsValue as Mock).mockResolvedValue('text-embedding-ada-002');
+  });
+
+  it('embeds the query with the model the corpus was stamped with, not a hardcoded ada-002', async () => {
+    // The chunk pipeline stamps files with the defaultEmbeddingModel admin setting. Querying a
+    // non-ada deployment with ada-002 would classify its entire consistent lake as mismatched
+    // and tell the operator to re-embed a corpus that is perfectly fine.
+    (adminSettingsRepository.getSettingsValue as Mock).mockResolvedValue('text-embedding-3-small');
+
+    await invoke({ query: 'dosing' });
+
+    expect(searchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ embeddingModel: 'text-embedding-3-small' }),
+      expect.anything()
+    );
+  });
+
+  it('still honors an explicit embedding_model from the caller', async () => {
+    (adminSettingsRepository.getSettingsValue as Mock).mockResolvedValue('text-embedding-3-small');
+
+    await invoke({ query: 'dosing', embedding_model: 'voyage-3' });
+
+    expect(searchSpy).toHaveBeenCalledWith(expect.objectContaining({ embeddingModel: 'voyage-3' }), expect.anything());
+  });
+
+  it('falls back to ada-002 when the setting is missing or unrecognized', async () => {
+    (adminSettingsRepository.getSettingsValue as Mock).mockResolvedValue('not-a-real-model');
+
+    await invoke({ query: 'dosing' });
+
+    expect(searchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ embeddingModel: 'text-embedding-ada-002' }),
+      expect.anything()
+    );
+  });
+
+  it('rejects an unknown explicit model instead of silently substituting one', async () => {
+    const { body } = await invoke({ query: 'dosing', embedding_model: 'made-up' });
     expect(body.error).toBe('Invalid request body');
     expect(searchSpy).not.toHaveBeenCalled();
   });

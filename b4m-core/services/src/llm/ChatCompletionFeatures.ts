@@ -1359,7 +1359,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // 2. Embed the query with the model most of the corpus actually used. Picking the first
       //    labelled file (the old behavior) let filename sort order decide, so on a mixed lake
       //    the majority of chunks could end up in the wrong embedding space.
-      const embeddingModel = resolveMajorityEmbeddingModel(files);
+      // The factory's own default is a model it holds a credential for. Passing a deployment-wide
+      // guess instead can pick a provider this factory was never given a key for, and
+      // createEmbeddingService throws on that - which the catch below turns into an empty result
+      // with nothing reported, the very failure this feature is meant to surface.
+      const embeddingModel = resolveMajorityEmbeddingModel(files, embeddingFactory.getDefaultEmbeddingModel());
       const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
       const queryVector = await embeddingService.generateEmbedding(query);
       const queryDim = queryVector.length;
@@ -1519,7 +1523,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           : '[Knowledge Base — Retrieved Context]\n' +
             'The following content was retrieved from the curated library for this query. Ground your answer in it and ' +
             'cite documents by name. If it does not address the question, say so rather than relying on outside knowledge.\n\n';
-      return [{ role: 'system' as const, content: header + sections.join('\n\n---\n\n') }];
+      // Same reasoning as the KB tool: the status line and promptMeta reach the UI, not the
+      // conversation, so without this the model would present partly-searched grounding as complete.
+      const partialNote = skipNotice
+        ? `\n\nNOTE: ${skipNotice} Tell the user this grounding may be incomplete.\n\n`
+        : '';
+      return [{ role: 'system' as const, content: header + partialNote + sections.join('\n\n---\n\n') }];
     } catch (error) {
       this.logger.error('🔒 Forced retrieval failed:', error);
       return [];

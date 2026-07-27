@@ -186,6 +186,10 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
     expect(result.chunksScored + result.embeddingMismatch.skippedChunks.total).toBe(result.totalChunksSearched);
   });
 
+  // findVectorsByFabFileIds filters vectorless chunks at the DB layer and is only asked for
+  // rankable ids, so these two states cannot arise on THIS path today. They are reachable on the
+  // forced-retrieval path (findByFabFileId, unfiltered), which shares the classifier, so the
+  // fixtures are deliberately stricter than the repo to keep the wiring covered from both ends.
   it('counts a chunk with no vector as missingVector', async () => {
     const findVectors = vi.fn().mockResolvedValue([chunk('c1', 'a', 'no vector', undefined)]);
     const result = await semanticDataLakeSearch(
@@ -271,7 +275,9 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
       adapters([{ id: 'a', fileName: 'a.md', embeddingModel: ADA }], findVectors)
     );
     expect(result.embeddingMismatch.truncated.chunkCapHit).toBe(true);
-    expect(result.embeddingMismatch.partial).toBe(true);
+    // Recorded, but a cap is not an embedding-space problem: a large healthy lake hits it on
+    // every search, so it must not raise the partial flag.
+    expect(result.embeddingMismatch.partial).toBe(false);
   });
 
   it('flags a hit file cap from the search page probe', async () => {
@@ -289,7 +295,7 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
       },
     });
     expect(result.embeddingMismatch.truncated).toEqual({ chunkCapHit: false, fileCapHit: true, filesTotal: 4321 });
-    expect(result.embeddingMismatch.partial).toBe(true);
+    expect(result.embeddingMismatch.partial).toBe(false);
   });
 });
 

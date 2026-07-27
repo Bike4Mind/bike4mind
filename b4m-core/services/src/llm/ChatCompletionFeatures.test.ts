@@ -333,6 +333,8 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
   };
   const embeddingFactory = {
     createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    // The model this factory holds a credential for; unlabeled files vote for it.
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
   const runRetrieval = async (citationStyle?: 'named' | 'indexed') => {
@@ -464,6 +466,8 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
   };
   const embeddingFactory = {
     createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    // The model this factory holds a credential for; unlabeled files vote for it.
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
   it('drops a marked file from forced retrieval content + citables, and forwards the DB pre-filter', async () => {
@@ -555,6 +559,8 @@ describe('KnowledgeRetrievalFeature embedding-model mismatch', () => {
 
   const embeddingFactory = {
     createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    // The model this factory holds a credential for; unlabeled files vote for it.
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
   const run = async (ctx: ReturnType<typeof makeCtx>, quest = makeQuest()) => {
@@ -668,7 +674,7 @@ describe('KnowledgeRetrievalFeature embedding-model mismatch', () => {
 
     expect(content).toContain('right width');
     expect(content).not.toContain('wrong width');
-    expect(warnings(quest)[0]).toContain('dimensionMismatch');
+    expect(warnings(quest)[0]).toContain('of a different vector size');
   });
 
   it('keeps a warning another producer already recorded', async () => {

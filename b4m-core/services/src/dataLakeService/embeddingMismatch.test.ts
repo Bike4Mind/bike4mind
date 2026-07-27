@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   classifyLoadedChunk,
   createEmbeddingMismatchAccumulator,
@@ -7,7 +7,6 @@ import {
   isForeignEmbeddingModel,
   partitionFilesByEmbeddingModel,
   resolveMajorityEmbeddingModel,
-  totalWithheldChunks,
 } from './embeddingMismatch';
 
 const ADA = 'text-embedding-ada-002';
@@ -87,41 +86,45 @@ describe('partitionFilesByEmbeddingModel', () => {
 });
 
 describe('resolveMajorityEmbeddingModel', () => {
-  afterEach(() => vi.unstubAllEnvs());
-
   it('lets an unlabeled majority outvote a single labeled outlier', () => {
     // The case that would otherwise withhold an entire legacy corpus: one re-vectorized file
     // must not decide the query model for 900 files it does not represent.
     const files = [...Array(900)].map((_, i) => ({ id: `legacy-${i}` }));
     files.push({ id: 'newcomer', embeddingModel: 'voyage-3' } as (typeof files)[number]);
-    expect(resolveMajorityEmbeddingModel(files)).toBe(ADA);
+    expect(resolveMajorityEmbeddingModel(files, ADA)).toBe(ADA);
   });
 
-  it('picks a labeled majority over the deployment default', () => {
+  it('picks a labeled majority over the fallback', () => {
     const files = [{ id: 'a', embeddingModel: SMALL_3 }, { id: 'b', embeddingModel: SMALL_3 }, { id: 'c' }];
-    expect(resolveMajorityEmbeddingModel(files)).toBe(SMALL_3);
+    expect(resolveMajorityEmbeddingModel(files, ADA)).toBe(SMALL_3);
   });
 
-  it('falls back to the deployment default for an empty file set', () => {
-    expect(resolveMajorityEmbeddingModel([])).toBe(ADA);
+  it('returns the fallback for an empty file set', () => {
+    expect(resolveMajorityEmbeddingModel([], ADA)).toBe(ADA);
   });
 
-  it('votes unlabeled files for the local embedder on keyless self-host', () => {
-    // defaultEmbeddingModelForEnv resolves to Ollama there, so unlabeled files must not be
-    // guessed as a cloud model that never embedded them.
-    vi.stubEnv('B4M_SELF_HOST', 'true');
-    vi.stubEnv('OLLAMA_BASE_URL', 'http://localhost:11434');
-    vi.stubEnv('OPENAI_API_KEY', '');
-    vi.stubEnv('VOYAGE_API_KEY', '');
-    expect(resolveMajorityEmbeddingModel([{ id: 'legacy' }])).toBe('qwen3-embedding:0.6b');
+  it('votes unlabeled files for the CALLER fallback, never a fixed cloud model', () => {
+    // A caller whose only credential is a local embedder must not be handed ada-002: building
+    // that service throws, and the callers swallow the throw into an empty result.
+    expect(resolveMajorityEmbeddingModel([{ id: 'legacy' }], 'qwen3-embedding:0.6b')).toBe('qwen3-embedding:0.6b');
+    // A labeled minority still cannot outvote them.
+    expect(
+      resolveMajorityEmbeddingModel(
+        [{ id: 'l1' }, { id: 'l2' }, { id: 'newcomer', embeddingModel: SMALL_3 }],
+        'qwen3-embedding:0.6b'
+      )
+    ).toBe('qwen3-embedding:0.6b');
   });
 
   it('breaks a tie on first-seen', () => {
     expect(
-      resolveMajorityEmbeddingModel([
-        { id: 'a', embeddingModel: SMALL_3 },
-        { id: 'b', embeddingModel: 'voyage-3' },
-      ])
+      resolveMajorityEmbeddingModel(
+        [
+          { id: 'a', embeddingModel: SMALL_3 },
+          { id: 'b', embeddingModel: 'voyage-3' },
+        ],
+        ADA
+      )
     ).toBe(SMALL_3);
   });
 });
@@ -170,6 +173,8 @@ describe('createEmbeddingMismatchAccumulator', () => {
     acc.skip('unknownFile');
     const report = acc.report();
     expect(report.skippedChunks.total).toBe(3);
+    // Prose, not raw enum keys - this text is read by users and by the model.
+    expect(describeEmbeddingMismatch(report, ADA)).toContain('2 of a different vector size');
     expect(report.skippedChunks.byReason).toEqual({
       dimensionMismatch: 2,
       unknownFile: 1,
@@ -192,21 +197,32 @@ describe('createEmbeddingMismatchAccumulator', () => {
     expect(report.partial).toBe(false);
   });
 
-  it('marks a capped corpus partial even with zero mismatches', () => {
+  it('records a hit cap without calling the result partial', () => {
+    // Both caps bound every search of a large lake, so treating them as partial would flag
+    // almost every query on a perfectly consistent corpus and bury the mismatch signal.
     const acc = createEmbeddingMismatchAccumulator([], ADA);
     acc.truncation({ chunkCapHit: true, filesTotal: 4321 });
     const report = acc.report();
-    expect(report.partial).toBe(true);
-    expect(describeEmbeddingMismatch(report, ADA)).toContain('cap');
+    expect(report.truncated).toEqual({ chunkCapHit: true, fileCapHit: false, filesTotal: 4321 });
+    expect(report.partial).toBe(false);
+    expect(describeEmbeddingMismatch(report, ADA)).toBeNull();
   });
 
-  it('adds both provenances for a total withheld count', () => {
+  it('mentions the cap once something was genuinely withheld', () => {
+    const acc = createEmbeddingMismatchAccumulator([{ id: 'a', embeddingModel: SMALL_3 }], ADA);
+    acc.truncation({ chunkCapHit: true });
+    expect(describeEmbeddingMismatch(acc.report(), ADA)).toContain('cap');
+  });
+
+  it('does not count a foreign file that holds no vectors', () => {
+    // Chunked under a previous default but its vectorize job never finished: excluding it
+    // withheld nothing, so claiming a partial result would be false.
     const acc = createEmbeddingMismatchAccumulator(
-      [{ id: 'a', embeddingModel: SMALL_3, vectorizedChunkCount: 12 }],
+      [{ id: 'a', embeddingModel: SMALL_3, vectorized: false, vectorizedChunkCount: 0 }],
       ADA
     );
-    acc.skip('dimensionMismatch');
-    expect(totalWithheldChunks(acc.report())).toBe(13);
+    expect(acc.report().excludedFiles.count).toBe(0);
+    expect(acc.report().partial).toBe(false);
   });
 });
 

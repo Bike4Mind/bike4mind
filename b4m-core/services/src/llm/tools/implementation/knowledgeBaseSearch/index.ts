@@ -206,7 +206,7 @@ async function trySemanticKbSearch(
 ): Promise<SemanticArmResult> {
   const chunkRepo = context.db.fabfilechunks;
   if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
-    return NO_SEMANTIC_RESULT; // semantic deps not wired — use keyword
+    return NO_SEMANTIC_RESULT; // semantic deps not wired - use keyword
   }
   try {
     const embedCtx = await resolveEmbeddingContext(context);
@@ -543,23 +543,34 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // agent's KB, and the status must not imply a wider corpus exists.
             const corpusLabel = scope ? "this agent's knowledge base" : 'the data lake';
             const foundStatus = `📄 Found ${rankedResults.length} in ${corpusLabel}: ${names.join(', ')}${more}`;
-            await context.statusUpdate({ promptMeta: { citables } } as any, foundStatus);
+            // The notice rides along here because emitSemanticCitables never ran: the semantic arm
+            // produced no hits, which is precisely what happens when everything was withheld.
+            await context.statusUpdate(
+              { promptMeta: { citables, ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}) } } as any,
+              semantic.skipNotice ? `${foundStatus} - partial results, some content could not be searched` : foundStatus
+            );
             context.logger.log(`📚 Knowledge Base Search: Stored ${citables.length} citables`);
           } else {
             // No hits - tell the user what was searched so the wait reads as deliberate.
             const clippedQuery = query.length > 50 ? query.slice(0, 49) + '…' : query;
+            const noHits = scope
+              ? `📭 No matches in this agent's knowledge base for “${clippedQuery}”`
+              : `📭 No data-lake matches for “${clippedQuery}” — broadening…`;
             await context.statusUpdate(
-              {} as any,
-              scope
-                ? `📭 No matches in this agent's knowledge base for “${clippedQuery}”`
-                : `📭 No data-lake matches for “${clippedQuery}” — broadening…`
+              { ...(semantic.skipNotice ? { promptMeta: { warnings: [semantic.skipNotice] } } : {}) } as any,
+              semantic.skipNotice ? `${noHits} - some content could not be searched` : noHits
             );
           }
 
           return formatSearchResults(rankedResults) + formatSkipNotice(semantic.skipNotice);
         } catch (error) {
           context.logger.error('❌ Knowledge Base Search: Error during search:', error);
-          return 'An error occurred while searching your knowledge base. Please try again.';
+          // Keep the notice even here: the semantic arm already established that part of the
+          // corpus was unsearchable, and dropping it would report a clean failure.
+          return (
+            'An error occurred while searching your knowledge base. Please try again.' +
+            formatSkipNotice(semantic.skipNotice)
+          );
         }
       },
       toolSchema: {

@@ -1,4 +1,4 @@
-import { defaultEmbeddingModelForEnv, type SupportedEmbeddingModel } from '@bike4mind/common';
+import type { SupportedEmbeddingModel } from '@bike4mind/common';
 
 /**
  * Detection and accounting for chunks that cannot be meaningfully cosine-compared to a query
@@ -6,11 +6,15 @@ import { defaultEmbeddingModelForEnv, type SupportedEmbeddingModel } from '@bike
  *
  * Shared by BOTH data-lake ranking loops - semanticDataLakeSearch's rankChunksForFiles (the
  * endpoint, the chat KB tool and the RLM tools) and KnowledgeRetrievalFeature's forced-retrieval
- * injection - so the two can never disagree about what counts as a mismatch.
+ * injection - so the two apply one definition of "cannot be compared". They still resolve the
+ * QUERY model differently (the tool reads the admin setting, forced retrieval infers it from the
+ * corpus), and that choice is what any given chunk is then judged against.
  *
  * Two distinct failure modes, and only one of them is visible to a vector-width check:
  *  - different WIDTH (e.g. an Ollama embedder at 768 vs OpenAI at 1536): computeCosineSimilarity
- *    already returns 0, so these were dropped, just never counted.
+ *    returns 0 for these. That is not the same as dropping them - callers using a minScore of 0
+ *    (both data-lake surfaces do) returned them as score-0 results, so they occupied result slots
+ *    while carrying no signal.
  *  - SAME width, different model: text-embedding-ada-002 and text-embedding-3-small are both
  *    1536 dims, so a length check cannot tell them apart. Their vectors live in different spaces,
  *    and the resulting similarity is noise that can outrank a genuine match. This is why the
@@ -26,6 +30,14 @@ import { defaultEmbeddingModelForEnv, type SupportedEmbeddingModel } from '@bike
 export type ChunkSkipReason = 'unknownFile' | 'modelMismatch' | 'missingVector' | 'dimensionMismatch';
 
 const SKIP_REASONS: ChunkSkipReason[] = ['unknownFile', 'modelMismatch', 'missingVector', 'dimensionMismatch'];
+
+/** Prose forms, since the report text is read by users and by the model. */
+const SKIP_REASON_LABELS: Record<ChunkSkipReason, string> = {
+  unknownFile: 'from a file no longer in scope',
+  modelMismatch: 'embedded with another model',
+  missingVector: 'never embedded',
+  dimensionMismatch: 'of a different vector size',
+};
 
 /** How many excluded files to name in the report, so a caller can act without dumping the lake. */
 const SAMPLE_CAP = 5;
@@ -53,7 +65,12 @@ export interface EmbeddingMismatchReport {
   unlabeled: { chunks: number; files: number };
   /** A scope/load cap was hit, so the corpus was not fully considered regardless of model. */
   truncated: { chunkCapHit: boolean; fileCapHit: boolean; filesTotal: number | null };
-  /** True when anything at all was withheld - the single flag a consumer branches on. */
+  /**
+   * True when content was withheld because it could not be compared - the single flag a consumer
+   * branches on. Deliberately NOT set by the scope/load caps in `truncated`: those bound every
+   * search of a large lake, so folding them in would flag almost every query on a healthy corpus
+   * and bury the signal this flag exists to carry.
+   */
   partial: boolean;
 }
 
@@ -80,6 +97,8 @@ export interface EmbeddingLabeledFile {
   fileName?: string;
   embeddingModel?: string | null;
   vectorizedChunkCount?: number;
+  /** Set by the vectorize pipeline. A file without vectors withholds nothing when excluded. */
+  vectorized?: boolean;
 }
 
 /**
@@ -122,25 +141,30 @@ export function partitionFilesByEmbeddingModel<T extends EmbeddingLabeledFile>(
 /**
  * Pick the embedding model to embed the query with, for callers that infer it from the corpus
  * instead of being told (forced retrieval). Returns the most common model across the candidate
- * files, with UNLABELED files voting for the deployment default.
+ * files, with UNLABELED files voting for `fallbackModel`.
  *
  * That vote is load-bearing, not a tiebreak nicety. Counting only explicit labels lets a single
  * re-vectorized file decide the query model for a whole lake: 900 legacy unlabeled files plus one
  * newer file at a different width would embed the query at the newcomer's width, and then all 900
- * legacy files fail the width check and get withheld. Letting the unlabeled majority speak for
- * itself keeps the bulk of the corpus searchable and leaves the outlier as the thing reported.
+ * legacy files fail the width check and get withheld.
  *
- * The deployment default is the right stand-in for an unset label because it is what the chunk
- * pipeline used at the time (see the `defaultEmbeddingModel` admin setting, which defaults to it).
+ * `fallbackModel` MUST be a model the caller can actually embed with. It is the stand-in for an
+ * unset label, so it decides the query model whenever unlabeled files are the plurality - and an
+ * unservable choice throws inside the embedding factory, which callers swallow into "no results"
+ * (exactly the silent partial this module exists to remove). Pass the caller's own working default
+ * rather than a deployment-wide guess: the chunk pipeline stamps the CURRENT `defaultEmbeddingModel`
+ * admin setting, which is not necessarily what any given environment resolves to.
  */
-export function resolveMajorityEmbeddingModel(files: EmbeddingLabeledFile[]): SupportedEmbeddingModel {
-  const envDefault = defaultEmbeddingModelForEnv();
+export function resolveMajorityEmbeddingModel(
+  files: EmbeddingLabeledFile[],
+  fallbackModel: SupportedEmbeddingModel
+): SupportedEmbeddingModel {
   const tally = new Map<string, number>();
   for (const file of files) {
-    const model = file.embeddingModel?.trim() || envDefault;
+    const model = file.embeddingModel?.trim() || fallbackModel;
     tally.set(model, (tally.get(model) ?? 0) + 1);
   }
-  let winner: string = envDefault;
+  let winner: string = fallbackModel;
   let best = 0;
   // Insertion order breaks ties, so the first model seen wins a dead heat.
   for (const [model, count] of tally) {
@@ -202,23 +226,24 @@ export function createEmbeddingMismatchAccumulator(
   const report = emptyEmbeddingMismatchReport();
   const unlabeledFileIds = new Set<string>();
 
-  report.excludedFiles.count = foreignFiles.length;
+  // Only files that actually hold vectors withheld anything. A file chunked under a previous
+  // default whose vectorize job never finished carries no vectors, so reporting it as excluded
+  // would claim a partial result where nothing was lost.
+  const withheld = foreignFiles.filter(f => f.vectorized !== false || (f.vectorizedChunkCount ?? 0) > 0);
+
+  report.excludedFiles.count = withheld.length;
   report.excludedFiles.models = [
-    ...new Set(foreignFiles.map(f => f.embeddingModel?.trim()).filter((m): m is string => !!m)),
+    ...new Set(withheld.map(f => f.embeddingModel?.trim()).filter((m): m is string => !!m)),
   ].sort();
-  report.excludedFiles.estimatedChunks = foreignFiles.reduce((sum, f) => sum + (f.vectorizedChunkCount ?? 0), 0);
-  report.excludedFiles.sample = foreignFiles.slice(0, SAMPLE_CAP).map(f => ({
+  report.excludedFiles.estimatedChunks = withheld.reduce((sum, f) => sum + (f.vectorizedChunkCount ?? 0), 0);
+  report.excludedFiles.sample = withheld.slice(0, SAMPLE_CAP).map(f => ({
     fileId: f.id,
     fileName: f.fileName ?? '',
     embeddingModel: f.embeddingModel?.trim() ?? '',
   }));
 
   const recomputePartial = () => {
-    report.partial =
-      report.excludedFiles.count > 0 ||
-      report.skippedChunks.total > 0 ||
-      report.truncated.chunkCapHit ||
-      report.truncated.fileCapHit;
+    report.partial = report.excludedFiles.count > 0 || report.skippedChunks.total > 0;
   };
   recomputePartial();
 
@@ -244,11 +269,6 @@ export function createEmbeddingMismatchAccumulator(
       return report;
     },
   };
-}
-
-/** Total withheld chunks across both provenances, for logging and short summaries. */
-export function totalWithheldChunks(report: EmbeddingMismatchReport): number {
-  return report.skippedChunks.total + report.excludedFiles.estimatedChunks;
 }
 
 /**
@@ -278,7 +298,7 @@ export function describeEmbeddingMismatch(
   }
   if (report.skippedChunks.total > 0) {
     const reasons = SKIP_REASONS.filter(r => report.skippedChunks.byReason[r] > 0)
-      .map(r => `${r} ${report.skippedChunks.byReason[r]}`)
+      .map(r => `${report.skippedChunks.byReason[r]} ${SKIP_REASON_LABELS[r]}`)
       .join(', ');
     sentences.push(`${report.skippedChunks.total} loaded chunk(s) could not be compared (${reasons}).`);
   }
