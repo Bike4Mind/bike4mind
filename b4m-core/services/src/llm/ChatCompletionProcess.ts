@@ -177,6 +177,21 @@ const RESPONSE_RESERVE = 8000;
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
 
 /**
+ * Fraction of the model's context window kept as VERBATIM conversation history
+ * before older turns are folded into contextSummary. Conservative on purpose:
+ * it leaves ample headroom for system prompts, tool schemas, RAG, and the
+ * current prompt, so compaction only kicks in once a session is genuinely heavy.
+ * Overridable per-deploy via the ContextVerbatimWindowFraction admin setting.
+ */
+const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
+
+/** Coerce an admin-setting value to a fraction in (0, 1], falling back when invalid. */
+function clampFraction(raw: unknown, fallback: number): number {
+  const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw));
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? parsed : fallback;
+}
+
+/**
  * Conservative fallback for simple query max history.
  * Used before model info is available.
  */
@@ -1401,10 +1416,22 @@ export class ChatCompletionProcess {
         ...(embeddingProvider === 'ollama' && { ollamaBaseUrl: apiKeyTable?.ollama }),
       });
 
-      // Fetch previous messages
-      const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, { db: this.db });
+      // Fetch previous messages. Token-bound the verbatim window to a fraction of
+      // the model's context so older turns fall outside it and get folded into
+      // contextSummary (see ContextSummarizationFeature); keeps a heavy session from
+      // re-sending its entire history every turn.
+      const verbatimWindowFraction = clampFraction(
+        getSettingsValue('ContextVerbatimWindowFraction', defaultAdminSettings),
+        DEFAULT_VERBATIM_WINDOW_FRACTION
+      );
+      const verbatimTokenBudget = Math.floor(contextWindow * verbatimWindowFraction);
+      const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, {
+        db: this.db,
+        verbatimTokenBudget,
+      });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
+      const verbatimExcludedCount = cacheInfo.excludedOlderQuestCount ?? 0;
 
       // Local (Ollama) models run on modest hardware with small context budgets and
       // are easily derailed by prose that isn't about the task. Give them a leaner
@@ -3528,6 +3555,7 @@ export class ChatCompletionProcess {
           utilizationPercentage: parseFloat(utilizationPercentage.toFixed(2)),
           overflowDetected: inputTokens > maxSafeInputTokens,
           overflowAmount: inputTokens > maxSafeInputTokens ? inputTokens - maxSafeInputTokens : undefined,
+          verbatimTurnsExcluded: verbatimExcludedCount > 0 ? verbatimExcludedCount : undefined,
         };
 
         // Message truncation tracking
@@ -3851,7 +3879,7 @@ export class ChatCompletionProcess {
         fireAndForgetFeatures.forEach(feature => {
           this.features
             .get(feature)
-            ?.onComplete({ quest, session, messages, questMaster, model, historyCount, oldestIncludedQuestId })
+            ?.onComplete({ quest, session, messages, questMaster, model, historyCount, oldestIncludedQuestId, verbatimExcludedCount })
             ?.catch(err => logger.error(`Error in fire-and-forget ${feature} onComplete:`, err));
         });
 
@@ -3868,7 +3896,7 @@ export class ChatCompletionProcess {
           .map(feature =>
             this.features
               .get(feature)
-              ?.onComplete({ quest, session, messages, questMaster, model, historyCount, oldestIncludedQuestId })
+              ?.onComplete({ quest, session, messages, questMaster, model, historyCount, oldestIncludedQuestId, verbatimExcludedCount })
           )
           .filter(p => p);
 

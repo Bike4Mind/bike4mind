@@ -50,6 +50,7 @@ import {
   type ContextUsageBand,
 } from '@client/app/hooks/useSessionContextUsage';
 import { ContextUsageWarning } from '../ContextUsageWarning';
+import { ContextCompactionNote } from '../ContextCompactionNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
@@ -183,10 +184,20 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const showContextWarning =
     !!contextUsage && contextUsage.band !== 'normal' && contextUsage.band !== contextWarningDismissedBand;
 
-  // Reset the dismissal when switching notebooks so a heavy session doesn't
+  // Compaction note: show when the latest turn folded older history into working
+  // memory, until dismissed. Re-surfaces when a later turn compacts again.
+  const compactedTurns = contextUsage?.compactedTurns ?? 0;
+  const [compactionNoteDismissed, setCompactionNoteDismissed] = useState(false);
+  const showCompactionNote = compactedTurns > 0 && !compactionNoteDismissed;
+  useEffect(() => {
+    setCompactionNoteDismissed(false);
+  }, [compactedTurns]);
+
+  // Reset both dismissals when switching notebooks so a heavy session doesn't
   // inherit a prior notebook's dismissed state.
   useEffect(() => {
     setContextWarningDismissedBand(null);
+    setCompactionNoteDismissed(false);
   }, [currentSessionId]);
 
   // Corner readout for the composer. Prefer the real assembled-context size from
@@ -460,6 +471,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                     onDismiss={() => setContextWarningDismissedBand(contextUsage.band)}
                   />
                 )}
+                <ContextCompactionNote
+                  show={showCompactionNote}
+                  turns={compactedTurns}
+                  onDismiss={() => setCompactionNoteDismissed(true)}
+                />
                 <Stack
                   className="session-bottom-input-row"
                   direction="row"

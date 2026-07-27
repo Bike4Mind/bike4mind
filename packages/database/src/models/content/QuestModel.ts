@@ -70,6 +70,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         utilizationPercentage: { type: Number, required: false },
         overflowDetected: { type: Boolean, required: false },
         overflowAmount: { type: Number, required: false },
+        verbatimTurnsExcluded: { type: Number, required: false },
       },
     },
     functionCalls: [
