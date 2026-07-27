@@ -68,6 +68,31 @@ describe('getAccessibleDataLakePrompts', () => {
     expect(reversed).toEqual(forward);
   });
 
+  /**
+   * The trust check compares ids across a String schema and a String()-coerced actor. If a future
+   * migration ever stored `createdByUserId` (or `organizationId`) as an ObjectId, a raw `===` would
+   * fail SILENTLY - the lake is simply never trusted, no error anywhere. Lock the coercion.
+   */
+  it('trusts an owner whose lake id is ObjectId-like rather than a plain string', async () => {
+    const objectIdLike = { toString: () => OWNER } as unknown as string;
+    const prompts = await getAccessibleDataLakePrompts(
+      makeContext([makeLake({ createdByUserId: objectIdLike })], { id: OWNER, tags: [] })
+    );
+    expect(prompts.map(p => p.name)).toEqual(['Lake One']);
+  });
+
+  it('trusts an org lake whose organizationId is ObjectId-like rather than a plain string', async () => {
+    const objectIdLike = { toString: () => ORG } as unknown as string;
+    const prompts = await getAccessibleDataLakePrompts(
+      makeContext([makeLake({ createdByUserId: 'colleague', organizationId: objectIdLike })], {
+        id: 'me',
+        tags: [],
+        organizationId: ORG,
+      })
+    );
+    expect(prompts.map(p => p.name)).toEqual(['Lake One']);
+  });
+
   it('composes one entry per contributing lake, ordered by name', async () => {
     const prompts = await getAccessibleDataLakePrompts(
       makeContext([
