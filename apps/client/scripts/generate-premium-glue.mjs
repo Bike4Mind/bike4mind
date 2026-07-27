@@ -20,8 +20,8 @@
  * Turbo cache key: packages/premium/*\/package.json
  */
 
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
-import { resolve, dirname, join, sep } from 'node:path';
+import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync } from 'node:fs';
+import { resolve, dirname, join, sep, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -66,7 +66,18 @@ function ensureDir(dir) {
 
 function writeFile(path, content) {
   ensureDir(dirname(path));
-  writeFileSync(path, content, 'utf8');
+  // Atomic write: write to a temp file in the same directory, then rename over the
+  // real path. A plain writeFileSync truncates the target before writing its new
+  // content, so a concurrent reader (e.g. another turbo task's test statically
+  // importing this exact generated file, in a different package with no ordering
+  // edge against THIS one - see @bike4mind/scripts's migrations/index.test.ts) can
+  // observe an empty or partial file mid-write. rename() is atomic as long as the
+  // temp file and the target share a directory (same filesystem), which this
+  // guarantees; the PID+random suffix avoids collisions between concurrent codegen
+  // runs writing the same file.
+  const tmpPath = join(dirname(path), `.${basename(path)}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  writeFileSync(tmpPath, content, 'utf8');
+  renameSync(tmpPath, path);
   console.log(`  wrote ${path.replace(REPO_ROOT + '/', '')}`);
 }
 
@@ -446,6 +457,46 @@ function generateLlmTools(packages) {
   );
 }
 
+// --- Generate premium migrations ---
+
+// Premium overlays contribute DB migrations (b4mContributions.migrationsExport -> a module
+// exporting `migrations: MigrationFile[]`). Generated into packages/scripts (NOT apps/client,
+// unlike every other glue file here): both consumers of AvailableMigrations - the
+// DatabaseMigrator Lambda's MigrationManager and the `pnpm migrate` CLI - live in
+// @bike4mind/scripts, which cannot import from apps/client (wrong dependency direction).
+// Bare specifier (like llmTools / serverHandlerStubs), NOT the infra glue's relative-import
+// workaround below - that workaround exists only because esbuild externalises symlinked
+// workspace packages when bundling sst.config.ts. The migrator is a normal Lambda handler
+// referenced by string path (infra/database.ts), so a bare specifier bundles fine - the same
+// path serverHandlerStubs already proves out for real Lambda handlers.
+function generateMigrations(packages) {
+  const outPath = join(REPO_ROOT, 'packages/scripts/migrate/migrations/premium.generated.ts');
+  const typeImport = `import type { MigrationFile } from '@bike4mind/database';`;
+
+  const contributors = packages.filter(p => p.contributions.migrationsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumMigrations: MigrationFile[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.migrationsExport, p.name, 'migrationsExport'));
+
+  const imports = contributors
+    .map((p, i) => `import { migrations as migrations${i} } from '${p.contributions.migrationsExport}';`)
+    .join('\n');
+
+  const spreads = contributors.map((_, i) => `  ...migrations${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumMigrations: MigrationFile[] = [\n${spreads}\n];\n`
+  );
+}
+
 // --- Generate infra glue ---
 
 // For each premium package that declares `b4mContributions.infra`, emit a thin
@@ -545,6 +596,7 @@ generateNotebookSidenav(packages);
 generateApiStubs(packages);
 generateServerHandlerStubs(packages);
 generateLlmTools(packages);
+generateMigrations(packages);
 generateInfraGlue(packages);
 
 console.log('[codegen] done.');
