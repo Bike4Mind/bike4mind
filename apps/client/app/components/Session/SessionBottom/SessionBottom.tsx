@@ -44,6 +44,12 @@ import { useChatCompletionContext } from '@client/app/contexts/ChatCompletionCon
 import { useAutoFocus } from '@client/app/hooks/useAutoFocus';
 import { useChatPaste } from '@client/app/hooks/useChatPaste';
 import { useTokenLimits } from '@client/app/hooks/useTokenLimits';
+import {
+  useSessionContextUsage,
+  formatTokenCount,
+  type ContextUsageBand,
+} from '@client/app/hooks/useSessionContextUsage';
+import { ContextUsageWarning } from '../ContextUsageWarning';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
@@ -112,6 +118,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const [rephraseGlow, setRephraseGlow] = useState(false);
   const [showSlashSuggestions, setShowSlashSuggestions] = useState(false);
   const [lowCreditsWarningDismissed, setLowCreditsWarningDismissed] = useState(false);
+  // Band at which the user dismissed the context warning; re-shows on escalation.
+  const [contextWarningDismissedBand, setContextWarningDismissedBand] = useState<ContextUsageBand | null>(null);
 
   // Modal state: triggered modal, admin preview, format dialog, modal list
   const {
@@ -164,6 +172,39 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     max_tokens,
     chatInputLength: chatInputValue.length,
   });
+
+  // Effective (assembled) context usage from the last completed turn - the real
+  // number the user is paying for, vs. isOverContextWindow which only measures
+  // the current input box against the budget.
+  const contextUsage = useSessionContextUsage(currentSessionId);
+  const modelName = useMemo(() => modelInfo?.find(m => m.id === model)?.name ?? model, [modelInfo, model]);
+  // Show the warning once usage is elevated, until dismissed at that band; a
+  // jump from warning -> danger re-surfaces it.
+  const showContextWarning =
+    !!contextUsage && contextUsage.band !== 'normal' && contextUsage.band !== contextWarningDismissedBand;
+
+  // Reset the dismissal when switching notebooks so a heavy session doesn't
+  // inherit a prior notebook's dismissed state.
+  useEffect(() => {
+    setContextWarningDismissedBand(null);
+  }, [currentSessionId]);
+
+  // Corner readout for the composer. Prefer the real assembled-context size from
+  // the last turn; before any turn completes, fall back to the current-input
+  // guard (which measures the input box against the budget, not the history).
+  const contextMeter = contextUsage
+    ? {
+        show: contextUsage.band !== 'normal',
+        danger: contextUsage.band === 'danger',
+        primary: `${formatTokenCount(contextUsage.actualInputTokens)}/${formatTokenCount(contextUsage.safeMaxInputTokens)}`,
+        secondary: `${Math.round(contextUsage.utilizationPercentage)}% of ${modelName} context`,
+      }
+    : {
+        show: isOverContextWindow,
+        danger: isOverContextWindow,
+        primary: `${chatInputValue.length}/${maxInputTokens}`,
+        secondary: `Context: ${contextWindowLimit} - Output: ${effectiveMaxOutputTokens}`,
+      };
 
   const pond = useNotebookFilepond();
   const maxFileSize = useGetSettingsValue('MaxFileSize') || 100;
@@ -411,6 +452,14 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                 }}
               >
                 <NoModelsWarning show={!isModelsLoading && (!accessibleModels || accessibleModels.length === 0)} />
+                {contextUsage && (
+                  <ContextUsageWarning
+                    show={showContextWarning}
+                    usage={contextUsage}
+                    modelName={modelName}
+                    onDismiss={() => setContextWarningDismissedBand(contextUsage.band)}
+                  />
+                )}
                 <Stack
                   className="session-bottom-input-row"
                   direction="row"
@@ -499,7 +548,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                       agents={lexicalAgents}
                     />
 
-                    {isOverContextWindow ? (
+                    {contextMeter.show ? (
                       <Box
                         sx={{
                           position: 'absolute',
@@ -510,10 +559,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                           padding: '4px 8px',
                         }}
                       >
-                        <Tooltip title="Context Window">
+                        <Tooltip title="Assembled context size for this notebook (last turn)">
                           <Typography
                             sx={theme => ({
-                              color: isOverContextWindow ? 'red' : theme.palette.text.primary,
+                              color: contextMeter.danger ? 'red' : theme.palette.text.primary,
                               textAlign: 'right',
                               leadingTrim: 'both',
                               textEdge: 'cap',
@@ -529,10 +578,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                             level="body-xs"
                           >
                             <Box component="span" sx={{ fontWeight: '500' }}>
-                              {chatInputValue.length}/{maxInputTokens}
+                              {contextMeter.primary}
                             </Box>
                             <Box component="span" sx={{ opacity: 0.7, fontSize: '12px', mt: 0.5 }}>
-                              Context: {contextWindowLimit} - Output: {effectiveMaxOutputTokens}
+                              {contextMeter.secondary}
                             </Box>
                           </Typography>
                         </Tooltip>

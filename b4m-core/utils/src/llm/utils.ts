@@ -113,8 +113,8 @@ const MAX_SAFETY_SHRINK_ROUNDS = 5;
  * Appended to attached-file content that had to be cut to fit. Without it a CSV sliced mid-row reads
  * as a complete file: the model treats the last surviving row as the final row and answers about it
  * confidently, which is indistinguishable from a correct answer unless you already hold the file.
- * Counted against the budget like any other content, because it is really sent. This text is for the
- * model only - what later steps read to know a message was cut is processMessages' truncatedMessages.
+ * Counted against the budget like any other content, because it is really sent. Its presence is also
+ * how later steps recognise that a message was cut.
  */
 const CONTENT_TRUNCATION_NOTICE =
   '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was not sent.]';
@@ -1263,10 +1263,10 @@ const truncateMessageContent = (message: IMessage, tokenLimit: number): IMessage
 const processMessages = (
   messages: IMessage[],
   tokenBudget: number,
-  // Appended to any message this call actually shortens. Passed only for attached-file content, and
-  // applied here because this is the only place that knows a message was cut: inferring it afterwards
-  // by comparing against the originals cannot distinguish a cut file from a whole one whose bytes
-  // happen to match a sibling attachment, in either direction.
+  // Appended to any message this call actually shortens. Passed only for attached-file content: it is
+  // applied at the truncation site because that is the only place that KNOWS a message was cut.
+  // Inferring it afterwards by comparing against the originals cannot distinguish a cut file from a
+  // whole one whose bytes happen to match a sibling attachment, in either direction.
   { truncationNotice }: { truncationNotice?: string } = {}
 ): {
   messages: IMessage[];
@@ -1659,10 +1659,7 @@ export async function buildAndSortMessages(
   const declareUndeliveredAttachments = (contentMessages: IMessage[]): IMessage[] => {
     if (attachmentsWithContent.length === 0) return contentMessages;
 
-    // Counted on the same footing as attachmentsWithContent: an attachment carrying no extractable
-    // text is absent from both sides. Counting it as delivered let it stand in for a sibling that was
-    // dropped, and the drop then went undeclared.
-    const delivered = contentMessages.filter(message => message !== undeliveredNote && fileTokens(message) > 0);
+    const delivered = contentMessages.filter(message => message !== undeliveredNote);
     const isUnusableSliver = (message: IMessage): boolean =>
       cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS;
     const usable = delivered.filter(message => !isUnusableSliver(message));

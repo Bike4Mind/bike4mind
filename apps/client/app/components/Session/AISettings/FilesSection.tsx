@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
-import { IFabFileDocument, MimeType } from '@bike4mind/common';
+import { IFabFileDocument, MimeType, isImageAttachment } from '@bike4mind/common';
 import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
 import {
   useSessions,
@@ -257,11 +257,11 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
     (file: IFabFileDocument) => {
       let supported = true;
       if (modelInfo?.type === 'text') {
-        if (!modelInfo?.supportsVision && file.mimeType.startsWith('image/')) {
+        if (!modelInfo?.supportsVision && isImageAttachment(file.mimeType)) {
           supported = false;
         }
       } else if (modelInfo?.type === 'image') {
-        if (file.mimeType.startsWith('image/')) {
+        if (isImageAttachment(file.mimeType)) {
           if (!modelInfo?.supportsImageVariation) {
             supported = false;
           }

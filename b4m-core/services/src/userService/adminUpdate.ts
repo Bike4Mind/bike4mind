@@ -14,7 +14,7 @@ import { addCredits } from '../creditService/addCredits';
 import { subtractCredits } from '../creditService/subtractCredits';
 import { MODERATION_POLICY } from './moderationPolicy';
 
-const adminUpdateUserSchema = updateUserSchema.extend({
+export const adminUpdateUserSchema = updateUserSchema.extend({
   id: z.string(),
   // Admins can directly update email addresses without verification
   email: z.email().optional(),

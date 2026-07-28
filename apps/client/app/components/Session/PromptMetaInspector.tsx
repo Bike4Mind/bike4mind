@@ -15,7 +15,7 @@ import {
   Tooltip,
 } from '@mui/joy';
 import { ModelTraining, Thermostat, Token, Speed, Close, Timer, Code, Warning, ContentCopy } from '@mui/icons-material';
-import { PromptMeta } from '@bike4mind/common';
+import { CLIENT_UNLIMITED_HISTORY_VALUE, PromptMeta } from '@bike4mind/common';
 import Draggable from 'react-draggable';
 import type { DraggableEvent, DraggableData } from 'react-draggable';
 
@@ -406,7 +406,8 @@ ${promptMeta.promptErrors?.length ? promptMeta.promptErrors.map((e: string) => `
                         <Stack direction="row" spacing={1} flexWrap="wrap">
                           <Typography level="body-xs">History Settings:</Typography>
                           <Chip size="sm" variant="soft" color="primary">
-                            {promptMeta.context?.requestedHistoryCount === 14
+                            {/* Records what the client asked for, so it is the wire value, not the marker. */}
+                            {promptMeta.context?.requestedHistoryCount === CLIENT_UNLIMITED_HISTORY_VALUE
                               ? 'All'
                               : (promptMeta.context?.requestedHistoryCount ?? 'N/A')}
                           </Chip>

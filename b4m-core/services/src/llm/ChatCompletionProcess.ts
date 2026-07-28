@@ -23,7 +23,11 @@ import {
   ICreditHolder,
   ICreditHolderMethods,
   isExperimentalFeatureEnabled,
+  isImageAttachment,
   isImageServeable,
+  isUnlimitedHistory,
+  normalizeRequestedHistoryCount,
+  resolveHistoryFetchLimit,
   QuestErrorCode,
   getQuestErrorCode,
 } from '@bike4mind/common';
@@ -89,6 +93,7 @@ import {
   ContextSummarizationFeature,
   MementoFeature,
   OrganizationPromptFeature,
+  DataLakePromptFeature,
   SessionPromptFeature,
   KnowledgeRetrievalFeature,
   ProjectFeature,
@@ -165,10 +170,9 @@ const SYSTEM_PROMPT_RESERVE = 4000;
 const RESPONSE_RESERVE = 8000;
 
 /**
- * Percentage of context budget allocated to history (vs knowledge files), used only to size the
- * history count below. It does NOT mirror how buildAndSortMessages splits the budget: that depends
- * on historyCount, giving files 70% when history is unlimited and guaranteeing them a 35% floor
- * otherwise.
+ * Share of the context budget this file assumes history will take when sizing a history count. It
+ * does NOT mirror how buildAndSortMessages splits the budget: that depends on historyCount, giving
+ * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise.
  */
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
 
@@ -236,6 +240,34 @@ function getSimpleQueryMaxHistory(contextWindow: number): number {
 function getComplexQueryMaxHistory(contextWindow: number): number {
   // Complex queries get the full optimal history count
   return calculateOptimalHistoryCount(contextWindow);
+}
+
+/**
+ * Narrow a requested history count to what the model's context window supports.
+ *
+ * Unlimited is an intent rather than a count, so it returns before any arithmetic. The marker is
+ * negative and this clamp only lowers, so the early return is belt-and-braces today - but
+ * calculateOptimalHistoryCount already floors at MIN_HISTORY_COUNT, and the same floor applied
+ * here would quietly turn unlimited back into a plain count, which is the bug this replaced.
+ *
+ * Exported for tests: the only caller sits deep inside process().
+ */
+export function resolveModelAwareHistoryCount({
+  historyCount,
+  contextWindow,
+  isSimpleQuery,
+}: {
+  historyCount: number;
+  contextWindow: number;
+  isSimpleQuery: boolean;
+}): number {
+  if (isUnlimitedHistory(historyCount)) return historyCount;
+
+  const modelAwareMax = isSimpleQuery
+    ? getSimpleQueryMaxHistory(contextWindow)
+    : getComplexQueryMaxHistory(contextWindow);
+
+  return Math.min(historyCount, modelAwareMax);
 }
 
 /**
@@ -615,7 +647,16 @@ export class ChatCompletionProcess {
       }
     }
 
-    const { historyCount = DEFAULT_HISTORY_COUNT, enableQuestMaster, enableMementos, enableAgents } = parsedBody;
+    const {
+      historyCount: requestedHistoryCount = DEFAULT_HISTORY_COUNT,
+      enableQuestMaster,
+      enableMementos,
+      enableAgents,
+    } = parsedBody;
+
+    // The one place the client's slider sentinel becomes the internal marker. Everything
+    // downstream works in that vocabulary, so no later step has to know the wire value.
+    const historyCount = normalizeRequestedHistoryCount(requestedHistoryCount);
 
     logger.info(`⏱️ [0ms] Parsed request body - questId: ${questId}, sessionId: ${sessionId}`);
 
@@ -819,24 +860,29 @@ export class ChatCompletionProcess {
 
       // Reduce history for simple queries to optimize cost and performance
       // Use conservative fallback here; dynamic adjustment happens after modelInfo is available
-      const originalHistoryCount = historyCount;
-      historyCount = Math.min(historyCount, SIMPLE_QUERY_FALLBACK_MAX);
+      // Unlimited carries no count to cap, so leave it for buildAndSortMessages to interpret.
+      if (!isUnlimitedHistory(historyCount)) {
+        const originalHistoryCount = historyCount;
+        historyCount = Math.min(historyCount, SIMPLE_QUERY_FALLBACK_MAX);
 
-      if (originalHistoryCount > historyCount) {
-        logger.info(`📉 [SIMPLE_QUERY] History pruned for simple query optimization`, {
-          original: originalHistoryCount,
-          reduced: historyCount,
-          sessionId,
-        });
+        if (originalHistoryCount > historyCount) {
+          logger.info(`📉 [SIMPLE_QUERY] History pruned for simple query optimization`, {
+            original: originalHistoryCount,
+            reduced: historyCount,
+            sessionId,
+          });
+        }
       }
 
       logger.info(
-        `🚀 [SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}, History=${historyCount}`
+        `🚀 [SIMPLE_QUERY] Optimizations: QuestMaster=${enableQuestMaster ? 'ON (explicit)' : 'OFF'}, Mementos=OFF, Agents=${enableAgents ? 'ON' : 'OFF'}, History=${
+          isUnlimitedHistory(historyCount) ? 'unlimited' : historyCount
+        }`
       );
     } else {
       // For complex queries, apply conservative cap before model info is available
       // Dynamic model-aware adjustment happens after modelInfo is fetched
-      if (historyCount > COMPLEX_QUERY_FALLBACK_MAX) {
+      if (!isUnlimitedHistory(historyCount) && historyCount > COMPLEX_QUERY_FALLBACK_MAX) {
         logger.info(
           `📊 [COMPLEX_QUERY] Initial cap at ${COMPLEX_QUERY_FALLBACK_MAX} messages (will adjust based on model)`,
           {
@@ -1108,28 +1154,40 @@ export class ChatCompletionProcess {
         historyCount = 0;
       }
 
-      const modelAwareMax = isSimpleQuery
-        ? getSimpleQueryMaxHistory(contextWindow)
-        : getComplexQueryMaxHistory(contextWindow);
+      if (isUnlimitedHistory(historyCount)) {
+        logger.info(`📊 [DYNAMIC_HISTORY] Unlimited history requested; no model-aware window applied`, {
+          model,
+          contextWindow,
+          queryType: isSimpleQuery ? 'simple' : 'complex',
+          // Unlimited has no count, so name the page size that will actually be fetched.
+          historyFetchLimit: resolveHistoryFetchLimit(historyCount),
+        });
+      } else {
+        const modelAwareMax = isSimpleQuery
+          ? getSimpleQueryMaxHistory(contextWindow)
+          : getComplexQueryMaxHistory(contextWindow);
+        const adjustedHistoryCount = resolveModelAwareHistoryCount({ historyCount, contextWindow, isSimpleQuery });
 
-      if (historyCount > modelAwareMax) {
-        logger.info(`📊 [DYNAMIC_HISTORY] Adjusting history based on model context window`, {
-          model,
-          contextWindow,
-          previousHistoryCount: historyCount,
-          modelAwareMax,
-          queryType: isSimpleQuery ? 'simple' : 'complex',
-        });
-        historyCount = modelAwareMax;
-      } else if (historyCount < modelAwareMax) {
-        // Allow expansion up to model-aware max if original request was lower
-        logger.info(`📊 [DYNAMIC_HISTORY] Model supports more history than requested`, {
-          model,
-          contextWindow,
-          requestedHistory: historyCount,
-          modelAwareMax,
-          queryType: isSimpleQuery ? 'simple' : 'complex',
-        });
+        if (adjustedHistoryCount < historyCount) {
+          logger.info(`📊 [DYNAMIC_HISTORY] Adjusting history based on model context window`, {
+            model,
+            contextWindow,
+            previousHistoryCount: historyCount,
+            modelAwareMax,
+            queryType: isSimpleQuery ? 'simple' : 'complex',
+          });
+        } else if (historyCount < modelAwareMax) {
+          // Allow expansion up to model-aware max if original request was lower
+          logger.info(`📊 [DYNAMIC_HISTORY] Model supports more history than requested`, {
+            model,
+            contextWindow,
+            requestedHistory: historyCount,
+            modelAwareMax,
+            queryType: isSimpleQuery ? 'simple' : 'complex',
+          });
+        }
+
+        historyCount = adjustedHistoryCount;
       }
 
       // Use default admin settings for immediate processing
@@ -1742,6 +1800,7 @@ export class ChatCompletionProcess {
           ...(featureContextMessages['agentDetection'] ?? []), // Add agent system prompts
           ...(featureContextMessages['questMaster'] ?? []),
           ...(featureContextMessages['organizationPrompt'] ?? []), // Add team-wide system prompt
+          ...(featureContextMessages['dataLakePrompt'] ?? []), // Per-lake system prompts (defer to the org block above)
           ...(featureContextMessages['sessionPrompt'] ?? []), // Per-session system prompt (product surfaces)
           ...(featureContextMessages['knowledgeRetrieval'] ?? []), // Forced data-lake retrieval (grounding + citations)
           // Add LLM-optimized context summary if available (covers messages before verbatim window)
@@ -3566,7 +3625,8 @@ export class ChatCompletionProcess {
             // Set request metadata
             telemetryBuilder.setRequestMetadata({
               queryComplexity: isSimpleQuery ? 'simple' : 'complex',
-              historyMessageCount: historyCount,
+              // Unlimited has no count of its own; report the page size it actually fetched.
+              historyMessageCount: resolveHistoryFetchLimit(historyCount),
               attachedFileCount: sessionFabFileIds?.length ?? 0,
               mementoCount: quest.promptMeta?.context?.mementoCount ?? 0,
               enabledFeatures: Array.from(this.features.keys()),
@@ -4110,7 +4170,7 @@ export class ChatCompletionProcess {
     // Add file metadata system message if there are files (for tools like edit_image).
     // Also require serveable so the LLM is never told the fabFileId of a
     // held/blocked image (that ID is what makes it reachable via edit_image, etc.).
-    const imageFiles = convertedFabFiles.filter(file => file.mimeType.startsWith('image/') && isImageServeable(file));
+    const imageFiles = convertedFabFiles.filter(file => isImageAttachment(file.mimeType) && isImageServeable(file));
     if (imageFiles.length > 0) {
       const fileList = imageFiles
         .map(file => `- "${file.fileName}" (fabFileId: ${file.id}, type: ${file.mimeType})`)
@@ -4372,6 +4432,23 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     if (organization?.systemPrompt) {
       this.logger.log(`  - Enabling OrganizationPrompt feature for "${organization.name}"`);
       this.features.set('organizationPrompt', new OrganizationPromptFeature(this, organization));
+    }
+
+    // Data lake prompt feature - per-lake system prompts for the caller's trusted lakes.
+    // Gated only on the repo being wired (like skills above): whether any lake actually
+    // carries a prompt is a DB question the feature answers itself, and it emits nothing
+    // when none do. Registered outside the complexity-optimized list so a lake's operating
+    // instructions are not silently dropped on a 'simple' turn.
+    //
+    // COST, accepted deliberately: this adds one accessible-lakes read per turn, and until the
+    // per-lake prompt editor ships it returns nothing useful (no UI writes the field yet). The
+    // collection is tiny, so the alternative - a repo method filtering on a non-empty
+    // systemPrompt - would buy little while adding a THIRD Mongo copy of the access predicate
+    // that the existing two already need a parity test to keep honest. Revisit if lake counts
+    // grow or this shows up in turn latency.
+    if (this.db.dataLakes) {
+      this.logger.log('  - Enabling DataLakePrompt feature');
+      this.features.set('dataLakePrompt', new DataLakePromptFeature(this));
     }
 
     // Session prompt feature - generic per-session system prompt (e.g. product

@@ -371,17 +371,7 @@ const ResetButton: React.FC<{
   height = '32px',
 }) => {
   const handleReset = () => {
-    const modelMaxTokens = modelInfo?.max_tokens ?? 16384;
-    const contextWindow = modelInfo?.contextWindow ?? 0;
-
-    let defaultMaxTokens;
-    if (contextWindow <= 8192) {
-      defaultMaxTokens = Math.min(modelMaxTokens, Math.floor(contextWindow / 2));
-    } else if (contextWindow <= 32768) {
-      defaultMaxTokens = Math.min(modelMaxTokens, 8192);
-    } else {
-      defaultMaxTokens = Math.min(modelMaxTokens, 16384);
-    }
+    const defaultMaxTokens = computeDefaultMaxTokens(modelInfo);
 
     let quality: OpenAIImageQuality | undefined;
 

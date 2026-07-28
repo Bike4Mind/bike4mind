@@ -9,6 +9,7 @@ import {
   fetchAgentConversationHistory,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
+import { DEFAULT_HISTORY_FETCH_LIMIT, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
 import type { IMessage, ISessionDocument } from '@bike4mind/common';
 
 // Define ITokenizer type locally since it's in @bike4mind/utils
@@ -138,7 +139,7 @@ describe('Context Management Tests', () => {
         [],
         tokenBudget + 1000, // Add buffer back
         {},
-        14, // INFINITE_VALUE
+        14,
         mockLogger as any,
         tokenizer
       );
@@ -406,7 +407,7 @@ describe('Context Management Tests', () => {
       expect(historyInResult).toBeLessThanOrEqual(historyCount * 2 + 1); // +1 for current prompt
     });
 
-    it('should use full history for complex queries (INFINITE_VALUE)', async () => {
+    it('should keep the whole history when no window is set', async () => {
       const previousMessages: IMessage[] = Array(10)
         .fill(null)
         .map((_, i) => ({
@@ -414,7 +415,6 @@ describe('Context Management Tests', () => {
           content: `Message ${i}`,
         }));
 
-      const INFINITE_VALUE = 14;
       const tokenizer = createMockTokenizer();
 
       const result = await buildAndSortMessages(
@@ -423,50 +423,101 @@ describe('Context Management Tests', () => {
         [{ role: 'user', content: 'Current prompt' }],
         10000,
         {},
-        INFINITE_VALUE,
+        UNLIMITED_HISTORY_COUNT,
         mockLogger as any,
         tokenizer
       );
 
-      // Should include all previous messages (budget permitting)
       const historyInResult = result
         .filter(m => m.role === 'user' || m.role === 'assistant')
-        .filter(m => m.content !== 'Current prompt').length;
+        .filter(m => m.content !== 'Current prompt');
 
-      expect(historyInResult).toBeGreaterThan(0);
+      expect(historyInResult).toHaveLength(previousMessages.length);
+      expect(getLastBuildDebugInfo()?.truncationMethod).not.toBe('history-limit');
     });
 
-    it('should allocate tokens proportionally when both history and content are large', async () => {
-      const previousMessages: IMessage[] = Array(20)
+    // The pair below is the allocation policy the old in-range sentinel could flip by accident:
+    // same oversubscribed inputs, and the only difference is whether a window was requested.
+    const oversubscribed = () => ({
+      previousMessages: Array(20)
         .fill(null)
         .map((_, i) => ({
           role: i % 2 === 0 ? 'user' : 'assistant',
-          content: `Previous message ${i}`,
-        }));
+          content: `Previous message ${i} ${'H'.repeat(330)}`,
+        })) as IMessage[],
+      fabMessages: [{ role: 'user', content: 'File content: ' + 'X'.repeat(1390) }] as IMessage[],
+      maxInputTokens: 1100,
+    });
 
-      const fabMessages: IMessage[] = [{ role: 'user', content: 'Large knowledge file content: ' + 'X'.repeat(5000) }];
+    const hasFileContent = (messages: IMessage[]) =>
+      messages.some(m => typeof m.content === 'string' && m.content.startsWith('File content:'));
 
-      const tokenBudget = 1000;
-      const tokenizer = createMockTokenizer();
+    it('should split the budget between files and history when no window is set', async () => {
+      const { previousMessages, fabMessages } = oversubscribed();
 
+      // 2100 rather than the fixture's 1100: after the 1000-token reserve the latter leaves ~96 tokens
+      // for a 401-token file, which is now declared undeliverable rather than sent as an unusable
+      // fragment, so there is no split left to observe. At 2100 the file fits inside its 70% share and
+      // history takes the rest, which is the division this test is named for.
       const result = await buildAndSortMessages(
         previousMessages,
         fabMessages,
         [{ role: 'user', content: 'Current prompt' }],
-        tokenBudget + 1000,
+        2100,
+        {},
+        UNLIMITED_HISTORY_COUNT,
+        mockLogger as any,
+        createMockTokenizer()
+      );
+
+      const historyKept = result.filter(
+        m => typeof m.content === 'string' && m.content.startsWith('Previous message')
+      ).length;
+      expect(hasFileContent(result)).toBe(true);
+      expect(historyKept).toBeGreaterThan(0);
+      expect(historyKept).toBeLessThan(previousMessages.length);
+    });
+
+    it('should treat a history count of 14 as an ordinary window, not a request for unlimited history', async () => {
+      // 14 is what a 128k model's simple-query ceiling computes to, and it used to mean "unlimited".
+      // Asserted on how much history survives rather than on whether file content does: with a budget
+      // large enough that nothing is squeezed, a window is observable as the 14*2 message cap and
+      // nothing else, which keeps this independent of how the branches divide a tight budget.
+      const previousMessages = Array(40)
+        .fill(null)
+        .map((_, i) => ({
+          role: i % 2 === 0 ? 'user' : 'assistant',
+          content: `Previous message ${i}`,
+        })) as IMessage[];
+      const fabMessages = [{ role: 'user', content: 'File content: ' + 'X'.repeat(200) }] as IMessage[];
+
+      const windowed = await buildAndSortMessages(
+        previousMessages,
+        fabMessages,
+        [{ role: 'user', content: 'Current prompt' }],
+        100000,
         {},
         14,
         mockLogger as any,
-        tokenizer
+        createMockTokenizer()
+      );
+      const unlimited = await buildAndSortMessages(
+        previousMessages,
+        fabMessages,
+        [{ role: 'user', content: 'Current prompt' }],
+        100000,
+        {},
+        UNLIMITED_HISTORY_COUNT,
+        mockLogger as any,
+        createMockTokenizer()
       );
 
-      // Both history and knowledge included; allocation ~70% knowledge / 30% history. The cap is
-      // only real if the result actually fits: with recent-pair protection left on for the content
-      // pass, the oversized knowledge message came back untouched and blew the budget.
-      expect(result.length).toBeGreaterThan(0);
-      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
-        tokenBudget + 1000
-      );
+      const historyCountIn = (messages: IMessage[]) =>
+        messages.filter(m => typeof m.content === 'string' && m.content.startsWith('Previous message')).length;
+      expect(historyCountIn(windowed)).toBe(28);
+      expect(historyCountIn(unlimited)).toBe(40);
+      // The file is small and the budget generous, so a window costs it nothing.
+      expect(hasFileContent(windowed)).toBe(true);
     });
   });
 
@@ -1423,6 +1474,44 @@ describe('Context Management Tests', () => {
 
       // After reverse -> [1,2,3], pop -> [1,2], filter keeps id > "000...01" -> [2]
       expect(meta.oldestIncludedQuestId).toBe(makeItem(2).id);
+    });
+
+    describe('history window resolution', () => {
+      it('pages unlimited history at the default limit instead of reading it as "no history"', async () => {
+        const items = [makeItem(3), makeItem(2), makeItem(1)];
+        const getMostRecentChatHistory = vi.fn().mockResolvedValue(items);
+
+        const [messages, count] = await fetchAndProcessPreviousMessages(makeSession(), UNLIMITED_HISTORY_COUNT, {
+          db: { quests: { getMostRecentChatHistory } },
+        });
+
+        // The marker is negative, so an ordering slip would take the "<= 0 means no history" path.
+        expect(count).toBe(2);
+        expect(messages).toHaveLength(4);
+        expect(getMostRecentChatHistory).toHaveBeenCalledWith('session1', DEFAULT_HISTORY_FETCH_LIMIT + 1);
+      });
+
+      it('still returns no history for a zero window', async () => {
+        const getMostRecentChatHistory = vi.fn();
+
+        const [messages, count] = await fetchAndProcessPreviousMessages(makeSession(), 0, {
+          db: { quests: { getMostRecentChatHistory } },
+        });
+
+        expect(count).toBe(0);
+        expect(messages).toHaveLength(0);
+        expect(getMostRecentChatHistory).not.toHaveBeenCalled();
+      });
+
+      it('pages a bounded window at that window', async () => {
+        const getMostRecentChatHistory = vi.fn().mockResolvedValue([]);
+
+        await fetchAndProcessPreviousMessages(makeSession(), 30, {
+          db: { quests: { getMostRecentChatHistory } },
+        });
+
+        expect(getMostRecentChatHistory).toHaveBeenCalledWith('session1', 31);
+      });
     });
 
     describe('recentGeneratedImages', () => {

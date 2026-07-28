@@ -190,7 +190,8 @@ export function getControlledManifestFields(
           description: 'View and manage your notebooks',
         },
         {
-          name: brand ? `Quick Ask ${brand}` : 'Quick Ask',
+          // Slack caps shortcut names at 24 chars; a long brand would overflow `Quick Ask <brand>`.
+          name: (brand ? `Quick Ask ${brand}` : 'Quick Ask').slice(0, 24),
           type: 'global',
           callback_id: 'quick_ask_shortcut',
           description: brand ? `Ask ${brand} a quick question` : 'Ask a quick question',

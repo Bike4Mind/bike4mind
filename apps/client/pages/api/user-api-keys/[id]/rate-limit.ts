@@ -18,10 +18,12 @@ interface UpdateRateLimitRequest {
  * Change a key's request ceilings in place, so raising or lowering a limit no
  * longer means revoking and re-minting. Only the fields sent change.
  *
- * Not admin-gated: ownership-scoped self-service, same posture as the sibling
- * embed-config PATCH. `updateApiKeyRateLimit` resolves the key via
- * findByUserIdAndId, so a caller can only ever retarget their own key. Bounds
- * are the service's (shared with mint); out-of-range values come back 422.
+ * Not admin-gated: minter-scoped self-service. `updateApiKeyRateLimit` resolves
+ * the key via findByUserIdAndId, so a caller can only ever retarget their own
+ * key. Deliberately narrower than the sibling embed-config PATCH, which also
+ * resolves org-administered keys because it backs the org-wide embed-key admin
+ * table; rate limits are not on that table. Bounds are the service's (shared
+ * with mint); out-of-range values come back 422.
  *
  * csrfProtection is defense in depth rather than a live hole - a cross-site
  * PATCH carrying JSON cannot get past preflight anyway - but it costs the
