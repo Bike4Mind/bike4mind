@@ -22,7 +22,7 @@ const UNTRUSTED_NOTE =
  * has to learn about the envelope.
  */
 function untrustedEventsEnvelope(result: CatchupResponse): string {
-  return JSON.stringify({ untrusted_data: true, note: UNTRUSTED_NOTE, ...result });
+  return JSON.stringify({ ...result, untrusted_data: true, note: UNTRUSTED_NOTE });
 }
 
 // Zod schemas for tool params (snake_case, LLM-facing)
