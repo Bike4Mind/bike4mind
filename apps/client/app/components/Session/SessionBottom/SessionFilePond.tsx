@@ -34,7 +34,7 @@ interface SessionFilePondProps {
     sessionId: string | null,
     fabFile: IFabFileDocument,
     options?: { propagateToProjects?: boolean }
-  ) => Promise<void>;
+  ) => Promise<boolean>;
 }
 
 export function SessionFilePond({
@@ -126,6 +126,7 @@ export function SessionFilePond({
                 uploadProgress: 0,
                 status: 'uploading',
                 scope,
+                uploadSessionId,
               },
             ]);
 

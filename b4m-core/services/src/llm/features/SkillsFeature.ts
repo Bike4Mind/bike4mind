@@ -106,7 +106,6 @@ export class SkillsFeature implements ChatCompletionFeature {
     quest: IChatHistoryItemDocument & { _skillsToInvoke?: ResolvedSkillInvocation[]; _skillCatalog?: ISkill[] },
     _embeddingFactory: unknown,
     _message: string,
-    _maxTokens: number,
     _modelInfo: ModelInfo
   ): Promise<IMessage[]> {
     const messages: IMessage[] = [];

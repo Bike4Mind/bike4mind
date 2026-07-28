@@ -55,6 +55,13 @@ export interface PendingMessageFile {
    * a file mid-flight would make the outcome depend on invisible network timing.
    */
   scope: AttachScope;
+  /**
+   * The notebook this upload was made against, frozen for the same reason. The
+   * moderation websocket can land after a session switch, and this store is not
+   * session-keyed, so promoting against the CURRENT session would file the image under
+   * whichever notebook the user happens to be looking at.
+   */
+  uploadSessionId: string | null;
 }
 
 interface SessionLayoutControlState {

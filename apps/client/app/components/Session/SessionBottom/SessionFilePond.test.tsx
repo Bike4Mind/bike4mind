@@ -166,7 +166,9 @@ describe('SessionFilePond attachment scope', () => {
     await upload('auto', makeFile('roster.pdf', 'application/pdf'), add);
 
     const firstUpdater = mockSetPendingMessageFiles.mock.calls[0][0] as (p: unknown[]) => unknown[];
-    expect(firstUpdater([])[0]).toMatchObject({ scope: 'notebook', status: 'uploading' });
+    // uploadSessionId is frozen alongside scope so the deferred image promotion cannot
+    // file the file under whichever notebook the user switched to meanwhile.
+    expect(firstUpdater([])[0]).toMatchObject({ scope: 'notebook', status: 'uploading', uploadSessionId: SID });
   });
 
   it('keeps the frozen scope across the temp-id to real-file swap', async () => {

@@ -278,7 +278,9 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
     (id: string) => {
       setLoadingChip(prev => ({ ...prev, [id]: true }));
       void removeFromNotebookContext(currentSessionId, id)
-        .then(() => toast.success('Removed from notebook context'))
+        .then(written => {
+          if (written) toast.success('Removed from notebook context');
+        })
         .catch(() => {})
         .finally(() => setLoadingChip(prev => ({ ...prev, [id]: false })));
     },
@@ -296,7 +298,9 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
       }
       // An explicit user gesture, so project propagation keeps its default.
       void addToNotebookContext(currentSessionId, file)
-        .then(() => toast.success(`"${file.fileName}" is now available to this whole notebook`))
+        .then(written => {
+          if (written) toast.success(`"${file.fileName}" is now available to this whole notebook`);
+        })
         .catch(() => {
           // Already rolled back and surfaced by the hook.
         });

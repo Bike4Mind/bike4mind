@@ -461,9 +461,12 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
         id: sessionId,
         knowledgeIds: knowledgeIds,
       });
-    } catch {
-      // Don't throw - this is a background operation
-      // Silent failure to avoid console noise
+    } catch (error) {
+      // Don't throw - callers treat this as a background operation. But it must not be
+      // silent: a dropped knowledgeIds write is invisible in the UI and looks exactly
+      // like the file was never attached. Callers that can surface it should use
+      // useNotebookContextFiles instead, which rolls back and tells the user.
+      console.error('Failed to persist session knowledgeIds', error);
     }
   }, []);
 

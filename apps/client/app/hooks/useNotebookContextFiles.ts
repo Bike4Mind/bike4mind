@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { useSessions, useWorkBenchStore } from '@client/app/contexts/SessionsContext';
@@ -38,18 +38,18 @@ export function useNotebookContextFiles() {
   const setWorkBenchFiles = useWorkBenchStore(s => s.setWorkBenchFiles);
   const updateSession = useUpdateSession();
 
-  // Tracks which files have a write in flight, purely so callers can disable a control
-  // while it runs. It is NOT the de-duplication guard - the optimistic append below is a
-  // synchronous store write, so a second concurrent call already sees the file present
-  // and returns on the contents check. The ref mirrors the state because the state
-  // setter is async and a rapid second call would otherwise read a stale set.
-  const inFlightRef = useRef<Set<string>>(new Set());
+  // Drives a spinner / disabled control while a write runs. NOT the de-duplication
+  // guard: the optimistic append below is a synchronous store write, so a second
+  // concurrent call already sees the file present and returns on the contents check.
   const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(new Set());
 
   const markPending = useCallback((fileId: string, pending: boolean) => {
-    if (pending) inFlightRef.current.add(fileId);
-    else inFlightRef.current.delete(fileId);
-    setPendingIds(new Set(inFlightRef.current));
+    setPendingIds(prev => {
+      const next = new Set(prev);
+      if (pending) next.add(fileId);
+      else next.delete(fileId);
+      return next;
+    });
   }, []);
 
   /**
@@ -81,15 +81,20 @@ export function useNotebookContextFiles() {
   );
 
   const addToNotebookContext = useCallback(
-    async (sessionId: string | null | undefined, fabFile: IFabFileDocument, options?: AddToNotebookContextOptions) => {
+    async (
+      sessionId: string | null | undefined,
+      fabFile: IFabFileDocument,
+      options?: AddToNotebookContextOptions
+    ): Promise<boolean> => {
       const sid = sessionId ?? '';
+      // Already present: a no-op, and the caller must not report success for it.
       if (
         useWorkBenchStore
           .getState()
           .getWorkBenchFiles(sid)
           .some(f => f.id === fabFile.id)
       )
-        return;
+        return false;
 
       markPending(fabFile.id, true);
       setWorkBenchFiles(sid, prev => [...prev, fabFile]);
@@ -102,15 +107,16 @@ export function useNotebookContextFiles() {
       } finally {
         markPending(fabFile.id, false);
       }
+      return true;
     },
     [markPending, setWorkBenchFiles, persist]
   );
 
   const removeFromNotebookContext = useCallback(
-    async (sessionId: string | null | undefined, fabFileId: string) => {
+    async (sessionId: string | null | undefined, fabFileId: string): Promise<boolean> => {
       const sid = sessionId ?? '';
       const previous = useWorkBenchStore.getState().getWorkBenchFiles(sid);
-      if (!previous.some(f => f.id === fabFileId)) return;
+      if (!previous.some(f => f.id === fabFileId)) return false;
 
       markPending(fabFileId, true);
       setWorkBenchFiles(sid, prev => prev.filter(f => f.id !== fabFileId));
@@ -128,6 +134,7 @@ export function useNotebookContextFiles() {
       } finally {
         markPending(fabFileId, false);
       }
+      return true;
     },
     [markPending, setWorkBenchFiles, persist]
   );

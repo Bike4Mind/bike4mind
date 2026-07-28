@@ -171,9 +171,14 @@ const RESPONSE_RESERVE = 8000;
  */
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
 /**
- * Share of the usable input window that attached-file content may be extracted into.
+ * Share of the usable input window that attached-file content may be EXTRACTED into.
  * Kept a minority share so conversational history, which is what users notice losing
  * first, keeps the majority. See attachedFileTokenBudget at its only use site.
+ *
+ * Not to be confused with HISTORY_BUDGET_PERCENTAGE above, or with
+ * KNOWLEDGE_FILE_TOKEN_ALLOCATION in utils.ts: those govern ASSEMBLY, deciding how an
+ * already-extracted set of messages is trimmed to fit. This one governs how much is
+ * read off disk in the first place, and is held below the assembly share on purpose.
  */
 const ATTACHED_CONTENT_SHARE = 0.35;
 /**
@@ -4467,7 +4472,6 @@ When using tools that require file IDs (like edit_image), use the ID shown above
             quest,
             embeddingFactory,
             message,
-            maxTokens,
             modelInfo,
             attachedFileTokenBudget
           );
