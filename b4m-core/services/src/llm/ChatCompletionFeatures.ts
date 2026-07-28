@@ -40,7 +40,6 @@ import {
   GenerateImageToolCallSchema,
   ILatticeModel,
   IDataLakeRepository,
-  IFabFileChunkDocument,
   CitableSource,
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
@@ -1195,13 +1194,55 @@ export class SessionPromptFeature implements ChatCompletionFeature {
 }
 
 /** Forced-retrieval tuning. */
-// Upper bound on lake files whose chunks we score (the whole lake for v1-scale lakes).
+// Upper bound on lake files whose chunks we score. Deliberately NOT raised to match the
+// data-lake search primitive: this runs inline on EVERY user turn, so scanning thousands of
+// files would add seconds per turn. A lake bigger than this is reported as partial coverage
+// (see reportCoverage) rather than scanned further.
 const FORCED_RETRIEVAL_MAX_CANDIDATE_FILES = 100;
+// File ids per chunk query, and chunk rows per query - together these bound how many vectors
+// are resident at once instead of loading every candidate file's chunks up front.
+const FORCED_RETRIEVAL_FILE_BATCH_SIZE = 10;
+const FORCED_RETRIEVAL_BATCH_CHUNK_CAP = 1000;
+// Hard ceiling on chunks scored in one turn, so a few huge documents cannot stall a turn.
+const FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS = 4000;
+// Above-floor candidates retained for the char-budget walk. Far more than the budget can fit,
+// so this bounds resident chunk text without changing which sections get injected.
+const FORCED_RETRIEVAL_MAX_SCORED_CHUNKS = 256;
 // Total characters of retrieved chunk text injected into the prompt.
 const FORCED_RETRIEVAL_CHAR_BUDGET = 12000;
 // Minimum cosine similarity (ada-002) for a chunk to count as relevant. Below this,
 // nothing is injected so the model refuses rather than grounding in off-topic content.
 const FORCED_RETRIEVAL_MIN_SIMILARITY = 0.75;
+
+/** An above-floor candidate. The vector is dropped so each batch can be freed after scoring. */
+interface ForcedRetrievalCandidate {
+  id: string;
+  fabFileId: string;
+  text: string;
+  score: number;
+}
+
+/** What the turn actually managed to look at. All-zero/false means full coverage - stay silent. */
+interface ForcedRetrievalCoverage {
+  filesListed: number;
+  filesMatching: number;
+  chunksScanned: number;
+  chunksSkippedDimMismatch: number;
+  filesWithDimMismatch: number;
+  stoppedByChunkBudget: boolean;
+  saturatedBatches: number;
+}
+
+/**
+ * Total order: score desc, then fabFileId, then chunk id. The explicit tiebreaker matters now
+ * that chunks arrive in batches - otherwise equal scores would be ordered by fetch order and the
+ * citation numbering could differ between two identical turns.
+ */
+function compareForcedRetrievalCandidates(a: ForcedRetrievalCandidate, b: ForcedRetrievalCandidate): number {
+  if (b.score !== a.score) return b.score - a.score;
+  if (a.fabFileId !== b.fabFileId) return a.fabFileId < b.fabFileId ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
 
 /**
  * KnowledgeRetrievalFeature - forced server-side retrieval ("citation enforcer").
@@ -1211,8 +1252,14 @@ const FORCED_RETRIEVAL_MIN_SIMILARITY = 0.75;
  * model answers, and the retrieved content is injected as a system message with
  * citations emitted to the UI. This guarantees grounded, cited answers regardless
  * of whether the model chooses to call the knowledge tools - the compliance-grade
- * path for reference products (e.g. LibreOncology). Reuses the same search +
- * chunk-read + citable logic as the knowledge tools. Keyed purely on the session
+ * path for reference products (e.g. LibreOncology). Shares the file-listing predicate and the
+ * projected chunk-vector reader with the knowledge tools, but keeps its own ranking loop, caps
+ * and citation-index construction - it is NOT routed through semanticDataLakeSearch.
+ *
+ * Coverage is bounded and self-reporting: the candidate-file cap, the per-turn chunk budget and
+ * any dimension mismatches are surfaced via reportCoverage (log + promptMeta) and hedged to the
+ * model, because "cited answer over a silently partial library" is the failure mode that matters
+ * most here. Keyed purely on the session
  * flag; no product-specific branching here. When the session sets
  * `citationStyle: 'indexed'`, each distinct source document is numbered in the
  * injected context and the model is instructed to cite by `[N]` only - the
@@ -1263,6 +1310,51 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     return getDynamicDataLakeAccess({ db, user, entitlementKeys });
   }
 
+  /**
+   * Surface reduced coverage exactly once: a log warning for operators and a promptMeta warning
+   * for the human reading the session. Returns whether anything was reduced, so the caller can
+   * also hedge the injected context.
+   *
+   * Fires ONLY when coverage was actually lost. A library with exactly the cap's worth of files is
+   * complete, so the test is `filesMatching > filesListed`, never `filesListed === cap` - a
+   * warning that fires on healthy libraries is one nobody reads.
+   */
+  private reportCoverage(quest: IChatHistoryItemDocument, coverage: ForcedRetrievalCoverage): boolean {
+    const partial =
+      coverage.filesMatching > coverage.filesListed ||
+      coverage.stoppedByChunkBudget ||
+      coverage.saturatedBatches > 0 ||
+      coverage.chunksSkippedDimMismatch > 0;
+    if (!partial) return false;
+
+    const reasons: string[] = [];
+    if (coverage.filesMatching > coverage.filesListed) {
+      reasons.push(`only ${coverage.filesListed} of ${coverage.filesMatching} matching documents were considered`);
+    }
+    if (coverage.stoppedByChunkBudget) {
+      reasons.push(`the ${FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS}-chunk per-turn scan budget was reached`);
+    }
+    if (coverage.saturatedBatches > 0) {
+      reasons.push(`${coverage.saturatedBatches} batch(es) held more chunks than one read returns`);
+    }
+    if (coverage.chunksSkippedDimMismatch > 0) {
+      reasons.push(
+        `${coverage.chunksSkippedDimMismatch} chunk(s) across ${coverage.filesWithDimMismatch} document(s) ` +
+          'are embedded at a different dimension and cannot be matched'
+      );
+    }
+    this.logger.warn(
+      `🔒 Forced retrieval: PARTIAL coverage - ${reasons.join('; ')}. Grounding is based on an incomplete library scan.`
+    );
+
+    quest.promptMeta = quest.promptMeta || {};
+    quest.promptMeta.warnings = [
+      ...(quest.promptMeta.warnings ?? []),
+      `Knowledge-base grounding scanned only part of the library for this message (${reasons.join('; ')}).`,
+    ];
+    return true;
+  }
+
   async getContextMessages(
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
@@ -1282,7 +1374,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
 
     const { db, user } = this.chatCompletion;
-    if (!db.fabfiles || !db.fabfilechunks) {
+    // Fail closed on the projected reader rather than falling back to an unbounded per-file read:
+    // a host missing it should ground nothing, not quietly reintroduce the corpus-sized load.
+    if (!db.fabfiles || !db.fabfilechunks || typeof db.fabfilechunks.findVectorsByFabFileIds !== 'function') {
       this.logger.warn('🔒 Forced retrieval: fabfiles/fabfilechunks repository unavailable — skipping');
       return [];
     }
@@ -1290,8 +1384,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     try {
       const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await this.resolveDataLakeAccess();
 
-      // 1. List the lake-accessible files (empty query -> all accessible). We rank by
-      //    semantic similarity below, so this list's order doesn't matter.
+      // 1. List the lake-accessible files (empty query -> all accessible). Ranking is by semantic
+      //    similarity below, but the ORDER still matters: on a lake larger than the candidate cap
+      //    it decides which files are considered at all, so it must be stable turn to turn.
       const fileResults = await db.fabfiles.search(
         user.id,
         '',
@@ -1320,27 +1415,98 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         return [];
       }
       const fileById = new Map(files.map(f => [f.id, f]));
+      // Fixed scan order so batching, the model pick, and any truncation are all reproducible;
+      // the DB sort is by a non-unique fileName, so `id` breaks the ties it leaves.
+      const scanOrder = [...files].sort((a, b) => {
+        const an = a.fileName ?? '';
+        const bn = b.fileName ?? '';
+        if (an !== bn) return an < bn ? -1 : 1;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
 
       // 2. Embed the query with the lake's embedding model (must match the chunks').
-      const embeddingModel = (files.find(f => f.embeddingModel)?.embeddingModel ||
+      //    First declaring file in the fixed scan order wins - deterministic, but it does mean a
+      //    mixed-model library can only ever match one of its models; the warning below says so.
+      const declaredModels = new Set(scanOrder.map(f => f.embeddingModel).filter(Boolean));
+      if (declaredModels.size > 1) {
+        this.logger.warn(
+          `🔒 Forced retrieval: candidate documents declare ${declaredModels.size} different embedding models ` +
+            `(${[...declaredModels].join(', ')}) - chunks outside the chosen one cannot match and will be skipped`
+        );
+      }
+      const embeddingModel = (scanOrder.find(f => f.embeddingModel)?.embeddingModel ||
         OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002) as SupportedEmbeddingModel;
       const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
       const queryVector = await embeddingService.generateEmbedding(query);
 
-      // 3. Score every chunk across candidate files by cosine similarity to the query.
-      const chunkLists = await Promise.all(files.map(f => db.fabfilechunks!.findByFabFileId(f.id)));
-      const scored: { chunk: IFabFileChunkDocument; score: number }[] = [];
-      for (const chunks of chunkLists) {
-        for (const chunk of chunks) {
-          if (!chunk.vector || chunk.vector.length === 0) continue;
-          scored.push({ chunk, score: computeCosineSimilarity(queryVector, chunk.vector) });
+      // 3. Score the candidate files' chunks in batches, keeping only above-floor candidates.
+      //    Batched + projected rather than one unbounded read per file: the whole point is that
+      //    peak memory is a batch, not the corpus, on a path that runs every turn.
+      const coverage: ForcedRetrievalCoverage = {
+        filesListed: files.length,
+        filesMatching: fileResults.total ?? files.length,
+        chunksScanned: 0,
+        chunksSkippedDimMismatch: 0,
+        filesWithDimMismatch: 0,
+        stoppedByChunkBudget: false,
+        saturatedBatches: 0,
+      };
+      const pool: ForcedRetrievalCandidate[] = [];
+      const mismatchedFileIds = new Set<string>();
+      let topScore = -1;
+      let scoredCount = 0;
+
+      for (let i = 0; i < scanOrder.length; i += FORCED_RETRIEVAL_FILE_BATCH_SIZE) {
+        if (coverage.chunksScanned >= FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS) {
+          coverage.stoppedByChunkBudget = true;
+          break;
+        }
+        const batchIds = scanOrder.slice(i, i + FORCED_RETRIEVAL_FILE_BATCH_SIZE).map(f => f.id);
+        const rows = await db.fabfilechunks.findVectorsByFabFileIds(batchIds, {
+          limit: FORCED_RETRIEVAL_BATCH_CHUNK_CAP,
+        });
+        // A full page means the batch had more chunks than we read, so those files are only
+        // partly covered. Bounded and reported instead of silently dropped.
+        if (rows.length >= FORCED_RETRIEVAL_BATCH_CHUNK_CAP) coverage.saturatedBatches++;
+
+        for (const row of rows) {
+          if (!row.vector || row.vector.length === 0) continue;
+          coverage.chunksScanned++;
+          if (row.vector.length !== queryVector.length) {
+            // Embedded under a different model, so this vector is in another space. Previously
+            // this scored 0 and was laundered out by the similarity floor with nothing recorded.
+            coverage.chunksSkippedDimMismatch++;
+            mismatchedFileIds.add(row.fabFileId);
+            continue;
+          }
+          const score = computeCosineSimilarity(queryVector, row.vector);
+          scoredCount++;
+          if (score > topScore) topScore = score;
+          if (score < FORCED_RETRIEVAL_MIN_SIMILARITY) continue;
+          pool.push({ id: row.id, fabFileId: row.fabFileId, text: row.text, score });
+          if (pool.length > FORCED_RETRIEVAL_MAX_SCORED_CHUNKS) {
+            pool.sort(compareForcedRetrievalCandidates);
+            pool.length = FORCED_RETRIEVAL_MAX_SCORED_CHUNKS;
+          }
         }
       }
-      if (scored.length === 0) {
-        this.logger.log('🔒 Forced retrieval: candidate files have no vectorized chunks');
+      coverage.filesWithDimMismatch = mismatchedFileIds.size;
+
+      if (scoredCount === 0) {
+        if (coverage.chunksSkippedDimMismatch > 0) {
+          // Distinct from "no vectorized chunks": these files DO have vectors, at the wrong width.
+          // Collapsing the two would send an operator hunting a vectorizing failure that isn't there.
+          this.logger.warn(
+            `🔒 Forced retrieval: all ${coverage.chunksSkippedDimMismatch} chunk(s) across ` +
+              `${coverage.filesWithDimMismatch} document(s) are embedded at a different dimension than the ` +
+              `${embeddingModel} query - the library needs re-vectorizing; nothing grounded`
+          );
+        } else {
+          this.logger.log('🔒 Forced retrieval: candidate files have no vectorized chunks');
+        }
         return [];
       }
-      scored.sort((a, b) => b.score - a.score);
+      const scored = pool.sort(compareForcedRetrievalCandidates);
 
       // 4. Inject the most-similar chunks (above the relevance floor) up to the budget.
       //    If nothing clears the floor, inject nothing so the model refuses rather than
@@ -1348,34 +1514,36 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       let used = 0;
       const sections: string[] = [];
       const sourceFileIds: string[] = [];
-      for (const { chunk, score } of scored) {
-        if (score < FORCED_RETRIEVAL_MIN_SIMILARITY) break; // sorted desc — the rest are lower
+      // `scored` is already floor-filtered during the scan, so the walk only enforces the budget.
+      for (const candidate of scored) {
         if (used >= FORCED_RETRIEVAL_CHAR_BUDGET) break;
-        const file = fileById.get(chunk.fabFileId);
+        const file = fileById.get(candidate.fabFileId);
         const remaining = FORCED_RETRIEVAL_CHAR_BUDGET - used;
-        const text = chunk.text.length > remaining ? chunk.text.slice(0, remaining) : chunk.text;
-        const name = file?.fileName || chunk.fabFileId;
+        const text = candidate.text.length > remaining ? candidate.text.slice(0, remaining) : candidate.text;
+        const name = file?.fileName || candidate.fabFileId;
         // Distinct-file first-appearance order IS the citation index order: the
         // citables emitted below follow sourceFileIds, so [N] -> citables[N-1].
-        let fileIdx = sourceFileIds.indexOf(chunk.fabFileId);
+        let fileIdx = sourceFileIds.indexOf(candidate.fabFileId);
         if (fileIdx === -1) {
-          sourceFileIds.push(chunk.fabFileId);
+          sourceFileIds.push(candidate.fabFileId);
           fileIdx = sourceFileIds.length - 1;
         }
         const heading =
           this.citationStyle === 'indexed'
-            ? `### [${fileIdx + 1}] ${name} (ID: ${chunk.fabFileId})`
-            : `### ${name} (ID: ${chunk.fabFileId})`;
+            ? `### [${fileIdx + 1}] ${name} (ID: ${candidate.fabFileId})`
+            : `### ${name} (ID: ${candidate.fabFileId})`;
         sections.push(`${heading}\n${text}`);
         used += text.length;
       }
 
       if (sections.length === 0) {
-        this.logger.log(
-          `🔒 Forced retrieval: no chunk cleared the similarity floor (top=${scored[0].score.toFixed(3)})`
-        );
+        // Report coverage first: a refusal grounded on a partially-scanned library is the most
+        // misleading outcome there is, because it reads as "the library has nothing on this".
+        this.reportCoverage(quest, coverage);
+        this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
         return [];
       }
+      const partialCoverage = this.reportCoverage(quest, coverage);
 
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".
       const citables: CitableSource[] = sourceFileIds.map((fid, index) => {
@@ -1438,9 +1606,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
       this.logger.log(
         `🔒 Forced retrieval: injected ${sections.length} chunk(s) from ${sourceFileIds.length} document(s), ` +
-          `${used} chars, top similarity ${scored[0].score.toFixed(3)}`
+          `${used} chars, top similarity ${topScore.toFixed(3)}`
       );
 
+      // Built once and appended to BOTH citation styles, so the two arms cannot drift apart. No
+      // raw counts: this is a compliance-grade path, and the model needs to know the search was
+      // partial, not to relay scan statistics to the reader.
+      const coverageNote = partialCoverage
+        ? 'Coverage note: only part of the library was searched for this query, so treat the retrieved set as ' +
+          'incomplete - do not state or imply the library was searched exhaustively, and say so if the question ' +
+          'calls for a comprehensive survey.\n\n'
+        : '';
       const header =
         this.citationStyle === 'indexed'
           ? '[Knowledge Base — Retrieved Context]\n' +
@@ -1452,7 +1628,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           : '[Knowledge Base — Retrieved Context]\n' +
             'The following content was retrieved from the curated library for this query. Ground your answer in it and ' +
             'cite documents by name. If it does not address the question, say so rather than relying on outside knowledge.\n\n';
-      return [{ role: 'system' as const, content: header + sections.join('\n\n---\n\n') }];
+      return [{ role: 'system' as const, content: header + coverageNote + sections.join('\n\n---\n\n') }];
     } catch (error) {
       this.logger.error('🔒 Forced retrieval failed:', error);
       return [];

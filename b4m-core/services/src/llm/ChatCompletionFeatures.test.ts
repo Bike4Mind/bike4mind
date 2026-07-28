@@ -314,17 +314,20 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     ];
     const chunksByFile: Record<string, unknown[]> = {
       fileA: [
-        { fabFileId: 'fileA', text: 'chunk A1', vector: [1, 0] },
-        { fabFileId: 'fileA', text: 'chunk A2', vector: [0.95, 0.05] },
+        { id: 'chA1', fabFileId: 'fileA', text: 'chunk A1', vector: [1, 0] },
+        { id: 'chA2', fabFileId: 'fileA', text: 'chunk A2', vector: [0.95, 0.05] },
       ],
-      fileB: [{ fabFileId: 'fileB', text: 'chunk B1', vector: [0.9, 0.1] }],
+      fileB: [{ id: 'chB1', fabFileId: 'fileB', text: 'chunk B1', vector: [0.9, 0.1] }],
     };
     return {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
       user: { id: 'u1', tags: [], groups: [] },
       db: {
-        fabfiles: { search: vi.fn().mockResolvedValue({ data: files }) },
-        fabfilechunks: { findByFabFileId: vi.fn((id: string) => Promise.resolve(chunksByFile[id] ?? [])) },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
+        },
       },
       // Resolver injected by ChatCompletionProcess; no entitlements in these citation tests.
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
@@ -448,15 +451,18 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
       { id: 'fileB', fileName: 'Cortes NEJM 2024.pdf', tags: [], vectorized: true },
     ];
     const chunksByFile: Record<string, unknown[]> = {
-      fileA: [{ fabFileId: 'fileA', text: 'chunk A1', vector: [1, 0] }],
-      fileB: [{ fabFileId: 'fileB', text: 'chunk B1', vector: [0.9, 0.1] }],
+      fileA: [{ id: 'chA1', fabFileId: 'fileA', text: 'chunk A1', vector: [1, 0] }],
+      fileB: [{ id: 'chB1', fabFileId: 'fileB', text: 'chunk B1', vector: [0.9, 0.1] }],
     };
     return {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
       user: { id: 'u1', tags: [], groups: [] },
       db: {
-        fabfiles: { search: vi.fn().mockResolvedValue({ data: files }) },
-        fabfilechunks: { findByFabFileId: vi.fn((id: string) => Promise.resolve(chunksByFile[id] ?? [])) },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
+        },
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
@@ -495,6 +501,9 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
       expect.anything(),
       expect.objectContaining({ excludeFilenameMarkers: ['Cortes'] })
     );
+    // An excluded file must never reach the (expensive) vector read at all.
+    expect(ctx.db.fabfilechunks.findVectorsByFabFileIds).toHaveBeenCalledTimes(1);
+    expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls[0][0]).toEqual(['fileA']);
   });
 
   it('no filter (default): both files are retrieved (opt-in only)', async () => {
@@ -510,6 +519,219 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
     );
     const citables = (quest.promptMeta as { citables?: Array<{ id: string }> }).citables ?? [];
     expect(citables.map(c => c.id).sort()).toEqual(['fileA', 'fileB']);
+  });
+});
+
+describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+  };
+
+  /** `total` defaults to the listed count, i.e. full coverage, so tests opt in to partiality. */
+  const makeCtx = (opts: {
+    files?: { id: string; fileName: string; tags?: unknown[]; embeddingModel?: string }[];
+    rows?: (ids: string[]) => unknown[];
+    total?: number;
+  }) => {
+    const files = opts.files ?? [{ id: 'fileA', fileName: 'A.pdf', tags: [] }];
+    const findVectorsByFabFileIds = vi.fn((ids: string[]) =>
+      Promise.resolve(
+        opts.rows
+          ? opts.rows(ids)
+          : ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [1, 0] }))
+      )
+    );
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: opts.total ?? files.length }),
+        },
+        fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  const run = async (ctx: ReturnType<typeof makeCtx>, citationStyle?: 'named' | 'indexed') => {
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      citationStyle
+    );
+    const quest = makeQuest();
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'stage III NSCLC treatment'
+    );
+    return { quest, content: messages[0]?.content ?? '', messages };
+  };
+
+  it('uses the projected batched reader, never the unbounded per-file read', async () => {
+    const ctx = makeCtx({});
+    await run(ctx);
+    expect(ctx.db.fabfilechunks.findVectorsByFabFileIds).toHaveBeenCalled();
+    expect(ctx.db.fabfilechunks.findByFabFileId).not.toHaveBeenCalled();
+    // The row cap must be passed, or a single huge file reintroduces the unbounded load.
+    expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ limit: expect.any(Number) })
+    );
+  });
+
+  it('full coverage stays completely silent: no warn, no promptMeta warning, no coverage note', async () => {
+    const ctx = makeCtx({});
+    const { quest, content } = await run(ctx);
+    expect(content).toContain('### A.pdf (ID: fileA)');
+    expect(content).not.toContain('Coverage note');
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalled();
+    expect((quest.promptMeta as { warnings?: string[] }).warnings).toBeUndefined();
+  });
+
+  it('a library larger than the candidate cap warns, records a promptMeta warning, and hedges the prompt', async () => {
+    const ctx = makeCtx({ total: 2314 });
+    const { quest, content } = await run(ctx);
+    expect(content).toContain('Coverage note');
+    expect(content).toContain('do not state or imply the library was searched exhaustively');
+    const warn = (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn;
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('PARTIAL coverage'));
+    expect(warn.mock.calls[0][0]).toContain('2314');
+    expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
+  });
+
+  it('a library exactly at the listed count is complete, not truncated', async () => {
+    // Kills the naive `listed === cap => truncated` inversion: equality is full coverage.
+    const ctx = makeCtx({ total: 1 });
+    const { quest, content } = await run(ctx);
+    expect(content).not.toContain('Coverage note');
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalled();
+    expect((quest.promptMeta as { warnings?: string[] }).warnings).toBeUndefined();
+  });
+
+  it('skips a wrong-width vector, still grounds on the good one, and reports the mismatch', async () => {
+    const ctx = makeCtx({
+      files: [
+        { id: 'good', fileName: 'Good.pdf', tags: [] },
+        { id: 'stale', fileName: 'Stale.pdf', tags: [] },
+      ],
+      rows: () => [
+        { id: 'c1', fabFileId: 'good', text: 'usable content', vector: [1, 0] },
+        // 3 dims against a 2-dim query: a different embedding model's vector space.
+        { id: 'c2', fabFileId: 'stale', text: 'unmatchable content', vector: [1, 0, 0] },
+      ],
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('usable content');
+    expect(content).not.toContain('unmatchable content');
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+      expect.stringContaining('different dimension')
+    );
+  });
+
+  it('an entirely wrong-width corpus says so, distinctly from having no vectors at all', async () => {
+    const ctx = makeCtx({
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'x', vector: [1, 0, 0] }],
+    });
+    const { messages } = await run(ctx);
+    expect(messages).toEqual([]);
+    const warn = (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn;
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('needs re-vectorizing'));
+    // Must NOT be reported as "no vectorized chunks" - these files have vectors, at the wrong width.
+    const logs = (ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.flat().join(' ');
+    expect(logs).not.toContain('no vectorized chunks');
+  });
+
+  it('genuinely unvectorized files keep the original message and do not warn', async () => {
+    const ctx = makeCtx({ rows: () => [] });
+    const { messages } = await run(ctx);
+    expect(messages).toEqual([]);
+    const logs = (ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.flat().join(' ');
+    expect(logs).toContain('no vectorized chunks');
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalled();
+  });
+
+  it('citation [N] numbering is stable when the reader returns rows in a different order', async () => {
+    // Batching changed arrival order, so equal-ranked chunks must be ordered by the explicit
+    // comparator rather than by whatever order the DB happened to return.
+    const rows = [
+      { id: 'c1', fabFileId: 'fileA', text: 'alpha', vector: [1, 0] },
+      { id: 'c2', fabFileId: 'fileB', text: 'beta', vector: [1, 0] },
+    ];
+    const files = [
+      { id: 'fileA', fileName: 'A.pdf', tags: [] },
+      { id: 'fileB', fileName: 'B.pdf', tags: [] },
+    ];
+    const forward = await run(makeCtx({ files, rows: () => [...rows] }), 'indexed');
+    const reversed = await run(makeCtx({ files, rows: () => [...rows].reverse() }), 'indexed');
+    expect(reversed.content).toBe(forward.content);
+    const ids = (q: typeof forward.quest) =>
+      ((q.promptMeta as { citables?: { id: string }[] }).citables ?? []).map(c => c.id);
+    expect(ids(reversed.quest)).toEqual(ids(forward.quest));
+  });
+
+  it('a saturated batch is reported rather than silently dropping the rest of its chunks', async () => {
+    // A full page means more chunks existed than one read returns.
+    const ctx = makeCtx({
+      rows: () =>
+        Array.from({ length: 1000 }, (_, i) => ({ id: `c${i}`, fabFileId: 'fileA', text: 'x', vector: [1, 0] })),
+    });
+    const { content } = await run(ctx);
+    expect(content).toContain('Coverage note');
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+      expect.stringContaining('more chunks than one read returns')
+    );
+  });
+
+  it('the per-turn chunk budget stops the scan instead of reading every batch', async () => {
+    const files = Array.from({ length: 100 }, (_, i) => ({
+      id: `f${String(i).padStart(3, '0')}`,
+      fileName: `F${String(i).padStart(3, '0')}.pdf`,
+      tags: [],
+    }));
+    const ctx = makeCtx({
+      files,
+      rows: ids =>
+        ids.flatMap(id =>
+          Array.from({ length: 100 }, (_, i) => ({ id: `${id}-${i}`, fabFileId: id, text: 'x', vector: [1, 0] }))
+        ),
+    });
+    await run(ctx);
+    // 4000-chunk budget over 1000-chunk batches: far fewer than the 10 batches 100 files imply.
+    expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.length).toBeLessThanOrEqual(5);
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+      expect.stringContaining('scan budget')
+    );
+  });
+
+  it('grounds nothing when the projected reader is missing, rather than falling back', async () => {
+    const ctx = makeCtx({});
+    (ctx.db.fabfilechunks as { findVectorsByFabFileIds?: unknown }).findVectorsByFabFileIds = undefined;
+    const { messages } = await run(ctx);
+    expect(messages).toEqual([]);
+    expect(ctx.db.fabfilechunks.findByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('warns when candidate documents declare more than one embedding model', async () => {
+    const ctx = makeCtx({
+      files: [
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-ada-002' },
+        { id: 'fileB', fileName: 'B.pdf', tags: [], embeddingModel: 'voyage-3' },
+      ],
+    });
+    await run(ctx);
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+      expect.stringContaining('different embedding models')
+    );
+  });
+
+  it('truncates the last chunk at the char budget without spilling over', async () => {
+    const ctx = makeCtx({
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'z'.repeat(20000), vector: [1, 0] }],
+    });
+    const { content } = await run(ctx);
+    expect((content.match(/z/g) ?? []).length).toBe(12000);
   });
 });
 
