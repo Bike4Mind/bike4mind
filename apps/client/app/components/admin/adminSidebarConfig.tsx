@@ -264,7 +264,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: HandymanIcon,
     label: 'General Ops',
     items: [
-      { Icon: HandymanIcon, tab: AdminTab.AdminSettings, label: 'Admin Settings' },
+      {
+        Icon: HandymanIcon,
+        tab: AdminTab.AdminSettings,
+        label: 'Admin Settings',
+        testid: 'admin-admin-settings-btn',
+      },
       { Icon: WidgetsIcon, tab: AdminTab.Modals, label: 'Modals' },
       { Icon: NewspaperIcon, tab: AdminTab.WhatsNewModals, label: "What's New" },
       { Icon: LanguageIcon, tab: AdminTab.WorldTime, label: 'World Time' },

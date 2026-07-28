@@ -211,6 +211,7 @@ const AdminSettingInputField = ({
           <Grid xs={12} md={6} sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'center' } }}>
             <Tooltip title="Update Setting" placement="top">
               <Button
+                data-testid={`admin-setting-${setting.key}-save-btn`}
                 color="success"
                 size="sm"
                 type="button"
