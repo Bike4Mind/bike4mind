@@ -9,6 +9,7 @@ import { requireUser } from '@server/middlewares/requireUser';
 import { sendToClient } from '@server/websocket/utils';
 import {
   toWireHearthEvent,
+  toPresenceProjection,
   HearthActorParamSchema,
   resolveRequestActor,
   assertHearthWriteScope,
@@ -74,6 +75,23 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.HEARTH_WRITE, ApiKeyScope
     });
 
     const wireEvent = toWireHearthEvent(event, actor.displayName);
+
+    // Roster projection. Best-effort for the same reason as the fanout below:
+    // the event is already durable, the roster is derived state that a later
+    // presence event repairs, and a projection bug must never cost a caller
+    // their append. See HearthPresenceModel for why this projection exists.
+    if (event.kind === 'presence') {
+      try {
+        const projection = toPresenceProjection({
+          event,
+          userId: req.user.id,
+          payload: body.machine?.payload,
+        });
+        if (projection) await hearthRepository.upsertPresence(projection);
+      } catch (err) {
+        req.logger?.warn(`hearth presence projection failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
 
     // Fanout is best-effort: the event is already durable in the log, and any
     // client that misses the push recovers losslessly via cursor catchup.

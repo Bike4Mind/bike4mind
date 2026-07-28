@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import type { HearthEvent } from '@bike4mind/hearth';
-import { hearthRepository } from '@bike4mind/database';
+import {
+  hearthRepository,
+  MAX_PRESENCE_FIELD_LENGTH,
+  type HearthPresenceState,
+  type IHearthPresenceDoc,
+  type UpsertPresenceInput,
+} from '@bike4mind/database';
 import { ApiKeyScope, ForbiddenError, type IHearthEventAction } from '@bike4mind/common';
 
 type WireHearthEvent = IHearthEventAction['event'];
@@ -61,6 +67,102 @@ export function assertHearthWriteScope(req: { apiKeyInfo?: { scopes?: string[] }
 }
 
 type ActorParam = z.infer<typeof HearthActorParamSchema>;
+
+/**
+ * Machine payload the roster projects from: the body written by the Claude Code
+ * hook (packages/cli/bin/hearth-hook.mjs, schema 'hearth.claude-code-hook@1').
+ * Every field is optional and unknown keys are dropped, so a presence event
+ * posted by hand - or by a low-disclosure hook tier that forwards no activity -
+ * still refreshes lastSeen; it just carries no detail. No length caps here on
+ * purpose: an over-long value is truncated rather than rejected, because losing
+ * a whole presence update over a long workspace name is the worse failure.
+ */
+const PresencePayloadSchema = z.object({
+  session_id: z.string().nullish(),
+  slug: z.string().nullish(),
+  workspace: z.string().nullish(),
+  activity: z
+    .object({
+      reason: z.string().nullish(),
+      tool: z.string().nullish(),
+      permission_mode: z.string().nullish(),
+      effort: z.string().nullish(),
+      subagent: z.string().nullish(),
+      background_tasks: z.number().int().min(0).nullish(),
+    })
+    .nullish(),
+});
+
+function clamp(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  return value.slice(0, MAX_PRESENCE_FIELD_LENGTH);
+}
+
+/**
+ * Map a presence event onto the roster row it projects. Returns null when the
+ * payload is not a shape we recognize at all, so the caller can skip the write
+ * instead of stamping a contentless row.
+ */
+export function toPresenceProjection(args: {
+  event: HearthEvent;
+  userId: string;
+  payload: unknown;
+}): UpsertPresenceInput | null {
+  const parsed = PresencePayloadSchema.safeParse(args.payload ?? {});
+  if (!parsed.success) return null;
+  const { activity } = parsed.data;
+
+  return {
+    channelId: args.event.channelId,
+    actorId: args.event.actorId,
+    userId: args.userId,
+    // The event's own time, so a delayed delivery cannot look more recent than
+    // an event that actually happened later.
+    lastSeen: args.event.createdAt,
+    reason: clamp(activity?.reason),
+    workspace: clamp(parsed.data.workspace),
+    tool: clamp(activity?.tool),
+    permissionMode: clamp(activity?.permission_mode),
+    effort: clamp(activity?.effort),
+    sessionId: clamp(parsed.data.session_id),
+    slug: clamp(parsed.data.slug),
+    subagent: clamp(activity?.subagent),
+    backgroundTasks: activity?.background_tasks ?? undefined,
+  };
+}
+
+export interface WireHearthPresence {
+  actorId: string;
+  actorName?: string;
+  state: HearthPresenceState;
+  reason?: string;
+  lastSeen: string;
+  workspace?: string;
+  tool?: string;
+  permissionMode?: string;
+  effort?: string;
+  slug?: string;
+  subagent?: string;
+  backgroundTasks?: number;
+}
+
+/** Roster row -> wire shape for GET /api/hearth/presence. */
+export function toWireHearthPresence(row: IHearthPresenceDoc, actorName?: string): WireHearthPresence {
+  return {
+    actorId: row.actorId.toString(),
+    actorName,
+    state: row.state,
+    reason: row.reason,
+    lastSeen: row.lastSeen.toISOString(),
+    workspace: row.workspace,
+    tool: row.tool,
+    permissionMode: row.permissionMode,
+    effort: row.effort,
+    slug: row.slug,
+    subagent: row.subagent,
+    backgroundTasks: row.backgroundTasks,
+  };
+}
 
 /** Find-or-create the acting Hearth actor for this request. */
 export async function resolveRequestActor(

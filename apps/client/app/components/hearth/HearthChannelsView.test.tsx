@@ -47,16 +47,39 @@ function wireEvent(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-/** The WS handler captured from subscribeToAction so tests can push events. */
-let pushWs: (message: unknown) => Promise<void> | void = () => {};
+const NOW = new Date().toISOString();
+
+type WsHandler = (message: unknown) => Promise<void> | void;
+
+/**
+ * Every hearth_event subscriber, not just the last one: the view and the nested
+ * presence panel both subscribe, and a mock that kept one callback would silently
+ * stop delivering events to the view.
+ */
+let wsHandlers: WsHandler[] = [];
+const pushWs = async (message: unknown) => {
+  for (const handler of [...wsHandlers]) await handler(message);
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
-  subscribeToActionMock.mockImplementation((_action: string, cb: typeof pushWs) => {
-    pushWs = cb;
-    return () => {};
+  wsHandlers = [];
+  subscribeToActionMock.mockImplementation((_action: string, cb: WsHandler) => {
+    wsHandlers.push(cb);
+    return () => {
+      wsHandlers = wsHandlers.filter(h => h !== cb);
+    };
   });
-  apiGetMock.mockResolvedValue({ data: { channels: [{ id: 'ch-1', name: 'ops', createdAt: '' }] } });
+  apiGetMock.mockImplementation(async (url: string) =>
+    url.startsWith('/api/hearth/presence')
+      ? {
+          data: {
+            presence: [{ actorId: 'actor-1', actorName: 'erik', state: 'idle', lastSeen: NOW }],
+            staleAfterMs: 300000,
+          },
+        }
+      : { data: { channels: [{ id: 'ch-1', name: 'ops', createdAt: '' }] } }
+  );
   apiPostMock.mockResolvedValue({ data: { events: [], cursor: 0 } });
 });
 
@@ -74,6 +97,17 @@ describe('HearthChannelsView', () => {
 
     expect(apiPostMock).toHaveBeenCalledWith('/api/hearth/catchup', { channelId: 'ch-1', tail: 100 });
     await screen.findByText('hello from the log');
+  });
+
+  it('shows the presence roster above the event stream', async () => {
+    await openChannel();
+
+    const panel = await screen.findByTestId('hearth-presence-panel');
+    const list = screen.getByTestId('hearth-event-list');
+    // DOCUMENT_POSITION_FOLLOWING: the stream comes after the roster, because
+    // "who is blocked on me" is the question asked on arrival.
+    expect(panel.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await screen.findByTestId('hearth-presence-row');
   });
 
   it('merges WS pushes with the HTTP tail, deduping by id', async () => {
