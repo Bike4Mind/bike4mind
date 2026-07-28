@@ -31,7 +31,9 @@ type SettingDoc = { settingName: string; settingValue: unknown };
 /** Open Admin, switch to Admin Settings, and flatten every tab into a single list. */
 async function gotoAdminSettings(page: Page, adminPage: { gotoAdmin: () => Promise<void> }) {
   await adminPage.gotoAdmin();
-  await page.getByTestId('admin-admin-settings-btn').click();
+  // The admin nav renders twice (desktop rail + mobile drawer), so the testid matches
+  // two nodes. Only one is on screen at a given viewport - click that one.
+  await page.getByTestId('admin-admin-settings-btn').filter({ visible: true }).first().click();
 
   const allTabs = page.getByTestId('admin-settings-all-tabs-checkbox');
   await expect(allTabs).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
