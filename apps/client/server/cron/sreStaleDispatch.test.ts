@@ -78,8 +78,8 @@ describe('sreStaleDispatch cron', () => {
     mockAtomicTransition.mockResolvedValue({ id: 'doc-1' });
   });
 
-  it('should timeout stale fixing docs', async () => {
-    mockFindStaleDispatches.mockResolvedValue([{ id: 'doc-1', errorFingerprint: 'fp-1' }]);
+  it('should blame GitHub Actions when the dispatch reached GitHub', async () => {
+    mockFindStaleDispatches.mockResolvedValue([{ id: 'doc-1', errorFingerprint: 'fp-1', githubRunDispatched: true }]);
 
     const result = await handler();
 
@@ -87,7 +87,35 @@ describe('sreStaleDispatch cron', () => {
     expect(mockAtomicTransition).toHaveBeenCalledWith('doc-1', 'fixing', 'failed', {
       errorMessage: expect.stringContaining('timed out after 20 minutes'),
     });
+    const { errorMessage } = mockAtomicTransition.mock.calls[0][3];
+    expect(errorMessage).toContain('dispatched to GitHub Actions but no callback received');
+    expect(errorMessage).not.toContain('sreFix handler never dispatched');
     expect(result.transitioned).toBe(1);
+  });
+
+  // Regression guard: a sreFix Lambda that dies before claimDispatch leaves
+  // githubRunDispatched absent, and the old message blamed GitHub Actions for a
+  // dispatch that never happened.
+  it('should blame the sreFix handler when githubRunDispatched is absent', async () => {
+    mockFindStaleDispatches.mockResolvedValue([{ id: 'doc-1', errorFingerprint: 'fp-1' }]);
+
+    const result = await handler();
+
+    const { errorMessage } = mockAtomicTransition.mock.calls[0][3];
+    expect(errorMessage).toContain('timed out after 20 minutes');
+    expect(errorMessage).toContain('sreFix handler never dispatched to GitHub');
+    expect(errorMessage).not.toContain('no callback received');
+    expect(result.transitioned).toBe(1);
+  });
+
+  // A revision cycle resets githubRunDispatched to false, so explicit false must
+  // read the same as absent rather than falling through to the dispatched branch.
+  it('should treat githubRunDispatched: false as never dispatched', async () => {
+    mockFindStaleDispatches.mockResolvedValue([{ id: 'doc-1', errorFingerprint: 'fp-1', githubRunDispatched: false }]);
+
+    await handler();
+
+    expect(mockAtomicTransition.mock.calls[0][3].errorMessage).toContain('sreFix handler never dispatched to GitHub');
   });
 
   it('should timeout stale analyzing docs after 10 min', async () => {
