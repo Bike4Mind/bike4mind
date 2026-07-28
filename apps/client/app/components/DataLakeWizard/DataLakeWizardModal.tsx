@@ -104,7 +104,12 @@ export default function DataLakeWizardModal() {
     // minimal path never stalls on Config's tagPrefix >= 2 gate. Skipped when taxonomy is on,
     // because setTaxonomy only adopts the inferred prefix while config.tagPrefix is empty -
     // seeding it here would silently suppress the AI's own suggestion.
-    if (step === 'source' && !targetLake && !optionalSteps.taxonomy && !config.tagPrefix.trim()) {
+    if (
+      step === 'source' &&
+      !targetLake &&
+      !isTaxonomyStepActive({ optionalSteps, targetLake }) &&
+      !config.tagPrefix.trim()
+    ) {
       setTagPrefix(`${slugifyDataLakeName(config.name)}:`);
     }
 
