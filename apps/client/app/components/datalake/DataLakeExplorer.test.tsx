@@ -41,3 +41,30 @@ describe('DataLakeExplorer - persistent Data Lakes info tooltip (#834)', () => {
     ).toBeInTheDocument();
   });
 });
+
+describe('DataLakeExplorer - create-first affordance (#837)', () => {
+  it('renders a header Create button when onCreate is provided and invokes it on click', () => {
+    const onCreate = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} onCreate={onCreate} />
+      </Wrapper>
+    );
+
+    const createBtn = screen.getByTestId('datalake-create-btn');
+    expect(createBtn).toBeInTheDocument();
+
+    fireEvent.click(createBtn);
+    expect(onCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('omits the create affordance entirely when no onCreate is provided', () => {
+    render(
+      <Wrapper>
+        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('datalake-create-btn')).not.toBeInTheDocument();
+  });
+});

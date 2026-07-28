@@ -1,8 +1,10 @@
 import { Box, Button, Chip, Skeleton, Typography, useTheme } from '@mui/joy';
 import { alpha } from '@mui/system';
+import AddIcon from '@mui/icons-material/Add';
 import ChatIcon from '@mui/icons-material/Chat';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
+import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { HUES, REDUCED_MOTION_OFF, driftFloat, inkFor, sonarPing } from '@client/app/components/datalake/deckChrome';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import type { IFabFileDocument } from '@bike4mind/common';
@@ -19,6 +21,9 @@ interface DataLakeArticleProps {
   /** Richest categories, surfaced as one-click dives in the empty state. */
   quickDives?: QuickDive[];
   onDive?: (path: string[]) => void;
+  /** When set, the empty state offers a create-first CTA (zero-lake bootstrap, #837).
+   *  The caller only passes this in the true zero-state, so its presence is the signal. */
+  onCreate?: () => void;
 }
 
 function cleanFileName(fileName: string): string {
@@ -51,10 +56,12 @@ function SonarEmptyState({
   isDark,
   quickDives,
   onDive,
+  onCreate,
 }: {
   isDark: boolean;
   quickDives: QuickDive[];
   onDive?: (path: string[]) => void;
+  onCreate?: () => void;
 }) {
   const cyan = inkFor(HUES.cyan, isDark);
   return (
@@ -132,12 +139,28 @@ function SonarEmptyState({
           level="title-lg"
           sx={{ fontWeight: 700, letterSpacing: '0.02em', color: 'text.secondary', mb: 0.5 }}
         >
-          Sonar idle — nothing on the scope
+          {onCreate ? 'Nothing on the scope yet' : 'Sonar idle — nothing on the scope'}
         </Typography>
         <Typography level="body-sm" sx={{ color: 'text.tertiary', maxWidth: 380 }}>
-          Pick a branch from the tree, or drop into one of the richest currents below.
+          {onCreate
+            ? `Create your first ${DATA_LAKE.toLowerCase()} to turn your files into searchable knowledge.`
+            : 'Pick a branch from the tree, or drop into one of the richest currents below.'}
         </Typography>
       </Box>
+
+      {/* Create-first CTA: only shown in the true zero-lake state (caller passes onCreate). */}
+      {onCreate && (
+        <Button
+          data-testid="datalake-empty-create-btn"
+          variant="solid"
+          color="primary"
+          startDecorator={<AddIcon />}
+          onClick={onCreate}
+          sx={{ zIndex: 1 }}
+        >
+          Create {DATA_LAKE.toLowerCase()}
+        </Button>
+      )}
 
       {/* Quick dives */}
       {quickDives.length > 0 && onDive && (
@@ -173,13 +196,13 @@ function SonarEmptyState({
   );
 }
 
-export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onDive }: DataLakeArticleProps) {
+export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onDive, onCreate }: DataLakeArticleProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const { data: content, isLoading } = useGetFabFileContent(file);
 
   if (!file) {
-    return <SonarEmptyState isDark={isDark} quickDives={quickDives} onDive={onDive} />;
+    return <SonarEmptyState isDark={isDark} quickDives={quickDives} onDive={onDive} onCreate={onCreate} />;
   }
 
   const title = cleanFileName(file.fileName);
