@@ -341,7 +341,9 @@ async function scanAndRank(args: {
  * query as before; a larger one is no longer silently cut off at the first page.
  */
 async function collectScopedFiles(args: {
-  search: IFabFileRepository['search'];
+  // The repository OBJECT, not a detached `search` reference: FabFileRepository.search calls
+  // this.executeSearch, so passing the method alone unbinds `this` and blows up at runtime.
+  fabfiles: Pick<IFabFileRepository, 'search'>;
   userId: string;
   userGroups: string[];
   tags: string[];
@@ -370,7 +372,7 @@ async function collectScopedFiles(args: {
 
   let exhaustedPageCeiling = true;
   for (let page = 1; page <= maxPages; page++) {
-    const result = await args.search(
+    const result = await args.fabfiles.search(
       args.userId,
       '', // no text query - pure data-lake browse; relevance comes from vector cosine below
       { tags: args.tags, shared: false },
@@ -538,7 +540,7 @@ export async function semanticDataLakeSearch(
 
   // --- Scope the files (metadata only) within the accessible data lakes ---
   const scoped = await collectScopedFiles({
-    search: adapters.db.fabfiles.search,
+    fabfiles: adapters.db.fabfiles,
     userId,
     userGroups,
     tags,

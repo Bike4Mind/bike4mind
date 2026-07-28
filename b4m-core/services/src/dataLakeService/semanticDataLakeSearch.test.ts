@@ -255,6 +255,34 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
     expect((search.mock.calls[0][3] as { limit: number }).limit).toBe(25);
   });
 
+  it('calls search as a method, so a repository whose search uses `this` still works', async () => {
+    // The real FabFileRepository.search delegates to this.executeSearch. Passing the method as a
+    // bare reference unbinds `this` and throws at runtime - and every vi.fn() mock in this file
+    // would still pass, because a plain function has no `this` to lose.
+    class RepoLikeTheRealOne {
+      private pageSize = 10;
+      async executeSearch(page: number) {
+        return { data: page === 1 ? [{ id: 'f1', fileName: 'F1.pdf', tags: [] }] : [], hasMore: false, total: 1 };
+      }
+      async search(..._args: unknown[]) {
+        const { page } = _args[3] as { page: number };
+        // Reading an instance field as well, so a lost binding cannot silently succeed.
+        void this.pageSize;
+        return this.executeSearch(page);
+      }
+    }
+
+    const result = await semanticDataLakeSearch(baseParams(), {
+      db: {
+        fabfiles: new RepoLikeTheRealOne(),
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 2)) },
+      },
+    } as never);
+
+    expect(result.scan.filesScoped).toBe(1);
+    expect(result.scan.chunksScanned).toBe(2);
+  });
+
   it('asks for the _id sort tiebreaker, without which a multi-page walk can lose a file', async () => {
     const search = filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]);
     await semanticDataLakeSearch(baseParams(), {
