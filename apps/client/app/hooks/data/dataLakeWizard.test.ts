@@ -590,4 +590,79 @@ describe('useInferTaxonomy response handling', () => {
     expect(useDataLakeWizardStore.getState().taxonomy.prefix).toBe('mine:');
     expect(toastMock.success).not.toHaveBeenCalled();
   });
+
+  it('dedups repeated category names so one card edit cannot hit two tags', async () => {
+    apiPost.mockResolvedValue({
+      data: {
+        suggestedPrefix: 'acme:',
+        suggestedName: 'Acme',
+        categories: [
+          { tagName: 'acme:type:contract', confidence: 0.9, matchingFolders: ['legal'] },
+          { tagName: 'acme:type:contract', confidence: 0.8, matchingFolders: ['legal2'] }, // dup
+        ],
+        fileAssignments: [],
+      },
+    });
+    seedFolderTree();
+
+    const { result } = mountHook(useInferTaxonomy);
+    act(() => {
+      result.current.mutate({});
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.attempted).toBe(true));
+
+    // originalName is the React key + the update/delete/merge key, so it must be unique.
+    expect(useDataLakeWizardStore.getState().taxonomy.tags).toHaveLength(1);
+  });
+
+  it('does not overwrite a name or prefix the user already typed', async () => {
+    // Re-analyze after the user set these on Config must not clobber them.
+    apiPost.mockResolvedValue({
+      data: {
+        suggestedPrefix: 'ai:',
+        suggestedName: 'AI Suggested Name',
+        categories: [{ tagName: 'ai:type:x', confidence: 0.9, matchingFolders: ['legal'] }],
+        fileAssignments: [],
+      },
+    });
+    seedFolderTree();
+    useDataLakeWizardStore.getState().setConfig({ name: 'My Lake', tagPrefix: 'mine:' });
+
+    const { result } = mountHook(useInferTaxonomy);
+    act(() => {
+      result.current.mutate({});
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.attempted).toBe(true));
+
+    const { config } = useDataLakeWizardStore.getState();
+    expect(config.name).toBe('My Lake');
+    expect(config.tagPrefix).toBe('mine:');
+  });
+
+  it('marks analyzing before the content-sampling await, closing the advance-mid-inference gap', async () => {
+    // Regression: analyzing was set only after sampling files (hundreds of ms), leaving the
+    // step's !analyzing gate open during that window so a user could advance and have onSuccess
+    // clobber their config. Stall sampling (Blob.text never resolves) and prove analyzing is
+    // already true while sampling is still pending and the network call has not fired.
+    const originalText = Blob.prototype.text;
+    Blob.prototype.text = () => new Promise<string>(() => {});
+    try {
+      apiPost.mockResolvedValue({
+        data: { suggestedPrefix: 'acme:', suggestedName: '', categories: [], fileAssignments: [] },
+      });
+      seedFolderTree(); // seeded file is text/plain, so it gets content-sampled
+
+      const { result } = mountHook(useInferTaxonomy);
+      act(() => {
+        result.current.mutate({});
+      });
+
+      await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.analyzing).toBe(true));
+      expect(apiPost).not.toHaveBeenCalled();
+    } finally {
+      Blob.prototype.text = originalText;
+    }
+  });
 });

@@ -114,6 +114,25 @@ const DEFAULT_UPLOAD_PROGRESS: UploadProgress = {
   status: 'idle',
 };
 
+/**
+ * A clean create-session's worth of state (everything except isOpen). Shared by openWizard,
+ * openWizardForLake, and resetWizard so opening the wizard can never inherit a prior session's
+ * files, config, or taxonomy - the fields are a synced set (e.g. taxonomy.prefix <-> config
+ * .tagPrefix), so resetting only some of them would desync them.
+ */
+const freshSession = () => ({
+  step: 'source' as WizardStep,
+  folderTree: null,
+  allFiles: [] as WizardFile[],
+  excludedPatterns: [...DEFAULT_EXCLUDED_PATTERNS],
+  taxonomy: { ...DEFAULT_TAXONOMY },
+  config: { ...DEFAULT_CONFIG },
+  duplicateCheckResults: null,
+  uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
+  hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
+  targetLake: null as WizardTargetLake | null,
+});
+
 // ── Store ───────────────────────────────────────────────────────────────────
 
 /**
@@ -209,9 +228,9 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
 
   // ── Navigation ──────────────────────────────────────────────────────────
 
-  // Taxonomy is cleared on every open: it now drives the tags files are actually
-  // uploaded with, so a previous run's categories must never leak into this one.
-  openWizard: () => set({ isOpen: true, step: 'source', targetLake: null, taxonomy: { ...DEFAULT_TAXONOMY } }),
+  // Always a clean session: taxonomy now drives the tags files are uploaded with, and config
+  // .tagPrefix is synced to taxonomy.prefix, so a stale prior session must not leak in.
+  openWizard: () => set({ isOpen: true, ...freshSession() }),
 
   // Management panel (list lakes, add files, lifecycle). Its internal "Create"
   // button calls openWizard, which stacks the wizard on top and returns here on close.
@@ -222,19 +241,18 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   // Append mode: upload into an existing lake. Preseeds config from the lake so
   // the (locked) Config step shows the right values; taxonomy is skipped.
   openWizardForLake: lake =>
-    set(state => ({
+    set({
       isOpen: true,
-      step: 'source',
+      ...freshSession(),
       targetLake: lake,
-      taxonomy: { ...DEFAULT_TAXONOMY },
       config: {
-        ...state.config,
+        ...DEFAULT_CONFIG,
         name: lake.name,
         tagPrefix: lake.fileTagPrefix,
         requiredUserTag: lake.requiredUserTag ?? '',
         requiredEntitlement: lake.requiredEntitlement ?? '',
       },
-    })),
+    }),
 
   closeWizard: () => set({ isOpen: false }),
 
@@ -273,11 +291,12 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   setTaxonomy: result =>
     set({
       taxonomy: result,
-      // Auto-fill config from taxonomy suggestion
+      // Auto-fill config from the suggestion, but a value the user already typed wins - else
+      // a Re-analyze would silently overwrite the name/prefix they set on the Config step.
       config: {
         ...get().config,
-        name: result.suggestedName || get().config.name,
-        tagPrefix: result.prefix || get().config.tagPrefix,
+        name: get().config.name || result.suggestedName,
+        tagPrefix: get().config.tagPrefix || result.prefix,
       },
     }),
 
@@ -384,18 +403,5 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
 
   // ── Reset ───────────────────────────────────────────────────────────────
 
-  resetWizard: () =>
-    set({
-      isOpen: false,
-      step: 'source',
-      folderTree: null,
-      allFiles: [],
-      excludedPatterns: [...DEFAULT_EXCLUDED_PATTERNS],
-      taxonomy: { ...DEFAULT_TAXONOMY },
-      config: { ...DEFAULT_CONFIG },
-      duplicateCheckResults: null,
-      uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
-      hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
-      targetLake: null,
-    }),
+  resetWizard: () => set({ isOpen: false, ...freshSession() }),
 }));

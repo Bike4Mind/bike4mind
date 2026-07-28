@@ -88,6 +88,9 @@ const deriveSuffix = (fullName: string, sourcePrefix: string): string => {
  */
 function sanitizeCategories(categories: InferTaxonomyResponse['categories'], sourcePrefix: string): TaxonomyTag[] {
   if (!Array.isArray(categories)) return [];
+  // originalName is the React key and the sole key for update/delete/merge, so it must be
+  // unique: a model that repeats a tagName would otherwise make one card's edit hit both.
+  const seen = new Set<string>();
   return categories
     .filter(cat => cat && isNonEmptyString(cat.tagName))
     .map(cat => {
@@ -101,7 +104,13 @@ function sanitizeCategories(categories: InferTaxonomyResponse['categories'], sou
         deleted: false,
       };
     })
-    .filter(t => t.suffix.length > 0);
+    .filter(t => {
+      if (t.suffix.length === 0) return false;
+      const key = t.originalName.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 function sanitizeFileAssignments(assignments: InferTaxonomyResponse['fileAssignments']): TaxonomyFileAssignment[] {
@@ -135,6 +144,11 @@ export function useInferTaxonomy() {
       const included = allFiles.filter(f => !f.excluded);
       if (included.length === 0) throw new Error('No files included');
 
+      // Set BEFORE the content-sampling await below: that read can take hundreds of ms, and
+      // until analyzing flips true the step's Next/Skip gate (`!taxonomy.analyzing`) stays
+      // open, letting the user advance mid-inference and have onSuccess clobber their config.
+      setTaxonomyAnalyzing(true);
+
       const sampled = sampleFiles(included);
 
       // Build folder entries with optional content samples
@@ -156,8 +170,6 @@ export function useInferTaxonomy() {
           };
         })
       );
-
-      setTaxonomyAnalyzing(true);
 
       const response = await api.post<InferTaxonomyResponse>('/api/data-lakes/infer-taxonomy', {
         folderTree: folderEntries,
