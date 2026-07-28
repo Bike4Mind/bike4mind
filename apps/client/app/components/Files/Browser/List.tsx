@@ -67,6 +67,7 @@ const FileBrowserList: FC<FileBrowserListProps> = ({
   // isPlaceholderData rather than isFetching: background refetches (the WebSocket-driven
   // ['fabFiles'] invalidations in Content.tsx) leave the visible page current, and disabling
   // Prev/Next through those would flicker the controls for no reason.
+  // Must stay in sync with Content.tsx's `isChangingPage`, which feeds the bottom-bar Prev/Next.
   const isChangingPage = isLoading || isPlaceholderData;
 
   function getTags(file: IFabFileDocument): IFileTag[] | undefined {

@@ -145,6 +145,10 @@ export class FileUploadPage extends BasePage {
     const renameInput = this.page.getByTestId('file-browser-rename-input');
     const renameItem = this.page.getByTestId('file-browser-rename-item');
     const saveBtn = this.page.getByTestId('file-browser-rename-save-btn');
+    const successToast = this.page
+      .locator('[data-sonner-toast]')
+      .filter({ hasText: /renamed/i })
+      .first();
 
     // Menu items can be detached by React re-renders, or the click may not register.
     // Retry the whole open-menu -> rename -> type -> save sequence, not just entering rename
@@ -166,6 +170,16 @@ export class FileUploadPage extends BasePage {
         await saveBtn.click({ timeout: TIMEOUTS.ELEMENT_STATE });
         break;
       } catch {
+        // The throw can land after the rename already went through - a save click that registered
+        // but whose actionability re-check then timed out on the re-rendering row. Retrying from
+        // there searches for a row that no longer carries the old name and would report a false
+        // failure, so treat the success toast as done. Bounded wait, not an instant check: the
+        // PUT may still be in flight when the click times out.
+        const renamed = await successToast
+          .waitFor({ state: 'visible', timeout: TIMEOUTS.POST_ACTION })
+          .then(() => true)
+          .catch(() => false);
+        if (renamed) break;
         if (attempt === 3) throw new Error('Failed to rename file after retries');
         await this.page.keyboard.press('Escape').catch(() => {});
       }
@@ -177,9 +191,7 @@ export class FileUploadPage extends BasePage {
       () => expect(renameInput).toBeHidden({ timeout: TIMEOUTS.ACTION })
     );
     // Wait for success toast to confirm rename completed and file list refreshed
-    await expect(this.page.locator('[data-sonner-toast]').filter({ hasText: /renamed/i })).toBeVisible({
-      timeout: TIMEOUTS.VISIBLE,
-    });
+    await expect(successToast).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
   async deleteFile(filename: string) {
