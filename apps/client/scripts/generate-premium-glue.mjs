@@ -21,7 +21,7 @@
  */
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync } from 'node:fs';
-import { resolve, dirname, join, sep, basename } from 'node:path';
+import { resolve, dirname, join, sep, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -464,11 +464,15 @@ function generateLlmTools(packages) {
 // unlike every other glue file here): both consumers of AvailableMigrations - the
 // DatabaseMigrator Lambda's MigrationManager and the `pnpm migrate` CLI - live in
 // @bike4mind/scripts, which cannot import from apps/client (wrong dependency direction).
-// Bare specifier (like llmTools / serverHandlerStubs), NOT the infra glue's relative-import
-// workaround below - that workaround exists only because esbuild externalises symlinked
-// workspace packages when bundling sst.config.ts. The migrator is a normal Lambda handler
-// referenced by string path (infra/database.ts), so a bare specifier bundles fine - the same
-// path serverHandlerStubs already proves out for real Lambda handlers.
+//
+// RELATIVE import to the overlay source (same as the infra glue below), NOT a bare
+// @bike4mind/premium-* specifier. The bare-specifier stubs (llmTools / serverHandlerStubs)
+// resolve only because they live under apps/client, where the overlay package is linked into
+// the resolution scope. This file lives under packages/scripts, which declares only
+// @bike4mind/database - the overlay is NOT resolvable from its node_modules, so a bare
+// specifier fails to bundle ("Could not resolve @bike4mind/premium-optihashi/server/migrations"
+// when SST esbuild-bundles the DatabaseMigrator Lambda). A relative .ts source import resolves
+// by filesystem path regardless of linking, and esbuild/vitest transpile it inline.
 function generateMigrations(packages) {
   const outPath = join(REPO_ROOT, 'packages/scripts/migrate/migrations/premium.generated.ts');
   const typeImport = `import type { MigrationFile } from '@bike4mind/database';`;
@@ -485,8 +489,25 @@ function generateMigrations(packages) {
 
   contributors.forEach(p => assertModuleSpecifier(p.contributions.migrationsExport, p.name, 'migrationsExport'));
 
-  const imports = contributors
-    .map((p, i) => `import { migrations as migrations${i} } from '${p.contributions.migrationsExport}';`)
+  // Resolve each overlay's declared migrationsExport subpath (via its own exports map) to the
+  // real source file, then rewrite it as a relative import from this generated file's dir.
+  const relSpecs = contributors.map(p => {
+    const sourceFile = resolveExportFromToSourceFile(p, p.contributions.migrationsExport);
+    if (!sourceFile) {
+      throw new Error(
+        `[codegen] cannot resolve migrationsExport ${JSON.stringify(p.contributions.migrationsExport)} ` +
+          `from package "${p.name}" to a source file (check its package.json "exports" map). ` +
+          `A bare specifier can't be used here - see generateMigrations().`
+      );
+    }
+    // Strip the .ts extension and normalise to a forward-slash relative specifier.
+    let rel = relative(dirname(outPath), sourceFile).split(sep).join('/').replace(/\.ts$/, '');
+    if (!rel.startsWith('.')) rel = `./${rel}`;
+    return rel;
+  });
+
+  const imports = relSpecs
+    .map((spec, i) => `import { migrations as migrations${i} } from '${spec}';`)
     .join('\n');
 
   const spreads = contributors.map((_, i) => `  ...migrations${i}`).join(',\n');
