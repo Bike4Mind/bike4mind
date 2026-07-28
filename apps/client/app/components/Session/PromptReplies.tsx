@@ -52,6 +52,7 @@ import { useConfig } from '@client/app/hooks/data/settings';
 import {
   hasCompleteOpeningTag,
   parseArtifactsWithFallback,
+  shouldWarnElidedArtifact,
   validateMermaidSyntax,
 } from '@client/app/utils/artifactParser';
 import RechartsRenderer from '../Charts/RechartsRenderer';
@@ -1408,6 +1409,21 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     };
   }, [cleanReply, rechartsDisplayMode, isStreamingArtifact, isTruncatedArtifact]);
 
+  // Suspected elision: the model abbreviated the artifact body instead of running out of
+  // room, so the stop reason is clean and the truncation banner never fires. Decision logic
+  // lives in shouldWarnElidedArtifact (unit-tested); memoized because the local fallback
+  // scan walks every artifact body and this component re-renders per streamed token.
+  const isElidedArtifact = useMemo(
+    () =>
+      shouldWarnElidedArtifact({
+        completed: !!completed,
+        isTruncatedArtifact,
+        suspectedElision: !!promptMeta?.suspectedElision,
+        artifacts,
+      }),
+    [completed, isTruncatedArtifact, promptMeta?.suspectedElision, artifacts]
+  );
+
   const chessArtifacts = useMemo(() => artifacts.filter(a => a.type === 'chess'), [artifacts]);
   const nonChessArtifacts = useMemo(() => artifacts.filter(a => a.type !== 'chess'), [artifacts]);
 
@@ -1532,6 +1548,25 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           <Typography level="body-sm">
             This response reached the output length limit before the artifact finished generating. The preview below may
             be incomplete — ask me to regenerate it (or to continue or shorten it) for a complete version.
+          </Typography>
+        </Alert>
+      )}
+
+      {/* Suspected-elision notice: the artifact finished cleanly but its body looks
+          abbreviated (placeholder comments, or handlers calling functions that were never
+          defined). Deliberately softer than the truncation copy above - this is a heuristic,
+          and the artifact below is shown exactly as generated. */}
+      {isElidedArtifact && (
+        <Alert
+          data-testid="artifact-elided-warning"
+          color="warning"
+          variant="soft"
+          sx={{ my: 1, flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}
+        >
+          <Typography level="title-sm">⚠️ Artifact may be incomplete</Typography>
+          <Typography level="body-sm">
+            Parts of this artifact look like placeholders rather than working code, so some features may do nothing.
+            Check it before sharing - or ask me to write it out in full.
           </Typography>
         </Alert>
       )}
