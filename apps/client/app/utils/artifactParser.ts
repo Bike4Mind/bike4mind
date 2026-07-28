@@ -5,6 +5,7 @@ import {
   ArtifactType,
   mapMimeTypeToArtifactType,
 } from '@bike4mind/common';
+import { detectElidedContent } from '@bike4mind/utils/artifactElision';
 import { tryParseChartJSON } from './chartJsonParser';
 
 // Built from the shared ARTIFACT_ATTRS_PATTERN so the attribute sub-pattern
@@ -938,6 +939,26 @@ export function generateCompleteArtifactId(type: string, identifier: string, tim
  */
 export function hasCompleteOpeningTag(tail: string): boolean {
   return new RegExp(`^<artifact\\s+${ARTIFACT_ATTRS_PATTERN}>`).test(tail);
+}
+
+/**
+ * Whether to show the "may be incomplete" notice for a reply. Companion to the truncation
+ * check above and deliberately subordinate to it: a truncated reply already gets a more
+ * accurate banner, so this stays quiet rather than stacking two warnings on one artifact.
+ *
+ * `suspectedElision` is the server's verdict (stamped in ChatCompletionProcess); the local
+ * scan is the fallback for replies generated before that shipped and for backends that
+ * persist no promptMeta. Advisory only - the caller must still render the artifact as-is.
+ */
+export function shouldWarnElidedArtifact(input: {
+  completed: boolean;
+  isTruncatedArtifact: boolean;
+  suspectedElision: boolean;
+  artifacts: Array<{ content: string; type: ArtifactType }>;
+}): boolean {
+  if (!input.completed || input.isTruncatedArtifact) return false;
+  if (input.suspectedElision) return true;
+  return input.artifacts.some(a => detectElidedContent(a.content, a.type).elided);
 }
 
 // Re-export validation functions from the core utils package
