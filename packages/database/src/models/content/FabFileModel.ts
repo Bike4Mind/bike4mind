@@ -195,6 +195,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toObject());
   }
 
+  /**
+   * Metadata-only fetch for a set of ids - `content` is projected out, so a caller
+   * that only needs to know *what* was attached never loads the file bodies.
+   * Invalid ObjectIds are dropped rather than throwing a BSONError, since the ids
+   * come from a session's `knowledgeIds` and can outlive the file.
+   */
+  async findMetadataByIds(ids: string[]) {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const result = await this.fabFileModel.find({ _id: { $in: convertIds(validIds) } }, { content: 0 });
+    return result.map(d => d.toJSON());
+  }
+
+  /** As `findMetadataByIds`, for the files uploaded into one session. */
+  async findMetadataBySessionId(sessionId: string) {
+    const result = await this.fabFileModel.find({ sessionId, deletedAt: null }, { content: 0 }).sort({ createdAt: 1 });
+    return result.map(d => d.toJSON());
+  }
+
   async deleteManyInIds(ids: string[]) {
     await this.fabFileModel.deleteMany({ _id: { $in: ids } });
   }

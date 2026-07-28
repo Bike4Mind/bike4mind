@@ -389,6 +389,33 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     });
   }
 
+  /**
+   * One page of a session's turns, oldest-first by default - the read shape a
+   * support view needs (a long notebook must not be loaded whole). Projects only
+   * the conversation fields, so bulk payloads like `structuredReplies` and
+   * `deepResearchState` stay out of the response. `hasMore` comes from fetching
+   * one extra row, matching the pagination contract used by the chat endpoints.
+   */
+  async findPageBySessionId(
+    sessionId: string,
+    options: { limit: number; page: number; sort?: 'asc' | 'desc' }
+  ): Promise<{ data: IChatHistoryItemDocument[]; hasMore: boolean }> {
+    const { limit, page, sort = 'asc' } = options;
+    const result = await this.model
+      .find({ sessionId, deletedAt: null })
+      .select('sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed')
+      .sort({ timestamp: sort })
+      .skip(limit * (page - 1))
+      .limit(limit + 1);
+
+    const hasMore = result.length > limit;
+    const rows = hasMore ? result.slice(0, limit) : result;
+    return {
+      data: rows.map(d => ({ ...d.toJSON() }) as IChatHistoryItemDocument),
+      hasMore,
+    };
+  }
+
   async findAllBySessionIdAndLessThanOrEqualToTimestamp(sessionId: string, timestamp: Date) {
     const query = this.model.find({ sessionId, timestamp: { $lte: timestamp } }).sort({ timestamp: -1 });
     // See `findAllBySessionId` above.
