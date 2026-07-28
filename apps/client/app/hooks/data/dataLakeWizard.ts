@@ -194,6 +194,11 @@ export function useInferTaxonomy() {
       const tags = sanitizeCategories(data.categories, data.suggestedPrefix || '');
       // An empty response (no API key configured) must not blank a prefix the user already
       // has: config.tagPrefix keeps its old value regardless.
+      // Pairs with setTaxonomy's own existing-value-wins rule, which guards the opposite input:
+      // this one keeps an EMPTY suggestion from blanking a stored prefix, setTaxonomy keeps a
+      // NON-EMPTY one from overwriting a prefix the source step already derived. They overlap
+      // only while taxonomy.prefix and config.tagPrefix agree, which every writer enforces -
+      // so this stays as the boundary-level guard rather than leaning on that invariant.
       const prefix = data.suggestedPrefix || previous.prefix;
 
       setTaxonomy({

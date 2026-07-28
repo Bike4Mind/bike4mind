@@ -337,6 +337,8 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
 
   setTaxonomy: result =>
     set({
+      // Second half of the prefix fallback that useInferTaxonomy's onSuccess starts (see the
+      // note there): that one handles an empty suggestion, this one a conflicting suggestion.
       // taxonomy.prefix follows the SAME existing-value-wins rule as config.tagPrefix below,
       // not just for symmetry: taxonomy.prefix renders the tag cards while config.tagPrefix is
       // what upload actually applies, so adopting result.prefix here while config keeps a

@@ -225,7 +225,9 @@ export default function TaxonomyReviewStep() {
     if (autoTriggered.current || taxonomy.attempted || taxonomy.analyzing) return;
     autoTriggered.current = true;
     inferTaxonomy.mutate({ existingPrefix: taxonomy.prefix || undefined });
-  }, [taxonomy.attempted, taxonomy.analyzing, taxonomy.prefix, inferTaxonomy]);
+    // Depends on mutate, not the mutation object: useMutation returns a fresh object every
+    // render, which would re-run this effect on each one (harmless, but noisy to reason about).
+  }, [taxonomy.attempted, taxonomy.analyzing, taxonomy.prefix, inferTaxonomy.mutate]);
 
   // Loading state
   if (taxonomy.analyzing) {
