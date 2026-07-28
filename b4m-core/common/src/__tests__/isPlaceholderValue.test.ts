@@ -155,8 +155,10 @@ describe('isPlaceholderApiKey', () => {
 
   describe('never rejects a real key (a false positive is worse than the bug)', () => {
     // Fixtures below are deliberately synthetic/low-entropy (no real-key marker) so push
-    // protection doesn't flag them; entropy is irrelevant here - the predicate only looks
-    // for a dummy token as a whole delimited segment.
+    // protection doesn't flag them, which costs nothing here: the predicate matches delimited
+    // segments and never inspects entropy, so a low-entropy body exercises it identically.
+    // (Entropy is why the token list is safe against real keys - see isPlaceholderApiKey - which
+    // is a separate argument from what these fixtures cover.)
     it('accepts real-looking OpenAI keys', () => {
       expect(isPlaceholderApiKey('sk-1234567890abcdefABCDEF')).toBe(false);
       expect(isPlaceholderApiKey('sk-proj-0000aaaa1111bbbb2222cccc3333dddd')).toBe(false);
