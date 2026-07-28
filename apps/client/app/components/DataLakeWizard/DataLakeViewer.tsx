@@ -520,9 +520,9 @@ function ArticlePanel({
         <ModalDialog data-testid="datalake-removefile-confirm" role="alertdialog">
           <DialogTitle>Remove file from data lake?</DialogTitle>
           <DialogContent>
-            “{title}” will be removed from this data lake and stops appearing in it right away, including in search. The
-            file stays in your Files list and in any chats that use it. Its tags under this lake&apos;s prefix go with
-            it, so it also leaves this lake&apos;s folder groupings.
+            &ldquo;{title}&rdquo; will be removed from this data lake and stops appearing in it right away, including in
+            search. The file stays in your Files list and in any chats that use it. Its tags under this lake&apos;s
+            prefix go with it, so it also leaves this lake&apos;s folder groupings.
           </DialogContent>
           <DialogActions>
             <Button
