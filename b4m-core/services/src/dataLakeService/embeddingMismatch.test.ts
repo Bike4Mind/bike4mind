@@ -186,9 +186,9 @@ describe('createEmbeddingMismatchAccumulator', () => {
   it('sorts and dedupes the distinct foreign models', () => {
     const report = createEmbeddingMismatchAccumulator(
       [
-        { id: 'a', embeddingModel: 'voyage-3' },
-        { id: 'b', embeddingModel: SMALL_3 },
-        { id: 'c', embeddingModel: 'voyage-3' },
+        { id: 'a', embeddingModel: 'voyage-3', vectorizedChunkCount: 1 },
+        { id: 'b', embeddingModel: SMALL_3, vectorizedChunkCount: 1 },
+        { id: 'c', embeddingModel: 'voyage-3', vectorizedChunkCount: 1 },
       ],
       ADA
     ).report();
@@ -238,9 +238,49 @@ describe('createEmbeddingMismatchAccumulator', () => {
   });
 
   it('mentions the cap once something was genuinely withheld', () => {
-    const acc = createEmbeddingMismatchAccumulator([{ id: 'a', embeddingModel: SMALL_3 }], ADA);
+    const acc = createEmbeddingMismatchAccumulator(
+      [{ id: 'a', embeddingModel: SMALL_3, vectorizedChunkCount: 1 }],
+      ADA
+    );
     acc.truncation({ chunkCapHit: true });
     expect(describeEmbeddingMismatch(acc.report(), ADA)).toContain('cap');
+  });
+
+  it('does not count a foreign file that chunked but never finished vectorizing', () => {
+    // The state the pipeline actually writes: chunk.ts stamps vectorized = chunks.length > 0,
+    // vectorizedChunkCount = 0 AND embeddingModel together at chunk time, before any vector
+    // exists. Keying the guard on `vectorized` therefore reported "1 file (about 0 chunks)
+    // excluded - re-embed those files" on every search after an admin model switch.
+    const acc = createEmbeddingMismatchAccumulator(
+      [{ id: 'a', embeddingModel: SMALL_3, vectorizedChunkCount: 0 }],
+      ADA
+    );
+    const report = acc.report();
+    expect(report.excludedFiles.count).toBe(0);
+    expect(report.partial).toBe(false);
+    expect(describeEmbeddingMismatch(report, ADA)).toBeNull();
+  });
+
+  it('does not let a never-embedded chunk make the result partial', () => {
+    // A chunk with no vector was never embedded, which is not an embedding-space mismatch. Some
+    // are permanently unembeddable (oversized past the context window), so counting them would
+    // flag that lake on every turn forever with no remedy the user can apply.
+    const acc = createEmbeddingMismatchAccumulator([], ADA);
+    acc.skip('missingVector');
+    acc.skip('unknownFile');
+    const report = acc.report();
+    expect(report.skippedChunks.total).toBe(2);
+    expect(report.partial).toBe(false);
+    expect(describeEmbeddingMismatch(report, ADA)).toBeNull();
+  });
+
+  it('still goes partial for a real embedding-space mismatch', () => {
+    const acc = createEmbeddingMismatchAccumulator([], ADA);
+    acc.skip('dimensionMismatch');
+    expect(acc.report().partial).toBe(true);
+    const acc2 = createEmbeddingMismatchAccumulator([], ADA);
+    acc2.skip('modelMismatch');
+    expect(acc2.report().partial).toBe(true);
   });
 
   it('does not count a foreign file that holds no vectors', () => {
@@ -259,7 +299,10 @@ describe('describeEmbeddingMismatch', () => {
   it('names the embedder as the cause, not a mismatch, when the query could not be embedded', () => {
     // Otherwise the text reads as a normal search with exclusions and sends the reader off to
     // re-embed files when the embedder is what failed.
-    const acc = createEmbeddingMismatchAccumulator([{ id: 'a', embeddingModel: SMALL_3 }], ADA);
+    const acc = createEmbeddingMismatchAccumulator(
+      [{ id: 'a', embeddingModel: SMALL_3, vectorizedChunkCount: 1 }],
+      ADA
+    );
     acc.queryEmbeddingFailed();
     const report = acc.report();
     expect(report.queryEmbeddingFailed).toBe(true);
@@ -290,7 +333,10 @@ describe('describeEmbeddingMismatch', () => {
   });
 
   it('mentions unlabeled chunks once there IS a genuine withholding to explain', () => {
-    const acc = createEmbeddingMismatchAccumulator([{ id: 'a', embeddingModel: SMALL_3 }], ADA);
+    const acc = createEmbeddingMismatchAccumulator(
+      [{ id: 'a', embeddingModel: SMALL_3, vectorizedChunkCount: 1 }],
+      ADA
+    );
     acc.scored({}, 'legacy');
     const text = describeEmbeddingMismatch(acc.report(), ADA);
     expect(text).toContain('unverified');

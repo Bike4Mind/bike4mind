@@ -51,6 +51,7 @@ import {
   classifyLoadedChunk,
   createEmbeddingMismatchAccumulator,
   describeEmbeddingMismatch,
+  PARTIAL_RESULTS_STATUS_SUFFIX,
   partitionFilesByEmbeddingModel,
   resolveMajorityEmbeddingModel,
   type EmbeddingMismatchReport,
@@ -1595,9 +1596,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       }
       await this.chatCompletion.sendStatusUpdate(
         quest,
-        skipNotice
-          ? 'Grounded in the knowledge base - partial results, some content could not be searched'
-          : 'Grounded in the knowledge base'
+        skipNotice ? `Grounded in the knowledge base${PARTIAL_RESULTS_STATUS_SUFFIX}` : 'Grounded in the knowledge base'
       );
 
       this.logger.log(

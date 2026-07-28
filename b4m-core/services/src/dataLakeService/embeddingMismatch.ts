@@ -31,6 +31,13 @@ export type ChunkSkipReason = 'unknownFile' | 'modelMismatch' | 'missingVector' 
 
 const SKIP_REASONS: ChunkSkipReason[] = ['unknownFile', 'modelMismatch', 'missingVector', 'dimensionMismatch'];
 
+/**
+ * The short decoration appended to a live status line when a search was partial. Exported so the
+ * chat tool and forced retrieval share one phrase instead of hand-copying it; the substantive
+ * sentence comes from describeEmbeddingMismatch below.
+ */
+export const PARTIAL_RESULTS_STATUS_SUFFIX = ' - partial results, some content could not be searched';
+
 /** Prose forms, since the report text is read by users and by the model. */
 const SKIP_REASON_LABELS: Record<ChunkSkipReason, string> = {
   unknownFile: 'from a file no longer in scope',
@@ -42,6 +49,11 @@ const SKIP_REASON_LABELS: Record<ChunkSkipReason, string> = {
 /** How many excluded files to name in the report, so a caller can act without dumping the lake. */
 const SAMPLE_CAP = 5;
 
+/**
+ * MUST STAY IN SYNC with serializeEmbeddingMismatch in
+ * apps/client/pages/api/data-lakes/semantic-search.ts, which maps this to the wire by hand. A
+ * field added here reaches no HTTP caller until that mapper is updated too.
+ */
 export interface EmbeddingMismatchReport {
   /** Files dropped wholesale before their vectors were loaded (their model is known and foreign). */
   excludedFiles: {
@@ -72,10 +84,20 @@ export interface EmbeddingMismatchReport {
    */
   queryEmbeddingFailed: boolean;
   /**
-   * True when content was withheld because it could not be compared - the single flag a consumer
-   * branches on. Deliberately NOT set by the scope/load caps in `truncated`: those bound every
-   * search of a large lake, so folding them in would flag almost every query on a healthy corpus
-   * and bury the signal this flag exists to carry.
+   * True when content was withheld because its embedding space could not be compared - the single
+   * flag a consumer branches on.
+   *
+   * Only `excludedFiles`, `modelMismatch` and `dimensionMismatch` raise it. Everything else the
+   * report counts is deliberately excluded, because each is either permanent or ordinary and would
+   * make the flag fire on a healthy corpus forever:
+   *  - the scope/load caps in `truncated`: every search of a large lake hits them.
+   *  - `unlabeled`: those chunks WERE searched, and most legacy lakes are entirely unlabeled.
+   *  - `missingVector`: a chunk with no vector was never embedded, which is not a mismatch. Some
+   *    are permanently unembeddable (oversized past the model's context window - a terminal state,
+   *    see countTerminalChunks), so counting them would flag such a lake on every turn with no
+   *    remedy available to the user.
+   *  - `unknownFile`: an orphan chunk cannot be attributed to a model, so nothing can be claimed
+   *    about whether it was comparable.
    */
   partial: boolean;
 }
@@ -103,9 +125,13 @@ export interface EmbeddingLabeledFile {
   id: string;
   fileName?: string;
   embeddingModel?: string | null;
+  /**
+   * Terminal chunk count maintained by the vectorize pipeline. This is the only trustworthy
+   * "has vectors" signal: `FabFile.vectorized` is stamped `chunks.length > 0` at CHUNK time
+   * (fabFileService/chunk.ts), before any vector exists, so it reads true for a file whose
+   * vectorize job never ran or failed.
+   */
   vectorizedChunkCount?: number;
-  /** Set by the vectorize pipeline. A file without vectors withholds nothing when excluded. */
-  vectorized?: boolean;
 }
 
 /**
@@ -241,8 +267,11 @@ export function createEmbeddingMismatchAccumulator(
 
   // Only files that actually hold vectors withheld anything. A file chunked under a previous
   // default whose vectorize job never finished carries no vectors, so reporting it as excluded
-  // would claim a partial result where nothing was lost.
-  const withheld = foreignFiles.filter(f => f.vectorized !== false || (f.vectorizedChunkCount ?? 0) > 0);
+  // would claim a partial result where nothing was lost - and right after an admin model switch
+  // that is a common state, not a rare one. Keyed on the terminal count rather than `vectorized`
+  // for the reason on the field above; any file carrying an embeddingModel was chunked by the
+  // pipeline that maintains this count, so it is reliable for the foreign files filtered here.
+  const withheld = foreignFiles.filter(f => (f.vectorizedChunkCount ?? 0) > 0);
 
   report.excludedFiles.count = withheld.length;
   report.excludedFiles.models = [
@@ -256,7 +285,8 @@ export function createEmbeddingMismatchAccumulator(
   }));
 
   const recomputePartial = () => {
-    report.partial = report.queryEmbeddingFailed || report.excludedFiles.count > 0 || report.skippedChunks.total > 0;
+    const mismatched = report.skippedChunks.byReason.modelMismatch + report.skippedChunks.byReason.dimensionMismatch;
+    report.partial = report.queryEmbeddingFailed || report.excludedFiles.count > 0 || mismatched > 0;
   };
   recomputePartial();
 

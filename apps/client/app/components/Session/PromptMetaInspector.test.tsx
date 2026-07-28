@@ -53,8 +53,10 @@ describe('PromptMetaInspector warnings', () => {
 
     const text = screen.getByTestId('prompt-meta-warning-item').firstElementChild as HTMLElement;
     const style = window.getComputedStyle(text);
-    expect(style.whiteSpace).not.toBe('nowrap');
-    expect(style.textOverflow).not.toBe('ellipsis');
+    // Asserted POSITIVELY: a `not.toBe('nowrap')` passes vacuously when styles fail to inject,
+    // which would hide the very regression this test exists for.
+    expect(style.whiteSpace).toBe('normal');
+    expect(style.wordBreak).toBe('break-word');
   });
 
   it('renders every warning when more than one producer has written', () => {

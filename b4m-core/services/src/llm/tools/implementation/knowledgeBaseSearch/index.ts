@@ -10,7 +10,10 @@ import { createTokenizer, getProviderFromModel, getSettingsByNames, type ITokeni
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
-import { describeEmbeddingMismatch } from '../../../../dataLakeService/embeddingMismatch';
+import {
+  describeEmbeddingMismatch,
+  PARTIAL_RESULTS_STATUS_SUFFIX,
+} from '../../../../dataLakeService/embeddingMismatch';
 import {
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
@@ -167,8 +170,10 @@ async function emitSemanticCitables(
   const more = citables.length > 3 ? ` +${citables.length - 3} more` : '';
   // Appended to the one found-status rather than sent as a second update, which would read as
   // a bug. warnings also accretes onto promptMeta so the notice survives in the quest record.
-  const partial = skipNotice ? ' - partial results, some content could not be searched' : '';
+  const partial = skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
   await context.statusUpdate(
+    // any: statusUpdate takes a Partial<IChatHistoryItemDocument>; promptMeta's generated type
+    // does not narrow to this literal. Pre-existing pattern in this file.
     { promptMeta: { citables, ...(skipNotice ? { warnings: [skipNotice] } : {}) } } as any,
     `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
   );
@@ -546,16 +551,17 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // The notice rides along here because emitSemanticCitables never ran: the semantic arm
             // produced no hits, which is precisely what happens when everything was withheld.
             await context.statusUpdate(
+              // any: see emitSemanticCitables above - same statusUpdate/promptMeta typing gap.
               { promptMeta: { citables, ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}) } } as any,
-              semantic.skipNotice ? `${foundStatus} - partial results, some content could not be searched` : foundStatus
+              semantic.skipNotice ? `${foundStatus}${PARTIAL_RESULTS_STATUS_SUFFIX}` : foundStatus
             );
             context.logger.log(`📚 Knowledge Base Search: Stored ${citables.length} citables`);
           } else {
             // No hits - tell the user what was searched so the wait reads as deliberate.
-            const clippedQuery = query.length > 50 ? query.slice(0, 49) + '…' : query;
+            const clippedQuery = query.length > 50 ? query.slice(0, 49) + '...' : query;
             const noHits = scope
-              ? `📭 No matches in this agent's knowledge base for “${clippedQuery}”`
-              : `📭 No data-lake matches for “${clippedQuery}” — broadening…`;
+              ? `📭 No matches in this agent's knowledge base for "${clippedQuery}"`
+              : `📭 No data-lake matches for "${clippedQuery}" - broadening...`;
             await context.statusUpdate(
               { ...(semantic.skipNotice ? { promptMeta: { warnings: [semantic.skipNotice] } } : {}) } as any,
               semantic.skipNotice ? `${noHits} - some content could not be searched` : noHits

@@ -615,7 +615,7 @@ describe('KnowledgeRetrievalFeature embedding-model mismatch', () => {
       [
         { id: 'l1', fileName: 'l1.pdf', tags: [] },
         { id: 'l2', fileName: 'l2.pdf', tags: [] },
-        { id: 'fileB', fileName: 'foreign.pdf', tags: [], embeddingModel: SMALL_3 },
+        { id: 'fileB', fileName: 'foreign.pdf', tags: [], embeddingModel: SMALL_3, vectorizedChunkCount: 1 },
       ],
       { fileB: [{ fabFileId: 'fileB', text: 'cross-space noise', vector: [1, 0] }] }
     );
@@ -647,7 +647,7 @@ describe('KnowledgeRetrievalFeature embedding-model mismatch', () => {
       { id: 'l1', fileName: 'l1.pdf', tags: [] },
       { id: 'l2', fileName: 'l2.pdf', tags: [] },
       { id: 'l3', fileName: 'l3.pdf', tags: [] },
-      { id: 'newcomer', fileName: 'a-newcomer.pdf', tags: [], embeddingModel: 'voyage-3' },
+      { id: 'newcomer', fileName: 'a-newcomer.pdf', tags: [], embeddingModel: 'voyage-3', vectorizedChunkCount: 1 },
     ];
     const ctx = makeCtx(files, {
       l1: [{ fabFileId: 'l1', text: 'legacy one', vector: [1, 0] }],
@@ -704,6 +704,25 @@ describe('KnowledgeRetrievalFeature embedding-model mismatch', () => {
     expect((ctx.logger as unknown as { error: ReturnType<typeof vi.fn> }).error).toHaveBeenCalled();
   });
 
+  it('does not cry wolf on a lake holding a permanently unembeddable chunk', async () => {
+    // Forced retrieval loads chunks with findByFabFileId, which does NOT filter vectorless rows
+    // the way the semantic path's findVectorsByFabFileIds does. An oversized chunk can never be
+    // embedded (a terminal state), so before this it produced a promptMeta warning, a partial
+    // status suffix and a "grounding may be incomplete" note on EVERY turn, forever.
+    const ctx = makeCtx([{ id: 'fileA', fileName: 'a.pdf', tags: [], embeddingModel: ADA }], {
+      fileA: [
+        { fabFileId: 'fileA', text: 'answerable content', vector: [1, 0] },
+        { fabFileId: 'fileA', text: 'oversized, never embeddable', vector: [] },
+      ],
+    });
+
+    const { quest, content } = await run(ctx);
+
+    expect(content).toContain('answerable content');
+    expect(warnings(quest)).toEqual([]);
+    expect(statuses(ctx)).toEqual(['Grounded in the knowledge base']);
+  });
+
   it('keeps a warning another producer already recorded', async () => {
     const quest = makeQuest({
       promptMeta: { warnings: ['Response was truncated against the output-token limit.'] },
@@ -712,7 +731,7 @@ describe('KnowledgeRetrievalFeature embedding-model mismatch', () => {
       [
         { id: 'l1', fileName: 'l1.pdf', tags: [] },
         { id: 'l2', fileName: 'l2.pdf', tags: [] },
-        { id: 'fileB', fileName: 'foreign.pdf', tags: [], embeddingModel: SMALL_3 },
+        { id: 'fileB', fileName: 'foreign.pdf', tags: [], embeddingModel: SMALL_3, vectorizedChunkCount: 1 },
       ],
       { fileB: [{ fabFileId: 'fileB', text: 'noise', vector: [1, 0] }] }
     );
