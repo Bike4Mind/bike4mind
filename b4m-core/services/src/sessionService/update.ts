@@ -100,11 +100,30 @@ const addFilesToProjects = async (
   },
   adapters: UpdateSessionAdapters
 ) => {
-  const { session, fileIds } = params;
+  const { session } = params;
+  let { fileIds } = params;
   const { db, storage } = adapters;
   const projects = await db.projects.findAllBySessionId(session.id);
 
-  const files = await db.fabFiles.findAllByIds(fileIds);
+  // Access-check before granting. findAllByIds has no ACL, and updateShareableFiles
+  // below grants every project member read+update on whatever it is handed - so an
+  // unchecked id here lets a caller PUT someone else's fileId into their own session
+  // and share it with their project. The sibling path (projectService/addFiles) has
+  // always resolved through `shareable`; this one did not.
+  //
+  // Filters rather than throwing, unlike that sibling: a session's knowledgeIds can
+  // legitimately contain a global/system file that the shareable filter does not return
+  // for this user, and failing the whole session write on one such id would be a
+  // regression. Skipping it grants nothing, which is the property that matters.
+  const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
+  if (files.length !== fileIds.length) {
+    const accessible = new Set(files.map(f => f.id));
+    Logger.globalInstance.warn(
+      `addFilesToProjects: skipping ${fileIds.length - files.length} file(s) not accessible to user ${user.id}`
+    );
+    fileIds = fileIds.filter(id => accessible.has(id));
+    if (fileIds.length === 0) return;
+  }
 
   // Hydrate the signed-URL cache for all files to speed up llm context retrieval.
   //

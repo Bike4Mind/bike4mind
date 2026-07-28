@@ -175,10 +175,11 @@ const HISTORY_BUDGET_PERCENTAGE = 0.3;
  * Kept a minority share so conversational history, which is what users notice losing
  * first, keeps the majority. See attachedFileTokenBudget at its only use site.
  *
- * Not to be confused with HISTORY_BUDGET_PERCENTAGE above, or with
- * KNOWLEDGE_FILE_TOKEN_ALLOCATION in utils.ts: those govern ASSEMBLY, deciding how an
- * already-extracted set of messages is trimmed to fit. This one governs how much is
- * read off disk in the first place, and is held below the assembly share on purpose.
+ * Three different stages, easily confused. HISTORY_BUDGET_PERCENTAGE above sizes the
+ * history MESSAGE COUNT before anything is fetched. KNOWLEDGE_FILE_TOKEN_ALLOCATION in
+ * utils.ts governs ASSEMBLY, trimming an already-extracted set to fit. This one governs
+ * EXTRACTION - how much is read off disk at all - and is held below the assembly share
+ * on purpose.
  */
 const ATTACHED_CONTENT_SHARE = 0.35;
 /**
@@ -1452,9 +1453,15 @@ export class ChatCompletionProcess {
       // per-file cap applied once per file. Three files would then be handed more
       // content than the whole input window. Flooring at a share of the raw window
       // keeps the per-file division in effect, and assembly trims from there.
+      // Outer clamp is not redundant: on a tiny context window maxSafeInputTokens is
+      // itself negative (contextLimit - output cap - buffer), so both inner terms are
+      // negative and a negative budget would reach processFabFilesServer.
       const attachedFileTokenBudget = Math.max(
-        Math.floor(maxSafeInputTokens * MIN_ATTACHED_CONTENT_SHARE),
-        Math.floor((maxSafeInputTokens - SYSTEM_PROMPT_RESERVE) * ATTACHED_CONTENT_SHARE)
+        0,
+        Math.max(
+          Math.floor(maxSafeInputTokens * MIN_ATTACHED_CONTENT_SHARE),
+          Math.floor((maxSafeInputTokens - SYSTEM_PROMPT_RESERVE) * ATTACHED_CONTENT_SHARE)
+        )
       );
 
       const dataSources = await this.buildDataSources({

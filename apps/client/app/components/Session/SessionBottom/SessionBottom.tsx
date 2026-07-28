@@ -367,7 +367,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     return () => {
       unsubscribe();
     };
-  }, [subscribeToAction, addToNotebookContext, currentSessionId]);
+  }, [subscribeToAction, addToNotebookContext]);
 
   const { setOpen: setFileBrowserOpen } = useFileBrowser();
 

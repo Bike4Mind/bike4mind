@@ -128,7 +128,12 @@ export function useNotebookContextFiles() {
         // Nothing needs propagating anyway: project.fileIds is append-only.
         await persist(sid, false);
       } catch (error) {
-        setWorkBenchFiles(sid, previous);
+        // Re-insert via an updater, not by restoring the pre-remove snapshot: an add
+        // that landed while this write was in flight would be erased by the snapshot,
+        // and the next UI write would persist that erasure.
+        setWorkBenchFiles(sid, current =>
+          current.some(f => f.id === fabFileId) ? current : [...current, ...previous.filter(f => f.id === fabFileId)]
+        );
         toast.error('Could not remove that file from this notebook');
         throw error;
       } finally {

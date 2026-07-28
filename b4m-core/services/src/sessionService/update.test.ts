@@ -43,6 +43,7 @@ describe('updateSession — signed-URL cache pre-warm gate', () => {
       },
       fabFiles: {
         findAllByIds: vi.fn().mockResolvedValue(files),
+        shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(files) },
       },
       caches: {},
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
@@ -87,7 +88,20 @@ describe('updateSession — signed-URL cache pre-warm gate', () => {
 describe('updateSession - project propagation opt-out', () => {
   const user = { id: 'user-1' } as IUserDocument;
 
-  const makeAdapters = () => {
+  const DEFAULT_FILE = {
+    id: 'new-file',
+    filePath: 'p/new.pdf',
+    mimeType: 'application/pdf',
+    moderationStatus: 'clean',
+  };
+
+  const makeAdapters = (
+    accessibleFiles: Array<Record<string, unknown>> = [DEFAULT_FILE],
+    // What the UNCHECKED lookup would have returned. Deliberately allowed to differ:
+    // if these two are mocked identically, removing the ACL check changes nothing and
+    // the security test passes without its guard.
+    unrestrictedFiles: Array<Record<string, unknown>> = accessibleFiles
+  ) => {
     const project = { id: 'project-1', fileIds: ['already-there'] };
     return {
       project,
@@ -110,11 +124,8 @@ describe('updateSession - project propagation opt-out', () => {
             update: vi.fn(),
           },
           fabFiles: {
-            findAllByIds: vi
-              .fn()
-              .mockResolvedValue([
-                { id: 'new-file', filePath: 'p/new.pdf', mimeType: 'application/pdf', moderationStatus: 'clean' },
-              ]),
+            findAllByIds: vi.fn().mockResolvedValue(unrestrictedFiles),
+            shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(accessibleFiles) },
           },
           caches: {},
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
@@ -189,6 +200,28 @@ describe('updateSession - project propagation opt-out', () => {
 
     expect(project.fileIds).toEqual(['already-there']);
     expect(adapters.db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('does not share a file the user cannot access', async () => {
+    // updateShareableFiles grants every project member read+update on whatever it is
+    // handed. Resolving ids without an ACL let a caller PUT someone else's fileId into
+    // their own session and hand it to their project. Inaccessible ids are dropped.
+    const victimFile = {
+      id: 'someone-elses-file',
+      filePath: 'p/victim.pdf',
+      mimeType: 'application/pdf',
+      moderationStatus: 'clean',
+    };
+    // Accessible: nothing. Unchecked lookup: the victim's file. Dropping the ACL check
+    // makes the service see the victim file and share it - which is the failure.
+    const { project, adapters } = makeAdapters([], [victimFile]);
+
+    await updateSession(user, { id: 'session-1', knowledgeIds: ['someone-elses-file'] }, adapters);
+
+    expect(project.fileIds).toEqual(['already-there']);
+    expect(updateShareableFiles).not.toHaveBeenCalled();
+    // The session itself still records it; only the project grant is refused.
+    expect(adapters.db.sessions.update).toHaveBeenCalledOnce();
   });
 
   it('propagates when propagateToProjects is explicitly true', async () => {
