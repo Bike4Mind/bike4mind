@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { connectTestDB, disconnectTestDB, cleanupTestDB } from './utils';
-import { HearthPresence, presenceStateForReason } from '../models/hearth/HearthPresenceModel';
+import { CcAgentStatus } from '@bike4mind/common';
+import { HearthPresence, presenceStateForReason, PRESENCE_STATE_RANK } from '../models/hearth/HearthPresenceModel';
 import { hearthRepository } from '../models/hearth/MongoHearthStore';
 
 describe('Hearth presence projection', () => {
@@ -37,25 +38,44 @@ describe('Hearth presence projection', () => {
   }
 
   it('maps every reason group onto its state', () => {
-    expect(presenceStateForReason('permission_prompt')).toBe('awaiting_input');
+    // A halted session and a session asking a question are DIFFERENT states:
+    // conflating them is what made the term ambiguous across surfaces.
+    expect(presenceStateForReason('permission_prompt')).toBe('awaiting_permission');
+
     expect(presenceStateForReason('idle_prompt')).toBe('awaiting_input');
     expect(presenceStateForReason('agent_needs_input')).toBe('awaiting_input');
     expect(presenceStateForReason('elicitation_dialog')).toBe('awaiting_input');
 
     expect(presenceStateForReason('turn_finished')).toBe('idle');
     expect(presenceStateForReason('agent_completed')).toBe('idle');
-    expect(presenceStateForReason('session_end')).toBe('idle');
+    // Gone, not merely quiet.
+    expect(presenceStateForReason('session_end')).toBe('disconnected');
 
-    expect(presenceStateForReason('tool_use')).toBe('working');
-    expect(presenceStateForReason('prompt_submitted')).toBe('working');
-    expect(presenceStateForReason('session_start')).toBe('working');
-    expect(presenceStateForReason('active')).toBe('working');
-    expect(presenceStateForReason('auth_success')).toBe('working');
-    expect(presenceStateForReason('elicitation_complete')).toBe('working');
+    expect(presenceStateForReason('tool_use')).toBe('running');
+    expect(presenceStateForReason('prompt_submitted')).toBe('running');
+    expect(presenceStateForReason('session_start')).toBe('running');
+    expect(presenceStateForReason('active')).toBe('running');
+    expect(presenceStateForReason('auth_success')).toBe('running');
+    expect(presenceStateForReason('elicitation_complete')).toBe('running');
 
     // An unknown reason must not claim your attention, nor vanish as idle.
-    expect(presenceStateForReason('some_future_reason')).toBe('working');
-    expect(presenceStateForReason(undefined)).toBe('working');
+    expect(presenceStateForReason('some_future_reason')).toBe('running');
+    expect(presenceStateForReason(undefined)).toBe('running');
+  });
+
+  it('states are exactly the shared code-agent status vocabulary', () => {
+    // Guards the whole point of the pivot: if someone adds a roster-only state
+    // here, or the shared enum grows a value the ranking does not cover, this
+    // fails rather than letting the two vocabularies drift apart silently.
+    expect(Object.keys(PRESENCE_STATE_RANK).sort()).toEqual([...CcAgentStatus.options].sort());
+  });
+
+  it('ranks the most-blocking state first', () => {
+    const byRank = (Object.keys(PRESENCE_STATE_RANK) as Array<keyof typeof PRESENCE_STATE_RANK>).sort(
+      (a, b) => PRESENCE_STATE_RANK[a] - PRESENCE_STATE_RANK[b]
+    );
+    // Permission outranks a question: it halts execution outright.
+    expect(byRank).toEqual(['awaiting_permission', 'awaiting_input', 'running', 'idle', 'disconnected']);
   });
 
   it('creates exactly one row per (channel, actor) and updates it in place', async () => {
@@ -64,7 +84,7 @@ describe('Hearth presence projection', () => {
     const first = await hearthRepository.upsertPresence(
       presence(channelId, actorId, new Date('2026-07-27T10:00:00Z'), 'tool_use', { tool: 'Bash' })
     );
-    expect(first?.state).toBe('working');
+    expect(first?.state).toBe('running');
     expect(first?.tool).toBe('Bash');
 
     const second = await hearthRepository.upsertPresence(
@@ -73,7 +93,7 @@ describe('Hearth presence projection', () => {
 
     expect(await HearthPresence.countDocuments({})).toBe(1);
     expect(second?._id.toString()).toBe(first?._id.toString());
-    expect(second?.state).toBe('awaiting_input');
+    expect(second?.state).toBe('awaiting_permission');
     expect(second?.tool).toBe('Write');
   });
 
@@ -111,7 +131,7 @@ describe('Hearth presence projection', () => {
     expect(late).toBeNull();
 
     const row = await HearthPresence.findOne({});
-    expect(row?.state).toBe('awaiting_input');
+    expect(row?.state).toBe('awaiting_permission');
     expect(row?.lastSeen.toISOString()).toBe('2026-07-27T10:00:10.000Z');
     expect(await HearthPresence.countDocuments({})).toBe(1);
   });
@@ -141,9 +161,12 @@ describe('Hearth presence projection', () => {
     );
 
     const roster = await hearthRepository.presenceForChannel(USER, channelId);
-    // Both blocked actors outrank the more recently seen working and idle rows.
-    expect(roster.map(r => r.actorId.toString())).toEqual([blockedNew, blockedOld, workingOne, idleOld]);
-    expect(roster.map(r => r.state)).toEqual(['awaiting_input', 'awaiting_input', 'working', 'idle']);
+    // Both blocked actors outrank the more recently seen running and idle rows,
+    // AND the permission block outranks the question despite being seen EARLIER -
+    // state ranking dominates recency, because a halted session is the thing
+    // most in need of the human.
+    expect(roster.map(r => r.actorId.toString())).toEqual([blockedOld, blockedNew, workingOne, idleOld]);
+    expect(roster.map(r => r.state)).toEqual(['awaiting_permission', 'awaiting_input', 'running', 'idle']);
   });
 
   it('scopes the roster to the owning user', async () => {

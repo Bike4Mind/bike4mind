@@ -65,8 +65,8 @@ describe('HearthPresencePanel', () => {
       respondWith([
         // Deliberately NOT in lastSeen order: a client-side sort would move the
         // blocked actor off the top, which is the whole point of the roster.
-        row('blocked', 'awaiting_input', { lastSeen: '2026-07-27T10:00:05Z' }),
-        row('busy', 'working', { lastSeen: '2026-07-27T10:00:20Z' }),
+        row('blocked', 'awaiting_permission', { lastSeen: '2026-07-27T10:00:05Z' }),
+        row('busy', 'running', { lastSeen: '2026-07-27T10:00:20Z' }),
         row('done', 'idle', { lastSeen: '2026-07-27T10:00:30Z' }),
       ])
     );
@@ -79,13 +79,15 @@ describe('HearthPresencePanel', () => {
 
   it('states are readable as text, not color alone', async () => {
     apiGetMock.mockResolvedValue(
-      respondWith([row('blocked', 'awaiting_input'), row('busy', 'working'), row('done', 'idle')])
+      respondWith([row('blocked', 'awaiting_permission'), row('busy', 'running'), row('done', 'idle')])
     );
     renderPanel();
 
     await waitFor(() => expect(screen.getAllByTestId('hearth-presence-state-chip')).toHaveLength(3));
+    // Distinct wording per state: a halted session and a session asking a
+    // question call for different responses, so the chip must not blur them.
     expect(screen.getAllByTestId('hearth-presence-state-chip').map(c => c.textContent)).toEqual([
-      'Needs you',
+      'Needs permission',
       'Working',
       'Idle',
     ]);
@@ -94,7 +96,7 @@ describe('HearthPresencePanel', () => {
   it('shows workspace, tool, and a relative last-seen when present', async () => {
     apiGetMock.mockResolvedValue(
       respondWith([
-        row('blocked', 'awaiting_input', { workspace: 'some-repo', tool: 'Bash', reason: 'permission_prompt' }),
+        row('blocked', 'awaiting_permission', { workspace: 'some-repo', tool: 'Bash', reason: 'permission_prompt' }),
       ])
     );
     renderPanel();
@@ -106,14 +108,14 @@ describe('HearthPresencePanel', () => {
   });
 
   it('refreshes on a presence event for its channel', async () => {
-    apiGetMock.mockResolvedValue(respondWith([row('busy', 'working')]));
+    apiGetMock.mockResolvedValue(respondWith([row('busy', 'running')]));
     renderPanel();
     await screen.findByText('Working');
 
-    apiGetMock.mockResolvedValue(respondWith([row('busy', 'awaiting_input')]));
+    apiGetMock.mockResolvedValue(respondWith([row('busy', 'awaiting_permission')]));
     await pushWs({ action: 'hearth_event', event: { channelId: 'ch-1', kind: 'presence' } });
 
-    await screen.findByText('Needs you');
+    await screen.findByText('Needs permission');
   });
 
   it('ignores events from other channels and other kinds', async () => {

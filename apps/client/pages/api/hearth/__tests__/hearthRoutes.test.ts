@@ -342,8 +342,8 @@ describe('GET /api/hearth/presence', () => {
 
   it('returns the repository order untouched (needs-you-first, not by recency)', async () => {
     presenceForChannelMock.mockResolvedValue([
-      presenceRow('a-blocked', 'awaiting_input', '2026-07-27T10:00:05Z', { reason: 'permission_prompt' }),
-      presenceRow('a-working', 'working', '2026-07-27T10:00:20Z', { tool: 'Bash' }),
+      presenceRow('a-blocked', 'awaiting_permission', '2026-07-27T10:00:05Z', { reason: 'permission_prompt' }),
+      presenceRow('a-working', 'running', '2026-07-27T10:00:20Z', { tool: 'Bash' }),
       presenceRow('a-idle', 'idle', '2026-07-27T10:00:30Z'),
     ]);
     actorNamesByIdMock.mockResolvedValue(new Map([['a-blocked', 'agent one']]));
@@ -355,7 +355,7 @@ describe('GET /api/hearth/presence', () => {
     // Sorting by lastSeen would have inverted this; the blocked actor stays first.
     expect(body.presence.map(p => p.actorId)).toEqual(['a-blocked', 'a-working', 'a-idle']);
     expect(body.presence[0]).toMatchObject({
-      state: 'awaiting_input',
+      state: 'awaiting_permission',
       actorName: 'agent one',
       reason: 'permission_prompt',
       lastSeen: '2026-07-27T10:00:05.000Z',

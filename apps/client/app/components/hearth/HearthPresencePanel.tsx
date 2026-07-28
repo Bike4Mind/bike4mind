@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Chip, Sheet, Stack, Typography } from '@mui/joy';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { IHearthEventAction } from '@bike4mind/common';
+import type { IHearthEventAction, ICcAgentStatus } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useActorColor } from './actorColors';
 
-type PresenceState = 'awaiting_input' | 'working' | 'idle';
+// Reuses the shared code-agent status vocabulary rather than a parallel one,
+// so this panel and any other surface rendering agent presence agree on terms.
+type PresenceState = ICcAgentStatus;
 
 /** The fields this panel renders; the full wire shape is WireHearthPresence. */
 interface PresenceRow {
@@ -28,10 +30,14 @@ interface PresenceResponse {
  * Chip text and color per state. The TEXT is the signal; the color only
  * reinforces it, because the roster has to be readable without color vision.
  */
-const STATE_CHIPS: Record<PresenceState, { label: string; color: 'warning' | 'primary' | 'neutral' }> = {
+const STATE_CHIPS: Record<PresenceState, { label: string; color: 'danger' | 'warning' | 'primary' | 'neutral' }> = {
+  // Distinct labels: a halted session and a session asking a question need
+  // different responses from the human, so the roster must not conflate them.
+  awaiting_permission: { label: 'Needs permission', color: 'danger' },
   awaiting_input: { label: 'Needs you', color: 'warning' },
-  working: { label: 'Working', color: 'primary' },
+  running: { label: 'Working', color: 'primary' },
   idle: { label: 'Idle', color: 'neutral' },
+  disconnected: { label: 'Disconnected', color: 'neutral' },
 };
 
 /**
@@ -136,7 +142,9 @@ export default function HearthPresencePanel({ channelId }: { channelId: string }
       ) : (
         <Stack spacing={0.75}>
           {rows.map(row => {
-            const chip = STATE_CHIPS[row.state] ?? STATE_CHIPS.working;
+            // Falls back to 'running' for an unrecognized state, matching the
+            // server-side default: never claim the human's attention on a guess.
+            const chip = STATE_CHIPS[row.state] ?? STATE_CHIPS.running;
             // Dimming is a redundant hint only: the relative time next to it is
             // what actually tells the reader how old the row is.
             const stale = staleAfterMs !== undefined && now - new Date(row.lastSeen).getTime() > staleAfterMs;

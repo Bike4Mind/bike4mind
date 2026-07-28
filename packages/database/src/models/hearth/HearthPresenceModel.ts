@@ -1,24 +1,37 @@
 import mongoose, { Schema, Model, model, Types } from 'mongoose';
+import { CcAgentStatus, type ICcAgentStatus } from '@bike4mind/common';
 
 /**
- * Roster state. THREE values, deliberately, and deliberately generic: the
- * roster is meant to be consumed by surfaces beyond this repo's SPA (other
- * clients already model an "is this agent waiting on me" status), so the
- * vocabulary is the union of what those surfaces need and nothing more. Adding
- * a fourth value is a breaking change for every consumer, so resist it - a new
- * `reason` should map onto an existing state instead.
+ * Roster state. This deliberately REUSES the existing code-agent status
+ * vocabulary (`CcAgentStatus`) rather than defining a parallel one.
+ *
+ * That enum already ships in the shared schema and is already the term set the
+ * code-agent bridge and its consuming surfaces speak, so inventing a second
+ * vocabulary here would mean every consumer translating between two nearly
+ * identical sets - and near-identical is worse than different, because
+ * `awaiting_input` would silently mean "asked a question" to one surface and
+ * "blocked on permission" to another.
+ *
+ * It is also the finer-grained set, which is the direction that stays open: a
+ * consumer that only cares "is this blocked on me" can OR
+ * awaiting_permission | awaiting_input, but a coarse vocabulary can never be
+ * split back apart after consumers depend on it.
  */
-export type HearthPresenceState = 'awaiting_input' | 'working' | 'idle';
+export type HearthPresenceState = ICcAgentStatus;
 
 /**
- * Read order for the roster: awaiting_input first. Exported because the sort is
- * performed in the aggregation (see hearthRepository.presenceForChannel) and
- * both places must agree on the ranking.
+ * Read order for the roster: most-blocking first. Permission blocks outrank
+ * questions because a permission prompt halts execution outright, and they are
+ * the dominant blocked state in practice. Exported because the sort runs in the
+ * aggregation (see hearthRepository.presenceForChannel) and both places must
+ * agree on the ranking.
  */
 export const PRESENCE_STATE_RANK: Readonly<Record<HearthPresenceState, number>> = {
-  awaiting_input: 0,
-  working: 1,
-  idle: 2,
+  awaiting_permission: 0,
+  awaiting_input: 1,
+  running: 2,
+  idle: 3,
+  disconnected: 4,
 };
 
 /**
@@ -26,22 +39,25 @@ export const PRESENCE_STATE_RANK: Readonly<Record<HearthPresenceState, number>> 
  * Claude Code hook forwards (packages/cli/bin/hearth-hook.mjs): the documented
  * notification_type values plus the hook's own event-derived codes.
  *
- * Anything unrecognized falls through to 'working', which is the safe default:
- * an unknown reason must never be reported as "waiting on you" (that would
- * make the roster cry wolf) nor as 'idle' (that would hide a live session).
+ * Anything unrecognized falls through to 'running', which is the safe default:
+ * an unknown reason must never be reported as blocked on the human (that would
+ * make the roster cry wolf) nor as idle/disconnected (that would hide a live
+ * session).
  */
 const REASON_STATES: Readonly<Record<string, HearthPresenceState>> = {
-  permission_prompt: 'awaiting_input',
+  // A permission prompt halts the session outright - distinct from a question.
+  permission_prompt: 'awaiting_permission',
   idle_prompt: 'awaiting_input',
   agent_needs_input: 'awaiting_input',
   elicitation_dialog: 'awaiting_input',
   turn_finished: 'idle',
   agent_completed: 'idle',
-  session_end: 'idle',
+  // The session is gone, not merely quiet - the distinction a bare 'idle' loses.
+  session_end: 'disconnected',
 };
 
 export function presenceStateForReason(reason: string | undefined): HearthPresenceState {
-  return (reason && REASON_STATES[reason]) || 'working';
+  return (reason && REASON_STATES[reason]) || 'running';
 }
 
 /** Shared cap for every projected string field; the writer truncates to it. */
@@ -88,7 +104,9 @@ const HearthPresenceSchema = new Schema<IHearthPresenceDoc>(
     channelId: { type: Schema.Types.ObjectId, required: true },
     actorId: { type: Schema.Types.ObjectId, required: true },
     userId: { type: Schema.Types.ObjectId, required: true },
-    state: { type: String, required: true, enum: Object.keys(PRESENCE_STATE_RANK) },
+    // Derived from the shared enum so a new status cannot be added there and
+    // silently rejected here.
+    state: { type: String, required: true, enum: CcAgentStatus.options },
     // One cap for every projected string: these are short closed-set codes and
     // names, and the writer truncates to the same number before it gets here.
     reason: { type: String, maxlength: MAX_PRESENCE_FIELD_LENGTH },
