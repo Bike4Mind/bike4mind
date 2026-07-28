@@ -142,21 +142,23 @@ const estimateMessagesTokens = (messages: IMessage[]): number =>
 
 /**
  * Flags attached content that was cut, so the model is not handed a partial file that looks whole.
- * A truncated message is a strict prefix of its original, which is what identifies it here - the
- * originals are needed because truncation happens several steps after the messages were built.
+ * Truncation happens several steps after these messages were built, so the originals are the only
+ * way to tell a cut message from a whole one.
+ *
+ * Matching an exact original first is what makes this safe with multiple attachments: a strict-prefix
+ * test alone marks a whole file as truncated whenever a LARGER attachment happens to start with the
+ * same bytes, which two CSVs sharing a header row do.
  */
-const annotateTruncatedContent = (processed: IMessage[], originals: IMessage[]): IMessage[] =>
-  processed.map(message => {
+const annotateTruncatedContent = (processed: IMessage[], originals: IMessage[]): IMessage[] => {
+  const originalTexts = originals.filter(o => typeof o.content === 'string').map(o => o.content as string);
+  return processed.map(message => {
     if (typeof message.content !== 'string') return message;
     const text = message.content;
-    const wasCut = originals.some(
-      original =>
-        typeof original.content === 'string' &&
-        original.content.length > text.length &&
-        original.content.startsWith(text)
-    );
+    if (originalTexts.includes(text)) return message; // survived whole
+    const wasCut = originalTexts.some(original => original.length > text.length && original.startsWith(text));
     return wasCut ? { ...message, content: text + CONTENT_TRUNCATION_NOTICE } : message;
   });
+};
 
 /**
  * Safely generate embeddings for text that might exceed token limits

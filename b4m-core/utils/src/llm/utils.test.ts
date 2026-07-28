@@ -2218,6 +2218,33 @@ describe('truncated attachments are marked', () => {
     expect(text).not.toContain('FINAL_ROW_MARKER');
   });
 
+  it('does not mark a whole file as cut just because a bigger attachment shares its prefix', async () => {
+    // Two CSVs with the same header row: the smaller one's content is a strict prefix of the larger.
+    // A prefix-only test flags the smaller file as truncated even though every byte of it arrived.
+    const tokenizer = createMockTokenizer();
+    const small = 'id,name\nrow,1\n';
+    const large = 'id,name\nrow,1\nrow,2\nrow,3\n';
+
+    const result = await buildAndSortMessages(
+      [],
+      [
+        { role: 'user', content: small },
+        { role: 'user', content: large },
+      ],
+      [{ role: 'user', content: 'summarize' }],
+      8000,
+      {},
+      10,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const delivered = result.filter(m => typeof m.content === 'string' && (m.content as string).startsWith('id,name'));
+    expect(delivered).toHaveLength(2);
+    for (const m of delivered) expect(m.content as string).not.toContain(NOTICE);
+    expect(delivered.map(m => m.content)).toEqual(expect.arrayContaining([small, large]));
+  });
+
   it('stays quiet when the whole file fits', async () => {
     const tokenizer = createMockTokenizer();
     const whole = 'row-data,'.repeat(50) + '\nFINAL_ROW_MARKER: apricot';
