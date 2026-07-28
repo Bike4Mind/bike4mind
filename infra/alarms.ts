@@ -103,6 +103,8 @@ export const agentCheckpointDepthExceededAlarm = isMonitoredStage
 
 export const websocketRouteOomAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WebSocketRouteOomAlarm') : undefined;
 
+export const largeApiResponseAlarm = isMonitoredStage ? new sst.aws.SnsTopic('LargeApiResponseAlarm') : undefined;
+
 export const modelDiscoveryFailureAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('ModelDiscoveryFailureAlarm')
   : undefined;
@@ -805,6 +807,40 @@ if (isMonitoredStage) {
       },
     });
   }
+
+  /**
+   * Alarm: Large UNCOMPRESSED API Response
+   *
+   * Fires when an API route ships a >= 5MB body that was NOT gzipped (client sent no gzip in
+   * Accept-Encoding, or DISABLE_RESPONSE_GZIP is set). Emitted by sendMaybeGzip -
+   * apps/client/server/utils/sendMaybeGzip.ts. That is the only remaining case that can hit
+   * Lambda's hard ~6MB synchronous-invocation response limit and fail as a bare 502 with nothing
+   * logged at the application level; a gzipped body of the same size ships at ~10% of it.
+   *
+   * Deliberately NOT alarming on the companion LargeApiResponseBytes metric: that one fires on
+   * every large response including the compressed (safe) ones, which on this route is routine.
+   * It stays as a dimensioned diagnostic for tracking uncompressed growth over time.
+   *
+   * Maximum, not Sum: the metric value is a byte count, so Maximum puts the actual size of the
+   * largest offending response in the notification instead of a meaningless total.
+   */
+  new aws.cloudwatch.MetricAlarm('largeUncompressedApiResponse', {
+    name: `${$app.name}-${$app.stage}-large-uncompressed-api-response`,
+    alarmDescription: 'An uncompressed API response body is approaching the Lambda 6MB response-size limit (>= 5MB)',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'LargeUncompressedApiResponseBytes',
+    namespace: 'Lumina5/ApiResponse',
+    period: 300, // 5 minutes
+    statistic: 'Maximum',
+    threshold: 0, // Alert on any occurrence
+    treatMissingData: 'notBreaching',
+    alarmActions: [largeApiResponseAlarm!.arn],
+    tags: {
+      Application: 'ApiResponse',
+      Severity: 'Medium',
+    },
+  });
 
   /**
    * The dimension set server/modelDiscovery/metrics.ts stamps on every datum.

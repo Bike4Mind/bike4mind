@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { Request } from 'express';
 import qs from 'qs';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { sendMaybeGzip } from '@server/utils/sendMaybeGzip';
 
 dayjs.extend(isSameOrBefore);
 
@@ -102,7 +103,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
       const cachedResult = await cacheRepository.findByKey(cacheKey);
       if (cachedResult) {
-        return res.json(cachedResult.result);
+        return sendMaybeGzip(req, res, cachedResult.result);
       }
 
       // Get API key for insights
@@ -131,14 +132,14 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         console.error('Failed to cache reports: %s', error);
       }
 
-      return res.json(response);
+      return sendMaybeGzip(req, res, response);
     } else {
       // For non-report requests, check cache first
       const cacheKey = `logs:${startDate}:${endDate}:${events?.join(',')}:${orgs?.join(',')}:${excludeOrgs?.join(',')}`;
 
       const cachedResult = await cacheRepository.findByKey(cacheKey);
       if (cachedResult) {
-        return res.json({ logs: cachedResult.result });
+        return sendMaybeGzip(req, res, { logs: cachedResult.result });
       }
 
       const startUTC = new Date(`${startDate}T00:00:00.000Z`);
@@ -267,7 +268,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         console.error('Failed to cache logs: %s', error);
       }
 
-      return res.json({ logs: result });
+      return sendMaybeGzip(req, res, { logs: result });
     }
   } catch (error) {
     if (error instanceof z.ZodError) {

@@ -1562,8 +1562,11 @@ export async function buildAndSortMessages(
   }
 
   // Store debug info for external access
-  const truncationMethod: 'priority' | 'token-budget' | 'history-limit' | undefined =
-    !isUnlimitedHistory(historyCount) ? 'history-limit' : allRemovedMessages.length > 0 ? 'token-budget' : undefined;
+  const truncationMethod: 'priority' | 'token-budget' | 'history-limit' | undefined = !isUnlimitedHistory(historyCount)
+    ? 'history-limit'
+    : allRemovedMessages.length > 0
+      ? 'token-budget'
+      : undefined;
 
   (buildAndSortMessages as any).lastDebugInfo = {
     messageTruncation: {
