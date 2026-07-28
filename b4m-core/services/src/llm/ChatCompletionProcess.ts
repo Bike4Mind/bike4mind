@@ -77,6 +77,13 @@ import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { LATTICE_TOOL_NAMES } from './tools';
+import {
+  buildElisionStamp,
+  truncateElisionText,
+  ELISION_TITLE_MAX,
+  ELISION_MATCH_MAX,
+  ELISION_NAME_MAX,
+} from './elisionStamp';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
@@ -174,7 +181,8 @@ const RESPONSE_RESERVE = 8000;
  * produce dozens; the client only needs enough to explain the notice, and promptMeta is stored
  * per quest.
  */
-const MAX_ELISION_DETAILS = 10;
+// The elision rollup, its caps, and the truncation helper live in ./elisionStamp so they can be
+// tested without standing up a harness for this module.
 
 /**
  * Share of the context budget this file assumes history will take when sizing a history count.
@@ -3088,24 +3096,48 @@ export class ChatCompletionProcess {
             const processedReply = convertCodeBlocksToArtifacts(reply);
             const { artifacts } = parseArtifacts(processedReply);
 
-            for (const artifact of artifacts) {
-              const elision = detectElidedContent(artifact.content, artifact.type);
-              if (!elision.elided) continue;
-              elisionHits.push({
-                confidence: elision.confidence,
-                signals: elision.signals.map(signal => {
-                  switch (signal.kind) {
-                    case 'placeholder_comment':
-                      return `"${artifact.title}" line ${signal.line}: placeholder comment - ${signal.match}`;
-                    case 'undefined_handler':
-                      return `"${artifact.title}": ${signal.attribute} calls ${signal.name}(), never defined`;
-                    case 'empty_function_body':
-                      return `"${artifact.title}": ${signal.name}() has no body, only a comment`;
-                    default:
-                      return `"${artifact.title}": calls ${signal.name}(), never defined`;
-                  }
-                }),
-              });
+            // Guarded because this runs inside the try whose catch RE-THROWS, and the outer handler
+            // overwrites quest.reply with the error message - so an unhandled throw here would
+            // destroy an already-completed reply to report an ADVISORY signal. Matches the
+            // protective try/catch around post-streaming processing further down. A crash degrades
+            // to "nothing detected"; the reply and its artifacts always stand.
+            try {
+              for (const artifact of artifacts) {
+                const elision = detectElidedContent(artifact.content, artifact.type);
+                if (!elision.elided) continue;
+                elisionHits.push({
+                  confidence: elision.confidence,
+                  signals: elision.signals.map(signal => {
+                    // Capped: the title and the matched comment text are both model-authored and
+                    // unbounded, and these strings are persisted on the quest.
+                    const title = truncateElisionText(artifact.title, ELISION_TITLE_MAX);
+                    switch (signal.kind) {
+                      case 'placeholder_comment':
+                        return `"${title}" line ${signal.line}: placeholder comment - ${truncateElisionText(
+                          signal.match,
+                          ELISION_MATCH_MAX
+                        )}`;
+                      case 'undefined_handler':
+                        return `"${title}": ${signal.attribute} calls ${truncateElisionText(
+                          signal.name,
+                          ELISION_NAME_MAX
+                        )}(), never defined`;
+                      case 'empty_function_body':
+                        return `"${title}": ${truncateElisionText(
+                          signal.name,
+                          ELISION_NAME_MAX
+                        )}() has no body, only a comment`;
+                      default:
+                        return `"${title}": calls ${truncateElisionText(
+                          signal.name,
+                          ELISION_NAME_MAX
+                        )}(), never defined`;
+                    }
+                  }),
+                });
+              }
+            } catch (elisionError) {
+              logger.warn('[Elision] Detector threw; leaving this reply unflagged', elisionError);
             }
 
             if (artifacts.length > 0) {
@@ -3161,29 +3193,25 @@ export class ChatCompletionProcess {
           // the reply and its artifacts are left exactly as generated; the client renders a
           // "may be incomplete" notice. Unlike truncation this works on every backend,
           // including those that never report a stop reason at all.
-          if (elisionHits.length > 0 && quest.promptMeta) {
-            const confidence = elisionHits.some(h => h.confidence === 'high') ? 'high' : 'low';
-            const allSignals = elisionHits.flatMap(h => h.signals);
-            // `details` is capped, so say so in the payload itself rather than letting a reader
-            // assume the list is complete. `signalCount` still carries the true total.
-            const shownSignals = allSignals.slice(0, MAX_ELISION_DETAILS);
-            const omittedSignals = allSignals.length - shownSignals.length;
-            quest.promptMeta.suspectedElision = {
-              confidence,
-              signalCount: allSignals.length,
-              details: omittedSignals > 0 ? [...shownSignals, `(+${omittedSignals} more not shown)`] : shownSignals,
-            };
-            // Appended once even if this block runs again for the same completion - `warnings`
-            // is user-facing, and the same sentence twice reads like two separate problems.
-            const elisionWarning =
-              'An artifact in this response appears to have been abbreviated (placeholder comments or undefined references) and may not be fully functional.';
-            const priorWarnings = quest.promptMeta.warnings ?? [];
-            quest.promptMeta.warnings = priorWarnings.includes(elisionWarning)
-              ? priorWarnings
-              : [...priorWarnings, elisionWarning];
-            logger.warn(
-              `[Elision] Suspected abbreviated artifact (model=${currentModel.id}, confidence=${confidence}, signals=${allSignals.length}): ${allSignals[0]}`
-            );
+          // Guarded for the same reason as the detection loop: stamping an advisory field must never
+          // be able to cost the completed reply. The rollup itself lives in elisionStamp.ts so it is
+          // unit-testable without a harness for this module.
+          try {
+            const stamp = quest.promptMeta
+              ? buildElisionStamp(elisionHits, {
+                  wasTruncated: actualTokenUsage?.stopReason === 'max_tokens',
+                  priorWarnings: quest.promptMeta.warnings ?? [],
+                })
+              : null;
+            if (stamp && quest.promptMeta) {
+              quest.promptMeta.suspectedElision = stamp.suspectedElision;
+              quest.promptMeta.warnings = stamp.warnings;
+              logger.warn(
+                `[Elision] Suspected abbreviated artifact (model=${currentModel.id}, confidence=${stamp.suspectedElision.confidence}, signals=${stamp.suspectedElision.signalCount}): ${stamp.suspectedElision.details[0]}`
+              );
+            }
+          } catch (elisionError) {
+            logger.warn('[Elision] Failed to stamp the elision verdict; reply left intact', elisionError);
           }
 
           // Capture actual artifact processing duration
