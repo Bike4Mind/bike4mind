@@ -177,11 +177,12 @@ const RESPONSE_RESERVE = 8000;
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
 
 /**
- * Fraction of the model's context window kept as VERBATIM conversation history
- * before older turns are folded into contextSummary. Conservative on purpose:
- * it leaves ample headroom for system prompts, tool schemas, RAG, and the
- * current prompt, so compaction only kicks in once a session is genuinely heavy.
- * Overridable per-deploy via the ContextVerbatimWindowFraction admin setting.
+ * Fraction of the model's SAFE INPUT budget (context window minus reserved
+ * output + buffer) kept as VERBATIM conversation history before older turns are
+ * folded into contextSummary. Conservative on purpose: it leaves headroom for
+ * system prompts, tool schemas, RAG, and the current prompt, so compaction only
+ * kicks in once a session is genuinely heavy. Overridable per-deploy via the
+ * ContextVerbatimWindowFraction admin setting.
  */
 const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
 
@@ -1424,7 +1425,17 @@ export class ChatCompletionProcess {
         getSettingsValue('ContextVerbatimWindowFraction', defaultAdminSettings),
         DEFAULT_VERBATIM_WINDOW_FRACTION
       );
-      const verbatimTokenBudget = Math.floor(contextWindow * verbatimWindowFraction);
+      // Budget is a fraction of the SAFE INPUT budget, not the raw context window:
+      // on a model whose output reserve is large relative to its window, a fraction
+      // of the raw window can exceed the usable input, so verbatim history would
+      // never be bounded before buildAndSortMessages' hard trim (which does not
+      // advance the summary boundary) and the turn overflows instead of compacting.
+      // Mirror the maxSafeInputTokens formula computed later (requested output
+      // capped at the model max, minus the safety buffer).
+      const modelMaxOutput = modelInfo.max_tokens ?? 16384;
+      const reservedOutputTokens = Math.min(params.max_tokens ?? modelMaxOutput, modelMaxOutput);
+      const safeInputTokens = Math.max(0, contextWindow - reservedOutputTokens - 1000);
+      const verbatimTokenBudget = Math.floor(safeInputTokens * verbatimWindowFraction);
       const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.db,
         verbatimTokenBudget,

@@ -3390,7 +3390,7 @@ export const settingsMap = {
     min: 0,
     max: 1,
     description:
-      'Fraction of a model context window kept as verbatim conversation history before older turns are summarized into working memory. Lower = compact sooner (cheaper, less verbatim detail); higher = keep more raw history.',
+      'Fraction of a model usable input budget (context window minus reserved output) kept as verbatim conversation history before older turns are summarized into working memory. Lower = compact sooner (cheaper, less verbatim detail); higher = keep more raw history.',
     category: 'AI',
     order: 121,
   }),
