@@ -5,6 +5,19 @@ import BaseRepository from '@bike4mind/db-core';
 
 export interface IChatHistoryItemModel extends Model<IChatHistoryItemDocument> {}
 
+/**
+ * The artifact-elision verdict, as its own sub-Schema so the parent can set `default: undefined`
+ * and keep "no elision detected" as an ABSENT field. See the usage site for why presence matters.
+ */
+const SuspectedElisionSchema = new Schema(
+  {
+    confidence: { type: String, enum: ['high', 'low'], required: false },
+    signalCount: { type: Number, required: false },
+    details: [{ type: String, required: false }],
+  },
+  { _id: false }
+);
+
 export const PromptMetaSchema = new Schema<PromptMeta>(
   {
     model: {
@@ -106,6 +119,17 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     generatedImageReferences: [{ type: String, required: false }],
     promptErrors: [{ type: String, required: false }],
     warnings: [{ type: String, required: false }],
+    // Suspected-elision verdict from the artifact scan. Like the billing audit fields and
+    // contextWindowUsage above, this MUST be declared or Mongoose strict mode silently strips it on
+    // save - which left the client re-running its fallback scan on every load and made the server
+    // half of the feature untestable end-to-end. Mirrors PromptMetaSchema's Zod `suspectedElision`.
+    //
+    // Declared as a sub-Schema with `default: undefined` rather than an inline nested object: an
+    // inline object containing an array materializes as `{ details: [] }` on EVERY quest, and the
+    // client treats the field's mere presence as the server's elision verdict
+    // (`!!promptMeta?.suspectedElision`), so it would show the "may be incomplete" banner on every
+    // artifact ever rendered. Absent must stay absent.
+    suspectedElision: { type: SuspectedElisionSchema, required: false, default: undefined },
     statusLog: [{ status: { type: String, required: true }, timestamp: { type: Date, required: true } }],
     // Citable sources referenced in AI responses (from web_search, deep_research, RAG, MCP)
     citables: [
