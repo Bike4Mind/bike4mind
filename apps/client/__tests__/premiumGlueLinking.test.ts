@@ -57,10 +57,15 @@ beforeAll(() => {
     join(overlayDir, 'package.json'),
     JSON.stringify({
       name: PKG_NAME,
+      exports: {
+        './server/migrations': './src/server/migrations.ts',
+      },
       b4mContributions: {
         spaRoutesExport: `${PKG_NAME}/routes`,
         navItemsExport: `${PKG_NAME}/nav`,
+        notebookSidenavExport: `${PKG_NAME}/sidenav`,
         llmToolsExport: `${PKG_NAME}/tools`,
+        migrationsExport: `${PKG_NAME}/server/migrations`,
         apiRouteStubs: [{ generatedPath: 'pages/api/premium-fakeoverlay/ping.ts', exportFrom: `${PKG_NAME}/api/ping` }],
         serverHandlerStubs: [
           { generatedPath: 'server/premium-generated/fakeoverlay.ts', exportFrom: `${PKG_NAME}/handlers` },
@@ -70,6 +75,8 @@ beforeAll(() => {
     })
   );
   writeFileSync(join(overlayDir, 'src/infra.ts'), 'export function contributeInfra() {}\n');
+  mkdirSync(join(overlayDir, 'src/server'), { recursive: true });
+  writeFileSync(join(overlayDir, 'src/server/migrations.ts'), 'export const migrations = [];\n');
 
   writeFileSync(
     join(sandbox, 'sst.config.ts'),
@@ -98,14 +105,26 @@ describe('hydrated but UNLINKED overlay', () => {
     const tools = readFileSync(join(clientRoot, 'server/premium-generated/premiumLlmTools.generated.ts'), 'utf8');
     expect(tools).not.toContain(PKG_NAME);
 
+    const nav = readFileSync(join(clientRoot, 'app/premium-generated/premiumNavItems.generated.ts'), 'utf8');
+    expect(nav).not.toContain(PKG_NAME);
+    expect(nav).toContain('premiumNavItems: PremiumNavDescriptor[] = []');
+
+    const sidenav = readFileSync(join(clientRoot, 'app/premium-generated/premiumNotebookSidenav.generated.ts'), 'utf8');
+    expect(sidenav).not.toContain(PKG_NAME);
+    expect(sidenav).toContain('premiumNotebookSidenav: PremiumNotebookSidenav = null');
+
     expect(existsSync(join(clientRoot, 'pages/api/premium-fakeoverlay'))).toBe(false);
     expect(existsSync(join(clientRoot, 'server/premium-generated/fakeoverlay.ts'))).toBe(false);
   });
 
-  it('still emits the PRESENT infra glue (relative import needs no link)', () => {
+  it('still emits the PRESENT relative-import glue (infra + migrations need no link)', () => {
     runCodegen();
     const infra = readFileSync(join(sandbox, 'infra/premium-generated/fakeoverlay-infra.generated.ts'), 'utf8');
     expect(infra).toContain(`from '../../packages/premium/fakeoverlay/src/infra'`);
+
+    const migrations = readFileSync(join(sandbox, 'packages/scripts/migrate/migrations/premium.generated.ts'), 'utf8');
+    expect(migrations).toContain('premium/fakeoverlay/src/server/migrations');
+    expect(migrations).not.toContain(PKG_NAME);
   });
 });
 
@@ -120,6 +139,12 @@ describe('hydrated AND linked overlay', () => {
 
     const routes = readFileSync(join(clientRoot, 'app/premium-generated/premiumRoutes.generated.ts'), 'utf8');
     expect(routes).toContain(`from '${PKG_NAME}/routes'`);
+
+    const nav = readFileSync(join(clientRoot, 'app/premium-generated/premiumNavItems.generated.ts'), 'utf8');
+    expect(nav).toContain(`from '${PKG_NAME}/nav'`);
+
+    const sidenav = readFileSync(join(clientRoot, 'app/premium-generated/premiumNotebookSidenav.generated.ts'), 'utf8');
+    expect(sidenav).toContain(`import('${PKG_NAME}/sidenav')`);
 
     const stub = readFileSync(join(clientRoot, 'pages/api/premium-fakeoverlay/ping.ts'), 'utf8');
     expect(stub).toContain(`export { default } from '${PKG_NAME}/api/ping'`);
