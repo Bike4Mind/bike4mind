@@ -439,8 +439,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
 
           // Dedup (the lake can contain duplicate uploads) and relevance-rank by how well each
           // file's metadata matches the query - since the underlying search sorts by fileName
-          // ASC, the most relevant files would otherwise be buried. Metadata-only proxy ranking;
-          // true semantic (embedding) ranking is the planned follow-up.
+          // ASC, the most relevant files would otherwise be buried. Metadata-only proxy ranking:
+          // this is the KEYWORD fallback, reached only when the semantic arms above are
+          // unavailable or found nothing, so embedding ranking is not an option here.
           const queryTerms = Array.from(
             new Set(
               query

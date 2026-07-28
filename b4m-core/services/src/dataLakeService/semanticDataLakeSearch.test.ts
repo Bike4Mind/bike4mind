@@ -177,6 +177,31 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
     expect(result.scan.truncated).toBe(false);
   });
 
+  it('keeps the page size constant when the budget is not a multiple of it', async () => {
+    // The query builder derives skip as (page - 1) * limit, so shrinking the limit to fit the
+    // remaining budget silently moves the offset: page 2 would re-read rows it already had and
+    // never reach the tail. Only reachable once an operator sets an odd budget, which the new
+    // admin setting allows, and invisible on the defaults because 20000 is a multiple of 2000.
+    const pageOne = Array.from({ length: 10 }, (_, i) => ({ id: `f${i}`, fileName: `F${i}.pdf`, tags: [] }));
+    const pageTwo = Array.from({ length: 10 }, (_, i) => ({ id: `g${i}`, fileName: `G${i}.pdf`, tags: [] }));
+    const search = filesAdapter([
+      { data: pageOne, hasMore: true, total: 20 },
+      { data: pageTwo, hasMore: false, total: 20 },
+    ]);
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), budgets: { maxFiles: 15, filePageSize: 10 } }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+
+    // Every page asks for the same limit; only `page` advances.
+    const limits = search.mock.calls.map(c => (c[3] as { limit: number }).limit);
+    expect(limits).toEqual([10, 10]);
+    // Trimmed to the budget, with no file counted twice.
+    expect(result.scan.filesScoped).toBe(15);
+    expect(result.scan.fileBudgetHit).toBe(true);
+    expect(result.scan.truncated).toBe(true);
+  });
+
   it('asks for the _id sort tiebreaker, without which a multi-page walk can lose a file', async () => {
     const search = filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]);
     await semanticDataLakeSearch(baseParams(), {

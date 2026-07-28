@@ -346,17 +346,21 @@ async function collectScopedFiles(args: {
   let filesMatching = 0;
   let fileBudgetHit = false;
 
-  for (let page = 1; ; page++) {
-    const limit = Math.min(args.filePageSize, args.maxFiles - files.length);
-    if (limit <= 0) {
-      fileBudgetHit = true;
-      break;
-    }
+  // The page size must stay CONSTANT across the walk: the query builder derives skip as
+  // (page - 1) * limit, so shrinking the limit to fit the remaining budget would move the offset
+  // under us - re-reading rows we already have and never reaching the tail. Over-fetch to the
+  // page boundary instead and trim to the budget at the end.
+  const pageSize = Math.max(1, args.filePageSize);
+  // A page always consumes pageSize rows, so this bounds the walk even if an adapter kept
+  // reporting hasMore forever.
+  const maxPages = Math.ceil(args.maxFiles / pageSize) + 1;
+
+  for (let page = 1; page <= maxPages; page++) {
     const result = await args.search(
       args.userId,
       '', // no text query - pure data-lake browse; relevance comes from vector cosine below
       { tags: args.tags, shared: false },
-      { page, limit },
+      { page, limit: pageSize },
       { by: 'fileName', direction: 'asc' },
       {
         textSearch: false,
@@ -377,14 +381,16 @@ async function collectScopedFiles(args: {
     // `total` is the pre-budget match count. Fall back to what we hold if an adapter omits it.
     if (page === 1) filesMatching = result.total ?? result.data.length;
     files.push(...result.data);
-    if (!result.hasMore) break;
     if (files.length >= args.maxFiles) {
-      fileBudgetHit = true;
+      // Only a truncation if something is actually left over - a corpus that lands exactly on the
+      // budget with nothing beyond it was scanned in full.
+      fileBudgetHit = files.length > args.maxFiles || result.hasMore;
       break;
     }
+    if (!result.hasMore) break;
   }
 
-  return { files, filesMatching, fileBudgetHit };
+  return { files: files.slice(0, args.maxFiles), filesMatching, fileBudgetHit };
 }
 
 /**
