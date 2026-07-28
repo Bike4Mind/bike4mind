@@ -271,6 +271,15 @@ export interface GetAvailableModelsOptions {
 }
 
 /**
+ * Deadline for the catalog and price reads. Deliberately NOT tied to
+ * `perBackendTimeoutMs`: that option is opt-in and only the picker route passes
+ * it, while a stalled DB read hurts the callers that omit it (chat turns) most.
+ * Mongo's own socketTimeoutMS bounds a stall at ~45s, far past any caller's
+ * budget for a model list, so these reads carry their own deadline.
+ */
+const CATALOG_READ_TIMEOUT_MS = 5_000;
+
+/**
  * Bound one backend's listing call. Rejects rather than resolving empty so the
  * fan-out's existing catch performs the degradation and names the slow backend.
  */
@@ -374,7 +383,7 @@ export const getAvailableModels = async (
   let merged = backendModels;
   if (_catalogProvider) {
     try {
-      const rows = await _catalogProvider();
+      const rows = await withListingTimeout(_catalogProvider(), CATALOG_READ_TIMEOUT_MS, 'model catalog read');
       merged = mergeCatalog(backendModels, rows, gateCtx);
       // Catalog successors take precedence over the static sunset map (sec
       // 5.10). Refreshed here, so before the first catalog read - cold start,
@@ -398,7 +407,7 @@ export const getAvailableModels = async (
   let priced = merged;
   if (_priceRowsProvider) {
     try {
-      const rows = await _priceRowsProvider();
+      const rows = await withListingTimeout(_priceRowsProvider(), CATALOG_READ_TIMEOUT_MS, 'price catalog read');
       priced = applyModelPriceCatalog(merged, rows);
       const overlaid = priced.filter((m, i) => m !== merged[i]).length;
       Logger.globalInstance.info(`[getAvailableModels] price catalog applied to ${overlaid}/${merged.length} models`);

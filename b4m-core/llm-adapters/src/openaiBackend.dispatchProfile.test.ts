@@ -229,6 +229,42 @@ describe('OpenAI request shaping with a dispatchProfile', () => {
     expect(params).not.toHaveProperty('max_completion_tokens');
   });
 
+  // ModelRecordPatchRead makes every dispatchProfile key optional, so a sparse
+  // row reaches the builders even though the write type says otherwise.
+  const partialProfile = {} as ModelInfo['dispatchProfile'];
+
+  it('falls through to the arrays for the fields a partial profile does not state', async () => {
+    // An absent key is "not stated", not a negative assertion - reading it as one
+    // takes GPT-5 off /v1/responses and onto max_tokens, a hard 400.
+    const transport = buildBackend();
+    transport.backend.setDispatchModel(modelRecord(ChatModels.GPT5, { dispatchProfile: partialProfile }));
+    await transport.backend.complete(
+      ChatModels.GPT5,
+      [{ role: 'user', content: 'hi' }],
+      { tools: [tool] },
+      async () => {}
+    );
+    expect(transport.responsesCreate).toHaveBeenCalledTimes(1);
+    expect(transport.chatCreate).not.toHaveBeenCalled();
+
+    const shape = buildBackend();
+    shape.backend.setDispatchModel(modelRecord(ChatModels.GPT5, { dispatchProfile: partialProfile }));
+    const params = await callChat(shape.backend, shape.chatCreate, ChatModels.GPT5);
+    expect(params.max_completion_tokens).toBe(1234);
+    expect(params).not.toHaveProperty('max_tokens');
+  });
+
+  it('does not pin temperature on a seeded model whose row states nothing about the request shape', async () => {
+    // gpt-5-chat-latest is not fixed-temperature; a row merely existing must not
+    // make it one just because the merged record reports can_think.
+    const { backend, chatCreate } = buildBackend();
+    backend.setDispatchModel(
+      modelRecord(ChatModels.GPT5_CHAT_LATEST, { can_think: true, dispatchProfile: partialProfile })
+    );
+    const params = await callChat(backend, chatCreate, ChatModels.GPT5_CHAT_LATEST, { temperature: 0.3 });
+    expect(params.temperature).toBe(0.3);
+  });
+
   it('drops the system role when the profile marks the o1 message format', async () => {
     const { backend, chatCreate } = buildBackend();
     backend.setDispatchModel(

@@ -97,6 +97,23 @@ describe('getAvailableModels model catalog provider', () => {
     }
   });
 
+  it('bounds a hanging catalog read instead of waiting out mongo socket timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      // Never settles: the deadline is the only thing that can end this read.
+      setModelCatalogProvider(() => new Promise<IModelCatalogRow[]>(() => {}));
+
+      const pending = getAvailableModels(null);
+      await vi.advanceTimersByTimeAsync(5_000);
+      const models = await pending;
+
+      // Degraded to the assembled adapter tables, not hung and not empty.
+      expect(models.find(m => m.id === TARGET)).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the replacedBy overlay when a later read comes back empty', async () => {
     // An empty read is no information, same as a failed one: wiping the overlay
     // would strand every catalog successor until the next non-empty read.

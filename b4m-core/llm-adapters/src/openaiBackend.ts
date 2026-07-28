@@ -115,17 +115,22 @@ export class OpenAIBackend implements ICompletionBackend {
    * Do this model's tool turns go to /v1/responses? The profile answers it for
    * a model the id arrays never heard of; without one the arrays decide, which
    * is exactly today's behavior.
+   *
+   * Keyed on the FIELD, not on the profile: the lenient read schema
+   * (ModelRecordPatchRead) makes every profile key optional, so a sparse row
+   * would otherwise read as a negative assertion and take a GPT-5 model off
+   * /v1/responses. An absent key is "not stated" and falls through.
    */
   private usesResponsesToolTransport(model: string): boolean {
     const profile = this._dispatch.profileFor(model);
-    if (profile) return profile.toolTransport === 'responses';
+    if (profile?.toolTransport !== undefined) return profile.toolTransport === 'responses';
     return RESPONSES_API_TOOL_MODELS.has(model);
   }
 
   /** Which complexity->effort table applies (effortMap_GPT5_1_2 vs effortMap). */
   private usesGPT5EffortMap(model: string): boolean {
     const profile = this._dispatch.profileFor(model);
-    if (profile) return profile.effortMapVariant === 'gpt5_1_2';
+    if (profile?.effortMapVariant !== undefined) return profile.effortMapVariant === 'gpt5_1_2';
     return GPT5_1_MODELS.includes(model) || GPT5_2_MODELS.includes(model) || GPT5_4_MODELS.includes(model);
   }
 
@@ -997,16 +1002,19 @@ export class OpenAIBackend implements ICompletionBackend {
     }
 
     const profile = this._dispatch.profileFor(model);
-    const isO1Model = profile ? profile.messageFormat === 'o1' : O1_MODELS.includes(model);
-    const usesMaxCompletionTokens = profile
-      ? profile.maxTokensParam === 'max_completion_tokens'
-      : O1_MODELS.includes(model) ||
-        GPT5_MODELS.includes(model) ||
-        GPT5_1_MODELS.includes(model) ||
-        GPT5_2_MODELS.includes(model) ||
-        GPT5_4_MODELS.includes(model) ||
-        GPT5_5_MODELS.includes(model) ||
-        GPT5_6_MODELS.includes(model);
+    // Per FIELD, not per profile: a sparse row must not read as a negative
+    // assertion. See usesResponsesToolTransport.
+    const isO1Model = profile?.messageFormat !== undefined ? profile.messageFormat === 'o1' : O1_MODELS.includes(model);
+    const usesMaxCompletionTokens =
+      profile?.maxTokensParam !== undefined
+        ? profile.maxTokensParam === 'max_completion_tokens'
+        : O1_MODELS.includes(model) ||
+          GPT5_MODELS.includes(model) ||
+          GPT5_1_MODELS.includes(model) ||
+          GPT5_2_MODELS.includes(model) ||
+          GPT5_4_MODELS.includes(model) ||
+          GPT5_5_MODELS.includes(model) ||
+          GPT5_6_MODELS.includes(model);
     // GPT-5.1/5.2/5.4 share the same complexity->reasoning-effort mapping (effortMap_GPT5_1_2).
     const usesGPT5EffortMap = this.usesGPT5EffortMap(model);
 
@@ -1025,9 +1033,12 @@ export class OpenAIBackend implements ICompletionBackend {
     // A reasoning model that is only known through the catalog is not in
     // FIXED_TEMPERATURE_MODELS, and OpenAI rejects any temperature but 1 on one.
     // Losing temperature control on a model that would have accepted it is
-    // recoverable; a 400 on every turn is not.
+    // recoverable; a 400 on every turn is not. Keyed on the profile STATING the
+    // reasoning-shaped max-tokens param rather than on a row merely existing, so
+    // a sparse patch cannot pin a seeded model's temperature as a side effect.
     const requiresFixedTemp =
-      FIXED_TEMPERATURE_MODELS.has(model) || (profile !== undefined && this._dispatch.for(model)?.can_think === true);
+      FIXED_TEMPERATURE_MODELS.has(model) ||
+      (profile?.maxTokensParam === 'max_completion_tokens' && this._dispatch.for(model)?.can_think === true);
     if (usesMaxCompletionTokens) {
       // Force temperature to 1.0 for models in FIXED_TEMPERATURE_MODELS
       // (reasoning models, chat-latest variants, and GPT-5.5).

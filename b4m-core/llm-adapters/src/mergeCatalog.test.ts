@@ -447,6 +447,63 @@ describe('mergeCatalog: lenient reads', () => {
     ]);
   });
 
+  it('strips {dispatch} from a seeded model when a row names a family this build cannot dispatch', () => {
+    // The catalog-only tier gets this from invocabilityBlocker. getLlmByModel
+    // routes on adapterFamily and backendForAdapterFamily THROWS on a family it
+    // has no constructor for, so the seeded tier needs the same guard - minus
+    // the active-lifecycle clause, which would strip dispatch off every legacy
+    // but still-served seeded model.
+    const seed = seedModel();
+    const { models, dropped } = mergeCatalogWithDrops(
+      [seed],
+      [
+        row({
+          modelId: seed.id,
+          ownedGroups: ['dispatch', 'presentation'],
+          patch: {
+            adapterFamily: 'openai-conversations',
+            dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'chat' },
+            rank: 9,
+          },
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(models[0].adapterFamily).toBeUndefined();
+    expect(models[0].dispatchProfile).toBeUndefined();
+    // Only that one group is dropped; the rest of the row still applies.
+    expect(models[0].rank).toBe(9);
+    expect(dropped).toEqual([
+      { modelId: seed.id, reason: expect.stringContaining('"openai-conversations" is not dispatchable') },
+    ]);
+  });
+
+  it('keeps {dispatch} on a seeded model whose row names a family this build does dispatch', () => {
+    const seed = seedModel();
+    const { models, dropped } = mergeCatalogWithDrops(
+      [seed],
+      [
+        row({
+          modelId: seed.id,
+          ownedGroups: ['dispatch'],
+          patch: {
+            adapterFamily: 'openai-responses',
+            dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'responses' },
+          },
+        }),
+      ],
+      NO_KEYS
+    );
+
+    expect(models[0].adapterFamily).toBe('openai-responses');
+    expect(models[0].dispatchProfile).toEqual({
+      maxTokensParam: 'max_completion_tokens',
+      toolTransport: 'responses',
+    });
+    expect(dropped).toEqual([]);
+  });
+
   it('round-trips a seeded model through toModelRecord without losing what a row does not own', () => {
     const seed = seedModel();
     const record = toModelRecord(seed);

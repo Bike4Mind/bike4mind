@@ -129,6 +129,23 @@ export function mergeCatalogWithDrops(
       models.push(base);
       continue;
     }
+    // The catalog-only tier gets this from invocabilityBlocker; a seeded model
+    // needs it separately, because invocabilityBlocker's active-lifecycle clause
+    // would strip dispatch off every legacy-but-still-served seeded model.
+    // Defense in depth rather than a live defect: no shipped seed row sets an
+    // adapterFamily, discovery cannot claim {dispatch} on an existing model, and
+    // there is no catalog-patch surface - but a rollback to a build that lost a
+    // family, or the first catalog-edit endpoint, makes it reachable, and
+    // backendForAdapterFamily THROWS on a family it cannot construct. Drop the
+    // group, not the model: the adapter literal keeps serving.
+    const family = parsed.record.adapterFamily;
+    if (owned.has('dispatch') && family && !DISPATCHABLE_ADAPTER_FAMILIES.includes(family)) {
+      dropped.push({
+        modelId,
+        reason: `adapterFamily "${family}" is not dispatchable by this build; kept the adapter dispatch`,
+      });
+      owned.delete('dispatch');
+    }
     models.push(overlayOwnedGroups(base, parsed.record, owned));
   }
 

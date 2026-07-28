@@ -86,6 +86,15 @@ describe('toModelInfo', () => {
     ).toMatchObject({ disabled: true, disabledReason: 'contract expired' });
   });
 
+  it('disables a retired model even with no date to hide it by', () => {
+    expect(toModelInfo({ ...minimal, lifecycle: { status: 'retired' } })).toMatchObject({
+      disabled: true,
+      disabledReason: 'retired by the provider',
+    });
+    // Deprecated is still callable: the date, once past, is what hides it.
+    expect(toModelInfo({ ...minimal, lifecycle: { status: 'deprecated' } }).disabled).toBe(false);
+  });
+
   it('passes lifecycle deprecation through and infers nothing else', () => {
     expect(
       toModelInfo({ ...minimal, lifecycle: { status: 'deprecated', deprecationDate: '2026-09-01' } })

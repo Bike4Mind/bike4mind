@@ -59,8 +59,13 @@ export type ToModelInfoIsTotal = Expect<
  */
 export function toModelInfo(record: RenderableModelRecord): ModelInfo {
   // Either owner can block a model and neither can clear the other's block:
-  // operators write disabled, discovery writes autoDisabled.
-  const disabled = record.disabled === true || record.autoDisabled === true;
+  // operators write disabled, discovery writes autoDisabled. 'retired' blocks it
+  // too: a deprecationDate hides a model once it passes, but a row stating
+  // retired WITHOUT one would leave a model the provider no longer serves in
+  // every picker, to fail at dispatch. 'deprecated' deliberately does not block -
+  // a deprecated model is callable right up to its date.
+  const retired = record.lifecycle?.status === 'retired';
+  const disabled = record.disabled === true || record.autoDisabled === true || retired;
 
   return {
     // ModelInfo.id is still the ModelName union; widening it to string is the
@@ -88,7 +93,8 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
     freeToRun: record.freeToRun,
     private: record.private ?? false,
     disabled,
-    disabledReason: record.disabledReason ?? record.autoDisabledReason,
+    disabledReason:
+      record.disabledReason ?? record.autoDisabledReason ?? (retired ? 'retired by the provider' : undefined),
     // Absent means "not filtered": deprecation is never inferred by the adapter.
     deprecationDate: record.lifecycle?.deprecationDate,
     trainingCutoff: record.trainingCutoff,
