@@ -5,14 +5,21 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { CounterLog, User } from '@bike4mind/database';
-import { SAFE_USER_LOOKUP_PROJECT } from '@bike4mind/common';
+import { SAFE_USER_LOOKUP_PROJECT, USER_SECRET_FIELDS } from '@bike4mind/common';
 
 /**
- * Agreement test for the M1 $lookup reorder (see counterlogs-phase2-payload-reduction.md):
- * drives the REAL aggregation against createMongoServer rather than mocking the pipeline, so a
- * regression in the group-then-join reshape or the inner $project fails here. The staging
- * before/after diff (13,308 rows, byte-identical once resorted, ~2x faster) is the empirical
- * parity proof; this test pins the same invariants so they can't regress silently in CI.
+ * Tests for the M1 $lookup reorder (see counterlogs-phase2-payload-reduction.md).
+ *
+ * Tests 1 and 3 are AGREEMENT tests: they drive the real handler against createMongoServer and
+ * pin the output contract, which is unchanged by the reorder. They pass against both the old and
+ * new pipeline by design - that is the point, since the PR's claim is "identical output, faster".
+ * The staging before/after diff (13,308 rows, byte-identical once resorted, ~2x faster) is the
+ * empirical parity proof.
+ *
+ * Test 2 asserts on `buildCounterLogsPipeline` - the exported builder the handler actually calls -
+ * NOT on a copy of the stages. An earlier version re-declared its own pipeline, which meant
+ * deleting the production `$project` failed nothing; it was asserting that MongoDB's `$project`
+ * works rather than that this route uses it.
  */
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -29,15 +36,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-import handler from '../counterLogs';
+import handler, { buildCounterLogsPipeline } from '../counterLogs';
 
 let mongoServer: MongoMemoryServer;
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
-  // autoIndex builds in the background after connect; the aggregation's `hint: { datetime: 1 }`
-  // needs that index to exist before the first query runs, or Mongo rejects the hint outright.
+  // Ensure declared indexes exist before querying. autoIndex is fire-and-forget, so on a fresh
+  // database the first query can race the index build.
   await CounterLog.init();
 }, 30000);
 
@@ -48,8 +55,7 @@ afterAll(async () => {
 
 afterEach(async () => {
   await mongoose.connection.dropDatabase();
-  // dropDatabase wipes indexes along with the data - rebuild before the next test's aggregate
-  // runs its `hint: { datetime: 1 }`, or it hits the same "no matching index" race.
+  // dropDatabase wipes indexes along with the data - rebuild for the next test.
   await CounterLog.init();
 });
 
@@ -140,73 +146,30 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     expect(orphanRow!.users[0].userEmail).toBe('');
   });
 
-  it('projects the joined user through the safe lookup allowlist, excluding secret fields', async () => {
-    // Password is bcrypt-hashed by a pre-save hook, and the endpoint's own outer $group/$project
-    // never forward the full `user` object to the response regardless of this stage - so a
-    // response-level string/key check on the full endpoint would pass whether or not the lookup's
-    // own inner $project exists. That made an earlier version of this test vacuous (confirmed by
-    // mutation: deleting the inner $project below did not fail it). Test the lookup's OWN output
-    // directly instead, by running the same match/group/lookup prefix the handler builds
-    // (apps/client/pages/api/users/counterLogs.ts) as its own aggregation. Keep this prefix in
-    // sync with that pipeline if the lookup stage ever changes.
-    const user = await User.create({
-      username: 'e2e-secret-check-user',
-      name: 'Secret Check User',
-      email: 'secret-check@example.com',
-      password: 'sup3rSecretHashValueXYZ',
-    });
+  it('builds the user $lookup with an inner $project restricted to non-secret fields', () => {
+    // Asserts on the EXPORTED builder the handler calls, so deleting or widening the production
+    // $project fails here. Do not inline a copy of the stages: the $lookup's projection has no
+    // effect on the HTTP response (the outer $group/$project already forward only named scalars),
+    // so an output-level assertion cannot pin it - the property is structural.
+    const stages = buildCounterLogsPipeline({ datetime: { $gte: new Date(0) } }) as Array<
+      Record<string, { pipeline?: Array<{ $project?: Record<string, unknown> }>; as?: string }>
+    >;
 
-    await CounterLog.create({
-      userId: user.id,
-      userName: 'Secret Check User',
-      userLevel: 'User',
-      counterName: 'Session Created',
-      counterValue: 1,
-      datetime: new Date('2026-07-21T10:00:00.000Z'),
-      metadata: { sessionId: 'session-secret-check' },
-    });
+    const lookup = stages.find(s => s.$lookup?.as === 'user')?.$lookup;
+    expect(lookup, 'the pipeline must contain a $lookup aliased to "user"').toBeDefined();
 
-    const rows = await CounterLog.aggregate([
-      {
-        $match: {
-          datetime: { $gte: new Date('2026-07-21T00:00:00.000Z'), $lte: new Date('2026-07-21T23:59:59.999Z') },
-        },
-      },
-      { $addFields: { dateString: { $dateToString: { format: '%Y-%m-%d', date: '$datetime', timezone: 'UTC' } } } },
-      {
-        $group: {
-          _id: { date: '$dateString', counterName: '$counterName', userId: '$userId', metadata: '$metadata' },
-          totalValue: { $sum: '$counterValue' },
-          count: { $sum: 1 },
-        },
-      },
-      { $addFields: { userObjectId: { $toObjectId: '$_id.userId' } } },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'userObjectId',
-          foreignField: '_id',
-          pipeline: [{ $project: { ...SAFE_USER_LOOKUP_PROJECT, email: 1, organization: 1 } }],
-          as: 'user',
-        },
-      },
-      { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
-    ]);
+    const projection = lookup!.pipeline?.[0]?.$project;
+    expect(projection, 'the user $lookup must carry an inner $project').toBeDefined();
 
-    expect(rows).toHaveLength(1);
-    const joinedUser = rows[0].user;
-    expect(joinedUser).toBeDefined();
-    expect(joinedUser.email).toBe('secret-check@example.com');
-    // $project only emits fields present on the source doc, so a field with no default (e.g.
-    // lastActiveAt) may legitimately be absent - assert no UNEXPECTED key leaked through, rather
-    // than exact key equality against fields that may or may not be set.
-    const allowedKeys = new Set([...Object.keys(SAFE_USER_LOOKUP_PROJECT), 'email', 'organization']);
-    for (const key of Object.keys(joinedUser)) {
-      expect(allowedKeys.has(key), `unexpected key "${key}" leaked through the lookup projection`).toBe(true);
+    // Exact key set: an inclusion projection that gains a field is exactly the regression to catch,
+    // so assert equality rather than a subset. Secret fields are named explicitly too, so the
+    // intent survives even if SAFE_USER_LOOKUP_PROJECT itself is ever widened by mistake.
+    expect(new Set(Object.keys(projection!))).toEqual(
+      new Set([...Object.keys(SAFE_USER_LOOKUP_PROJECT), 'email', 'organization'])
+    );
+    for (const secret of USER_SECRET_FIELDS) {
+      expect(projection, `secret field "${secret}" must never be projected`).not.toHaveProperty(secret);
     }
-    expect(joinedUser.password).toBeUndefined();
-    expect(joinedUser.mfa).toBeUndefined();
-    expect(joinedUser.oauthCredentials).toBeUndefined();
   });
 
   it('keeps metadata fragments in separate groups (M1 does not change the group key)', async () => {

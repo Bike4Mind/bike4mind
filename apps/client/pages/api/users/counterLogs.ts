@@ -22,8 +22,136 @@ import { sendMaybeGzip } from '@server/utils/sendMaybeGzip';
 dayjs.extend(isSameOrBefore);
 
 // Lambda gives this route a 60s budget; leave headroom for the response to serialize/gzip
-// after the DB call returns rather than let a slow query eat the whole timeout.
+// after the DB call returns rather than let a slow query eat the whole timeout. Deliberately
+// larger than the 20s used by the overwatch services - this route's aggregation is heavier and
+// its Lambda budget is 60s, so it is sized to this route rather than copied from elsewhere.
 const AGGREGATION_MAX_TIME_MS = 45000;
+
+/**
+ * Builds the `{logs}` aggregation pipeline.
+ *
+ * Exported so the test can assert against the pipeline the handler ACTUALLY runs. An earlier
+ * version of the test re-declared its own copy of these stages, which meant deleting the
+ * `$lookup`'s inner `$project` from this file failed nothing - the test was asserting that
+ * MongoDB's `$project` works, not that this route uses it. Keep the builder as the single
+ * source of truth rather than reintroducing a replica.
+ *
+ * The user `$lookup` runs AFTER the first `$group`, not before: userEmail/userOrganization are
+ * functionally determined by userId alone, so grouping first and joining once per resulting
+ * (date, counterName, userId, metadata) row returns the same output as the old per-raw-document
+ * join while touching far fewer rows (this collection's bloat is metadata fragmentation, not
+ * user cardinality - see the Phase 2 plan). It also lets the join use the index-eligible
+ * localField/foreignField form instead of a correlated let/pipeline/$expr subquery.
+ *
+ * NOTE: `convertLookupForDocumentDB` returns early when `localField`/`foreignField` are present
+ * (b4m-core/db-core/src/utils/documentdb-compat.ts), so the inner pipeline below is passed to
+ * DocumentDB unconverted. Do not add an `$expr` in there expecting it to be rewritten.
+ */
+export const buildCounterLogsPipeline = (matchCondition: Record<string, unknown>) => [
+  {
+    $match: matchCondition,
+  },
+  {
+    $addFields: {
+      dateString: {
+        $dateToString: {
+          format: '%Y-%m-%d',
+          date: '$datetime',
+          timezone: 'UTC',
+        },
+      },
+    },
+  },
+  {
+    $group: {
+      // metadata is part of the group key; storing it again as a field would
+      // duplicate it in every user pushed below.
+      _id: {
+        date: '$dateString',
+        counterName: '$counterName',
+        userId: '$userId',
+        metadata: '$metadata',
+      },
+      totalValue: { $sum: '$counterValue' },
+      count: { $sum: 1 },
+    },
+  },
+  {
+    $addFields: {
+      // $convert (not $toObjectId) so a non-ObjectId userId such as 'SYSTEM' yields null and
+      // simply fails to join, instead of aborting the whole aggregation with a 500. Mirrors
+      // InboxModel.findByReceiverId, which documents the same hazard.
+      userObjectId: { $convert: { input: '$_id.userId', to: 'objectId', onError: null } },
+    },
+  },
+  {
+    // Aggregation $lookup bypasses Mongoose select:false, so project off the shared
+    // secret-free baseline plus the extra non-secret fields this route reads (email,
+    // organization). Never add credential/secret fields here.
+    $lookup: {
+      from: 'users',
+      localField: 'userObjectId',
+      foreignField: '_id',
+      pipeline: [
+        {
+          $project: {
+            ...SAFE_USER_LOOKUP_PROJECT,
+            email: 1,
+            organization: 1,
+          },
+        },
+      ],
+      as: 'user',
+    },
+  },
+  {
+    $unwind: {
+      path: '$user',
+      preserveNullAndEmptyArrays: true,
+    },
+  },
+  {
+    $addFields: {
+      userEmail: { $ifNull: ['$user.email', ''] },
+    },
+  },
+  {
+    $group: {
+      // Outer key includes metadata, so every user in users[] shares the parent
+      // log's metadata. Consumers read it from the parent row, not per user.
+      _id: {
+        date: '$_id.date',
+        counterName: '$_id.counterName',
+        metadata: '$_id.metadata',
+      },
+      totalValue: { $sum: '$totalValue' },
+      count: { $sum: '$count' },
+      uniqueUsers: { $addToSet: '$_id.userId' },
+      users: {
+        $push: {
+          userId: '$_id.userId',
+          userEmail: '$userEmail',
+          userOrganization: '$user.organization',
+          totalValue: '$totalValue',
+          count: '$count',
+        },
+      },
+    },
+  },
+  {
+    $project: {
+      _id: 0,
+      date: '$_id.date',
+      counterName: '$_id.counterName',
+      metadata: '$_id.metadata',
+      totalValue: 1,
+      count: 1,
+      uniqueUserCount: { $size: '$uniqueUsers' },
+      users: 1,
+    },
+  },
+  { $sort: { date: 1, counterName: 1 } },
+];
 
 const CounterLogsQuerySchema = z.object({
   startDate: z.string(),
@@ -167,122 +295,16 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         matchCondition.userOrganization = { $nin: excludeOrgs };
       }
 
-      // For non-report requests, return the aggregated logs.
-      //
-      // The user $lookup runs AFTER the first $group, not before: userEmail/userOrganization
-      // are functionally determined by userId alone, so grouping first and joining once per
-      // resulting (date, counterName, userId, metadata) row is equivalent to the old
-      // per-raw-document join but touches far fewer rows (this collection's own bloat problem
-      // is metadata fragmentation, not user cardinality - see the Phase 2 plan). It also lets
-      // the join use the standard localField/foreignField form (an index-eligible equality
-      // join) instead of a correlated let/pipeline/$expr subquery, which is the only one of its
-      // kind on this collection - every other lookup here uses localField/foreignField.
-      const pipeline = [
-        {
-          $match: matchCondition,
-        },
-        {
-          $addFields: {
-            dateString: {
-              $dateToString: {
-                format: '%Y-%m-%d',
-                date: '$datetime',
-                timezone: 'UTC',
-              },
-            },
-          },
-        },
-        {
-          $group: {
-            // metadata is part of the group key; storing it again as a field would
-            // duplicate it in every user pushed below.
-            _id: {
-              date: '$dateString',
-              counterName: '$counterName',
-              userId: '$userId',
-              metadata: '$metadata',
-            },
-            totalValue: { $sum: '$counterValue' },
-            count: { $sum: 1 },
-          },
-        },
-        {
-          $addFields: {
-            userObjectId: { $toObjectId: '$_id.userId' },
-          },
-        },
-        {
-          // Aggregation $lookup bypasses Mongoose select:false, so project off the shared
-          // secret-free baseline plus the extra non-secret fields this route reads (email,
-          // organization). Never add credential/secret fields here.
-          $lookup: {
-            from: 'users',
-            localField: 'userObjectId',
-            foreignField: '_id',
-            pipeline: [
-              {
-                $project: {
-                  ...SAFE_USER_LOOKUP_PROJECT,
-                  email: 1,
-                  organization: 1,
-                },
-              },
-            ],
-            as: 'user',
-          },
-        },
-        {
-          $unwind: {
-            path: '$user',
-            preserveNullAndEmptyArrays: true,
-          },
-        },
-        {
-          $addFields: {
-            userEmail: { $ifNull: ['$user.email', ''] },
-          },
-        },
-        {
-          $group: {
-            // Outer key includes metadata, so every user in users[] shares the parent
-            // log's metadata. Consumers read it from the parent row, not per user.
-            _id: {
-              date: '$_id.date',
-              counterName: '$_id.counterName',
-              metadata: '$_id.metadata',
-            },
-            totalValue: { $sum: '$totalValue' },
-            count: { $sum: '$count' },
-            uniqueUsers: { $addToSet: '$_id.userId' },
-            users: {
-              $push: {
-                userId: '$_id.userId',
-                userEmail: '$userEmail',
-                userOrganization: '$user.organization',
-                totalValue: '$totalValue',
-                count: '$count',
-              },
-            },
-          },
-        },
-        {
-          $project: {
-            _id: 0,
-            date: '$_id.date',
-            counterName: '$_id.counterName',
-            metadata: '$_id.metadata',
-            totalValue: 1,
-            count: 1,
-            uniqueUserCount: { $size: '$uniqueUsers' },
-            users: 1,
-          },
-        },
-        { $sort: { date: 1, counterName: 1 } },
-      ];
+      // Pipeline lives in buildCounterLogsPipeline (exported, so the test asserts the real thing).
+      const pipeline = buildCounterLogsPipeline(matchCondition);
 
+      // No `hint`: measured with explain() on this collection's real index set, forcing
+      // { datetime: 1 } makes Mongo examine 4x the documents on the filtered shape the UI
+      // actually sends (orgs/excludeOrgs are always present), because it blocks the
+      // { datetime, counterName, userOrganization } compound index the planner would pick.
+      // A hint would also hard-fail the whole request if the index were ever absent.
       const result = await CounterLog.aggregate(convertPipelineForDocumentDB(pipeline), {
         allowDiskUse: true,
-        hint: { datetime: 1 },
         maxTimeMS: AGGREGATION_MAX_TIME_MS,
       });
 
