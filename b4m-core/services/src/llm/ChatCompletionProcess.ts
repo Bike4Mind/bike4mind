@@ -3010,8 +3010,10 @@ export class ChatCompletionProcess {
 
         // Process artifacts if enabled
         if (getSettingsValue('EnableArtifacts', defaultAdminSettings)) {
-          const { parseArtifacts, convertCodeBlocksToArtifacts, detectElidedContent } =
-            await import('@bike4mind/utils');
+          const { parseArtifacts, convertCodeBlocksToArtifacts } = await import('@bike4mind/utils');
+          // Subpath rather than the barrel, matching the client - the detector has no dependencies
+          // and there is no reason for either side to pull the whole of @bike4mind/utils for it.
+          const { detectElidedContent } = await import('@bike4mind/utils/artifactElision');
           const artifactProcessingStartTime = Date.now();
 
           // Elision hits accumulate across every reply/artifact, then get stamped on promptMeta
