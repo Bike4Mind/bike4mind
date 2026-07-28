@@ -50,7 +50,10 @@ const PLACEHOLDER_PATTERNS: readonly RegExp[] = [
   /\.\.\.\s*\(?\s*same\b/i,
   /\[\s*\.\.\.\s*\]/,
   /\bidentical to (?:the )?previous\b/i,
-  /\bfrom the previous\b/i,
+  // Anchored to a stub-shaped subject: bare "from the previous" matches innocent comments like
+  // `// Ported from the previous system`.
+  /\b(?:same|copied|carried over|unchanged|reused?|taken|lifted|as) (?:\w+\s+){0,3}from the previous\b/i,
+  /\b(?:code|logic|markup|styles?|body|rest|remainder|implementation) from the previous\b/i,
   /\bprevious (?:complete|working|full)\b/i,
   /\bfor brevity\b/i,
   // "omitted" and "unchanged" are qualified rather than bare: `// optional fields omitted from
@@ -301,23 +304,30 @@ export function detectElidedContent(body: string, type?: ArtifactType): ElisionR
 
   const hasPlaceholder = signals.some(s => s.kind === 'placeholder_comment');
   const hollowCount = signals.filter(s => s.kind === 'empty_function_body').length;
-  const distinctMissing = new Set(
-    signals.filter(s => s.kind !== 'placeholder_comment').map(s => (s as { name: string }).name)
+  // Distinct names from the REFERENCE signals only. Hollow bodies are deliberately excluded:
+  // pooling them here let two ordinary no-ops with different names reach the threshold on their
+  // own, which contradicts the rule below and is a false positive on working code.
+  const distinctMissingRefs = new Set(
+    signals
+      .filter(s => s.kind === 'undefined_reference' || s.kind === 'undefined_handler')
+      .map(s => (s as { name: string }).name)
   ).size;
 
   // Three or more comment-only bodies is as unambiguous as a stub marker - an artifact does not
   // accidentally declare that many functions and implement none of them. One or two could be a
-  // deliberate no-op, so they only count toward the corroboration threshold.
-  const confidence = hasPlaceholder || hollowCount >= HOLLOW_BODY_HIGH_CONFIDENCE ? 'high' : 'low';
+  // deliberate no-op, so on their own they never fire; they only corroborate a reference miss.
+  const hollowIsConclusive = hollowCount >= HOLLOW_BODY_HIGH_CONFIDENCE;
+  const confidence = hasPlaceholder || hollowIsConclusive ? 'high' : 'low';
 
   return {
-    elided: hasPlaceholder || distinctMissing >= 2,
+    elided:
+      hasPlaceholder || hollowIsConclusive || distinctMissingRefs >= 2 || (hollowCount > 0 && distinctMissingRefs > 0),
     confidence,
     signals,
   };
 }
 
-/** Comment-only function bodies needed before the verdict is high confidence. */
+/** Comment-only function bodies needed before hollowness alone is conclusive. */
 const HOLLOW_BODY_HIGH_CONFIDENCE = 3;
 
 /**
@@ -425,7 +435,10 @@ function findPlaceholderComments(body: string, type?: ArtifactType): ElisionSign
   return found;
 }
 
-/** Index of a `//` that starts a comment - skips `://` (URLs) and `//` inside a quoted string. */
+/**
+ * Index of a `//` that starts a comment - skips `://` (URLs), `//` inside a quoted string, and a
+ * protocol-relative URL (`//example.com/x`), which at column 0 has no preceding `:` to catch it.
+ */
 function findLineCommentStart(line: string): number {
   let quote: string | null = null;
   for (let i = 0; i < line.length; i++) {
@@ -439,10 +452,20 @@ function findLineCommentStart(line: string): number {
       quote = ch;
       continue;
     }
-    if (ch === '/' && line[i + 1] === '/' && line[i - 1] !== ':') return i;
+    if (ch === '/' && line[i + 1] === '/' && line[i - 1] !== ':') {
+      if (PROTOCOL_RELATIVE_URL_REGEX.test(line.slice(i))) continue;
+      return i;
+    }
   }
   return -1;
 }
+
+/**
+ * A protocol-relative URL, e.g. `//cdn.example.com/lib.js`. Requires a dotted host immediately
+ * after the slashes, which a real comment never has - `// example.com is down` has a space, and
+ * `//TODO` has no dot.
+ */
+const PROTOCOL_RELATIVE_URL_REGEX = /^\/\/[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:[/:?#]|$)/;
 
 /** Index of a python `#` comment marker outside any quoted string. */
 function findHashCommentStart(line: string): number {
