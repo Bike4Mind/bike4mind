@@ -56,6 +56,7 @@ const catalogPlan = (contributions: SourceContribution[], base: Map<string, Reso
   planCatalogWrites({
     contributions,
     base,
+    coveredBackends: new Set<string>([ModelBackend.OpenAI]),
     operatorOwnedModelIds: new Set(),
     credentials: testCredentials(),
     policy: 'priced',
@@ -212,6 +213,32 @@ describe('planLifecycle absence graduation', () => {
     });
     expect(result.rows[0].patch).toMatchObject({ lifecycle: { status: 'deprecated', deprecationDate: '2026-07-26' } });
     expect(result.diff[0]).toMatchObject({ modelId: 'gpt-5', kind: 'updated', changedKeys: ['lifecycle'] });
+  });
+
+  it('folds the graduation into a catalog row the same run already planned', () => {
+    // The reachable shape: an aggregator still lists a model the provider
+    // dropped, so the same model has a catalog row AND an absence graduation.
+    // Two rows would carry the same (modelId, effectiveFrom) and the unique
+    // index would drop the second one silently, losing the deprecation while
+    // the report insisted it landed.
+    const catalog = catalogPlan(
+      [aggregator('models.dev', [{ modelId: 'gpt-5', patch: { maxOutputTokens: 64_000 } }])],
+      base
+    );
+    const result = plan({
+      base,
+      catalogPlan: catalog,
+      missed: ['gpt-5'],
+      statesBeforeRun: new Map([['gpt-5', state({ modelId: 'gpt-5', missCount: 2, firstMissAt: twoDaysAgo })]]),
+    });
+
+    expect(catalog.rows).toHaveLength(1);
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].ownedGroups).toContain('lifecycle');
+    expect(result.rows[0].patch.lifecycle).toMatchObject({ status: 'deprecated', deprecationDate: '2026-07-26' });
+    expect(result.rows[0].note).toContain(ABSENCE_NOTE_PREFIX);
+    expect(result.diff).toHaveLength(1);
+    expect(result.diff[0].changedKeys).toContain('lifecycle');
   });
 
   it('waits when three misses are packed into less than 48h', () => {

@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import {
   isFieldGroup,
   type FieldGroup,
+  type ICatalogContributor,
   type IDiscoveryJoinCoverage,
   type IDiscoverySourceReport,
   type IModelDiscoveryRun,
@@ -16,6 +18,7 @@ import { applyAbsence, planAbsence, type AbsencePlan } from './absence';
 import { limitConcurrency } from './concurrency';
 import { planCatalogWrites, summarizeDiff, type CatalogWritePlan } from './catalogWrite';
 import {
+  detectListingShrink,
   detectParserRowShifts,
   planLifecycle,
   planLifecycleSignals,
@@ -57,7 +60,7 @@ export const GLOBAL_DEADLINE_HEADROOM_MS = 60_000;
 
 export const DEFAULT_SOURCE_DEADLINE_MS = 30_000;
 
-/** Register a paginated source with this via sourceDeadlineMsByName (sec 6.3). */
+/** Deadline for a source whose fetch is a page walk or a per-model fan-out (sec 6.3). */
 export const PAGINATED_SOURCE_DEADLINE_MS = 60_000;
 
 export const DEFAULT_CONCURRENCY = 4;
@@ -93,6 +96,13 @@ const RUN_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
 export const DEFAULT_PRICE_BAND_PCT = 50;
 
 const LOG_PREFIX = '[model-discovery]';
+
+/**
+ * Dropped records kept on the run document. They are a trace, not a ledger, and
+ * a pathological run (a feed that renames every field) can drop thousands, which
+ * would put an unbounded array on a document the admin card reads whole.
+ */
+export const MAX_PERSISTED_DROPPED_RECORDS = 200;
 
 /** Its own prefix (sec 10) so a flagged price move alarms without a log filter. */
 const PRICE_BAND_PREFIX = '[PRICE_BAND]';
@@ -132,9 +142,10 @@ export async function runModelDiscovery(
   // window a healthy run could still be inside.
   const leaseTtlMs = 2 * globalDeadlineMs;
 
+  const token = randomUUID();
   const lease = await db.cache.claimDedup(
     DISCOVERY_LEASE_KEY,
-    { claimedAt: now().toISOString(), host: options.host, trigger: options.trigger },
+    { claimedAt: now().toISOString(), host: options.host, trigger: options.trigger, token },
     leaseTtlMs
   );
   if (!lease.claimed) {
@@ -150,9 +161,31 @@ export async function runModelDiscovery(
   } finally {
     // Release on EVERY terminal outcome. claimDedup has no release path other
     // than expiry, so a missed delete blocks the next genuine run for the TTL.
-    await db.cache.deleteByKey(DISCOVERY_LEASE_KEY).catch((error: unknown) => {
-      logger.error(`${LOG_PREFIX} failed to release lease: ${describe(error)}`);
-    });
+    await releaseLease(adapters, token, logger);
+  }
+}
+
+/**
+ * Delete the lease only if it is still ours.
+ *
+ * A run that overran its TTL (a crash-restart, a stalled container; note the
+ * commit phase is deliberately outside globalDeadline) would otherwise delete
+ * the lease a healthy successor just claimed and hand a third driver a run that
+ * overlaps it. claimDedup returns no fencing token, so the token is carried in
+ * the claim payload and checked here. Read-then-delete is not atomic, but it
+ * narrows the window from a whole overrunning run to one round trip.
+ */
+async function releaseLease(adapters: ModelDiscoveryAdapters, token: string, logger: DiscoveryLogger): Promise<void> {
+  try {
+    const held = await adapters.db.cache.findByKey(DISCOVERY_LEASE_KEY);
+    const heldToken = (held?.result as { token?: unknown } | undefined)?.token;
+    if (held && heldToken !== token) {
+      logger.warn(`${LOG_PREFIX} lease was reclaimed by another run; leaving it alone`);
+      return;
+    }
+    await adapters.db.cache.deleteByKey(DISCOVERY_LEASE_KEY);
+  } catch (error) {
+    logger.error(`${LOG_PREFIX} failed to release lease: ${describe(error)}`);
   }
 }
 
@@ -222,7 +255,8 @@ async function executeRun(
             logger,
             startedAt,
             globalSignal: globalDeadline.signal,
-            deadlineMs: options.sourceDeadlineMsByName?.[source.name] ?? DEFAULT_SOURCE_DEADLINE_MS,
+            deadlineMs:
+              options.sourceDeadlineMsByName?.[source.name] ?? source.deadlineMs ?? DEFAULT_SOURCE_DEADLINE_MS,
             previous: history.validators.get(source.name),
             now: ctx.now,
           });
@@ -256,6 +290,16 @@ async function executeRun(
     logParserShifts(parserShifts, logger);
     const droppedDocsSources = new Set(parserShifts.map(shift => shift.source));
 
+    // Decided here for the same reason as the parser shift: providers are
+    // fetched once, so no later pass has a new listing size to compare.
+    const shrunkListings = detectListingShrink(recordCountsOf(succeeded(), results), history.recordCounts);
+    for (const source of shrunkListings) {
+      logger.warn(
+        `${LOG_PREFIX} ${source} listed materially fewer models than last run; not counting absences from it`
+      );
+    }
+    const unauthoritativeSources = new Set(shrunkListings);
+
     // The only sources whose answer this run's own writes can change: an
     // aggregator joins against the catalog. One that was skipped or failed in
     // pass 1 stays out - the convergence loop may not become a way around the
@@ -277,22 +321,25 @@ async function executeRun(
         succeeded: succeeded(),
         results,
         droppedDocsSources,
+        unauthoritativeSources,
         effectiveAt: new Date(startedAt.getTime() + pass - 1),
         statesBeforeRun: passes[0]?.plan.statesBeforeRun,
         priceRowsAtRunStart: passes[0]?.plan.priceRowsAtRunStart,
       });
 
-      let appended = 0;
-      let pricesAppended = 0;
+      let catalogWrites: AppendOutcome = { appended: 0, failed: 0 };
+      let priceWrites: AppendOutcome = { appended: 0, failed: 0 };
       if (ctx.mode === 'write') {
-        appended = await appendRows(plan.lifecycle.rows, adapters, logger);
-        pricesAppended = await appendPriceRows(plan.prices.rows, adapters, logger);
+        catalogWrites = await appendRows(plan.lifecycle.rows, adapters, logger);
+        priceWrites = await appendPriceRows(plan.prices.rows, adapters, logger);
         // Per pass rather than once at the end: recordSuggestion is a
         // same-content overwrite, so a queue item a later pass re-raises costs
         // one redundant write instead of a lost one when a pass throws.
         await recordSuggestions(plan.lifecycle.suggestions, adapters, startedAt, logger);
       }
-      passes.push({ plan, appended, pricesAppended });
+      const appended = catalogWrites.appended;
+      const pricesAppended = priceWrites.appended;
+      passes.push({ plan, appended, pricesAppended, failed: catalogWrites.failed + priceWrites.failed });
       if (pass > 1) {
         logger.info(
           `${LOG_PREFIX} convergence pass ${pass}: appended=${appended} priced=${pricesAppended} ` +
@@ -320,8 +367,20 @@ async function executeRun(
 
   const deadlineHit = globalDeadline.signal.aborted;
   const succeededCount = succeeded().length;
-  const status = runStatus(attempts.length, succeededCount, deadlineHit);
   const merged = aggregate(passes);
+  // The plan and the writes can disagree: appendRows logs and continues past a
+  // throw, so without this a write-mode run that persisted nothing still reports
+  // 'ok' with a full metric set. A unique-index skip is deliberately NOT a loss -
+  // it means a concurrent driver already wrote that row.
+  const writesLost = merged.failed > 0;
+  if (writesLost) {
+    logger.error(
+      `${LOG_PREFIX} run ${runId} lost ${merged.failed} write(s): ` +
+        `${merged.appended}/${merged.plannedRows} catalog and ` +
+        `${merged.pricesAppended}/${merged.plannedPriceRows} price rows landed`
+    );
+  }
+  const status = runStatus(attempts.length, succeededCount, deadlineHit || writesLost);
   const summary = summarizeDiff(merged.diff);
   const added = [...new Set(summary.added)];
   const promoted = [...new Set(summary.promoted)];
@@ -348,7 +407,13 @@ async function executeRun(
       // Operator overlaps and price flags are one queue: both are "a human has
       // to look at this model", which is what report mode exists to surface.
       flagged: [...new Set([...summary.operatorConflicts, ...merged.priceFlags.map(flag => flag.modelId)])],
+      plannedRows: merged.plannedRows,
+      appendedRows: merged.appended,
+      plannedPriceRows: merged.plannedPriceRows,
+      appendedPriceRows: merged.pricesAppended,
     },
+    passes: passes.length,
+    droppedRecords: merged.droppedRecords.slice(0, MAX_PERSISTED_DROPPED_RECORDS),
   } as Partial<IModelDiscoveryRunDocument>);
 
   logger.info(
@@ -408,6 +473,8 @@ interface PassInput {
   results: ReadonlyMap<string, { report: IDiscoverySourceReport; result: SourceResult }>;
   /** Sources whose docs-derived signals this run drops, decided from pass 1. */
   droppedDocsSources: ReadonlySet<string>;
+  /** Sources whose listing shrank this run; they enrich but claim no backend. */
+  unauthoritativeSources: ReadonlySet<string>;
   /**
    * When this pass's rows take effect: the run's startedAt plus one millisecond
    * per pass. Both collections hold (modelId[, unit], effectiveFrom) unique and
@@ -440,6 +507,8 @@ interface CompletedPass {
   plan: PassPlan;
   appended: number;
   pricesAppended: number;
+  /** Appends that THREW. A unique-index skip is not one; see appendRows. */
+  failed: number;
 }
 
 /**
@@ -469,6 +538,19 @@ async function planPass(input: PassInput): Promise<PassPlan> {
   const resolvedInForce = resolveCatalogRecords(inForce);
   const operatorOwnedModelIds = new Set(inForce.filter(row => row.source === 'operator').map(row => row.modelId));
   const priorDiscoveryGroups = discoveryGroupsInForce(inForce);
+  const priorContributors = discoveryContributorsInForce(inForce);
+
+  // Only a provider listing carries authority over a backend; types.ts:128-133
+  // says aggregators must never claim it, and this is where that stops being a
+  // doc-only invariant. Read before the catalog plan because the plan needs it:
+  // a backend nobody listed leaves the aggregators as the only voice, and they
+  // are gap-fill for it rather than authoritative.
+  const coveredBackends = new Set<string>();
+  for (const source of succeeded) {
+    if (source.kind !== 'provider' || input.unauthoritativeSources.has(source.name)) continue;
+    const ok = results.get(source.name)?.result as DiscoverySourceOk;
+    for (const backend of ok.authoritativeFor ?? []) coveredBackends.add(backend);
+  }
 
   const priceRowsInForce = await db.prices.rowsInForce(effectiveAt);
   // A price the catalog already holds satisfies the promotion predicate, so a
@@ -483,6 +565,9 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     contributions: signals.contributions,
     resolveDispatch: adapters.resolveDispatch,
     base,
+    coveredBackends,
+    priorDiscoveryGroups,
+    priorContributors,
     operatorOwnedModelIds,
     credentials,
     policy: ctx.autoEnable,
@@ -503,11 +588,6 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     runStartedAt: effectiveAt,
   });
 
-  const coveredBackends = new Set<string>();
-  for (const source of succeeded) {
-    const ok = results.get(source.name)?.result as DiscoverySourceOk;
-    for (const backend of ok.authoritativeFor ?? []) coveredBackends.add(backend);
-  }
   const absence = planAbsence({ coveredBackends, sightedModelIds: catalog.sightedModelIds, base });
 
   // Read BEFORE applyAbsence: planLifecycle adds this run's miss itself, so the
@@ -559,6 +639,11 @@ interface RunAggregate {
   rejected: number;
   appended: number;
   pricesAppended: number;
+  /** What the passes planned, against `appended`; both are persisted on the run. */
+  plannedRows: number;
+  plannedPriceRows: number;
+  /** Appends that threw across every pass. Nonzero degrades the run to 'partial'. */
+  failed: number;
 }
 
 /**
@@ -575,7 +660,9 @@ function aggregate(passes: readonly CompletedPass[]): RunAggregate {
   const joined = [...plans].reverse().find(plan => plan.ranAggregators) ?? last;
 
   return {
-    diff: plans.flatMap(plan => plan.lifecycle.diff),
+    // One entry per model rather than one per pass, or the admin UI reads a model
+    // three passes touched as three separate changes.
+    diff: mergeDiff(plans.flatMap(plan => plan.lifecycle.diff)),
     droppedRecords: lastPerKey(
       plans.flatMap(plan => [...plan.catalog.dropped, ...plan.lifecycle.dropped]),
       dropped => `${dropped.source} ${dropped.modelId} ${dropped.reason}`
@@ -598,7 +685,36 @@ function aggregate(passes: readonly CompletedPass[]): RunAggregate {
     rejected: last.rejected,
     appended: passes.reduce((total, pass) => total + pass.appended, 0),
     pricesAppended: passes.reduce((total, pass) => total + pass.pricesAppended, 0),
+    plannedRows: plans.reduce((total, plan) => total + plan.lifecycle.rows.length, 0),
+    plannedPriceRows: plans.reduce((total, plan) => total + plan.prices.rows.length, 0),
+    failed: passes.reduce((total, pass) => total + pass.failed, 0),
   };
+}
+
+/**
+ * One entry per model across every pass. The newest pass wins on content, but
+ * `kind` and `promoted` are sticky: the pass that ADDED a model is pass 1 and
+ * every later pass reports it as an update, so taking the newest wholesale would
+ * lose the addition and the promotion from the run's own metrics.
+ */
+function mergeDiff(entries: readonly CatalogDiffEntry[]): CatalogDiffEntry[] {
+  const byModel = new Map<string, CatalogDiffEntry>();
+  for (const entry of entries) {
+    const held = byModel.get(entry.modelId);
+    byModel.set(
+      entry.modelId,
+      held
+        ? {
+            ...entry,
+            kind: held.kind,
+            promoted: held.promoted || entry.promoted,
+            ownedGroups: [...new Set([...held.ownedGroups, ...entry.ownedGroups])],
+            changedKeys: [...new Set([...held.changedKeys, ...entry.changedKeys])].sort(),
+          }
+        : entry
+    );
+  }
+  return [...byModel.values()];
 }
 
 /** One entry per key, the last writer's, in first-seen order. */
@@ -612,26 +728,40 @@ async function appendRows(
   rows: readonly IModelCatalogRowInput[],
   adapters: ModelDiscoveryAdapters,
   logger: DiscoveryLogger
-): Promise<number> {
+): Promise<AppendOutcome> {
   let appended = 0;
+  let failed = 0;
   for (const row of rows) {
     try {
-      // A null return is the unique-index race: another driver already wrote this
-      // model for this run window, which is a skip rather than a failure.
+      // A null return is the unique-index race: another driver already wrote
+      // this model for this run window, so it is a skip and not a failure. It is
+      // logged all the same - the plan did not expect it, and a row this run
+      // computed never landed.
       if (await adapters.db.catalog.append(row)) appended += 1;
+      else {
+        logger.warn(`${LOG_PREFIX} append skipped for ${row.modelId}: a row already holds this run's timestamp`);
+      }
     } catch (error) {
+      failed += 1;
       logger.error(`${LOG_PREFIX} append failed for ${row.modelId}: ${describe(error)}`);
     }
   }
-  return appended;
+  return { appended, failed };
+}
+
+/** Appends that landed against appends that THREW; a unique-index skip is neither. */
+interface AppendOutcome {
+  appended: number;
+  failed: number;
 }
 
 async function appendPriceRows(
   rows: readonly IModelPriceInput[],
   adapters: ModelDiscoveryAdapters,
   logger: DiscoveryLogger
-): Promise<number> {
+): Promise<AppendOutcome> {
   let appended = 0;
+  let failed = 0;
   for (const row of rows) {
     try {
       if (await adapters.db.prices.append(row)) appended += 1;
@@ -640,10 +770,11 @@ async function appendPriceRows(
       // E11000: another driver already priced this model for this run window,
       // which is a skip. Everything else is a real failure worth a log line.
       if (isDuplicateKey(error)) continue;
+      failed += 1;
       logger.error(`${LOG_PREFIX} price append failed for ${row.modelId}: ${describe(error)}`);
     }
   }
-  return appended;
+  return { appended, failed };
 }
 
 const isDuplicateKey = (error: unknown): boolean =>
@@ -676,6 +807,7 @@ async function recordSuggestions(
           retirementDate: suggestion.retirementDate,
           replacedBy: suggestion.replacedBy,
           source: suggestion.source,
+          detail: suggestion.detail,
         },
         at
       );
@@ -738,6 +870,33 @@ function discoveryGroupsInForce(rows: readonly IModelCatalogRow[]): Map<string, 
   return groups;
 }
 
+/** Contributors on that same superseded row, so a re-claimed group keeps its provenance. */
+function discoveryContributorsInForce(rows: readonly IModelCatalogRow[]): Map<string, ICatalogContributor[]> {
+  const contributors = new Map<string, ICatalogContributor[]>();
+  for (const row of rows) {
+    if (row.source !== 'discovery' || contributors.has(row.modelId)) continue;
+    const known = (row.contributors ?? []).flatMap(entry =>
+      isFieldGroup(entry.group) ? [{ group: entry.group, source: entry.source }] : []
+    );
+    contributors.set(row.modelId, known);
+  }
+  return contributors;
+}
+
+/** This run's record count per PROVIDER source, for the run-over-run comparison. */
+function recordCountsOf(
+  succeeded: readonly DiscoverySource[],
+  results: ReadonlyMap<string, { result: SourceResult }>
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const source of succeeded) {
+    if (source.kind !== 'provider') continue;
+    const records = (results.get(source.name)?.result as DiscoverySourceOk).records;
+    if (records) counts.set(source.name, records.length);
+  }
+  return counts;
+}
+
 /** This run's parser row counts per source, for the run-over-run comparison. */
 function parserRowsOf(
   succeeded: readonly DiscoverySource[],
@@ -783,6 +942,7 @@ async function fetchSource(
           etag: result.etag,
           contentHash: result.contentHash,
           parserRows: result.parserRows,
+          recordCount: result.records?.length,
         }
       : { httpStatus: result.httpStatus, error: result.error ?? 'source reported failure' }),
   };
@@ -860,6 +1020,8 @@ interface RunHistory {
   validators: Map<string, { etag?: string; contentHash?: string }>;
   /** Newest parser row counts per source, for the docs-parser shift guard. */
   parserRows: Map<string, Record<string, number>>;
+  /** Newest listing size per source, for the provider-listing shrink guard. */
+  recordCounts: Map<string, number>;
 }
 
 async function recentRunHistory(adapters: ModelDiscoveryAdapters, startedAt: Date): Promise<RunHistory> {
@@ -870,6 +1032,7 @@ async function recentRunHistory(adapters: ModelDiscoveryAdapters, startedAt: Dat
   const lastOkAt = new Map<string, Date>();
   const validators = new Map<string, { etag?: string; contentHash?: string }>();
   const parserRows = new Map<string, Record<string, number>>();
+  const recordCounts = new Map<string, number>();
   for (const run of ordered) {
     for (const report of run.sources ?? []) {
       if (!report.ok || lastOkAt.has(report.name)) continue;
@@ -878,9 +1041,10 @@ async function recentRunHistory(adapters: ModelDiscoveryAdapters, startedAt: Dat
         validators.set(report.name, { etag: report.etag, contentHash: report.contentHash });
       }
       if (report.parserRows) parserRows.set(report.name, report.parserRows);
+      if (typeof report.recordCount === 'number') recordCounts.set(report.name, report.recordCount);
     }
   }
-  return { lastOkAt, validators, parserRows };
+  return { lastOkAt, validators, parserRows, recordCounts };
 }
 
 /**

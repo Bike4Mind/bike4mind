@@ -41,6 +41,7 @@ const ModelDiscoveryStateSchema = new Schema<IModelDiscoveryStateDocument>(
           retirementDate: { type: String, required: false },
           replacedBy: { type: String, required: false },
           source: { type: String, required: true },
+          detail: { type: String, required: false },
           suggestedAt: { type: Date, required: true },
           resolvedAt: { type: Date, required: false },
           resolution: { type: String, required: false, enum: ['accepted', 'dismissed'] },

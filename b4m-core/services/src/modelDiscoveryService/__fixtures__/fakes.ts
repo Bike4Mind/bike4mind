@@ -43,6 +43,12 @@ export class FakeCacheRepository {
     return { claimed: true };
   }
 
+  /** Enough of ICacheDocument for the fenced release to read its own token back. */
+  async findByKey(key: string) {
+    const entry = this.entries.get(key);
+    return entry ? { key, result: entry.result, expiresAt: entry.expiresAt } : null;
+  }
+
   async deleteByKey(key: string): Promise<void> {
     this.deleteCalls += 1;
     this.entries.delete(key);

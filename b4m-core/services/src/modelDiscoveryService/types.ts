@@ -184,6 +184,12 @@ export interface DiscoverySource {
   /** Report key and min-interval key: 'anthropic', 'models.dev', ... */
   name: string;
   kind: DiscoverySourceKind;
+  /**
+   * The source's own deadline, for the ones whose fetch is a page walk or a
+   * per-model fan-out rather than a single request. Overridden by
+   * sourceDeadlineMsByName; falls back to DEFAULT_SOURCE_DEADLINE_MS.
+   */
+  deadlineMs?: number;
   isConfigured(creds: DiscoveryCredentials, env: DiscoveryEnv): boolean;
   fetch(ctx: DiscoveryFetchContext): Promise<SourceResult>;
 }
@@ -418,7 +424,7 @@ export interface ModelDiscoveryAdapters {
     >;
     discoveryRuns: Pick<IModelDiscoveryRunRepository, 'create' | 'update' | 'find'>;
     /** claimDedup is the lease; deleteByKey is the only release path it has. */
-    cache: Pick<ICacheRepository, 'claimDedup' | 'deleteByKey'>;
+    cache: Pick<ICacheRepository, 'claimDedup' | 'deleteByKey' | 'findByKey'>;
     adminSettings: Pick<IAdminSettingsRepository, 'getSettingsValue'>;
     /** Prices are appended to the EXISTING ModelPrice collection (sec 5.8). */
     prices: Pick<IModelPriceRepository, 'append' | 'rowsInForce'>;

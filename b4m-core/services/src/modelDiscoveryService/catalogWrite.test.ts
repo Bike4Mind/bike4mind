@@ -38,6 +38,9 @@ const plan = (overrides: Partial<CatalogWriteInput> = {}) =>
   planCatalogWrites({
     contributions: [{ name: 'openai', kind: 'provider', records: [gpt6()] }],
     base: new Map(),
+    // The default is a healthy run: every fixture is OpenAI-backed, so the
+    // aggregator enrich-only rule is off unless a test asks for it.
+    coveredBackends: new Set<string>([ModelBackend.OpenAI]),
     operatorOwnedModelIds: new Set(),
     credentials: testCredentials(),
     policy: 'priced',
@@ -419,6 +422,97 @@ describe('planCatalogWrites', () => {
     });
 
     expect(result.rows[0].patch).toMatchObject({ contextWindow: 400_000 });
+  });
+
+  it('re-claims the groups the discovery row it supersedes held', () => {
+    const discovered = plan({ resolveDispatch: dispatchable });
+    const base = asBase(discovered.rows);
+
+    // Anthropic-style outage: only the aggregator reports, and only limits.
+    const next = plan({
+      base,
+      coveredBackends: new Set<string>(),
+      priorDiscoveryGroups: new Map([['gpt-6', discovered.rows[0].ownedGroups]]),
+      priorContributors: new Map([['gpt-6', discovered.rows[0].contributors ?? []]]),
+      contributions: [
+        { name: 'openai', kind: 'provider', records: [gpt6({ contextWindow: 500_000 })] },
+        { name: 'models.dev', kind: 'aggregator', records: [{ modelId: 'gpt-6', patch: { maxOutputTokens: 64_000 } }] },
+      ],
+    });
+
+    // Claiming only {limits} would leave identity with no row behind it and the
+    // merged record would fail asRenderableRecord on missing id/vendor/name.
+    expect(next.rows[0].ownedGroups).toEqual(expect.arrayContaining(['identity', 'lifecycle', 'availability']));
+    expect(next.rows[0].patch).toMatchObject({ id: 'gpt-6', vendor: 'openai', name: 'GPT-6' });
+    expect(next.rows[0].contributors).toContainEqual({ group: 'dispatch', source: 'seed' });
+  });
+
+  it('lets an aggregator fill a gap but not overwrite when no provider listed the backend', () => {
+    const base = asBase(
+      [],
+      [
+        seedRow(
+          {
+            id: 'gpt-6',
+            vendor: 'openai',
+            backend: 'openai',
+            type: 'text',
+            name: 'GPT-6',
+            contextWindow: 400_000,
+            lifecycle: { status: 'active' },
+          },
+          ['identity', 'limits', 'lifecycle']
+        ),
+      ]
+    );
+
+    const result = plan({
+      base,
+      coveredBackends: new Set<string>(),
+      contributions: [
+        {
+          name: 'models.dev',
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: { contextWindow: 128_000, maxOutputTokens: 64_000 } }],
+        },
+      ],
+    });
+
+    expect(result.rows[0].patch).toMatchObject({ contextWindow: 400_000, maxOutputTokens: 64_000 });
+    expect(result.dropped).toContainEqual({
+      source: 'models.dev',
+      modelId: 'gpt-6',
+      reason: 'aggregator may not overwrite "contextWindow" on a run no openai listing succeeded',
+    });
+  });
+
+  it("lets an aggregator update once the model's own backend listed successfully", () => {
+    const base = asBase(
+      [],
+      [
+        seedRow(
+          {
+            id: 'gpt-6',
+            vendor: 'openai',
+            backend: 'openai',
+            type: 'text',
+            name: 'GPT-6',
+            contextWindow: 400_000,
+            lifecycle: { status: 'active' },
+          },
+          ['identity', 'limits', 'lifecycle']
+        ),
+      ]
+    );
+
+    const result = plan({
+      base,
+      contributions: [
+        { name: 'models.dev', kind: 'aggregator', records: [{ modelId: 'gpt-6', patch: { contextWindow: 128_000 } }] },
+      ],
+    });
+
+    expect(result.rows[0].patch).toMatchObject({ contextWindow: 128_000 });
   });
 
   it('drops malformed and unknown source data instead of writing it', () => {

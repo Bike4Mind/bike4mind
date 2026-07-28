@@ -52,6 +52,7 @@ interface Harness {
   state: FakeDiscoveryStateRepository;
   runs: FakeRunRepository;
   warnings: string[];
+  errors: string[];
   infos: string[];
   advance: (ms: number) => void;
   options: RunModelDiscoveryOptions;
@@ -66,11 +67,12 @@ function harness(sources: DiscoverySource[], settings: Partial<Record<SettingKey
   const state = new FakeDiscoveryStateRepository();
   const runs = new FakeRunRepository();
   const warnings: string[] = [];
+  const errors: string[] = [];
   const infos: string[] = [];
   const logger: DiscoveryLogger = {
     info: message => infos.push(message),
     warn: message => warnings.push(message),
-    error: () => {},
+    error: message => errors.push(message),
   };
 
   return {
@@ -80,6 +82,7 @@ function harness(sources: DiscoverySource[], settings: Partial<Record<SettingKey
     state,
     runs,
     warnings,
+    errors,
     infos,
     advance: (ms: number) => {
       clock += ms;
@@ -729,6 +732,28 @@ describe('runModelDiscovery', () => {
 
       expect(result.metrics.PriceFlagged).toBe(0);
       expect(wide.prices.rows).toHaveLength(2);
+    });
+
+    it('degrades the run when an append throws instead of reporting the plan as done', async () => {
+      // The log-and-continue contract: one row throwing must not abandon the
+      // rest, but the run may not then claim 'ok' with a full metric set either.
+      const append = bench.prices.append.bind(bench.prices);
+      let first = true;
+      bench.prices.append = async row => {
+        if (!first) return append(row);
+        first = false;
+        throw new Error('write concern timed out');
+      };
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      // The convergence pass re-plans the row and it lands, so the catalog does
+      // recover - but the run still has to say a write was lost, or a run whose
+      // every append threw would be indistinguishable from a clean one.
+      expect(result.outcome).toBe('partial');
+      expect(bench.errors.some(message => message.includes('lost 1 write'))).toBe(true);
+      const changes = bench.runs.docs[0].changes;
+      expect(changes?.appendedPriceRows).toBeLessThan(changes?.plannedPriceRows ?? 0);
     });
 
     it('treats the unique-index collision as a skip, not a failed run', async () => {

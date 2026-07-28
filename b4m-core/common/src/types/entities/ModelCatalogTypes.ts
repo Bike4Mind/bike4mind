@@ -490,6 +490,12 @@ export const ModelLifecycleSuggestion = z.object({
   replacedBy: z.string().optional(),
   /** What raised it: a source name, or 'absence' for the K-miss protocol. */
   source: z.string().min(1),
+  /**
+   * Why the automation would not apply it itself, in the operator's words. The
+   * queue is asking a human to make a call the constraints refused; without
+   * this they are making it blind.
+   */
+  detail: z.string().optional(),
   suggestedAt: z.date(),
   resolvedAt: z.date().optional(),
   resolution: z.enum(['accepted', 'dismissed']).optional(),
@@ -594,6 +600,13 @@ export const DiscoverySourceReport = z.object({
    * move before its bad data is actioned (sec 5.10).
    */
   parserRows: z.record(z.string(), z.number()).optional(),
+  /**
+   * Records this source emitted. The same idea as parserRows one level up: a
+   * provider that answers 200 with a genuinely short list (permission scoping, a
+   * partial outage, a region flap) is otherwise indistinguishable from one whose
+   * models really went away, and three such runs deprecate everything unlisted.
+   */
+  recordCount: z.number().int().nonnegative().optional(),
 });
 
 export const DiscoveryJoinCoverage = z.object({
@@ -609,11 +622,29 @@ export const DiscoveryRunChanges = z.object({
   deprecated: z.array(z.string()).optional(),
   repriced: z.array(z.string()).optional(),
   flagged: z.array(z.string()).optional(),
+  /**
+   * Rows the run PLANNED against rows that actually landed. Everything above is
+   * the plan, deliberately, so report and write mode report identically - which
+   * leaves a write-mode run whose appends all threw indistinguishable from a
+   * clean one. These two are the only fields that say what happened.
+   */
+  plannedRows: z.number().int().nonnegative().optional(),
+  appendedRows: z.number().int().nonnegative().optional(),
+  plannedPriceRows: z.number().int().nonnegative().optional(),
+  appendedPriceRows: z.number().int().nonnegative().optional(),
+});
+
+/** A source record the write path refused, kept so a run's refusals are auditable. */
+export const DiscoveryDroppedRecord = z.object({
+  source: z.string(),
+  modelId: z.string(),
+  reason: z.string(),
 });
 
 export type IDiscoverySourceReport = z.infer<typeof DiscoverySourceReport>;
 export type IDiscoveryJoinCoverage = z.infer<typeof DiscoveryJoinCoverage>;
 export type IDiscoveryRunChanges = z.infer<typeof DiscoveryRunChanges>;
+export type IDiscoveryDroppedRecord = z.infer<typeof DiscoveryDroppedRecord>;
 
 export const ModelDiscoveryRun = z.object({
   id: z.string().optional(),
@@ -627,6 +658,10 @@ export const ModelDiscoveryRun = z.object({
   /** Ids no aggregator matched: a work item, not a log line. */
   unmatchedIds: z.array(z.string()).optional(),
   changes: DiscoveryRunChanges.optional(),
+  /** Convergence passes the run made; the cap being hit is worth seeing. */
+  passes: z.number().int().nonnegative().optional(),
+  /** Bounded: the whole point is a trace, and a pathological run can drop thousands. */
+  droppedRecords: z.array(DiscoveryDroppedRecord).optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });

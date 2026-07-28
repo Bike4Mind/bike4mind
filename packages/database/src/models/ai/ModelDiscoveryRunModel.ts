@@ -42,6 +42,7 @@ const ModelDiscoveryRunSchema = new Schema<IModelDiscoveryRunDocument>(
             // guard reads this back through a hydrated find(), where a Map would
             // arrive as a Map and a plain record arrives as itself.
             parserRows: { type: Schema.Types.Mixed, required: false },
+            recordCount: { type: Number, required: false },
           },
           { _id: false }
         ),
@@ -70,9 +71,30 @@ const ModelDiscoveryRunSchema = new Schema<IModelDiscoveryRunDocument>(
           deprecated: { type: [String], required: false },
           repriced: { type: [String], required: false },
           flagged: { type: [String], required: false },
+          // Everything above is the PLAN, identically in both modes. These four
+          // are what actually happened, and they are the only way a write-mode
+          // run whose appends all failed reads differently from a clean one.
+          plannedRows: { type: Number, required: false },
+          appendedRows: { type: Number, required: false },
+          plannedPriceRows: { type: Number, required: false },
+          appendedPriceRows: { type: Number, required: false },
         },
         { _id: false }
       ),
+      required: false,
+    },
+    passes: { type: Number, required: false },
+    droppedRecords: {
+      type: [
+        new Schema(
+          {
+            source: { type: String, required: true },
+            modelId: { type: String, required: true },
+            reason: { type: String, required: true },
+          },
+          { _id: false }
+        ),
+      ],
       required: false,
     },
   },

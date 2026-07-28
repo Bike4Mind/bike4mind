@@ -1,6 +1,8 @@
 import {
+  FIELD_GROUPS,
   FIELD_GROUP_OF,
   ModelRecordWrite,
+  groupsTouchedByPatch,
   type FieldGroup,
   type ICatalogContributor,
   type IModelCatalogRowInput,
@@ -56,6 +58,22 @@ export interface CatalogWriteInput {
   resolveDispatch?: DispatchResolver;
   /** Belief per model from the NON-operator rows in force. */
   base: ReadonlyMap<string, ResolvedCatalogRecord>;
+  /**
+   * Backends a PROVIDER source listed successfully this run. A model whose own
+   * backend is missing here has no authoritative voice in the run, which is what
+   * demotes the aggregators to gap-fill for it (see planOne).
+   */
+  coveredBackends: ReadonlySet<string>;
+  /**
+   * Groups the discovery row in force claims, per model. An appended discovery
+   * row SUPERSEDES that row - rowsInForce keeps one non-operator row per
+   * (modelId, source) - so it has to re-claim what it replaces or the merge
+   * drops every group this run did not happen to observe. Same invariant the
+   * absence graduation honors in lifecyclePlan; both go through claimedGroups.
+   */
+  priorDiscoveryGroups?: ReadonlyMap<string, readonly FieldGroup[]>;
+  /** Contributors on that same superseded row, so a re-claim keeps its provenance. */
+  priorContributors?: ReadonlyMap<string, readonly ICatalogContributor[]>;
   operatorOwnedModelIds: ReadonlySet<string>;
   credentials: DiscoveryCredentials;
   policy: DiscoveryAutoEnablePolicy;
@@ -217,11 +235,12 @@ function planOne(
   dropped: DroppedSourceRecord[]
 ): PlanOneResult {
   const base = existing?.record ?? {};
+  const contributed = contributedFields(candidate, base, existing !== undefined, input.coveredBackends, dropped);
   const draft: Record<string, unknown> = { ...base };
-  for (const [key, value] of candidate.fields) draft[key] = value;
+  for (const [key, value] of contributed) draft[key] = value;
 
-  const lifecyclePatch = candidate.fields.get('lifecycle');
-  let claimsLifecycle = candidate.fields.has('lifecycle');
+  const lifecyclePatch = contributed.get('lifecycle');
+  let claimsLifecycle = contributed.has('lifecycle');
   if (claimsLifecycle && isPlainObject(lifecyclePatch)) {
     const merged = mergeLifecycle(base, lifecyclePatch, candidate, dropped);
     if (merged) {
@@ -233,7 +252,7 @@ function planOne(
   }
 
   const ownedGroups = new Set<FieldGroup>();
-  for (const key of candidate.fields.keys()) {
+  for (const key of contributed.keys()) {
     // A refused lifecycle block is not a claim: an ownedGroups entry no field
     // backs is overclaiming, which the row schema rejects at append time.
     if (key === 'lifecycle' && !claimsLifecycle) continue;
@@ -297,7 +316,7 @@ function planOne(
 
   if (ownedGroups.size === 0) return { unchanged: true };
 
-  const owned = [...ownedGroups];
+  const owned = claimedGroups(record, ownedGroups, input.priorDiscoveryGroups?.get(candidate.modelId));
   const changedKeys = changedWithinGroups(base, record, owned);
   if (existing && changedKeys.length === 0) return { unchanged: true };
 
@@ -319,7 +338,7 @@ function planOne(
     patch: record,
     ownedGroups: owned,
     effectiveFrom: input.runStartedAt,
-    contributors: contributorsFor(candidate, owned),
+    contributors: contributorsFor(candidate, contributed, owned, input.priorContributors?.get(candidate.modelId)),
     note: `discovery:${candidate.sourceNames.join('+')}@${input.runStartedAt.toISOString()}`,
     runId: input.runId,
   };
@@ -400,17 +419,84 @@ function changedWithinGroups(
   return [...keys].filter(key => !isEqual(base[key], next[key])).sort();
 }
 
-function contributorsFor(candidate: Candidate, owned: readonly FieldGroup[]): ICatalogContributor[] {
+function contributorsFor(
+  candidate: Candidate,
+  contributed: ReadonlyMap<string, unknown>,
+  owned: readonly FieldGroup[],
+  prior: readonly ICatalogContributor[] | undefined
+): ICatalogContributor[] {
   const bySource = new Map<FieldGroup, string>();
-  for (const [key, source] of candidate.sourceOfField) {
+  for (const key of contributed.keys()) {
     const group = FIELD_GROUP_OF[key as keyof ModelRecord];
+    const source = candidate.sourceOfField.get(key);
     // First writer of a group's first field is the source that group is credited to.
-    if (group && !bySource.has(group)) bySource.set(group, source);
+    if (group && source && !bySource.has(group)) bySource.set(group, source);
   }
+  // A group re-claimed but not re-observed keeps the provenance of the row it
+  // supersedes; crediting discovery would erase which feed the data came from.
+  const carried = new Map((prior ?? []).map(entry => [entry.group, entry.source] as const));
   return owned.map(group => ({
     group,
-    source: bySource.get(group) ?? (group === 'dispatch' ? DISPATCH_SEED_CONTRIBUTOR : DISCOVERY_CONTRIBUTOR),
+    source:
+      bySource.get(group) ??
+      carried.get(group) ??
+      (group === 'dispatch' ? DISPATCH_SEED_CONTRIBUTOR : DISCOVERY_CONTRIBUTOR),
   }));
+}
+
+/**
+ * The fields a candidate is allowed to write, given who reported it this run.
+ *
+ * An aggregator alone may fill a gap but never overwrite. models.dev and litellm
+ * are the only voices left on a run where the model's own provider did not list
+ * (a 429, an outage, a credential rotation), and they carry a coarser view of
+ * the same fields: their `reasoning` block has no style, and their context
+ * windows lag. Letting them win rewrites provider-supplied values until the next
+ * healthy run reverts it - two rows per model per flap, forever - and their own
+ * contract is enrichment, not authority. A run where the backend WAS listed
+ * leaves them free to update, because provider records outrank theirs in
+ * collectCandidates and a surviving aggregator value is one no provider claimed.
+ */
+function contributedFields(
+  candidate: Candidate,
+  base: Record<string, unknown>,
+  isExisting: boolean,
+  coveredBackends: ReadonlySet<string>,
+  dropped: DroppedSourceRecord[]
+): Map<string, unknown> {
+  const backend = typeof base.backend === 'string' ? base.backend : undefined;
+  const enrichOnly = isExisting && !candidate.sawProvider && !(backend !== undefined && coveredBackends.has(backend));
+  if (!enrichOnly) return candidate.fields;
+
+  const contributed = new Map<string, unknown>();
+  for (const [key, value] of candidate.fields) {
+    if (base[key] !== undefined) {
+      dropped.push({
+        source: candidate.sourceOfField.get(key) ?? candidate.sourceNames.join('+'),
+        modelId: candidate.modelId,
+        reason: `aggregator may not overwrite "${key}" on a run no ${backend ?? 'provider'} listing succeeded`,
+      });
+      continue;
+    }
+    contributed.set(key, value);
+  }
+  return contributed;
+}
+
+/**
+ * What an appended row claims: the groups this run decided, plus whatever the
+ * discovery row it supersedes claimed, intersected with the groups its record
+ * actually supplies so the append schema's "no overclaiming" rule always holds.
+ */
+export function claimedGroups(
+  record: ModelRecord,
+  claimed: ReadonlySet<FieldGroup>,
+  prior: readonly FieldGroup[] | undefined
+): FieldGroup[] {
+  const supplied = new Set(groupsTouchedByPatch(record as unknown as Record<string, unknown>));
+  const all = new Set<FieldGroup>(claimed);
+  for (const group of prior ?? []) if (supplied.has(group)) all.add(group);
+  return FIELD_GROUPS.filter(group => all.has(group));
 }
 
 /**

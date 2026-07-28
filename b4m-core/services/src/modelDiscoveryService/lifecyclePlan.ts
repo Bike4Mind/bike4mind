@@ -1,7 +1,5 @@
 import {
-  FIELD_GROUPS,
   ModelRecordWrite,
-  groupsTouchedByPatch,
   normalizeAggregatorKey,
   type FieldGroup,
   type IModelCatalogRowInput,
@@ -10,7 +8,7 @@ import {
 } from '@bike4mind/common';
 import type { ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 import omit from 'lodash/omit.js';
-import { DISCOVERY_CONTRIBUTOR, relativeGap, type CatalogWritePlan } from './catalogWrite';
+import { DISCOVERY_CONTRIBUTOR, claimedGroups, relativeGap, type CatalogWritePlan } from './catalogWrite';
 import type { PerTokenRates } from './pricePlan';
 import type {
   CatalogDiffEntry,
@@ -36,6 +34,9 @@ export const ABSENCE_MIN_STREAK_MS = 48 * 60 * 60_000;
 
 /** Relative row-count move that reads as a page restructure rather than a model list changing. */
 export const DOCS_PARSER_SHIFT_TOLERANCE = 0.2;
+
+/** Smallest listing the shift tolerance can say anything about: 1/DOCS_PARSER_SHIFT_TOLERANCE. */
+export const MIN_LISTING_FOR_SHRINK_CHECK = 5;
 
 /** Note prefix on the row the absence protocol appends; mirrors catalogWrite's shape. */
 export const ABSENCE_NOTE_PREFIX = 'discovery:absence@';
@@ -167,6 +168,33 @@ export function detectParserRowShifts(
     }
   }
   return shifts.sort((a, b) => a.source.localeCompare(b.source) || a.parser.localeCompare(b.parser));
+}
+
+/**
+ * Providers whose listing came back materially shorter than last run's.
+ *
+ * detectParserRowShifts only guards `parserRows`, which the scraped-page parsers
+ * populate; a provider API answering 200 with a short list has nothing watching
+ * it. That matters because a listing is what claims authority over a backend,
+ * and three short runs spanning 48h graduate every unlisted model to deprecated.
+ * A source named here keeps its enrichment and loses only its absence authority,
+ * which degrades the run to "no new information" rather than failing it.
+ */
+export function detectListingShrink(
+  current: ReadonlyMap<string, number>,
+  previous: ReadonlyMap<string, number>
+): string[] {
+  const shrunk: string[] = [];
+  for (const [source, count] of current) {
+    const was = previous.get(source);
+    // Below the floor one model leaving already exceeds the tolerance, so the
+    // ratio carries no signal and every legitimate removal would read as a
+    // truncated listing.
+    if (was === undefined || was < MIN_LISTING_FOR_SHRINK_CHECK || count >= was) continue;
+    if (relativeGap(count, was) <= DOCS_PARSER_SHIFT_TOLERANCE) continue;
+    shrunk.push(source);
+  }
+  return shrunk.sort();
 }
 
 /** Why a computed successor was not written. Each clause is verified on its own (sec 8). */
@@ -309,12 +337,43 @@ export function planLifecycle(plannerInput: LifecyclePlanInput): LifecyclePlan {
   });
   const diff = [...input.catalogPlan.diff];
 
+  // A graduation and a catalog row for the same model carry the same
+  // effectiveFrom, and (modelId, effectiveFrom) is unique - appending both drops
+  // the second silently while the report claims both landed. Reachable whenever
+  // an aggregator still reports a model its provider stopped listing, so the
+  // graduation folds into the planned row instead of racing it.
+  const plannedRowFor = new Map(rows.map((row, index) => [row.modelId, index] as const));
+
   for (const entry of graduated) {
     if (!entry.record) continue;
     const replacedBy = applied.get(entry.modelId);
     const lifecycle = replacedBy ? { ...entry.lifecycle, replacedBy } : entry.lifecycle;
     const record = { ...entry.record, lifecycle };
     const ownedGroups = groupsFor(record, input.priorDiscoveryGroups?.get(entry.modelId));
+    const planned = plannedRowFor.get(entry.modelId);
+
+    const row = planned === undefined ? undefined : rows[planned];
+    if (planned !== undefined && row?.source === 'discovery') {
+      const merged = { ...row.patch, lifecycle };
+      const claimed = claimedGroups(merged, new Set<FieldGroup>([...row.ownedGroups, 'lifecycle']), undefined);
+      rows[planned] = {
+        ...row,
+        patch: merged,
+        ownedGroups: claimed,
+        contributors: claimed.map(
+          group => row.contributors?.find(entry => entry.group === group) ?? { group, source: DISCOVERY_CONTRIBUTOR }
+        ),
+        note: `${row.note}+${ABSENCE_NOTE_PREFIX}${input.runStartedAt.toISOString()}`,
+      };
+      diff[planned] = {
+        ...diff[planned],
+        ownedGroups: rows[planned].ownedGroups,
+        changedKeys: [...new Set([...diff[planned].changedKeys, 'lifecycle'])].sort(),
+        lifecycleStatus: lifecycle.status,
+      };
+      continue;
+    }
+
     rows.push({
       modelId: entry.modelId,
       source: 'discovery',
@@ -460,19 +519,33 @@ function planRemap(
   return {
     candidate,
     origin: declared ? 'declared' : 'heuristic',
-    blockers: verifyReplacement(candidate, entry.modelId, input, sunsetting),
+    blockers: verifyReplacement(candidate, entry.modelId, { ...input, sunsetting }),
   };
+}
+
+/** What the sec 8 remap constraints read; the run's plan context satisfies it structurally. */
+export interface ReplacementConstraintInput {
+  /** Belief per model from EVERY row in force, operator rows included. */
+  resolvedInForce: ReadonlyMap<string, ResolvedCatalogRecord>;
+  /** Per-token rates in force, the comparable cost the cost clause reads. */
+  ratesInForce: ReadonlyMap<string, PerTokenRates>;
+  /** Models already on their way out this run; none of them may be a successor. */
+  sunsetting?: ReadonlySet<string>;
 }
 
 /**
  * The sec 8 auto-remap constraints, each checked independently so the failure
  * report names every clause the candidate missed rather than the first one.
+ *
+ * Exported because the admin accept path applies the same clauses: the value an
+ * operator confirms is usually the one upstream's docs suggested, and the two
+ * paths disagreeing on what is acceptable is how a bad successor gets in through
+ * the side door as a sovereign operator row.
  */
-function verifyReplacement(
+export function verifyReplacement(
   candidateId: string,
   modelId: string,
-  input: PlanContext,
-  sunsetting: ReadonlySet<string>
+  input: ReplacementConstraintInput
 ): RemapBlocker[] {
   if (candidateId === modelId) return ['deprecating-too'];
   const candidate = input.resolvedInForce.get(candidateId);
@@ -483,11 +556,15 @@ function verifyReplacement(
   const blockers: RemapBlocker[] = [];
   if (statusOf(candidate) !== 'active') blockers.push('not-active');
   if (backendOf(candidate) !== backendOf(input.resolvedInForce.get(modelId))) blockers.push('different-backend');
-  if (sunsetting.has(candidateId)) blockers.push('deprecating-too');
+  if (input.sunsetting?.has(candidateId)) blockers.push('deprecating-too');
   const cost = costClause(candidateId, modelId, input.ratesInForce);
   if (cost) blockers.push(cost);
   return blockers;
 }
+
+/** Blocker codes as the sentence fragments the run report and the admin UI both show. */
+export const describeBlockers = (blockers: readonly RemapBlocker[]): string[] =>
+  blockers.map(blocker => BLOCKER_TEXT[blocker]);
 
 /**
  * The cost clause: the replacement may not raise the bill. A missing row on
@@ -582,17 +659,11 @@ function describeRemap(remap: RemapDecision, modelId: string, autoRemap: Discove
   return `${origin} ${remap.candidate} to replace ${modelId} and it passes every constraint; modelDiscoveryAutoRemap is '${autoRemap}', so applying it is an admin decision`;
 }
 
-/**
- * What a graduation row claims: lifecycle plus whatever the discovery row it
- * supersedes claimed, intersected with the groups its record actually supplies
- * so the append schema's "no overclaiming" rule always holds.
- */
-function groupsFor(record: ModelRecord, prior: readonly FieldGroup[] | undefined): FieldGroup[] {
-  const supplied = new Set(groupsTouchedByPatch(record as unknown as Record<string, unknown>));
-  const claimed = new Set<FieldGroup>(['lifecycle']);
-  for (const group of prior ?? []) if (supplied.has(group)) claimed.add(group);
-  return FIELD_GROUPS.filter(group => claimed.has(group));
-}
+/** What a graduation row claims: lifecycle plus whatever the row it supersedes claimed. */
+const groupsFor = (record: ModelRecord, prior: readonly FieldGroup[] | undefined): FieldGroup[] =>
+  claimedGroups(record, LIFECYCLE_ONLY, prior);
+
+const LIFECYCLE_ONLY: ReadonlySet<FieldGroup> = new Set<FieldGroup>(['lifecycle']);
 
 const evidenceOf = (record: DiscoveredModel): LifecycleEvidence =>
   record.lifecycleEvidence === 'typed' ? 'typed' : 'docs';
