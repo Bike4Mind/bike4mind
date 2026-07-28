@@ -47,6 +47,27 @@ export interface DataLakeConfig {
 }
 
 /**
+ * DataLakeConfig plus the fields only a lake's EDITORS may read. Returned exclusively by the
+ * actor-aware list projections (listDataLakes / listAllDataLakes), which populate the extra
+ * fields per lake and only when `canManage` holds for the requesting caller.
+ *
+ * This is a separate type on purpose: DataLakeConfig is the shared shape the access filters and
+ * the tag/registry projections all operate on, and several of those have no actor to gate on.
+ * `toDataLakeConfig` is therefore structurally unable to carry an editor-only field - the
+ * invariant that keeps the prompt text out of every actor-less projection (see
+ * getAccessibleDataLakePrompts, which reads it off the raw documents for the same reason).
+ */
+export interface ManageableDataLakeConfig extends DataLakeConfig {
+  /**
+   * Per-lake system prompt (see IDataLake.systemPrompt). EDITOR-ONLY: a user who can merely
+   * read the lake must never receive the wording, only its effect on answers. Present only
+   * when the caller can manage this lake; `undefined` otherwise (never an empty-string stand-in,
+   * so "not yours to see" and "set to blank" stay distinguishable).
+   */
+  systemPrompt?: string;
+}
+
+/**
  * A public data lake as it appears in the discover/browse surface: the lightweight card
  * projection returned by the `/api/data-lakes/public` browse endpoint. Distinct from
  * DataLakeConfig - it drops the access/gate internals (a browseable lake is gate-less by
