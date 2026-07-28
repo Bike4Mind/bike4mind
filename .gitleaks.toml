@@ -3,7 +3,10 @@
 
 title = "Bike4Mind Gitleaks Configuration"
 
-# Global allowlist for non-sensitive patterns matching secret formats
+# Global allowlist for non-sensitive patterns matching secret formats.
+# Keep the singular [allowlist] table. The [[allowlists]] array form is accepted by
+# gitleaks 8.26 but SILENTLY IGNORED by 8.24.3, which CI pins - switching would drop
+# every exclusion below without any error, so the two must not diverge.
 [allowlist]
 description = "Global allowlist for non-sensitive patterns"
 paths = [
@@ -42,6 +45,8 @@ regexes = [
   # Generic placeholder shapes
   "your[-_]secret[-_]here",
   "your[-_]api[-_]key",
+  # Uppercase placeholder shapes in docs and demo snippets, e.g. `Bearer YOUR_TOKEN`
+  "(?i)your[-_](api[-_])?(token|key|secret)",
   "insert[-_].*[-_]here",
   "<your[-_]",
   "\\$\\{[A-Z_]+\\}",
@@ -138,5 +143,19 @@ regexes = [
   "XXXXXXXXXXXXXXXXXXXXXXXXX"
 ]
 
-# Use default builtin rules as well
-[useBuiltinRules]
+# Inherit gitleaks' builtin rules (aws-access-token, github-pat, stripe, gcp,
+# private keys, ...) on top of the domain rules above. This must stay
+# `[extend] useDefault = true`: a bare `[useBuiltinRules]` table is not gitleaks
+# config syntax, so it parsed as an empty table and left every builtin disabled.
+#
+# generic-api-key stays off. It is a pure entropy heuristic with no credential
+# shape, and it fires on ordinary camelCase identifiers - every `key: 'xEnabled'`
+# in the settings schema scores above its threshold. There is no narrower fix that
+# works on both gitleaks versions in play: a `paths` allowlist would exempt the
+# whole file from ALL rules (8.26 ignores `targetRules` and `matchCondition` on a
+# global allowlist), and secret/stopword allowlists are ignored entirely by 8.24.3.
+# Specific-shape rules (aws, github, stripe, anthropic, gemini, slack, mongodb,
+# JWT/session secrets) all remain active and are what actually catch leaks.
+[extend]
+useDefault = true
+disabledRules = ["generic-api-key"]
