@@ -100,6 +100,15 @@ describe('FabFileRepository.pullTagsByFabFileId', () => {
     expect((await FabFile.findById(id))?.updatedAt).toEqual(before?.updatedAt);
   });
 
+  // Pins the documented contract: timestamps mean a modification is reported for a write that
+  // removed nothing, so no caller may read the return as "a tag was removed".
+  it('reports a modification even when no named tag was present', async () => {
+    const id = await seed();
+
+    expect(await fabFileRepository.pullTagsByFabFileId(id, ['not-on-this-file'])).toBe(1);
+    expect(await tagsOf(id)).toHaveLength(SEED_TAGS.length);
+  });
+
   it('is idempotent - a second identical call removes nothing more', async () => {
     const id = await seed();
 

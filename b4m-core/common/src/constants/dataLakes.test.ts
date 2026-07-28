@@ -5,6 +5,7 @@ import {
   getAccessibleDataLakes,
   getDataLakeTags,
   lakeMatchesAccess,
+  isReservedTagPrefix,
   normalizeEntitlementKey,
   normalizeTagPrefix,
   toDataLakeConfig,
@@ -187,5 +188,15 @@ describe('normalizeTagPrefix', () => {
     [null, 'null'],
   ])('rejects %o (%s)', prefix => {
     expect(normalizeTagPrefix(prefix as string | undefined | null)).toBeNull();
+  });
+});
+
+describe('isReservedTagPrefix', () => {
+  it.each(['datalake:', 'datalake:x:', '  datalake:'])('flags %o as reserved', prefix => {
+    expect(isReservedTagPrefix(prefix)).toBe(true);
+  });
+
+  it.each(['acme:', 'opti:', 'data:', undefined, null])('allows %o', prefix => {
+    expect(isReservedTagPrefix(prefix as string | undefined | null)).toBe(false);
   });
 });

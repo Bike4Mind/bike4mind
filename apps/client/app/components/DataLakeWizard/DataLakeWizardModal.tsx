@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { useDataLakeWizardStore, type WizardStep } from '@client/app/stores/useDataLakeWizardStore';
 import { useBatchUpload, OFFLINE_MESSAGE } from '@client/app/hooks/data/dataLakeWizard';
 import { isValidDataLakeSlug } from '@client/app/hooks/data/dataLakeSlug';
+import { isReservedTagPrefix } from '@bike4mind/common';
 import WizardStepIndicator from './WizardStepIndicator';
 import SourceSelectionStep from './steps/SourceSelectionStep';
 import PreviewStep from './steps/PreviewStep';
@@ -46,7 +47,13 @@ export default function DataLakeWizardModal() {
       case 'config':
         // Append mode reuses the target lake's (already valid) slug; create mode must
         // produce a slug the server will accept (slug.min(2)) before Start Upload enables.
-        return (!!targetLake || isValidDataLakeSlug(config.name)) && config.tagPrefix.trim().length >= 2;
+        // The prefix has to clear the server's reserved-namespace rule here too, or the whole
+        // upload fails at the final step.
+        return (
+          (!!targetLake || isValidDataLakeSlug(config.name)) &&
+          config.tagPrefix.trim().length >= 2 &&
+          !isReservedTagPrefix(config.tagPrefix)
+        );
       case 'upload':
         return false; // No "next" on last step
     }

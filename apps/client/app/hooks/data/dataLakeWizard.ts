@@ -869,7 +869,9 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
     onSuccess: () => {
       toast.success('File removed from data lake.');
       if (dataLakeId) queryClient.invalidateQueries({ queryKey: ['dataLakeFiles', dataLakeId] });
-      // Refresh the lake list so the cached fileCount reflects the removal.
+      // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
+      // files only, so removing a file that was in the lake by prefix alone drops a row from
+      // the list without moving the count.
       queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
       // Removal also drops the file's tags under the lake's prefix, so every tag-derived view
       // is stale. Invalidate on the bare key prefixes: these are keyed by an opti/datalakes

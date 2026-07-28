@@ -20,6 +20,7 @@ import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStor
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
 import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
+import { isReservedTagPrefix } from '@bike4mind/common';
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 
@@ -35,6 +36,7 @@ export default function ConfigStep() {
   const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const duplicateCheckResults = useDataLakeWizardStore(s => s.duplicateCheckResults);
+  const reservedTagPrefix = isReservedTagPrefix(config.tagPrefix);
   const hashingProgress = useDataLakeWizardStore(s => s.hashingProgress);
 
   const computeHashes = useComputeHashes();
@@ -163,7 +165,7 @@ export default function ConfigStep() {
         </FormControl>
 
         {/* Tag Prefix */}
-        <FormControl required>
+        <FormControl required error={reservedTagPrefix}>
           <FormLabel>Tag Prefix</FormLabel>
           <Input
             value={config.tagPrefix}
@@ -177,8 +179,13 @@ export default function ConfigStep() {
             placeholder="e.g. legal:"
             sx={{ fontFamily: 'monospace' }}
             disabled={!!targetLake}
+            data-testid="datalake-config-tagprefix-input"
           />
-          <FormHelperText>All tags will be prefixed with this (must end with &quot;:&quot;)</FormHelperText>
+          <FormHelperText data-testid="datalake-config-tagprefix-help">
+            {reservedTagPrefix
+              ? '"datalake:" is reserved for lake membership. Pick another prefix, such as legal:'
+              : 'All tags will be prefixed with this (must end with ":")'}
+          </FormHelperText>
         </FormControl>
 
         {/* Required User Tag */}

@@ -27,22 +27,31 @@ interface RemoveFileFromDataLakeAdapters {
  * while computeDataLakeStats (meta-tag only) reported it as removed.
  *
  * Membership is TESTED against both signals too, so a file carrying only a prefixed tag can
- * be removed rather than 404ing forever. The prefix arm additionally requires the actor to
- * own the file: fileTagPrefix is user-chosen and neither unique nor reserved, so a prefix
- * match alone is not proof the file belongs to THIS lake - the read path ANDs that arm with
- * owner access for the same reason.
+ * be removed rather than 404ing forever. The prefix arm additionally requires the actor to own
+ * the file, because fileTagPrefix is user-chosen and neither unique nor reserved: without that
+ * conjunct, minting a lake with someone else's prefix would be a licence to strip their tags.
+ * This bar is deliberately NARROWER than the read arm, which ANDs the prefix with owner OR
+ * shared OR group access - a destructive write should not ride a read share. The cost is that
+ * a prefix-only file reaching the lake only through a share or a group is still listed and
+ * still unremovable; widening the bar needs the actor's groups plumbed in here.
  *
- * If the caller owns a second lake sharing this prefix, that lake loses the shared prefixed
- * tag too. It keeps its own meta-tag, so the file stays in it with an unchanged count and
- * only the folder grouping goes; one tag string cannot be cleared for one lake and kept for
- * the other.
+ * A second lake sharing this prefix - not necessarily the caller's, since nothing makes
+ * fileTagPrefix unique - loses the shared prefixed tag too. A lake holding its own meta-tag on
+ * the file keeps it and only loses the folder grouping, but a lake whose membership was
+ * prefix-only loses the file outright. One tag string cannot be cleared for one lake and kept
+ * for another.
  *
  * Lake owner or admin only. Idempotent-safe: a second call 404s because both signals are
  * already gone - the correct "already removed" response for a retry.
  *
  * No per-file retrieval-index call: RetrievalIndexPort exposes only removeByDataLakeTag,
  * which would de-index the ENTIRE lake, and it has no implementer here (bestEffortIndexRemove
- * no-ops without one). Removal is enforced by the Mongo tag state every read path filters on.
+ * no-ops without one). Removal is enforced by Mongo tag state, so it takes effect on the next
+ * read - immediately and completely for the single-lake browse, today the only reader that sets
+ * restrictToDataLake. Every other lake reader (the aggregate lake browse, lake semantic search,
+ * the chat KB tools) leaves the broad ownership arm in place, so the file's OWNER still finds
+ * their own file there. That is ownership, not lake membership, and this function cannot change
+ * it.
  */
 export const removeFileFromDataLake = async (
   actor: { userId: string; isAdmin: boolean },
