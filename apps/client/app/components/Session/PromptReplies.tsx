@@ -1413,15 +1413,18 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   // room, so the stop reason is clean and the truncation banner never fires. Decision logic
   // lives in shouldWarnElidedArtifact (unit-tested); memoized because the local fallback
   // scan walks every artifact body and this component re-renders per streamed token.
+  // Depends on the BOOLEAN, not the object: a referentially-fresh but identical
+  // `suspectedElision` would otherwise re-run the scan for no change in the answer.
+  const hasServerElisionVerdict = !!promptMeta?.suspectedElision;
   const isElidedArtifact = useMemo(
     () =>
       shouldWarnElidedArtifact({
         completed: !!completed,
         isTruncatedArtifact,
-        suspectedElision: !!promptMeta?.suspectedElision,
+        suspectedElision: hasServerElisionVerdict,
         artifacts,
       }),
-    [completed, isTruncatedArtifact, promptMeta?.suspectedElision, artifacts]
+    [completed, isTruncatedArtifact, hasServerElisionVerdict, artifacts]
   );
 
   const chessArtifacts = useMemo(() => artifacts.filter(a => a.type === 'chess'), [artifacts]);
