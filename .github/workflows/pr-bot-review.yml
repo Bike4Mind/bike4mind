@@ -77,16 +77,39 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Size guard — skip oversize PRs
+      - name: Size guard — skip oversize PRs, pick review model
         id: size_check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          FILES=$(gh pr view ${{ github.event.pull_request.number }} \
-            --json changedFiles --jq .changedFiles \
-            --repo ${{ github.repository }} || echo 999999)
+          # One API call for all three numbers. On failure SIZE is empty and the
+          # :- fallbacks below force the oversize path — fail-closed, unchanged.
+          SIZE=$(gh pr view ${{ github.event.pull_request.number }} \
+            --json changedFiles,additions,deletions \
+            --jq '"\(.changedFiles) \(.additions) \(.deletions)"' \
+            --repo ${{ github.repository }} || echo "")
+          read -r FILES ADDS DELS <<< "$SIZE"
           FILES=${FILES:-999999}
+          ADDS=${ADDS:-999999}
+          DELS=${DELS:-0}
+          LINES=$((ADDS + DELS))
           echo "changed_files=$FILES" >> "$GITHUB_OUTPUT"
+
+          # Model tiering (cost control). Small, low-risk diffs review on Sonnet 5;
+          # anything bigger stays on Opus 4.7, because mid-size feature PRs are where
+          # the real bugs live. Sonnet 5 and Opus 4.7 share a tokenizer, so this is a
+          # pure list-price difference ($3/$15 vs $5/$25 per MTok) with no token-count
+          # penalty. Emitted UNCONDITIONALLY and defaulting to Opus, so the review step
+          # can never receive an empty --model — including on the API-failure path above,
+          # where FILES=999999 lands here before the oversize branch skips the review.
+          if [ "$FILES" -le 10 ] && [ "$LINES" -le 300 ]; then
+            MODEL=claude-sonnet-5
+          else
+            MODEL=claude-opus-4-7
+          fi
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "Review model: $MODEL ($FILES files, $LINES lines changed)"
+
           if [ "$FILES" -gt 100 ]; then
             gh pr comment ${{ github.event.pull_request.number }} \
               --repo ${{ github.repository }} \
@@ -227,7 +250,7 @@ jobs:
               this review.
             - Restoring the original branch at the end is unnecessary in CI — skip it.
           claude_args: |
-            --model claude-opus-4-7
+            --model ${{ steps.size_check.outputs.model }}
             --allowedTools Bash(gh:*),Bash(git:*),Read,Grep,Glob,Agent,Task
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead
