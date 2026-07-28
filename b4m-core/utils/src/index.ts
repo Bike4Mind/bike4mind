@@ -76,6 +76,7 @@ export * from './functionQueueRunner';
 export * from './fabfile';
 export * from './office/officeEdit';
 export * from './artifactParser';
+export * from './artifactElision';
 export * from './adminSettings';
 export * from './notificationDeduplicator';
 export * from './tokenCounting';
