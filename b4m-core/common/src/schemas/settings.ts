@@ -210,6 +210,8 @@ export const SettingKeySchema = z.enum([
 
   // EMBEDDING SETTINGS
   'defaultEmbeddingModel',
+  'dataLakeSearchMaxFiles',
+  'dataLakeSearchMaxChunks',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -605,6 +607,23 @@ function makeStringSetting(
       : z.string(),
   };
 }
+
+/**
+ * Data-lake semantic-search scan budgets. Declared here so the admin-settings default and the
+ * retrieval code that applies it cannot drift - `semanticDataLakeSearch` imports these same
+ * constants for the case where no setting row exists.
+ *
+ * Sized for the memory and latency a single search can afford, not for a deployment preference:
+ * the chunk cap is what bounds how long one query may scan, and exceeding either is reported as
+ * a truncated scan rather than silently dropping the remainder.
+ *
+ * The file cap is deliberately only a few pages. The scope walk uses skip pagination, so the last
+ * page's sort has to hold skip + limit documents - a much larger cap would trade the truncation
+ * this change exists to expose for a sort-memory failure on the same large lakes. Raise it only
+ * alongside keyset file pagination.
+ */
+export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
+export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
 
 function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number } & BaseSetting) {
   let numberSchema = z.coerce.number();
@@ -1211,7 +1230,11 @@ export const API_SERVICE_GROUPS = {
     name: 'Embedding Service',
     description: 'Embedding API integration settings',
     icon: 'AutoAwesome',
-    settings: [{ key: 'defaultEmbeddingModel', order: 1 }],
+    settings: [
+      { key: 'defaultEmbeddingModel', order: 1 },
+      { key: 'dataLakeSearchMaxFiles', order: 2 },
+      { key: 'dataLakeSearchMaxChunks', order: 3 },
+    ],
   },
   VOICE_SESSION: {
     id: 'voiceSessionService',
@@ -2791,6 +2814,28 @@ export const settingsMap = {
       // runs Ollama; hide them from the cloud admin dropdown otherwise.
       ...(process.env.B4M_SELF_HOST === 'true' ? Object.values(OllamaEmbeddingModel) : []),
     ],
+  }),
+  dataLakeSearchMaxFiles: makeNumberSetting({
+    key: 'dataLakeSearchMaxFiles',
+    name: 'Data Lake Search Max Files',
+    defaultValue: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
+    min: 1,
+    description:
+      'Most files one data-lake semantic search will scope. Beyond this the search reports itself as truncated rather than silently ignoring the rest. Raising it well past a few thousand also deepens the paging offset, so prefer reporting truncation over a very large value.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 2,
+  }),
+  dataLakeSearchMaxChunks: makeNumberSetting({
+    key: 'dataLakeSearchMaxChunks',
+    name: 'Data Lake Search Max Chunks',
+    defaultValue: DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
+    min: 1,
+    description:
+      'Most chunk vectors one data-lake semantic search will score. Raising it trades query latency for coverage; lowering it makes truncation more likely (and reported).',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 3,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({
