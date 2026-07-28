@@ -1205,8 +1205,10 @@ const FORCED_RETRIEVAL_FILE_BATCH_SIZE = 10;
 const FORCED_RETRIEVAL_BATCH_CHUNK_CAP = 1000;
 // Hard ceiling on chunks scored in one turn, so a few huge documents cannot stall a turn.
 const FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS = 4000;
-// Above-floor candidates retained for the char-budget walk. Far more than the budget can fit,
-// so this bounds resident chunk text without changing which sections get injected.
+// Above-floor candidates retained for the char-budget walk, so resident chunk text stays bounded.
+// The budget can only fit this many sections while the mean retained chunk exceeds
+// 12000/256 ~ 47 chars, which real chunking always does; a corpus of very short chunks (one
+// record per chunk) could inject fewer sections than before.
 const FORCED_RETRIEVAL_MAX_SCORED_CHUNKS = 256;
 // Total characters of retrieved chunk text injected into the prompt.
 const FORCED_RETRIEVAL_CHAR_BUDGET = 12000;
@@ -1225,12 +1227,14 @@ interface ForcedRetrievalCandidate {
 /** What the turn actually managed to look at. All-zero/false means full coverage - stay silent. */
 interface ForcedRetrievalCoverage {
   filesListed: number;
-  filesMatching: number;
+  /** More files matched than the candidate cap returned, so whole documents were never considered. */
+  moreFilesBeyondCap: boolean;
   chunksScanned: number;
   chunksSkippedDimMismatch: number;
   filesWithDimMismatch: number;
   stoppedByChunkBudget: boolean;
-  saturatedBatches: number;
+  /** Batches that needed more than one read. Informational only - they are paged to completion. */
+  partiallyReadBatches: number;
 }
 
 /**
@@ -1315,31 +1319,32 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * for the human reading the session. Returns whether anything was reduced, so the caller can
    * also hedge the injected context.
    *
-   * Fires ONLY when coverage was actually lost. A library with exactly the cap's worth of files is
-   * complete, so the test is `filesMatching > filesListed`, never `filesListed === cap` - a
-   * warning that fires on healthy libraries is one nobody reads.
+   * Fires ONLY when coverage was actually lost, because a warning that fires on healthy libraries
+   * is one nobody reads. Three deliberate exclusions:
+   * - a library with exactly the cap's worth of files is complete, so this keys on `hasMore` from
+   *   the search rather than on a count comparison;
+   * - a batch needing several reads is paged to completion, so it is not a loss;
+   * - a FEW dimension mismatches are normal mid-revectorize (same policy as semanticDataLakeSearch,
+   *   which warns only when the entire corpus is the wrong width).
    */
   private reportCoverage(quest: IChatHistoryItemDocument, coverage: ForcedRetrievalCoverage): boolean {
-    const partial =
-      coverage.filesMatching > coverage.filesListed ||
-      coverage.stoppedByChunkBudget ||
-      coverage.saturatedBatches > 0 ||
-      coverage.chunksSkippedDimMismatch > 0;
+    const allChunksMismatched =
+      coverage.chunksScanned > 0 && coverage.chunksSkippedDimMismatch === coverage.chunksScanned;
+    const partial = coverage.moreFilesBeyondCap || coverage.stoppedByChunkBudget || allChunksMismatched;
     if (!partial) return false;
 
     const reasons: string[] = [];
-    if (coverage.filesMatching > coverage.filesListed) {
-      reasons.push(`only ${coverage.filesListed} of ${coverage.filesMatching} matching documents were considered`);
+    if (coverage.moreFilesBeyondCap) {
+      reasons.push(
+        `more than the ${FORCED_RETRIEVAL_MAX_CANDIDATE_FILES}-document candidate cap matched, so some were never considered`
+      );
     }
     if (coverage.stoppedByChunkBudget) {
       reasons.push(`the ${FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS}-chunk per-turn scan budget was reached`);
     }
-    if (coverage.saturatedBatches > 0) {
-      reasons.push(`${coverage.saturatedBatches} batch(es) held more chunks than one read returns`);
-    }
-    if (coverage.chunksSkippedDimMismatch > 0) {
+    if (allChunksMismatched) {
       reasons.push(
-        `${coverage.chunksSkippedDimMismatch} chunk(s) across ${coverage.filesWithDimMismatch} document(s) ` +
+        `all ${coverage.chunksSkippedDimMismatch} chunk(s) across ${coverage.filesWithDimMismatch} document(s) ` +
           'are embedded at a different dimension and cannot be matched'
       );
     }
@@ -1401,6 +1406,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           dataLakeTagPrefixes, // static-registry (open) prefixes
           scopedTagPrefixes, // dynamic-lake prefixes — owner/org-scoped
           excludeContent: true, // metadata only; chunk text + vectors fetched below
+          // fileName is not unique, so without an _id tiebreaker WHICH files survive the candidate
+          // cap is an arbitrary tie order - the "stable turn to turn" the comment above requires.
+          stableSort: true,
           // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
           // so this arm agrees with the surface's document-listing predicate. No-op when unset.
           ...this.retrievalFilter,
@@ -1444,50 +1452,82 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       //    peak memory is a batch, not the corpus, on a path that runs every turn.
       const coverage: ForcedRetrievalCoverage = {
         filesListed: files.length,
-        filesMatching: fileResults.total ?? files.length,
+        // Files beyond the candidate cap, NOT files the exclusion filter removed. `total` counts
+        // rows the in-memory post-filter later drops (the DB clause is best-effort), so comparing
+        // against it would report partial coverage on every turn of an exclusion-configured
+        // session. `hasMore` is the only honest "the cap cut something off" signal here.
+        moreFilesBeyondCap: fileResults.hasMore === true,
         chunksScanned: 0,
         chunksSkippedDimMismatch: 0,
         filesWithDimMismatch: 0,
         stoppedByChunkBudget: false,
-        saturatedBatches: 0,
+        partiallyReadBatches: 0,
       };
       const pool: ForcedRetrievalCandidate[] = [];
       const mismatchedFileIds = new Set<string>();
       let topScore = -1;
       let scoredCount = 0;
 
-      for (let i = 0; i < scanOrder.length; i += FORCED_RETRIEVAL_FILE_BATCH_SIZE) {
-        if (coverage.chunksScanned >= FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS) {
-          coverage.stoppedByChunkBudget = true;
-          break;
-        }
+      batches: for (let i = 0; i < scanOrder.length; i += FORCED_RETRIEVAL_FILE_BATCH_SIZE) {
         const batchIds = scanOrder.slice(i, i + FORCED_RETRIEVAL_FILE_BATCH_SIZE).map(f => f.id);
-        const rows = await db.fabfilechunks.findVectorsByFabFileIds(batchIds, {
-          limit: FORCED_RETRIEVAL_BATCH_CHUNK_CAP,
-        });
-        // A full page means the batch had more chunks than we read, so those files are only
-        // partly covered. Bounded and reported instead of silently dropped.
-        if (rows.length >= FORCED_RETRIEVAL_BATCH_CHUNK_CAP) coverage.saturatedBatches++;
+        let cursor: string | undefined;
+        // Page WITHIN the batch. Rows come back globally _id-ascending across the $in, so a single
+        // large document would otherwise consume the whole read and the rest of its batch would
+        // contribute nothing - a coverage regression versus the per-file reads this replaced.
+        for (let page = 0; ; page++) {
+          const remaining = FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS - coverage.chunksScanned;
+          if (remaining <= 0) {
+            coverage.stoppedByChunkBudget = true;
+            break batches;
+          }
+          const want = Math.min(FORCED_RETRIEVAL_BATCH_CHUNK_CAP, remaining);
+          // One row beyond what we will consume, so "exactly full" is distinguishable from
+          // "more remains". Guessing from a full page reports truncation that never happened.
+          const rows = await db.fabfilechunks.findVectorsByFabFileIds(batchIds, {
+            limit: want + 1,
+            afterChunkId: cursor,
+          });
+          if (rows.length === 0) break;
+          const moreExist = rows.length > want;
+          const usable = moreExist ? rows.slice(0, want) : rows;
 
-        for (const row of rows) {
-          if (!row.vector || row.vector.length === 0) continue;
-          coverage.chunksScanned++;
-          if (row.vector.length !== queryVector.length) {
-            // Embedded under a different model, so this vector is in another space. Previously
-            // this scored 0 and was laundered out by the similarity floor with nothing recorded.
-            coverage.chunksSkippedDimMismatch++;
-            mismatchedFileIds.add(row.fabFileId);
-            continue;
+          for (const row of usable) {
+            if (!row.vector || row.vector.length === 0) continue;
+            coverage.chunksScanned++;
+            if (row.vector.length !== queryVector.length) {
+              // Embedded under a different model, so this vector is in another space. Previously
+              // this scored 0 and was laundered out by the similarity floor with nothing recorded.
+              coverage.chunksSkippedDimMismatch++;
+              mismatchedFileIds.add(row.fabFileId);
+              continue;
+            }
+            const score = computeCosineSimilarity(queryVector, row.vector);
+            // A zero-magnitude vector makes cosine NaN, and NaN fails every comparison below -
+            // it would slip past the floor and sort ahead of real hits.
+            if (!Number.isFinite(score)) continue;
+            scoredCount++;
+            if (score > topScore) topScore = score;
+            if (score < FORCED_RETRIEVAL_MIN_SIMILARITY) continue;
+            pool.push({ id: row.id, fabFileId: row.fabFileId, text: row.text, score });
+            if (pool.length > FORCED_RETRIEVAL_MAX_SCORED_CHUNKS) {
+              pool.sort(compareForcedRetrievalCandidates);
+              pool.length = FORCED_RETRIEVAL_MAX_SCORED_CHUNKS;
+            }
           }
-          const score = computeCosineSimilarity(queryVector, row.vector);
-          scoredCount++;
-          if (score > topScore) topScore = score;
-          if (score < FORCED_RETRIEVAL_MIN_SIMILARITY) continue;
-          pool.push({ id: row.id, fabFileId: row.fabFileId, text: row.text, score });
-          if (pool.length > FORCED_RETRIEVAL_MAX_SCORED_CHUNKS) {
-            pool.sort(compareForcedRetrievalCandidates);
-            pool.length = FORCED_RETRIEVAL_MAX_SCORED_CHUNKS;
+
+          const nextCursor = usable[usable.length - 1]?.id;
+          if (nextCursor === undefined || (cursor !== undefined && nextCursor <= cursor)) {
+            this.logger.warn('🔒 Forced retrieval: chunk cursor did not advance - stopping the batch');
+            break;
           }
+          cursor = nextCursor;
+          if (!moreExist) break; // batch drained
+          if (want === remaining) {
+            coverage.stoppedByChunkBudget = true;
+            break batches;
+          }
+          // Budget still available but this batch has more: keep paging it.
+          coverage.partiallyReadBatches++;
         }
       }
       coverage.filesWithDimMismatch = mismatchedFileIds.size;

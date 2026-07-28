@@ -608,8 +608,13 @@ function makeStringSetting(
  * Sized for the memory and latency a single search can afford, not for a deployment preference:
  * the chunk cap is what bounds how long one query may scan, and exceeding either is reported as
  * a truncated scan rather than silently dropping the remainder.
+ *
+ * The file cap is deliberately only a few pages. The scope walk uses skip pagination, so the last
+ * page's sort has to hold skip + limit documents - a much larger cap would trade the truncation
+ * this change exists to expose for a sort-memory failure on the same large lakes. Raise it only
+ * alongside keyset file pagination.
  */
-export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 20_000;
+export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
 export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
 
 function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number } & BaseSetting) {
@@ -2794,7 +2799,7 @@ export const settingsMap = {
     defaultValue: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
     min: 1,
     description:
-      'Most files one data-lake semantic search will scope. Beyond this the search reports itself as truncated rather than silently ignoring the rest.',
+      'Most files one data-lake semantic search will scope. Beyond this the search reports itself as truncated rather than silently ignoring the rest. Raising it well past a few thousand also deepens the paging offset, so prefer reporting truncation over a very large value.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 2,

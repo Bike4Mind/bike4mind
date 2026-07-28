@@ -527,26 +527,34 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
   };
 
-  /** `total` defaults to the listed count, i.e. full coverage, so tests opt in to partiality. */
+  /** Defaults to full coverage (no more pages), so tests opt in to partiality via `hasMore`. */
   const makeCtx = (opts: {
     files?: { id: string; fileName: string; tags?: unknown[]; embeddingModel?: string }[];
     rows?: (ids: string[]) => unknown[];
     total?: number;
+    hasMore?: boolean;
   }) => {
     const files = opts.files ?? [{ id: 'fileA', fileName: 'A.pdf', tags: [] }];
-    const findVectorsByFabFileIds = vi.fn((ids: string[]) =>
-      Promise.resolve(
-        opts.rows
-          ? opts.rows(ids)
-          : ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [1, 0] }))
-      )
-    );
+    // Honours limit + afterChunkId like the real repository, so the probe and the within-batch
+    // paging are exercised for real rather than against a mock that returns everything at once.
+    const findVectorsByFabFileIds = vi.fn((ids: string[], o?: { limit?: number; afterChunkId?: string }) => {
+      const all = opts.rows
+        ? opts.rows(ids)
+        : ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: [1, 0] }));
+      const rows = (all as { id: string }[])
+        .filter(r => (o?.afterChunkId ? r.id > o.afterChunkId : true))
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .slice(0, o?.limit ?? 10_000);
+      return Promise.resolve(rows);
+    });
     return {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
       user: { id: 'u1', tags: [], groups: [] },
       db: {
         fabfiles: {
-          search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: opts.total ?? files.length }),
+          search: vi
+            .fn()
+            .mockResolvedValue({ data: files, hasMore: opts.hasMore ?? false, total: opts.total ?? files.length }),
         },
         fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds },
       },
@@ -590,20 +598,21 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect((quest.promptMeta as { warnings?: string[] }).warnings).toBeUndefined();
   });
 
-  it('a library larger than the candidate cap warns, records a promptMeta warning, and hedges the prompt', async () => {
-    const ctx = makeCtx({ total: 2314 });
+  it('more documents beyond the candidate cap warns, records a promptMeta warning, and hedges the prompt', async () => {
+    const ctx = makeCtx({ hasMore: true });
     const { quest, content } = await run(ctx);
     expect(content).toContain('Coverage note');
     expect(content).toContain('do not state or imply the library was searched exhaustively');
     const warn = (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn;
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('PARTIAL coverage'));
-    expect(warn.mock.calls[0][0]).toContain('2314');
+    expect(warn.mock.calls[0][0]).toContain('candidate cap');
     expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
   });
 
-  it('a library exactly at the listed count is complete, not truncated', async () => {
-    // Kills the naive `listed === cap => truncated` inversion: equality is full coverage.
-    const ctx = makeCtx({ total: 1 });
+  it('the exclusion filter dropping a file is NOT partial coverage', async () => {
+    // `total` counts rows the in-memory post-filter later drops, so keying on it would warn on
+    // every single turn of any session configured with a filename-marker exclusion.
+    const ctx = makeCtx({ total: 9, hasMore: false });
     const { quest, content } = await run(ctx);
     expect(content).not.toContain('Coverage note');
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalled();
@@ -625,9 +634,9 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     const { content } = await run(ctx);
     expect(content).toContain('usable content');
     expect(content).not.toContain('unmatchable content');
-    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
-      expect.stringContaining('different dimension')
-    );
+    // A FEW mismatches are normal mid-revectorize, so this must not hedge the prompt - same policy
+    // as semanticDataLakeSearch, which warns only when the entire corpus is the wrong width.
+    expect(content).not.toContain('Coverage note');
   });
 
   it('an entirely wrong-width corpus says so, distinctly from having no vectors at all', async () => {
@@ -671,17 +680,62 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(ids(reversed.quest)).toEqual(ids(forward.quest));
   });
 
-  it('a saturated batch is reported rather than silently dropping the rest of its chunks', async () => {
-    // A full page means more chunks existed than one read returns.
+  it('a batch holding exactly one full read is complete - it must not report partial coverage', async () => {
+    // Guessing truncation from a full page is wrong: 1000 rows with nothing beyond them were
+    // scanned in full. The probe row is what tells the two apart.
     const ctx = makeCtx({
       rows: () =>
-        Array.from({ length: 1000 }, (_, i) => ({ id: `c${i}`, fabFileId: 'fileA', text: 'x', vector: [1, 0] })),
+        Array.from({ length: 1000 }, (_, i) => ({
+          id: `c${String(i).padStart(4, '0')}`,
+          fabFileId: 'fileA',
+          text: 'x',
+          vector: [1, 0],
+        })),
+    });
+    const { quest, content } = await run(ctx);
+    expect(content).not.toContain('Coverage note');
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalled();
+    expect((quest.promptMeta as { warnings?: string[] }).warnings).toBeUndefined();
+  });
+
+  it('pages within a batch so one large document cannot starve the rest of it', async () => {
+    // Rows arrive globally _id-ascending across the $in, so without paging the big file fills the
+    // read and its batch-mates contribute nothing - a coverage regression vs the per-file reads.
+    const files = Array.from({ length: 3 }, (_, i) => ({ id: `f${i}`, fileName: `F${i}.pdf`, tags: [] }));
+    // The big file's chunks are above the floor but LESS similar than the later files', so if the
+    // later files are read at all they must outrank it. Equal scores would let f0 win on the
+    // id tiebreaker and hide whether they were read.
+    const big = Array.from({ length: 1200 }, (_, i) => ({
+      id: `a${String(i).padStart(5, '0')}`,
+      fabFileId: 'f0',
+      text: 'filler',
+      vector: [1, 0.5],
+    }));
+    const later = [
+      { id: 'z1', fabFileId: 'f1', text: 'UNIQUELY RELEVANT ONE', vector: [1, 0] },
+      { id: 'z2', fabFileId: 'f2', text: 'UNIQUELY RELEVANT TWO', vector: [1, 0] },
+    ];
+    const ctx = makeCtx({ files, rows: () => [...big, ...later] });
+
+    const { content } = await run(ctx);
+
+    expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.length).toBeGreaterThan(1);
+    expect(content).toContain('UNIQUELY RELEVANT ONE');
+    expect(content).toContain('UNIQUELY RELEVANT TWO');
+  });
+
+  it('drops a NaN score instead of letting it outrank real hits', async () => {
+    // cosine of a zero-magnitude vector is 0/0; NaN fails every comparison, so an unguarded NaN
+    // slips past the similarity floor.
+    const ctx = makeCtx({
+      rows: () => [
+        { id: 'c1', fabFileId: 'fileA', text: 'DEGENERATE', vector: [0, 0] },
+        { id: 'c2', fabFileId: 'fileA', text: 'real hit', vector: [1, 0] },
+      ],
     });
     const { content } = await run(ctx);
-    expect(content).toContain('Coverage note');
-    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
-      expect.stringContaining('more chunks than one read returns')
-    );
+    expect(content).toContain('real hit');
+    expect(content).not.toContain('DEGENERATE');
   });
 
   it('the per-turn chunk budget stops the scan instead of reading every batch', async () => {
@@ -699,7 +753,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     });
     await run(ctx);
     // 4000-chunk budget over 1000-chunk batches: far fewer than the 10 batches 100 files imply.
-    expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.length).toBeLessThanOrEqual(5);
+    expect(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.length).toBeLessThanOrEqual(6);
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
       expect.stringContaining('scan budget')
     );

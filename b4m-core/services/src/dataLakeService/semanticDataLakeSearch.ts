@@ -22,10 +22,16 @@ import { BoundedTopK } from './boundedTopK';
  * Reuses EmbeddingFactory (query embed) + computeCosineSimilarity (ranking) + the chunk
  * vectors the fabFileVectorize pipeline already populates.
  *
- * Ranking is a BOUNDED STREAMING scan, not a bulk load: the file scope is paged, each group's
- * chunk vectors are walked in keyset pages, scored into a fixed-size top-K, then dropped. Peak
- * memory is O(topK + one page) rather than O(corpus), and when a budget stops the walk short the
- * result says so (see `scan`) instead of passing a partial corpus off as complete.
+ * Ranking is a BOUNDED STREAMING scan, not a bulk load: chunk vectors are walked in keyset pages,
+ * scored into a fixed-size top-K, then dropped, so the vector phase costs O(topK + one page)
+ * instead of O(corpus) - which is where the memory actually went. When a budget stops the walk
+ * short, the result says so (see `scan`) instead of passing a partial corpus off as complete.
+ *
+ * The FILE phase is bounded by `maxFiles`, not by a page: the scope is accumulated across pages
+ * before ranking, so it holds up to that many content-projected FabFile documents. It also uses
+ * skip pagination, so the last page's sort grows with the offset - which is why `maxFiles` defaults
+ * to a few pages rather than a huge number. Keyset-paginating files (and streaming them into the
+ * scan) is the next step if lakes outgrow that.
  *
  * Data-lake SCOPING is the caller's concern (passed as dataLakeTags + the two prefix
  * buckets). Both the endpoint and the chat tool now compute it from
@@ -58,9 +64,9 @@ export interface SemanticChunkResult {
 
 /** Tuning + hard limits. All optional; the module defaults apply when omitted. */
 export interface SemanticSearchBudgets {
-  /** Hard cap on files scoped for scanning. Default 20_000. */
+  /** Hard cap on files scoped for scanning. Default DATA_LAKE_SEARCH_MAX_FILES_DEFAULT. */
   maxFiles?: number;
-  /** Hard cap on chunk vectors fetched and scored. Default 100_000. */
+  /** Hard cap on chunk vectors fetched and scored. Default DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT. */
   maxChunks?: number;
   /** fabfiles.search page size while paginating the scope. Default 2000. */
   filePageSize?: number;
@@ -290,6 +296,10 @@ async function scanAndRank(args: {
           continue;
         }
         const score = computeCosineSimilarity(queryEmbedding, chunk.vector);
+        // A zero-magnitude vector makes cosine NaN, and NaN fails every comparison: it would slip
+        // past `score < minScore` and, because it also fails the top-K reject test, sort ahead of
+        // every real hit.
+        if (!Number.isFinite(score)) continue;
         if (score < minScore) continue;
         const file = fileById.get(chunk.fabFileId);
         if (!file) continue;
@@ -350,11 +360,15 @@ async function collectScopedFiles(args: {
   // (page - 1) * limit, so shrinking the limit to fit the remaining budget would move the offset
   // under us - re-reading rows we already have and never reaching the tail. Over-fetch to the
   // page boundary instead and trim to the budget at the end.
-  const pageSize = Math.max(1, args.filePageSize);
+  // Clamped to the budget so a small budget also means a small query: without this, lowering the
+  // max-files setting to cut latency would still fetch (and sort) a full page before discarding
+  // most of it. Computed once so it stays constant, per the skip arithmetic above.
+  const pageSize = Math.max(1, Math.min(args.filePageSize, args.maxFiles));
   // A page always consumes pageSize rows, so this bounds the walk even if an adapter kept
   // reporting hasMore forever.
   const maxPages = Math.ceil(args.maxFiles / pageSize) + 1;
 
+  let exhaustedPageCeiling = true;
   for (let page = 1; page <= maxPages; page++) {
     const result = await args.search(
       args.userId,
@@ -385,10 +399,17 @@ async function collectScopedFiles(args: {
       // Only a truncation if something is actually left over - a corpus that lands exactly on the
       // budget with nothing beyond it was scanned in full.
       fileBudgetHit = files.length > args.maxFiles || result.hasMore;
+      exhaustedPageCeiling = false;
       break;
     }
-    if (!result.hasMore) break;
+    if (!result.hasMore) {
+      exhaustedPageCeiling = false;
+      break;
+    }
   }
+  // Falling out of the loop means an adapter kept reporting hasMore past the ceiling, so files
+  // were left unread. Report it rather than returning a silently short scope.
+  if (exhaustedPageCeiling) fileBudgetHit = true;
 
   return { files: files.slice(0, args.maxFiles), filesMatching, fileBudgetHit };
 }

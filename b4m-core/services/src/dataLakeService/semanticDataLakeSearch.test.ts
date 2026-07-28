@@ -123,6 +123,20 @@ const filesAdapter = (
   return search;
 };
 
+/**
+ * A files adapter that serves from ONE corpus using the real skip/limit contract
+ * (`skip = (page - 1) * limit`, as buildFabFileSearchQuery computes it) instead of returning
+ * canned pages keyed on page number. Page-keyed mocks cannot see a wrong offset, which is exactly
+ * how a shrinking page limit shipped a walk that re-read rows and never reached the tail.
+ */
+const skipAwareFilesAdapter = (corpus: { id: string; fileName: string; tags?: unknown[] }[]) =>
+  vi.fn((..._args: unknown[]) => {
+    const { page, limit } = _args[3] as { page: number; limit: number };
+    const skip = (page - 1) * limit;
+    const slice = corpus.slice(skip, skip + limit);
+    return Promise.resolve({ data: slice, hasMore: skip + limit < corpus.length, total: corpus.length });
+  });
+
 const makeLogger = () => ({ warn: vi.fn(), debug: vi.fn(), error: vi.fn(), log: vi.fn() });
 
 describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
@@ -200,6 +214,45 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
     expect(result.scan.filesScoped).toBe(15);
     expect(result.scan.fileBudgetHit).toBe(true);
     expect(result.scan.truncated).toBe(true);
+  });
+
+  it('walks a real skip/limit corpus with no file repeated and none missed', async () => {
+    // Served through the actual skip arithmetic, so a wrong offset shows up as a duplicate or a
+    // gap rather than passing unnoticed the way a page-keyed mock allows.
+    const corpus = Array.from({ length: 23 }, (_, i) => ({
+      id: `f${String(i).padStart(3, '0')}`,
+      fileName: `F${String(i).padStart(3, '0')}.pdf`,
+      tags: [],
+    }));
+    const search = skipAwareFilesAdapter(corpus);
+    const seenIds: string[] = [];
+    const findVectors = vi.fn((ids: string[]) => {
+      seenIds.push(...ids);
+      return Promise.resolve([]);
+    });
+
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), budgets: { maxFiles: 23, filePageSize: 10, fileGroupSize: 100 } },
+      { db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: findVectors } } } as never
+    );
+
+    expect(seenIds).toEqual(corpus.map(f => f.id));
+    expect(new Set(seenIds).size).toBe(23);
+    expect(result.scan.filesScoped).toBe(23);
+    expect(result.scan.filesMatching).toBe(23);
+    expect(result.scan.truncated).toBe(false);
+  });
+
+  it('a small budget shrinks the query itself, not just the result', async () => {
+    // Otherwise lowering the setting to cut latency still sorts and fetches a full page.
+    const corpus = Array.from({ length: 500 }, (_, i) => ({ id: `f${i}`, fileName: `F${i}.pdf`, tags: [] }));
+    const search = skipAwareFilesAdapter(corpus);
+
+    await semanticDataLakeSearch({ ...baseParams(), budgets: { maxFiles: 25, filePageSize: 2000 } }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+
+    expect((search.mock.calls[0][3] as { limit: number }).limit).toBe(25);
   });
 
   it('asks for the _id sort tiebreaker, without which a multi-page walk can lose a file', async () => {
@@ -336,6 +389,26 @@ describe('semanticDataLakeSearch dimension mismatch accounting', () => {
     expect(result.scan.chunksScanned).toBe(2);
     expect(result.scan.chunksSkippedDimensionMismatch).toBe(1);
     expect(result.results.map(r => r.chunkText)).toEqual(['good']);
+  });
+
+  it('drops a NaN score instead of letting it outrank every real hit', async () => {
+    // cosine of a zero-magnitude vector is 0/0. NaN fails `score < minScore` AND the top-K reject
+    // test, so without an explicit guard it lands at rank 1 and serialises as null.
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => ((v as number[])[0] === 0 ? NaN : 0.5));
+    const result = await semanticDataLakeSearch({ ...baseParams(), topK: 2 }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+        fabfilechunks: {
+          findVectorsByFabFileIds: pagingChunkMock([
+            { id: 'f1-bad', fabFileId: 'f1', text: 'degenerate', vector: [0, 0] },
+            { id: 'f1-good', fabFileId: 'f1', text: 'real hit', vector: [1, 0] },
+          ] as never),
+        },
+      },
+    } as never);
+
+    expect(result.results.map(r => r.chunkText)).toEqual(['real hit']);
+    expect(result.results.every(r => Number.isFinite(r.score))).toBe(true);
   });
 
   it('warns when the WHOLE corpus is the wrong width, but stays quiet for a partial mismatch', async () => {
