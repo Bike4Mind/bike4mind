@@ -73,7 +73,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // so hide the Data Lakes destination when it's off - otherwise the link lands on an
   // Explorer whose every request 403s (mirrors FileBrowser's guard).
   const isDataLakesEnabled = isAdminFeatureEnabled('EnableDataLakes');
-  // Bob (premium overlay, issue #33) is a codegen-mounted `/bob` route contributed as a
+  // Bob (premium overlay) is a codegen-mounted `/bob` route contributed as a
   // premium nav item. Surface it in the main sidebar only when the overlay contributes it
   // AND the user's entitlements make it visible - reusing filterVisiblePremiumNavItems so the
   // gate matches ProfileMenu's source (STRICT: no admin/developer bypass) and open-core builds
@@ -304,9 +304,10 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   ];
 
   // Pinned vs scroll split for the unified-scroll sidebar: the first two items stay
-  // pinned at the top. items[0] is always New Chat; items[1] is OptiHashi when Opti is
-  // enabled, otherwise Files Manager (the conditional Opti/Data-Lakes entries shift the
-  // rest into the scroll slice). The split is purely positional, so it holds either way.
+  // pinned at the top. items[0] is always New Chat; items[1] is whichever conditional
+  // entry comes first for this user - OptiHashi, Bob, Data Lakes, or the earned Files
+  // Manager - since each is elided when absent. The split is purely positional, so it
+  // holds regardless of which entries are present.
   const shownItems = section === 'pinned' ? items.slice(0, 2) : section === 'scroll' ? items.slice(2) : items;
 
   return (
