@@ -616,6 +616,30 @@ describe('useInferTaxonomy response handling', () => {
     expect(useDataLakeWizardStore.getState().taxonomy.tags).toHaveLength(1);
   });
 
+  it('trims a padded relativePath so per-file assignments still match at upload', async () => {
+    // tagsForFile matches assignments by strict path equality; a padded path would miss.
+    apiPost.mockResolvedValue({
+      data: {
+        suggestedPrefix: 'acme:',
+        suggestedName: 'Acme',
+        categories: [{ tagName: 'acme:type:x', confidence: 0.9, matchingFolders: ['legal'] }],
+        fileAssignments: [
+          { relativePath: '  root/legal/a.txt  ', suggestedTags: [{ name: 'acme:type:x', strength: 1 }] },
+        ],
+      },
+    });
+    seedFolderTree();
+
+    const { result } = mountHook(useInferTaxonomy);
+    act(() => {
+      result.current.mutate({});
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.attempted).toBe(true));
+
+    expect(useDataLakeWizardStore.getState().taxonomy.fileAssignments[0].relativePath).toBe('root/legal/a.txt');
+  });
+
   it('does not overwrite a name or prefix the user already typed', async () => {
     // Re-analyze after the user set these on Config must not clobber them.
     apiPost.mockResolvedValue({

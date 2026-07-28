@@ -118,7 +118,9 @@ function sanitizeFileAssignments(assignments: InferTaxonomyResponse['fileAssignm
   return assignments
     .filter(entry => entry && isNonEmptyString(entry.relativePath))
     .map(entry => ({
-      relativePath: entry.relativePath,
+      // Trim on write to match how categories are stored: tagsForFile matches assignments by
+      // strict path equality, so a padded path would otherwise miss its per-file suggestions.
+      relativePath: entry.relativePath.trim(),
       suggestedTags: Array.isArray(entry.suggestedTags)
         ? entry.suggestedTags
             .filter(tag => tag && isNonEmptyString(tag.name))

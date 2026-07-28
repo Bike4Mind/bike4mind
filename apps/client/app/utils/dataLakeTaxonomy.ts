@@ -8,7 +8,8 @@ export interface AppliedTag {
 /**
  * A single file can pick up a tag from every category whose folders it sits under.
  * Cap it so a pathological inference result (every category matching the root) can't
- * bury a file under dozens of tags; the highest-strength ones win.
+ * bury a file under dozens of tags; the highest-strength ones win. Caps taxonomy tags
+ * only - the folder tag is added on top, so a file can carry this many + 1.
  */
 const MAX_TAXONOMY_TAGS_PER_FILE = 8;
 
