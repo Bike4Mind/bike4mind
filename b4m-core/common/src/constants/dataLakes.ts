@@ -194,6 +194,9 @@ export function toDataLakeConfig(dl: {
  * owner-only unless org-scoped or public (Private-by-default, see canAccessLake). This
  * predicate has no ownership rule, so callers passing `dynamicDataLakes` MUST pre-filter them
  * through findAccessible / findActiveByUserTagsAndEntitlements, which enforce it datastore-side.
+ * Having no ownership rule also means this drops a lake the caller CREATED whose own gate they
+ * do not hold, so a caller that needs those must restore them AFTER filtering, from the
+ * persisted `createdByUserId` - see the owner exemption in getDynamicDataLakeAccess.
  *
  * When dynamicDataLakes is provided (fetched from DB), those take precedence over
  * hardcoded DATA_LAKES entries with the same id. `entitlementKeys` is optional - callers
