@@ -10,6 +10,9 @@ import type { Request } from 'express';
 // a least-privilege chat key 403s on its own reply. OR / "any of" semantics.
 const handler = baseApi({
   requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
+  // Quest status is the poll step of the async generation pipeline; don't let
+  // polling one job to completion burn the daily quota that meters submissions.
+  exemptReadsFromDailyRateLimit: true,
 }).get(async (req: Request<{}, {}, {}, { id: string }>, res) => {
   const { id: questId } = req.query;
   const userId = req.user?.id;

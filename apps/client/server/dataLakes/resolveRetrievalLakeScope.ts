@@ -7,9 +7,9 @@
  * `getDynamicDataLakeAccess` - the SAME core function the chat `search_knowledge_base` tool
  * calls - so a caller's semantic-search scope and their chat-retrieval scope cannot drift.
  *
- * Browse stays the wider of the two - see the difference list in ./index.ts (an owner's own
- * gated lake, tracked in #976; admin reach; draft lakes). Retrieval is a subset in every
- * case, never the reverse. Do not paper those over here.
+ * Browse stays the wider of the two - see the difference list in ./index.ts (admin reach;
+ * draft lakes). Retrieval is a subset in every case, never the reverse. Do not paper those
+ * over here. An owner's own gated lake is no longer among them: the core resolver restores it.
  */
 import { DATA_LAKES, hasDeveloperUserTag, type DataLakeConfig } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';

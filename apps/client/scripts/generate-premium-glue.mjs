@@ -21,7 +21,7 @@
  */
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync } from 'node:fs';
-import { resolve, dirname, join, sep, basename } from 'node:path';
+import { resolve, dirname, join, sep, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -229,7 +229,18 @@ export const premiumNotebookSidenav: PremiumNotebookSidenav = dynamic(
 // `exports` map in its package.json - so we can inspect the source without executing it.
 // Returns null (never throws) for any shape this doesn't confidently recognize;
 // callers treat null as "no config to re-export", which is the pre-existing behavior.
-function resolveExportFromToSourceFile(pkg, exportFrom) {
+// Resolve a validated bare specifier to the path its package.json DECLARES for it,
+// without requiring that path to exist on disk yet.
+//
+// That distinction is load-bearing during the Docker image build. Dockerfile.chatcompletion
+// copies `**/package.json` and apps/client/scripts, runs `pnpm install` (whose postinstall
+// runs THIS script), and only then does `COPY . .` bring in the sources. So at codegen time
+// inside the image every overlay's package.json is present but none of its .ts source is.
+// A generator that only needs to WRITE a path must therefore not probe the filesystem;
+// one that needs to READ the source (extractConfigLiteral) legitimately must.
+//
+// Returns null (never throws) for any shape this doesn't confidently recognize.
+function resolveExportToDeclaredPath(pkg, exportFrom) {
   let subpath;
   if (exportFrom === pkg.name) subpath = '.';
   else if (exportFrom.startsWith(`${pkg.name}/`)) subpath = `.${exportFrom.slice(pkg.name.length)}`;
@@ -266,7 +277,14 @@ function resolveExportFromToSourceFile(pkg, exportFrom) {
   const resolved = resolve(join(PREMIUM_DIR, pkg.dir, target));
   if (resolved !== pkgRoot && !resolved.startsWith(pkgRoot + sep)) return null;
 
-  return existsSync(resolved) ? resolved : null;
+  return resolved;
+}
+
+// As above, but additionally requires the source file to be present, because every
+// caller of this one goes on to READ it. Unchanged behaviour for those callers.
+function resolveExportFromToSourceFile(pkg, exportFrom) {
+  const resolved = resolveExportToDeclaredPath(pkg, exportFrom);
+  return resolved !== null && existsSync(resolved) ? resolved : null;
 }
 
 // Next.js's Pages Router requires `export const config = {...}` to be a literal,
@@ -464,11 +482,15 @@ function generateLlmTools(packages) {
 // unlike every other glue file here): both consumers of AvailableMigrations - the
 // DatabaseMigrator Lambda's MigrationManager and the `pnpm migrate` CLI - live in
 // @bike4mind/scripts, which cannot import from apps/client (wrong dependency direction).
-// Bare specifier (like llmTools / serverHandlerStubs), NOT the infra glue's relative-import
-// workaround below - that workaround exists only because esbuild externalises symlinked
-// workspace packages when bundling sst.config.ts. The migrator is a normal Lambda handler
-// referenced by string path (infra/database.ts), so a bare specifier bundles fine - the same
-// path serverHandlerStubs already proves out for real Lambda handlers.
+//
+// RELATIVE import to the overlay source (same as the infra glue below), NOT a bare
+// @bike4mind/premium-* specifier. The bare-specifier stubs (llmTools / serverHandlerStubs)
+// resolve only because they live under apps/client, where the overlay package is linked into
+// the resolution scope. This file lives under packages/scripts, which declares only
+// @bike4mind/database - the overlay is NOT resolvable from its node_modules, so a bare
+// specifier fails to bundle ("Could not resolve @bike4mind/premium-optihashi/server/migrations"
+// when SST esbuild-bundles the DatabaseMigrator Lambda). A relative .ts source import resolves
+// by filesystem path regardless of linking, and esbuild/vitest transpile it inline.
 function generateMigrations(packages) {
   const outPath = join(REPO_ROOT, 'packages/scripts/migrate/migrations/premium.generated.ts');
   const typeImport = `import type { MigrationFile } from '@bike4mind/database';`;
@@ -485,8 +507,35 @@ function generateMigrations(packages) {
 
   contributors.forEach(p => assertModuleSpecifier(p.contributions.migrationsExport, p.name, 'migrationsExport'));
 
-  const imports = contributors
-    .map((p, i) => `import { migrations as migrations${i} } from '${p.contributions.migrationsExport}';`)
+  // Resolve each overlay's declared migrationsExport subpath (via its own exports map) to the
+  // path that package.json DECLARES, then rewrite it as a relative import from this generated
+  // file's dir.
+  //
+  // Declared path, NOT an on-disk one: this must not require the overlay source to exist yet.
+  // Dockerfile.chatcompletion copies `**/package.json` and apps/client/scripts, runs
+  // `pnpm install` - whose postinstall runs this script - and only then `COPY . .`. Probing the
+  // filesystem here made the image build die with "cannot resolve migrationsExport" the moment
+  // an overlay declared one, even though the very same import resolves fine at build time, once
+  // the sources are in place. The generated path is identical either way.
+  const relSpecs = contributors.map(p => {
+    const sourceFile = resolveExportToDeclaredPath(p, p.contributions.migrationsExport);
+    if (!sourceFile) {
+      throw new Error(
+        `[codegen] cannot resolve migrationsExport ${JSON.stringify(p.contributions.migrationsExport)} ` +
+          `from package "${p.name}" to a declared path - its package.json "exports" map has no ` +
+          `plain-string entry for that subpath. A bare specifier can't be used here - see ` +
+          `generateMigrations(). Note this checks only what package.json DECLARES; the source ` +
+          `file itself is deliberately not required to exist yet.`
+      );
+    }
+    // Strip the .ts extension and normalise to a forward-slash relative specifier.
+    let rel = relative(dirname(outPath), sourceFile).split(sep).join('/').replace(/\.ts$/, '');
+    if (!rel.startsWith('.')) rel = `./${rel}`;
+    return rel;
+  });
+
+  const imports = relSpecs
+    .map((spec, i) => `import { migrations as migrations${i} } from '${spec}';`)
     .join('\n');
 
   const spreads = contributors.map((_, i) => `  ...migrations${i}`).join(',\n');
