@@ -283,6 +283,23 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
     expect(result.scan.chunksScanned).toBe(2);
   });
 
+  it('a zero or negative budget cannot make the page ceiling Infinite', async () => {
+    // `??` only replaces null/undefined, so an explicit 0 would reach Math.ceil(maxChunks / 0)
+    // and produce Infinity for the loop bound. Clamped, this walks and terminates normally.
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), budgets: { chunkPageSize: 0, fileGroupSize: 0, filePageSize: 0, maxChunks: -5 } },
+      {
+        db: {
+          fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+          fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 3)) },
+        },
+      } as never
+    );
+
+    expect(result.scan.budgets.maxChunks).toBeGreaterThanOrEqual(1);
+    expect(result.scan.chunksScanned).toBeGreaterThanOrEqual(1);
+  });
+
   it('asks for the _id sort tiebreaker, without which a multi-page walk can lose a file', async () => {
     const search = filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]);
     await semanticDataLakeSearch(baseParams(), {

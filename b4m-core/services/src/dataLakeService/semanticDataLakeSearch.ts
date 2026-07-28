@@ -176,13 +176,21 @@ function compareByScore(a: SemanticChunkResult, b: SemanticChunkResult): number 
   return a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0;
 }
 
+/**
+ * `??` only replaces null/undefined, so a caller-supplied 0 or negative would flow straight into
+ * the page-ceiling arithmetic and make it Infinity. Clamp every budget to at least 1 here, once,
+ * rather than defending against it at each use.
+ */
 function resolveBudgets(budgets: SemanticSearchBudgets | undefined) {
+  const atLeastOne = (value: number | undefined, fallback: number) =>
+    Math.max(1, Math.floor(value ?? fallback) || fallback);
   return {
-    maxFiles: budgets?.maxFiles ?? DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
-    maxChunks: budgets?.maxChunks ?? DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
-    filePageSize: budgets?.filePageSize ?? DEFAULT_FILE_PAGE_SIZE,
-    fileGroupSize: budgets?.fileGroupSize ?? DEFAULT_FILE_GROUP_SIZE,
-    chunkPageSize: budgets?.chunkPageSize,
+    maxFiles: atLeastOne(budgets?.maxFiles, DATA_LAKE_SEARCH_MAX_FILES_DEFAULT),
+    maxChunks: atLeastOne(budgets?.maxChunks, DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT),
+    filePageSize: atLeastOne(budgets?.filePageSize, DEFAULT_FILE_PAGE_SIZE),
+    fileGroupSize: atLeastOne(budgets?.fileGroupSize, DEFAULT_FILE_GROUP_SIZE),
+    // Undefined stays undefined so the dimension-derived default still applies downstream.
+    chunkPageSize: budgets?.chunkPageSize === undefined ? undefined : atLeastOne(budgets.chunkPageSize, 1),
   };
 }
 
