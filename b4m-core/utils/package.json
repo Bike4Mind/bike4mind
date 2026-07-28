@@ -132,7 +132,7 @@
     "tiktoken": "^1.0.22",
     "tldts": "^7.4.8",
     "unpdf": "^1.6.2",
-    "uuid": "^13.0.2",
+    "uuid": "^14.0.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3"
   },

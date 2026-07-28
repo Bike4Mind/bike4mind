@@ -678,8 +678,8 @@ importers:
         specifier: ^1.6.2
         version: 1.6.2(@napi-rs/canvas@0.1.100)
       uuid:
-        specifier: ^13.0.2
-        version: 13.0.2
+        specifier: ^14.0.1
+        version: 14.0.1
       xlsx:
         specifier: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
         version: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
@@ -1175,8 +1175,8 @@ importers:
         specifier: ^7.28.0
         version: 7.28.0
       uuid:
-        specifier: ^13.0.2
-        version: 13.0.2
+        specifier: ^14.0.1
+        version: 14.0.1
     devDependencies:
       '@types/lodash':
         specifier: ^4.17.24
@@ -1378,8 +1378,8 @@ importers:
         specifier: ^7.2.4
         version: 7.2.4
       uuid:
-        specifier: ^13.0.2
-        version: 13.0.2
+        specifier: ^14.0.1
+        version: 14.0.1
       write-excel-file:
         specifier: ^4.1.1
         version: 4.1.1
@@ -1600,8 +1600,8 @@ importers:
         specifier: ^1.6.2
         version: 1.6.2(@napi-rs/canvas@0.1.100)
       uuid:
-        specifier: ^13.0.2
-        version: 13.0.2
+        specifier: ^14.0.1
+        version: 14.0.1
       xlsx:
         specifier: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
         version: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz
@@ -1848,8 +1848,8 @@ importers:
         specifier: ^1.6.2
         version: 1.6.2(@napi-rs/canvas@0.1.100)
       uuid:
-        specifier: ^13.0.2
-        version: 13.0.2
+        specifier: ^14.0.1
+        version: 14.0.1
       voyageai:
         specifier: ^0.4.0
         version: 0.4.0(encoding@0.1.13)
@@ -11609,8 +11609,8 @@ packages:
     resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
     hasBin: true
 
-  uuid@13.0.2:
-    resolution: {integrity: sha512-vzi9uRZ926x4XV73S/4qQaTwPXM2JBj6/6lI/byHH1jOpCzb0zDbfytgA9LcN/hzb2l7WQSQnxITOVx5un/wGw==}
+  uuid@14.0.1:
+    resolution: {integrity: sha512-6ZxzVpzDXDa3bJWaHilVayA+BH/1zmxCJoVgvmqJnid/gPoKHxUrS/aC/T6LGQtNHT+XHG9fXPJB4d+IrU30Ew==}
     hasBin: true
 
   v8-compile-cache-lib@3.0.1:
@@ -23676,7 +23676,7 @@ snapshots:
 
   uuid@11.1.1: {}
 
-  uuid@13.0.2: {}
+  uuid@14.0.1: {}
 
   v8-compile-cache-lib@3.0.1: {}
 

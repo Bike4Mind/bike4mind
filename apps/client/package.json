@@ -223,7 +223,7 @@
     "typescript": "^5.9.3",
     "unified": "^11.0.5",
     "unpdf": "^1.6.2",
-    "uuid": "^13.0.2",
+    "uuid": "^14.0.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yargs": "^18.0.0",
     "yauzl": "^3.4.0",
