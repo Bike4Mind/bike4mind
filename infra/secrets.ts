@@ -19,6 +19,13 @@ export const secrets = {
   MAIL_PASSWORD: new sst.Secret('MAIL_PASSWORD', 'not-configured'),
   ANTHROPIC_API_KEY: new sst.Secret('ANTHROPIC_API_KEY', 'not-configured'),
   GEMINI_API_KEY: new sst.Secret('GEMINI_API_KEY', 'not-configured'),
+  // Deployment-level provider keys for model discovery (spec 5.7). Discovery has
+  // no user, so its only other source is the admin demo-key tier, which exists
+  // for a different purpose - a stage without one would silently stop watching
+  // its two largest catalog surfaces. Both are manifest-optional, so a stage
+  // that leaves them at the default just reports those sources unconfigured.
+  OPENAI_API_KEY: new sst.Secret('OPENAI_API_KEY', 'not-configured'),
+  XAI_API_KEY: new sst.Secret('XAI_API_KEY', 'not-configured'),
   OKTA_AUDIENCE: new sst.Secret('OKTA_AUDIENCE', 'not-configured'),
   OKTA_CLIENT_ID: new sst.Secret('OKTA_CLIENT_ID', 'not-configured'),
   OKTA_CLIENT_SECRET: new sst.Secret('OKTA_CLIENT_SECRET', 'not-configured'),

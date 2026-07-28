@@ -9,7 +9,7 @@ import {
   notebookImportFunction,
 } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
-import { attackSimulationFunction } from './cron';
+import { attackSimulationFunction, modelDiscoveryFunction } from './cron';
 import { emailJobQueue, emailBatchQueue, emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
 import {
   emailIngestionQueue,
@@ -125,6 +125,9 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
 const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
   properties: {
     attackSimulation: attackSimulationFunction.name,
+    // Admin "Run now" (pages/api/admin/model-discovery) invokes the same
+    // function the discovery cron targets, with { trigger: 'manual' }.
+    modelDiscovery: modelDiscoveryFunction.name,
   },
 });
 
