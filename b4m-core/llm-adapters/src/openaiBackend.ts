@@ -747,8 +747,9 @@ export class OpenAIBackend implements ICompletionBackend {
         name: 'GPT-4',
         backend: ModelBackend.OpenAI,
         contextWindow: 8192,
-        // GPT-4's real ceiling is 4096; it was listed as the full 8192 context window, which left
+        // Half the context window, deliberately: this was listed as the full 8192, which left
         // maxSafeInputTokens (context - output - buffer) negative and silently emptied the prompt.
+        // Whatever the provider's own output ceiling is, this entry has to keep that figure positive.
         max_tokens: 4096,
         can_stream: true,
         pricing: {

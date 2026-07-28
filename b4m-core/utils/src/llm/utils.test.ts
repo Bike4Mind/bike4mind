@@ -2497,3 +2497,199 @@ describe('unusable attachments are judged one at a time', () => {
     );
   });
 });
+
+describe('the safety pass on paths the primary allocation does not reach', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const CONTENT_TRUNCATION_NOTICE =
+    '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was not sent.]';
+
+  const tokenizerAt = (charsPerToken: number): ITokenizer => ({
+    countTokens: vi.fn(async (text: string) => Math.ceil(text.length / charsPerToken)),
+    encodeTokens: vi.fn(async (text: string) => Array(Math.ceil(text.length / charsPerToken)).fill(1)),
+    clearCache: vi.fn(),
+    getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+    warmUpCache: vi.fn(async () => {}),
+  });
+
+  const history = (count: number, charsEach: number): IMessage[] =>
+    Array.from({ length: count }, (_, i) => ({
+      role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `h${i}-`.padEnd(charsEach, 'x'),
+    }));
+
+  const attachment = (fileName: string, chars: number): IMessage => ({
+    role: 'user',
+    content: `Here is the content from the attached file "${fileName}" for context:\n\n` + 'C'.repeat(chars),
+  });
+
+  const delivered = (messages: IMessage[]): string =>
+    messages.map(m => (typeof m.content === 'string' ? m.content : '')).join('');
+
+  const warnings = (): string => (mockLogger.warn.mock.calls as unknown[][]).map(call => String(call[0])).join('\n');
+
+  it('trims proportionally on an image turn instead of asking content for everything', async () => {
+    // The estimator used to JSON-stringify base64 image data as text while the real tokenizer charged
+    // a flat 1600, so the ratio converting the overage between the two units collapsed and round 1
+    // zeroed the attachment when a ~200-token trim was enough.
+    const tokenizer = tokenizerAt(3.5);
+    const result = await buildAndSortMessages(
+      history(10, 500),
+      [
+        attachment('roster.csv', 10000),
+        {
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(300000) } },
+          ] as unknown as IMessage['content'],
+        },
+      ],
+      [{ role: 'user', content: 'Summarize the attached file' }],
+      5700,
+      {},
+      5,
+      mockLogger as any,
+      tokenizer
+    );
+
+    // Most of the file still reaches the model, and it is never reduced to the could-not-be-included note.
+    expect(delivered(result)).toContain('C'.repeat(7000));
+    expect(delivered(result)).not.toContain('could not be included');
+    expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(5700);
+  });
+
+  it('declares an attachment the safety pass drops, not just one the allocation drops', async () => {
+    // The allocation delivers the file, then the safety pass drops it whole. The note is applied before
+    // that pass, so the file used to vanish with nothing said and the model denied it was ever attached.
+    const result = await buildAndSortMessages(
+      history(40, 1000),
+      [attachment('roster.csv', 3000)],
+      [{ role: 'user', content: 'Summarize the attached file' }],
+      12000,
+      {},
+      20,
+      mockLogger as any,
+      tokenizerAt(1.5)
+    );
+
+    expect(delivered(result)).toContain('could not be included in this request');
+    expect(delivered(result)).toContain('do not tell the user that no file was provided');
+    // Names no file: which one was lost is not knowable once processMessages has replaced the objects,
+    // and listing them all let the model disclaim a file it did receive.
+    expect(delivered(result)).not.toContain('roster.csv');
+  });
+
+  it('keeps a history reduction that frees tokens without changing the message count', async () => {
+    // processMessages' fallback shrinks messages in place. The pass compared message counts, so it read
+    // "same count" as "cannot shrink", discarded a valid reduction and handed the caller an oversized
+    // payload for its hard throw.
+    // 20k window so the 1000-token reserve stays small next to it, one history message the allocation
+    // can afford whole, and 2.0 chars/token so only the real count overflows.
+    const maxInputTokens = 20000;
+    const tokenizer = tokenizerAt(2.0);
+    const result = await buildAndSortMessages(
+      [{ role: 'user', content: 'H'.repeat(63000) }],
+      [],
+      [{ role: 'user', content: 'Carry on' }],
+      maxInputTokens,
+      {},
+      3,
+      mockLogger as any,
+      tokenizer
+    );
+
+    expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+      maxInputTokens
+    );
+    expect(warnings()).not.toContain('could not bring the payload under');
+  });
+
+  it('reports a mid-message cut made by the safety pass as a budget truncation', async () => {
+    // The allocation delivers the file whole and removes nothing, so allRemovedMessages stays empty and
+    // only the safety pass's cut is evidence of loss. Telemetry used to call this turn untruncated.
+    // Sized so the allocation delivers the file whole (17143 est. tokens against an 18881 content
+    // budget) and only the 2.5-chars/token real count overflows, so the pass's cut is the sole loss.
+    await buildAndSortMessages(
+      history(2, 200),
+      [attachment('roster.csv', 60000)],
+      [{ role: 'user', content: 'Summarize' }],
+      20000,
+      {},
+      5,
+      mockLogger as any,
+      tokenizerAt(2.5)
+    );
+
+    const debug = getLastBuildDebugInfo();
+    expect(debug?.wasTruncated).toBe(true);
+    expect(debug?.truncationMethod).toBe('token-budget');
+  });
+
+  it('keeps fetched page content out of the warning it logs', async () => {
+    // A URL-derived attachment's first line is raw fetched body, not a filename header, so logging the
+    // first 120 chars of it put page content into warn-level logs.
+    await buildAndSortMessages(
+      history(10, 500),
+      [{ role: 'user', content: 'For context: ' + 'PAGEBODY-'.repeat(2000) }],
+      [{ role: 'user', content: 'Summarize it' }],
+      1500,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(warnings()).toContain('squeezed to fit the token budget');
+    expect(warnings()).not.toContain('PAGEBODY');
+    expect(warnings()).toContain('attachment 1');
+  });
+
+  it('declares a dropped file even when an empty attachment survives in its place', async () => {
+    // droppedCount compared the delivered message count against attachments that had content. An
+    // attachment with nothing extractable is absent from the second set but still present in the
+    // first, so it stood in for the dropped sibling one-for-one and the drop went undeclared.
+    const result = await buildAndSortMessages(
+      history(20, 3000),
+      [
+        { role: 'user', content: '' },
+        attachment('roster.csv', 40000),
+      ],
+      [{ role: 'user', content: 'Summarize the attached file' }],
+      20000,
+      {},
+      15,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(delivered(result)).toContain('could not be included in this request');
+  });
+
+  it('does not mistake a file ending in the notice text for a cut one', async () => {
+    // Truncation was detected by sniffing for the appended notice, so a small file whose own last line
+    // happened to be that sentence was judged an unusable sliver and replaced - losing a file that fit.
+    const result = await buildAndSortMessages(
+      history(2, 100),
+      [
+        {
+          role: 'user',
+          content:
+            'Here is the content from the attached file "small.csv" for context:\n\n' +
+            'row-a\nrow-b\nrow-c\n' +
+            CONTENT_TRUNCATION_NOTICE,
+        },
+      ],
+      [{ role: 'user', content: 'What is in the file' }],
+      100000,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(delivered(result)).toContain('row-a\nrow-b\nrow-c');
+    expect(delivered(result)).not.toContain('could not be included');
+  });
+});

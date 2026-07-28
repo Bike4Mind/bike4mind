@@ -1638,7 +1638,12 @@ export class ChatCompletionProcess {
       }
 
       const safetyBuffer = 1000; // Emergency buffer
-      const maxSafeInputTokens = contextLimit - safeMaxTokens - safetyBuffer;
+      // Image and video models return media, not tokens, so max_tokens on those entries is not an
+      // output reserve - every image backend in the repo sets it equal to contextWindow (both are the
+      // prompt-length limit). Subtracting it left no input room at all, which the empty-prompt guard
+      // below then reports as a misconfiguration on a request that fits perfectly well.
+      const reservesTextOutput = modelInfo.type !== 'image' && modelInfo.type !== 'video';
+      const maxSafeInputTokens = contextLimit - (reservesTextOutput ? safeMaxTokens : 0) - safetyBuffer;
 
       // Generate current date context for the AI.
       // Use user's browser timezone if available, otherwise fall back to server timezone.

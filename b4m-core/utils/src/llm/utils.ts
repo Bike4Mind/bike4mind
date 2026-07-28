@@ -113,8 +113,8 @@ const MAX_SAFETY_SHRINK_ROUNDS = 5;
  * Appended to attached-file content that had to be cut to fit. Without it a CSV sliced mid-row reads
  * as a complete file: the model treats the last surviving row as the final row and answers about it
  * confidently, which is indistinguishable from a correct answer unless you already hold the file.
- * Counted against the budget like any other content, because it is really sent. Its presence is also
- * how later steps recognise that a message was cut.
+ * Counted against the budget like any other content, because it is really sent. This text is for the
+ * model only - what later steps read to know a message was cut is processMessages' truncatedMessages.
  */
 const CONTENT_TRUNCATION_NOTICE =
   '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was not sent.]';
@@ -127,24 +127,50 @@ const CONTENT_TRUNCATION_NOTICE =
  */
 const MIN_USEFUL_ATTACHED_CONTENT_TOKENS = 200;
 
+/**
+ * Flat per-image token charge. Exact cost needs decoding the image (Anthropic ~ width*height/750;
+ * OpenAI varies by detail level, low=85), so both the estimator and the real counter assume ~1600
+ * ("normal"). They must use the same figure or converting an overage between the two units skews.
+ */
+const IMAGE_TOKEN_ESTIMATE = 1600;
+
+/** Bounded so building a log label never walks a multi-MB attachment. */
+const ATTACHMENT_LABEL_SCAN_CHARS = 400;
+
 const estimateTokenLength = (text: string): number => {
   // Rough estimate: ~3.5 chars per token for English text
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 };
 
+const isImageBlock = (obj: { type?: string }): boolean => obj.type === 'image' || obj.type === 'image_url';
+
 /**
- * Flattens a message's content to the text the estimators measure. Note this deliberately omits the
- * role, unlike calculateTotalTokenLength which concatenates role + content and charges a flat rate
- * per image. The two are therefore NOT interchangeable, which matters most for the squeeze check in
- * buildAndSortMessages: comparing what content used against what it wanted has to use this estimator
- * on both sides, or the role overhead alone would report every attachment as squeezed.
+ * Flattens a message's content to its text, skipping image blocks - their base64 payload is not text
+ * and stringifying it would both mis-measure the message and put megabytes of data into any log line
+ * built from this. Images are charged separately by estimateMessageTokens.
+ *
+ * Differs from calculateTotalTokenLength only in omitting the role string, so the two are still NOT
+ * interchangeable: the squeeze check in buildAndSortMessages has to use this estimator on both sides
+ * or the role overhead alone would report every attachment as squeezed.
  */
 const messageContentText = (message: IMessage): string =>
   Array.isArray(message.content)
-    ? message.content.map(obj => JSON.stringify(obj)).join('')
+    ? message.content
+        .filter(obj => !isImageBlock(obj))
+        .map(obj => JSON.stringify(obj))
+        .join('')
     : ((message.content as string) ?? '');
 
-const estimateMessageTokens = (message: IMessage): number => estimateTokenLength(messageContentText(message));
+/**
+ * Must charge images the same flat rate as calculateTotalTokenLength. The safety pass divides a real
+ * token count by this estimate to convert an overage between the two units, so an estimator that
+ * counted base64 as text made that ratio collapse on any image-carrying turn and the first round
+ * then asked content to give up everything when a small trim would have done.
+ */
+const estimateMessageTokens = (message: IMessage): number => {
+  const imageCount = Array.isArray(message.content) ? message.content.filter(isImageBlock).length : 0;
+  return estimateTokenLength(messageContentText(message)) + imageCount * IMAGE_TOKEN_ESTIMATE;
+};
 
 const estimateMessagesTokens = (messages: IMessage[]): number =>
   messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
@@ -514,13 +540,11 @@ export async function calculateTotalTokenLength(
 
     if (Array.isArray(message.content)) {
       message.content.forEach((obj: any) => {
-        if (obj.type === 'image' || obj.type === 'image_url') {
-          // Both Anthropic ('image') and OpenAI ('image_url'): exact token cost needs decoding
-          // the image (Anthropic ~ width*height/750; OpenAI varies by detail level, low=85). We
-          // can't compute that here, so assume ~1600 ("normal"). CRITICAL: without this branch,
-          // base64 image data would be JSON.stringify'd and counted as text, causing massive
-          // overflow (e.g. 2.7M tokens).
-          imageTokenCount += 1600;
+        if (isImageBlock(obj)) {
+          // Both Anthropic ('image') and OpenAI ('image_url'). CRITICAL: without this branch, base64
+          // image data would be JSON.stringify'd and counted as text, causing massive overflow (e.g.
+          // 2.7M tokens). estimateMessageTokens charges the same rate for the same reason.
+          imageTokenCount += IMAGE_TOKEN_ESTIMATE;
         } else {
           concatenatedContent += JSON.stringify(obj);
         }
@@ -1239,14 +1263,19 @@ const truncateMessageContent = (message: IMessage, tokenLimit: number): IMessage
 const processMessages = (
   messages: IMessage[],
   tokenBudget: number,
-  // Appended to any message this call actually shortens. Passed only for attached-file content: it is
-  // applied at the truncation site because that is the only place that KNOWS a message was cut.
-  // Inferring it afterwards by comparing against the originals cannot distinguish a cut file from a
-  // whole one whose bytes happen to match a sibling attachment, in either direction.
+  // Appended to any message this call actually shortens. Passed only for attached-file content, and
+  // applied here because this is the only place that knows a message was cut: inferring it afterwards
+  // by comparing against the originals cannot distinguish a cut file from a whole one whose bytes
+  // happen to match a sibling attachment, in either direction.
   { truncationNotice }: { truncationNotice?: string } = {}
 ): {
   messages: IMessage[];
   removedMessages: Array<{ role: string; tokens: number; priority: number }>;
+  // The returned objects this call shortened. Identity is the only reliable signal a message was cut:
+  // comparing bytes against the originals cannot tell a cut file from a whole one that happens to
+  // match a sibling, and sniffing for the appended notice mistakes a file ending in that text for a
+  // cut one. Callers surface mid-message loss from this, since removedMessages stays empty for it.
+  truncatedMessages: IMessage[];
 } => {
   const describeRemoved = (message: IMessage) => ({
     role: message.role,
@@ -1259,7 +1288,11 @@ const processMessages = (
   if (!(tokenBudget > 0)) {
     // Only messages that carry content count as a loss. An empty-content message is not a truncation
     // event, and reporting it as one would flip truncationMethod to 'token-budget' on a healthy turn.
-    return { messages: [], removedMessages: messages.filter(m => estimateMessageTokens(m) > 0).map(describeRemoved) };
+    return {
+      messages: [],
+      removedMessages: messages.filter(m => estimateMessageTokens(m) > 0).map(describeRemoved),
+      truncatedMessages: [],
+    };
   }
 
   const messagesWithTokens = messages.map((message, index) => ({
@@ -1337,19 +1370,21 @@ const processMessages = (
     // Under 1 token each, truncation yields empty content that providers reject, so drop the
     // messages instead and let the removal reporting below stand.
     if (tokensPerMessage >= 1) {
+      const truncatedMessages = messages.map(message => {
+        const truncated = truncateMessageContent(message, tokensPerMessage);
+        // Every message reaching this branch gets shortened - it only runs when none of them fit,
+        // and the per-message share is at most the budget each one already exceeded. The type check
+        // is the real guard: array content truncates by whole blocks and takes no text notice.
+        if (!truncationNotice || typeof truncated.content !== 'string') return truncated;
+        return { ...truncated, content: truncated.content + truncationNotice };
+      });
       return {
-        messages: messages.map(message => {
-          const truncated = truncateMessageContent(message, tokensPerMessage);
-          // Every message reaching this branch gets shortened - it only runs when none of them fit,
-          // and the per-message share is at most the budget each one already exceeded. The type check
-          // is the real guard: array content truncates by whole blocks and takes no text notice.
-          if (!truncationNotice || typeof truncated.content !== 'string') return truncated;
-          return { ...truncated, content: truncated.content + truncationNotice };
-        }),
+        messages: truncatedMessages,
         // Under-reports on purpose: content was cut mid-message but no message was dropped.
         // Reporting these as removed would make truncationRate read 0% next to a truncation flag,
-        // so callers surface mid-message loss through their own warn instead.
+        // so callers surface mid-message loss through truncatedMessages instead.
         removedMessages: [],
+        truncatedMessages,
       };
     }
   }
@@ -1360,6 +1395,7 @@ const processMessages = (
   return {
     messages: selectedMessages.map(item => item.message),
     removedMessages,
+    truncatedMessages: [],
   };
 };
 
@@ -1508,6 +1544,27 @@ export async function buildAndSortMessages(
   let contentSqueezed = false;
   const originalTotalMessageCount = historyMessages.length + nonImageMessages.length;
 
+  // Attached-content messages this run shortened, by identity. Every content allocation funnels
+  // through recordContentResult so a cut made anywhere - either allocation branch or the final safety
+  // pass - is reported, and so `contentSqueezed` reads the structural signal rather than comparing
+  // token totals: the appended notice can leave a squeezed message measuring larger than the original.
+  const cutContentMessages = new Set<IMessage>();
+  const recordContentResult = (result: ReturnType<typeof processMessages>): IMessage[] => {
+    allRemovedMessages.push(...result.removedMessages);
+    result.truncatedMessages.forEach(message => cutContentMessages.add(message));
+    if (result.removedMessages.length > 0 || result.truncatedMessages.length > 0) contentSqueezed = true;
+    return result.messages;
+  };
+
+  // Content-free descriptor for logs. An attachment's first line is a quoted filename header for fab
+  // files but raw fetched page body for URL-derived content (the `For context:` message built above),
+  // so this quotes only what the header itself quotes and never falls back to echoing the body.
+  const attachmentLabel = (message: IMessage, index: number): string => {
+    const head = messageContentText(message).slice(0, ATTACHMENT_LABEL_SCAN_CHARS);
+    const named = head.match(/"[^"\n]{1,120}"|--- File \d+: [^\n]{1,120} ---/g);
+    return `${named ? named.join(', ') : `attachment ${index + 1}`} (~${estimateMessageTokens(message)} est. tokens)`;
+  };
+
   // If historyCount is explicitly set (not INFINITE_VALUE), allocate tokens accordingly.
   if (historyCount !== INFINITE_VALUE) {
     // Content gets whatever history does not need, but never less than the floor. Both the fits and
@@ -1522,15 +1579,12 @@ export async function buildAndSortMessages(
         : Math.max(Math.floor(tokenBudget * MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION), tokenBudget - totalPreviousTokens);
 
     // Content first: history's budget depends on what content actually used.
-    const contentResult = processMessages(nonImageMessages, contentBudget, {
-      truncationNotice: CONTENT_TRUNCATION_NOTICE,
-    });
-    processedContentMessages = contentResult.messages;
-    allRemovedMessages.push(...contentResult.removedMessages);
+    processedContentMessages = recordContentResult(
+      processMessages(nonImageMessages, contentBudget, { truncationNotice: CONTENT_TRUNCATION_NOTICE })
+    );
 
     // Unused reserve flows back, so a small attachment costs history nothing.
     const contentTokensUsed = estimateMessagesTokens(processedContentMessages);
-    contentSqueezed = contentTokensUsed < attachedContentTokens;
 
     const historyResult = processMessages(historyMessages, tokenBudget - contentTokensUsed);
     processedPreviousMessages = historyResult.messages;
@@ -1538,13 +1592,12 @@ export async function buildAndSortMessages(
 
     if (contentSqueezed) {
       // Warned rather than logged because the symptom is a missing answer, not an error: the model
-      // says it cannot see the file and the user has no way to tell why. Compared estimate against
-      // estimate, so an attachment that fully fits can never trip this.
+      // says it cannot see the file and the user has no way to tell why.
       logger.warn(
         `Attached content squeezed to fit the token budget: kept ${processedContentMessages.length}/${nonImageMessages.length} message(s), ` +
           `${contentTokensUsed}/${attachedContentTokens} est. tokens (reserved ${contentBudget} of ${tokenBudget}, floor ` +
           `${Math.round(MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION * 100)}%). Affected: ` +
-          nonImageMessages.map(msg => messageContentText(msg).split('\n')[0].slice(0, 120)).join(' | ')
+          nonImageMessages.map(attachmentLabel).join(' | ')
       );
     }
     if (totalPreviousTokens > tokenBudget) {
@@ -1553,11 +1606,9 @@ export async function buildAndSortMessages(
   } else {
     // Check if both fit within the remaining token budget
     if (totalContentTokens + totalPreviousTokens <= tokenBudget) {
-      const contentResult = processMessages(nonImageMessages, tokenBudget, {
-        truncationNotice: CONTENT_TRUNCATION_NOTICE,
-      });
-      processedContentMessages = contentResult.messages;
-      allRemovedMessages.push(...contentResult.removedMessages);
+      processedContentMessages = recordContentResult(
+        processMessages(nonImageMessages, tokenBudget, { truncationNotice: CONTENT_TRUNCATION_NOTICE })
+      );
 
       const historyResult = processMessages(historyMessages, tokenBudget);
       processedPreviousMessages = historyResult.messages;
@@ -1567,11 +1618,9 @@ export async function buildAndSortMessages(
       const nonImageTokenBudget = Math.min(tokenBudget * KNOWLEDGE_FILE_TOKEN_ALLOCATION, totalContentTokens);
       const previousMessageTokenBudget = tokenBudget - nonImageTokenBudget;
 
-      const contentResult = processMessages(nonImageMessages, nonImageTokenBudget, {
-        truncationNotice: CONTENT_TRUNCATION_NOTICE,
-      });
-      processedContentMessages = contentResult.messages;
-      allRemovedMessages.push(...contentResult.removedMessages);
+      processedContentMessages = recordContentResult(
+        processMessages(nonImageMessages, nonImageTokenBudget, { truncationNotice: CONTENT_TRUNCATION_NOTICE })
+      );
 
       const historyResult = processMessages(historyMessages, previousMessageTokenBudget);
       processedPreviousMessages = historyResult.messages;
@@ -1580,53 +1629,69 @@ export async function buildAndSortMessages(
   }
 
   // A sliver of a file is worse than none: the model does not recognise it as file content and answers
-  // as though nothing was attached. Decided per attachment rather than on the total, so two files each
-  // cut to an unusable fragment are both caught - summing them hides exactly that case. A message
-  // carrying the truncation notice is one that was cut, which is why the notice is applied at the
-  // truncation site rather than inferred.
-  if (nonImageMessages.length > 0) {
-    const fileTokens = (message: IMessage): number => {
-      const text = messageContentText(message);
-      return estimateTokenLength(
-        text.endsWith(CONTENT_TRUNCATION_NOTICE) ? text.slice(0, -CONTENT_TRUNCATION_NOTICE.length) : text
-      );
-    };
+  // as though nothing was attached. Judged per attachment rather than on the total, so two files each
+  // cut to an unusable fragment are both caught - summing them hides exactly that case.
+  const fileTokens = (message: IMessage): number => {
+    const text = messageContentText(message);
+    // The appended notice is not the file's content and would push a sliver over the threshold.
+    return estimateTokenLength(
+      cutContentMessages.has(message) && text.endsWith(CONTENT_TRUNCATION_NOTICE)
+        ? text.slice(0, -CONTENT_TRUNCATION_NOTICE.length)
+        : text
+    );
+  };
+  // Attachments that carried no extractable text are excluded - losing nothing is not a loss, and
+  // counting it would report a truncation on a completely healthy turn.
+  const attachmentsWithContent = nonImageMessages.filter(message => fileTokens(message) > 0);
+  let undeliveredNote: IMessage | null = null;
+
+  /**
+   * Replaces attachments that arrived too small to be recognised as file content, and declares any
+   * dropped whole, with one message saying so. Runs after each stage that can shrink content: the
+   * allocation above, and again after the final safety pass, which can drop an attachment the
+   * allocation had delivered - without this second call that file reaches the model with no note at
+   * all and it denies the file exists, the exact failure this backstop exists to prevent.
+   *
+   * Idempotent: its own note is excluded by identity, so a second call re-judges only real attachments
+   * and replaces the note rather than stacking another. Keeps the note in the payload it measures, so
+   * the ~100 tokens it costs are counted, not added behind the safety pass's back.
+   */
+  const declareUndeliveredAttachments = (contentMessages: IMessage[]): IMessage[] => {
+    if (attachmentsWithContent.length === 0) return contentMessages;
+
+    // Counted on the same footing as attachmentsWithContent: an attachment carrying no extractable
+    // text is absent from both sides. Counting it as delivered let it stand in for a sibling that was
+    // dropped, and the drop then went undeclared.
+    const delivered = contentMessages.filter(message => message !== undeliveredNote && fileTokens(message) > 0);
     const isUnusableSliver = (message: IMessage): boolean =>
-      typeof message.content === 'string' &&
-      message.content.endsWith(CONTENT_TRUNCATION_NOTICE) &&
-      fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS;
+      cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS;
+    const usable = delivered.filter(message => !isUnusableSliver(message));
+    const droppedCount = Math.max(0, attachmentsWithContent.length - delivered.length);
+    const sliverCount = delivered.length - usable.length;
+    if (droppedCount === 0 && sliverCount === 0) return contentMessages;
 
-    const usable = processedContentMessages.filter(message => !isUnusableSliver(message));
-    // Anything missing from the output entirely was dropped whole, which is the worst case of all: the
-    // model is told nothing and will deny the file exists. Attachments that carried no extractable text
-    // in the first place are excluded - losing nothing is not a loss, and counting it would put a
-    // truncation on a completely healthy turn.
-    const attachmentsWithContent = nonImageMessages.filter(message => fileTokens(message) > 0);
-    const droppedCount = Math.max(0, attachmentsWithContent.length - processedContentMessages.length);
-    const sliverCount = processedContentMessages.length - usable.length;
+    logger.warn(
+      `Attached content could not be delivered usefully: ${droppedCount} file(s) dropped whole and ` +
+        `${sliverCount} reduced below the ${MIN_USEFUL_ATTACHED_CONTENT_TOKENS}-token minimum worth sending. ` +
+        `Context window is too small after system instructions and history. Affected: ` +
+        attachmentsWithContent.map(attachmentLabel).join(' | ')
+    );
+    contentSqueezed = true;
+    // Deliberately names no files. Which attachment was lost is not knowable here once processMessages
+    // has replaced the objects, and listing all of them let the model disclaim one it did receive.
+    undeliveredNote = {
+      role: 'user',
+      content:
+        `${droppedCount + sliverCount} attached file(s) could not be included in this request. After system ` +
+        `instructions and conversation history there was too little room left to send a usable amount of their ` +
+        `content. The file(s) ARE attached - do not tell the user that no file was provided. Tell them the file ` +
+        `could not be read within this model's context window, and suggest a model with a larger context window, ` +
+        `a smaller file, or a shorter conversation.`,
+    };
+    return [...usable, undeliveredNote];
+  };
 
-    if (droppedCount > 0 || sliverCount > 0) {
-      const names = attachmentsWithContent.map(msg => messageContentText(msg).split('\n')[0].slice(0, 120)).join(' | ');
-      logger.warn(
-        `Attached content could not be delivered usefully: ${droppedCount} file(s) dropped whole and ` +
-          `${sliverCount} reduced below the ${MIN_USEFUL_ATTACHED_CONTENT_TOKENS}-token minimum worth sending. ` +
-          `Context window is too small after system instructions and history. Affected: ${names}`
-      );
-      processedContentMessages = [
-        ...usable,
-        {
-          role: 'user',
-          content:
-            `${droppedCount + sliverCount} attached file(s) could not be included in this request. After system ` +
-            `instructions and conversation history there was too little room left to send a usable amount of their ` +
-            `content. The file(s) ARE attached - do not tell the user that no file was provided. Tell them the file ` +
-            `could not be read within this model's context window, and suggest a model with a larger context window, ` +
-            `a smaller file, or a shorter conversation. Attached: ${names}`,
-        },
-      ];
-      contentSqueezed = true;
-    }
-  }
+  processedContentMessages = declareUndeliveredAttachments(processedContentMessages);
 
   // Separate image and non-image messages
   const imageMessages: IMessage[] = fabMessages.filter(
@@ -1737,29 +1802,36 @@ export async function buildAndSortMessages(
       const excessInEstimateTokens = Math.ceil((currentTokenCount - maxInputTokens) / realPerEstimate);
 
       if (!contentExhausted) {
-        const before = reducedContentMessages;
+        // The undelivered note is held out of the shrink so its identity survives for the re-check
+        // after the loop; it stays in the payload above, so its cost is still measured.
+        const before = reducedContentMessages.filter(message => message !== undeliveredNote);
         const budgetBasis = estimateMessagesTokens(before);
-        const reduced = processMessages(before, Math.max(0, budgetBasis - excessInEstimateTokens), {
-          truncationNotice: CONTENT_TRUNCATION_NOTICE,
-        });
-        reducedContentMessages = reduced.messages;
-        // Reported like the history branch below. These are messages the pass dropped on top of
-        // whatever the primary allocation already removed, so they cannot be double-counted: this
-        // round only ever sees the content that survived to here.
-        allRemovedMessages.push(...reduced.removedMessages);
-        if (reduced.messages.length < before.length) {
+        // Reported through the same recorder as the primary allocation. These are messages this pass
+        // dropped or cut on top of whatever the allocation already lost, and cannot be double-counted:
+        // a round only ever sees the content that survived to here.
+        const reduced = recordContentResult(
+          processMessages(before, Math.max(0, budgetBasis - excessInEstimateTokens), {
+            truncationNotice: CONTENT_TRUNCATION_NOTICE,
+          })
+        );
+        reducedContentMessages = undeliveredNote ? [...reduced, undeliveredNote] : reduced;
+        if (reduced.length < before.length) {
           logger.warn(
-            `Final safety pass dropped ${before.length - reduced.messages.length} of ${before.length} ` +
+            `Final safety pass dropped ${before.length - reduced.length} of ${before.length} ` +
               `attached content message(s) to fit the context window.`
           );
         }
       } else if (processedPreviousMessages.length > 0) {
         const before = processedPreviousMessages;
-        const reduced = processMessages(before, Math.max(0, estimateMessagesTokens(before) - excessInEstimateTokens));
-        if (reduced.messages.length === before.length) break; // history cannot shrink further either
+        const beforeTokens = estimateMessagesTokens(before);
+        const reduced = processMessages(before, Math.max(0, beforeTokens - excessInEstimateTokens));
+        // Compared in tokens, not message count: the truncation fallback shrinks messages in place, so
+        // a count test discards a real reduction and sends the still-oversized payload to the caller's
+        // hard throw. Only a round that frees nothing at all means history cannot give any more.
+        if (estimateMessagesTokens(reduced.messages) >= beforeTokens) break;
         logger.warn(
-          `Final safety pass also dropped ${before.length - reduced.messages.length} of ${before.length} ` +
-            `history message(s): the attached content alone could not absorb the overflow.`
+          `Final safety pass also reduced ${before.length} history message(s) to ${reduced.messages.length}: ` +
+            `the attached content alone could not absorb the overflow.`
         );
         processedPreviousMessages = reduced.messages;
         allRemovedMessages.push(...reduced.removedMessages);
@@ -1776,10 +1848,18 @@ export async function buildAndSortMessages(
       currentTokenCount = afterTokenCount;
     }
 
+    // Anything the pass dropped here still has to be declared, or a file the allocation delivered
+    // disappears silently and the model denies it was ever attached.
+    reducedContentMessages = declareUndeliveredAttachments(reducedContentMessages);
+
     if (currentTokenCount > maxInputTokens) {
+      // Deliberately does not name a cause: this is reached from three different exits (the round cap,
+      // history unable to shrink, nothing droppable left) and only the last is about system + prompt
+      // size. The composition is logged instead so the actual one is identifiable.
       logger.warn(
-        `Final safety pass could not bring the payload under maxInputTokens (${currentTokenCount} > ${maxInputTokens}); ` +
-          `system messages and the user prompt alone exceed the window.`
+        `Final safety pass could not bring the payload under maxInputTokens (${currentTokenCount} > ${maxInputTokens}). ` +
+          `Remaining: ${systemMessages.length} system, ${processedPreviousMessages.length} history, ` +
+          `${reducedContentMessages.length} content, ${imageMessages.length} image message(s) plus the user prompt.`
       );
     }
 

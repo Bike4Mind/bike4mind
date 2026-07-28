@@ -22,6 +22,7 @@ import {
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
+  ImageModels,
   ModelBackend,
   usdToCredits as realUsdToCredits,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
@@ -359,6 +360,56 @@ describe('ChatCompletionProcess', () => {
 
       // Fails loudly with an actionable message naming the cause, rather than sending an empty prompt.
       await expect(service.process({ body, logger: mockLogger })).rejects.toThrow(/no input budget/);
+    });
+
+    // Image and video entries set max_tokens equal to contextWindow across every backend in the repo -
+    // both are the prompt-length limit, since these models return media rather than tokens. Reserving
+    // that as output left no input room, so the guard above rejected a request that fits fine.
+    it('does not reserve text output on an image model, whose max_tokens is not an output budget', async () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['done']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ImageModels.GPT_IMAGE_1,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ImageModels.GPT_IMAGE_1,
+          type: 'image',
+          name: 'GPT Image 1',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 10000,
+          contextWindow: 10000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'a duck on a bicycle' }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'a duck on a bicycle' });
+
+      const body = {
+        ...startQuestParams,
+        params: { model: ImageModels.GPT_IMAGE_1, temperature: 0.5, top_p: 1, max_tokens: 9000 },
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+
+      await expect(service.process({ body, logger: mockLogger })).resolves.not.toThrow();
+      // 10000 context - 1000 reserve, with no output subtracted.
+      expect(mockedBuildAndSortMessages).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        9000,
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.anything()
+      );
     });
 
     // Settlement bills from the provider-reported usage when present (the true
