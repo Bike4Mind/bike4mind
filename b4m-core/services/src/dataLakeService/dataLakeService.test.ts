@@ -812,12 +812,17 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
 });
 
 describe('removeFileFromDataLake — single-file removal', () => {
-  // A file that belongs to this lake AND another lake, to prove removal is lake-scoped.
+  // A wizard-ingested file as it really looks: the lake meta-tag AND a folder tag under the
+  // lake's fileTagPrefix (both are membership signals the read path ORs). Also in a second
+  // lake, and carrying that lake's prefixed tag, to prove removal is lake-scoped.
   const fileInLake = {
     id: 'f1',
+    userId: 'owner',
     tags: [
       { name: 'datalake:lake', strength: 1 },
+      { name: 'lk:invoices', strength: 1 },
       { name: 'datalake:other', strength: 1 },
+      { name: 'other:keepme', strength: 1 },
     ],
   };
 
@@ -832,14 +837,101 @@ describe('removeFileFromDataLake — single-file removal', () => {
     },
   });
 
-  it('atomically pulls only the lake tag (keeps other lakes), never soft-deletes, and recomputes stats (owner)', async () => {
+  it('clears BOTH membership signals for this lake, keeps other lakes, and recomputes stats (owner)', async () => {
     const adapters = makeAdapters();
     const result = await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
-    // Lake-scoped + concurrency-safe: an atomic $pull of THIS lake's tag only - never a
-    // whole-array rewrite (which could clobber a concurrent removal) and never a soft-delete.
-    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
+    // The read path admits a file on the meta-tag OR the lake's fileTagPrefix, so both go in
+    // ONE atomic $pull - never a whole-array rewrite (which could clobber a concurrent
+    // removal) and never a soft-delete. The other lake's tags are untouched.
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalled();
     expect(result).toEqual({ success: true, fileCount: 0, totalSizeBytes: 0 });
+  });
+
+  it('removes a file whose only membership signal is a prefixed tag', async () => {
+    // These exist in quantity (see getDynamicDataLakeAccess): the lake browse lists them, so
+    // testing membership on the meta-tag alone made them permanently unremovable.
+    const prefixOnly = { id: 'f1', userId: 'owner', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(prefixOnly);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).resolves.toMatchObject({ success: true });
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
+  });
+
+  it('refuses to strip a prefixed tag off a file the actor does not own', async () => {
+    // fileTagPrefix is user-chosen and neither unique nor reserved, so a prefix match alone is
+    // not proof of membership. Without the ownership conjunct, minting a lake with someone
+    // else's prefix would be a licence to strip their tags.
+    const someoneElses = { id: 'f1', userId: 'victim', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(someoneElses);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+  });
+
+  it('treats a file with no owner as unowned rather than matching the prefix arm', async () => {
+    const ownerless = { id: 'f1', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(ownerless);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin remove a prefix-only file they do not own', async () => {
+    const someoneElses = { id: 'f1', userId: 'victim', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(someoneElses);
+    await expect(
+      removeFileFromDataLake({ userId: 'root', isAdmin: true }, 'lake1', 'f1', adapters as any)
+    ).resolves.toMatchObject({ success: true });
+  });
+
+  it('ignores a fileTagPrefix no read arm would match, rather than clearing every tag', async () => {
+    // An empty prefix contributes no read arm, so there is nothing for removal to clear. It
+    // must not become a wildcard that empties the file's tags.
+    const adapters = makeAdapters({ id: 'f1', userId: 'owner', tags: [{ name: 'anything', strength: 1 }] });
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ fileTagPrefix: '' }));
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  // The next two pin removal to the SAME normalization the read arms apply, so the prefixes a
+  // query matches are exactly the ones a removal clears - neither more nor fewer.
+  it('ignores a prefix missing its trailing colon, which no read arm honors either', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ fileTagPrefix: 'lk' }));
+    await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
+    // `lk` would match `lk:invoices` on a bare startsWith, but the read path drops the prefix
+    // outright, so clearing that tag would be removing a tag membership never depended on.
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
+  });
+
+  it('clears prefixed tags for a padded prefix, matching the trim the read arms do', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ fileTagPrefix: '  lk:  ' }));
+    await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
+  });
+
+  it('never strips another lake meta-tag, even when this lake claims the reserved prefix', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ fileTagPrefix: 'datalake:' }));
+    await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
+    // Only this lake's own tag: `datalake:other` belongs to a lake the actor may not manage.
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
+  });
+
+  it('reports success when the pull modified nothing (a concurrent removal won the race)', async () => {
+    const adapters = makeAdapters();
+    adapters.db.fabFiles.pullTagsByFabFileId = vi.fn().mockResolvedValue(0);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).resolves.toMatchObject({ success: true });
   });
 
   it('removing the file from its ONLY lake still just pulls the tag — never cascade-deletes the file', async () => {
@@ -867,6 +959,8 @@ describe('removeFileFromDataLake — single-file removal', () => {
       removeFileFromDataLake({ userId: 'intruder', isAdmin: false }, 'lake1', 'f1', adapters as any)
     ).rejects.toThrow(/creator/i);
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    // The gate runs before any write, so a denial leaves the lake's stats alone too.
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
   });
 
   it('404s when the file does not carry the lake tag (not in this lake)', async () => {
