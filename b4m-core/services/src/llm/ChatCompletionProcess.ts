@@ -3112,10 +3112,14 @@ export class ChatCompletionProcess {
               signalCount: allSignals.length,
               details: omittedSignals > 0 ? [...shownSignals, `(+${omittedSignals} more not shown)`] : shownSignals,
             };
-            quest.promptMeta.warnings = [
-              ...(quest.promptMeta.warnings ?? []),
-              'An artifact in this response appears to have been abbreviated (placeholder comments or undefined references) and may not be fully functional.',
-            ];
+            // Appended once even if this block runs again for the same completion - `warnings`
+            // is user-facing, and the same sentence twice reads like two separate problems.
+            const elisionWarning =
+              'An artifact in this response appears to have been abbreviated (placeholder comments or undefined references) and may not be fully functional.';
+            const priorWarnings = quest.promptMeta.warnings ?? [];
+            quest.promptMeta.warnings = priorWarnings.includes(elisionWarning)
+              ? priorWarnings
+              : [...priorWarnings, elisionWarning];
             logger.warn(
               `[Elision] Suspected abbreviated artifact (model=${currentModel.id}, confidence=${confidence}, signals=${allSignals.length}): ${allSignals[0]}`
             );
