@@ -12,7 +12,7 @@ interface TitanResultElement {
 interface TitanChunk {
   index: number;
   inputTextTokenCount: number;
-  totalOutputTokenCount: number;
+  totalOutputTextTokenCount: number;
   outputText: string;
   completionReason: 'FINISH' | 'LENGTH' | 'CONTENT_FILTERED';
 }
@@ -162,6 +162,10 @@ export default class TitanBedrockBackend extends BaseBedrockBackend {
               index: parsed.index,
               status: ChoiceStatus.END,
               statusEndReason: completionReasonMap[parsed.completionReason] ?? chunk.completionReason,
+              usage: {
+                input_tokens: parsed.inputTextTokenCount || 0,
+                output_tokens: parsed.totalOutputTextTokenCount || 0,
+              },
             },
           ],
         },
