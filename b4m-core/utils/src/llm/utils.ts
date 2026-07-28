@@ -8,6 +8,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   IMessage,
+  isImageAttachment,
   isImageServeable,
   ISessionDocument,
   MessageContent,
@@ -18,6 +19,8 @@ import {
   ModelInfo,
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
+  isUnlimitedHistory,
+  resolveHistoryFetchLimit,
 } from '@bike4mind/common';
 import {
   BaseStorage,
@@ -35,7 +38,6 @@ import { BadRequestError, CorruptedFileError } from '../errors';
 import { isAxiosError } from 'axios';
 import { ITokenizer } from '../tokenCounting';
 import { getFileType } from '../file';
-const INFINITE_VALUE = 14;
 const MAX_FILE_SIZE = 6000;
 /** Cap on generated images surfaced to the model for editing (keeps the context note small). */
 const MAX_RECENT_GENERATED_IMAGES = 6;
@@ -83,7 +85,7 @@ const TOKEN_BUFFER_PERCENTAGE = 0.05;
 /**
  * Share of the token budget given to knowledge/fab files when history + files overflow: 70% files,
  * 30% history. Users attach files expecting them used; history can be pruned more aggressively.
- * Applies only when historyCount is INFINITE_VALUE; a finite historyCount uses the floor below.
+ * Applies only when history is unlimited; a windowed historyCount uses the floor below.
  */
 const KNOWLEDGE_FILE_TOKEN_ALLOCATION = 0.7;
 
@@ -113,8 +115,8 @@ const MAX_SAFETY_SHRINK_ROUNDS = 5;
  * Appended to attached-file content that had to be cut to fit. Without it a CSV sliced mid-row reads
  * as a complete file: the model treats the last surviving row as the final row and answers about it
  * confidently, which is indistinguishable from a correct answer unless you already hold the file.
- * Counted against the budget like any other content, because it is really sent. Its presence is also
- * how later steps recognise that a message was cut.
+ * Counted against the budget like any other content, because it is really sent. This text is for the
+ * model only - what later steps read to know a message was cut is processMessages' truncatedMessages.
  */
 const CONTENT_TRUNCATION_NOTICE =
   '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was not sent.]';
@@ -254,6 +256,10 @@ export async function generateSafeEmbedding(
 
 /**
  * Return the previous messages from the database, and the total number of previous messages.
+ *
+ * `historyCount` is a window in quests: null means the default page size, 0 or below means no
+ * history at all, and UNLIMITED_HISTORY_COUNT means no window (which still pages, since the
+ * fetch needs some limit).
  */
 export async function fetchAndProcessPreviousMessages(
   session: ISessionDocument,
@@ -279,9 +285,12 @@ export async function fetchAndProcessPreviousMessages(
     },
   ]
 > {
-  if (historyCount !== null && historyCount <= 0) return [[], 0, { cacheHit: false }];
+  // Unlimited is negative, so it has to be recognised before the no-history check below.
+  if (!isUnlimitedHistory(historyCount) && historyCount !== null && historyCount <= 0) {
+    return [[], 0, { cacheHit: false }];
+  }
 
-  const limit = historyCount ?? INFINITE_VALUE;
+  const limit = resolveHistoryFetchLimit(historyCount);
 
   // Query with descending timestamp, to get the <limit> most-recent messages
   // Add 1 to the limit to account for the current prompt
@@ -851,7 +860,7 @@ export async function processFabFilesServer(
 
   const processFileInParallel = async (file: IFabFileDocument): Promise<void> => {
     try {
-      if (supportsVision && file.mimeType.startsWith('image/')) {
+      if (supportsVision && isImageAttachment(file.mimeType)) {
         // Never send a not-yet-clean or blocked uploaded image to the model.
         if (!isImageServeable(file)) {
           logger.warn(
@@ -990,7 +999,7 @@ export async function processFabFilesServer(
             logger.error(`Unsupported backend for model ${modelInfo.id} backend ${modelInfo?.backend ?? 'undefined'}`);
             break;
         }
-      } else if (!supportsVision && file.mimeType.startsWith('image/')) {
+      } else if (!supportsVision && isImageAttachment(file.mimeType)) {
         logger.warn(`File ${file.fileName} is an image but model does not support vision. Skipping...`);
       } else {
         if (file.vectorized) {
@@ -1263,10 +1272,10 @@ const truncateMessageContent = (message: IMessage, tokenLimit: number): IMessage
 const processMessages = (
   messages: IMessage[],
   tokenBudget: number,
-  // Appended to any message this call actually shortens. Passed only for attached-file content: it is
-  // applied at the truncation site because that is the only place that KNOWS a message was cut.
-  // Inferring it afterwards by comparing against the originals cannot distinguish a cut file from a
-  // whole one whose bytes happen to match a sibling attachment, in either direction.
+  // Appended to any message this call actually shortens. Passed only for attached-file content, and
+  // applied here because this is the only place that knows a message was cut: inferring it afterwards
+  // by comparing against the originals cannot distinguish a cut file from a whole one whose bytes
+  // happen to match a sibling attachment, in either direction.
   { truncationNotice }: { truncationNotice?: string } = {}
 ): {
   messages: IMessage[];
@@ -1527,12 +1536,11 @@ export async function buildAndSortMessages(
   // The historyCount > 0 guard matters: slice(-0) is slice(0), which returns the WHOLE array, so
   // asking for no history used to send all of it. Image models set historyCount to 0 precisely to
   // keep history out of their small context windows.
-  const historyMessages =
-    historyCount === INFINITE_VALUE
-      ? previousMessages
-      : historyCount > 0
-        ? previousMessages.slice(-historyCount * 2)
-        : [];
+  const historyMessages = isUnlimitedHistory(historyCount)
+    ? previousMessages
+    : historyCount > 0
+      ? previousMessages.slice(-historyCount * 2)
+      : [];
   const totalContentTokens = await calculateTotalTokenLength(nonImageMessages, { estimateOnly: true, tokenizer });
   const totalPreviousTokens = await calculateTotalTokenLength(historyMessages, { estimateOnly: true, tokenizer });
   let processedContentMessages: IMessage[] = [];
@@ -1565,8 +1573,9 @@ export async function buildAndSortMessages(
     return `${named ? named.join(', ') : `attachment ${index + 1}`} (~${estimateMessageTokens(message)} est. tokens)`;
   };
 
-  // If historyCount is explicitly set (not INFINITE_VALUE), allocate tokens accordingly.
-  if (historyCount !== INFINITE_VALUE) {
+  // A windowed request allocates content a floor and gives history the rest; an unwindowed one splits
+  // the budget (see KNOWLEDGE_FILE_TOKEN_ALLOCATION in the else branch).
+  if (!isUnlimitedHistory(historyCount)) {
     // Content gets whatever history does not need, but never less than the floor. Both the fits and
     // the overflow case run through this one expression: splitting them would put a cliff on the
     // `totalPreviousTokens <= tokenBudget` boundary, where one more token of history flipped content
@@ -1659,7 +1668,10 @@ export async function buildAndSortMessages(
   const declareUndeliveredAttachments = (contentMessages: IMessage[]): IMessage[] => {
     if (attachmentsWithContent.length === 0) return contentMessages;
 
-    const delivered = contentMessages.filter(message => message !== undeliveredNote);
+    // Counted on the same footing as attachmentsWithContent: an attachment carrying no extractable
+    // text is absent from both sides. Counting it as delivered let it stand in for a sibling that was
+    // dropped, and the drop then went undeclared.
+    const delivered = contentMessages.filter(message => message !== undeliveredNote && fileTokens(message) > 0);
     const isUnusableSliver = (message: IMessage): boolean =>
       cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS;
     const usable = delivered.filter(message => !isUnusableSliver(message));
