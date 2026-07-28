@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   isPlaceholderValue,
   isPlaceholderApiKey,
+  PLACEHOLDER_API_KEY_TOKENS,
   SST_PLACEHOLDER_VALUE,
   NOT_CONFIGURED_PLACEHOLDER,
 } from '../types/entities/SystemSecretsTypes';
@@ -181,5 +182,44 @@ describe('isPlaceholderApiKey', () => {
       ];
       for (const b of bodies) expect(isPlaceholderApiKey(b)).toBe(false);
     });
+
+    it('accepts a modern base64url key whose body genuinely carries `-` and `_`', () => {
+      // Every fixture above is a contiguous body, so none of them can catch a regression here:
+      // modern sk-proj-/sk-svcacct- keys are base64url and legitimately contain `-`/`_`, which the
+      // `_` -> `-` normalization splits into segments the token regex scans. Nothing structural
+      // keeps those segments from matching - only the tokens' length does.
+      expect(isPlaceholderApiKey('sk-proj-0000aaaa_1111bbbb-2222cccc_3333dddd')).toBe(false);
+      expect(isPlaceholderApiKey('sk-svcacct-0000aaaa-1111bbbb_2222cccc')).toBe(false);
+    });
+  });
+});
+
+describe('PLACEHOLDER_API_KEY_TOKENS', () => {
+  // Tokens are regex fragments, so a raw `.length` measures the pattern (`change-?me` is 10) and
+  // not what it can match (`changeme`, 8). Drop optional groups and optional single chars to get
+  // the shortest string a token can match.
+  const shortestMatch = (token: string) => token.replace(/\([^)]*\)\?/g, '').replace(/.\?/g, '');
+
+  const MIN_TOKEN_LENGTH = 5;
+
+  it('every token is long enough that a random key body will not collide with it', () => {
+    // The predicate is safe because of entropy, not structure (see isPlaceholderApiKey): a real
+    // base64url body DOES split into `-`-delimited segments, so a short token collides orders of
+    // magnitude more often - a 3-char token roughly 64^2 (~4000x) more often than a 5-char one.
+    const tooShort = PLACEHOLDER_API_KEY_TOKENS.filter(t => shortestMatch(t).length < MIN_TOKEN_LENGTH);
+    expect(
+      tooShort,
+      `tokens shorter than ${MIN_TOKEN_LENGTH} chars at their shortest match: ${tooShort.join(', ')}`
+    ).toEqual([]);
+  });
+
+  it('measures the shortest match, so the invariant above is not vacuous', () => {
+    // Without this, the assertion above would still pass if shortestMatch were wrong in the
+    // permissive direction and silently let a short token through.
+    expect(shortestMatch('change-?me')).toBe('changeme');
+    expect(shortestMatch('your-?(api-?)?key')).toBe('yourkey');
+    for (const short of ['key', 'test', 'demo', 'fake', 'k(ey)?']) {
+      expect(shortestMatch(short).length).toBeLessThan(MIN_TOKEN_LENGTH);
+    }
   });
 });
