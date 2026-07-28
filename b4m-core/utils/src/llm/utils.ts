@@ -19,6 +19,8 @@ import {
   ModelInfo,
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
+  isUnlimitedHistory,
+  resolveHistoryFetchLimit,
 } from '@bike4mind/common';
 import {
   BaseStorage,
@@ -36,7 +38,6 @@ import { BadRequestError, CorruptedFileError } from '../errors';
 import { isAxiosError } from 'axios';
 import { ITokenizer } from '../tokenCounting';
 import { getFileType } from '../file';
-const INFINITE_VALUE = 14;
 const MAX_FILE_SIZE = 6000;
 /** Cap on generated images surfaced to the model for editing (keeps the context note small). */
 const MAX_RECENT_GENERATED_IMAGES = 6;
@@ -158,6 +159,10 @@ export async function generateSafeEmbedding(
 
 /**
  * Return the previous messages from the database, and the total number of previous messages.
+ *
+ * `historyCount` is a window in quests: null means the default page size, 0 or below means no
+ * history at all, and UNLIMITED_HISTORY_COUNT means no window (which still pages, since the
+ * fetch needs some limit).
  */
 export async function fetchAndProcessPreviousMessages(
   session: ISessionDocument,
@@ -183,9 +188,12 @@ export async function fetchAndProcessPreviousMessages(
     },
   ]
 > {
-  if (historyCount !== null && historyCount <= 0) return [[], 0, { cacheHit: false }];
+  // Unlimited is negative, so it has to be recognised before the no-history check below.
+  if (!isUnlimitedHistory(historyCount) && historyCount !== null && historyCount <= 0) {
+    return [[], 0, { cacheHit: false }];
+  }
 
-  const limit = historyCount ?? INFINITE_VALUE;
+  const limit = resolveHistoryFetchLimit(historyCount);
 
   // Query with descending timestamp, to get the <limit> most-recent messages
   // Add 1 to the limit to account for the current prompt
@@ -1378,8 +1386,9 @@ export async function buildAndSortMessages(
 
   // TODO: also weight previousMessages by cosine score (not just fabMessages) - blocked on not
   // having vectors for previousMessages yet.
-  const historyMessages =
-    historyCount !== INFINITE_VALUE ? previousMessages.slice(-historyCount * 2) : previousMessages;
+  const historyMessages = isUnlimitedHistory(historyCount)
+    ? previousMessages
+    : previousMessages.slice(-historyCount * 2);
   const totalContentTokens = await calculateTotalTokenLength(nonImageMessages, { estimateOnly: true, tokenizer });
   const totalPreviousTokens = await calculateTotalTokenLength(historyMessages, { estimateOnly: true, tokenizer });
   let processedContentMessages: IMessage[] = [];
@@ -1389,8 +1398,9 @@ export async function buildAndSortMessages(
   const allRemovedMessages: Array<{ role: string; tokens: number; priority: number }> = [];
   const originalTotalMessageCount = historyMessages.length + nonImageMessages.length;
 
-  // If historyCount is explicitly set (not INFINITE_VALUE), allocate tokens accordingly.
-  if (historyCount !== INFINITE_VALUE) {
+  // A windowed request gives history absolute priority; an unwindowed one splits the budget
+  // between files and history (see KNOWLEDGE_FILE_TOKEN_ALLOCATION in the else branch).
+  if (!isUnlimitedHistory(historyCount)) {
     // If the history fits within the budget, process it and allocate remaining tokens to content
     if (totalPreviousTokens <= tokenBudget) {
       const historyResult = processMessages(historyMessages, totalPreviousTokens);
@@ -1553,7 +1563,7 @@ export async function buildAndSortMessages(
 
   // Store debug info for external access
   const truncationMethod: 'priority' | 'token-budget' | 'history-limit' | undefined =
-    historyCount !== INFINITE_VALUE ? 'history-limit' : allRemovedMessages.length > 0 ? 'token-budget' : undefined;
+    !isUnlimitedHistory(historyCount) ? 'history-limit' : allRemovedMessages.length > 0 ? 'token-budget' : undefined;
 
   (buildAndSortMessages as any).lastDebugInfo = {
     messageTruncation: {
