@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import {
   Box,
+  Button,
   Chip,
   IconButton,
   Input,
@@ -18,8 +19,9 @@ import SwapVertIcon from '@mui/icons-material/SwapVert';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import AddIcon from '@mui/icons-material/Add';
-import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import CloseIcon from '@mui/icons-material/Close';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
@@ -39,6 +41,11 @@ const PREFIX_HUES: Record<string, Hue> = {
 
 const hueForBranch = (segment: string, breadcrumb: string[]): Hue =>
   PREFIX_HUES[breadcrumb[0] ?? segment] ?? HUES.amber;
+
+/** Shared chrome sizing for the tree's 32px controls (header icons + footer buttons). */
+const CONTROL_SX = { borderRadius: '6px' } as const;
+const ICON_BTN_SX = { ...CONTROL_SX, '--IconButton-size': '32px' } as const;
+const FOOTER_BTN_SX = { ...CONTROL_SX, flex: 1, minHeight: 32, height: 32, fontWeight: 400, fontSize: 14 } as const;
 
 const CATEGORY_LABELS: Record<string, string> = {
   offering: 'Offering Lines',
@@ -75,6 +82,8 @@ interface DataLakeTreeProps {
   onManage?: () => void;
   /** Blue + button - opens the Create Lake wizard. */
   onCreateLake?: () => void;
+  /** Header close (X) button - turns Data Lake mode off for this chat. */
+  onClose?: () => void;
 }
 
 export default function DataLakeTree({
@@ -89,6 +98,7 @@ export default function DataLakeTree({
   title,
   onManage,
   onCreateLake,
+  onClose,
 }: DataLakeTreeProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
@@ -135,7 +145,7 @@ export default function DataLakeTree({
         borderRadius: '10px',
       }}
     >
-      {/* Header: title + Manage Lakes (gear) + Create Lake (blue +). */}
+      {/* Header: title + close (turns Data Lake mode off for this chat). */}
       <Box
         className="datalake-tree-header"
         sx={{
@@ -149,34 +159,48 @@ export default function DataLakeTree({
           borderColor: isDark ? gray[800] : gray[200],
         }}
       >
-        <Typography noWrap sx={{ flex: 1, fontSize: '14px', fontWeight: 300, color: gray[200] }}>
-          {title}
-        </Typography>
-        {onManage && (
-          <Tooltip title="Manage lakes" size="sm">
+        <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Typography noWrap sx={{ fontSize: '14px', fontWeight: 300, color: gray[200] }}>
+            {title}
+          </Typography>
+          <Tooltip
+            title="Ground this chat in your Data Lakes - the assistant answers from the files in your lakes, with citations. Turn it on for any chat; use Create to add a lake and Manage to organize them."
+            placement="top"
+            size="sm"
+            sx={{ maxWidth: 280 }}
+          >
             <IconButton
-              variant="outlined"
+              size="sm"
+              variant="plain"
               color="neutral"
-              onClick={onManage}
-              aria-label="Manage lakes"
-              data-testid="datalake-manage-btn"
-              sx={{ '--IconButton-size': '32px', borderRadius: '6px' }}
+              aria-label="About Data Lakes"
+              data-testid="datalake-info-icon"
+              sx={{ ...HEADER_ICON_BUTTON_SX, flexShrink: 0 }}
             >
-              <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
+              <HelpOutlineIcon sx={{ fontSize: 16 }} />
             </IconButton>
           </Tooltip>
-        )}
-        {onCreateLake && (
-          <Tooltip title="Create lake" size="sm">
+        </Box>
+        {onClose && (
+          <Tooltip title="Close Data Lakes" size="sm">
             <IconButton
-              variant="solid"
-              color="primary"
-              onClick={onCreateLake}
-              aria-label="Create lake"
-              data-testid="datalake-create-btn"
-              sx={{ '--IconButton-size': '32px', borderRadius: '6px' }}
+              variant="plain"
+              color="neutral"
+              onClick={onClose}
+              aria-label="Close Data Lakes"
+              data-testid="datalake-close-btn"
+              sx={theme => ({
+                ...ICON_BTN_SX,
+                // No pressed/active fill - the icon brightening is the only affordance.
+                '--variant-plainActiveBg': 'transparent',
+                // Icon reads this var; the button flips it on hover so the swap can't lose a
+                // specificity fight with the icon's own color. text.icon == text.tertiary in
+                // this theme, so hover uses the brighter neutral plain color instead.
+                '--dl-close-color': theme.vars.palette.text.tertiary,
+                '&:hover': { '--dl-close-color': theme.vars.palette.neutral.plainColor },
+              })}
             >
-              <AddIcon sx={{ fontSize: 18 }} />
+              <CloseIcon sx={{ fontSize: 18, color: 'var(--dl-close-color)', transition: 'color 0.15s' }} />
             </IconButton>
           </Tooltip>
         )}
@@ -206,7 +230,7 @@ export default function DataLakeTree({
             onClick={() => setSortBy(prev => (prev === 'count' ? 'alpha' : 'count'))}
             data-testid="datalake-sort-toggle"
             data-sort={sortBy}
-            sx={{ flexShrink: 0, '--IconButton-size': '32px', borderRadius: '6px' }}
+            sx={{ ...ICON_BTN_SX, flexShrink: 0 }}
           >
             <SwapVertIcon sx={{ fontSize: 18 }} />
           </IconButton>
@@ -354,6 +378,43 @@ export default function DataLakeTree({
           </List>
         )}
       </Box>
+
+      {/* Sticky bottom bar: manage / create lakes. Pinned below the scrollable list. */}
+      {(onManage || onCreateLake) && (
+        <Box
+          className="datalake-tree-footer"
+          sx={{
+            display: 'flex',
+            gap: '8px',
+            p: '12px',
+            borderTop: '1px solid',
+            borderColor: isDark ? gray[800] : gray[200],
+          }}
+        >
+          {onManage && (
+            <Button
+              variant="outlined"
+              color="neutral"
+              onClick={onManage}
+              data-testid="datalake-manage-btn"
+              sx={FOOTER_BTN_SX}
+            >
+              Manage
+            </Button>
+          )}
+          {onCreateLake && (
+            <Button
+              variant="solid"
+              color="primary"
+              onClick={onCreateLake}
+              data-testid="datalake-create-btn"
+              sx={FOOTER_BTN_SX}
+            >
+              Create
+            </Button>
+          )}
+        </Box>
+      )}
     </Box>
   );
 }

@@ -56,16 +56,10 @@ describe('DataLakeToggle', () => {
     );
   });
 
-  it('turning off: flips the store back to false and persists forceKnowledgeRetrieval:false', () => {
+  it('renders nothing once mode is on - the tree close (X) button is the off-switch', () => {
     useDataLakeMode.setState({ enabled: true, seededSessionId: 's1' });
-    currentSession = { id: 's1', name: 'Chat', forceKnowledgeRetrieval: true };
-    wrap(<DataLakeToggle />);
-    fireEvent.click(screen.getByTestId('datalake-mode-toggle'));
-    expect(useDataLakeMode.getState().enabled).toBe(false);
-    expect(updateSession).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 's1', forceKnowledgeRetrieval: false }),
-      expect.objectContaining({ onError: expect.any(Function) })
-    );
+    const { container } = wrap(<DataLakeToggle />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('rolls back the optimistic toggle when persistence fails', () => {

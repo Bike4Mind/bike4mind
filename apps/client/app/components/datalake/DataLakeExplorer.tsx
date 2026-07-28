@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Box, Typography, useTheme } from '@mui/joy';
+import { Box, Typography } from '@mui/joy';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import DataLakeTree from './DataLakeTree';
-import { deckBackground } from '@client/app/components/datalake/deckChrome';
 import { useGetDataLakeArticles, useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import type { DataLakeBrowseSource } from '@client/app/hooks/data/fabFiles';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
@@ -14,12 +14,6 @@ import { toast } from 'sonner';
 import type { IFabFileDocument } from '@bike4mind/common';
 
 interface DataLakeExplorerProps {
-  /** Unused internally; kept optional for the premium overlay's QuantumPage, which still
-   *  passes it pending its own chat-only migration. */
-  onBack?: () => void;
-  /** Unused internally; kept optional for the premium overlay's QuantumPage, which still
-   *  passes it pending its own chat-only migration. */
-  onAskAbout?: (prompt: string) => void;
   /** When set (from URL param), auto-select and display this article on mount. */
   articleId?: string | null;
   /** Which browse backend to read (default 'opti'). The standalone Data Lakes home
@@ -32,11 +26,23 @@ interface DataLakeExplorerProps {
   /** When provided, the tree's blue + button opens the Create Lake wizard. */
   onCreateLake?: () => void;
   /**
-   * `chatSlot` (a full `SessionContainer`) fills the right pane. Clicking a tree file opens it
-   * inline in the KnowledgeViewer split (layout `vertical`) by adding it to the session
-   * workbench, rather than a modal - the parent owns/pre-creates the session (see issue #836).
+   * Fills the pane right of the tree. Two host arrangements exist:
+   * - Main app (DataLakeChatSurface): the chat's SessionContainer, declared via `chatEmbedded`.
+   * - Premium overlay: the page's own (non-chat) content, with the chat DOCKED as a sibling
+   *   outside this component.
    */
   chatSlot?: React.ReactNode;
+  /**
+   * True when `chatSlot` holds the chat's SessionContainer (main app): clicking a tree file
+   * opens it inline in the KnowledgeViewer split (layout `vertical`) via the session workbench,
+   * rather than a modal - the parent owns/pre-creates the session (see issue #836) - and tree
+   * navigation closes that split. When omitted (overlay), the chat lives OUTSIDE this component
+   * (docked), so the global layout is never touched - switching it would collapse the docked
+   * chat into a 0x0 branch - and a clicked file is added to the chat's workbench with a toast.
+   * Keyed on the HOST, not the live layout: the layout store is global and persists across
+   * surfaces, so it can't tell who owns the chat.
+   */
+  chatEmbedded?: boolean;
 }
 
 /** True only for drags carrying real files (not text/image-from-page drags). */
@@ -49,30 +55,40 @@ export default function DataLakeExplorer({
   onManage,
   onCreateLake,
   chatSlot,
+  chatEmbedded = false,
 }: DataLakeExplorerProps) {
-  const theme = useTheme();
-  const isDark = theme.palette.mode === 'dark';
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
 
-  // Clicking a file opens it INLINE in the chat's KnowledgeViewer (the split
-  // "knowledge-viewer-container") rather than a modal - by adding it to the session workbench and
-  // switching the layout to `vertical` (KnowledgeViewer left, chat right). The parent's
-  // SessionContainer drives the global session context, so `currentSessionId` here is the
-  // datalake chat's session. (#836)
+  // Clicking a file adds it to the current session's workbench and highlights it. What ELSE
+  // happens is the host's contract (see the chatEmbedded doc): embedded chat -> open the
+  // KnowledgeViewer split; external (docked) chat -> leave the layout alone and toast so the
+  // click still has visible feedback. `currentSessionId` is whatever session the host page
+  // has active. (#836)
   const { currentSessionId } = useSessions();
   const { setWorkBenchFiles } = useWorkBenchActions();
+  const setDataLakeMode = useSetDataLakeMode();
   // Id of the file most recently opened in the viewer, kept to highlight it in the tree.
   const [viewerFileId, setViewerFileId] = useState<string | null>(articleId ?? null);
   const openFileInViewer = useCallback(
     (file: IFabFileDocument) => {
-      if (currentSessionId) {
-        setWorkBenchFiles(currentSessionId, prev => (prev.some(f => f.id === file.id) ? prev : [...prev, file]));
+      if (!currentSessionId) {
+        // /new: session creation is deferred to the first message, so there is no workbench
+        // to attach the file to and the viewer would render empty (then auto-hide). Guide
+        // instead of silently no-oping; the highlight below still marks the pick.
+        toast.info('Start the chat with a first message - lake files will then open right here.');
+        setViewerFileId(file.id);
+        return;
       }
-      // Show the KnowledgeViewer split and select this file's tab.
-      setSessionLayout({ layout: 'vertical', selectedArtifactId: file.id });
+      setWorkBenchFiles(currentSessionId, prev => (prev.some(f => f.id === file.id) ? prev : [...prev, file]));
+      if (chatEmbedded) {
+        // Chat is embedded in our right pane: show the KnowledgeViewer split with this file's tab.
+        setSessionLayout({ layout: 'vertical', selectedArtifactId: file.id });
+      } else {
+        toast.info(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
+      }
       setViewerFileId(file.id);
     },
-    [currentSessionId, setWorkBenchFiles]
+    [currentSessionId, setWorkBenchFiles, chatEmbedded]
   );
 
   // Drag-to-ingest: an overlay invites dropping files/folders, which then open a lake
@@ -146,12 +162,19 @@ export default function DataLakeExplorer({
     }
   }, [deepLinkTarget, openFileInViewer]);
 
-  const handleNavigate = useCallback((newBreadcrumb: string[]) => {
-    setBreadcrumb(newBreadcrumb);
-    // Browsing away closes the inline file viewer, returning to the full-width chat.
-    setSessionLayout({ layout: 'hide' });
-    setViewerFileId(null);
-  }, []);
+  const handleNavigate = useCallback(
+    (newBreadcrumb: string[]) => {
+      setBreadcrumb(newBreadcrumb);
+      // Browsing away closes the inline file viewer, returning to the full-width chat. Only
+      // when the chat is embedded, and only resetting a layout WE opened ('vertical' above) -
+      // an unconditional 'hide' would collapse a docked/floating chat on external-chat hosts.
+      if (chatEmbedded) {
+        setSessionLayout(prev => (prev.layout === 'vertical' ? { layout: 'hide' } : {}));
+      }
+      setViewerFileId(null);
+    },
+    [chatEmbedded]
+  );
 
   const handleSelectFile = useCallback(
     (file: IFabFileDocument) => {
@@ -172,7 +195,6 @@ export default function DataLakeExplorer({
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        background: deckBackground(isDark),
       }}
     >
       {isDragging && (
@@ -220,6 +242,7 @@ export default function DataLakeExplorer({
           title={rootLabel}
           onManage={onManage}
           onCreateLake={onCreateLake}
+          onClose={() => setDataLakeMode(false)}
         />
         <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
           {chatSlot}

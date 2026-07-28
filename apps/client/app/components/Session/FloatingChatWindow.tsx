@@ -19,6 +19,8 @@ const DraggableComponent = Draggable;
 interface FloatingChatWindowProps {
   children: React.ReactNode;
   headerActions?: React.ReactNode;
+  /** Overrides the default "AI Chat" title-bar label (e.g. /opti swaps in the Data Lakes toggle). */
+  title?: React.ReactNode;
 }
 
 // Animation for expand/collapse
@@ -81,7 +83,7 @@ const getCursorForHandle = (position: string): string => {
   return cursors[position] || 'default';
 };
 
-const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, headerActions }) => {
+const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, headerActions, title }) => {
   const nodeRef = useRef<HTMLDivElement>(null);
   const [isResizing, setIsResizing] = useState(false);
 
@@ -411,9 +413,22 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
             >
               <SmartToyIcon sx={{ fontSize: 18 }} />
             </Box>
-            <Typography level="body-sm" fontWeight="md">
-              AI Chat
-            </Typography>
+            {title ? (
+              // The title bar is the drag handle; stop pointer events so clicking an interactive
+              // title (e.g. the Data Lakes toggle) doesn't start a window drag.
+              <Box
+                sx={{ display: 'flex', alignItems: 'center' }}
+                onMouseDown={e => e.stopPropagation()}
+                onTouchStart={e => e.stopPropagation()}
+                onPointerDown={e => e.stopPropagation()}
+              >
+                {title}
+              </Box>
+            ) : (
+              <Typography level="body-sm" fontWeight="md">
+                AI Chat
+              </Typography>
+            )}
           </Box>
 
           {/* Stop all event propagation so react-draggable doesn't swallow taps on mobile */}

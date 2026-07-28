@@ -8,10 +8,15 @@ import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: { id: 's1', forceKnowledgeRetrieval: false } }),
 }));
-// Stub the heavy explorer so the test asserts only the conditional wrapping.
+// Stub the heavy explorer so the test asserts only the conditional wrapping + the
+// chat-embedded contract (file clicks may own the layout only when the chat is inside).
 vi.mock('./DataLakeExplorer', () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
-  default: ({ chatSlot }: any) => <div data-testid="explorer">{chatSlot}</div>,
+  default: ({ chatSlot, chatEmbedded }: any) => (
+    <div data-testid="explorer" data-chat-embedded={String(!!chatEmbedded)}>
+      {chatSlot}
+    </div>
+  ),
 }));
 
 describe('DataLakeChatSurface', () => {
@@ -31,5 +36,7 @@ describe('DataLakeChatSurface', () => {
     const explorer = screen.getByTestId('explorer');
     expect(explorer).toBeInTheDocument();
     expect(explorer).toContainElement(screen.getByTestId('chat'));
+    // The chat lives IN the explorer here, so file clicks may drive the KnowledgeViewer layout.
+    expect(explorer).toHaveAttribute('data-chat-embedded', 'true');
   });
 });
