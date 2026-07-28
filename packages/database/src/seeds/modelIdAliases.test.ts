@@ -83,10 +83,17 @@ describe('aggregator join coverage over the checked-in seed', () => {
     expect(litellm.matched).toBeGreaterThan(modelsDev.matched);
   });
 
-  it('joins every model id exactly once, with no id resolving to two different keys', () => {
+  // The property that matters is injectivity: two DIFFERENT seed ids landing on
+  // one aggregator key means one model is quoted the other's price. Calling the
+  // same pure function twice with identical arguments cannot show that.
+  it.each(['modelsDev', 'litellm'] as const)('resolves no two seed ids to the same %s key', aggregator => {
+    const owner = new Map<string, string>();
     for (const modelId of seedModelIds) {
-      const first = resolveAggregatorKey(modelId, INDEXES.litellm, aliases);
-      expect(resolveAggregatorKey(modelId, INDEXES.litellm, aliases)).toEqual(first);
+      const hit = resolveAggregatorKey(modelId, INDEXES[aggregator], aliases);
+      if (!hit) continue;
+      const held = owner.get(hit.key);
+      expect(held, `${modelId} and ${held} both resolve to ${aggregator} key ${hit.key}`).toBeUndefined();
+      owner.set(hit.key, modelId);
     }
   });
 });

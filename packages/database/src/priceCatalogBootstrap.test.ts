@@ -9,11 +9,17 @@ const priceRowsInForce = vi.fn();
 const catalogRowsInForce = vi.fn();
 const seedModelPrices = vi.fn();
 const seedModelCatalog = vi.fn();
+const catalogInit = vi.fn();
+const discoveryStateInit = vi.fn();
 
 vi.mock('@bike4mind/db-core', () => ({ connectDB: baseConnectDB }));
 vi.mock('@bike4mind/llm-adapters', () => ({ setModelPriceRowsProvider, setModelCatalogProvider }));
 vi.mock('./models/billing/ModelPriceModel', () => ({ modelPriceRepository: { rowsInForce: priceRowsInForce } }));
-vi.mock('./models/ai/ModelCatalogModel', () => ({ modelCatalogRepository: { rowsInForce: catalogRowsInForce } }));
+vi.mock('./models/ai/ModelCatalogModel', () => ({
+  modelCatalogRepository: { rowsInForce: catalogRowsInForce },
+  ModelCatalog: { init: catalogInit },
+}));
+vi.mock('./models/ai/ModelDiscoveryStateModel', () => ({ ModelDiscoveryState: { init: discoveryStateInit } }));
 vi.mock('./seeds/seedModelPrices', () => ({ seedModelPrices }));
 vi.mock('./seeds/seedModelCatalog', () => ({ seedModelCatalog }));
 
@@ -33,6 +39,8 @@ describe('priceCatalogBootstrap.connectDB', () => {
     baseConnectDB.mockResolvedValue('connection');
     seedModelPrices.mockResolvedValue({ inserted: 0, skipped: 0 });
     seedModelCatalog.mockResolvedValue({ inserted: 0, skipped: 0 });
+    catalogInit.mockResolvedValue(undefined);
+    discoveryStateInit.mockResolvedValue(undefined);
   });
 
   it('wires both providers and seeds exactly once across repeated connects', async () => {
@@ -69,6 +77,40 @@ describe('priceCatalogBootstrap.connectDB', () => {
     await flushSeeding();
 
     expect(order).toEqual(['catalog', 'prices']);
+  });
+
+  it('awaits both unique-index builds before the first write', async () => {
+    // autoIndex is fire-and-forget: seeding a fresh collection first lets the
+    // duplicates land, and createIndexes then fails on them permanently. The
+    // discovery drivers gate on whenCatalogSeeded, so the discovery-state index
+    // has to be built here too, ahead of the first recordSighting upsert.
+    const order: string[] = [];
+    catalogInit.mockImplementation(async () => order.push('catalog-index'));
+    discoveryStateInit.mockImplementation(async () => order.push('discovery-index'));
+    seedModelCatalog.mockImplementation(async () => {
+      order.push('catalog-seed');
+      return { inserted: 0, skipped: 0 };
+    });
+
+    const connectDB = await freshConnectDB();
+    await connectDB('mongodb://x');
+    await flushSeeding();
+
+    expect(order).toEqual(['catalog-index', 'discovery-index', 'catalog-seed']);
+  });
+
+  it('still seeds when an index build fails, so an already-duplicated collection is not left empty', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    catalogInit.mockRejectedValue(new Error('E11000 duplicate key'));
+
+    const connectDB = await freshConnectDB();
+    await connectDB('mongodb://x');
+    await flushSeeding();
+
+    expect(seedModelCatalog).toHaveBeenCalledTimes(1);
+    expect(seedModelPrices).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('unique index build failed'), expect.any(Error));
+    warn.mockRestore();
   });
 
   it('does not reject the connect when fire-and-forget seeding fails', async () => {

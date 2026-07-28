@@ -1,7 +1,8 @@
 import { connectDB as baseConnectDB } from '@bike4mind/db-core';
 import { setModelCatalogProvider, setModelPriceRowsProvider } from '@bike4mind/llm-adapters';
 import { modelPriceRepository } from './models/billing/ModelPriceModel';
-import { modelCatalogRepository } from './models/ai/ModelCatalogModel';
+import { ModelCatalog, modelCatalogRepository } from './models/ai/ModelCatalogModel';
+import { ModelDiscoveryState } from './models/ai/ModelDiscoveryStateModel';
 import { seedModelCatalog } from './seeds/seedModelCatalog';
 import { seedModelPrices } from './seeds/seedModelPrices';
 
@@ -21,6 +22,28 @@ let catalogSeedSettled: Promise<boolean> | null = null;
 export const whenCatalogSeeded = (): Promise<boolean> => catalogSeedSettled ?? Promise.resolve(true);
 
 /**
+ * Await one collection's index build, warning instead of throwing.
+ *
+ * mongo.ts sets autoIndex, but Mongoose fires createIndexes without anything
+ * awaiting it, so on a fresh database the first writers can beat their own
+ * unique index into the collection: the duplicates land, createIndexes then
+ * fails on them, and the index is never created again. ModelCatalog and
+ * ModelDiscoveryState are both new collections, so every deployment gets exactly
+ * that cold start. ModelPrice is deliberately absent - its collection and index
+ * predate this.
+ *
+ * A failed build must not skip the seeding it precedes: an already-duplicated
+ * collection would then never receive its rows.
+ */
+async function ensureUniqueIndex(label: string, model: { init(): Promise<unknown> }): Promise<void> {
+  try {
+    await model.init();
+  } catch (error) {
+    console.warn(`[${label}] unique index build failed; concurrent writers may duplicate rows`, error);
+  }
+}
+
+/**
  * Seed both collections, each independently: a catalog failure must not cancel
  * price seeding, or one transient write error would leave the process billing
  * from adapter literals for its whole lifetime. Catalog first only for ordering
@@ -32,6 +55,16 @@ export const whenCatalogSeeded = (): Promise<boolean> => catalogSeedSettled ?? P
  * Returns whether the catalog seed succeeded; see whenCatalogSeeded.
  */
 async function seedCatalogs(): Promise<boolean> {
+  // Before any write: seedModelCatalog resolves the concurrent-seeder race only
+  // by catching E11000, which needs the {modelId, effectiveFrom} unique index to
+  // already exist. The discovery drivers gate on whenCatalogSeeded, so awaiting
+  // ModelDiscoveryState's index here also puts it ahead of the first
+  // recordSighting upsert.
+  await Promise.all([
+    ensureUniqueIndex('modelCatalog', ModelCatalog),
+    ensureUniqueIndex('modelDiscoveryState', ModelDiscoveryState),
+  ]);
+
   let catalogSeeded = true;
   try {
     const catalog = await seedModelCatalog(modelCatalogRepository);

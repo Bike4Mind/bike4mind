@@ -17,6 +17,14 @@ const seed = seedFile as unknown as ModelCatalogSeedFile;
  * is where CI says so instead of a user discovering it. */
 const MAX_SEED_AGE_DAYS = 120;
 
+/**
+ * Time-based, so it fails on a date rather than on a change - as a PR-blocking
+ * test that means every PR, hotfixes included, starts failing on a day nobody
+ * touched the seed. It runs where a scheduled job can act on it. The freshness
+ * test above is the deterministic one and stays PR-blocking.
+ */
+const runStalenessGuard = process.env.B4M_SEED_STALENESS_CHECK === 'true' ? it : it.skip;
+
 describe('model catalog seed (no DB)', () => {
   it('the checked-in seed file is fresh (regenerating from the adapter tables produces it)', async () => {
     // Fails when an adapter table changes without regenerating the seed - the
@@ -30,7 +38,7 @@ describe('model catalog seed (no DB)', () => {
     expect(Number.isFinite(new Date(seed.generatedAt).getTime())).toBe(true);
   });
 
-  it('is not stale: the "last maintained" notice is still honest (CI staleness guard)', () => {
+  runStalenessGuard('is not stale: the "last maintained" notice is still honest', () => {
     const ageDays = (Date.now() - new Date(seed.generatedAt).getTime()) / 86_400_000;
     expect(ageDays).toBeLessThan(MAX_SEED_AGE_DAYS);
   });
