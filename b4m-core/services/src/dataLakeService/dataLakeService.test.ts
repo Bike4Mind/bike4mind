@@ -826,7 +826,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
       dataLakes: { findById: vi.fn().mockResolvedValue(lake()), setStats: vi.fn() },
       fabFiles: {
         findById: vi.fn().mockResolvedValue(file),
-        pullTagByFabFileId: vi.fn().mockResolvedValue(1),
+        pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
       },
     },
@@ -837,7 +837,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
     const result = await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
     // Lake-scoped + concurrency-safe: an atomic $pull of THIS lake's tag only - never a
     // whole-array rewrite (which could clobber a concurrent removal) and never a soft-delete.
-    expect(adapters.db.fabFiles.pullTagByFabFileId).toHaveBeenCalledWith('f1', 'datalake:lake');
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalled();
     expect(result).toEqual({ success: true, fileCount: 0, totalSizeBytes: 0 });
   });
@@ -850,7 +850,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
     const result = await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
     // Same tag-pull path as the multi-lake case - the service has no cascade-delete branch,
     // so "last lake" is not special: the tag is pulled and the file is left to exist.
-    expect(adapters.db.fabFiles.pullTagByFabFileId).toHaveBeenCalledWith('f1', 'datalake:lake');
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
     expect(result).toEqual({ success: true, fileCount: 0, totalSizeBytes: 0 });
   });
 
@@ -866,7 +866,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
     await expect(
       removeFileFromDataLake({ userId: 'intruder', isAdmin: false }, 'lake1', 'f1', adapters as any)
     ).rejects.toThrow(/creator/i);
-    expect(adapters.db.fabFiles.pullTagByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 
   it('404s when the file does not carry the lake tag (not in this lake)', async () => {
@@ -874,7 +874,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
     await expect(
       removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
     ).rejects.toThrow(/not found in this data lake/i);
-    expect(adapters.db.fabFiles.pullTagByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 
   it('404s when the lake does not exist', async () => {

@@ -6,7 +6,7 @@ import { recomputeLakeStats } from './recomputeLakeStats';
 interface RemoveFileFromDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats'>;
-    fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagByFabFileId' | 'computeDataLakeStats'>;
+    fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
   };
 }
 
@@ -53,7 +53,7 @@ export const removeFileFromDataLake = async (
   // other lake membership) intact. $pull removes just the matching element, so a concurrent
   // removal of the same file from a DIFFERENT lake can't clobber this write the way a
   // read-filter-write of the whole tags array would (last-write-wins re-adding a tag).
-  await db.fabFiles.pullTagByFabFileId(file.id, lake.datalakeTag);
+  await db.fabFiles.pullTagsByFabFileId(file.id, [lake.datalakeTag]);
 
   const stats = await recomputeLakeStats(dataLakeId, lake.datalakeTag, { db });
   return { success: true, ...stats };

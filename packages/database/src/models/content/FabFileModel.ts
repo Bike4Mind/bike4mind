@@ -603,11 +603,26 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
-  async pullTagByFabFileId(fabFileId: string, tagName: string): Promise<number> {
-    // Atomic $pull by exact tag name: removes only the matching element, so concurrent
+  async pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number> {
+    // The schema has timestamps, so an empty $in would still rewrite updatedAt and report a
+    // modification for a write that removes nothing.
+    if (tagNames.length === 0) return 0;
+    // Atomic $pull by exact tag names: removes only the matching elements, so concurrent
     // removals of different tags on the same file can't clobber each other. Idempotent -
-    // a no-op (modifiedCount 0) if the tag is already absent.
-    const result = await this.fabFileModel.updateOne({ _id: fabFileId }, { $pull: { tags: { name: tagName } } });
+    // absent names are a no-op. Exact names only, deliberately: a prefix pattern here would
+    // mean building a regex from a user-chosen prefix, and an empty one matches every tag.
+    const result = await this.fabFileModel.updateOne(
+      { _id: fabFileId },
+      { $pull: { tags: { name: { $in: tagNames } } } }
+    );
+    // A primaryTag naming a tag the file no longer carries later fails the data-lake write
+    // gate on PUT /api/files/[id], which round-trips the stale value. Separate filtered write
+    // because a plain update can't clear a field conditionally on its own value; it is a
+    // no-op unless primaryTag actually went.
+    await this.fabFileModel.updateOne(
+      { _id: fabFileId, primaryTag: { $in: tagNames } },
+      { $unset: { primaryTag: '' } }
+    );
     return result.modifiedCount;
   }
 }
