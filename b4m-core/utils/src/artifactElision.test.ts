@@ -152,6 +152,167 @@ describe('detectElidedContent', () => {
       expect(detectElidedContent(body, 'html').elided).toBe(false);
     });
 
+    // The cases below pin the lexer. An earlier version scanned for comments with a separate,
+    // line-by-line matcher that had no string or template state, so an artifact that merely
+    // DISPLAYED code containing a stub phrase flagged at HIGH confidence. Comments are now
+    // harvested by the same single pass that blanks strings and templates, and HTML is walked
+    // tag-aware so an attribute value is never treated as code.
+    it('does not flag a comment-shaped stub phrase inside a template literal', () => {
+      const body = `<html><body><script>
+        const tpl = \`<div><!-- rest of the rows are rendered below --></div>\`;
+        function render() { document.body.innerHTML = tpl; }
+        render();
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('does not flag a block comment inside a string showing sample code', () => {
+      const body = `<html><body><script>
+        const SAMPLE = 'function f() { /* for brevity */ }';
+        function show() { document.title = SAMPLE; }
+        show();
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('does not let an unterminated /* inside a string swallow the next line', () => {
+      const body = `<html><body><script>
+        const DOC = 'use /* to open a block comment';
+        const NOTE = 'identical to previous builds';
+        function go() { document.title = DOC + NOTE; }
+        go();
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('does not let an apostrophe in HTML prose hide a later real stub comment', () => {
+      // Markup is not JS: a quote in body text is an apostrophe, not a string delimiter. Lexing
+      // this with JS rules opened a "string" that ran past the stub comment entirely.
+      const body = `<html><body>
+        <p>it's a lovely day</p>
+        <!-- rest of the markup omitted for brevity -->
+      </body></html>`;
+
+      const result = detectElidedContent(body, 'html');
+      expect(result.elided).toBe(true);
+      expect(result.confidence).toBe('high');
+    });
+
+    it('does not scan a script src attribute as a comment', () => {
+      const body = `<html><body>
+        <script src="//cdn.example.com/rest-of-the-lib.js"></script>
+        <script>function go(){ document.title='x'; } go();</script>
+      </body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('flags a stub phrase in a CSS block comment', () => {
+      const body = `<html><head><style>
+        .card { color: #333; }
+        /* rest of the rules omitted for brevity */
+      </style></head><body><div class="card">x</div></body></html>`;
+
+      expect(detectElidedContent(body, 'html').confidence).toBe('high');
+    });
+
+    it('treats a python docstring as prose but still flags a # stub', () => {
+      const clean = `def run():\n    """for brevity we only summarise here"""\n    return 1\n`;
+      const stub = `def run():\n    # rest of the implementation omitted for brevity\n    pass\n`;
+
+      expect(detectElidedContent(clean, 'python').elided).toBe(false);
+      expect(detectElidedContent(stub, 'python').confidence).toBe('high');
+    });
+
+    it('does not mislex a regex literal after a keyword as division', () => {
+      // `return /re/` read as division left the regex body as live code, leaking phantom names.
+      const body = `<html><body><script>
+        function isNum(s) { return /^[0-9]+$/.test(s); }
+        function go() { document.title = isNum('1') ? 'y' : 'n'; }
+        go();
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('does not flag "rest of the" in its ordinary sense', () => {
+      // This was the one unqualified phrase in an otherwise carefully qualified list, so it fired at
+      // HIGH confidence on healthy code. Now qualified like its omitted/unchanged siblings.
+      const body = `<html><body><script>
+        function drain(queue) {
+          const first = queue.shift();
+          // handle the rest of the items in the queue
+          queue.forEach(item => log(item));
+          return first;
+        }
+        function log(i) { return i; }
+        drain([1, 2, 3]);
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('still flags the stub reading of "rest of the"', () => {
+      const body = '<html><body><!-- rest of the markup unchanged --><div id="a"></div></body></html>';
+
+      expect(detectElidedContent(body, 'html').confidence).toBe('high');
+    });
+
+    it('does not flag a working CDN-library page whose globals it cannot know', () => {
+      // A jQuery page reaches the 2-distinct-name threshold on `$` and `jQuery` alone; a p5.js
+      // sketch flags on four. An off-site script means the global namespace is unknowable, so the
+      // reference signals carry no information and are suppressed rather than merely re-thresholded.
+      const jquery = `<html><body>
+        <script src="https://cdn.example.com/jquery.min.js"></script>
+        <script>
+          $(document).ready(function () { jQuery('#app').text('ready'); });
+        </script>
+      </body></html>`;
+      const p5 = `<html><body>
+        <script src="//cdn.example.com/p5.min.js"></script>
+        <script>
+          function setup() { createCanvas(400, 400); background(220); }
+          function draw() { ellipse(mouseX, mouseY, 20, 20); fill(100); }
+        </script>
+      </body></html>`;
+
+      expect(detectElidedContent(jquery, 'html').elided).toBe(false);
+      expect(detectElidedContent(p5, 'html').elided).toBe(false);
+    });
+
+    it('still flags a stub comment on a page that loads a CDN library', () => {
+      // Suppression applies ONLY to the reference signals - the high-confidence ones must survive,
+      // or loading a library would become a way to hide an elided artifact entirely.
+      const body = `<html><body>
+        <script src="https://cdn.example.com/jquery.min.js"></script>
+        <script>
+          function init() {
+            // All the interactive JS from the previous complete artifact
+          }
+          init();
+        </script>
+      </body></html>`;
+
+      expect(detectElidedContent(body, 'html').confidence).toBe('high');
+    });
+
+    it('does not suppress references for a root-relative blessed library', () => {
+      // Root-relative sources are the self-hosted blessed libraries, whose globals ARE known, so
+      // suppression must not extend to them or every artifact could opt out of the scan.
+      const body = `<html><body>
+        <script src="/libs/chart.umd.min.js"></script>
+        <script>
+          function init() { renderBoard(); wireChips(); }
+          init();
+        </script>
+      </body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(true);
+    });
+
     it('does not flag stub phrases inside string literals', () => {
       const body = `<html><body><script>
         const NOTICE = 'for brevity, see the appendix';
@@ -402,6 +563,78 @@ func main() {
    * referring to a previous version, and every called name resolves because the declaration is
    * still present. Only the missing bodies give it away.
    */
+  describe('hollowed bodies across declaration forms', () => {
+    it('flags hollow arrow-const handlers in a react artifact', () => {
+      // The `function` keyword alone was not enough: react artifacts overwhelmingly use
+      // `const handleX = () => {}`, so this exact shape - the reported bug, in the framework the
+      // detector most often runs in - previously produced ZERO signals.
+      const body = `
+        const handleSearch = () => { // wire up search
+        };
+        const handleFilter = () => { // wire up filtering
+        };
+        const handleSort = () => { // wire up sorting
+        };
+        const handleExport = () => { // wire up export
+        };
+        function App() { return <div onClick={handleSearch}>x</div>; }
+      `;
+
+      const result = detectElidedContent(body, 'react');
+      expect(result.elided).toBe(true);
+      expect(result.confidence).toBe('high');
+    });
+
+    it('flags hollow object method shorthand', () => {
+      const body = `<html><body><script>
+        const api = {
+          load() { // fetch it
+          },
+          save() { // persist it
+          },
+          reset() { // clear it
+          },
+        };
+        function go(){ api.load(); api.save(); api.reset(); }
+        go();
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').confidence).toBe('high');
+    });
+
+    it('counts a function declaration once, not once per matching form', () => {
+      // `function foo() {}` matches both the declaration pattern and the method-shorthand pattern.
+      // Counting it twice would reach the 3-body high-confidence threshold on two real functions.
+      const body = `<html><body><script>
+        function a() { // todo
+        }
+        function b() { // todo
+        }
+        function go() { a(); b(); document.title='x'; }
+        go();
+      </script></body></html>`;
+
+      const result = detectElidedContent(body, 'html');
+      expect(result.signals.filter(s => s.kind === 'empty_function_body')).toHaveLength(2);
+      expect(result.elided).toBe(false);
+    });
+
+    it('does not treat control flow or an empty constructor as a hollow body', () => {
+      const body = `<html><body><script>
+        class Thing { constructor() {} }
+        function go(items) {
+          if (!items.length) { }
+          for (const i of items) { }
+          try { document.title = 'x'; } catch (e) { }
+          return new Thing();
+        }
+        go([]);
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+  });
+
   describe('hollowed function bodies (the captured staging variant)', () => {
     const HOLLOWED = `<html><body>
       <div class="controls">
@@ -562,6 +795,24 @@ Let me know if you want more filters.`;
  * is O(n^2) - on a real 200KB dashboard that is enough string churn to freeze the UI.
  */
 describe('large bodies', () => {
+  it('stays fast when the body has tens of thousands of DISTINCT unresolved names', () => {
+    // The shape the existing size-only guard below misses. The raw-source declaration re-check used
+    // to compile a RegExp per candidate and rescan the whole body: O(names x body). Measured in
+    // isolation on this exact input, that step alone took 41.8s; harvesting the declared set in one
+    // pass takes 29ms. It runs synchronously on the completion worker and on the publish click, so
+    // the cost is user-visible in both places. The threshold is loose on purpose - it is here to
+    // catch a return to quadratic behaviour, not to police milliseconds.
+    const lines = Array.from({ length: 30000 }, (_, i) => `  const value_${i} = compute_${i}(${i});`).join('\n');
+    const body = `<html><body><script>\n${lines}\n  function go() { document.title = String(value_0); }\n  go();\n</script></body></html>`;
+
+    const startedAt = Date.now();
+    const result = detectElidedContent(body, 'html');
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result.signals.length).toBeGreaterThan(0);
+    expect(elapsedMs).toBeLessThan(3000);
+  });
+
   it('scans a large complete artifact quickly and without flagging it', () => {
     const rows = Array.from({ length: 4000 }, (_, i) => `  { id: ${i}, name: 'row-${i}', score: ${i % 97} },`).join(
       '\n'
