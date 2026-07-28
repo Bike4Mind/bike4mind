@@ -177,6 +177,19 @@ describe('planPriceWrites guardrails', () => {
     expect(result.flags[0].detail).toContain('litellm');
   });
 
+  it.each([
+    ['negative', -1],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])('never writes a %s rate, whoever reported it', (_label, rate) => {
+    const result = plan({
+      contributions: [provider({ inputPerMTok: rate, outputPerMTok: 25 })],
+      rowsInForce: [],
+    });
+
+    expect(result.rows).toEqual([]);
+  });
+
   it('proposes one of the two values it names as disagreeing', () => {
     // The provider agrees with both aggregators inside the tolerance while they
     // disagree with each other, so the first disagreeing pair excludes it.
