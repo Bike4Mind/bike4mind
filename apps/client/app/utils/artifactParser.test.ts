@@ -4,6 +4,7 @@ import {
   hasCompleteOpeningTag,
   parseArtifactsWithFallback,
   isSvgGraphicallyEmpty,
+  shouldWarnElidedArtifact,
 } from './artifactParser';
 
 describe('extractReactDependencies', () => {
@@ -345,5 +346,86 @@ describe('parseArtifactsWithFallback - attribute values containing quotes', () =
       `<artifact identifier="x" type="text/html" title="mismatched'><p>hi</p></artifact>`
     );
     expect(result.artifacts).toHaveLength(0);
+  });
+});
+
+/**
+ * The elision notice's decision logic. Mirrors how hasCompleteOpeningTag is tested above:
+ * PromptReplies renders the banner, this decides whether it should.
+ */
+describe('shouldWarnElidedArtifact', () => {
+  const ELIDED = {
+    content: '<html><body><script>// ... (same JS as before)\nfunction init(){} init();</script></body></html>',
+    type: 'html' as const,
+  };
+  const COMPLETE = {
+    content: '<html><body><script>function init(){ document.title = "x"; } init();</script></body></html>',
+    type: 'html' as const,
+  };
+
+  it('warns on a completed reply whose artifact body is stubbed', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: false,
+        suspectedElision: false,
+        artifacts: [ELIDED],
+      })
+    ).toBe(true);
+  });
+
+  it('stays silent for a complete artifact', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: false,
+        suspectedElision: false,
+        artifacts: [COMPLETE],
+      })
+    ).toBe(false);
+  });
+
+  it('defers to the truncation banner rather than stacking two warnings', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: true,
+        suspectedElision: true,
+        artifacts: [ELIDED],
+      })
+    ).toBe(false);
+  });
+
+  it('stays silent while the reply is still streaming', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: false,
+        isTruncatedArtifact: false,
+        suspectedElision: true,
+        artifacts: [ELIDED],
+      })
+    ).toBe(false);
+  });
+
+  it("trusts the server's verdict even when the local scan finds nothing", () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: false,
+        suspectedElision: true,
+        artifacts: [COMPLETE],
+      })
+    ).toBe(true);
+  });
+
+  it('warns when any one of several artifacts is stubbed', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: false,
+        suspectedElision: false,
+        artifacts: [COMPLETE, ELIDED],
+      })
+    ).toBe(true);
   });
 });
