@@ -131,6 +131,25 @@ describe('anthropic deprecations parser', () => {
     expect(parsed.ok).toBe(false);
   });
 
+  it('fails when a date column is renamed rather than silently dropping every date', () => {
+    // The status column still parses, so every row still yields a status and the
+    // row count is unchanged - neither the zero-row guard nor
+    // detectParserRowShifts would notice that every date went undefined.
+    const noDeprecatedColumn = deprecationsMarkdown.replace(/\|\s*Deprecated\s*\|/, '| Announced |');
+    const noRetirementColumn = deprecationsMarkdown.replace(/\|\s*Tentative retirement date\s*\|/, '| Sunset |');
+    expect(noDeprecatedColumn).not.toBe(deprecationsMarkdown);
+    expect(noRetirementColumn).not.toBe(deprecationsMarkdown);
+
+    expect(parseAnthropicDeprecations(noDeprecatedColumn).ok).toBe(false);
+    expect(parseAnthropicDeprecations(noRetirementColumn).ok).toBe(false);
+  });
+
+  it('still finds the deprecation column when upstream rewords the header', () => {
+    const reworded = deprecationsMarkdown.replace(/\|\s*Deprecated\s*\|/, '| Deprecation date |');
+    expect(reworded).not.toBe(deprecationsMarkdown);
+    expect(parseAnthropicDeprecations(reworded).ok).toBe(true);
+  });
+
   it('returns a failure when the page has no table it recognizes', () => {
     expect(parseAnthropicDeprecations('# Model deprecations\n\nSee the console.\n').ok).toBe(false);
   });

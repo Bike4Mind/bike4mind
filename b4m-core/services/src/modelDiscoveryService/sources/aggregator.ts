@@ -38,6 +38,17 @@ export interface JoinOutcome<T> {
 }
 
 /**
+ * A parseable body that carries no entries at all: served, but empty. Every
+ * provider source refuses an empty listing (types.ts:154-158) and the
+ * aggregators owe the same contract, or a CDN glitch reads as a clean run on
+ * which all enrichment happened to vanish. Asked of the DOCUMENT rather than the
+ * join: a join that matches nothing is a coverage number, and on a fresh catalog
+ * it is the correct one.
+ */
+export const isEmptyDocument = (document: unknown): boolean =>
+  typeof document !== 'object' || document === null || Object.keys(document).length === 0;
+
+/**
  * Resolve every target against one aggregator's key space. Pure given the two
  * inputs, so a coverage number is reproducible from a checked-in fixture.
  */

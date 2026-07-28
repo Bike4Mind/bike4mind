@@ -148,6 +148,17 @@ describe('models.dev source fetch', () => {
     }
   });
 
+  it('fails on a valid-but-empty document instead of reporting a clean run', async () => {
+    const restore = stubFetch({ body: {} });
+    try {
+      const result = await createModelsDevSource({ targets }).fetch(makeContext());
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain('empty document');
+    } finally {
+      restore();
+    }
+  });
+
   it('never claims authority for a backend, because an aggregator cannot retire a model', async () => {
     const restore = stubFetch({ body: apiJson });
     try {

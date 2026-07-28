@@ -204,5 +204,16 @@ describe('litellm source fetch', () => {
     }
   });
 
+  it('fails on a valid-but-empty document instead of reporting a clean run', async () => {
+    const restore = stubFetch({ body: {} });
+    try {
+      const result = await createLiteLlmSource({ targets }).fetch(makeContext({ runStartedAt: RUN_AT }));
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain('empty document');
+    } finally {
+      restore();
+    }
+  });
+
   expectDegradesOnFailure(() => createLiteLlmSource({ targets }));
 });

@@ -38,6 +38,23 @@ describe('fetchText', () => {
     }
   });
 
+  it('refuses a redirect rather than replaying a credential header at the new origin', async () => {
+    // A cross-origin redirect strips Authorization and nothing else, so x-api-key
+    // would be handed verbatim to whatever the Location names.
+    const restore = stubFetch({ status: 302, headers: { location: 'https://elsewhere.example/v1/models' }, body: {} });
+    try {
+      const result = await fetchText(
+        { url: 'https://api.anthropic.com/v1/models', headers: { 'x-api-key': 'sk-ant-real' } },
+        makeContext()
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain('redirected');
+    } finally {
+      restore();
+    }
+  });
+
   it('keeps the credential out of a transport error too', async () => {
     const url = 'https://user:pa55@ollama.internal:11434/api/tags';
     const original = globalThis.fetch;

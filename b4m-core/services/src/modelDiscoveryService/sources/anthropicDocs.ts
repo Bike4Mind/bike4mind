@@ -132,8 +132,17 @@ export function parseAnthropicDeprecations(markdown: string): ParseResult<Anthro
   }
 
   const stateColumn = statusTable.headers.findIndex(header => /current state/i.test(header));
-  const deprecatedColumn = statusTable.headers.findIndex(header => /^deprecated$/i.test(header));
+  const deprecatedColumn = statusTable.headers.findIndex(header => /deprecat/i.test(header));
   const retirementColumn = statusTable.headers.findIndex(header => /retirement/i.test(header));
+
+  // A renamed STATE column fails loudly on its own: no row parses a status, so
+  // the zero-row guard below fires. A renamed DATE column does not - every date
+  // resolves to undefined while the statuses still parse and the row count is
+  // unchanged, so neither that guard nor detectParserRowShifts sees anything and
+  // every model's deprecation date quietly stops updating.
+  if (stateColumn < 0 || deprecatedColumn < 0 || retirementColumn < 0) {
+    return { ok: false, error: 'model-deprecations.md status table is missing an expected column' };
+  }
 
   const rows: AnthropicLifecycleRow[] = [];
   for (const row of statusTable.rows) {

@@ -7,6 +7,7 @@ import type {
   DiscoverySource,
   SourceResult,
 } from '../types';
+import { PAGINATED_SOURCE_DEADLINE_MS } from '../runModelDiscovery';
 import { compact, text } from './http';
 
 /**
@@ -119,9 +120,15 @@ export function normalizeBedrockModels({ summaries, availability }: BedrockFacts
 
     const entitlement = availability?.get(id);
     const inputs = (summary.inputModalities ?? []).map(value => value.toUpperCase());
+    // regionAvailability counts too: a model AUTHORIZED and entitled account-wide
+    // but restricted in the deployment's region is offered by the catalog and
+    // then fails at every dispatch. Only the explicit negative disables, same as
+    // the other two clauses - an absent field is "did not say".
     const unauthorized =
       entitlement !== undefined &&
-      (entitlement.authorizationStatus === 'NOT_AUTHORIZED' || entitlement.entitlementAvailability === 'NOT_AVAILABLE');
+      (entitlement.authorizationStatus === 'NOT_AUTHORIZED' ||
+        entitlement.entitlementAvailability === 'NOT_AVAILABLE' ||
+        entitlement.regionAvailability === 'NOT_AVAILABLE');
     const lifecycle = lifecycleOf(summary);
 
     records.push(
@@ -170,6 +177,8 @@ export function createBedrockSource(options: BedrockSourceOptions): DiscoverySou
   return {
     name: 'bedrock',
     kind: 'provider',
+    // First run probes availability per model, ~300 calls at concurrency 4.
+    deadlineMs: PAGINATED_SOURCE_DEADLINE_MS,
     // Bedrock is IAM-authenticated, so there is no key to check - but under
     // B4M_SELF_HOST the AWS credentials are the local MinIO ones, and listing
     // Bedrock models there offers choices that can only fail.

@@ -17,6 +17,7 @@ import {
   type AnthropicLifecycleRow,
   type AnthropicPriceRow,
 } from './anthropicDocs';
+import { PAGINATED_SOURCE_DEADLINE_MS } from '../runModelDiscovery';
 import { boolean, compact, count, fetchJson, fetchText, hasTimeLeft, text } from './http';
 
 export const ANTHROPIC_MODELS_URL = 'https://api.anthropic.com/v1/models';
@@ -173,6 +174,8 @@ export function createAnthropicSource(): DiscoverySource {
   return {
     name: 'anthropic',
     kind: 'provider',
+    // A page walk plus two docs fetches, not one request.
+    deadlineMs: PAGINATED_SOURCE_DEADLINE_MS,
     isConfigured: (creds: DiscoveryCredentials) => Boolean(creds.anthropic),
     async fetch(ctx: DiscoveryFetchContext): Promise<SourceResult> {
       const headers = {
@@ -250,7 +253,12 @@ async function readDoc<T>(
   parse: (markdown: string) => { ok: true; rows: T[] } | { ok: false; error: string },
   ctx: DiscoveryFetchContext
 ): Promise<T[] | undefined> {
-  const response = await fetchText({ url, headers: { accept: 'text/markdown, text/plain' } }, ctx);
+  // The docs host redirects (docs.anthropic.com -> docs.claude.com) and this
+  // request carries no credential, so following is safe here and only here.
+  const response = await fetchText(
+    { url, headers: { accept: 'text/markdown, text/plain' }, followRedirects: true },
+    ctx
+  );
   if (!response.ok || response.notModified) {
     ctx.logger.warn(`[model-discovery] anthropic docs ${url} unavailable`);
     return undefined;

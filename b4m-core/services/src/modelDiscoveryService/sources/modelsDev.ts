@@ -1,6 +1,6 @@
 import { MODELS_DEV_PROVIDER_BY_BACKEND, type ModelRecord } from '@bike4mind/common';
 import type { DiscoveredModel, DiscoveredPrice, DiscoveryFetchContext, DiscoverySource, SourceResult } from '../types';
-import { joinTargets, logCoverage, type AggregatorSourceOptions, type JoinTarget } from './aggregator';
+import { isEmptyDocument, joinTargets, logCoverage, type AggregatorSourceOptions, type JoinTarget } from './aggregator';
 import { boolean, compact, contentHashOf, count, fetchJson } from './http';
 
 export const MODELS_DEV_URL = 'https://models.dev/api.json';
@@ -154,13 +154,24 @@ export function createModelsDevSource(options: AggregatorSourceOptions): Discove
       // reporting an empty aggregator contribution would drive
       // AggregatorJoinCoverage to zero on a run where nothing was actually
       // wrong. The extra request is a few hundred bytes against a 3 MB body.
-      let response = await fetchJson<ModelsDevDocument>({ url: MODELS_DEV_URL, ifNoneMatch: ctx.previous?.etag }, ctx);
+      let response = await fetchJson<ModelsDevDocument>(
+        { url: MODELS_DEV_URL, ifNoneMatch: ctx.previous?.etag, followRedirects: true },
+        ctx
+      );
       if (response.ok && response.notModified) {
         ctx.logger.info(`[model-discovery] models.dev unchanged (etag ${response.etag ?? ctx.previous?.etag ?? '?'})`);
-        response = await fetchJson<ModelsDevDocument>({ url: MODELS_DEV_URL }, ctx);
+        response = await fetchJson<ModelsDevDocument>({ url: MODELS_DEV_URL, followRedirects: true }, ctx);
       }
       if (!response.ok) return { ok: false, error: response.error, httpStatus: response.status };
       if (response.notModified) return { ok: false, error: 'models.dev kept returning 304', httpStatus: 304 };
+      // Every provider source refuses an empty listing (types.ts:154-158) and so
+      // must this: a CDN glitch serving a valid-but-empty body would otherwise
+      // report a clean success while all price and lifecycle enrichment silently
+      // vanished for the run. Checked against the DOCUMENT, not the join - zero
+      // matches is a coverage number, and on a fresh catalog it is the right one.
+      if (isEmptyDocument(response.body)) {
+        return { ok: false, error: 'models.dev returned an empty document', httpStatus: response.status };
+      }
 
       const targets = await options.targets();
       const { records, unmatched } = normalizeModelsDev(response.body, targets, options.aliases);

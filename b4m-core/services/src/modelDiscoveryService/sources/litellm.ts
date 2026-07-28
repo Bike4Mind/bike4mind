@@ -6,7 +6,7 @@ import type {
   DiscoverySource,
   SourceResult,
 } from '../types';
-import { joinTargets, logCoverage, type AggregatorSourceOptions, type JoinTarget } from './aggregator';
+import { isEmptyDocument, joinTargets, logCoverage, type AggregatorSourceOptions, type JoinTarget } from './aggregator';
 import { boolean, compact, contentHashOf, count, fetchJson } from './http';
 
 /**
@@ -155,9 +155,15 @@ export function createLiteLlmSource(options: AggregatorSourceOptions): Discovery
     async fetch(ctx: DiscoveryFetchContext): Promise<SourceResult> {
       // No conditional GET: a tagged file is immutable, so a validator would
       // only ever answer a question the tag already answers.
-      const response = await fetchJson<LiteLlmDocument>({ url: LITELLM_PRICES_URL }, ctx);
+      const response = await fetchJson<LiteLlmDocument>({ url: LITELLM_PRICES_URL, followRedirects: true }, ctx);
       if (!response.ok) return { ok: false, error: response.error, httpStatus: response.status };
       if (response.notModified) return { ok: false, error: 'unexpected 304 from a pinned tag', httpStatus: 304 };
+      // Same contract every provider source honors (types.ts:154-158): a
+      // valid-but-empty body is a failed fetch, not a run on which every price
+      // happened to vanish. Checked on the document, not the join.
+      if (isEmptyDocument(response.body)) {
+        return { ok: false, error: 'litellm returned an empty document', httpStatus: response.status };
+      }
 
       const targets = await options.targets();
       const { records, unmatched } = normalizeLiteLlm(response.body, targets, ctx.runStartedAt, options.aliases);

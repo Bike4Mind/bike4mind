@@ -1,4 +1,4 @@
-import { isPlaceholderValue, type IAdminSettings } from '@bike4mind/common';
+import { isPlaceholderApiKey, type IAdminSettings } from '@bike4mind/common';
 import { getEffectiveLLMApiKeys, type GetEffectiveLLMApiKeysAdapters } from '@bike4mind/auth/apiKeyService';
 import type { DiscoveryCredentials, DiscoveryEnv } from './types';
 
@@ -39,15 +39,18 @@ export interface DiscoveryCredentialAdapters extends GetEffectiveLLMApiKeysAdapt
 }
 
 /**
- * A value that is absent, blank, the expiry sentinel, or the unset-secret
+ * A value that is absent, blank, the expiry sentinel, or any recognized
  * placeholder is not a credential. The placeholder matters most on the env tier:
  * DISCOVERY_ENV_KEYS is live on hosted, so on a stage where `sst secret set`
  * never ran the placeholder would beat the AdminSettings key and every request
- * would go out as `Bearer not-configured`.
+ * would go out as `Bearer not-configured`. isPlaceholderApiKey rather than
+ * isPlaceholderValue: it is the repo's documented superset, and the values a
+ * half-filled .env actually carries (your-api-key, REPLACE_ME, dummy) are in the
+ * superset only. Sending one upstream buys a 401 and a false SourceFailures alarm.
  */
 const usable = (value: string | null | undefined): string | null => {
   const trimmed = value?.trim();
-  if (!trimmed || trimmed === EXPIRED_KEY_SENTINEL || isPlaceholderValue(trimmed)) return null;
+  if (!trimmed || trimmed === EXPIRED_KEY_SENTINEL || isPlaceholderApiKey(trimmed)) return null;
   return trimmed;
 };
 

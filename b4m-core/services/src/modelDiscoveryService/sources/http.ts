@@ -40,7 +40,25 @@ export interface HttpRequest {
   /** Ollama's /api/show is the one read in this layer that is not a GET. */
   method?: 'GET' | 'POST';
   body?: string;
+  /**
+   * Off by default, and only ever safe on a request that carries no credential.
+   * Per WHATWG Fetch a cross-origin redirect strips Authorization, Cookie, Host
+   * and Proxy-Authorization and NOTHING else, so the vendor key headers this
+   * layer sends (x-api-key, x-goog-api-key, xi-api-key) would be replayed
+   * verbatim to whatever origin the 3xx names. Following also amplifies an
+   * operator-set base URL (Ollama) into arbitrary hosts. Left off, a redirect is
+   * a source failure, which is visible in the run report and fail-safe.
+   */
+  followRedirects?: boolean;
 }
+
+/**
+ * 304 is handled before this: it is the one 3xx that is a success carrying no
+ * body. Status 0 covers the filtered opaque-redirect response a spec-strict
+ * fetch returns for redirect:'manual' instead of the real 3xx.
+ */
+const isRedirect = (response: Response): boolean =>
+  response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400);
 
 /** SHA-256 of the fetched body, recorded so "the aggregator changed under us" stays answerable (sec 6.5). */
 export const contentHashOf = (text: string): string => createHash('sha256').update(text).digest('hex');
@@ -102,10 +120,13 @@ export async function fetchText(request: HttpRequest, ctx: DiscoveryFetchContext
       headers,
       body: request.body,
       signal: ctx.signal,
-      redirect: 'follow',
+      redirect: request.followRedirects ? 'follow' : 'manual',
     });
     const etag = response.headers.get('etag') ?? undefined;
     if (response.status === 304) return { ok: true, status: 304, notModified: true, etag };
+    if (isRedirect(response)) {
+      return { ok: false, status: response.status, error: `${safeUrl} redirected; refusing to replay the request` };
+    }
     if (!response.ok) {
       return { ok: false, status: response.status, error: `${safeUrl} responded ${response.status}` };
     }
