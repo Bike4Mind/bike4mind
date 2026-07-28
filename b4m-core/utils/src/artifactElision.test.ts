@@ -289,6 +289,29 @@ describe('detectElidedContent', () => {
       expect(result.elided).toBe(false);
     });
 
+    it('does not treat `new Ctor()` as a bare call to an undefined function', () => {
+      // `new` is a call-like keyword but the identifier AFTER it was still collected, so two
+      // constructors for classes we do not list as ambient reached the two-distinct-names threshold.
+      const body = `<html><body><script>
+        function init() {
+          const obs = new IntersectionObserver(() => {});
+          const fmt = new Intl.NumberFormat('en-US');
+          const chart = new ChartWidget(document.body);
+          const store = new SessionStore();
+          obs.observe(document.body);
+          document.title = fmt.format(1) + chart.id + store.id;
+        }
+        init();
+      </script></body></html>`;
+
+      const result = detectElidedContent(body, 'html');
+      const missing = result.signals.filter(s => s.kind === 'undefined_reference').map(s => s.name);
+
+      expect(missing).not.toContain('ChartWidget');
+      expect(missing).not.toContain('SessionStore');
+      expect(result.elided).toBe(false);
+    });
+
     it('does not flag member calls, which it cannot resolve', () => {
       const body = `<html><body><script>
         const api = { load() { return 1; }, save() { return 2; } };
