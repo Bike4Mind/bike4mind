@@ -14,6 +14,12 @@ import { toast } from 'sonner';
 import type { IFabFileDocument } from '@bike4mind/common';
 
 interface DataLakeExplorerProps {
+  /** @deprecated Unused; accepted only so the currently PINNED premium overlay (which still
+   *  passes it) keeps typechecking against main. Remove with the next overlay pin bump. */
+  onBack?: () => void;
+  /** @deprecated Unused; accepted only so the currently PINNED premium overlay (which still
+   *  passes it) keeps typechecking against main. Remove with the next overlay pin bump. */
+  onAskAbout?: (prompt: string) => void;
   /** When set (from URL param), auto-select and display this article on mount. */
   articleId?: string | null;
   /** Which browse backend to read (default 'opti'). The standalone Data Lakes home
