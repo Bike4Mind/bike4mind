@@ -563,6 +563,120 @@ func main() {
    * referring to a previous version, and every called name resolves because the declaration is
    * still present. Only the missing bodies give it away.
    */
+  // Two hollow bodies used to be silent regardless of what their comments said, so a model could
+  // ship a dead artifact by describing the behaviour instead of writing it. QA caught this on the
+  // preview twice. The discriminator is what the comment DOES: declare the emptiness deliberate, or
+  // describe behaviour that was never implemented.
+  describe('hollow bodies: described stub vs declared no-op', () => {
+    it('flags QA repro 1 - two bodies that describe what they would do', () => {
+      const body = `<html><body>
+        <button id="go">Run</button>
+        <div id="out"></div>
+        <script>
+          function init() {
+            // Wire up the button and render the list
+          }
+          function render() {
+            // Render all rows into #out
+          }
+          init();
+        </script>
+      </body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(true);
+    });
+
+    it('flags QA repro 2 - working logic vouching for two described stubs', () => {
+      // The artifact's honest half is what makes this dangerous: the counter reports "5 of 5 tasks
+      // shown" while the columns render empty, so visual review reads it as working.
+      const body = `<html><body>
+        <input id="q" placeholder="Filter">
+        <div id="count"></div>
+        <div id="cols"></div>
+        <button id="add">Add</button>
+        <script>
+          const TASKS = [
+            { id: 1, title: 'A', status: 'todo' },
+            { id: 2, title: 'B', status: 'doing' },
+            { id: 3, title: 'C', status: 'done' }
+          ];
+          let filter = '';
+          function visibleTasks() {
+            return TASKS.filter(t => t.title.toLowerCase().includes(filter.toLowerCase()));
+          }
+          function updateCount() {
+            document.getElementById('count').textContent = visibleTasks().length + ' of ' + TASKS.length;
+          }
+          function renderBoard() {
+            // This function would clear each column and display the filtered tasks in their columns.
+          }
+          function addTask() {
+            // This function would gather input, create a task, add it to TASKS and refresh the board.
+          }
+          document.getElementById('add').addEventListener('click', addTask);
+          updateCount();
+          renderBoard();
+        </script>
+      </body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(true);
+    });
+
+    it('reports two described bodies at LOW confidence, three at HIGH', () => {
+      const two = `<html><body><script>
+        function init() { // Attach every event listener
+        }
+        function render() { // Draw all the rows
+        }
+        init();
+      </script></body></html>`;
+      const three = `<html><body><script>
+        function init() { // Attach every event listener
+        }
+        function render() { // Draw all the rows
+        }
+        function refresh() { // Recompute totals and redraw
+        }
+        init();
+      </script></body></html>`;
+
+      expect(detectElidedContent(two, 'html').confidence).toBe('low');
+      expect(detectElidedContent(three, 'html').confidence).toBe('high');
+    });
+
+    it('stays silent on bodies that DECLARE themselves deliberate', () => {
+      // The requirement from the opposite direction: an ordinary no-op must not warn, however many
+      // of them there are. This is the case a prior review asked us to protect.
+      const body = `<html><body><script>
+        function onResize() {
+          // intentionally does nothing - layout is handled entirely in CSS
+        }
+        function onPrint() {
+          // no-op, reserved for the print hook
+        }
+        function onIdle() {
+          // deliberately empty by design
+        }
+        function render() { document.title = 'ok'; onResize(); onPrint(); onIdle(); }
+        render();
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('does not count a body with no comment at all', () => {
+      // A stub explains itself; a bare `{}` is a no-op. Two of them must not warn.
+      const body = `<html><body><script>
+        function onResize() {}
+        function onPrint() {}
+        function render() { document.title = 'ok'; onResize(); onPrint(); }
+        render();
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+  });
+
   describe('hollowed bodies across declaration forms', () => {
     it('flags hollow arrow-const handlers in a react artifact', () => {
       // The `function` keyword alone was not enough: react artifacts overwhelmingly use
@@ -604,7 +718,8 @@ func main() {
 
     it('counts a function declaration once, not once per matching form', () => {
       // `function foo() {}` matches both the declaration pattern and the method-shorthand pattern.
-      // Counting it twice would reach the 3-body high-confidence threshold on two real functions.
+      // Without dedupe these TWO functions would count as FOUR hollow bodies and reach the 3-body
+      // HIGH-confidence threshold; deduped they sit at two, which reports but stays LOW.
       const body = `<html><body><script>
         function a() { // todo
         }
@@ -616,7 +731,7 @@ func main() {
 
       const result = detectElidedContent(body, 'html');
       expect(result.signals.filter(s => s.kind === 'empty_function_body')).toHaveLength(2);
-      expect(result.elided).toBe(false);
+      expect(result.confidence).toBe('low');
     });
 
     it('does not treat control flow or an empty constructor as a hollow body', () => {
