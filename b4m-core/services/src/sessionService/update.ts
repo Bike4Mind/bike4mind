@@ -118,8 +118,10 @@ const addFilesToProjects = async (
   const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
   if (files.length !== fileIds.length) {
     const accessible = new Set(files.map(f => f.id));
+    const refused = fileIds.filter(id => !accessible.has(id));
     Logger.globalInstance.warn(
-      `addFilesToProjects: skipping ${fileIds.length - files.length} file(s) not accessible to user ${user.id}`
+      `addFilesToProjects: refusing to share ${refused.length} file(s) not accessible to user ${user.id}: ` +
+        `${refused.join(', ')}`
     );
     fileIds = fileIds.filter(id => accessible.has(id));
     if (fileIds.length === 0) return;
