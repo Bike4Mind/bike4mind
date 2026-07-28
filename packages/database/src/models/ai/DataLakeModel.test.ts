@@ -129,6 +129,32 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     const withKey = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], ['product:pro'], 'orgB', 'bob');
     expect(withKey.map(l => l.slug)).toEqual(['pubgated']);
   });
+
+  it('owner bypass reaches a GATED lake the creator does not personally satisfy', async () => {
+    // The retrieval resolver relies on this arm to restore an owner's own gated lake after the
+    // in-memory tag/entitlement filter drops it. Covered here at the datastore layer because the
+    // resolver's own tests mock this repository, so they cannot prove the arm returns the row.
+    await dataLakeRepository.create(
+      baseLake({ slug: 'mine', createdByUserId: 'alice', requiredUserTag: 'TagAliceLacks' })
+    );
+    await dataLakeRepository.create(
+      baseLake({ slug: 'theirs', createdByUserId: 'carol', requiredUserTag: 'TagAliceLacks' })
+    );
+
+    // Alice holds no tags and no keys, yet gets her own gated lake - and only hers.
+    const owner = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'alice');
+    expect(owner.map(l => l.slug)).toEqual(['mine']);
+    // A non-owner lacking the tag gets neither.
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'bob')).toEqual([]);
+  });
+
+  it('owner bypass stays bounded by status: a creator does not retrieve their own DRAFT lake', async () => {
+    // Retrieval is active-only across the board, so a draft lake remains browse-only. Pinned so
+    // the owner exemption in the resolver is not read as "the owner sees everything they made".
+    await dataLakeRepository.create(baseLake({ slug: 'draft', createdByUserId: 'alice', status: 'draft' }));
+
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'alice')).toEqual([]);
+  });
 });
 
 describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/management path)', () => {
