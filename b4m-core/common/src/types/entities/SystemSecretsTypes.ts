@@ -28,6 +28,41 @@ export function isPlaceholderValue(value: string | undefined | null): boolean {
 }
 
 /**
+ * Distinctive dummy tokens that mark an API-key value as a placeholder rather than a real
+ * credential. Matched only as a whole hyphen-delimited segment (see PLACEHOLDER_API_KEY_REGEX),
+ * so a token can hit a deliberately-labelled placeholder but not the contiguous random body of a
+ * real key. Keep this set tight: a false positive rejects a paying user's real key, which is
+ * worse than the downstream 401 this guards against.
+ */
+const PLACEHOLDER_API_KEY_TOKENS = [
+  'dummy',
+  'placeholder',
+  'change-?me',
+  'replace-?me',
+  'your-?(api-?)?key',
+  'not-a-real',
+  'example',
+];
+
+const PLACEHOLDER_API_KEY_REGEX = new RegExp(`(^|-)(${PLACEHOLDER_API_KEY_TOKENS.join('|')})(-|$)`);
+
+/**
+ * Is this API-key value a placeholder/dummy rather than a real credential? Superset of
+ * isPlaceholderValue (so empty/null/SST sentinels are caught too) plus a small set of distinctive
+ * dummy tokens matched only as whole hyphen-delimited segments. Underscores are normalized to
+ * hyphens first so REPLACE_ME / YOUR_API_KEY are caught, and a whitespace-only value counts as a
+ * placeholder. Conservative by design: real OpenAI/Voyage keys are a known prefix plus a
+ * contiguous base62 body with no hyphen-delimited dummy word, so this must never reject one - when
+ * a value isn't a recognized placeholder it returns false and the caller surfaces the real error.
+ */
+export function isPlaceholderApiKey(value: string | undefined | null): boolean {
+  if (isPlaceholderValue(value)) return true;
+  const normalized = (value ?? '').trim().toLowerCase().replace(/_/g, '-');
+  if (!normalized) return true;
+  return PLACEHOLDER_API_KEY_REGEX.test(normalized);
+}
+
+/**
  * Category of system secret.
  * - auth: Authentication secrets (JWT_SECRET)
  * - mail: Email configuration secrets

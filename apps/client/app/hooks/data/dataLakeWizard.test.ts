@@ -32,15 +32,17 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefined }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
-import { useBatchUpload } from './dataLakeWizard';
+import { useBatchUpload, useInferTaxonomy } from './dataLakeWizard';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
-const mountBatchUpload = () => {
+const mountHook = <T>(hook: () => T) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
-  return renderHook(() => useBatchUpload(), { wrapper });
+  return renderHook(hook, { wrapper });
 };
+
+const mountBatchUpload = () => mountHook(useBatchUpload);
 
 const seedWizardFile = () =>
   useDataLakeWizardStore.setState({
@@ -268,6 +270,68 @@ describe('useBatchUpload onError', () => {
     );
   });
 
+  it('sends the reviewed taxonomy tags with each file, honoring renames and deletes', async () => {
+    // Regression: the Taxonomy step's edits used to be discarded entirely - every file
+    // got only a folder slug, so reviewing tags changed nothing about the upload.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/files/generate-presigned-urls-batch') return Promise.resolve({ data: { files: [] } });
+      return Promise.resolve({ data: { id: 'id-1' } });
+    });
+    seedWizardFile();
+    useDataLakeWizardStore.setState({
+      allFiles: [
+        {
+          file: new File(['contents'], 'vendor.pdf', { type: 'application/pdf' }),
+          relativePath: 'root/legal/vendor.pdf',
+          size: 8,
+          type: 'application/pdf',
+          excluded: false,
+          isDuplicate: false,
+        },
+      ],
+      taxonomy: {
+        prefix: 'test:',
+        suggestedName: 'Acme',
+        attempted: true,
+        analyzing: false,
+        fileAssignments: [],
+        tags: [
+          {
+            // User edited the suffix to "type:agreement"; originalName stays the inference id.
+            suffix: 'type:agreement',
+            originalName: 'acme:type:contract',
+            strength: 0.95,
+            source: 'ai',
+            matchingFolders: ['legal'],
+            deleted: false,
+          },
+          {
+            suffix: 'topic:hr',
+            originalName: 'acme:topic:hr',
+            strength: 0.8,
+            source: 'ai',
+            matchingFolders: ['legal'],
+            deleted: true,
+          },
+        ],
+      },
+    });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/api/files/generate-presigned-urls-batch', expect.anything())
+    );
+
+    const presign = apiPost.mock.calls.find(([url]) => url === '/api/files/generate-presigned-urls-batch');
+    const tagNames = (presign?.[1] as { files: { tags: { name: string }[] }[] }).files[0].tags.map(t => t.name).sort();
+    // Applied tag = prefix + edited suffix; deleted tag gone; folder tag kept.
+    expect(tagNames).toEqual(['test:legal', 'test:type:agreement']);
+  });
+
   it('retrying via the toast action re-invokes the upload', async () => {
     apiPost.mockRejectedValue({ isAxiosError: true, code: 'ERR_NETWORK', message: 'Network Error' });
     seedWizardFile();
@@ -439,5 +503,190 @@ describe('useBatchUpload rollback (#816)', () => {
     expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(true);
     expect(putCall('/api/data-lakes/batches/batch1')?.[1]).toMatchObject({ status: 'failed' });
     expect(toastMock.success).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The infer-taxonomy endpoint validates only suggestedPrefix + categories-is-an-array and
+ * otherwise returns the model's raw JSON. Since the taxonomy now feeds the upload path -
+ * which runs after the lake record exists - a malformed payload reaching tagsForFile would
+ * throw mid-upload and trigger the lake rollback. It has to be sanitized on the way in.
+ */
+describe('useInferTaxonomy response handling', () => {
+  const seedFolderTree = () =>
+    useDataLakeWizardStore.setState({
+      folderTree: { name: 'root', path: 'root', type: 'folder', children: [], excluded: false },
+      allFiles: [
+        {
+          file: new File(['contents'], 'a.txt', { type: 'text/plain' }),
+          relativePath: 'root/legal/a.txt',
+          size: 8,
+          type: 'text/plain',
+          excluded: false,
+          isDuplicate: false,
+        },
+      ],
+    });
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    toastMock.success.mockClear();
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('splits each category into a stable originalName and an editable suffix, dropping malformed ones', async () => {
+    apiPost.mockResolvedValue({
+      data: {
+        suggestedPrefix: 'acme:',
+        suggestedName: 'Acme',
+        categories: [
+          { tagName: 'acme:type:contract', confidence: 0.9, matchingFolders: ['legal'] }, // carries prefix
+          { tagName: 'topic:finance', confidence: 0.85, matchingFolders: ['finance'] }, // no prefix -> whole name is suffix
+          { confidence: 0.8, matchingFolders: ['finance'] }, // no tagName
+          { tagName: '  ', confidence: 0.8 }, // blank tagName
+          { tagName: 'acme:', confidence: 0.8 }, // nothing but the prefix -> empty suffix, dropped
+        ],
+        fileAssignments: { nope: true }, // not an array
+      },
+    });
+    seedFolderTree();
+
+    const { result } = mountHook(useInferTaxonomy);
+    act(() => {
+      result.current.mutate({});
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.attempted).toBe(true));
+
+    const { taxonomy } = useDataLakeWizardStore.getState();
+    expect(taxonomy.prefix).toBe('acme:');
+    // Prefix stripped into suffix; a category without the prefix keeps its whole name as suffix.
+    expect(taxonomy.tags.map(t => t.suffix)).toEqual(['type:contract', 'topic:finance']);
+    // originalName stays the full inferred name (the per-file-assignment join key).
+    expect(taxonomy.tags.map(t => t.originalName)).toEqual(['acme:type:contract', 'topic:finance']);
+    expect(taxonomy.fileAssignments).toEqual([]);
+    // The toast must reflect what was kept, not what the model claimed to send.
+    expect(toastMock.success).toHaveBeenCalledWith('AI suggested 2 tag categories');
+  });
+
+  it('keeps the existing prefix when the endpoint returns an empty taxonomy', async () => {
+    // No API key configured -> emptyTaxonomy with a blank suggestedPrefix. It must not blank
+    // a prefix the user already has, or Config's tagPrefix>=2 gate would strand them.
+    apiPost.mockResolvedValue({
+      data: { suggestedPrefix: '', suggestedName: '', categories: [], fileAssignments: [] },
+    });
+    seedFolderTree();
+    useDataLakeWizardStore.setState({
+      taxonomy: { ...useDataLakeWizardStore.getState().taxonomy, prefix: 'mine:' },
+    });
+
+    const { result } = mountHook(useInferTaxonomy);
+    act(() => {
+      result.current.mutate({});
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.attempted).toBe(true));
+
+    expect(useDataLakeWizardStore.getState().taxonomy.prefix).toBe('mine:');
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  it('dedups repeated category names so one card edit cannot hit two tags', async () => {
+    apiPost.mockResolvedValue({
+      data: {
+        suggestedPrefix: 'acme:',
+        suggestedName: 'Acme',
+        categories: [
+          { tagName: 'acme:type:contract', confidence: 0.9, matchingFolders: ['legal'] },
+          { tagName: 'acme:type:contract', confidence: 0.8, matchingFolders: ['legal2'] }, // dup
+        ],
+        fileAssignments: [],
+      },
+    });
+    seedFolderTree();
+
+    const { result } = mountHook(useInferTaxonomy);
+    act(() => {
+      result.current.mutate({});
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.attempted).toBe(true));
+
+    // originalName is the React key + the update/delete/merge key, so it must be unique.
+    expect(useDataLakeWizardStore.getState().taxonomy.tags).toHaveLength(1);
+  });
+
+  it('trims a padded relativePath so per-file assignments still match at upload', async () => {
+    // tagsForFile matches assignments by strict path equality; a padded path would miss.
+    apiPost.mockResolvedValue({
+      data: {
+        suggestedPrefix: 'acme:',
+        suggestedName: 'Acme',
+        categories: [{ tagName: 'acme:type:x', confidence: 0.9, matchingFolders: ['legal'] }],
+        fileAssignments: [
+          { relativePath: '  root/legal/a.txt  ', suggestedTags: [{ name: 'acme:type:x', strength: 1 }] },
+        ],
+      },
+    });
+    seedFolderTree();
+
+    const { result } = mountHook(useInferTaxonomy);
+    act(() => {
+      result.current.mutate({});
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.attempted).toBe(true));
+
+    expect(useDataLakeWizardStore.getState().taxonomy.fileAssignments[0].relativePath).toBe('root/legal/a.txt');
+  });
+
+  it('does not overwrite a name or prefix the user already typed', async () => {
+    // Re-analyze after the user set these on Config must not clobber them.
+    apiPost.mockResolvedValue({
+      data: {
+        suggestedPrefix: 'ai:',
+        suggestedName: 'AI Suggested Name',
+        categories: [{ tagName: 'ai:type:x', confidence: 0.9, matchingFolders: ['legal'] }],
+        fileAssignments: [],
+      },
+    });
+    seedFolderTree();
+    useDataLakeWizardStore.getState().setConfig({ name: 'My Lake', tagPrefix: 'mine:' });
+
+    const { result } = mountHook(useInferTaxonomy);
+    act(() => {
+      result.current.mutate({});
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.attempted).toBe(true));
+
+    const { config } = useDataLakeWizardStore.getState();
+    expect(config.name).toBe('My Lake');
+    expect(config.tagPrefix).toBe('mine:');
+  });
+
+  it('marks analyzing before the content-sampling await, closing the advance-mid-inference gap', async () => {
+    // Regression: analyzing was set only after sampling files (hundreds of ms), leaving the
+    // step's !analyzing gate open during that window so a user could advance and have onSuccess
+    // clobber their config. Stall sampling (Blob.text never resolves) and prove analyzing is
+    // already true while sampling is still pending and the network call has not fired.
+    const originalText = Blob.prototype.text;
+    Blob.prototype.text = () => new Promise<string>(() => {});
+    try {
+      apiPost.mockResolvedValue({
+        data: { suggestedPrefix: 'acme:', suggestedName: '', categories: [], fileAssignments: [] },
+      });
+      seedFolderTree(); // seeded file is text/plain, so it gets content-sampled
+
+      const { result } = mountHook(useInferTaxonomy);
+      act(() => {
+        result.current.mutate({});
+      });
+
+      await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.analyzing).toBe(true));
+      expect(apiPost).not.toHaveBeenCalled();
+    } finally {
+      Blob.prototype.text = originalText;
+    }
   });
 });

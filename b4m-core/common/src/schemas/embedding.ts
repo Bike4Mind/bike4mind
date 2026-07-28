@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isPlaceholderApiKey } from '../types/entities/SystemSecretsTypes';
 
 export enum OpenAIEmbeddingModel {
   TEXT_EMBEDDING_3_SMALL = 'text-embedding-3-small',
@@ -49,8 +50,10 @@ export function defaultEmbeddingModelForEnv(): SupportedEmbeddingModel {
   const hasOllama = !!process.env.OLLAMA_BASE_URL?.trim();
   // "Has a cloud embedding key" must match serverConfig.ts hasEmbeddingKey (OpenAI OR VoyageAI):
   // a self-host that configured a cloud embedder should keep the cloud default, not be silently
-  // switched to the local embedder.
-  const hasCloudEmbeddingKey = !!process.env.OPENAI_API_KEY?.trim() || !!process.env.VOYAGE_API_KEY?.trim();
+  // switched to the local embedder. A placeholder value (isPlaceholderApiKey) counts as no key, so
+  // a self-hoster who left a dummy OPENAI_API_KEY still gets the keyless local embedder default.
+  const hasCloudEmbeddingKey =
+    !isPlaceholderApiKey(process.env.OPENAI_API_KEY) || !isPlaceholderApiKey(process.env.VOYAGE_API_KEY);
   if (selfHost && hasOllama && !hasCloudEmbeddingKey) {
     return OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B;
   }

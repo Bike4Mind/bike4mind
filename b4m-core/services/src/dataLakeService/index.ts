@@ -18,4 +18,5 @@ export * from './recomputeLakeStats';
 export * from './reconcileStuckBatches';
 export * from './getDynamicDataLakeTags';
 export * from './embeddingMismatch';
+export * from './getDataLakePrompts';
 export * from './semanticDataLakeSearch';
