@@ -1,4 +1,4 @@
-import { Permission, dayjs, type CompletionSource } from '@bike4mind/common';
+import { Permission, dayjs, SAFE_USER_LOOKUP_PROJECT, type CompletionSource } from '@bike4mind/common';
 import {
   CounterLog,
   DailyReport,
@@ -9,7 +9,6 @@ import {
   convertPipelineForDocumentDB,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { User } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 import { counterService } from '@bike4mind/services';
@@ -21,6 +20,10 @@ import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { sendMaybeGzip } from '@server/utils/sendMaybeGzip';
 
 dayjs.extend(isSameOrBefore);
+
+// Lambda gives this route a 60s budget; leave headroom for the response to serialize/gzip
+// after the DB call returns rather than let a slow query eat the whole timeout.
+const AGGREGATION_MAX_TIME_MS = 45000;
 
 const CounterLogsQuerySchema = z.object({
   startDate: z.string(),
@@ -164,19 +167,64 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         matchCondition.userOrganization = { $nin: excludeOrgs };
       }
 
-      // For non-report requests, return the aggregated logs
+      // For non-report requests, return the aggregated logs.
+      //
+      // The user $lookup runs AFTER the first $group, not before: userEmail/userOrganization
+      // are functionally determined by userId alone, so grouping first and joining once per
+      // resulting (date, counterName, userId, metadata) row is equivalent to the old
+      // per-raw-document join but touches far fewer rows (this collection's own bloat problem
+      // is metadata fragmentation, not user cardinality - see the Phase 2 plan). It also lets
+      // the join use the standard localField/foreignField form (an index-eligible equality
+      // join) instead of a correlated let/pipeline/$expr subquery, which is the only one of its
+      // kind on this collection - every other lookup here uses localField/foreignField.
       const pipeline = [
         {
           $match: matchCondition,
         },
         {
+          $addFields: {
+            dateString: {
+              $dateToString: {
+                format: '%Y-%m-%d',
+                date: '$datetime',
+                timezone: 'UTC',
+              },
+            },
+          },
+        },
+        {
+          $group: {
+            // metadata is part of the group key; storing it again as a field would
+            // duplicate it in every user pushed below.
+            _id: {
+              date: '$dateString',
+              counterName: '$counterName',
+              userId: '$userId',
+              metadata: '$metadata',
+            },
+            totalValue: { $sum: '$counterValue' },
+            count: { $sum: 1 },
+          },
+        },
+        {
+          $addFields: {
+            userObjectId: { $toObjectId: '$_id.userId' },
+          },
+        },
+        {
+          // Aggregation $lookup bypasses Mongoose select:false, so project off the shared
+          // secret-free baseline plus the extra non-secret fields this route reads (email,
+          // organization). Never add credential/secret fields here.
           $lookup: {
-            from: User.collection.name,
-            let: { userId: '$userId' },
+            from: 'users',
+            localField: 'userObjectId',
+            foreignField: '_id',
             pipeline: [
               {
-                $match: {
-                  $expr: { $eq: ['$_id', { $toObjectId: '$$userId' }] },
+                $project: {
+                  ...SAFE_USER_LOOKUP_PROJECT,
+                  email: 1,
+                  organization: 1,
                 },
               },
             ],
@@ -191,30 +239,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         },
         {
           $addFields: {
-            dateString: {
-              $dateToString: {
-                format: '%Y-%m-%d',
-                date: '$datetime',
-                timezone: 'UTC',
-              },
-            },
             userEmail: { $ifNull: ['$user.email', ''] },
-          },
-        },
-        {
-          $group: {
-            // metadata is part of the group key; storing it again as a field would
-            // duplicate it in every user pushed below.
-            _id: {
-              date: '$dateString',
-              counterName: '$counterName',
-              userId: '$userId',
-              userEmail: '$userEmail',
-              userOrganization: '$user.organization',
-              metadata: '$metadata',
-            },
-            totalValue: { $sum: '$counterValue' },
-            count: { $sum: 1 },
           },
         },
         {
@@ -232,8 +257,8 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
             users: {
               $push: {
                 userId: '$_id.userId',
-                userEmail: '$_id.userEmail',
-                userOrganization: '$_id.userOrganization',
+                userEmail: '$userEmail',
+                userOrganization: '$user.organization',
                 totalValue: '$totalValue',
                 count: '$count',
               },
@@ -255,7 +280,11 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         { $sort: { date: 1, counterName: 1 } },
       ];
 
-      const result = await CounterLog.aggregate(convertPipelineForDocumentDB(pipeline));
+      const result = await CounterLog.aggregate(convertPipelineForDocumentDB(pipeline), {
+        allowDiskUse: true,
+        hint: { datetime: 1 },
+        maxTimeMS: AGGREGATION_MAX_TIME_MS,
+      });
 
       // Cache the result with 1 hour expiry
       try {
