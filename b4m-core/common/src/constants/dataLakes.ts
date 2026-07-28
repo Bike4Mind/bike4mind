@@ -6,6 +6,18 @@
  */
 export const DATALAKE_TAG_PREFIX = 'datalake:';
 
+/**
+ * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
+ * (non-empty, ends with ':'), else null. Read scoping (`buildOwnershipConditions`) and the
+ * single-file removal write path both go through this, so the prefixes a query MATCHES are
+ * exactly the ones a removal can CLEAR - the asymmetry that let a removed file keep
+ * surfacing. An empty prefix would match every tag, so it is rejected rather than honored.
+ */
+export const normalizeTagPrefix = (prefix: string | undefined | null): string | null => {
+  const trimmed = typeof prefix === 'string' ? prefix.trim() : '';
+  return trimmed.length > 0 && trimmed.endsWith(':') ? trimmed : null;
+};
+
 export interface DataLakeConfig {
   id: string;
   /**

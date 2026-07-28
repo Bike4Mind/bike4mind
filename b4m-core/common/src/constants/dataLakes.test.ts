@@ -6,6 +6,7 @@ import {
   getDataLakeTags,
   lakeMatchesAccess,
   normalizeEntitlementKey,
+  normalizeTagPrefix,
   toDataLakeConfig,
 } from './dataLakes';
 
@@ -167,5 +168,24 @@ describe('toDataLakeConfig', () => {
 describe('normalizeEntitlementKey', () => {
   it('trims and lowercases', () => {
     expect(normalizeEntitlementKey('  MedLib:Pro ')).toBe('medlib:pro');
+  });
+});
+
+describe('normalizeTagPrefix', () => {
+  it('returns the trimmed prefix when it ends with a colon', () => {
+    expect(normalizeTagPrefix('acme:')).toBe('acme:');
+    expect(normalizeTagPrefix('  acme:  ')).toBe('acme:');
+  });
+
+  // Read scoping and the removal write path share this, so anything rejected here is a
+  // prefix no query matches AND no removal clears.
+  it.each([
+    ['', 'empty would match every tag'],
+    ['   ', 'whitespace-only collapses to empty'],
+    ['acme', 'no trailing colon would match unrelated tags like acmex:'],
+    [undefined, 'absent'],
+    [null, 'null'],
+  ])('rejects %o (%s)', prefix => {
+    expect(normalizeTagPrefix(prefix as string | undefined | null)).toBeNull();
   });
 });
