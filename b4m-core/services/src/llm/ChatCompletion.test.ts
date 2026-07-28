@@ -329,6 +329,38 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // An empty message array means the input budget was non-positive - e.g. a model configured with
+    // max output equal to its whole context window. The old guard was `if (!messages)`, which is
+    // false for `[]`, so the empty prompt reached the model and it answered confidently from nothing.
+    it('refuses to send an empty prompt when there is no input budget', async () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn(),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      // Fails loudly with an actionable message naming the cause, rather than sending an empty prompt.
+      await expect(service.process({ body, logger: mockLogger })).rejects.toThrow(/no input budget/);
+    });
+
     // Settlement bills from the provider-reported usage when present (the true
     // COGS basis, matching the cliCompletions path). The local tokenizer count
     // remains the pre-reservation estimate and the fallback when the provider

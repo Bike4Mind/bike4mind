@@ -109,6 +109,15 @@ const MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION = 0.35;
  */
 const MAX_SAFETY_SHRINK_ROUNDS = 5;
 
+/**
+ * Appended to attached-file content that had to be cut to fit. Without it a CSV sliced mid-row reads
+ * as a complete file: the model treats the last surviving row as the final row and answers about it
+ * confidently, which is indistinguishable from a correct answer unless you already hold the file.
+ * Counted against the budget like any other content, because it is really sent.
+ */
+const CONTENT_TRUNCATION_NOTICE =
+  '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was not sent.]';
+
 const estimateTokenLength = (text: string): number => {
   // Rough estimate: ~3.5 chars per token for English text
   return Math.ceil(text.length / CHARS_PER_TOKEN);
@@ -130,6 +139,24 @@ const estimateMessageTokens = (message: IMessage): number => estimateTokenLength
 
 const estimateMessagesTokens = (messages: IMessage[]): number =>
   messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+
+/**
+ * Flags attached content that was cut, so the model is not handed a partial file that looks whole.
+ * A truncated message is a strict prefix of its original, which is what identifies it here - the
+ * originals are needed because truncation happens several steps after the messages were built.
+ */
+const annotateTruncatedContent = (processed: IMessage[], originals: IMessage[]): IMessage[] =>
+  processed.map(message => {
+    if (typeof message.content !== 'string') return message;
+    const text = message.content;
+    const wasCut = originals.some(
+      original =>
+        typeof original.content === 'string' &&
+        original.content.length > text.length &&
+        original.content.startsWith(text)
+    );
+    return wasCut ? { ...message, content: text + CONTENT_TRUNCATION_NOTICE } : message;
+  });
 
 /**
  * Safely generate embeddings for text that might exceed token limits
@@ -1566,6 +1593,11 @@ export async function buildAndSortMessages(
       msg.content.some((block: any) => block.type === 'tool_result')
   );
 
+  // Applied at every assembly point rather than to processedContentMessages directly: the safety pass
+  // below shrinks the raw content further, and annotating early would leave the notice mid-message or
+  // cut it off entirely. Comparing against the untouched originals keeps it accurate either way.
+  const withTruncationNotice = (content: IMessage[]) => annotateTruncatedContent(content, nonImageMessages);
+
   let messages: IMessage[];
 
   // tool_use blocks must be immediately followed by tool_result blocks. If history ends with a
@@ -1577,14 +1609,14 @@ export async function buildAndSortMessages(
       ...processedPreviousMessages, // previous message context
       ...userPrompt, // Tool result must follow tool use immediately
       ...imageMessages, // Include all image messages
-      ...processedContentMessages, // fab file content (non-image messages)
+      ...withTruncationNotice(processedContentMessages), // fab file content (non-image messages)
     ];
   } else {
     messages = [
       ...systemMessages, // System messages go first for instruction
       ...processedPreviousMessages, // previous message context
       ...imageMessages, // Include all image messages
-      ...processedContentMessages, // fab file content (non-image messages)
+      ...withTruncationNotice(processedContentMessages), // fab file content (non-image messages)
       ...userPrompt, // Spread the userPrompt array into the messages array
     ];
   }
@@ -1634,8 +1666,20 @@ export async function buildAndSortMessages(
     // being charged against the budget.
     const assemble = (content: IMessage[]) =>
       historyEndsWithToolUse && promptHasToolResult
-        ? [...systemMessages, ...processedPreviousMessages, ...userPrompt, ...imageMessages, ...content]
-        : [...systemMessages, ...processedPreviousMessages, ...imageMessages, ...content, ...userPrompt];
+        ? [
+            ...systemMessages,
+            ...processedPreviousMessages,
+            ...userPrompt,
+            ...imageMessages,
+            ...withTruncationNotice(content),
+          ]
+        : [
+            ...systemMessages,
+            ...processedPreviousMessages,
+            ...imageMessages,
+            ...withTruncationNotice(content),
+            ...userPrompt,
+          ];
 
     // Content is asked to give first, but a round that frees nothing has to move on to history rather
     // than retrying forever: processMessages is judging against the character estimate, so content
@@ -1700,14 +1744,14 @@ export async function buildAndSortMessages(
         ...processedPreviousMessages,
         ...userPrompt,
         ...imageMessages,
-        ...reducedContentMessages,
+        ...withTruncationNotice(reducedContentMessages),
       ];
     } else {
       truncatedMessages = [
         ...systemMessages,
         ...processedPreviousMessages,
         ...imageMessages,
-        ...reducedContentMessages,
+        ...withTruncationNotice(reducedContentMessages),
         ...userPrompt,
       ];
     }

@@ -1784,8 +1784,16 @@ export class ChatCompletionProcess {
         logger,
         this.tokenizer
       );
-      if (!messages) {
-        throw new Error('No messages to send to OpenAI');
+      // The length check is the part that matters: buildAndSortMessages returns an EMPTY ARRAY when
+      // the input budget is non-positive, and `!messages` is false for `[]`, so an empty prompt used
+      // to reach the model. It then answers confidently from nothing, which reads to the user as the
+      // assistant ignoring their file rather than as a misconfiguration.
+      if (!messages || messages.length === 0) {
+        throw new Error(
+          `Cannot build a prompt for ${modelInfo.name || model}: no input budget. The model's context window ` +
+            `(${contextLimit}) minus its reserved output (${safeMaxTokens}) leaves no room for input. Lower the ` +
+            `max output tokens for this model, or pick a model with a larger context window.`
+        );
       }
 
       // Phase 2: Capture message truncation debug info

@@ -1741,7 +1741,9 @@ describe('Token budget allocation', () => {
       // rather than dropped.
       const file = findAttachedFile(result);
       expect(file).toBeDefined();
-      expect((file!.content as string).length).toBe(7708);
+      // 7708 chars of the file, plus the notice telling the model this is not where the file ends.
+      expect(file!.content as string).toContain('Content truncated to fit the context window');
+      expect((file!.content as string).indexOf('\n\n[Content truncated')).toBe(7708);
 
       // History still holds the majority of the budget and keeps its newest exchange.
       const labels = historyLabels(result);
@@ -1750,7 +1752,7 @@ describe('Token budget allocation', () => {
       expect(labels).toContain('history-38');
 
       // The primary allocation kept us in bounds, so the final safety net never had to fire.
-      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBe(6630);
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBe(6661);
       expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('exceeds maxInputTokens'));
 
       // The squeeze is reported, and it names the file so a support engineer can see which one lost.
@@ -2173,5 +2175,91 @@ describe('history windowing edge cases', () => {
 
     expect(getLastBuildDebugInfo()?.truncationMethod).toBeUndefined();
     expect(getLastBuildDebugInfo()?.wasTruncated).toBe(false);
+  });
+});
+
+// A file cut to fit must say so. Without this the model treats the last surviving row as the end of
+// the file and answers about it confidently - QA hit exactly that, reading a mid-file row as the
+// final row of a 416-row CSV.
+describe('truncated attachments are marked', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const makeHistory = (count: number, charsEach: number): IMessage[] =>
+    Array.from({ length: count }, (_, i) => ({
+      role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `history-${i}-` + 'h'.repeat(Math.max(0, charsEach - `history-${i}-`.length)),
+    }));
+
+  const NOTICE = 'Content truncated to fit the context window';
+
+  it('tells the model where a cut file stops', async () => {
+    const tokenizer = createMockTokenizer();
+    const body = 'row-data,'.repeat(3000) + '\nFINAL_ROW_MARKER: pineapple';
+
+    const result = await buildAndSortMessages(
+      makeHistory(40, 1400),
+      [{ role: 'user', content: body }],
+      [{ role: 'user', content: 'What is FINAL_ROW_MARKER?' }],
+      8000,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const file = result.find(m => typeof m.content === 'string' && (m.content as string).startsWith('row-data,'));
+    expect(file).toBeDefined();
+    const text = file!.content as string;
+    expect(text).toContain(NOTICE);
+    expect(text.endsWith(NOTICE + '. This is NOT the end of the file - later content was not sent.]')).toBe(true);
+    // The tail the marker lives in genuinely did not survive, which is exactly why the notice matters.
+    expect(text).not.toContain('FINAL_ROW_MARKER');
+  });
+
+  it('stays quiet when the whole file fits', async () => {
+    const tokenizer = createMockTokenizer();
+    const whole = 'row-data,'.repeat(50) + '\nFINAL_ROW_MARKER: apricot';
+
+    const result = await buildAndSortMessages(
+      [],
+      [{ role: 'user', content: whole }],
+      [{ role: 'user', content: 'What is FINAL_ROW_MARKER?' }],
+      8000,
+      {},
+      10,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const file = result.find(m => typeof m.content === 'string' && (m.content as string).startsWith('row-data,'));
+    expect(file!.content).toBe(whole);
+    expect(file!.content as string).not.toContain(NOTICE);
+    expect(file!.content as string).toContain('FINAL_ROW_MARKER: apricot');
+  });
+
+  it('delivers a whole small file with its trailing marker on an 8k-class model', async () => {
+    // The corrected Guide-for-Testers scenario: a ~4k file on a small-context model fits inside the
+    // floor, so a marker on the last line actually arrives. The original guide paired a <=8k model
+    // with a 30k file, which cannot fit that window at all - the marker could never have survived.
+    const tokenizer = createMockTokenizer();
+    const file = 'row,value\n' + 'a,1\n'.repeat(980) + 'FINAL_ROW_MARKER: apricot';
+
+    const result = await buildAndSortMessages(
+      makeHistory(20, 1400),
+      [{ role: 'user', content: file }],
+      [{ role: 'user', content: 'What is FINAL_ROW_MARKER?' }],
+      8000,
+      {},
+      10,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const delivered = result.find(m => typeof m.content === 'string' && (m.content as string).startsWith('row,value'));
+    expect(delivered!.content).toBe(file);
+    expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
+    expect(delivered!.content as string).not.toContain(NOTICE);
   });
 });
