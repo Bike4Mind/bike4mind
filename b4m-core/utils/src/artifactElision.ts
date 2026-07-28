@@ -275,6 +275,8 @@ export function detectElidedContent(body: string, type?: ArtifactType): ElisionR
   // false positive to a slightly larger sketch. Placeholder comments and hollow bodies are
   // unaffected, so the high-confidence signals still work on these artifacts.
   const referencesAreKnowable = !hasOffsiteScript(body);
+  /** Hollow bodies whose comment describes missing behaviour - see describesMissingBehaviour. */
+  let describedHollowCount = 0;
 
   if (type && JS_BEARING_TYPES.has(type)) {
     const js = type === 'react' ? [body] : extractScriptBodies(body);
@@ -312,8 +314,9 @@ export function detectElidedContent(body: string, type?: ArtifactType): ElisionR
     // ("// Render all UI components and attach event listeners"). Neither signal above sees it:
     // the comments are descriptive rather than referential, and every name resolves because the
     // declaration is still there. Only the missing bodies give it away.
-    for (const name of collectCommentOnlyFunctions(strippedSources)) {
-      signals.push({ kind: 'empty_function_body', name });
+    for (const body of collectCommentOnlyFunctions(strippedSources, js)) {
+      signals.push({ kind: 'empty_function_body', name: body.name });
+      if (describesMissingBehaviour(body.comment)) describedHollowCount++;
     }
 
     // HTML handler attributes live outside <script>, so they are scanned against the same
@@ -339,22 +342,41 @@ export function detectElidedContent(body: string, type?: ArtifactType): ElisionR
       .map(s => (s as { name: string }).name)
   ).size;
 
-  // Three or more comment-only bodies is as unambiguous as a stub marker - an artifact does not
-  // accidentally declare that many functions and implement none of them. One or two could be a
-  // deliberate no-op, so on their own they never fire; they only corroborate a reference miss.
-  const hollowIsConclusive = hollowCount >= HOLLOW_BODY_HIGH_CONFIDENCE;
+  // Only DESCRIBED hollow bodies count toward these thresholds. A body that declares itself
+  // deliberate (`// intentionally does nothing`) is excluded, which is what lets both of the
+  // conflicting requirements hold at once: two ordinary no-ops stay silent, while two bodies that
+  // describe behaviour they do not implement are reported. QA reproduced the latter twice - a task
+  // board rendering empty columns while its counter truthfully read "5 of 5 tasks shown".
+  //
+  // Three or more is as unambiguous as a stub marker, so it reports HIGH. Two is reported but stays
+  // LOW: the banner is advisory and the publish gate is acknowledge-to-proceed, so a false positive
+  // costs a mildly wrong warning, while a false negative costs a dead artifact on a shared link.
+  const hollowIsConclusive = describedHollowCount >= HOLLOW_BODY_HIGH_CONFIDENCE;
+  const hollowIsReportable = describedHollowCount >= HOLLOW_BODY_REPORTABLE;
   const confidence = hasPlaceholder || hollowIsConclusive ? 'high' : 'low';
 
   return {
     elided:
-      hasPlaceholder || hollowIsConclusive || distinctMissingRefs >= 2 || (hollowCount > 0 && distinctMissingRefs > 0),
+      hasPlaceholder ||
+      hollowIsConclusive ||
+      hollowIsReportable ||
+      distinctMissingRefs >= 2 ||
+      (hollowCount > 0 && distinctMissingRefs > 0),
     confidence,
     signals,
   };
 }
 
-/** Comment-only function bodies needed before hollowness alone is conclusive. */
+/** Described-behaviour hollow bodies needed before hollowness alone reports HIGH confidence. */
 const HOLLOW_BODY_HIGH_CONFIDENCE = 3;
+
+/**
+ * Described-behaviour hollow bodies needed to report at all. Two functions that each describe work
+ * they do not do is not a plausible accident, and it is the shape QA caught escaping: an artifact
+ * that renders, exposes controls, and silently does nothing. Below this, hollowness only corroborates
+ * a reference miss.
+ */
+const HOLLOW_BODY_REPORTABLE = 2;
 
 /**
  * Names of functions declared with a body containing nothing but comments. Takes ALREADY-STRIPPED
@@ -367,12 +389,13 @@ const HOLLOW_BODY_HIGH_CONFIDENCE = 3;
  * hollowed out - this detector's whole reason for existing, in the framework it most often has to
  * work in - produced zero signals.
  */
-function collectCommentOnlyFunctions(strippedSources: string[]): string[] {
-  // A SET, not a list: the same hollow function matches several patterns below (`function foo() {}`
-  // matches both the declaration form and the method-shorthand form), and counting it twice would
-  // walk an artifact toward HOLLOW_BODY_HIGH_CONFIDENCE on half the evidence.
-  const hollow = new Set<string>();
-  for (const stripped of strippedSources) {
+function collectCommentOnlyFunctions(strippedSources: string[], rawSources: string[]): HollowBody[] {
+  // A MAP keyed by name, not a list: the same hollow function matches several patterns below
+  // (`function foo() {}` matches both the declaration form and the method-shorthand form), and
+  // counting it twice would walk an artifact toward the threshold on half the evidence.
+  const hollow = new Map<string, string>();
+  strippedSources.forEach((stripped, index) => {
+    const raw = rawSources[index] ?? '';
     for (const pattern of HOLLOW_BODY_PATTERNS) {
       pattern.lastIndex = 0;
       let m: RegExpExecArray | null;
@@ -380,11 +403,58 @@ function collectCommentOnlyFunctions(strippedSources: string[]): string[] {
         if ((m[2] ?? '').trim() !== '') continue;
         // `if (x) { }` and `catch (e) { }` are shaped exactly like method shorthand.
         if (CALL_LIKE_KEYWORDS.has(m[1]) || NEVER_HOLLOW_NAMES.has(m[1])) continue;
-        hollow.add(m[1]);
+        // The body is blank in the stripped source BECAUSE its comment was blanked, so the comment
+        // text has to come from the raw source. Safe at the same offsets: the stripper replaces
+        // rather than deletes, making its output position-identical to its input.
+        const bodyStart = m.index + m[0].lastIndexOf('{') + 1;
+        const comment = raw.slice(bodyStart, bodyStart + (m[2] ?? '').length);
+        if (!hollow.has(m[1])) hollow.set(m[1], comment);
       }
     }
-  }
-  return [...hollow];
+  });
+  return [...hollow].map(([name, comment]) => ({ name, comment }));
+}
+
+/** A function whose body is nothing but a comment, with that comment's raw text. */
+interface HollowBody {
+  name: string;
+  comment: string;
+}
+
+/**
+ * Comment phrasings that DECLARE a body is meant to be empty. A function carrying one of these is a
+ * deliberate no-op, not an elision, and must never count toward the hollow thresholds.
+ *
+ * Kept short and explicit on purpose. The asymmetry is deliberate: a marker listed here too eagerly
+ * hides a real stub (the expensive failure - a dead artifact published to a shared link), while a
+ * marker missing from it produces at worst a mildly wrong advisory banner behind an
+ * acknowledge-to-proceed gate. When in doubt, leave it out.
+ */
+const NO_OP_INTENT_PATTERNS: readonly RegExp[] = [
+  /\bintentional/i,
+  /\bdo(?:es)? nothing\b/i,
+  /\bno-?op\b/i,
+  /\bnot implemented\b/i,
+  /\bunused\b/i,
+  /\breserved\b/i,
+  /\bdeliberately\b/i,
+  /\bby design\b/i,
+  /\bon purpose\b/i,
+  /\bleft empty\b/i,
+];
+
+/**
+ * Whether a hollow body's comment DESCRIBES the behaviour that is missing, rather than declaring the
+ * emptiness deliberate. This is the distinction between the two shapes that are otherwise identical
+ * to the scanner, and the reason both of these can be true at once:
+ *   `// intentionally does nothing - reserved for the print hook`  -> deliberate, stays silent
+ *   `// Wire up the button and render the list`                    -> a stub, reported
+ * A body with no comment at all is treated as deliberate: a stub always explains itself.
+ */
+function describesMissingBehaviour(comment: string): boolean {
+  const text = comment.replace(/[/*]|<!--|-->/g, ' ').trim();
+  if (!text) return false;
+  return !NO_OP_INTENT_PATTERNS.some(pattern => pattern.test(text));
 }
 
 /** Names whose empty body is ordinary rather than a stub. */
