@@ -8,6 +8,8 @@ const {
   listChannelsForUserMock,
   tailEventsMock,
   actorNamesByIdMock,
+  upsertPresenceMock,
+  presenceForChannelMock,
   storeMock,
   sendToClientMock,
   featureGateMock,
@@ -31,6 +33,8 @@ const {
     listChannelsForUserMock: vi.fn(),
     tailEventsMock: vi.fn(),
     actorNamesByIdMock: vi.fn(),
+    upsertPresenceMock: vi.fn(),
+    presenceForChannelMock: vi.fn(),
     storeMock,
     sendToClientMock: vi.fn(),
     featureGateMock: vi.fn((key: string) => {
@@ -75,6 +79,7 @@ vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: featu
 vi.mock('@server/websocket/utils', () => ({ sendToClient: sendToClientMock }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 vi.mock('@bike4mind/database', () => ({
+  MAX_PRESENCE_FIELD_LENGTH: 200,
   hearthRepository: {
     store: storeMock,
     getOwnedChannel: getOwnedChannelMock,
@@ -83,6 +88,8 @@ vi.mock('@bike4mind/database', () => ({
     listChannelsForUser: listChannelsForUserMock,
     tailEvents: tailEventsMock,
     actorNamesById: actorNamesByIdMock,
+    upsertPresence: upsertPresenceMock,
+    presenceForChannel: presenceForChannelMock,
   },
 }));
 vi.mock('@bike4mind/hearth', async importOriginal => ({
@@ -99,6 +106,7 @@ type MockedRouter = { _routes: Record<string, Handler>; _uses: unknown[] };
 const eventsRouter = (await import('../events')).default as unknown as MockedRouter;
 const catchupRouter = (await import('../catchup')).default as unknown as MockedRouter;
 const channelsRouter = (await import('../channels')).default as unknown as MockedRouter;
+const presenceRouter = (await import('../presence')).default as unknown as MockedRouter;
 
 const DOMAIN_EVENT = {
   id: 'ev-1',
@@ -128,12 +136,20 @@ const makeRes = () => {
   return res;
 };
 
-const makeReq = (body: unknown) =>
+const makeReq = (body: unknown, query: unknown = {}) =>
   ({
     user: { id: 'u1', username: 'erik' },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     body,
+    query,
   }) as unknown as Request;
+
+const presenceRow = (actorId: string, state: string, lastSeen: string, extra: Record<string, unknown> = {}) => ({
+  actorId: { toString: () => actorId },
+  state,
+  lastSeen: new Date(lastSeen),
+  ...extra,
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -145,13 +161,15 @@ beforeEach(() => {
   storeMock.getCursor.mockResolvedValue(1);
   tailEventsMock.mockResolvedValue([DOMAIN_EVENT]);
   sendToClientMock.mockResolvedValue(undefined);
+  upsertPresenceMock.mockResolvedValue(null);
+  presenceForChannelMock.mockResolvedValue([]);
 });
 
 describe('route wiring', () => {
   it('every hearth route registers the EnableHearth feature gate', () => {
     // requireFeatureEnabled runs at module import, once per route file.
-    expect(gateKeys.filter(k => k === 'EnableHearth')).toHaveLength(3);
-    for (const router of [eventsRouter, catchupRouter, channelsRouter]) {
+    expect(gateKeys.filter(k => k === 'EnableHearth')).toHaveLength(4);
+    for (const router of [eventsRouter, catchupRouter, channelsRouter, presenceRouter]) {
       expect(router._uses.length).toBeGreaterThanOrEqual(2);
     }
   });
@@ -240,6 +258,113 @@ describe('POST /api/hearth/events', () => {
       'wss://test',
       expect.objectContaining({ action: 'hearth_event' })
     );
+  });
+});
+
+describe('POST /api/hearth/events presence projection', () => {
+  const post = () => eventsRouter._routes.post;
+
+  const PRESENCE_BODY = {
+    channelId: 'ch-1',
+    kind: 'presence',
+    human: { text: 'agent needs permission', format: 'text' },
+    machine: {
+      schema: 'hearth.claude-code-hook@1',
+      payload: {
+        hook_event_name: 'Notification',
+        session_id: 'sess-1',
+        slug: 'amber-otter',
+        workspace: 'some-repo',
+        activity: { reason: 'permission_prompt', tool: 'Bash', permission_mode: 'default', background_tasks: 2 },
+      },
+    },
+  };
+
+  beforeEach(() => {
+    hearthLogAppendMock.mockResolvedValue({ ...DOMAIN_EVENT, kind: 'presence' });
+  });
+
+  it('projects the hook payload onto the roster row', async () => {
+    await post()(makeReq(PRESENCE_BODY), makeRes());
+    expect(upsertPresenceMock).toHaveBeenCalledWith({
+      channelId: 'ch-1',
+      actorId: 'actor-1',
+      userId: 'u1',
+      lastSeen: DOMAIN_EVENT.createdAt,
+      reason: 'permission_prompt',
+      workspace: 'some-repo',
+      tool: 'Bash',
+      permissionMode: 'default',
+      effort: undefined,
+      sessionId: 'sess-1',
+      slug: 'amber-otter',
+      subagent: undefined,
+      backgroundTasks: 2,
+    });
+  });
+
+  it('leaves the roster alone for non-presence events', async () => {
+    hearthLogAppendMock.mockResolvedValue(DOMAIN_EVENT);
+    await post()(makeReq({ channelId: 'ch-1', human: { text: 'hi' } }), makeRes());
+    expect(upsertPresenceMock).not.toHaveBeenCalled();
+  });
+
+  it('still returns 201 when the projection write throws', async () => {
+    // The log is the source of truth: a derived-state failure must not cost the
+    // caller their append.
+    upsertPresenceMock.mockRejectedValue(new Error('index build in progress'));
+    const req = makeReq(PRESENCE_BODY);
+    const res = makeRes();
+    await post()(req, res);
+    expect(res.statusCode).toBe(201);
+    expect(req.logger?.warn).toHaveBeenCalledWith(expect.stringMatching(/presence projection failed/i));
+  });
+});
+
+describe('GET /api/hearth/presence', () => {
+  const get = () => presenceRouter._routes.get;
+
+  it('404s when the channel is not owned by the caller', async () => {
+    getOwnedChannelMock.mockResolvedValue(null);
+    await expect(get()(makeReq({}, { channelId: 'ch-x' }), makeRes())).rejects.toThrow(/channel not found/i);
+    expect(presenceForChannelMock).not.toHaveBeenCalled();
+  });
+
+  it('is read-only: a key with only hearth:read may read the roster', async () => {
+    const req = makeReq({}, { channelId: 'ch-1' });
+    (req as unknown as { apiKeyInfo: { scopes: string[] } }).apiKeyInfo = { scopes: ['hearth:read'] };
+    await get()(req, makeRes());
+    expect(presenceForChannelMock).toHaveBeenCalledWith('u1', 'ch-1');
+    // Reading a roster consumes nothing.
+    expect(storeMock.setCursor).not.toHaveBeenCalled();
+    expect(ensureActorMock).not.toHaveBeenCalled();
+  });
+
+  it('returns the repository order untouched (needs-you-first, not by recency)', async () => {
+    presenceForChannelMock.mockResolvedValue([
+      presenceRow('a-blocked', 'awaiting_input', '2026-07-27T10:00:05Z', { reason: 'permission_prompt' }),
+      presenceRow('a-working', 'working', '2026-07-27T10:00:20Z', { tool: 'Bash' }),
+      presenceRow('a-idle', 'idle', '2026-07-27T10:00:30Z'),
+    ]);
+    actorNamesByIdMock.mockResolvedValue(new Map([['a-blocked', 'agent one']]));
+
+    const res = makeRes();
+    await get()(makeReq({}, { channelId: 'ch-1' }), res);
+
+    const body = res.body as { presence: Array<{ actorId: string; state: string }>; staleAfterMs: number };
+    // Sorting by lastSeen would have inverted this; the blocked actor stays first.
+    expect(body.presence.map(p => p.actorId)).toEqual(['a-blocked', 'a-working', 'a-idle']);
+    expect(body.presence[0]).toMatchObject({
+      state: 'awaiting_input',
+      actorName: 'agent one',
+      reason: 'permission_prompt',
+      lastSeen: '2026-07-27T10:00:05.000Z',
+    });
+    expect(body.staleAfterMs).toBeGreaterThan(0);
+  });
+
+  it('requires a channelId', async () => {
+    await expect(get()(makeReq({}, {}), makeRes())).rejects.toThrow();
   });
 });
 
