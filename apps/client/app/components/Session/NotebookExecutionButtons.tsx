@@ -1,6 +1,8 @@
 /**
- * NotebookExecutionButtons - Execute Jupyter notebook locally via CLI
- * Shown when a message contains generated notebook content
+ * NotebookExecutionButtons - Execute Jupyter notebooks directly from the browser
+ *
+ * Primary path: connects to the user's local Jupyter server from the browser
+ * (no CLI needed). Falls back to CLI relay if no browser Jupyter config is set.
  */
 
 import { Box, Button, CircularProgress, Typography } from '@mui/joy';
@@ -9,6 +11,11 @@ import { FC, useState, useEffect } from 'react';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
+import {
+  JupyterBrowserClient,
+  JupyterBrowserError,
+  getStoredJupyterConfig,
+} from '@client/app/utils/jupyterBrowserClient';
 import type { IChatHistoryItem } from '@bike4mind/common';
 
 export interface NotebookExecutionButtonsProps {
@@ -20,7 +27,6 @@ export interface NotebookExecutionButtonsProps {
 
 /**
  * Safely parse sessionStorage data with error handling.
- * Returns null if data is corrupted or unparseable.
  */
 function safeParseStoredData(
   storageKey: string | null
@@ -32,12 +38,22 @@ function safeParseStoredData(
     if (!storedData) return null;
     return JSON.parse(storedData);
   } catch {
-    // Corrupted data - clear it and return null
     if (storageKey) {
       sessionStorage.removeItem(storageKey);
     }
     return null;
   }
+}
+
+interface NotebookCell {
+  cell_type: string;
+  source: string | string[];
+  outputs?: unknown[];
+  execution_count?: number | null;
+}
+
+function getCellSource(cell: { source: string | string[] }): string {
+  return Array.isArray(cell.source) ? cell.source.join('') : cell.source;
 }
 
 export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
@@ -54,7 +70,6 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
   const [executionStarted, setExecutionStarted] = useState(() => parsedData?.started || false);
   const [error, setError] = useState<string | null>(() => parsedData?.error || null);
 
-  // Live progress state updated via WebSocket
   const [liveProgress, setLiveProgress] = useState<{
     status?: string;
     cellIndex?: number;
@@ -62,12 +77,11 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
     error?: string;
   }>({});
 
-  // Subscribe to WebSocket progress updates
+  // Subscribe to WebSocket progress updates (for CLI fallback path)
   useEffect(() => {
     if (!messageId || !sessionId) return;
 
     const unsubscribe = subscribeToAction('jupyter_notebook_progress', async message => {
-      // Type guard for the message
       const progressMsg = message as {
         action: string;
         questId?: string;
@@ -78,7 +92,6 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
         error?: string;
       };
 
-      // Check if this progress update is for our message/session
       if (progressMsg.questId === messageId || progressMsg.sessionId === sessionId) {
         setLiveProgress({
           status: progressMsg.status,
@@ -87,7 +100,6 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
           error: progressMsg.error,
         });
 
-        // Update sessionStorage for persistence across refresh
         if (storageKey) {
           if (progressMsg.status === 'completed') {
             sessionStorage.setItem(storageKey, JSON.stringify({ completed: true }));
@@ -99,23 +111,159 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
     });
 
     return unsubscribe;
-    // storageKey is derived from messageId, but eslint requires it in deps
   }, [messageId, sessionId, subscribeToAction, storageKey]);
 
-  // Merge initial state with live progress
-  const status = liveProgress.status ?? initialJupyterNotebook?.status ?? (executionStarted ? 'executing' : 'pending');
-  const cellCount = liveProgress.totalCells ?? initialJupyterNotebook?.cellCount ?? 0;
-  // Use ?? to handle 0 as a valid value (|| would incorrectly treat 0 as falsy)
-  const executedCells =
-    liveProgress.cellIndex !== undefined ? liveProgress.cellIndex + 1 : (initialJupyterNotebook?.executedCells ?? 0);
-  const lastError = liveProgress.error ?? initialJupyterNotebook?.lastError ?? error;
+  const reportProgress = async (
+    status: 'executing' | 'completed' | 'failed',
+    cellIndex?: number,
+    totalCells?: number,
+    errMsg?: string
+  ) => {
+    if (!messageId || !sessionId) return;
+    try {
+      await api.post('/api/jupyter/progress', {
+        sessionId,
+        questId: messageId,
+        status,
+        cellIndex,
+        totalCells,
+        error: errMsg,
+      });
+    } catch {
+      // Non-fatal: progress reporting is best-effort
+    }
+  };
 
-  // Don't show if no notebook content to execute
-  if (!notebookContent) {
-    return null;
-  }
+  const handleBrowserExecute = async () => {
+    if (!notebookContent || !sessionId) return;
 
-  const handleExecute = async () => {
+    const jupyterConfig = getStoredJupyterConfig();
+    if (!jupyterConfig) return;
+
+    setIsExecuting(true);
+    setExecutionStarted(true);
+    setError(null);
+
+    if (storageKey) {
+      sessionStorage.setItem(storageKey, JSON.stringify({ started: true }));
+    }
+
+    let notebook: { cells: NotebookCell[]; metadata?: Record<string, unknown> };
+    try {
+      notebook = JSON.parse(notebookContent);
+      if (!notebook.cells || !Array.isArray(notebook.cells)) {
+        throw new Error('Invalid notebook: missing cells array');
+      }
+    } catch (parseErr) {
+      const msg = parseErr instanceof Error ? parseErr.message : 'Failed to parse notebook';
+      setError(msg);
+      setIsExecuting(false);
+      return;
+    }
+
+    const client = new JupyterBrowserClient({
+      serverUrl: jupyterConfig.serverUrl,
+      token: jupyterConfig.token || undefined,
+    });
+
+    const codeCells = notebook.cells
+      .map((cell, idx) => ({ cell, idx }))
+      .filter(({ cell }) => cell.cell_type === 'code' && getCellSource(cell).trim().length > 0);
+    const totalCodeCells = codeCells.length;
+
+    setLiveProgress({ status: 'executing', cellIndex: -1, totalCells: totalCodeCells });
+
+    // Report initial state to server
+    await reportProgress('executing', undefined, totalCodeCells);
+
+    const kernelName = initialJupyterNotebook?.kernelName || 'python3';
+    const notebookPath = `b4m-notebook-${Date.now()}.ipynb`;
+
+    let session: { id: string; kernel: { id: string } } | null = null;
+
+    try {
+      session = await client.startSession(notebookPath, kernelName);
+      const kernelId = session.kernel.id;
+
+      let cellsFailed = 0;
+
+      for (let ci = 0; ci < codeCells.length; ci++) {
+        const { cell } = codeCells[ci];
+        const code = getCellSource(cell);
+
+        setLiveProgress({ status: 'executing', cellIndex: ci, totalCells: totalCodeCells });
+
+        try {
+          const result = await client.executeCell(kernelId, code, 30000);
+          cell.outputs = result.outputs;
+          cell.execution_count = result.executionCount;
+
+          if (!result.success) {
+            cellsFailed++;
+            const errMsg = result.error ? `${result.error.ename}: ${result.error.evalue}` : 'Cell execution failed';
+            setLiveProgress({ status: 'error', cellIndex: ci, totalCells: totalCodeCells, error: errMsg });
+            await reportProgress('failed', ci, totalCodeCells, errMsg);
+            setError(errMsg);
+            if (storageKey) {
+              sessionStorage.setItem(storageKey, JSON.stringify({ error: errMsg }));
+            }
+            // Stop on first error to match CLI behavior
+            break;
+          }
+
+          await reportProgress('executing', ci, totalCodeCells);
+        } catch (cellErr) {
+          cellsFailed++;
+          const errMsg = cellErr instanceof Error ? cellErr.message : 'Cell execution failed';
+          setLiveProgress({ status: 'error', cellIndex: ci, totalCells: totalCodeCells, error: errMsg });
+          await reportProgress('failed', ci, totalCodeCells, errMsg);
+          setError(errMsg);
+          if (storageKey) {
+            sessionStorage.setItem(storageKey, JSON.stringify({ error: errMsg }));
+          }
+          break;
+        }
+      }
+
+      if (cellsFailed === 0) {
+        setLiveProgress({ status: 'completed', cellIndex: totalCodeCells - 1, totalCells: totalCodeCells });
+        await reportProgress('completed', totalCodeCells - 1, totalCodeCells);
+        if (storageKey) {
+          sessionStorage.setItem(storageKey, JSON.stringify({ completed: true }));
+        }
+      }
+    } catch (err) {
+      const errMsg =
+        err instanceof JupyterBrowserError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Failed to connect to Jupyter server';
+      setError(errMsg);
+      setLiveProgress({ status: 'failed', error: errMsg });
+      await reportProgress('failed', undefined, totalCodeCells, errMsg);
+      if (storageKey) {
+        sessionStorage.setItem(storageKey, JSON.stringify({ error: errMsg }));
+      }
+    } finally {
+      if (session) {
+        try {
+          await client.stopSession(session.id);
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+      // Clean up the temp notebook file created on the Jupyter server
+      try {
+        await client.deleteContents(notebookPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+      setIsExecuting(false);
+    }
+  };
+
+  const handleCliExecute = async () => {
     if (!sessionId || !notebookContent) return;
 
     setIsExecuting(true);
@@ -150,6 +298,27 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
       setIsExecuting(false);
     }
   };
+
+  const hasJupyterConfig = !!getStoredJupyterConfig()?.serverUrl;
+
+  const handleExecute = async () => {
+    if (hasJupyterConfig) {
+      await handleBrowserExecute();
+    } else {
+      await handleCliExecute();
+    }
+  };
+
+  // Merge initial state with live progress
+  const status = liveProgress.status ?? initialJupyterNotebook?.status ?? (executionStarted ? 'executing' : 'pending');
+  const cellCount = liveProgress.totalCells ?? initialJupyterNotebook?.cellCount ?? 0;
+  const executedCells =
+    liveProgress.cellIndex !== undefined ? liveProgress.cellIndex + 1 : (initialJupyterNotebook?.executedCells ?? 0);
+  const lastError = liveProgress.error ?? initialJupyterNotebook?.lastError ?? error;
+
+  if (!notebookContent) {
+    return null;
+  }
 
   // Show completion state
   if (status === 'completed') {
@@ -232,9 +401,11 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
       <Typography level="body-sm" sx={{ mb: 1.5, fontWeight: 'md' }}>
         Run this notebook locally with Jupyter
       </Typography>
-      <Typography level="body-xs" sx={{ mb: 1.5, color: 'text.secondary' }}>
-        Requires B4M CLI connected with Jupyter server running locally
-      </Typography>
+      {!hasJupyterConfig && (
+        <Typography level="body-xs" sx={{ mb: 1.5, color: 'text.secondary' }}>
+          Configure your Jupyter server in Settings to run notebooks directly from the browser, or use the B4M CLI.
+        </Typography>
+      )}
       <Button
         size="sm"
         variant="solid"
@@ -244,7 +415,7 @@ export const NotebookExecutionButtons: FC<NotebookExecutionButtonsProps> = ({
         startDecorator={isExecuting ? <CircularProgress size="sm" /> : <PlayArrow sx={{ fontSize: 16 }} />}
         data-testid="notebook-execute-btn"
       >
-        {isExecuting ? 'Starting...' : 'Execute Locally'}
+        {isExecuting ? 'Executing...' : 'Execute Locally'}
       </Button>
     </Box>
   );
