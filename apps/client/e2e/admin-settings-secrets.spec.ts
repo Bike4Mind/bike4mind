@@ -31,13 +31,25 @@ type SettingDoc = { settingName: string; settingValue: unknown };
 /** Open Admin, switch to Admin Settings, and flatten every tab into a single list. */
 async function gotoAdminSettings(page: Page, adminPage: { gotoAdmin: () => Promise<void> }) {
   await adminPage.gotoAdmin();
-  // The admin nav renders twice (desktop rail + mobile drawer), so the testid matches
-  // two nodes. Only one is on screen at a given viewport - click that one.
-  await page.getByTestId('admin-admin-settings-btn').filter({ visible: true }).first().click();
 
+  // Admin Settings lives in the "General Ops" accordion, which is collapsed on load - its
+  // summary swallows the click otherwise. The nav also renders twice (desktop rail and
+  // mobile drawer), so every lookup takes the on-screen one.
+  const section = page.getByRole('button', { name: 'General Ops' }).filter({ visible: true }).first();
+  await expect(section).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+  if ((await section.getAttribute('aria-expanded')) !== 'true') {
+    await section.click();
+  }
+
+  const navButton = page.getByTestId('admin-admin-settings-btn').filter({ visible: true }).first();
+  await expect(navButton).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  await navButton.scrollIntoViewIfNeeded();
+  await navButton.click();
+
+  // Joy puts the testid on the Checkbox root span, so check() has to target the real input.
   const allTabs = page.getByTestId('admin-settings-all-tabs-checkbox');
   await expect(allTabs).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
-  await allTabs.check();
+  await allTabs.locator('input[type="checkbox"]').check();
   await expect(page.getByTestId('admin-settings-all-tabs-results')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
 }
 
