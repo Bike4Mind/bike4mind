@@ -193,7 +193,7 @@ export function useGetFabFiles(
   search: string = '',
   filters: {
     tags?: string;
-    type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
+    type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
     shared?: boolean;
     projectId?: string;
   } = {},
@@ -483,7 +483,7 @@ export interface ISearchFabFilesParams {
   search?: string;
   filters?: {
     tags?: string[];
-    type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
+    type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
     shared?: boolean;
     curated?: boolean;
   };

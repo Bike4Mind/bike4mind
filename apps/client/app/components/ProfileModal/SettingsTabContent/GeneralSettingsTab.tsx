@@ -661,6 +661,40 @@ const GeneralSettingsTab = () => {
         </Grid>
       </SectionContainer>
 
+      {/* Files Section */}
+      <SectionContainer title="Files">
+        <Grid container spacing={2}>
+          <Grid xs={12} md={6}>
+            <Box
+              sx={theme => ({
+                ...cardSurfaceSx(theme),
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '12px',
+                height: '100%',
+              })}
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography level="title-md" sx={{ fontSize: '16px', fontWeight: 500 }}>
+                  Save Generated Audio
+                </Typography>
+                <Typography level="body-sm" sx={{ mt: 0.5 }}>
+                  Keep text-to-speech and sound-effect audio in your files so you can browse and replay it. Counts
+                  toward your storage limit.
+                </Typography>
+              </Box>
+              <Switch
+                data-testid="settings-save-generated-audio-switch"
+                checked={settings.saveGeneratedAudio}
+                onChange={e => updatePreferences({ saveGeneratedAudio: e.target.checked })}
+              />
+            </Box>
+          </Grid>
+        </Grid>
+      </SectionContainer>
+
       {openDeleteAllSessionsModal && (
         <ConfirmActionModal
           title="Delete All Sessions"

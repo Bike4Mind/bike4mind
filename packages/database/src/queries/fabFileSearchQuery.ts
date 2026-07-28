@@ -99,7 +99,7 @@ export { escapeRegex };
 
 /** Map file type filter to MongoDB mimeType query condition */
 export function getMimeTypeFilter(
-  type: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code'
+  type: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio'
 ): Record<string, unknown> {
   switch (type) {
     case 'text':
@@ -126,6 +126,8 @@ export function getMimeTypeFilter(
       return { mimeType: 'text/markdown' };
     case 'code':
       return { mimeType: { $in: CODE_FILE_MIME_TYPES } };
+    case 'audio':
+      return { mimeType: { $regex: '^audio/' } };
   }
 }
 
@@ -248,7 +250,7 @@ export function buildOwnershipConditions(
 }
 
 export type FabFileFilterType =
-  'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
+  'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
 
 export interface FabFileSearchParams {
   userId: string;

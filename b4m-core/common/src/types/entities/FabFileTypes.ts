@@ -20,6 +20,12 @@ export enum KnowledgeType {
    * This is a user-created knowledge through the Bike4Mind knowledge editor.
    */
   TEXT = 'TEXT',
+  /**
+   * Generated audio (TTS / sound effects). Storable and browsable, but never
+   * ingestable: no model accepts audio as input, so audio is deliberately
+   * excluded from every LLM-attachment and vectorization path.
+   */
+  AUDIO = 'AUDIO',
 }
 
 // Data Lake source types
@@ -299,7 +305,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
+      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[]; // EXCLUDE these ids ($nin)
