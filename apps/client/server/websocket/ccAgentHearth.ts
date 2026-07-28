@@ -42,15 +42,22 @@ const CC_BRIDGE_MACHINE_SCHEMA = 'hearth.cc-bridge@1';
  */
 export type CcAgentPresenceReason = 'session_start' | 'disconnected' | ICcAgentStatus;
 
-/** Phrases for the closed reason set; anything unrecognized degrades generically. */
-const REASON_PHRASES: Record<string, string> = {
+/**
+ * Phrases for the closed reason set; anything unrecognized degrades generically.
+ *
+ * `satisfies` rather than an annotation: it keeps the runtime fallback for an
+ * unknown reason while making a MISTYPED key a compile error. A plain
+ * Record<string, string> would accept `awaiting_permision` and silently emit
+ * the generic phrase forever.
+ */
+const REASON_PHRASES = {
   session_start: 'started a session',
   running: 'is working',
   idle: 'is idle',
   awaiting_input: 'is waiting for input',
   awaiting_permission: 'needs permission',
   disconnected: 'disconnected',
-};
+} satisfies Partial<Record<CcAgentPresenceReason, string>>;
 
 interface BestEffortLogger {
   warn: (message: string, error?: Error) => void;

@@ -61,17 +61,26 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
       // Hearth dual-write, after the despawn broadcast. See ccAgentHearth.ts
       // for the scope/authority and content-free rationale.
-      for (const swept of orphaned) {
-        await reportCcAgentPresence({
-          userId: userId.toString(),
-          instanceId: swept.instanceId,
-          workspaceName: swept.workspaceName,
-          reason: 'disconnected',
-          source: swept.source,
-          deviceId: swept.deviceId,
-          logger,
-        });
-      }
+      //
+      // Concurrent, not sequential: a single disconnect can sweep several
+      // orphaned sessions, and awaiting each in turn would add their latencies
+      // together on a handler that already has a timeout budget. allSettled
+      // because these are best-effort - one failing report must not abandon
+      // the rest, and reportCcAgentPresence already swallows and logs its own
+      // errors, so a rejection here would be unexpected rather than routine.
+      await Promise.allSettled(
+        orphaned.map(swept =>
+          reportCcAgentPresence({
+            userId: userId.toString(),
+            instanceId: swept.instanceId,
+            workspaceName: swept.workspaceName,
+            reason: 'disconnected',
+            source: swept.source,
+            deviceId: swept.deviceId,
+            logger,
+          })
+        )
+      );
     }
   }
 
