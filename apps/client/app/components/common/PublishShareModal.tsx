@@ -27,6 +27,7 @@ import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind/common';
+import { ELISION_PUBLISH_TITLE } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { ShareActions } from './ShareActions';
 import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
@@ -699,7 +700,7 @@ export function PublishShareModal({
             sx={{ mb: 2, flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}
             data-testid="publish-share-incomplete-warning"
           >
-            <Typography level="title-sm">This artifact may be incomplete</Typography>
+            <Typography level="title-sm">{ELISION_PUBLISH_TITLE}</Typography>
             <Typography level="body-sm">{incompleteWarning}</Typography>
             <Checkbox
               size="sm"
