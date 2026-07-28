@@ -2187,6 +2187,14 @@ describe('truncated attachments are marked', () => {
     vi.clearAllMocks();
   });
 
+  const createDenseTokenizer = (charsPerToken: number): ITokenizer => ({
+    countTokens: vi.fn(async (text: string) => Math.ceil(text.length / charsPerToken)),
+    encodeTokens: vi.fn(async (text: string) => Array(Math.ceil(text.length / charsPerToken)).fill(1)),
+    clearCache: vi.fn(),
+    getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+    warmUpCache: vi.fn(async () => {}),
+  });
+
   const makeHistory = (count: number, charsEach: number): IMessage[] =>
     Array.from({ length: count }, (_, i) => ({
       role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
@@ -2246,6 +2254,33 @@ describe('truncated attachments are marked', () => {
     expect(delivered).toHaveLength(2);
     expect(delivered.map(m => m.content)).toEqual(expect.arrayContaining([small, large]));
     for (const m of delivered) expect(m.content as string).not.toContain(NOTICE);
+  });
+
+  it('never leaves more than one truncation notice, even when the safety pass cuts twice', async () => {
+    // A dense tokenizer forces the safety pass to run after the primary pass already cut and marked the
+    // file. Cutting notice-carrying content again lands mid-notice, so appending another one would leave
+    // a mangled fragment followed by a whole notice.
+    const tokenizer = createDenseTokenizer(2.0);
+    const body = 'row-data,'.repeat(4000) + '\nFINAL_ROW_MARKER: pineapple';
+
+    const result = await buildAndSortMessages(
+      makeHistory(60, 1000),
+      [{ role: 'user', content: body }],
+      [{ role: 'user', content: 'What is FINAL_ROW_MARKER?' }],
+      4952,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const file = result.find(m => typeof m.content === 'string' && (m.content as string).startsWith('row-data,'));
+    expect(file).toBeDefined();
+    const text = file!.content as string;
+    expect(text.split(NOTICE)).toHaveLength(2); // exactly one occurrence
+    expect(text.endsWith('later content was not sent.]')).toBe(true);
+    // No fragment of a notice stranded earlier in the payload.
+    expect(text.slice(0, text.indexOf(NOTICE))).not.toContain('[Content truncated');
   });
 
   it('stays quiet when the whole file fits', async () => {

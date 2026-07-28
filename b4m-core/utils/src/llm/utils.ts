@@ -1223,8 +1223,10 @@ const truncateMessageContent = (message: IMessage, tokenLimit: number): IMessage
 };
 
 // Process messages, keeping complete ones over truncation to avoid mid-content cuts that cause
-// hallucinations. Never returns more than `tokenBudget` worth of messages; the truncation fallback
-// at the bottom is the one exception and it stays under 90% of the budget.
+// hallucinations. Never returns more than `tokenBudget` worth of messages, except in the truncation
+// fallback at the bottom: that stays under 90% of the budget, plus the truncation notice when one is
+// passed - which on a very small budget can put the total over it. The caller's final safety pass
+// absorbs that.
 const processMessages = (
   messages: IMessage[],
   tokenBudget: number,
