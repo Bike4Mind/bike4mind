@@ -22,7 +22,7 @@ import { persist } from 'zustand/middleware';
 import { useAccessibleModels } from '../hooks/useAccessibleModels';
 import { useModelInfo } from '../hooks/data/useModelInfo';
 import { ResearchModeState, ResearchModeConfiguration } from '../types/ResearchMode';
-import { computeDefaultMaxTokens } from '../utils/aiSettingsUtils';
+import { computeDefaultMaxTokens, refitMaxTokensForModel } from '../utils/aiSettingsUtils';
 import { useAdminSettings } from './AdminSettingsContext';
 
 export interface LLMContextProps {
@@ -277,7 +277,7 @@ export const useLLM = create(
     }),
     {
       name: 'llm-settings',
-      version: 4,
+      version: 5,
       migrate: (persistedState: any, version: number) => {
         // Remap any persisted image-model ids that are now legacy/removed (e.g. dall-e-3, flux-dev).
         const remapLegacyImageModels = (state: Record<string, unknown>) => {
@@ -309,6 +309,13 @@ export const useLLM = create(
         // Migration v3->v4: re-run the remap to catch the xAI aliases added after v3 shipped (grok-2-image-1212 / grok-2-image / grok-2-image-gen -> grok-imagine-image-quality)
         if (version < 4) {
           remapLegacyImageModels(persistedState);
+        }
+        // Migration v4->v5: clear max_tokens once so the old flat 16384/8192 tier defaults are
+        // recomputed from the current rule (see computeDefaultMaxTokens). Without this, everyone
+        // who has ever picked a model keeps their stale low ceiling: the model-change effect only
+        // raises on an actual model switch, deliberately, so it cannot do this for us.
+        if (version < 5) {
+          persistedState.max_tokens = 0;
         }
         return persistedState;
       },
@@ -483,20 +490,25 @@ export const LLMProvider: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setState, adminDefaultTextModel, isAdminSettingsLoading, accessibleModels]);
 
-  // Re-clamp max_tokens whenever the active text/chat model changes. Without this, a value
-  // persisted from a previously-selected larger-context model can leak into a smaller-context
-  // model and zero out the input budget. Skip image models: their
-  // catalog max_tokens is unrelated to text-output budgets and would silently lower it.
+  // Re-fit max_tokens whenever the active text/chat model changes (see refitMaxTokensForModel -
+  // it corrects both a too-high carry-over and a too-low one). Skip image models: their catalog
+  // max_tokens is unrelated to text-output budgets and would silently lower it.
+  //
+  // allowRaise is gated on an actual model switch. This effect also re-runs on mount and whenever
+  // the modelInfoRepo reference changes (a catalog refetch), and on those runs a below-default
+  // value belongs to the model the user is already on - i.e. it is their own deliberate setting,
+  // not a stale carry-over. Raising unconditionally discarded a lowered budget on every reload.
+  const refitModelRef = useRef<string | null>(null);
   useEffect(() => {
     if (!activeModel || !modelInfoRepo) return;
     if (isImageModel(activeModel)) return;
     const info = modelInfoRepo.find(m => m.id === activeModel);
     if (!info) return;
-    const ceiling = info.max_tokens ?? 0;
-    if (ceiling <= 0) return;
+    const modelChanged = refitModelRef.current !== null && refitModelRef.current !== activeModel;
+    refitModelRef.current = activeModel;
     setState(state => {
-      if (state.max_tokens > 0 && state.max_tokens <= ceiling) return state;
-      return { ...state, max_tokens: computeDefaultMaxTokens(info) };
+      const refitted = refitMaxTokensForModel(state.max_tokens, info, { allowRaise: modelChanged });
+      return refitted === state.max_tokens ? state : { ...state, max_tokens: refitted };
     });
     // setState from Zustand is stable by reference - matches the convention used by the
     // other effects in this file.
