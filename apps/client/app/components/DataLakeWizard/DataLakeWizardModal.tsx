@@ -9,7 +9,7 @@ import {
   type WizardTargetLake,
 } from '@client/app/stores/useDataLakeWizardStore';
 import { useBatchUpload, OFFLINE_MESSAGE } from '@client/app/hooks/data/dataLakeWizard';
-import { isValidDataLakeSlug, slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
+import { isValidDataLakeSlug } from '@client/app/hooks/data/dataLakeSlug';
 import WizardStepIndicator from './WizardStepIndicator';
 import SourceSelectionStep from './steps/SourceSelectionStep';
 import PreviewStep from './steps/PreviewStep';
@@ -48,7 +48,7 @@ export default function DataLakeWizardModal() {
   const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
   const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const config = useDataLakeWizardStore(s => s.config);
-  const setTagPrefix = useDataLakeWizardStore(s => s.setTagPrefix);
+  const deriveTagPrefixFromName = useDataLakeWizardStore(s => s.deriveTagPrefixFromName);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
 
   const batchUpload = useBatchUpload();
@@ -103,14 +103,11 @@ export default function DataLakeWizardModal() {
     // Leaving source with no taxonomy step to set a prefix: derive one from the name so the
     // minimal path never stalls on Config's tagPrefix >= 2 gate. Skipped when taxonomy is on,
     // because setTaxonomy only adopts the inferred prefix while config.tagPrefix is empty -
-    // seeding it here would silently suppress the AI's own suggestion.
-    if (
-      step === 'source' &&
-      !targetLake &&
-      !isTaxonomyStepActive({ optionalSteps, targetLake }) &&
-      !config.tagPrefix.trim()
-    ) {
-      setTagPrefix(`${slugifyDataLakeName(config.name)}:`);
+    // seeding it here would silently suppress the AI's own suggestion. Fires on every pass so a
+    // rename re-derives; deriveTagPrefixFromName is what decides not to clobber a hand-edited
+    // prefix.
+    if (step === 'source' && !targetLake && !isTaxonomyStepActive({ optionalSteps, targetLake })) {
+      deriveTagPrefixFromName();
     }
 
     setStep(STEP_ORDER[currentIndex + 1]);

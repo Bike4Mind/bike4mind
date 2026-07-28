@@ -18,7 +18,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import { useTheme } from '@mui/joy/styles';
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useDataLakeWizardStore, type TaxonomyTag } from '@client/app/stores/useDataLakeWizardStore';
 import { useInferTaxonomy } from '@client/app/hooks/data/dataLakeWizard';
 
@@ -216,13 +216,16 @@ export default function TaxonomyReviewStep() {
   // this is its editable home, so the user isn't surprised by a blocked gate two steps later.
   const prefixInvalid = taxonomy.prefix.trim().length < 2;
 
-  // Auto-trigger inference on first mount if not yet attempted
-  const [autoTriggered, setAutoTriggered] = useState(false);
-  if (!taxonomy.attempted && !taxonomy.analyzing && !autoTriggered) {
-    setAutoTriggered(true);
-    // Use setTimeout to avoid setState during render
-    setTimeout(() => inferTaxonomy.mutate({}), 0);
-  }
+  // Auto-run inference on first mount if not yet attempted. Ref-guarded rather than state-guarded
+  // so StrictMode's double-invoked effect can't fire two inference requests. Passes the prefix for
+  // the same reason Re-analyze does: the source step may already have derived one, and a run that
+  // ignored it would return tags in a namespace config.tagPrefix never adopts.
+  const autoTriggered = useRef(false);
+  useEffect(() => {
+    if (autoTriggered.current || taxonomy.attempted || taxonomy.analyzing) return;
+    autoTriggered.current = true;
+    inferTaxonomy.mutate({ existingPrefix: taxonomy.prefix || undefined });
+  }, [taxonomy.attempted, taxonomy.analyzing, taxonomy.prefix, inferTaxonomy]);
 
   // Loading state
   if (taxonomy.analyzing) {

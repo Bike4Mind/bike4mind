@@ -283,6 +283,35 @@ describe('DataLakeWizardModal - streamlined step order', () => {
     expect(state.config.tagPrefix).toBe('legal-contracts:');
   });
 
+  it('re-derives the prefix after a rename, so it never references the abandoned name', () => {
+    seedSource({ name: 'Legal Contracts' });
+
+    renderModal();
+    screen.getByTestId('wizard-next-btn').click();
+    useDataLakeWizardStore.setState(state => ({
+      step: 'source',
+      config: { ...state.config, name: 'Medical Records' },
+    }));
+    screen.getByTestId('wizard-next-btn').click();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('medical-records:');
+  });
+
+  it('leaves a hand-edited prefix alone when the name later changes', () => {
+    seedSource({ name: 'Legal Contracts' });
+
+    renderModal();
+    screen.getByTestId('wizard-next-btn').click();
+    useDataLakeWizardStore.getState().setTagPrefix('custom:');
+    useDataLakeWizardStore.setState(state => ({
+      step: 'source',
+      config: { ...state.config, name: 'Medical Records' },
+    }));
+    screen.getByTestId('wizard-next-btn').click();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('custom:');
+  });
+
   it('leaves the prefix empty for the taxonomy step to fill when that step is enabled', () => {
     // setTaxonomy only adopts the inferred prefix while config.tagPrefix is empty, so
     // seeding one here would silently suppress the AI's own suggestion.

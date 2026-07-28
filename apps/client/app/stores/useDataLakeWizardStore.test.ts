@@ -95,6 +95,69 @@ describe('useDataLakeWizardStore - open starts a clean session', () => {
   });
 });
 
+describe('useDataLakeWizardStore - prefix stays synced across taxonomy inference', () => {
+  afterEach(() => useDataLakeWizardStore.getState().resetWizard());
+
+  const inferenceResult = (prefix: string) => ({
+    prefix,
+    suggestedName: 'Legal',
+    tags: [],
+    fileAssignments: [],
+    attempted: true,
+    analyzing: false,
+  });
+
+  it('keeps an already-seeded prefix on BOTH fields when inference suggests a different one', () => {
+    // Reachable via source -> Next (derives a prefix) -> Back -> enable AI Taxonomy -> Next.
+    // taxonomy.prefix renders the tag cards; config.tagPrefix is what upload applies. Adopting
+    // the inferred prefix on only one of them would tag files with a namespace never shown.
+    useDataLakeWizardStore.getState().setTagPrefix('legal-contracts:');
+
+    useDataLakeWizardStore.getState().setTaxonomy(inferenceResult('legal:'));
+
+    const s = useDataLakeWizardStore.getState();
+    expect(s.taxonomy.prefix).toBe('legal-contracts:');
+    expect(s.config.tagPrefix).toBe('legal-contracts:');
+  });
+
+  it('adopts the inferred prefix on both fields when nothing was seeded', () => {
+    useDataLakeWizardStore.getState().setTaxonomy(inferenceResult('legal:'));
+
+    const s = useDataLakeWizardStore.getState();
+    expect(s.taxonomy.prefix).toBe('legal:');
+    expect(s.config.tagPrefix).toBe('legal:');
+  });
+});
+
+describe('useDataLakeWizardStore - deriveTagPrefixFromName', () => {
+  afterEach(() => useDataLakeWizardStore.getState().resetWizard());
+
+  const setName = (name: string) => useDataLakeWizardStore.getState().setConfig({ name });
+
+  it('re-derives after a rename, keeping both prefix fields together', () => {
+    setName('Legal Contracts');
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    setName('Medical Records');
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    const s = useDataLakeWizardStore.getState();
+    expect(s.config.tagPrefix).toBe('medical-records:');
+    expect(s.taxonomy.prefix).toBe('medical-records:');
+  });
+
+  it('never clobbers a prefix the user edited by hand', () => {
+    setName('Legal Contracts');
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+    useDataLakeWizardStore.getState().setTagPrefix('custom:');
+
+    setName('Medical Records');
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('custom:');
+  });
+});
+
 describe('useDataLakeWizardStore - optional step opt-ins', () => {
   afterEach(() => useDataLakeWizardStore.getState().resetWizard());
 

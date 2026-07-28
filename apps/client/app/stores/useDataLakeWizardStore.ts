@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { TaxonomyFileAssignment } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
+import { slugifyDataLakeName } from '../hooks/data/dataLakeSlug';
 import {
   parseFilesToTree,
   getAllFiles,
@@ -145,6 +146,7 @@ const freshSession = () => ({
   taxonomy: { ...EMPTY_TAXONOMY },
   optionalSteps: { ...DEFAULT_OPTIONAL_STEPS },
   config: { ...DEFAULT_CONFIG },
+  autoDerivedTagPrefix: '',
   duplicateCheckResults: null,
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
@@ -192,6 +194,11 @@ interface DataLakeWizardStore {
   /** Opt-ins for the two skippable steps; drives the wizard's step order. */
   optionalSteps: OptionalSteps;
   config: DataLakeFormValues;
+  /**
+   * The last prefix deriveTagPrefixFromName produced, so a rename can re-derive over it while a
+   * hand-edited prefix stays untouched. Never read outside that action.
+   */
+  autoDerivedTagPrefix: string;
   duplicateCheckResults: { duplicateCount: number; checkedAt: number } | null;
   uploadProgress: UploadProgress;
   hashingProgress: { total: number; completed: number; status: 'idle' | 'hashing' | 'done' };
@@ -226,6 +233,7 @@ interface DataLakeWizardStore {
   mergeTags: (sourceOriginalName: string, targetOriginalName: string) => void;
   deleteTag: (originalName: string) => void;
   setTagPrefix: (prefix: string) => void;
+  deriveTagPrefixFromName: () => void;
 
   // Config step
   setConfig: (config: Partial<DataLakeFormValues>) => void;
@@ -255,6 +263,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   taxonomy: { ...EMPTY_TAXONOMY },
   optionalSteps: { ...DEFAULT_OPTIONAL_STEPS },
   config: { ...DEFAULT_CONFIG },
+  autoDerivedTagPrefix: '',
   duplicateCheckResults: null,
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
@@ -328,7 +337,11 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
 
   setTaxonomy: result =>
     set({
-      taxonomy: result,
+      // taxonomy.prefix follows the SAME existing-value-wins rule as config.tagPrefix below,
+      // not just for symmetry: taxonomy.prefix renders the tag cards while config.tagPrefix is
+      // what upload actually applies, so adopting result.prefix here while config keeps a
+      // seeded value would show one namespace and tag files with another.
+      taxonomy: { ...result, prefix: get().taxonomy.prefix || result.prefix },
       // Auto-fill config from the suggestion, but a value the user already typed wins - else
       // a Re-analyze would silently overwrite the name/prefix they set on the Config step.
       config: {
@@ -396,6 +409,25 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
       taxonomy: { ...state.taxonomy, prefix },
       config: { ...state.config, tagPrefix: prefix },
     })),
+
+  /**
+   * Derive the tag prefix from the lake name, for flows with no taxonomy step to supply one.
+   * Re-derives after a rename so the prefix can't keep referencing an abandoned name, but only
+   * while the prefix is still exactly what this last produced - once the user edits it on
+   * Config, their value is theirs to keep. Callers own the when (see DataLakeWizardModal's
+   * source-step guard); this owns the whether.
+   */
+  deriveTagPrefixFromName: () =>
+    set(state => {
+      const current = state.config.tagPrefix.trim();
+      if (current && current !== state.autoDerivedTagPrefix) return state;
+      const prefix = `${slugifyDataLakeName(state.config.name)}:`;
+      return {
+        autoDerivedTagPrefix: prefix,
+        taxonomy: { ...state.taxonomy, prefix },
+        config: { ...state.config, tagPrefix: prefix },
+      };
+    }),
 
   // ── Config Step ─────────────────────────────────────────────────────────
 
