@@ -51,6 +51,39 @@ describe('AdminSettingInputField sensitive setting', () => {
     expect(input().value).toBe(maskedValue);
   });
 
+  it('keeps Save disabled while the field is empty only because focus cleared the mask', () => {
+    renderSensitiveField(maskedValue);
+    fireEvent.focus(input());
+
+    expect(input().value).toBe('');
+    expect(screen.getByRole('button')).toBeDisabled();
+  });
+
+  it('does not write when Save is clicked after focus without typing', () => {
+    renderSensitiveField(maskedValue);
+
+    // Blur would restore the mask and re-disable Save, but a click is not guaranteed to
+    // blur the input first (macOS Safari and Firefox do not focus buttons on click), so
+    // the write path is guarded independently of event ordering.
+    fireEvent.focus(input());
+    fireEvent.click(screen.getByRole('button'));
+
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it('still allows an admin to deliberately clear a stored secret', () => {
+    renderSensitiveField(maskedValue);
+    fireEvent.focus(input());
+    // Focus already emptied the field, so a real clear is type-then-delete. That is an
+    // explicit edit, unlike the untouched-empty state above, and must still reach the server.
+    fireEvent.change(input(), { target: { value: 'x' } });
+    fireEvent.change(input(), { target: { value: '' } });
+
+    expect(screen.getByRole('button')).not.toBeDisabled();
+    fireEvent.click(screen.getByRole('button'));
+    expect(mutate).toHaveBeenCalledWith({ key: 'anthropicDemoKey', value: '' }, expect.anything());
+  });
+
   it('submits a newly typed secret and then holds only what the server returns', () => {
     renderSensitiveField(maskedValue);
     fireEvent.focus(input());

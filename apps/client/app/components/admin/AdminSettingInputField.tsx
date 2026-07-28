@@ -95,20 +95,34 @@ const AdminSettingInputField = ({
   });
   const updateSettings = useUpdateSettings();
   const [showEmbeddingWarning, setShowEmbeddingWarning] = useState(false);
+  // Whether the admin actually typed into a sensitive field, as opposed to the field
+  // being emptied by focus clearing the mask. Distinguishes a deliberate "unset this
+  // key" from an accidental empty write - see the guard in saveValue.
+  const [secretEdited, setSecretEdited] = useState(false);
 
-  const isDirty = value !== defaultValue;
+  // A sensitive field sitting empty purely because focus cleared its mask is not an edit,
+  // so Save stays disabled. Without this the field reads as dirty the moment it is focused
+  // and an empty write becomes one click away (saveValue guards the write itself as well).
+  const isUntouchedClearedSecret = setting.isSensitive === true && value === '' && !secretEdited;
+  const isDirty = value !== defaultValue && !isUntouchedClearedSecret;
   const showsStoredSecretMask = setting.isSensitive === true && isMaskedSensitiveSettingValue(value);
   const isEmbeddingModelSetting = setting.key === 'defaultEmbeddingModel';
 
   const saveValue = (next: string | number | boolean) => {
+    // Focusing a sensitive field clears the mask, which enables Save. Blur restores it,
+    // but a click is not guaranteed to blur the input first (macOS Safari and Firefox do
+    // not focus buttons on click), so an untouched empty value must never reach the server
+    // - it would overwrite the stored key with ''. Only an explicit edit can clear a key.
+    if (setting.isSensitive && next === '' && !secretEdited) return;
+
     updateSettings.mutate(
       { key: setting.key, value: next },
       {
         // Drop the typed plaintext as soon as it is stored: the server answers a sensitive
         // write with the mask, which is all this field should ever hold afterwards.
-        onSuccess: data => {
-          const saved = (data as { settingValue?: unknown } | undefined)?.settingValue;
-          if (setting.isSensitive && typeof saved === 'string') setValue(saved);
+        onSuccess: (data: { settingValue?: unknown } | undefined) => {
+          setSecretEdited(false);
+          if (setting.isSensitive && typeof data?.settingValue === 'string') setValue(data.settingValue);
         },
       }
     );
@@ -170,15 +184,21 @@ const AdminSettingInputField = ({
                     slotProps={{ input: { 'data-testid': `admin-setting-${setting.key}-input` } }}
                     value={(value as string) || ''}
                     placeholder={setting.isSensitive ? 'Enter a new value to replace the stored secret' : undefined}
-                    onChange={e => setValue(e.target.value)}
+                    onChange={e => {
+                      setValue(e.target.value);
+                      if (setting.isSensitive) setSecretEdited(true);
+                    }}
                     // A sensitive setting arrives already masked from the server, so there is
                     // nothing to reveal. Clear the mask on focus so the admin types a fresh
                     // value, and restore it on an untouched blur so the field stays non-dirty.
+                    // A field the admin deliberately emptied is left alone - that is a clear.
                     onFocus={() => {
                       if (showsStoredSecretMask) setValue('');
                     }}
                     onBlur={() => {
-                      if (setting.isSensitive && value === '') setValue((defaultValue as string) ?? '');
+                      if (setting.isSensitive && value === '' && !secretEdited) {
+                        setValue((defaultValue as string) ?? '');
+                      }
                     }}
                   />
                 )
