@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
+import { Types } from 'mongoose';
 import { HearthLog } from '@bike4mind/hearth';
 import { connectTestDB, disconnectTestDB, cleanupTestDB } from './utils';
 import { HearthChannel } from '../models/hearth/HearthChannelModel';
 import { HearthActor } from '../models/hearth/HearthActorModel';
-import { HearthEventDoc } from '../models/hearth/HearthEventModel';
+import { HearthEventDoc, PRESENCE_EVENT_RETENTION_SECONDS } from '../models/hearth/HearthEventModel';
 import { HearthCursor } from '../models/hearth/HearthCursorModel';
 import { MongoHearthStore, hearthRepository } from '../models/hearth/MongoHearthStore';
 
@@ -154,5 +155,93 @@ describe('Hearth models + MongoHearthStore', () => {
     expect(await hearthRepository.getOwnedChannel(USER, channelId)).not.toBeNull();
     expect(await hearthRepository.getOwnedChannel('6540b58d1f703ade3ea1e82c', channelId)).toBeNull();
     expect(await hearthRepository.getOwnedChannel(USER, 'not-an-object-id')).toBeNull();
+  });
+
+  /**
+   * The TTL contract, not the reaper: Mongo's TTL monitor runs on a ~60s
+   * background interval, so waiting for real expiry would be slow and flaky.
+   * These assert what we control - which documents the index selects.
+   */
+  describe('presence event retention', () => {
+    // schema.indexes() returns [keys, options] pairs; narrowed locally because
+    // the mongoose type is a broad union that hides expireAfterSeconds.
+    type DeclaredIndex = [
+      Record<string, number>,
+      { name?: string; expireAfterSeconds?: number; partialFilterExpression?: Record<string, unknown> } | undefined,
+    ];
+
+    function presenceTtlIndex(): DeclaredIndex {
+      const declared = HearthEventDoc.schema.indexes() as unknown as DeclaredIndex[];
+      const match = declared.find(([, options]) => options?.expireAfterSeconds !== undefined);
+      expect(match, 'no TTL index declared on HearthEvent').toBeDefined();
+      return match as DeclaredIndex;
+    }
+
+    it('declares exactly one TTL index, on createdAt, filtered to presence only', () => {
+      const declared = HearthEventDoc.schema.indexes() as unknown as DeclaredIndex[];
+      const ttls = declared.filter(([, options]) => options?.expireAfterSeconds !== undefined);
+      expect(ttls).toHaveLength(1);
+
+      const [keys, options] = presenceTtlIndex();
+      expect(keys).toEqual({ createdAt: 1 });
+      expect(options?.expireAfterSeconds).toBe(PRESENCE_EVENT_RETENTION_SECONDS);
+      expect(options?.expireAfterSeconds).toBeGreaterThan(0);
+      // Exact shape, not a superset: a broader filter (an $in, an $exists) would
+      // silently start expiring facts.
+      expect(options?.partialFilterExpression).toEqual({ kind: 'presence' });
+    });
+
+    it('builds the TTL index in Mongo with its filter intact', async () => {
+      // beforeEach drops the database, so re-create indexes inside the test.
+      await HearthEventDoc.ensureIndexes();
+      const live = await HearthEventDoc.collection.indexes();
+
+      const ttl = live.find(idx => idx.name === 'hearth_event_presence_ttl');
+      expect(ttl, 'presence TTL index missing from the collection').toBeDefined();
+      expect(ttl?.expireAfterSeconds).toBe(PRESENCE_EVENT_RETENTION_SECONDS);
+      expect(ttl?.partialFilterExpression).toEqual({ kind: 'presence' });
+    });
+
+    it('selects presence events and no other kind', async () => {
+      const { channelId, actorId } = await makeChannelAndActor();
+      await store.appendEvent(messageInput(channelId, actorId, 'a fact, kept forever'));
+      const presence = await store.appendEvent({
+        channelId,
+        actorId,
+        kind: 'presence',
+        human: { text: 'running', format: 'text' },
+        refs: {},
+      });
+
+      // Run the declared filter as a query: what it matches is exactly what the
+      // reaper would delete.
+      const [, options] = presenceTtlIndex();
+      const doomed = await HearthEventDoc.find(options?.partialFilterExpression ?? {});
+      expect(doomed.map(d => d._id.toString())).toEqual([presence.id]);
+    });
+
+    it('eventsSince stays correctly ordered when seq has gaps', async () => {
+      const { channelId, actorId } = await makeChannelAndActor();
+
+      // Insert non-contiguous seqs directly: this is the post-reaper shape of a
+      // channel whose presence events have expired. Written out of order too,
+      // so the assertion cannot pass on insertion order alone.
+      for (const seq of [7, 2, 11, 4]) {
+        await HearthEventDoc.create({
+          channelId: new Types.ObjectId(channelId),
+          seq,
+          actorId: new Types.ObjectId(actorId),
+          kind: 'message',
+          human: { text: `msg ${seq}`, format: 'text' },
+          refs: {},
+        });
+      }
+
+      expect((await store.eventsSince(channelId, 0)).map(e => e.seq)).toEqual([2, 4, 7, 11]);
+      expect((await store.eventsSince(channelId, 4)).map(e => e.seq)).toEqual([7, 11]);
+      // A cursor sitting in a gap must resume at the next surviving event, not stall.
+      expect((await store.eventsSince(channelId, 5)).map(e => e.seq)).toEqual([7, 11]);
+      expect((await store.eventsSince(channelId, 0, { limit: 2 })).map(e => e.seq)).toEqual([2, 4]);
+    });
   });
 });
