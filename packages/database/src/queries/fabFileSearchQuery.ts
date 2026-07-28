@@ -299,6 +299,12 @@ export interface FabFileSearchParams {
     excludeFilenameMarkers?: string[];
     /** When true, restrict results to vectorized files only (excludes unvectorized). */
     vectorizedOnly?: boolean;
+    /**
+     * When true, append an `_id` tiebreaker to a `fileName` sort so it becomes a total order.
+     * Required by callers that skip-paginate past page 1, because `fileName` is not unique.
+     * Ignored for other sort fields - see the sort block below for why.
+     */
+    stableSort?: boolean;
   };
   useDocumentDB?: boolean;
 }
@@ -442,11 +448,21 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
   }
 
   // Sort - DocumentDB uses lowercase field for case-insensitive sorting
+  const direction = order.direction === 'asc' ? 1 : -1;
   let sort: Record<string, 1 | -1>;
   if (order.by === 'fileName' && useDocumentDB) {
-    sort = { fileNameLower: order.direction === 'asc' ? 1 : -1 };
+    sort = { fileNameLower: direction };
   } else {
-    sort = { [order.by]: order.direction === 'asc' ? 1 : -1 };
+    sort = { [order.by]: direction };
+  }
+  // `fileName` is NOT unique - a lake legitimately holds duplicate uploads - so skip-paginating a
+  // fileName sort can drop or repeat a file at a page boundary. Callers that walk more than one
+  // page opt in to an `_id` tiebreaker, which makes the sort a total order.
+  // Deliberately restricted to the fileName branches: they already require an in-memory sort
+  // (no usable collated fileName index), so the tiebreaker is free there, whereas adding it to
+  // `createdAt` would turn an indexed 21-document scan into a full-collection blocking sort.
+  if (options?.stableSort && (order.by === 'fileName' || sort.fileNameLower !== undefined)) {
+    sort._id = direction;
   }
 
   return {
