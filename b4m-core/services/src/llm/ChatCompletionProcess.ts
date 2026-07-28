@@ -177,19 +177,52 @@ const RESPONSE_RESERVE = 8000;
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
 
 /**
- * Fraction of the model's SAFE INPUT budget (context window minus reserved
- * output + buffer) kept as VERBATIM conversation history before older turns are
- * folded into contextSummary. Conservative on purpose: it leaves headroom for
- * system prompts, tool schemas, RAG, and the current prompt, so compaction only
- * kicks in once a session is genuinely heavy. Overridable per-deploy via the
+ * Fraction of the space ACTUALLY AVAILABLE FOR HISTORY (safe input minus the
+ * non-history overhead reserved below) kept as VERBATIM conversation history
+ * before older turns are folded into contextSummary. The fraction tunes the
+ * verbatim/summary split of whatever room is left after overhead; it is NOT a
+ * fraction of the raw window. Overridable per-deploy via the
  * ContextVerbatimWindowFraction admin setting.
  */
 const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
 
+/**
+ * Non-history input competes with the verbatim window for the same safe-input
+ * budget: system prompts, tool schemas, the injected contextSummary, and the
+ * current prompt. The verbatim budget must reserve room for these or the window
+ * grows until history ALONE nears safe input while total input has already
+ * overflowed - the turn then hits the hard overflow guard (which throws before
+ * the reactive summarizer's onComplete can run) instead of compacting. These are
+ * conservative floors used only to pick the summary boundary; the exact tokenizer
+ * still enforces the real budget downstream in buildAndSortMessages.
+ */
+const SYSTEM_PROMPT_RESERVE_TOKENS = 1200; // persona + artifact/help/date guidance, typical floor
+const PER_TOOL_SCHEMA_RESERVE_TOKENS = 120; // rough serialized {name,description,input_schema} per enabled tool
+
 /** Coerce an admin-setting value to a fraction in (0, 1], falling back when invalid. */
-function clampFraction(raw: unknown, fallback: number): number {
+export function clampFraction(raw: unknown, fallback: number): number {
   const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw));
   return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? parsed : fallback;
+}
+
+/**
+ * Drop the oldest conversation turn from a verbatim history built by
+ * fetchAndProcessPreviousMessages. A human turn starts at a user message with
+ * STRING content; tool results are user messages with ARRAY content, so slicing
+ * at the second string-content user message removes the oldest turn WHOLE
+ * (prompt + assistant reply + any tool_use/tool_result pairs) and leaves the
+ * remainder starting on a clean turn boundary - never a dangling tool_result that
+ * would break provider pairing. Returns null when fewer than two turns remain
+ * (nothing safe left to shed). Used only by the overflow-guard safety net.
+ */
+export function dropOldestHistoryTurn(history: IMessage[]): IMessage[] | null {
+  const turnStarts: number[] = [];
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i];
+    if (m.role === 'user' && typeof m.content === 'string') turnStarts.push(i);
+  }
+  if (turnStarts.length < 2) return null;
+  return history.slice(turnStarts[1]);
 }
 
 /**
@@ -1435,7 +1468,22 @@ export class ChatCompletionProcess {
       const modelMaxOutput = modelInfo.max_tokens ?? 16384;
       const reservedOutputTokens = Math.min(params.max_tokens ?? modelMaxOutput, modelMaxOutput);
       const safeInputTokens = Math.max(0, contextWindow - reservedOutputTokens - 1000);
-      const verbatimTokenBudget = Math.floor(safeInputTokens * verbatimWindowFraction);
+      // Reserve the non-history overhead that shares this budget before applying the
+      // fraction, so heavier-payload turns (more tools, a longer running summary, a
+      // large prompt) compact SOONER rather than overflowing first - this is the
+      // account-to-account difference QA saw, where a larger tool block overflowed
+      // where a lean one did not. The tokenizer isn't run here (that would be N async
+      // calls over the whole history on every turn); char/4 estimates keep boundary
+      // selection synchronous and are only a conservative floor. enabledTools here
+      // undercounts MCP-expanded tools, which the overflow-guard safety net catches.
+      const estTokens = (text: string | undefined | null): number => (text ? Math.ceil(text.length / 4) : 0);
+      const nonHistoryOverhead =
+        SYSTEM_PROMPT_RESERVE_TOKENS +
+        enabledTools.length * PER_TOOL_SCHEMA_RESERVE_TOKENS +
+        estTokens(message) +
+        estTokens(session.contextSummary);
+      const availableForVerbatim = Math.max(0, safeInputTokens - nonHistoryOverhead);
+      const verbatimTokenBudget = Math.floor(availableForVerbatim * verbatimWindowFraction);
       const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.db,
         verbatimTokenBudget,
@@ -1774,9 +1822,9 @@ export class ChatCompletionProcess {
         });
       }
 
-      let messages = await buildAndSortMessages(
-        previousMessages,
-        [
+      // Extracted so the overflow-guard safety net below can rebuild with a trimmed
+      // history without duplicating this (long, order-sensitive) system/context block.
+      const contextAndSystemMessages: IMessage[] = [
           dateTimeContext, // Always provide current date/time awareness
           ...extraContextMessages, // Add extra context messages from external sources at the top
           // Artifact emission guidance. Without this, correct <artifact> usage
@@ -1873,8 +1921,12 @@ export class ChatCompletionProcess {
             : []),
           ...urlMessages,
           ...fabMessages,
-        ],
-        [{ role: 'user', content: effectiveUserPrompt }],
+        ];
+      const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
+      let messages = await buildAndSortMessages(
+        previousMessages,
+        contextAndSystemMessages,
+        currentUserPromptMessages,
         maxSafeInputTokens,
         defaultAdminSettings,
         historyCount,
@@ -1988,16 +2040,65 @@ export class ChatCompletionProcess {
           }ms`
         );
 
+        // OVERFLOW SAFETY NET (see also the verbatim-budget reservation above). Part 1's
+        // reserve normally makes compaction fire BEFORE a turn overflows, but overhead we
+        // can't see when the summary boundary is chosen - MCP-expanded tool schemas, an
+        // unusually large running summary - can still push a turn over. Throwing here would
+        // kill the turn before the reactive summarizer's onComplete runs, permanently
+        // bricking a heavy session. Instead shed the oldest verbatim turns and rebuild (via
+        // the same tested buildAndSortMessages, so tool pairing stays intact) until the REAL
+        // tokenizer says it fits, or nothing is left to shed. Only the overflow path pays this;
+        // the common path is unchanged. NOTE: these shed turns are dropped from THIS turn only
+        // and are not folded into contextSummary (the message layer has no quest-id boundary);
+        // the estimate-layer boundary keeps advancing normally on subsequent turns.
+        let effectiveTotalTokens = totalTokens;
+        let effectiveHistoryTokens = historyTokens;
+        if (inputTokens > maxSafeInputTokens && previousMessages.length > 0) {
+          let recoveryHistory: IMessage[] = previousMessages;
+          let shedTurns = 0;
+          while (inputTokens > maxSafeInputTokens) {
+            const trimmed = dropOldestHistoryTurn(recoveryHistory);
+            if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
+            recoveryHistory = trimmed;
+            const rebuilt = await buildAndSortMessages(
+              recoveryHistory,
+              contextAndSystemMessages,
+              currentUserPromptMessages,
+              maxSafeInputTokens,
+              defaultAdminSettings,
+              historyCount,
+              logger,
+              this.tokenizer
+            );
+            if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
+            messages = rebuilt;
+            shedTurns++;
+            [effectiveTotalTokens, effectiveHistoryTokens] = await Promise.all([
+              calculateTotalTokenLength(messages, tokenCalcOptions),
+              calculateTotalTokenLength(recoveryHistory, tokenCalcOptions),
+            ]);
+            inputTokens = effectiveTotalTokens + toolSchemaTokens;
+          }
+          if (shedTurns > 0) {
+            logger.warn(
+              `⚠️ [Context Overflow Recovery] Shed ${shedTurns} oldest verbatim turn(s) and rebuilt; ` +
+                `inputTokens now ${inputTokens}/${maxSafeInputTokens}. The verbatim budget under-reserved ` +
+                `overhead this turn (likely MCP tools or a large running summary).`
+            );
+          }
+        }
+
         // System prompts = the messages-only total (totalTokens) minus the known message sources.
         // This avoids double-counting (mementos/project are system-role but tracked separately) and
         // captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.).
         // Derived from totalTokens, NOT inputTokens, so the tool-schema count never inflates it.
-        const knownSourceTokens = fabTokens + historyTokens + mementoTokens + urlTokens + userPromptTokens;
-        const systemPromptTokens = Math.max(0, totalTokens - knownSourceTokens);
+        // Uses the post-recovery effective totals so a shed turn isn't double-counted as history.
+        const knownSourceTokens = fabTokens + effectiveHistoryTokens + mementoTokens + urlTokens + userPromptTokens;
+        const systemPromptTokens = Math.max(0, effectiveTotalTokens - knownSourceTokens);
 
         tokensBySource = {
           systemPrompts: systemPromptTokens,
-          conversationHistory: historyTokens,
+          conversationHistory: effectiveHistoryTokens,
           mementos: mementoTokens,
           fabFiles: fabTokens,
           urlContent: urlTokens,
