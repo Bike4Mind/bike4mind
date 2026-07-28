@@ -141,26 +141,6 @@ const estimateMessagesTokens = (messages: IMessage[]): number =>
   messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
 
 /**
- * Flags attached content that was cut, so the model is not handed a partial file that looks whole.
- * Truncation happens several steps after these messages were built, so the originals are the only
- * way to tell a cut message from a whole one.
- *
- * Matching an exact original first is what makes this safe with multiple attachments: a strict-prefix
- * test alone marks a whole file as truncated whenever a LARGER attachment happens to start with the
- * same bytes, which two CSVs sharing a header row do.
- */
-const annotateTruncatedContent = (processed: IMessage[], originals: IMessage[]): IMessage[] => {
-  const originalTexts = originals.filter(o => typeof o.content === 'string').map(o => o.content as string);
-  return processed.map(message => {
-    if (typeof message.content !== 'string') return message;
-    const text = message.content;
-    if (originalTexts.includes(text)) return message; // survived whole
-    const wasCut = originalTexts.some(original => original.length > text.length && original.startsWith(text));
-    return wasCut ? { ...message, content: text + CONTENT_TRUNCATION_NOTICE } : message;
-  });
-};
-
-/**
  * Safely generate embeddings for text that might exceed token limits
  * Chunks large text and returns averaged embedding vector
  */
@@ -1247,7 +1227,12 @@ const truncateMessageContent = (message: IMessage, tokenLimit: number): IMessage
 // at the bottom is the one exception and it stays under 90% of the budget.
 const processMessages = (
   messages: IMessage[],
-  tokenBudget: number
+  tokenBudget: number,
+  // Appended to any message this call actually shortens. Passed only for attached-file content: it is
+  // applied at the truncation site because that is the only place that KNOWS a message was cut.
+  // Inferring it afterwards by comparing against the originals cannot distinguish a cut file from a
+  // whole one whose bytes happen to match a sibling attachment, in either direction.
+  { truncationNotice }: { truncationNotice?: string } = {}
 ): {
   messages: IMessage[];
   removedMessages: Array<{ role: string; tokens: number; priority: number }>;
@@ -1342,7 +1327,14 @@ const processMessages = (
     // messages instead and let the removal reporting below stand.
     if (tokensPerMessage >= 1) {
       return {
-        messages: messages.map(message => truncateMessageContent(message, tokensPerMessage)),
+        messages: messages.map(message => {
+          const truncated = truncateMessageContent(message, tokensPerMessage);
+          // Every message reaching this branch gets shortened - it only runs when none of them fit,
+          // and the per-message share is at most the budget each one already exceeded. The type check
+          // is the real guard: array content truncates by whole blocks and takes no text notice.
+          if (!truncationNotice || typeof truncated.content !== 'string') return truncated;
+          return { ...truncated, content: truncated.content + truncationNotice };
+        }),
         // Under-reports on purpose: content was cut mid-message but no message was dropped.
         // Reporting these as removed would make truncationRate read 0% next to a truncation flag,
         // so callers surface mid-message loss through their own warn instead.
@@ -1519,7 +1511,9 @@ export async function buildAndSortMessages(
         : Math.max(Math.floor(tokenBudget * MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION), tokenBudget - totalPreviousTokens);
 
     // Content first: history's budget depends on what content actually used.
-    const contentResult = processMessages(nonImageMessages, contentBudget);
+    const contentResult = processMessages(nonImageMessages, contentBudget, {
+      truncationNotice: CONTENT_TRUNCATION_NOTICE,
+    });
     processedContentMessages = contentResult.messages;
     allRemovedMessages.push(...contentResult.removedMessages);
 
@@ -1548,7 +1542,9 @@ export async function buildAndSortMessages(
   } else {
     // Check if both fit within the remaining token budget
     if (totalContentTokens + totalPreviousTokens <= tokenBudget) {
-      const contentResult = processMessages(nonImageMessages, tokenBudget);
+      const contentResult = processMessages(nonImageMessages, tokenBudget, {
+        truncationNotice: CONTENT_TRUNCATION_NOTICE,
+      });
       processedContentMessages = contentResult.messages;
       allRemovedMessages.push(...contentResult.removedMessages);
 
@@ -1560,7 +1556,9 @@ export async function buildAndSortMessages(
       const nonImageTokenBudget = Math.min(tokenBudget * KNOWLEDGE_FILE_TOKEN_ALLOCATION, totalContentTokens);
       const previousMessageTokenBudget = tokenBudget - nonImageTokenBudget;
 
-      const contentResult = processMessages(nonImageMessages, nonImageTokenBudget);
+      const contentResult = processMessages(nonImageMessages, nonImageTokenBudget, {
+        truncationNotice: CONTENT_TRUNCATION_NOTICE,
+      });
       processedContentMessages = contentResult.messages;
       allRemovedMessages.push(...contentResult.removedMessages);
 
@@ -1595,11 +1593,6 @@ export async function buildAndSortMessages(
       msg.content.some((block: any) => block.type === 'tool_result')
   );
 
-  // Applied at every assembly point rather than to processedContentMessages directly: the safety pass
-  // below shrinks the raw content further, and annotating early would leave the notice mid-message or
-  // cut it off entirely. Comparing against the untouched originals keeps it accurate either way.
-  const withTruncationNotice = (content: IMessage[]) => annotateTruncatedContent(content, nonImageMessages);
-
   let messages: IMessage[];
 
   // tool_use blocks must be immediately followed by tool_result blocks. If history ends with a
@@ -1611,14 +1604,14 @@ export async function buildAndSortMessages(
       ...processedPreviousMessages, // previous message context
       ...userPrompt, // Tool result must follow tool use immediately
       ...imageMessages, // Include all image messages
-      ...withTruncationNotice(processedContentMessages), // fab file content (non-image messages)
+      ...processedContentMessages, // fab file content (non-image messages)
     ];
   } else {
     messages = [
       ...systemMessages, // System messages go first for instruction
       ...processedPreviousMessages, // previous message context
       ...imageMessages, // Include all image messages
-      ...withTruncationNotice(processedContentMessages), // fab file content (non-image messages)
+      ...processedContentMessages, // fab file content (non-image messages)
       ...userPrompt, // Spread the userPrompt array into the messages array
     ];
   }
@@ -1668,20 +1661,8 @@ export async function buildAndSortMessages(
     // being charged against the budget.
     const assemble = (content: IMessage[]) =>
       historyEndsWithToolUse && promptHasToolResult
-        ? [
-            ...systemMessages,
-            ...processedPreviousMessages,
-            ...userPrompt,
-            ...imageMessages,
-            ...withTruncationNotice(content),
-          ]
-        : [
-            ...systemMessages,
-            ...processedPreviousMessages,
-            ...imageMessages,
-            ...withTruncationNotice(content),
-            ...userPrompt,
-          ];
+        ? [...systemMessages, ...processedPreviousMessages, ...userPrompt, ...imageMessages, ...content]
+        : [...systemMessages, ...processedPreviousMessages, ...imageMessages, ...content, ...userPrompt];
 
     // Content is asked to give first, but a round that frees nothing has to move on to history rather
     // than retrying forever: processMessages is judging against the character estimate, so content
@@ -1697,11 +1678,10 @@ export async function buildAndSortMessages(
 
       if (!contentExhausted) {
         const before = reducedContentMessages;
-        // Measured WITH the notice, matching estimatedTotal above. Sizing the budget off bare content
-        // while the overage was measured on the annotated payload leaves the notice's tokens unaccounted
-        // for, so a turn that is over by about the notice's size needs an extra round to converge.
-        const budgetBasis = estimateMessagesTokens(withTruncationNotice(before));
-        const reduced = processMessages(before, Math.max(0, budgetBasis - excessInEstimateTokens));
+        const budgetBasis = estimateMessagesTokens(before);
+        const reduced = processMessages(before, Math.max(0, budgetBasis - excessInEstimateTokens), {
+          truncationNotice: CONTENT_TRUNCATION_NOTICE,
+        });
         reducedContentMessages = reduced.messages;
         // Reported like the history branch below. These are messages the pass dropped on top of
         // whatever the primary allocation already removed, so they cannot be double-counted: this
@@ -1750,14 +1730,14 @@ export async function buildAndSortMessages(
         ...processedPreviousMessages,
         ...userPrompt,
         ...imageMessages,
-        ...withTruncationNotice(reducedContentMessages),
+        ...reducedContentMessages,
       ];
     } else {
       truncatedMessages = [
         ...systemMessages,
         ...processedPreviousMessages,
         ...imageMessages,
-        ...withTruncationNotice(reducedContentMessages),
+        ...reducedContentMessages,
         ...userPrompt,
       ];
     }

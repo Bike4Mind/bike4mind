@@ -1773,8 +1773,9 @@ describe('Token budget allocation', () => {
     });
 
     it('returns the unused part of the reserve to history', async () => {
-      // The file uses 2203 of its 2447-token reserve. The leftover 244 must go back to history,
-      // which is 16 more messages at 40 tokens each.
+      // The file uses most of its 2447-token reserve; the leftover flows back to history, which at 40
+      // tokens per message is worth another 15 of them. The truncation notice is part of what content
+      // consumed, so history is sized after it - that is why this is 118 and not 119.
       const tokenizer = createMockTokenizer();
 
       const result = await buildAndSortMessages(
@@ -1788,7 +1789,7 @@ describe('Token budget allocation', () => {
         tokenizer
       );
 
-      expect(historyLabels(result)).toHaveLength(119);
+      expect(historyLabels(result)).toHaveLength(118);
     });
 
     it('gives history the whole budget when nothing is attached', async () => {
@@ -2218,12 +2219,14 @@ describe('truncated attachments are marked', () => {
     expect(text).not.toContain('FINAL_ROW_MARKER');
   });
 
-  it('does not mark a whole file as cut just because a bigger attachment shares its prefix', async () => {
-    // Two CSVs with the same header row: the smaller one's content is a strict prefix of the larger.
-    // A prefix-only test flags the smaller file as truncated even though every byte of it arrived.
+  it('marks by what was actually cut, not by whether some sibling shares the bytes', async () => {
+    // Two collision directions, both broken by inferring truncation from a prefix comparison:
+    //  - a whole small file whose content is a prefix of a larger sibling looked truncated;
+    //  - a large file cut to exactly a smaller sibling's bytes looked whole.
+    // The notice is applied where the cut happens, so neither can happen.
     const tokenizer = createMockTokenizer();
     const small = 'id,name\nrow,1\n';
-    const large = 'id,name\nrow,1\nrow,2\nrow,3\n';
+    const large = small + 'row,2\nrow,3\n';
 
     const result = await buildAndSortMessages(
       [],
@@ -2241,8 +2244,8 @@ describe('truncated attachments are marked', () => {
 
     const delivered = result.filter(m => typeof m.content === 'string' && (m.content as string).startsWith('id,name'));
     expect(delivered).toHaveLength(2);
-    for (const m of delivered) expect(m.content as string).not.toContain(NOTICE);
     expect(delivered.map(m => m.content)).toEqual(expect.arrayContaining([small, large]));
+    for (const m of delivered) expect(m.content as string).not.toContain(NOTICE);
   });
 
   it('stays quiet when the whole file fits', async () => {
