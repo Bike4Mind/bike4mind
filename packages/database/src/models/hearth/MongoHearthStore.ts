@@ -126,6 +126,15 @@ export const hearthRepository = {
     return HearthChannel.find({ userId: new Types.ObjectId(userId) }).sort({ createdAt: 1 });
   },
 
+  /**
+   * Existence check only. Separate from listChannelsForUser because the gear
+   * unlock in /api/gears/status is polled often and needs one indexed lookup,
+   * not every channel document hydrated to read .length.
+   */
+  async hasAnyChannelForUser(userId: string): Promise<boolean> {
+    return (await HearthChannel.exists({ userId: new Types.ObjectId(userId) })) !== null;
+  },
+
   async createChannel(userId: string, name: string): Promise<IHearthChannelDoc> {
     return HearthChannel.create({ userId: new Types.ObjectId(userId), name });
   },

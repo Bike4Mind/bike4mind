@@ -174,7 +174,7 @@ const GEARS: GearDef[] = [
     key: 'hearth',
     credits: 1000,
     kind: 'destination',
-    check: async ({ userId }) => (await hearthRepository.listChannelsForUser(userId)).length > 0,
+    check: async ({ userId }) => hearthRepository.hasAnyChannelForUser(userId),
   },
   // --- Skills ---
   {

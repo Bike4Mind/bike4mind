@@ -19,7 +19,7 @@ const { mocks } = vi.hoisted(() => ({
     importFindOne: vi.fn(),
     overridesByKey: vi.fn(),
     claimOnce: vi.fn(),
-    hearthListChannels: vi.fn(),
+    hearthHasAnyChannel: vi.fn(),
   },
 }));
 
@@ -62,7 +62,7 @@ vi.mock('@bike4mind/database', () => ({
     claimOnce: (...a: unknown[]) => mocks.claimOnce(...a),
   },
   gearOverrideRepository: { byKey: (...a: unknown[]) => mocks.overridesByKey(...a) },
-  hearthRepository: { listChannelsForUser: (...a: unknown[]) => mocks.hearthListChannels(...a) },
+  hearthRepository: { hasAnyChannelForUser: (...a: unknown[]) => mocks.hearthHasAnyChannel(...a) },
   importHistoryJobRepository: { findOne: (...a: unknown[]) => mocks.importFindOne(...a) },
   rapidReplyAuditLogRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
   researchDataRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
@@ -101,7 +101,7 @@ const lockEverything = () => {
   mocks.importFindOne.mockResolvedValue(null);
   mocks.overridesByKey.mockResolvedValue(new Map());
   mocks.claimOnce.mockResolvedValue(true);
-  mocks.hearthListChannels.mockResolvedValue([]);
+  mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
 };
 
@@ -222,7 +222,7 @@ describe('GET /api/gears/status - skill gears', () => {
 
 describe('GET /api/gears/status - hearth destination', () => {
   it('is derived from owning at least one channel, not from a stamp', async () => {
-    mocks.hearthListChannels.mockResolvedValue([{ _id: 'ch1' }]);
+    mocks.hearthHasAnyChannel.mockResolvedValue(true);
     const { res, promise } = run({ id: 'u1' });
     await promise;
 
@@ -230,7 +230,7 @@ describe('GET /api/gears/status - hearth destination', () => {
     const hearth = body.gears.find(g => g.key === 'hearth')!;
     expect(hearth.unlocked).toBe(true);
     expect(hearth.kind).toBe('destination');
-    expect(mocks.hearthListChannels).toHaveBeenCalledWith('u1');
+    expect(mocks.hearthHasAnyChannel).toHaveBeenCalledWith('u1');
   });
 
   it('stays locked with zero channels', async () => {
