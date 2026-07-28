@@ -1,5 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
 import type {
+  ArtifactType,
   CommentPolicy,
   PublishResult,
   PublishScopeTier,
@@ -8,6 +9,7 @@ import type {
   UploadUrlResponse,
 } from '@bike4mind/common';
 import { SCOPE_URL_PREFIX } from '@bike4mind/common';
+import { detectElidedContent } from '@bike4mind/utils/artifactElision';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
 
 /** Summary row for the published-artifacts management list. */
@@ -412,10 +414,20 @@ export function buildArtifactPublishWiring(input: {
 }): {
   resolveExisting: () => Promise<ManagedArtifact | null>;
   publish: (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult>;
+  incompleteWarning?: string;
 } {
   return {
     resolveExisting: () => findPublishedByArtifact(input.artifactId),
     publish: artifactBundlePublisher(input),
+    // A /p/ link is the point of no return: it can be handed to a client before anyone
+    // notices the artifact's buttons are inert. Computed here rather than in the dialog so
+    // every publish surface that routes through this wiring inherits the check.
+    ...(detectElidedContent(input.content, input.type as ArtifactType).elided
+      ? {
+          incompleteWarning:
+            'Parts of this artifact look like placeholders rather than working code, so some features may do nothing on the shared link.',
+        }
+      : {}),
   };
 }
 
