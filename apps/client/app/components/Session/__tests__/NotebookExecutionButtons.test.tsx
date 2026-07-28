@@ -5,9 +5,22 @@ import { AxiosError, AxiosHeaders } from 'axios';
 import { NotebookExecutionButtons } from '../NotebookExecutionButtons';
 
 // Mock dependencies - use vi.hoisted() to ensure these are defined before vi.mock hoisting
-const { mockSubscribeToAction, mockPost } = vi.hoisted(() => ({
+const {
+  mockSubscribeToAction,
+  mockPost,
+  mockGetStoredJupyterConfig,
+  mockStartSession,
+  mockExecuteCell,
+  mockStopSession,
+  mockDeleteContents,
+} = vi.hoisted(() => ({
   mockSubscribeToAction: vi.fn(),
   mockPost: vi.fn(),
+  mockGetStoredJupyterConfig: vi.fn(),
+  mockStartSession: vi.fn(),
+  mockExecuteCell: vi.fn(),
+  mockStopSession: vi.fn(),
+  mockDeleteContents: vi.fn(),
 }));
 
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
@@ -22,6 +35,17 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
   },
 }));
 
+vi.mock('@client/app/utils/jupyterBrowserClient', () => ({
+  getStoredJupyterConfig: mockGetStoredJupyterConfig,
+  JupyterBrowserClient: class {
+    startSession = mockStartSession;
+    executeCell = mockExecuteCell;
+    stopSession = mockStopSession;
+    deleteContents = mockDeleteContents;
+  },
+  JupyterBrowserError: class extends Error {},
+}));
+
 describe('NotebookExecutionButtons', () => {
   const validNotebookContent = JSON.stringify({
     nbformat: 4,
@@ -34,6 +58,8 @@ describe('NotebookExecutionButtons', () => {
     vi.clearAllMocks();
     unsubscribeMock = vi.fn();
     mockSubscribeToAction.mockReturnValue(unsubscribeMock);
+    // Default: no browser Jupyter config, so tests use the CLI fallback path
+    mockGetStoredJupyterConfig.mockReturnValue(null);
     sessionStorage.clear();
   });
 
@@ -131,7 +157,9 @@ describe('NotebookExecutionButtons', () => {
       });
     });
 
-    it('shows error message when API call fails', async () => {
+    it('shows error message when CLI API call fails', async () => {
+      // Ensure CLI fallback path
+      mockGetStoredJupyterConfig.mockReturnValue(null);
       // Create a proper AxiosError to test isAxiosError() function correctly
       const axiosError = new AxiosError('Request failed', 'ERR_BAD_REQUEST', undefined, undefined, {
         data: {
@@ -182,7 +210,7 @@ describe('NotebookExecutionButtons', () => {
 
       // Button should show loading state
       await waitFor(() => {
-        expect(screen.getByText('Starting...')).toBeInTheDocument();
+        expect(screen.getByText('Executing...')).toBeInTheDocument();
       });
 
       resolvePost!({ data: { sent: true } });
@@ -279,6 +307,121 @@ describe('NotebookExecutionButtons', () => {
         const stored = sessionStorage.getItem('notebook-exec-quest-123');
         expect(stored).toBe(JSON.stringify({ started: true }));
       });
+    });
+  });
+
+  describe('browser-direct execution', () => {
+    const multiCellNotebook = JSON.stringify({
+      nbformat: 4,
+      cells: [
+        { cell_type: 'markdown', source: '# Title' },
+        { cell_type: 'code', source: 'x = 1' },
+        { cell_type: 'code', source: 'print(x)' },
+      ],
+    });
+
+    beforeEach(() => {
+      // Configure browser Jupyter path
+      mockGetStoredJupyterConfig.mockReturnValue({
+        serverUrl: 'http://localhost:8888',
+        token: '',
+      });
+      mockStartSession.mockResolvedValue({ id: 's1', kernel: { id: 'k1' } });
+      mockStopSession.mockResolvedValue(undefined);
+      mockDeleteContents.mockResolvedValue(undefined);
+      // progress reporting is best-effort
+      mockPost.mockResolvedValue({ data: { ok: true } });
+    });
+
+    it('executes cells via JupyterBrowserClient when config is set', async () => {
+      mockExecuteCell.mockResolvedValue({
+        success: true,
+        outputs: [{ output_type: 'stream', text: '1\n' }],
+        executionCount: 1,
+      });
+
+      render(
+        <NotebookExecutionButtons notebookContent={multiCellNotebook} sessionId="session-1" messageId="quest-1" />
+      );
+
+      fireEvent.click(screen.getByTestId('notebook-execute-btn'));
+
+      await waitFor(() => {
+        expect(mockStartSession).toHaveBeenCalled();
+        expect(mockExecuteCell).toHaveBeenCalledTimes(2); // 2 code cells
+        expect(mockStopSession).toHaveBeenCalledWith('s1');
+        expect(mockDeleteContents).toHaveBeenCalled();
+      });
+
+      // Should show completed
+      await waitFor(() => {
+        expect(screen.getByText(/Notebook executed successfully/)).toBeInTheDocument();
+      });
+    });
+
+    it('reports progress to the server API', async () => {
+      mockExecuteCell.mockResolvedValue({
+        success: true,
+        outputs: [],
+        executionCount: 1,
+      });
+
+      render(
+        <NotebookExecutionButtons notebookContent={multiCellNotebook} sessionId="session-1" messageId="quest-1" />
+      );
+
+      fireEvent.click(screen.getByTestId('notebook-execute-btn'));
+
+      await waitFor(() => {
+        // Initial executing report + per-cell reports + completed
+        const progressCalls = mockPost.mock.calls.filter((c: unknown[]) => c[0] === '/api/jupyter/progress');
+        expect(progressCalls.length).toBeGreaterThanOrEqual(3);
+
+        // Last call should be 'completed'
+        const lastCall = progressCalls[progressCalls.length - 1];
+        expect(lastCall[1].status).toBe('completed');
+      });
+    });
+
+    it('shows error and stops on cell failure', async () => {
+      mockExecuteCell.mockResolvedValueOnce({ success: true, outputs: [], executionCount: 1 }).mockResolvedValueOnce({
+        success: false,
+        outputs: [],
+        executionCount: 2,
+        error: { ename: 'NameError', evalue: 'x is not defined', traceback: [] },
+      });
+
+      render(
+        <NotebookExecutionButtons notebookContent={multiCellNotebook} sessionId="session-1" messageId="quest-1" />
+      );
+
+      fireEvent.click(screen.getByTestId('notebook-execute-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByText(/NameError: x is not defined/)).toBeInTheDocument();
+      });
+    });
+
+    it('handles startSession failure gracefully', async () => {
+      mockStartSession.mockRejectedValue(new Error('Jupyter server not responding'));
+
+      render(
+        <NotebookExecutionButtons notebookContent={multiCellNotebook} sessionId="session-1" messageId="quest-1" />
+      );
+
+      fireEvent.click(screen.getByTestId('notebook-execute-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Jupyter server not responding/)).toBeInTheDocument();
+      });
+    });
+
+    it('does not show CLI hint when Jupyter config is set', () => {
+      render(
+        <NotebookExecutionButtons notebookContent={multiCellNotebook} sessionId="session-1" messageId="quest-1" />
+      );
+
+      expect(screen.queryByText(/Configure your Jupyter server/)).not.toBeInTheDocument();
     });
   });
 });

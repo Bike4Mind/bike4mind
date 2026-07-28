@@ -200,3 +200,99 @@ describe('ConfigStep - slug validation hint', () => {
     expect(screen.queryByTestId(SLUG_ERROR)).toBeNull();
   });
 });
+
+/**
+ * Reconciliation of #829 (taxonomy applies tags -> prefix is meaningful there) with #826
+ * (Tag Prefix de-duped to a single home). The single editable home is now the taxonomy
+ * step, so Config shows the prefix read-only - except the empty-prefix dead-end, where a
+ * skippable/empty taxonomy would otherwise strand the user at Config's tagPrefix>=2 gate.
+ */
+describe('ConfigStep - Tag Prefix single home + empty-prefix fallback', () => {
+  const seedConfig = (over: { tagPrefix: string; targetLake?: unknown }) =>
+    useDataLakeWizardStore.setState({
+      step: 'config',
+      targetLake: (over.targetLake ?? null) as never,
+      allFiles: [],
+      config: {
+        name: 'My Lake',
+        description: '',
+        tagPrefix: over.tagPrefix,
+        requiredUserTag: '',
+        requiredEntitlement: '',
+        conflictResolution: 'skip',
+      },
+    });
+
+  const prefixInput = () => screen.getByTestId('config-tag-prefix-input').querySelector('input') as HTMLInputElement;
+
+  beforeEach(() => {
+    lakes.current = [];
+    selectedAccount.current = { id: 'me', personal: true };
+  });
+
+  afterEach(() => {
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('shows the prefix read-only in create mode when the taxonomy step already set one', () => {
+    seedConfig({ tagPrefix: 'acme:' });
+
+    render(
+      <TestWrapper>
+        <ConfigStep />
+      </TestWrapper>
+    );
+
+    expect(prefixInput().disabled).toBe(true);
+    expect(prefixInput().value).toBe('acme:');
+    expect(screen.getByText(/Set on the AI Taxonomy step/i)).toBeInTheDocument();
+  });
+
+  it('falls back to an editable prefix when create mode arrives with an empty prefix', () => {
+    // Taxonomy skipped or inference returned no prefix: without this the user hits the
+    // tagPrefix>=2 gate on Start Upload with no field to fix it.
+    seedConfig({ tagPrefix: '' });
+
+    render(
+      <TestWrapper>
+        <ConfigStep />
+      </TestWrapper>
+    );
+
+    expect(prefixInput().disabled).toBe(false);
+    expect(screen.getByText(/No taxonomy prefix was set/i)).toBeInTheDocument();
+  });
+
+  it('flags a reserved prefix even though the field is read-only here', () => {
+    // The prefix arrives from the taxonomy step, so the field is disabled - but the server
+    // rejects the datalake: namespace outright and Start Upload is gated on it. Without a
+    // message here the button is disabled with no visible reason.
+    seedConfig({ tagPrefix: 'datalake:' });
+
+    render(
+      <TestWrapper>
+        <ConfigStep />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-config-tagprefix-help').textContent).toMatch(/reserved/i);
+    expect(screen.queryByText(/Set on the AI Taxonomy step/i)).not.toBeInTheDocument();
+  });
+
+  it('locks the prefix to the target lake in append mode (taxonomy step is skipped there)', () => {
+    seedConfig({
+      tagPrefix: 'niche:',
+      targetLake: { id: 'l1', name: 'Niche', slug: 'niche', fileTagPrefix: 'niche:' },
+    });
+
+    render(
+      <TestWrapper>
+        <ConfigStep />
+      </TestWrapper>
+    );
+
+    expect(prefixInput().disabled).toBe(true);
+    expect(prefixInput().value).toBe('niche:');
+    expect(screen.getByText(/Inherited from the existing data lake/i)).toBeInTheDocument();
+  });
+});

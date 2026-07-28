@@ -90,6 +90,7 @@ import {
   ContextSummarizationFeature,
   MementoFeature,
   OrganizationPromptFeature,
+  DataLakePromptFeature,
   SessionPromptFeature,
   KnowledgeRetrievalFeature,
   ProjectFeature,
@@ -1736,6 +1737,7 @@ export class ChatCompletionProcess {
           ...(featureContextMessages['agentDetection'] ?? []), // Add agent system prompts
           ...(featureContextMessages['questMaster'] ?? []),
           ...(featureContextMessages['organizationPrompt'] ?? []), // Add team-wide system prompt
+          ...(featureContextMessages['dataLakePrompt'] ?? []), // Per-lake system prompts (defer to the org block above)
           ...(featureContextMessages['sessionPrompt'] ?? []), // Per-session system prompt (product surfaces)
           ...(featureContextMessages['knowledgeRetrieval'] ?? []), // Forced data-lake retrieval (grounding + citations)
           // Add LLM-optimized context summary if available (covers messages before verbatim window)
@@ -4358,6 +4360,23 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     if (organization?.systemPrompt) {
       this.logger.log(`  - Enabling OrganizationPrompt feature for "${organization.name}"`);
       this.features.set('organizationPrompt', new OrganizationPromptFeature(this, organization));
+    }
+
+    // Data lake prompt feature - per-lake system prompts for the caller's trusted lakes.
+    // Gated only on the repo being wired (like skills above): whether any lake actually
+    // carries a prompt is a DB question the feature answers itself, and it emits nothing
+    // when none do. Registered outside the complexity-optimized list so a lake's operating
+    // instructions are not silently dropped on a 'simple' turn.
+    //
+    // COST, accepted deliberately: this adds one accessible-lakes read per turn, and until the
+    // per-lake prompt editor ships it returns nothing useful (no UI writes the field yet). The
+    // collection is tiny, so the alternative - a repo method filtering on a non-empty
+    // systemPrompt - would buy little while adding a THIRD Mongo copy of the access predicate
+    // that the existing two already need a parity test to keep honest. Revisit if lake counts
+    // grow or this shows up in turn latency.
+    if (this.db.dataLakes) {
+      this.logger.log('  - Enabling DataLakePrompt feature');
+      this.features.set('dataLakePrompt', new DataLakePromptFeature(this));
     }
 
     // Session prompt feature - generic per-session system prompt (e.g. product
