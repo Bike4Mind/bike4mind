@@ -36,15 +36,30 @@ const { B4M_API_URL, B4M_API_KEY, B4M_HEARTH_CHANNEL, B4M_HEARTH_LABEL, B4M_HEAR
 
 const DEFAULT_DISCLOSURE = 2;
 const MAX_DISCLOSURE = 2;
+/**
+ * Where an UNPARSEABLE value lands. Deliberately the minimum, not the default:
+ * `none`, `off`, `min`, `zero`, a quoted `"0"`, or an unexpanded `$LEVEL` all
+ * parse to NaN, and an operator who typed any of those was reaching for LESS
+ * disclosure, not more. Resolving NaN to the default (which is also the
+ * maximum) meant every one of those silently produced the widest tier, and
+ * because unset and set-but-garbage were indistinguishable the misconfiguration
+ * was undetectable from the outside. A privacy control has to fail closed.
+ */
+const MALFORMED_DISCLOSURE = 0;
 
 /** Must match DEFAULT_HEARTH_CHANNEL_NAME in b4m-core/hearth; the hook is
  *  dependency-free and cannot import it. */
 const DEFAULT_CHANNEL_NAME = 'agents';
 
-/** Clamped, so a typo or an out-of-range value can never disclose MORE than intended. */
+/**
+ * UNSET means the default tier. SET-BUT-UNPARSEABLE means the minimum, because
+ * a garbage value is a misconfiguration and the safe reading of a broken
+ * privacy setting is the narrow one. Out-of-range values clamp into range.
+ */
 function disclosureTier() {
-  const parsed = Number.parseInt(B4M_HEARTH_DISCLOSURE ?? '', 10);
-  if (Number.isNaN(parsed)) return DEFAULT_DISCLOSURE;
+  if (B4M_HEARTH_DISCLOSURE === undefined || B4M_HEARTH_DISCLOSURE === '') return DEFAULT_DISCLOSURE;
+  const parsed = Number.parseInt(B4M_HEARTH_DISCLOSURE, 10);
+  if (Number.isNaN(parsed)) return MALFORMED_DISCLOSURE;
   return Math.max(0, Math.min(MAX_DISCLOSURE, parsed));
 }
 
