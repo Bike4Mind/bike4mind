@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 
 const {
   getOwnedChannelMock,
+  ensureChannelByNameMock,
   ensureActorMock,
   createChannelMock,
   listChannelsForUserMock,
@@ -28,6 +29,7 @@ const {
   return {
     gateKeys,
     getOwnedChannelMock: vi.fn(),
+    ensureChannelByNameMock: vi.fn(),
     ensureActorMock: vi.fn(),
     createChannelMock: vi.fn(),
     listChannelsForUserMock: vi.fn(),
@@ -83,6 +85,7 @@ vi.mock('@bike4mind/database', () => ({
   hearthRepository: {
     store: storeMock,
     getOwnedChannel: getOwnedChannelMock,
+    ensureChannelByName: ensureChannelByNameMock,
     ensureActor: ensureActorMock,
     createChannel: createChannelMock,
     listChannelsForUser: listChannelsForUserMock,
@@ -154,6 +157,7 @@ const presenceRow = (actorId: string, state: string, lastSeen: string, extra: Re
 beforeEach(() => {
   vi.clearAllMocks();
   getOwnedChannelMock.mockResolvedValue({ _id: 'ch-1', nextSeq: 5, userId: 'u1' });
+  ensureChannelByNameMock.mockResolvedValue({ _id: 'ch-default', nextSeq: 0, userId: 'u1' });
   ensureActorMock.mockResolvedValue({ _id: { toString: () => 'actor-1' }, displayName: 'erik' });
   hearthLogAppendMock.mockResolvedValue(DOMAIN_EVENT);
   hearthLogCatchupMock.mockResolvedValue([DOMAIN_EVENT]);
@@ -184,6 +188,30 @@ describe('POST /api/hearth/events', () => {
     await expect(post()(makeReq({ channelId: 'ch-x', human: { text: 'hi' } }), res)).rejects.toThrow(
       /channel not found/i
     );
+    expect(hearthLogAppendMock).not.toHaveBeenCalled();
+  });
+
+  it('channelName resolves-or-creates and never runs the ownership check', async () => {
+    await post()(makeReq({ channelName: 'agents', human: { text: 'hi' } }), makeRes());
+    expect(ensureChannelByNameMock).toHaveBeenCalledWith('u1', 'agents');
+    expect(getOwnedChannelMock).not.toHaveBeenCalled();
+    expect(hearthLogAppendMock).toHaveBeenCalledWith(expect.objectContaining({ channelId: 'ch-default' }));
+  });
+
+  it('channelId keeps its ownership check and is mutually exclusive with channelName', async () => {
+    // Ownership is still enforced for an id: another user's channel is a 404.
+    getOwnedChannelMock.mockResolvedValue(null);
+    await expect(post()(makeReq({ channelId: 'ch-theirs', human: { text: 'hi' } }), makeRes())).rejects.toThrow(
+      /channel not found/i
+    );
+
+    for (const body of [
+      { channelId: 'ch-1', channelName: 'agents', human: { text: 'hi' } },
+      { human: { text: 'hi' } },
+    ]) {
+      await expect(post()(makeReq(body), makeRes())).rejects.toThrow(/exactly one of channelId or channelName/i);
+    }
+    expect(ensureChannelByNameMock).not.toHaveBeenCalled();
     expect(hearthLogAppendMock).not.toHaveBeenCalled();
   });
 

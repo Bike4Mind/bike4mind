@@ -277,9 +277,42 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
     }
   }, 15000);
 
-  it('exits 0 without any request when env is missing (fail-silent contract)', async () => {
-    const exitCode = await runHook({ B4M_API_URL: '', B4M_API_KEY: '', B4M_HEARTH_CHANNEL: '' }, HOOK_INPUT);
-    expect(exitCode).toBe(0);
+  it('addresses the shared default channel by NAME when no channel id is configured', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      // B4M_HEARTH_CHANNEL is optional: without it a fresh install still reports,
+      // into the same channel the cc-bridge uses, so one roster covers both.
+      await runHook({ B4M_API_URL: `http://127.0.0.1:${port}`, B4M_API_KEY: 'test-key' }, HOOK_INPUT);
+      const body = captured.current!.body;
+      expect(body.channelName).toBe('agents');
+      expect(body.channelId).toBeUndefined();
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('prefers an explicit channel id over the default name', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      await runHook(HOOK_ENV(port), HOOK_INPUT);
+      const body = captured.current!.body;
+      expect(body.channelId).toBe('ch-1');
+      expect(body.channelName).toBeUndefined();
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('exits 0 without any request when credentials are missing (fail-silent contract)', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      // The channel is optional now, but the credentials are not.
+      const exitCode = await runHook({ B4M_API_URL: `http://127.0.0.1:${port}`, B4M_API_KEY: '' }, HOOK_INPUT);
+      expect(exitCode).toBe(0);
+      expect(captured.current).toBeUndefined();
+    } finally {
+      close();
+    }
   }, 15000);
 
   it('exits 0 even on malformed stdin (never blocks the session)', async () => {

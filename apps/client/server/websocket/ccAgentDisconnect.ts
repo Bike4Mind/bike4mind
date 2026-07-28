@@ -1,6 +1,7 @@
 import { activeCodeAgentRepository, ccBridgeDeviceRepository } from '@bike4mind/database';
 import { CcAgentDisconnectAction } from '@bike4mind/common';
 import { resolveBridgeWsAuth } from '@server/websocket/ccAgentAuth';
+import { reportCcAgentPresence } from '@server/websocket/ccAgentHearth';
 import { connectionUserCanAccessTavern } from '@server/websocket/tavernWsAuth';
 import { sendToClient, withWebSocketContext } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
@@ -96,6 +97,22 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     },
     { sourceFilter: 'web' }
   );
+
+  // Hearth dual-write. The $disconnect sweep reports the same thing for a
+  // crashed bridge, but a clean /exit deletes the record here first, so without
+  // this the common exit path would leave the session open in the roster.
+  // The caller-supplied `reason` string is deliberately NOT forwarded - the
+  // Hearth log takes only closed-set values. See ccAgentHearth.ts.
+  await reportCcAgentPresence({
+    userId,
+    instanceId,
+    workspaceName: existing.workspaceName,
+    reason: 'disconnected',
+    source: existing.source,
+    claudeVersion: existing.claudeVersion,
+    hearthChannelId: device.hearthChannelId,
+    logger,
+  });
 
   return { statusCode: 200 };
 });

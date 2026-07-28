@@ -188,6 +188,32 @@ export const hearthRepository = {
     return HearthChannel.create({ userId: new Types.ObjectId(userId), name });
   },
 
+  /**
+   * Find-or-create a channel by (user, name). Atomic upsert against the unique
+   * (userId, name) index, so two writers racing the very first write - a bridge
+   * register and a Claude Code hook heartbeat arriving together - cannot end up
+   * with two channels of the same name or a failed presence report.
+   */
+  async ensureChannelByName(userId: string, name: string): Promise<IHearthChannelDoc> {
+    const filter = { userId: new Types.ObjectId(userId), name };
+    try {
+      return await HearthChannel.findOneAndUpdate(
+        filter,
+        { $setOnInsert: { nextSeq: 0 } },
+        { upsert: true, new: true }
+      );
+    } catch (err) {
+      // An upsert whose filter misses can still lose the insert race and take
+      // E11000 from the unique index. The row exists by then, so re-reading it
+      // is the correct answer rather than propagating the collision.
+      if (isDuplicateKeyError(err)) {
+        const winner = await HearthChannel.findOne(filter);
+        if (winner) return winner;
+      }
+      throw err;
+    }
+  },
+
   /** Returns the channel only if it belongs to the user; null otherwise. */
   async getOwnedChannel(userId: string, channelId: string): Promise<IHearthChannelDoc | null> {
     if (!Types.ObjectId.isValid(channelId)) return null;

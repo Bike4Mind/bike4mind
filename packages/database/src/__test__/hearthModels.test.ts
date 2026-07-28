@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
+import { Types } from 'mongoose';
 import { HearthLog } from '@bike4mind/hearth';
 import { connectTestDB, disconnectTestDB, cleanupTestDB } from './utils';
 import { HearthChannel } from '../models/hearth/HearthChannelModel';
@@ -146,6 +147,36 @@ describe('Hearth models + MongoHearthStore', () => {
       hearthRepository.ensureActor(USER, 'agent', 'Spock'),
     ]);
     expect(a._id.toString()).toBe(b._id.toString());
+  });
+
+  it('ensureChannelByName creates once and returns the same channel thereafter', async () => {
+    const first = await hearthRepository.ensureChannelByName(USER, 'agents');
+    const second = await hearthRepository.ensureChannelByName(USER, 'agents');
+
+    expect(second._id.toString()).toBe(first._id.toString());
+    expect(first.nextSeq).toBe(0);
+    expect(await HearthChannel.countDocuments({ name: 'agents' })).toBe(1);
+  });
+
+  it('ensureChannelByName does not duplicate under concurrent first-writes', async () => {
+    // The real race: a bridge register and a hook heartbeat both arriving before
+    // the channel exists. The unique (userId, name) index is what makes one win.
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => hearthRepository.ensureChannelByName(USER, 'agents'))
+    );
+
+    const ids = new Set(results.map(c => c._id.toString()));
+    expect(ids.size).toBe(1);
+    expect(await HearthChannel.countDocuments({ userId: new Types.ObjectId(USER), name: 'agents' })).toBe(1);
+  });
+
+  it('ensureChannelByName is scoped per user', async () => {
+    const OTHER = '6540b58d1f703ade3ea1e82c';
+    const mine = await hearthRepository.ensureChannelByName(USER, 'agents');
+    const theirs = await hearthRepository.ensureChannelByName(OTHER, 'agents');
+
+    expect(theirs._id.toString()).not.toBe(mine._id.toString());
+    expect(await hearthRepository.getOwnedChannel(USER, theirs._id.toString())).toBeNull();
   });
 
   it('getOwnedChannel enforces ownership and tolerates malformed ids', async () => {
