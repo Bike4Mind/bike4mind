@@ -199,6 +199,8 @@ const TagCard = memo(function TagCard({ tag, prefix, onUpdate, onDelete }: TagCa
 export default function TaxonomyReviewStep() {
   const theme = useTheme();
   const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
+  const config = useDataLakeWizardStore(s => s.config);
+  const setConfig = useDataLakeWizardStore(s => s.setConfig);
   const setTagPrefix = useDataLakeWizardStore(s => s.setTagPrefix);
   const updateTag = useDataLakeWizardStore(s => s.updateTag);
   const deleteTag = useDataLakeWizardStore(s => s.deleteTag);
@@ -287,11 +289,26 @@ export default function TaxonomyReviewStep() {
             </FormHelperText>
           )}
         </FormControl>
+        {/* The name is set on the source step now, so setTaxonomy's "fill config.name only if
+            empty" back-fill never fires. Offer the suggestion explicitly instead of showing a
+            value that silently does nothing. */}
         <Box sx={{ flex: 1, minWidth: 200 }}>
           <Typography level="body-xs" fontWeight="bold" sx={{ mb: 0.5 }}>
             Suggested Name
           </Typography>
-          <Typography level="body-sm">{taxonomy.suggestedName || '-'}</Typography>
+          <Stack direction="row" gap={1} alignItems="center">
+            <Typography level="body-sm">{taxonomy.suggestedName || '-'}</Typography>
+            {taxonomy.suggestedName && taxonomy.suggestedName !== config.name && (
+              <Button
+                size="sm"
+                variant="plain"
+                data-testid="taxonomy-use-suggested-name"
+                onClick={() => setConfig({ name: taxonomy.suggestedName })}
+              >
+                Use this name
+              </Button>
+            )}
+          </Stack>
         </Box>
         <Button
           size="sm"

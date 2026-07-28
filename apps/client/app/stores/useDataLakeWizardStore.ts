@@ -53,6 +53,17 @@ export interface TaxonomyResult {
   analyzing: boolean;
 }
 
+/**
+ * Which of the two optional steps the user opted into on the source step. Both default off,
+ * so the minimal create path is name + files -> config -> upload; enabling one splices it back
+ * into the wizard's step order. Only mutable while on the source step, which is what keeps the
+ * current step from ever being spliced out from under the user.
+ */
+export interface OptionalSteps {
+  preview: boolean;
+  taxonomy: boolean;
+}
+
 export interface DataLakeFormValues {
   name: string;
   description: string;
@@ -86,13 +97,19 @@ export interface UploadProgress {
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
-const DEFAULT_TAXONOMY: TaxonomyResult = {
+/** A taxonomy that applies nothing - the upload path's stand-in when the step is not in play. */
+export const EMPTY_TAXONOMY: TaxonomyResult = {
   prefix: '',
   suggestedName: '',
   tags: [],
   fileAssignments: [],
   attempted: false,
   analyzing: false,
+};
+
+const DEFAULT_OPTIONAL_STEPS: OptionalSteps = {
+  preview: false,
+  taxonomy: false,
 };
 
 const DEFAULT_CONFIG: DataLakeFormValues = {
@@ -125,7 +142,8 @@ const freshSession = () => ({
   folderTree: null,
   allFiles: [] as WizardFile[],
   excludedPatterns: [...DEFAULT_EXCLUDED_PATTERNS],
-  taxonomy: { ...DEFAULT_TAXONOMY },
+  taxonomy: { ...EMPTY_TAXONOMY },
+  optionalSteps: { ...DEFAULT_OPTIONAL_STEPS },
   config: { ...DEFAULT_CONFIG },
   duplicateCheckResults: null,
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
@@ -149,6 +167,20 @@ export interface WizardTargetLake {
   requiredEntitlement?: string;
 }
 
+/**
+ * Whether the AI taxonomy step is part of this session's flow, and therefore whether its
+ * reviewed tags get applied at upload. Toggling the step back off deliberately leaves
+ * taxonomy.tags in the store - re-enabling it restores the user's edits without paying for
+ * another inference run - so the step's presence in the flow, never the presence of tags, is
+ * the authority. Shared by the wizard's step order and the upload path so they cannot drift.
+ */
+export function isTaxonomyStepActive(state: {
+  optionalSteps: OptionalSteps;
+  targetLake: WizardTargetLake | null;
+}): boolean {
+  return !state.targetLake && state.optionalSteps.taxonomy;
+}
+
 interface DataLakeWizardStore {
   // State
   isOpen: boolean;
@@ -157,6 +189,8 @@ interface DataLakeWizardStore {
   allFiles: WizardFile[];
   excludedPatterns: string[];
   taxonomy: TaxonomyResult;
+  /** Opt-ins for the two skippable steps; drives the wizard's step order. */
+  optionalSteps: OptionalSteps;
   config: DataLakeFormValues;
   duplicateCheckResults: { duplicateCount: number; checkedAt: number } | null;
   uploadProgress: UploadProgress;
@@ -178,6 +212,7 @@ interface DataLakeWizardStore {
 
   // Source step
   setFiles: (files: File[]) => void;
+  setOptionalStep: (key: keyof OptionalSteps, enabled: boolean) => void;
 
   // Preview step
   toggleFolderExclusion: (path: string) => void;
@@ -217,7 +252,8 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   folderTree: null,
   allFiles: [],
   excludedPatterns: [...DEFAULT_EXCLUDED_PATTERNS],
-  taxonomy: { ...DEFAULT_TAXONOMY },
+  taxonomy: { ...EMPTY_TAXONOMY },
+  optionalSteps: { ...DEFAULT_OPTIONAL_STEPS },
   config: { ...DEFAULT_CONFIG },
   duplicateCheckResults: null,
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
@@ -266,6 +302,8 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
     const allFiles = getAllFiles(tree);
     set({ folderTree: tree, allFiles });
   },
+
+  setOptionalStep: (key, enabled) => set(state => ({ optionalSteps: { ...state.optionalSteps, [key]: enabled } })),
 
   // ── Preview Step ────────────────────────────────────────────────────────
 

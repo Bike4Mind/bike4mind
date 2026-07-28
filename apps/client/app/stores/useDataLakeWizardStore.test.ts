@@ -21,6 +21,7 @@ const staleFile = (): WizardFile => ({
 const seedStaleSession = () =>
   useDataLakeWizardStore.setState({
     allFiles: [staleFile()],
+    optionalSteps: { preview: true, taxonomy: true },
     config: {
       name: 'Old Lake',
       description: 'old',
@@ -67,6 +68,8 @@ describe('useDataLakeWizardStore - open starts a clean session', () => {
     expect(s.taxonomy.prefix).toBe('');
     expect(s.taxonomy.tags).toEqual([]);
     expect(s.taxonomy.attempted).toBe(false);
+    // Opt-ins are per-session: a prior session's choices must not silently re-expand the flow.
+    expect(s.optionalSteps).toEqual({ preview: false, taxonomy: false });
   });
 
   it('openWizardForLake clears a prior session and preseeds config from the lake only', () => {
@@ -88,5 +91,21 @@ describe('useDataLakeWizardStore - open starts a clean session', () => {
     expect(s.config.description).toBe('');
     expect(s.config.requiredUserTag).toBe('');
     expect(s.taxonomy.tags).toEqual([]);
+    expect(s.optionalSteps).toEqual({ preview: false, taxonomy: false });
+  });
+});
+
+describe('useDataLakeWizardStore - optional step opt-ins', () => {
+  afterEach(() => useDataLakeWizardStore.getState().resetWizard());
+
+  it('toggles one step without disturbing the other', () => {
+    useDataLakeWizardStore.getState().setOptionalStep('taxonomy', true);
+    expect(useDataLakeWizardStore.getState().optionalSteps).toEqual({ preview: false, taxonomy: true });
+
+    useDataLakeWizardStore.getState().setOptionalStep('preview', true);
+    expect(useDataLakeWizardStore.getState().optionalSteps).toEqual({ preview: true, taxonomy: true });
+
+    useDataLakeWizardStore.getState().setOptionalStep('taxonomy', false);
+    expect(useDataLakeWizardStore.getState().optionalSteps).toEqual({ preview: true, taxonomy: false });
   });
 });

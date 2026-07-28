@@ -129,6 +129,8 @@ describe('DataLakeWizardModal - taxonomy step is optional', () => {
       isOpen: true,
       step: 'taxonomy',
       targetLake: null,
+      // The step is opt-in (#824); seeding the flag is what puts it in the step order.
+      optionalSteps: { preview: false, taxonomy: true },
       taxonomy: {
         prefix: 'test:',
         suggestedName: '',
@@ -159,9 +161,9 @@ describe('DataLakeWizardModal - taxonomy step is optional', () => {
   });
 
   it('holds the user on the step while inference is still in flight', () => {
-    // Inference's result overwrites config.name and config.tagPrefix, so advancing mid-flight
-    // would clobber what the user then types on Config. "Skip" would also be a lie here: tags
-    // landing after the click are still applied at upload.
+    // Inference's result overwrites config.tagPrefix, so advancing mid-flight would clobber
+    // what the user then types on Config. "Skip" would also be a lie here: tags landing after
+    // the click are still applied at upload.
     const next = renderAtTaxonomyStep([], true);
 
     expect(next.disabled).toBe(true);
@@ -182,5 +184,115 @@ describe('DataLakeWizardModal - taxonomy step is optional', () => {
 
     expect(next.disabled).toBe(false);
     expect(next.textContent).toContain('Next');
+  });
+});
+
+/**
+ * #824: the create flow is name + files -> config -> upload, with Preview and AI Taxonomy
+ * spliced in only when the user opts into them on the source step.
+ */
+describe('DataLakeWizardModal - streamlined step order', () => {
+  const seedSource = (over: {
+    name?: string;
+    optionalSteps?: { preview: boolean; taxonomy: boolean };
+    targetLake?: unknown;
+  }) =>
+    useDataLakeWizardStore.setState(state => ({
+      isOpen: true,
+      step: 'source',
+      targetLake: (over.targetLake ?? null) as never,
+      allFiles: [{ relativePath: 'a.txt', size: 1, excluded: false }] as never,
+      optionalSteps: over.optionalSteps ?? { preview: false, taxonomy: false },
+      config: { ...state.config, name: over.name ?? 'Legal Contracts', tagPrefix: '' },
+    }));
+
+  const renderModal = () =>
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+
+  afterEach(() => {
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('shows only source, configure and upload when neither optional step is enabled', () => {
+    seedSource({});
+
+    renderModal();
+
+    const labels = screen.getAllByTestId('wizard-step-label').map(el => el.textContent);
+    expect(labels).toEqual(['Select Source', 'Configure', 'Upload']);
+  });
+
+  it('splices each opted-in step into the order, in flow position', () => {
+    seedSource({ optionalSteps: { preview: true, taxonomy: true } });
+
+    renderModal();
+
+    const labels = screen.getAllByTestId('wizard-step-label').map(el => el.textContent);
+    expect(labels).toEqual(['Select Source', 'Preview', 'AI Taxonomy', 'Configure', 'Upload']);
+  });
+
+  it('never offers the taxonomy step in append mode, even if the flag is set', () => {
+    seedSource({
+      optionalSteps: { preview: true, taxonomy: true },
+      targetLake: { id: 'l1', name: 'Niche', slug: 'niche', fileTagPrefix: 'niche:' },
+    });
+
+    renderModal();
+
+    const labels = screen.getAllByTestId('wizard-step-label').map(el => el.textContent);
+    expect(labels).toEqual(['Select Source', 'Preview', 'Configure', 'Upload']);
+  });
+
+  it('blocks leaving source when every file was excluded, with no Preview step to catch it', () => {
+    // Auto-exclusion alone can empty a selection (e.g. only junk files picked). Preview used
+    // to be the mandatory home of this check; skipping it must not let the user reach Start
+    // Upload with nothing to send.
+    seedSource({});
+    useDataLakeWizardStore.setState({
+      allFiles: [{ relativePath: '.DS_Store', size: 1, excluded: true }] as never,
+    });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
+  });
+
+  it('blocks leaving source until the name yields a server-acceptable slug', () => {
+    // Identity is gated here now rather than on Config, so an unusable name is caught
+    // before the user commits to anything downstream.
+    seedSource({ name: '!!' });
+
+    renderModal();
+
+    expect(screen.getByTestId('wizard-next-btn')).toBeDisabled();
+  });
+
+  it('derives the tag prefix from the name when no taxonomy step will set one', () => {
+    // Start Upload gates on tagPrefix >= 2; without this the minimal path stalls there.
+    seedSource({ name: 'Legal Contracts' });
+
+    renderModal();
+    screen.getByTestId('wizard-next-btn').click();
+
+    const state = useDataLakeWizardStore.getState();
+    expect(state.step).toBe('config');
+    expect(state.config.tagPrefix).toBe('legal-contracts:');
+  });
+
+  it('leaves the prefix empty for the taxonomy step to fill when that step is enabled', () => {
+    // setTaxonomy only adopts the inferred prefix while config.tagPrefix is empty, so
+    // seeding one here would silently suppress the AI's own suggestion.
+    seedSource({ optionalSteps: { preview: false, taxonomy: true } });
+
+    renderModal();
+    screen.getByTestId('wizard-next-btn').click();
+
+    const state = useDataLakeWizardStore.getState();
+    expect(state.step).toBe('taxonomy');
+    expect(state.config.tagPrefix).toBe('');
   });
 });

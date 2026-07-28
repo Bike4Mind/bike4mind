@@ -14,6 +14,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   useDataLakeWizardStore,
+  isTaxonomyStepActive,
+  EMPTY_TAXONOMY,
   type TaxonomyTag,
   type UploadProgress,
   type UploadErrorKind,
@@ -461,7 +463,10 @@ export function useBatchUpload() {
 
       // Read from store at mutation time to avoid stale closure
       // (same pattern as useComputeHashes)
-      const { config, allFiles, targetLake, taxonomy } = useDataLakeWizardStore.getState();
+      const { config, allFiles, targetLake, taxonomy, optionalSteps } = useDataLakeWizardStore.getState();
+      // A taxonomy the user toggled back off must not still tag the upload. Its tags stay in
+      // the store so re-enabling the step restores them, so the flow decides, not the tags.
+      const appliedTaxonomy = isTaxonomyStepActive({ optionalSteps, targetLake }) ? taxonomy : EMPTY_TAXONOMY;
       let included = allFiles.filter(f => !f.excluded);
       if (included.length === 0) throw new Error('No files to upload');
 
@@ -544,7 +549,7 @@ export function useBatchUpload() {
         // Per-file tags: each file's source folder plus the taxonomy categories the
         // user reviewed (append mode has no taxonomy step, so it stays folder-only).
         // The lake meta-tag is added server-side.
-        const appliedTags = appliedTagsForBatch(included, taxonomy, tagPrefix);
+        const appliedTags = appliedTagsForBatch(included, appliedTaxonomy, tagPrefix);
 
         // Step 2: Create batch record
         const batchRes = await api.post<{ id: string }>('/api/data-lakes/batches', {
@@ -593,7 +598,7 @@ export function useBatchUpload() {
                 ...(f.contentHash && { contentHash: f.contentHash }),
                 // Each file's source folder plus the reviewed taxonomy categories covering
                 // it (append mode has an empty taxonomy, so this stays folder-only).
-                tags: tagsForFile(f.relativePath, taxonomy, tagPrefix),
+                tags: tagsForFile(f.relativePath, appliedTaxonomy, tagPrefix),
               })),
               dataLakeSlug: slug,
               // Correlate every uploaded file to its batch so the pipeline
