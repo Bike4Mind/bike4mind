@@ -373,6 +373,7 @@ export interface ChatCompletionFeature {
     model: string;
     historyCount?: number;
     oldestIncludedQuestId?: string | null;
+    verbatimExcludedCount?: number;
   }): Promise<void>;
   beforeDataGathering: (args: {
     quest: IChatHistoryItemDocument;
@@ -1781,6 +1782,7 @@ export class ContextSummarizationFeature implements ChatCompletionFeature {
     session,
     historyCount,
     oldestIncludedQuestId,
+    verbatimExcludedCount,
   }: {
     quest: IChatHistoryItemDocument;
     session: ISessionDocument;
@@ -1789,12 +1791,22 @@ export class ContextSummarizationFeature implements ChatCompletionFeature {
     model: string;
     historyCount?: number;
     oldestIncludedQuestId?: string | null;
+    /** Older turns the token-bounded verbatim window dropped this turn (see fetchAndProcessPreviousMessages). */
+    verbatimExcludedCount?: number;
   }): Promise<void> {
-    // Only trigger when there's confirmed overflow AND we have a boundary
     if (!historyCount || !oldestIncludedQuestId) return;
-    // Compare against the resolved page size: the unlimited marker is negative, so comparing
-    // against it raw would read as "everything overflows" and summarize on every turn.
-    if (!session.messageCount || session.messageCount <= resolveHistoryFetchLimit(historyCount)) return;
+    // Summarize when older turns fell outside the window and are not yet covered.
+    // Two independent pressures put turns beyond the boundary:
+    //  - token pressure: the verbatim token budget dropped older turns this turn
+    //    (verbatimExcludedCount > 0) - this is the path that fires for a heavy
+    //    session with few messages, which the count check alone never caught;
+    //  - count pressure: the history fetch was capped below the full history.
+    //    Compare against the resolved page size: the unlimited marker is negative,
+    //    so comparing against it raw would read as "everything overflows".
+    const tokenPressure = (verbatimExcludedCount ?? 0) > 0;
+    const countPressure =
+      !!session.messageCount && session.messageCount > resolveHistoryFetchLimit(historyCount);
+    if (!tokenPressure && !countPressure) return;
 
     // Rate-limit: skip if summarized recently
     if (session.contextSummaryAt) {

@@ -164,6 +164,42 @@ describe('ContextSummarizationFeature', () => {
       );
       expect(contextSummarizeSession).toHaveBeenCalledOnce();
     });
+
+    // Token-pressure path: a heavy session with FEW messages (the #956 case) has
+    // no count pressure, but the token-bounded verbatim window dropped older turns.
+    it('calls contextSummarizeSession on token pressure even when messageCount <= historyCount', async () => {
+      await feature.onComplete(
+        makeArgs({
+          session: makeSession({ messageCount: 8 }),
+          historyCount: 20,
+          verbatimExcludedCount: 3,
+        })
+      );
+      expect(contextSummarizeSession).toHaveBeenCalledOnce();
+      expect(contextSummarizeSession).toHaveBeenCalledWith('session1', '000000000000000000000005');
+    });
+
+    it('does NOT call contextSummarizeSession when neither token nor count pressure exists', async () => {
+      await feature.onComplete(
+        makeArgs({
+          session: makeSession({ messageCount: 8 }),
+          historyCount: 20,
+          verbatimExcludedCount: 0,
+        })
+      );
+      expect(contextSummarizeSession).not.toHaveBeenCalled();
+    });
+
+    it('still respects the rate limit under token pressure', async () => {
+      await feature.onComplete(
+        makeArgs({
+          session: makeSession({ messageCount: 8, contextSummaryAt: new Date(Date.now() - 60_000) }),
+          historyCount: 20,
+          verbatimExcludedCount: 3,
+        })
+      );
+      expect(contextSummarizeSession).not.toHaveBeenCalled();
+    });
   });
 });
 

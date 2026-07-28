@@ -299,6 +299,7 @@ export const SettingKeySchema = z.enum([
   // CONTEXT TELEMETRY SETTINGS
   'EnableContextTelemetry',
   'contextTelemetryAlerts',
+  'ContextVerbatimWindowFraction',
 
   // SRE AGENT SETTINGS
   'sreAgentConfig',
@@ -3448,6 +3449,17 @@ export const settingsMap = {
       'Enable privacy-first telemetry for LLM completions. Captures operational metadata for debugging without storing content or user identity.',
     category: 'Admin',
     order: 120,
+  }),
+  ContextVerbatimWindowFraction: makeNumberSetting({
+    key: 'ContextVerbatimWindowFraction',
+    name: 'Context Verbatim Window Fraction',
+    defaultValue: 0.55,
+    min: 0,
+    max: 1,
+    description:
+      'Fraction of a model usable input budget (context window minus reserved output) kept as verbatim conversation history before older turns are summarized into working memory. Lower = compact sooner (cheaper, less verbatim detail); higher = keep more raw history.',
+    category: 'AI',
+    order: 121,
   }),
   sreAgentConfig: makeObjectSetting({
     key: 'sreAgentConfig',
