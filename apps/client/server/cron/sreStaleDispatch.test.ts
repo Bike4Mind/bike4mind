@@ -115,7 +115,9 @@ describe('sreStaleDispatch cron', () => {
 
     await handler();
 
-    expect(mockAtomicTransition.mock.calls[0][3].errorMessage).toContain('sreFix handler never dispatched to GitHub');
+    const { errorMessage } = mockAtomicTransition.mock.calls[0][3];
+    expect(errorMessage).toContain('sreFix handler never dispatched to GitHub');
+    expect(errorMessage).not.toContain('no callback received');
   });
 
   it('should timeout stale analyzing docs after 10 min', async () => {
