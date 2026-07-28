@@ -165,6 +165,13 @@ const SYSTEM_PROMPT_RESERVE = 4000;
 const RESPONSE_RESERVE = 8000;
 
 /**
+ * Cap on elision signal descriptions persisted to promptMeta. A heavily stubbed artifact can
+ * produce dozens; the client only needs enough to explain the notice, and promptMeta is stored
+ * per quest.
+ */
+const MAX_ELISION_DETAILS = 10;
+
+/**
  * Percentage of context budget allocated to history (vs knowledge files).
  * The buildAndSortMessages function allocates 30% to history, 70% to files.
  */
@@ -3003,12 +3010,38 @@ export class ChatCompletionProcess {
 
         // Process artifacts if enabled
         if (getSettingsValue('EnableArtifacts', defaultAdminSettings)) {
-          const { parseArtifacts, convertCodeBlocksToArtifacts } = await import('@bike4mind/utils');
+          const { parseArtifacts, convertCodeBlocksToArtifacts, detectElidedContent } =
+            await import('@bike4mind/utils');
           const artifactProcessingStartTime = Date.now();
+
+          // Elision hits accumulate across every reply/artifact, then get stamped on promptMeta
+          // once below. Pre-formatted at push time so no type from the detector needs importing
+          // into this module's static graph (@bike4mind/utils is loaded dynamically here).
+          const elisionHits: Array<{ confidence: 'high' | 'low'; signals: string[] }> = [];
 
           quest.replies = quest.replies?.map(reply => {
             const processedReply = convertCodeBlocksToArtifacts(reply);
             const { artifacts } = parseArtifacts(processedReply);
+
+            for (const artifact of artifacts) {
+              const elision = detectElidedContent(artifact.content, artifact.type);
+              if (!elision.elided) continue;
+              elisionHits.push({
+                confidence: elision.confidence,
+                signals: elision.signals.map(signal => {
+                  switch (signal.kind) {
+                    case 'placeholder_comment':
+                      return `"${artifact.title}" line ${signal.line}: placeholder comment - ${signal.match}`;
+                    case 'undefined_handler':
+                      return `"${artifact.title}": ${signal.attribute} calls ${signal.name}(), never defined`;
+                    case 'empty_function_body':
+                      return `"${artifact.title}": ${signal.name}() has no body, only a comment`;
+                    default:
+                      return `"${artifact.title}": calls ${signal.name}(), never defined`;
+                  }
+                }),
+              });
+            }
 
             if (artifacts.length > 0) {
               logger.info(`Found ${artifacts.length} artifacts in response`);
@@ -3057,6 +3090,28 @@ export class ChatCompletionProcess {
 
             return processedReply;
           });
+
+          // Suspected elision: the model abbreviated instead of hitting the ceiling, so
+          // finishReason is clean and the truncation path below never fires. Advisory only -
+          // the reply and its artifacts are left exactly as generated; the client renders a
+          // "may be incomplete" notice. Unlike truncation this works on every backend,
+          // including those that never report a stop reason at all.
+          if (elisionHits.length > 0 && quest.promptMeta) {
+            const confidence = elisionHits.some(h => h.confidence === 'high') ? 'high' : 'low';
+            const allSignals = elisionHits.flatMap(h => h.signals);
+            quest.promptMeta.suspectedElision = {
+              confidence,
+              signalCount: allSignals.length,
+              details: allSignals.slice(0, MAX_ELISION_DETAILS),
+            };
+            quest.promptMeta.warnings = [
+              ...(quest.promptMeta.warnings ?? []),
+              'An artifact in this response appears to have been abbreviated (placeholder comments or undefined references) and may not be fully functional.',
+            ];
+            logger.warn(
+              `[Elision] Suspected abbreviated artifact (model=${currentModel.id}, confidence=${confidence}, signals=${allSignals.length}): ${allSignals[0]}`
+            );
+          }
 
           // Capture actual artifact processing duration
           actualArtifactProcessingDuration = Date.now() - artifactProcessingStartTime;
