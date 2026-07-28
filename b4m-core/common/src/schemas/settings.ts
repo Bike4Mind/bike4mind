@@ -17,6 +17,13 @@ import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
  * ChatCompletionProcess - so an unset/empty/cleared DB value reverts to this and never bricks
  * completions. The prompt (natural-language guidance to the model) is intentionally live-editable;
  * the sandbox runtime + CSP stay in code (a security boundary, not config).
+ *
+ * MUST STAY IN SYNC with `PLACEHOLDER_PATTERNS` in `@bike4mind/utils/artifactElision`: the phrases
+ * the NEVER ABBREVIATE paragraph forbids are the same phrases the detector treats as stub markers.
+ * Adding a forbidden phrase here without adding it there means the model is told not to do something
+ * nobody checks for; the reverse means the detector flags wording the prompt never warned against.
+ * Because this text is live-editable per environment, that drift is silent - an admin edit cannot
+ * update the detector. Prefer changing both in one commit.
  */
 export const ARTIFACT_EMISSION_PROMPT = `ARTIFACT OUTPUT:
 When asked to create something substantial and self-contained - a complete HTML page, an interactive visualization, a React component, an SVG, a Mermaid diagram, or a long code file/document - emit it inside an <artifact> tag, never as raw inline markup. The body between the opening and closing tags MUST be the complete file you generate - the entire document, top to bottom. NEVER put an ellipsis (...), a stand-in, or a "code here" comment as the body; write the real, full content and close the document before </artifact>. Shape (replace the body with your actual complete file):
