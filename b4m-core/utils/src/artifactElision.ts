@@ -682,12 +682,29 @@ function collectDeclaredNames(source: string, into: Set<string>): void {
     pattern.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = pattern.exec(source)) !== null) {
-      for (const raw of (m[1] ?? '').split(',')) {
-        // `{ a: b }` binds b; `a = 1` binds a; `...rest` binds rest
-        const name = raw.split(':').pop()!.split('=')[0].replace(/[.\s]/g, '');
-        if (/^[A-Za-z_$][\w$]*$/.test(name) && !CALL_LIKE_KEYWORDS.has(name)) into.add(name);
-      }
+      harvestBoundNames(m[1] ?? '', into);
     }
+  }
+}
+
+/**
+ * Adds every identifier that a binding group BINDS, given the group's inner text.
+ *
+ * Harvests identifiers directly rather than splitting on commas, because a comma split cannot see
+ * into nesting: `const { user: { name, email } }` captures `user: { name, email` and the old
+ * split produced the fragment `user: { name`, losing `name` entirely. Anything followed by `:` is
+ * a property KEY, not a binding, so it is skipped - which leaves the bound names at every depth.
+ *
+ * Deliberately over-inclusive: a default value (`{ a = fallback }`) contributes `fallback` too.
+ * That direction is safe here - a name wrongly believed to be declared costs one missed detection,
+ * whereas a name wrongly believed missing would flag a working artifact.
+ */
+function harvestBoundNames(groupText: string, into: Set<string>): void {
+  const IDENT = /([A-Za-z_$][\w$]*)\s*(:)?/g;
+  let m: RegExpExecArray | null;
+  while ((m = IDENT.exec(groupText)) !== null) {
+    if (m[2]) continue; // property key, e.g. the `user` in `{ user: { name } }`
+    if (!CALL_LIKE_KEYWORDS.has(m[1])) into.add(m[1]);
   }
 }
 
