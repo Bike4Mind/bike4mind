@@ -402,6 +402,10 @@ export function artifactBundlePublisher(input: {
  * lookup and the write. A drifted id (e.g. a positional `artifact-<tabIndex>` fallback) both
  * misses the lookup - silently degrading "update existing" to publish-as-new - AND gets
  * persisted as `source.artifactId`, corrupting the linkage. Callers must pass a stable id.
+ *
+ * CALL FROM AN EVENT HANDLER, NOT A RENDER BODY: `incompleteWarning` scans the whole artifact
+ * body synchronously. Both current callers invoke this on the share click, which is why the cost
+ * is invisible; running it per render on a large body would not be.
  */
 export function buildArtifactPublishWiring(input: {
   artifactId: string;
