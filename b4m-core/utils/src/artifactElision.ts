@@ -742,6 +742,10 @@ function collectCalledNames(source: string): Set<string> {
     const before = source.slice(Math.max(0, m.index - CALL_LOOKBACK_CHARS), m.index).replace(/\s+$/, '');
     if (before.endsWith('.') || before.endsWith('?.')) continue; // member call
     if (/\b(?:function|class)\s*\*?\s*$/.test(before)) continue; // declaration, not a call
+    // `new Person()` names a constructor, and an undeclared one is far more likely to be an
+    // ambient class we simply do not list than an elided body - a class that WAS elided keeps its
+    // `class X {` declaration. Skipping it trades a missed detection for no false positive.
+    if (/\bnew$/.test(before)) continue;
     names.add(name);
   }
   return names;
