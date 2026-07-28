@@ -14,6 +14,8 @@ import {
   FormControl,
   FormLabel,
   Switch,
+  Alert,
+  Checkbox,
 } from '@mui/joy';
 import PublicIcon from '@mui/icons-material/Public';
 import LockIcon from '@mui/icons-material/Lock';
@@ -80,6 +82,14 @@ export interface PublishShareModalProps {
    * scope (only Public/Private are offered).
    */
   orgOption?: { label: string; hint: string };
+  /**
+   * Set when the content looks abbreviated/non-functional (see `detectElidedContent`). Shown
+   * as a warning that must be acknowledged before the publish button enables. A published
+   * link is the point of no return - it can reach a teammate or client before anyone
+   * notices the artifact's controls are inert. Heuristic, hence acknowledge-and-proceed
+   * rather than a hard block.
+   */
+  incompleteWarning?: string;
 }
 
 type VisibilityOption = { value: PublishVisibility; label: string; hint: string; icon: React.ReactNode };
@@ -161,6 +171,7 @@ export function PublishShareModal({
   defaultVisibility = 'public',
   resolveExisting,
   orgOption,
+  incompleteWarning,
 }: PublishShareModalProps) {
   const [visibility, setVisibility] = useState<PublishVisibility>(defaultVisibility);
   const [commentsOn, setCommentsOn] = useState(true);
@@ -190,6 +201,8 @@ export function PublishShareModal({
   // Whether a gate is live on the published item - drives whether the embed
   // editor is offered (embedding is open-public only). Seeded from the record.
   const [embedGated, setEmbedGated] = useState(false);
+  // Explicit acknowledgement of `incompleteWarning`; gates the publish button.
+  const [incompleteAck, setIncompleteAck] = useState(false);
 
   // Reset to the choose phase each time the dialog is opened fresh.
   useEffect(() => {
@@ -207,6 +220,7 @@ export function PublishShareModal({
       setGateDomainsText('');
       setGateTouched(false);
       setEmbedGated(false);
+      setIncompleteAck(false);
     }
   }, [open, defaultVisibility]);
 
@@ -678,10 +692,30 @@ export function PublishShareModal({
           />
         </FormControl>
 
+        {phase === 'choose' && incompleteWarning && (
+          <Alert
+            color="warning"
+            variant="soft"
+            sx={{ mb: 2, flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}
+            data-testid="publish-share-incomplete-warning"
+          >
+            <Typography level="title-sm">This artifact may be incomplete</Typography>
+            <Typography level="body-sm">{incompleteWarning}</Typography>
+            <Checkbox
+              size="sm"
+              checked={incompleteAck}
+              onChange={e => setIncompleteAck(e.target.checked)}
+              label="Publish anyway"
+              slotProps={{ input: { 'data-testid': 'publish-share-incomplete-ack' } }}
+            />
+          </Alert>
+        )}
+
         {phase === 'choose' ? (
           <Button
             onClick={() => void handleCreate()}
             loading={busy}
+            disabled={!!incompleteWarning && !incompleteAck}
             startDecorator={<PublicIcon />}
             data-testid="publish-share-create"
           >
