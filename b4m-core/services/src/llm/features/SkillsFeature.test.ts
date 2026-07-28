@@ -59,7 +59,7 @@ describe('SkillsFeature', () => {
     const quest = makeQuest();
 
     await feature.beforeDataGathering({ ...baseArgs, quest: quest as never, message: 'hello world' });
-    const messages = await feature.getContextMessages(quest as never, undefined as never, '', 0, undefined as never);
+    const messages = await feature.getContextMessages(quest as never, undefined as never, '', undefined as never, 0);
 
     expect(messages).toEqual([]);
   });
@@ -75,7 +75,7 @@ describe('SkillsFeature', () => {
     });
 
     expect(result.shouldContinue).toBe(true);
-    expect(await feature.getContextMessages(quest as never, undefined as never, '', 0, undefined as never)).toEqual([]);
+    expect(await feature.getContextMessages(quest as never, undefined as never, '', undefined as never, 0)).toEqual([]);
   });
 
   it('injects an expanded skill body when a mention resolves', async () => {
@@ -91,7 +91,7 @@ describe('SkillsFeature', () => {
       quest: quest as never,
       message: '/summarize the user input',
     });
-    const messages = await feature.getContextMessages(quest as never, undefined as never, '', 0, undefined as never);
+    const messages = await feature.getContextMessages(quest as never, undefined as never, '', undefined as never, 0);
 
     // Batched: ONE call for the whole mention list, not one per mention.
     expect(findAccessibleByNamesForUser).toHaveBeenCalledTimes(1);
@@ -117,7 +117,7 @@ describe('SkillsFeature', () => {
       quest: quest as never,
       message: '/summarize hello world /translate english to french',
     });
-    const messages = await feature.getContextMessages(quest as never, undefined as never, '', 0, undefined as never);
+    const messages = await feature.getContextMessages(quest as never, undefined as never, '', undefined as never, 0);
 
     // ONE round-trip for both mentions - N+1 guarded.
     expect(findAccessibleByNamesForUser).toHaveBeenCalledTimes(1);
@@ -140,7 +140,7 @@ describe('SkillsFeature', () => {
     const quest = makeQuest();
 
     await feature.beforeDataGathering({ ...baseArgs, quest: quest as never, message: 'just a chat message' });
-    const messages = await feature.getContextMessages(quest as never, undefined as never, '', 0, undefined as never);
+    const messages = await feature.getContextMessages(quest as never, undefined as never, '', undefined as never, 0);
 
     // Cap is pushed into Mongo - limit is passed as the second arg.
     expect(listAccessibleInvocableForUser).toHaveBeenCalledWith('user-1', 50);
@@ -163,7 +163,7 @@ describe('SkillsFeature', () => {
     const quest = makeQuest();
 
     await feature.beforeDataGathering({ ...baseArgs, quest: quest as never, message: 'hi' });
-    const messages = await feature.getContextMessages(quest as never, undefined as never, '', 0, undefined as never);
+    const messages = await feature.getContextMessages(quest as never, undefined as never, '', undefined as never, 0);
 
     const content = messages[0]?.content ?? '';
     // The fenced skill-name span uses backticks; the description must not be
@@ -180,7 +180,7 @@ describe('SkillsFeature', () => {
     const quest = makeQuest();
 
     await feature.beforeDataGathering({ ...baseArgs, quest: quest as never, message: '/unknown skill' });
-    const messages = await feature.getContextMessages(quest as never, undefined as never, '', 0, undefined as never);
+    const messages = await feature.getContextMessages(quest as never, undefined as never, '', undefined as never, 0);
 
     expect(messages).toEqual([]);
   });
@@ -194,7 +194,7 @@ describe('SkillsFeature', () => {
     const quest = makeQuest();
 
     await feature.beforeDataGathering({ ...baseArgs, quest: quest as never, message: '/shared now' });
-    const messages = await feature.getContextMessages(quest as never, undefined as never, '', 0, undefined as never);
+    const messages = await feature.getContextMessages(quest as never, undefined as never, '', undefined as never, 0);
 
     expect(messages).toHaveLength(1);
     const content = messages[0]?.content ?? '';
@@ -215,7 +215,7 @@ describe('SkillsFeature', () => {
     const quest = makeQuest();
 
     await feature.beforeDataGathering({ ...baseArgs, quest: quest as never, message: '/mine hello' });
-    const messages = await feature.getContextMessages(quest as never, undefined as never, '', 0, undefined as never);
+    const messages = await feature.getContextMessages(quest as never, undefined as never, '', undefined as never, 0);
 
     const content = messages[0]?.content ?? '';
     expect(content).toContain('## Skill Invoked: /mine');

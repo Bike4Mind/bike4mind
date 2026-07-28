@@ -359,7 +359,7 @@ export type ChatCompletionContext = Pick<
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
     message: string,
-    max_tokens: number,
+    attachedFileTokenBudget: number,
     modelInfo: ModelInfo
   ) => Promise<{ promptMessages: IMessage[]; convertedFabFiles: any[] }>;
 };
@@ -391,8 +391,9 @@ export interface ChatCompletionFeature {
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
     message: string,
-    max_tokens: number,
-    modelInfo: ModelInfo
+    modelInfo: ModelInfo,
+    /** Input-window-derived; deliberately NOT the model's output cap. */
+    attachedFileTokenBudget: number
   ) => Promise<IMessage[]>;
 }
 
@@ -424,7 +425,6 @@ export class MementoFeature implements ChatCompletionFeature {
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
     message: string,
-    max_tokens: number,
     modelInfo: ModelInfo
   ): Promise<IMessage[]> {
     // Mementos V2: if this user is on V2, inject the ledger-unioned-with-mementos recall and skip
@@ -955,8 +955,8 @@ export class ProjectFeature implements ChatCompletionFeature {
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
     message: string,
-    max_tokens: number,
-    modelInfo: ModelInfo
+    modelInfo: ModelInfo,
+    attachedFileTokenBudget: number
   ): Promise<IMessage[]> {
     if (!this.project) return [];
 
@@ -981,7 +981,7 @@ export class ProjectFeature implements ChatCompletionFeature {
       quest,
       embeddingFactory,
       message,
-      max_tokens,
+      attachedFileTokenBudget,
       modelInfo
     );
 

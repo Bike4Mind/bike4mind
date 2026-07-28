@@ -1,11 +1,16 @@
 import React from 'react';
-import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { Box } from '@mui/joy';
 import 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.css';
 import 'filepond/dist/filepond.min.css';
 import { FilePond } from 'react-filepond';
-import { IFabFileDocument, ISessionDocument, KnowledgeType, isImageAttachment } from '@bike4mind/common';
+import {
+  IFabFileDocument,
+  KnowledgeType,
+  isImageAttachment,
+  resolveAttachScope,
+  type AttachScopeMode,
+} from '@bike4mind/common';
 import { createFabFileOnServerWithUpload, deleteFileUtility } from '@client/app/utils/filesAPICalls';
 import {
   setPendingMessageFiles,
@@ -13,7 +18,6 @@ import {
   patchPendingMessageFileModerationStatus,
 } from '@client/app/hooks/useSessionLayout';
 import { GearsStatusResponse } from '@client/app/hooks/useGearsStatus';
-import { LexicalChatInputRef } from '../LexicalChatInput';
 import styles from '../FilePond.module.css';
 
 // any: FilePond types are not fully compatible with React 18 generics
@@ -24,17 +28,13 @@ interface SessionFilePondProps {
   files: any[];
   setFiles: React.Dispatch<React.SetStateAction<any[]>>;
   maxFileSizeForFilePond: string;
-  isSessionFileMode: boolean;
+  attachScopeMode: AttachScopeMode;
   currentSessionId: string | null;
-  currentSession: ISessionDocument | null;
-  setWorkBenchFiles: (
-    sessionId: string,
-    files: IFabFileDocument[] | ((prev: IFabFileDocument[]) => IFabFileDocument[])
-  ) => void;
-  setCurrentSession: (session: ISessionDocument) => void;
-  lexicalInputRef: React.RefObject<LexicalChatInputRef | null>;
-  chatInputValue: string;
-  setChatInputValue: (value: string) => void;
+  addToNotebookContext: (
+    sessionId: string | null,
+    fabFile: IFabFileDocument,
+    options?: { propagateToProjects?: boolean }
+  ) => Promise<boolean>;
 }
 
 export function SessionFilePond({
@@ -42,14 +42,9 @@ export function SessionFilePond({
   files,
   setFiles,
   maxFileSizeForFilePond,
-  isSessionFileMode,
+  attachScopeMode,
   currentSessionId,
-  currentSession,
-  setWorkBenchFiles,
-  setCurrentSession,
-  lexicalInputRef,
-  chatInputValue,
-  setChatInputValue,
+  addToNotebookContext,
 }: SessionFilePondProps) {
   const queryClient = useQueryClient();
 
@@ -111,6 +106,13 @@ export function SessionFilePond({
             // Create temporary ID for this upload
             const tempId = `temp-${Date.now()}-${Math.random()}`;
 
+            // Frozen for the life of this upload. FilePond re-assigns `server` on every
+            // render, but an in-flight upload keeps the closure it started with - so
+            // reading either of these later could scope a file to whichever notebook the
+            // user happened to switch to, or to a mode they changed their mind about.
+            const uploadSessionId = currentSessionId;
+            const scope = resolveAttachScope(attachScopeMode, file.type);
+
             // Immediately add to thumbnails with uploading status
             setPendingMessageFiles(prev => [
               ...prev,
@@ -123,6 +125,8 @@ export function SessionFilePond({
                 } as IFabFileDocument,
                 uploadProgress: 0,
                 status: 'uploading',
+                scope,
+                uploadSessionId,
               },
             ]);
 
@@ -172,10 +176,22 @@ export function SessionFilePond({
                 // hasn't resolved yet - GetFileIcon shows the scanning placeholder
                 // until the image_moderation_status websocket event flips it to clean/blocked.
                 const isImageUpload = isImageAttachment(fabFile.mimeType);
+
+                // Consume the buffer BEFORE the state update, not inside the updater.
+                // The WS handler promotes notebook-scoped images once they clear, but it
+                // matches on the real FabFile id - and when the scan beat this swap the
+                // event was buffered instead, so that lookup found nothing. This is the
+                // only remaining chance to see it. Read out here so the promotion
+                // decision below does not depend on a state updater having already run.
+                const buffered = isImageUpload ? consumeBufferedModerationStatus(fabFile.id) : undefined;
+
                 setPendingMessageFiles(prev => {
                   const withRealFile = prev.map(item =>
                     item.fabFile.id === tempId
                       ? {
+                          // Spread first: `scope` was frozen when the upload started and
+                          // must survive the temp-id -> real-FabFile swap.
+                          ...item,
                           fabFile,
                           uploadProgress: 100,
                           status: isImageUpload ? ('scanning' as const) : ('complete' as const),
@@ -183,14 +199,8 @@ export function SessionFilePond({
                       : item
                   );
 
-                  if (!isImageUpload) return withRealFile;
-
-                  // The image_moderation_status websocket event can arrive before this
-                  // temp-id -> real-FabFile-id swap resolves (a race) - the
-                  // subscriber can't match it to a pending item yet and buffers it by
-                  // fabFileId instead. Replay it now so the item doesn't get stuck on the
+                  // Replay the buffered scan result so the item doesn't sit on the
                   // 'scanning' placeholder set just above.
-                  const buffered = consumeBufferedModerationStatus(fabFile.id);
                   if (!buffered) return withRealFile;
 
                   return patchPendingMessageFileModerationStatus(
@@ -201,36 +211,18 @@ export function SessionFilePond({
                   );
                 });
 
-                // CONDITIONAL: Only session mode adds to workBenchFiles and auto-tags
-                if (isSessionFileMode) {
-                  setWorkBenchFiles(currentSessionId ?? '', prev => {
-                    const newWorkBenchFiles = [...prev, fabFile];
-                    // If we have a current session, update its knowledgeIds
-                    if (currentSession) {
-                      const knowledgeIds = newWorkBenchFiles.map((f: IFabFileDocument) => f.id);
-                      // Create new session object to trigger persistence
-                      setCurrentSession({ ...currentSession, knowledgeIds });
-                    }
-                    return newWorkBenchFiles;
+                // A document joins notebook context as soon as the upload resolves.
+                // An image only gets here when the user explicitly chose 'notebook';
+                // its write is deferred until moderation clears, because a knowledgeIds
+                // entry propagates into clones, exports and (opt-in) projects, and a
+                // blocked image must never reach any of those.
+                //
+                // propagateToProjects is false: landing in notebook context by default
+                // is consent to THIS notebook, not to every project containing it.
+                if (scope === 'notebook' && (!isImageUpload || buffered?.moderationStatus === 'clean')) {
+                  void addToNotebookContext(uploadSessionId, fabFile, { propagateToProjects: false }).catch(() => {
+                    // Already rolled back and surfaced by the hook.
                   });
-
-                  // Add file reference tag to the input (session mode only)
-                  const fileTag = `[[${fabFile.fileName}]]`;
-                  if (lexicalInputRef.current) {
-                    try {
-                      lexicalInputRef.current.insertContent(fileTag);
-                    } catch (insertError) {
-                      console.error('Failed to insert file tag:', insertError);
-                      toast.error('Failed to add file reference to input');
-                      // Fallback to string concatenation
-                      const newValue = chatInputValue.trim() ? `${chatInputValue.trim()}\n\n${fileTag}` : fileTag;
-                      setChatInputValue(newValue);
-                    }
-                  } else {
-                    // Fallback for backward compatibility
-                    const newValue = chatInputValue.trim() ? `${chatInputValue.trim()}\n\n${fileTag}` : fileTag;
-                    setChatInputValue(newValue);
-                  }
                 }
 
                 invalidateGearsStatusOnFirstFile();

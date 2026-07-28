@@ -753,7 +753,12 @@ export async function processFabFilesServer(
   embeddingFactory: EmbeddingFactory,
   fabFiles: IFabFileDocument[],
   userPrompt: string,
-  maxTokens: number,
+  /**
+   * Total tokens of attached-file content this turn may contribute, derived from the
+   * model's INPUT window. Was previously the output-token cap, which bore no relation
+   * to how much of a file could be read. Split across the text files below.
+   */
+  attachedContentTokenBudget: number,
   modelInfo: ModelInfo,
   sendStatusUpdate: (status: string) => Promise<void>,
   {
@@ -825,6 +830,15 @@ export async function processFabFilesServer(
   logger.info(`🕐 [processFabFilesServer] User prompt embedding completed in ${embeddingTime}ms`);
 
   // Cache for file content to avoid redundant processing
+  // The char caps below are applied per file and never summed, so the budget has to be
+  // divided up front or N files would each get the full allowance. Images are excluded:
+  // they do not consume this text budget.
+  const textFileCount = Math.max(1, fabFiles.filter(f => !isImageAttachment(f.mimeType)).length);
+  // Guard the per-file share against 0: the char caps below read a non-positive budget
+  // as "no budget supplied" and fall back to a flat MAX_FILE_SIZE per file, which at N
+  // files is unbounded. A caller that genuinely has no room should send no files.
+  const maxTokens = Math.max(1, Math.floor(attachedContentTokenBudget / textFileCount));
+
   const fileContentCache = new Map<string, string>();
 
   const processFileInParallel = async (file: IFabFileDocument): Promise<void> => {

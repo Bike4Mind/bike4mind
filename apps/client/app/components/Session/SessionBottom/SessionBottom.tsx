@@ -15,6 +15,8 @@ import {
   useWorkBenchFiles,
 } from '@client/app/contexts/SessionsContext';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
+import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
+import type { AttachScopeMode } from '@bike4mind/common';
 import { useEmbeddingMismatchStatus } from '@client/app/hooks/useEmbeddingMismatchStatus';
 
 import HighlanderFocus from '@client/app/components/HighlanderFocus';
@@ -90,13 +92,17 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
   const workBenchFiles = useWorkBenchFiles(currentSessionId || undefined);
   const { setWorkBenchFiles } = useWorkBenchActions();
+  const { addToNotebookContext, removeFromNotebookContext } = useNotebookContextFiles();
   const { systemFiles } = useSystemPromptFiles();
   const hasEmbeddingMismatches = useEmbeddingMismatchStatus(currentSessionId);
 
   // Use custom hook to fetch message files (files attached to individual messages)
   const messageFiles = useMessageFiles(effectiveSessionId);
 
-  const totalFilesCount = workBenchFiles.length + systemFiles.length;
+  // Includes messageFiles: a notebook whose only files are message-scoped would
+  // otherwise render no Files button and no panel - which is exactly the case the
+  // promote action in that panel exists to rescue.
+  const totalFilesCount = workBenchFiles.length + systemFiles.length + messageFiles.length;
   const queryClient = useQueryClient();
   const theme = useTheme();
   const mode = theme.palette.mode;
@@ -233,7 +239,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const isPWA = useIsPWA();
 
   // Toggle state for file upload mode (false = message files, true = session files)
-  const [isSessionFileMode, setIsSessionFileMode] = useState(false);
+  const [attachScopeMode, setAttachScopeMode] = useState<AttachScopeMode>('auto');
 
   // Track message-specific files pending send - now stored in session layout store
   const pendingMessageFilesRaw = useSessionLayout(s => s.pendingMessageFiles);
@@ -389,6 +395,22 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           // (File Manager / message stream) self-heals by refetching a valid fileUrl.
         }
         recordModerationStatus(msg.fabFileId, 'clean', fileUrl);
+
+        // An image the user explicitly scoped to the notebook is held back at upload
+        // time and promoted only here, once the scan clears. A knowledgeIds entry
+        // survives into clones, exports and (when propagation is on) projects, so a
+        // blocked image must never acquire one. Read from the store rather than a
+        // closure: this effect is subscribed once and would capture a stale list.
+        const promoted = useSessionLayout
+          .getState()
+          .pendingMessageFiles.find(item => item.fabFile.id === msg.fabFileId);
+        if (promoted?.scope === 'notebook') {
+          void addToNotebookContext(promoted.uploadSessionId, promoted.fabFile, { propagateToProjects: false }).catch(
+            () => {
+              // Already rolled back and surfaced by the hook.
+            }
+          );
+        }
       } else {
         recordModerationStatus(msg.fabFileId, msg.moderationStatus);
       }
@@ -397,7 +419,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     return () => {
       unsubscribe();
     };
-  }, [subscribeToAction]);
+  }, [subscribeToAction, addToNotebookContext]);
 
   const { setOpen: setFileBrowserOpen } = useFileBrowser();
 
@@ -616,14 +638,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
             files={files}
             setFiles={setFiles}
             maxFileSizeForFilePond={maxFileSizeForFilePond}
-            isSessionFileMode={isSessionFileMode}
+            attachScopeMode={attachScopeMode}
             currentSessionId={currentSessionId}
-            currentSession={currentSession}
-            setWorkBenchFiles={setWorkBenchFiles}
-            setCurrentSession={setCurrentSession}
-            lexicalInputRef={lexicalInputRef}
-            chatInputValue={chatInputValue}
-            setChatInputValue={setChatInputValue}
+            addToNotebookContext={addToNotebookContext}
           />
         )}
 
@@ -635,19 +652,21 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
               setPendingMessageFiles(prev => prev.filter(item => item.fabFile.id !== fileId));
               setFiles(prevFiles => prevFiles.filter(f => f.serverId !== fileId));
 
-              // If session mode, also remove from workBenchFiles
-              if (isSessionFileMode) {
-                setWorkBenchFiles(currentSessionId ?? '', prev => prev.filter(f => f.id !== fileId));
-                if (currentSession) {
-                  const updatedKnowledgeIds = (currentSession.knowledgeIds || []).filter(id => id !== fileId);
-                  setCurrentSession({ ...currentSession, knowledgeIds: updatedKnowledgeIds });
-                }
-              }
+              // Strip knowledgeIds BEFORE the hard delete. If the delete succeeded and
+              // this failed, knowledgeIds would keep a dead id that every later hydration
+              // tries and fails to resolve. Keyed off the item's own frozen scope rather
+              // than the current control value, which the user may have changed since.
+              const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
+              const stripped =
+                removed?.scope === 'notebook'
+                  ? removeFromNotebookContext(currentSessionId, fileId).catch(() => {})
+                  : Promise.resolve();
 
-              // Delete FabFile from server
-              deleteFileUtility(fileId).catch(err => {
-                console.error('Failed to delete file:', err);
-              });
+              void stripped.then(() =>
+                deleteFileUtility(fileId).catch(err => {
+                  console.error('Failed to delete file:', err);
+                })
+              );
             }}
             onClick={file => {
               // First ensure the KnowledgeViewer is open by setting layout to vertical
@@ -683,8 +702,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           toggleFileUpload={toggleFileUpload}
           setFileBrowserOpen={setFileBrowserOpen}
           rollRandomDice={rollRandomDice}
-          isSessionFileMode={isSessionFileMode}
-          setIsSessionFileMode={setIsSessionFileMode}
+          attachScopeMode={attachScopeMode}
+          setAttachScopeMode={setAttachScopeMode}
           totalFilesCount={totalFilesCount}
           hasEmbeddingMismatches={hasEmbeddingMismatches}
           model={model}

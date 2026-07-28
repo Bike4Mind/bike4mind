@@ -232,8 +232,8 @@ describe('MementoFeature - Mementos V2 injection', () => {
       makeQuest(),
       undefined as unknown as Parameters<typeof feature.getContextMessages>[1],
       'what do i like',
-      1000,
-      undefined as unknown as Parameters<typeof feature.getContextMessages>[4]
+      undefined as unknown as Parameters<typeof feature.getContextMessages>[3],
+      1000
     );
 
   it('injects the V2 union recall as system messages and skips the V1 path', async () => {
