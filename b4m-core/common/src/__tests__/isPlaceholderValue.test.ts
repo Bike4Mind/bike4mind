@@ -200,7 +200,16 @@ describe('PLACEHOLDER_API_KEY_TOKENS', () => {
   // Tokens are regex fragments, so a raw `.length` measures the pattern (`change-?me` is 10) and
   // not what it can match (`changeme`, 8). Drop optional groups and optional single chars to get
   // the shortest string a token can match.
+  //
+  // CONTRACT: this understands literals, an optional single char (`x?`) and ONE non-nested
+  // optional group (`(...)?`) - exactly the forms in use. It cannot reason about alternation,
+  // quantifiers or character classes, and for those it reports a length that is too LARGE
+  // (`dummy|key` measures 9 but matches `key`), which would smuggle a short token past the floor
+  // below. The syntax guard test keeps such a token out rather than measuring it wrong.
   const shortestMatch = (token: string) => token.replace(/\([^)]*\)\?/g, '').replace(/.\?/g, '');
+
+  // Constructs that let a token match something shorter than shortestMatch reports.
+  const UNMEASURABLE_SYNTAX = /[|{}[\]*+\\]|\([^)]*\(/;
 
   const MIN_TOKEN_LENGTH = 5;
 
@@ -215,6 +224,23 @@ describe('PLACEHOLDER_API_KEY_TOKENS', () => {
     ).toEqual([]);
   });
 
+  it('every token sticks to the syntax the length check can actually measure', () => {
+    // Guards the floor above from being measured with the wrong ruler: a token using alternation,
+    // a quantifier or a character class would report a too-large length and pass while still
+    // matching a short segment. Such a token must be rejected here, or shortestMatch extended.
+    const unmeasurable = PLACEHOLDER_API_KEY_TOKENS.filter(t => UNMEASURABLE_SYNTAX.test(t));
+    expect(unmeasurable, `tokens using syntax shortestMatch cannot measure: ${unmeasurable.join(', ')}`).toEqual([]);
+  });
+
+  it('reports a string each token can genuinely match', () => {
+    // shortestMatch is string surgery, not a regex engine, so prove its output is a real match of
+    // the token rather than a plausible-looking string.
+    for (const token of PLACEHOLDER_API_KEY_TOKENS) {
+      const candidate = shortestMatch(token);
+      expect(new RegExp(`^(?:${token})$`).test(candidate), `${token} -> ${candidate}`).toBe(true);
+    }
+  });
+
   it('measures the shortest match, so the invariant above is not vacuous', () => {
     // Without this, the assertion above would still pass if shortestMatch were wrong in the
     // permissive direction and silently let a short token through.
@@ -222,6 +248,19 @@ describe('PLACEHOLDER_API_KEY_TOKENS', () => {
     expect(shortestMatch('your-?(api-?)?key')).toBe('yourkey');
     for (const short of ['key', 'test', 'demo', 'fake', 'k(ey)?']) {
       expect(shortestMatch(short).length).toBeLessThan(MIN_TOKEN_LENGTH);
+    }
+  });
+
+  it('the syntax guard catches the forms that would defeat the length floor', () => {
+    // Each of these measures >= 5 by shortestMatch while actually matching a much shorter segment
+    // (`dummy|key` -> `key`, `keyy*` -> `key`, `a{3,}` -> `aaa`, `[abcde]` -> `a`), so the guard,
+    // not the floor, is what keeps them out. `((a)?b)?` covers the nested-group case.
+    for (const hostile of ['dummy|key', 'keyy*', 'keyy+', 'a{3,}', '[abcde]', 'abc\\?def', '((a)?b)?']) {
+      expect(UNMEASURABLE_SYNTAX.test(hostile), `should be rejected: ${hostile}`).toBe(true);
+    }
+    // The forms actually in use must NOT trip the guard, or it would fail the whole token list.
+    for (const supported of ['dummy', 'change-?me', 'your-?(api-?)?key', 'not-a-real']) {
+      expect(UNMEASURABLE_SYNTAX.test(supported), `should be allowed: ${supported}`).toBe(false);
     }
   });
 });
