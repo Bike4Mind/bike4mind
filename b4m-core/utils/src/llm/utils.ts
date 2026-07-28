@@ -115,6 +115,14 @@ const MAX_SAFETY_SHRINK_ROUNDS = 5;
  * confidently, which is indistinguishable from a correct answer unless you already hold the file.
  * Counted against the budget like any other content, because it is really sent.
  */
+/**
+ * Below this many tokens of an attached file, a slice is not worth sending. Handing the model a few
+ * dozen characters of a CSV does not read as a truncated file - it reads as no file, and the model
+ * says so confidently, which is the silent wrong answer this whole area exists to prevent. Replacing
+ * the slice with a plain statement is both smaller and honest.
+ */
+const MIN_USEFUL_ATTACHED_CONTENT_TOKENS = 200;
+
 const CONTENT_TRUNCATION_NOTICE =
   '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was not sent.]';
 
@@ -1567,6 +1575,45 @@ export async function buildAndSortMessages(
       const historyResult = processMessages(historyMessages, previousMessageTokenBudget);
       processedPreviousMessages = historyResult.messages;
       allRemovedMessages.push(...historyResult.removedMessages);
+    }
+  }
+
+  // A sliver of a file is worse than none: the model does not recognise it as file content and
+  // answers as though nothing was attached. Say so instead, and say it plainly enough that the model
+  // cannot report the file as absent.
+  if (nonImageMessages.length > 0) {
+    // Measured with the notice stripped: it is our own text, and counting it makes a 40-token sliver
+    // look like a 70-token one, which is exactly enough to slip past the threshold below.
+    const deliveredTokens = estimateMessagesTokens(
+      processedContentMessages.map(msg =>
+        typeof msg.content === 'string' && msg.content.endsWith(CONTENT_TRUNCATION_NOTICE)
+          ? { ...msg, content: msg.content.slice(0, -CONTENT_TRUNCATION_NOTICE.length) }
+          : msg
+      )
+    );
+    const wantedTokens = estimateMessagesTokens(nonImageMessages);
+    // Only when content was actually lost. A small file delivered whole is fine however few tokens it
+    // is - the point is a useless FRACTION, not a small attachment.
+    const lostSome = deliveredTokens < wantedTokens;
+    if (lostSome && deliveredTokens > 0 && deliveredTokens < MIN_USEFUL_ATTACHED_CONTENT_TOKENS) {
+      const names = nonImageMessages.map(msg => messageContentText(msg).split('\n')[0].slice(0, 120)).join(' | ');
+      logger.warn(
+        `Attached content dropped: only ${deliveredTokens} token(s) of ${wantedTokens} ` +
+          `could be delivered, below the ${MIN_USEFUL_ATTACHED_CONTENT_TOKENS}-token minimum worth sending. ` +
+          `Context window is too small after system instructions and history. Affected: ${names}`
+      );
+      processedContentMessages = [
+        {
+          role: 'user',
+          content:
+            `An attached file could not be included in this request. After system instructions and conversation ` +
+            `history there was only room for ${deliveredTokens} tokens of file content, which is too little to be ` +
+            `usable. The file IS attached - do not tell the user that no file was provided. Tell them the file could ` +
+            `not be read within this model's context window, and suggest a model with a larger context window, a ` +
+            `smaller file, or a shorter conversation. Affected: ${names}`,
+        },
+      ];
+      contentSqueezed = true;
     }
   }
 

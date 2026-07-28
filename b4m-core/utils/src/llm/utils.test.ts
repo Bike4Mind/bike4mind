@@ -2328,3 +2328,123 @@ describe('truncated attachments are marked', () => {
     expect(delivered!.content as string).not.toContain(NOTICE);
   });
 });
+
+// Production always carries system instructions - date context, artifact guidance, help-centre
+// awareness - and they are subtracted from the budget BEFORE content and history are allocated. Every
+// other case in this file runs with no system messages at all, which is why two rounds of QA found
+// budget behaviour these tests could not see. These use an 8k-class window plus a realistic system load.
+describe('allocation under a production-shaped system-prompt load', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Llama 4 Maverick 8K context / 2K output: 8192 - 2048 - 1000 emergency buffer.
+  const LLAMA_8K_INPUT_BUDGET = 5144;
+  // GPT-4 8K context / 4K output leaves far less room for anything else.
+  const GPT4_8K_INPUT_BUDGET = 3096;
+  const SYSTEM_TOKENS = 1500;
+
+  const systemLoad = (): IMessage => ({ role: 'system', content: 'S'.repeat(SYSTEM_TOKENS * 3.5) });
+  const history = (count: number): IMessage[] =>
+    Array.from({ length: count }, (_, i) => ({
+      role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `history-${i}-` + 'h'.repeat(240),
+    }));
+  const csv = (chars: number): IMessage => ({
+    role: 'user',
+    content:
+      'id,fruit,color\n' +
+      'r,apple,red\n'.repeat(Math.max(0, Math.floor((chars - 40) / 12))) +
+      'FINAL_ROW_MARKER: apricot',
+  });
+  const question: IMessage[] = [
+    { role: 'user', content: 'What is the value of FINAL_ROW_MARKER in the attached file?' },
+  ];
+  const NOTICE = 'Content truncated to fit the context window';
+
+  it('delivers a 2k file whole on an 8k model, marker included', async () => {
+    // This is the size the Guide for Testers now specifies, derived from this budget rather than guessed.
+    const tokenizer = createMockTokenizer();
+    const file = csv(2052);
+
+    const result = await buildAndSortMessages(
+      history(18),
+      [systemLoad(), file],
+      question,
+      LLAMA_8K_INPUT_BUDGET,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const delivered = result.find(
+      m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color')
+    );
+    expect(delivered!.content).toBe(file.content);
+    expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
+    expect(delivered!.content as string).not.toContain(NOTICE);
+    expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+      LLAMA_8K_INPUT_BUDGET
+    );
+  });
+
+  it('truncates a 4k file on an 8k model and says so, rather than faking the tail', async () => {
+    // QA attached exactly this and expected the trailing marker. It cannot arrive: after 1.5k of system
+    // instructions the content share is around 900 tokens, so roughly 2.9k of 4k characters is the
+    // ceiling. What matters is that the cut is declared.
+    const tokenizer = createMockTokenizer();
+
+    const result = await buildAndSortMessages(
+      history(40),
+      [systemLoad(), csv(4004)],
+      question,
+      LLAMA_8K_INPUT_BUDGET,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const delivered = result.find(
+      m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color')
+    );
+    expect(delivered).toBeDefined();
+    const text = delivered!.content as string;
+    expect(text).toContain(NOTICE);
+    expect(text).not.toContain('FINAL_ROW_MARKER');
+    expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+      LLAMA_8K_INPUT_BUDGET
+    );
+  });
+
+  it('states the file could not be included rather than sending an unusable sliver', async () => {
+    // GPT-4's 4k output reserve leaves so little that the file's share collapses to a few dozen tokens.
+    // A fragment that small does not read as a truncated file - it reads as no file, and the model then
+    // tells the user it cannot see attachments at all. That is the failure this replaces.
+    const tokenizer = createMockTokenizer();
+
+    const result = await buildAndSortMessages(
+      history(40),
+      [systemLoad(), csv(4004)],
+      question,
+      GPT4_8K_INPUT_BUDGET,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const note = result.find(
+      m => typeof m.content === 'string' && (m.content as string).includes('could not be included')
+    );
+    expect(note).toBeDefined();
+    // The model must not be left free to report the file as absent.
+    expect(note!.content as string).toContain('do not tell the user that no file was provided');
+    // And no unusable fragment of the CSV is sent alongside it.
+    expect(result.some(m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color'))).toBe(
+      false
+    );
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Attached content dropped'));
+  });
+});
