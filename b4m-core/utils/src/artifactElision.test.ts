@@ -176,6 +176,25 @@ describe('detectElidedContent', () => {
       expect(detectElidedContent(body, 'html').elided).toBe(false);
     });
 
+    it('treats a bare //localhost URL as a URL, but //word: as a comment', () => {
+      // `localhost` is the one routine dotless host, so it is admitted by name. Admitting dotless
+      // hosts generally would swallow `//TODO: ...` comments and stop scanning them entirely -
+      // the second half of this test is what pins that line.
+      const url = `<html><body><script>
+//localhost:3000/for-brevity-notes.js
+        function render() { document.title = 'ok'; }
+        render();
+      </script></body></html>`;
+      const comment = `<html><body><script>
+//TODO: rest of the code omitted
+        function render() { document.title = 'ok'; }
+        render();
+      </script></body></html>`;
+
+      expect(detectElidedContent(url, 'html').elided).toBe(false);
+      expect(detectElidedContent(comment, 'html').elided).toBe(true);
+    });
+
     it('does not flag "from the previous" in its ordinary sense', () => {
       const body = `<html><body><script>
         function render() {
