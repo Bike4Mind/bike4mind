@@ -792,24 +792,30 @@ if (isMonitoredStage) {
   }
 
   /**
-   * Alarm: Large API Response
+   * Alarm: Large UNCOMPRESSED API Response
    *
-   * Fires when any API route reports an uncompressed JSON response body >= 5MB
-   * (emitted by sendMaybeGzip - apps/client/server/utils/sendMaybeGzip.ts). AWS Lambda enforces
-   * a hard, non-configurable ~6MB synchronous-invocation response limit; a response that
-   * crosses it fails as a bare 502 with nothing logged at the application level. This metric is
-   * the only advance warning before that happens, since Next.js's own "response exceeds 4MB"
-   * warning measures pre-gzip bytes and goes silent once the route ends a pre-compressed buffer.
+   * Fires when an API route ships a >= 5MB body that was NOT gzipped (client sent no gzip in
+   * Accept-Encoding, or DISABLE_RESPONSE_GZIP is set). Emitted by sendMaybeGzip -
+   * apps/client/server/utils/sendMaybeGzip.ts. That is the only remaining case that can hit
+   * Lambda's hard ~6MB synchronous-invocation response limit and fail as a bare 502 with nothing
+   * logged at the application level; a gzipped body of the same size ships at ~10% of it.
+   *
+   * Deliberately NOT alarming on the companion LargeApiResponseBytes metric: that one fires on
+   * every large response including the compressed (safe) ones, which on this route is routine.
+   * It stays as a dimensioned diagnostic for tracking uncompressed growth over time.
+   *
+   * Maximum, not Sum: the metric value is a byte count, so Maximum puts the actual size of the
+   * largest offending response in the notification instead of a meaningless total.
    */
-  new aws.cloudwatch.MetricAlarm('largeApiResponse', {
-    name: `${$app.name}-${$app.stage}-large-api-response`,
-    alarmDescription: 'An API response body is approaching the Lambda 6MB response-size limit (uncompressed >= 5MB)',
+  new aws.cloudwatch.MetricAlarm('largeUncompressedApiResponse', {
+    name: `${$app.name}-${$app.stage}-large-uncompressed-api-response`,
+    alarmDescription: 'An uncompressed API response body is approaching the Lambda 6MB response-size limit (>= 5MB)',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
-    metricName: 'LargeApiResponseBytes',
+    metricName: 'LargeUncompressedApiResponseBytes',
     namespace: 'Lumina5/ApiResponse',
     period: 300, // 5 minutes
-    statistic: 'Sum',
+    statistic: 'Maximum',
     threshold: 0, // Alert on any occurrence
     treatMissingData: 'notBreaching',
     alarmActions: [largeApiResponseAlarm!.arn],
