@@ -1,4 +1,5 @@
 import z from 'zod';
+import { DATALAKE_TAG_PREFIX } from '../constants/dataLakes';
 
 // Slug validation
 
@@ -19,7 +20,13 @@ export const CreateDataLakeRequestInput = z.object({
     .string()
     .min(2)
     .max(30)
-    .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")'),
+    .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")')
+    // The datalake: namespace holds every lake's membership meta-tag. A lake claiming it as
+    // its content prefix would make its own prefix match other lakes' membership tags.
+    .refine(
+      s => !s.trim().startsWith(DATALAKE_TAG_PREFIX),
+      `Tag prefix cannot use the reserved "${DATALAKE_TAG_PREFIX}" namespace`
+    ),
   requiredUserTag: z.string().min(1).max(100).optional(),
   // Entitlement keys are namespaced (must contain ":") so a bare user-tag value can never
   // be a requiredEntitlement - tags pass through 1:1 as entitlement keys, so an un-namespaced
