@@ -45,6 +45,7 @@ import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
 import { IAgent } from '@bike4mind/common';
+import { ELISION_BANNER_TITLE, ELISION_BANNER_BODY } from '@bike4mind/common';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
@@ -1566,10 +1567,9 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           variant="soft"
           sx={{ my: 1, flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}
         >
-          <Typography level="title-sm">⚠️ Artifact may be incomplete</Typography>
+          <Typography level="title-sm">⚠️ {ELISION_BANNER_TITLE}</Typography>
           <Typography level="body-sm">
-            Parts of this artifact look like placeholders rather than working code, so some features may do nothing.
-            Check it before sharing - or ask me to write it out in full.
+            {ELISION_BANNER_BODY} Check it before sharing - or ask me to write it out in full.
           </Typography>
         </Alert>
       )}
