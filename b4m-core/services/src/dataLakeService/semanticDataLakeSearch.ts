@@ -1,4 +1,6 @@
 import {
+  DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
+  DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
   FabFileChunkVector,
   IFabFileChunkRepository,
   IFabFileDocument,
@@ -33,10 +35,6 @@ import { BoundedTopK } from './boundedTopK';
 
 /** Files scoped per fabfiles.search page. Page 1 alone reproduces the pre-pagination query. */
 const DEFAULT_FILE_PAGE_SIZE = 2000;
-/** Hard cap on files scoped for scanning. */
-const DEFAULT_MAX_FILES = 20_000;
-/** Hard cap on chunk vectors fetched and scored for one search. */
-const DEFAULT_MAX_CHUNKS = 100_000;
 /** Files per chunk query - bounds the `$in` breadth without making pages tiny. */
 const DEFAULT_FILE_GROUP_SIZE = 200;
 /**
@@ -174,8 +172,8 @@ function compareByScore(a: SemanticChunkResult, b: SemanticChunkResult): number 
 
 function resolveBudgets(budgets: SemanticSearchBudgets | undefined) {
   return {
-    maxFiles: budgets?.maxFiles ?? DEFAULT_MAX_FILES,
-    maxChunks: budgets?.maxChunks ?? DEFAULT_MAX_CHUNKS,
+    maxFiles: budgets?.maxFiles ?? DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
+    maxChunks: budgets?.maxChunks ?? DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
     filePageSize: budgets?.filePageSize ?? DEFAULT_FILE_PAGE_SIZE,
     fileGroupSize: budgets?.fileGroupSize ?? DEFAULT_FILE_GROUP_SIZE,
     chunkPageSize: budgets?.chunkPageSize,
