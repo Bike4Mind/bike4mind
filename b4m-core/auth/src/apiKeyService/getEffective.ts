@@ -14,6 +14,7 @@ const DEMO_KEY_MAP: Partial<Record<ApiKeyType, IAdminSettings['settingName']>> =
   [ApiKeyType.anthropic]: 'anthropicDemoKey',
   [ApiKeyType.gemini]: 'geminiDemoKey',
   [ApiKeyType.xai]: 'xaiApiKey',
+  [ApiKeyType.kimi]: 'moonshotApiKey',
   [ApiKeyType.bfl]: 'bflApiKey',
   [ApiKeyType.voyageai]: 'voyageApiKey',
   // Admin-provisioned ElevenLabs key powers TTS for all users (same key the
@@ -146,6 +147,7 @@ export const getEffectiveLLMApiKeys = async (
     'geminiDemoKey',
     'bflApiKey',
     'xaiApiKey',
+    'moonshotApiKey',
     'voyageApiKey',
     'ollamaBackend',
     'EnableOllama',
@@ -164,6 +166,7 @@ export const getEffectiveLLMApiKeys = async (
             ApiKeyType.gemini,
             ApiKeyType.bfl,
             ApiKeyType.xai,
+            ApiKeyType.kimi,
             ApiKeyType.voyageai,
           ],
           adapters
@@ -181,6 +184,7 @@ export const getEffectiveLLMApiKeys = async (
   const geminiUserKey = userKeyMap.get(ApiKeyType.gemini) || null;
   const bflUserKey = userKeyMap.get(ApiKeyType.bfl) || null;
   const xaiUserKey = userKeyMap.get(ApiKeyType.xai) || null;
+  const kimiUserKey = userKeyMap.get(ApiKeyType.kimi) || null;
   const voyageaiUserKey = userKeyMap.get(ApiKeyType.voyageai) || null;
 
   // Extract individual settings for backward compatibility
@@ -189,6 +193,7 @@ export const getEffectiveLLMApiKeys = async (
   const geminiDemoKey = adminSettings['geminiDemoKey'];
   const bflDemoKey = adminSettings['bflApiKey'];
   const xaiDemoKey = adminSettings['xaiApiKey'];
+  const kimiDemoKey = adminSettings['moonshotApiKey'];
   const voyageaiDemoKey = adminSettings['voyageApiKey'];
   const ollamaBackend = adminSettings['ollamaBackend'];
   const enableOllama = adminSettings['EnableOllama'];
@@ -214,6 +219,9 @@ export const getEffectiveLLMApiKeys = async (
     gemini: keyOrExpired(geminiUserKey) || geminiDemoKey || envKey('GEMINI_API_KEY'),
     bfl: keyOrExpired(bflUserKey) || bflDemoKey || null,
     xai: keyOrExpired(xaiUserKey) || xaiDemoKey || envKey('XAI_API_KEY'),
+    // MOONSHOT_API_KEY is the name Moonshot's own docs and SDK examples use, so a
+    // self-hoster who followed their quickstart already has it exported.
+    kimi: keyOrExpired(kimiUserKey) || kimiDemoKey || envKey('MOONSHOT_API_KEY'),
     voyageai: keyOrExpired(voyageaiUserKey) || voyageaiDemoKey || null,
     // Self-host: when OLLAMA_BASE_URL is set in the environment, enable Ollama
     // pointed at that endpoint without requiring the DB admin settings

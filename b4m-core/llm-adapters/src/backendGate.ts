@@ -44,6 +44,7 @@ const KEYED_LISTING_BACKENDS: readonly string[] = [
   ModelBackend.Ollama,
   ModelBackend.BFL,
   ModelBackend.XAI,
+  ModelBackend.Kimi,
   ModelBackend.LocalImage,
 ];
 

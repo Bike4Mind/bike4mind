@@ -138,6 +138,9 @@ const VENDOR_BY_BACKEND: Record<ModelBackend, string> = {
   [ModelBackend.Anthropic]: 'anthropic',
   [ModelBackend.Gemini]: 'google',
   [ModelBackend.XAI]: 'xai',
+  // Vendor, not backend: Bedrock-served Kimi carries the same 'moonshotai'
+  // vendor while routing through ModelBackend.Bedrock.
+  [ModelBackend.Kimi]: 'moonshotai',
   [ModelBackend.BFL]: 'black-forest-labs',
   [ModelBackend.AWS]: 'amazon',
   [ModelBackend.VoyageAI]: 'voyageai',
