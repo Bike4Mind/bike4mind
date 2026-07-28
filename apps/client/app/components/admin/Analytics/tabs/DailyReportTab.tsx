@@ -7,16 +7,18 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import InfoIcon from '@mui/icons-material/Info';
 import { DateFilterComponent } from '../filters/DateFilterComponent';
 import { useAnalyticsData } from '@client/app/hooks/useAnalyticsData';
+import { AnalyticsErrorCard } from '../AnalyticsErrorCard';
 
 dayjs.extend(isSameOrBefore);
 
 interface DailyReportTabProps {
   rawData: any[];
   loading: boolean;
+  error?: unknown;
   onRefresh: () => void;
 }
 
-export const DailyReportTab: React.FC<DailyReportTabProps> = ({ loading, onRefresh }) => {
+export const DailyReportTab: React.FC<DailyReportTabProps> = ({ loading, error, onRefresh }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(5);
   const [dateRange, setDateRange] = useState({
@@ -73,6 +75,13 @@ export const DailyReportTab: React.FC<DailyReportTabProps> = ({ loading, onRefre
 
       {loading || analyticsQuery.isLoading ? (
         <LinearProgress />
+      ) : error || analyticsQuery.error ? (
+        <AnalyticsErrorCard
+          error={error || analyticsQuery.error}
+          onRetry={handleRefresh}
+          title="Could not load daily reports"
+          testId="daily-report-error"
+        />
       ) : (
         <>
           <Alert variant="soft" color="neutral" startDecorator={<InfoIcon />}>

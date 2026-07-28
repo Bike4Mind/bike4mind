@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   Box,
   Card,
@@ -31,37 +31,28 @@ import DownloadIcon from '@mui/icons-material/Download';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import { useUserActivityFilters } from '@client/app/hooks/useUserActivityFilters';
 import { useExportToCSV } from '@client/app/hooks/useExportToCSV';
+import { fetchCounterLogs, type CounterLogRow } from '@client/app/utils/userAPICalls';
 import { useAnalyticsStore, ALL_VALUE } from '../store';
 import { useGetAllOrganizations } from '@client/app/utils/organizationAPICalls';
 import { UserActivityFilters } from '../filters/UserActivityFilters';
+import { collectUserActivityRows, MAX_EXPORT_ROWS } from '../exportUserActivity';
+import { buildUserActivityRequest } from '../userActivityRequest';
+import { AnalyticsErrorCard } from '../AnalyticsErrorCard';
 
 interface UserActivityTabProps {
-  rawData: any[];
+  rows: CounterLogRow[];
+  total: number;
   loading: boolean;
+  error?: unknown;
   onRefresh: () => void;
-  onExport?: React.MutableRefObject<(() => void) | null>;
 }
 
-interface ActivityData {
-  date: string;
-  counterName: string;
-  userEmail: string;
-  metadata: Record<string, any>;
-  count: number;
-}
-
-export const UserActivityTab: React.FC<UserActivityTabProps> = ({
-  rawData,
-  loading,
-  onRefresh,
-  onExport: onExportRef,
-}) => {
+export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, loading, error, onRefresh }) => {
   const isMobile = useIsMobile();
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(10);
   const [expandedMetadata, setExpandedMetadata] = useState<Set<string>>(new Set());
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportNote, setExportNote] = useState<string | null>(null);
   const {
     dateFilters,
     selectedOrganizations,
@@ -69,38 +60,15 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({
     excludedOrgs,
     toggleExcludedOrg,
     userActivityFilters,
+    metadataFilters,
+    page,
+    limit,
+    setPage,
+    setLimit,
     showUserActivityAdvancedFilters,
     setShowUserActivityAdvancedFilters,
   } = useAnalyticsStore();
-  const { filters, updateFilter, transformData } = useUserActivityFilters();
   const orgsResponse = useGetAllOrganizations({ filters: { personal: false } });
-
-  // Initialize filters with dateFilters and userActivityFilters from store
-  useEffect(() => {
-    if (filters.startDate !== dateFilters.startDate) {
-      updateFilter('startDate', dateFilters.startDate);
-    }
-    if (filters.endDate !== dateFilters.endDate) {
-      updateFilter('endDate', dateFilters.endDate);
-    }
-
-    if (filters.counterNameSearch !== userActivityFilters.counterNameSearch) {
-      updateFilter('counterNameSearch', userActivityFilters.counterNameSearch);
-    }
-    if (filters.userEmailSearch !== userActivityFilters.userEmailSearch) {
-      updateFilter('userEmailSearch', userActivityFilters.userEmailSearch);
-    }
-  }, [
-    dateFilters.startDate,
-    dateFilters.endDate,
-    userActivityFilters.counterNameSearch,
-    userActivityFilters.userEmailSearch,
-    filters.startDate,
-    filters.endDate,
-    filters.counterNameSearch,
-    filters.userEmailSearch,
-    updateFilter,
-  ]);
 
   const exportToCSV = useExportToCSV();
 
@@ -140,38 +108,53 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({
     }
   };
 
-  const filteredData = useMemo(() => {
-    return transformData(rawData);
-  }, [rawData, transformData]);
+  const isAllSelected = selectedOrganizations.includes(ALL_VALUE);
 
-  // Export data when called from parent
-  useEffect(() => {
-    if (onExportRef) {
-      const exportHandler = () => {
-        const csvData = filteredData.map((item: ActivityData) => ({
-          date: item.date,
-          counterName: item.counterName,
-          userEmail: item.userEmail || 'N/A',
-          metadata: JSON.stringify(item.metadata || {}),
-          count: item.count || 0,
-        }));
+  /**
+   * Export walks the pages itself: the grid holds a single server page, so exporting what is
+   * rendered would silently drop everything else.
+   */
+  const handleExport = useCallback(async () => {
+    setIsExporting(true);
+    setExportNote(null);
+    try {
+      const request = buildUserActivityRequest({
+        dateFilters,
+        selectedOrganizations,
+        excludedOrgs,
+        userActivityFilters,
+        metadataFilters,
+      });
 
-        exportToCSV(csvData, {
-          filename: 'user_activity',
-          customHeaders: ['date', 'counterName', 'userEmail', 'metadata', 'count'],
-        });
-      };
+      const { rows: allRows, truncated } = await collectUserActivityRows((pageNumber, pageSize) =>
+        fetchCounterLogs({ ...request, page: pageNumber, limit: pageSize }).then(response => ({
+          logs: response.logs ?? [],
+          total: response.total ?? 0,
+        }))
+      );
 
-      // Store the export handler so parent can access it
-      onExportRef.current = exportHandler;
+      exportToCSV(
+        allRows.map(row => ({
+          date: row.date,
+          counterName: row.counterName,
+          userEmail: row.userEmail || 'N/A',
+          metadata: JSON.stringify(row.metadata || {}),
+          count: row.count || 0,
+        })),
+        { filename: 'user_activity', customHeaders: ['date', 'counterName', 'userEmail', 'metadata', 'count'] }
+      );
+
+      if (truncated) {
+        setExportNote(`Exported the first ${MAX_EXPORT_ROWS.toLocaleString()} of ${total.toLocaleString()} rows.`);
+      }
+    } catch (exportError) {
+      setExportNote(exportError instanceof Error ? `Export failed: ${exportError.message}` : 'Export failed.');
+    } finally {
+      setIsExporting(false);
     }
-  }, [filteredData, onExportRef, exportToCSV]);
+  }, [dateFilters, excludedOrgs, selectedOrganizations, userActivityFilters, metadataFilters, exportToCSV, total]);
 
-  // Pagination
-  const indexOfLastItem = currentPage * itemsPerPage;
-  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentItems = filteredData.slice(indexOfFirstItem, indexOfLastItem);
-  const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(total / limit));
 
   // Helper functions for metadata display
   const toggleMetadataExpansion = (itemKey: string) => {
@@ -184,12 +167,15 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({
     setExpandedMetadata(newExpanded);
   };
 
-  const getMetadataSummary = (metadata: Record<string, any>) => {
+  const getMetadataSummary = (metadata: Record<string, unknown> = {}) => {
     const keys = Object.keys(metadata || {});
     if (keys.length === 0) return 'No metadata';
     if (keys.length === 1) return `${keys[0]}: ${metadata[keys[0]]}`;
     return keys.join(', ');
   };
+
+  const rowKey = (item: CounterLogRow, index: number) =>
+    `${item.date}-${item.counterName}-${item.userEmail}-${item.metadata?.reportId}-${index}`;
 
   return (
     <Box>
@@ -262,21 +248,21 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({
                       <Checkbox
                         checked={excludedOrgs.millionOnMars}
                         onChange={() => toggleExcludedOrg('millionOnMars')}
-                        disabled={!selectedOrganizations.includes(ALL_VALUE)}
+                        disabled={!isAllSelected}
                         label="Million On Mars"
                         size="sm"
                       />
                       <Checkbox
                         checked={excludedOrgs.unknown}
                         onChange={() => toggleExcludedOrg('unknown')}
-                        disabled={!selectedOrganizations.includes(ALL_VALUE)}
+                        disabled={!isAllSelected}
                         label="Unknown"
                         size="sm"
                       />
                       <Checkbox
                         checked={excludedOrgs.personal}
                         onChange={() => toggleExcludedOrg('personal')}
-                        disabled={!selectedOrganizations.includes(ALL_VALUE)}
+                        disabled={!isAllSelected}
                         label="Personal"
                         size="sm"
                       />
@@ -291,6 +277,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({
                   startDecorator={<RefreshIcon />}
                   onClick={onRefresh}
                   disabled={loading}
+                  data-testid="user-activity-refresh-btn"
                   sx={{ flex: { xs: 1, sm: 'none' } }}
                 >
                   Refresh
@@ -298,9 +285,11 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({
                 <Button
                   size="sm"
                   startDecorator={<DownloadIcon />}
-                  onClick={() => onExportRef?.current?.()}
-                  disabled={loading}
+                  onClick={handleExport}
+                  loading={isExporting}
+                  disabled={loading || isExporting}
                   color="success"
+                  data-testid="user-activity-export-btn"
                   sx={{ flex: { xs: 1, sm: 'none' } }}
                 >
                   Export CSV
@@ -323,11 +312,17 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({
             </Stack>
           </Stack>
 
+          {exportNote && (
+            <Typography level="body-sm" color="warning" data-testid="user-activity-export-note">
+              {exportNote}
+            </Typography>
+          )}
+
           {/* Advanced Filters Section */}
           {showUserActivityAdvancedFilters && (
             <>
               <Divider />
-              <UserActivityFilters filters={filters} updateFilter={updateFilter} rawData={rawData} />
+              <UserActivityFilters rows={rows} />
             </>
           )}
         </Stack>
@@ -336,8 +331,15 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({
       {/* Results */}
       {loading ? (
         <LinearProgress />
-      ) : filteredData.length === 0 ? (
-        <Card variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
+      ) : error ? (
+        <AnalyticsErrorCard
+          error={error}
+          onRetry={onRefresh}
+          title="Could not load user activity"
+          testId="user-activity-error"
+        />
+      ) : rows.length === 0 ? (
+        <Card variant="outlined" sx={{ p: 4, textAlign: 'center' }} data-testid="user-activity-empty">
           <Stack alignItems="center" spacing={2}>
             <SearchOffIcon sx={{ fontSize: 48, color: 'neutral.500' }} />
             <Typography level="body-lg">No data found</Typography>
@@ -346,27 +348,25 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({
       ) : (
         <>
           <SharedPaginationControls
-            currentPage={currentPage}
+            currentPage={page}
             totalPages={totalPages}
-            itemsPerPage={itemsPerPage}
-            totalItems={filteredData.length}
-            onPageChange={setCurrentPage}
-            onItemsPerPageChange={size => {
-              setItemsPerPage(size);
-              setCurrentPage(1);
-            }}
-            pageLimitOptions={[5, 10, 20]}
+            itemsPerPage={limit}
+            totalItems={total}
+            onPageChange={setPage}
+            onItemsPerPageChange={setLimit}
+            pageLimitOptions={[25, 50, 100]}
           />
           {isMobile ? (
             /* Mobile: card-per-row layout */
             <Stack spacing={1}>
-              {currentItems.map((item: ActivityData, index) => {
-                const itemKey = `${item.date}-${item.counterName}-${item.userEmail}-${item.metadata?.reportId}-${index}`;
+              {rows.map((item, index) => {
+                const itemKey = rowKey(item, index);
                 const hasMetadata = Object.keys(item.metadata || {}).length > 0;
                 return (
                   <Card
                     variant="outlined"
                     key={itemKey}
+                    data-testid="user-activity-row"
                     sx={{ bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 1.5 }}
                   >
                     <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
@@ -473,12 +473,13 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({
                   </Grid>
                 </Grid>
               </Card>
-              {currentItems.map((item: ActivityData, index) => {
-                const itemKey = `${item.date}-${item.counterName}-${item.userEmail}-${item.metadata?.reportId}-${index}`;
+              {rows.map((item, index) => {
+                const itemKey = rowKey(item, index);
                 return (
                   <Card
                     variant="outlined"
                     key={itemKey}
+                    data-testid="user-activity-row"
                     sx={{ mb: 1, bgcolor: index % 2 ? 'background.level1' : 'background.level2' }}
                   >
                     <Grid container spacing={1} alignItems="center">
