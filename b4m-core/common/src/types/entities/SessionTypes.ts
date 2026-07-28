@@ -22,7 +22,7 @@ export interface IPendingAction {
  * Discriminated union - add new variants here as needed.
  */
 
-/** A job-shop scheduling problem — the bare payload a formulate/edit tool populates. */
+/** A job-shop scheduling problem - the bare payload a formulate/edit tool populates. */
 export type SchedulingProblemPayload = {
   name: string;
   description?: string;
