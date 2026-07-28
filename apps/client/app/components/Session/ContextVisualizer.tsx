@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { Box, Typography, Stack, Button } from '@mui/joy';
 import { PromptMeta } from '@bike4mind/common';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { computeDefaultMaxTokens } from '@client/app/utils/aiSettingsUtils';
 
 interface ContextVisualizerProps {
   promptMeta: PromptMeta;
@@ -25,8 +26,14 @@ const ContextVisualizer: React.FC<ContextVisualizerProps> = ({ promptMeta }) => 
 
     // Get actual model context window and max tokens from model info or promptMeta
     const contextWindow = modelInfo?.contextWindow || promptMeta.model?.contextWindow || 200000;
+    // Last-resort display fallback when neither the catalog nor the recorded promptMeta knows the
+    // ceiling: apply the tier rule with the window as its own ceiling rather than a flat 16384,
+    // which would draw a misleadingly thin output band on a large-context model.
     const maxOutputTokens =
-      modelInfo?.max_tokens || promptMeta.model?.maxTokens || promptMeta.model?.parameters?.maxTokens || 16384;
+      modelInfo?.max_tokens ||
+      promptMeta.model?.maxTokens ||
+      promptMeta.model?.parameters?.maxTokens ||
+      computeDefaultMaxTokens({ contextWindow, max_tokens: contextWindow });
 
     // Calculate components with more accurate distribution based on available data
     // If we have specific counts, use them to better estimate distribution

@@ -20,11 +20,8 @@ import { buildSystemPrompt } from '../core/prompts';
 import { generateCliTools, PermissionManager, type AgentContext, requireApiUrl, loadContextFiles } from '../utils';
 import { McpManager } from '../utils/mcpAdapter';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
-import { ServerLlmBackend } from '../llm/ServerLlmBackend';
-import { WebSocketLlmBackend } from '../llm/WebSocketLlmBackend';
+import { createSseBackend } from '../bootstrap/sseTransport.js';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
-import { WebSocketConnectionManager } from '../ws/WebSocketConnectionManager';
-import { WebSocketToolExecutor } from '../ws/WebSocketToolExecutor';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
 import { ApiClient } from '../auth/ApiClient';
 import { logger } from '../utils/Logger';
@@ -176,7 +173,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       process.exit(1);
     }
 
-    // Initialize LLM backend - WebSocket preferred, SSE fallback.
+    // Initialize the LLM backend (HTTP+SSE).
     // Fail loud when unconfigured rather than handing axios an empty baseURL.
     let apiBaseURL: string;
     try {
@@ -202,54 +199,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       }
     }
 
-    const tokenGetter = async (): Promise<string | null> => {
-      const tokens = await configStore.getAuthTokens();
-      return tokens?.accessToken ?? null;
-    };
-
-    let wsManager: WebSocketConnectionManager | null = null;
-    let llm: ICompletionBackend & { currentModel: string; getModelInfo: () => Promise<{ id: string }[]> };
-    let sseCompletionsUrl: string | undefined;
-
-    try {
-      const serverConfig = await apiClient.get<{
-        websocketUrl?: string;
-        wsCompletionUrl?: string;
-        sseCompletionsUrl?: string;
-      }>('/api/settings/serverConfig');
-      const wsUrl = serverConfig?.websocketUrl;
-      const wsCompletionUrl = serverConfig?.wsCompletionUrl;
-      sseCompletionsUrl = serverConfig?.sseCompletionsUrl;
-
-      if (wsUrl && wsCompletionUrl) {
-        wsManager = new WebSocketConnectionManager(wsUrl, tokenGetter, () => apiClient.checkSessionValid());
-        wsManager.onRevoked(() => {
-          logger.warn('[headless] Session revoked - run `b4m login` again. WebSocket reconnect stopped.');
-        });
-        await wsManager.connect();
-        const wsToolExecutor = new WebSocketToolExecutor(wsManager, tokenGetter);
-        setWebSocketToolExecutor(wsToolExecutor);
-        llm = new WebSocketLlmBackend({
-          wsManager,
-          apiClient,
-          model: config.defaultModel,
-          tokenGetter,
-          wsCompletionUrl,
-        });
-        logger.debug('[headless] Using WebSocket transport');
-      } else {
-        throw new Error('No websocketUrl or wsCompletionUrl in server config');
-      }
-    } catch {
-      // A failed connect() still schedules a verify/reconnect via onclose. Falling back to
-      // SSE without tearing that down would leave an orphaned reconnect loop running with
-      // no owner, so disconnect before dropping the reference.
-      wsManager?.disconnect();
-      wsManager = null;
-      setWebSocketToolExecutor(null);
-      llm = new ServerLlmBackend({ apiClient, model: config.defaultModel, sseCompletionsUrl });
-      logger.debug('[headless] Using SSE transport fallback');
-    }
+    // SSE-only transport, via the same seam interactive bootstrap uses so the two
+    // can't drift. Headless never opens the feature-event socket: no feature
+    // modules are registered in a `-p` run.
+    const { llm } = await createSseBackend({ apiClient, model: config.defaultModel });
 
     // Resolve model
     const models = await llm.getModelInfo();
@@ -588,7 +541,6 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     // Cleanup
     await mcpManager.disconnect().catch(() => {});
-    if (wsManager) wsManager.disconnect();
     setWebSocketToolExecutor(null);
     agent.removeAllListeners();
 

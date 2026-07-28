@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { useDataLakeWizardStore, type TaxonomyTag } from '@client/app/stores/useDataLakeWizardStore';
 import DataLakeWizardModal from './DataLakeWizardModal';
 
 /**
@@ -19,10 +19,13 @@ const { toastMock, batchUploadMutate } = vi.hoisted(() => ({
 }));
 
 vi.mock('sonner', () => ({ toast: toastMock }));
+// Stub only the hooks; isValidDataLakeSlug comes from the unmocked dataLakeSlug
+// module so the config gate is checked against the real validation logic.
 vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
   useBatchUpload: () => ({ mutate: batchUploadMutate, isPending: false }),
   useComputeHashes: () => ({ mutate: vi.fn(), isPending: false }),
   useCheckDuplicates: () => ({ mutate: vi.fn(), isPending: false }),
+  useInferTaxonomy: () => ({ mutate: vi.fn(), isPending: false }),
   OFFLINE_MESSAGE: 'No internet connection. Check your network and try again.',
 }));
 // ConfigStep reads the lake list for its duplicate-name hint; stub it so this test
@@ -95,5 +98,89 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
 
     expect(batchUploadMutate).toHaveBeenCalledTimes(1);
     expect(toastMock.error).not.toHaveBeenCalled();
+  });
+
+  it('disables Start Upload when the name slugifies too short, and clicking it is a no-op', () => {
+    // "!!" slugifies to an empty string - shorter than the server's slug.min(2), which
+    // would otherwise be rejected only at the final upload step.
+    useDataLakeWizardStore.setState(state => ({ config: { ...state.config, name: '!!' } }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    const btn = screen.getByTestId('wizard-start-upload-btn') as HTMLButtonElement;
+    expect(btn).toBeDisabled();
+    btn.click();
+    expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Regression coverage: the taxonomy step gated Next on a successful inference run, so an
+ * empty result - or a failed one, which never set the flag at all - stranded the user in
+ * the wizard with a dead Next button. Inference is optional by design (the endpoint itself
+ * returns an empty taxonomy when no API key is configured), so it must never block.
+ */
+describe('DataLakeWizardModal - taxonomy step is optional', () => {
+  const renderAtTaxonomyStep = (tags: TaxonomyTag[], analyzing = false) => {
+    useDataLakeWizardStore.setState({
+      isOpen: true,
+      step: 'taxonomy',
+      targetLake: null,
+      taxonomy: {
+        prefix: 'test:',
+        suggestedName: '',
+        tags,
+        fileAssignments: [],
+        attempted: !analyzing,
+        analyzing,
+      },
+    });
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    return screen.getByTestId('wizard-next-btn') as HTMLButtonElement;
+  };
+
+  afterEach(() => {
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('lets the user continue past an empty result, labelling the button Skip', () => {
+    const next = renderAtTaxonomyStep([]);
+
+    expect(next.disabled).toBe(false);
+    expect(next.textContent).toContain('Skip');
+    expect(screen.getByTestId('taxonomy-empty-state')).toBeTruthy();
+  });
+
+  it('holds the user on the step while inference is still in flight', () => {
+    // Inference's result overwrites config.name and config.tagPrefix, so advancing mid-flight
+    // would clobber what the user then types on Config. "Skip" would also be a lie here: tags
+    // landing after the click are still applied at upload.
+    const next = renderAtTaxonomyStep([], true);
+
+    expect(next.disabled).toBe(true);
+    expect(next.textContent).toContain('Next');
+  });
+
+  it('labels the button Next once there are tags to apply', () => {
+    const next = renderAtTaxonomyStep([
+      {
+        suffix: 'type:contract',
+        originalName: 'test:type:contract',
+        strength: 0.9,
+        source: 'ai',
+        matchingFolders: ['legal'],
+        deleted: false,
+      },
+    ]);
+
+    expect(next.disabled).toBe(false);
+    expect(next.textContent).toContain('Next');
   });
 });

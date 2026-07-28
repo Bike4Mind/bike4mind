@@ -2,7 +2,7 @@ import { ApiKeyType, IApiKeyRepository } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/common';
 import { z } from 'zod';
 
-const createApiKeySchema = z.object({
+export const createApiKeySchema = z.object({
   apiKey: z.string().min(6),
   description: z.string().optional().prefault(''),
   isActive: z.boolean().optional().prefault(true),

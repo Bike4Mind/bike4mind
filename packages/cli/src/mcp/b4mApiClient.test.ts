@@ -121,6 +121,86 @@ describe('B4mApiClient', () => {
     await client.getFile('f1');
     expect(mockGet).toHaveBeenCalledWith('/api/files/f1');
   });
+
+  it('lists projects with nested pagination and normalizes the envelope', async () => {
+    mockGet.mockResolvedValue({ data: [{ id: 'p1', name: 'Proj' }], hasMore: true, total: 5 });
+
+    const result = await client.listProjects({ limit: 100 });
+
+    expect(mockGet).toHaveBeenCalledWith('/api/projects', {
+      params: { pagination: { page: 1, limit: 100 } },
+    });
+    expect(result).toEqual({ data: [{ id: 'p1', name: 'Proj' }], hasMore: true });
+  });
+
+  it('threads search and an explicit page through project pagination', async () => {
+    mockGet.mockResolvedValue({ data: [], hasMore: false });
+
+    await client.listProjects({ search: 'apollo', limit: 10, page: 3 });
+
+    expect(mockGet).toHaveBeenCalledWith('/api/projects', {
+      params: { search: 'apollo', pagination: { page: 3, limit: 10 } },
+    });
+  });
+
+  it('normalizes a bare-array project response to { data, hasMore:false }', async () => {
+    mockGet.mockResolvedValue([{ id: 'p1' }, { id: 'p2' }]);
+
+    expect(await client.listProjects({ limit: 100 })).toEqual({
+      data: [{ id: 'p1' }, { id: 'p2' }],
+      hasMore: false,
+    });
+  });
+
+  it('gets a project by id (url-encoded)', async () => {
+    mockGet.mockResolvedValue({ id: 'p 1' });
+    await client.getProject('p 1');
+    expect(mockGet).toHaveBeenCalledWith('/api/projects/p%201');
+  });
+
+  it('lists artifacts with flat limit/offset params and normalizes the envelope', async () => {
+    mockGet.mockResolvedValue({
+      artifacts: [{ id: 'artifact_a_1', title: 'A' }],
+      pagination: { total: 3, limit: 100, offset: 0, hasMore: true },
+    });
+
+    const result = await client.listArtifacts({ limit: 100 });
+
+    expect(mockGet).toHaveBeenCalledWith('/api/artifacts', {
+      params: { limit: 100, offset: 0 },
+    });
+    expect(result).toEqual({ data: [{ id: 'artifact_a_1', title: 'A' }], hasMore: true });
+  });
+
+  it('threads search and an explicit offset through the artifact list', async () => {
+    mockGet.mockResolvedValue({ artifacts: [], pagination: { total: 0, limit: 10, offset: 20, hasMore: false } });
+
+    await client.listArtifacts({ search: 'chart', limit: 10, offset: 20 });
+
+    expect(mockGet).toHaveBeenCalledWith('/api/artifacts', {
+      params: { search: 'chart', limit: 10, offset: 20 },
+    });
+  });
+
+  it('defaults artifact hasMore to false when the envelope omits pagination', async () => {
+    mockGet.mockResolvedValue({ artifacts: [{ id: 'artifact_a_1' }] });
+
+    expect(await client.listArtifacts({ limit: 100 })).toEqual({
+      data: [{ id: 'artifact_a_1' }],
+      hasMore: false,
+    });
+  });
+
+  it('gets an artifact with content, url-encoding the id', async () => {
+    mockGet.mockResolvedValue({ artifact: { id: 'a 1' }, content: { content: 'hello' } });
+
+    const result = await client.getArtifact('a 1');
+
+    expect(mockGet).toHaveBeenCalledWith('/api/artifacts/a%201', {
+      params: { includeContent: 'true' },
+    });
+    expect(result).toEqual({ artifact: { id: 'a 1' }, content: { content: 'hello' } });
+  });
 });
 
 describe('mapApiError', () => {

@@ -27,6 +27,16 @@ interface BaseAPIOptions {
    * scope gate only runs for requests authenticated by an API key.
    */
   requiredScopes?: ApiKeyScope[];
+  /**
+   * Exempt this route's SAFE (idempotent) requests - GET/HEAD/OPTIONS - from
+   * the per-DAY API-key quota. Use for async job-status polls and content
+   * fetches so one async generation (submit + N polls + 1 fetch) costs a
+   * single daily slot instead of N+2. Only safe methods are exempted, so a
+   * POST on the same route still counts. The per-minute burst limit always
+   * applies. Defaults to false (every request counts - unaudited routes fail
+   * safe).
+   */
+  exemptReadsFromDailyRateLimit?: boolean;
 }
 
 /** Default max body size: 1MB - prevents memory exhaustion from large payloads */
@@ -125,7 +135,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     router.use(apiKeyAnomalyDetection());
 
     // Enforce per-API-key rate limits (skips non-API-key requests)
-    router.use(apiKeyRateLimit());
+    router.use(apiKeyRateLimit({ exemptReadsFromDailyLimit: resolvedOptions.exemptReadsFromDailyRateLimit }));
 
     // Apply JWT authentication middleware (will be skipped if already authenticated via API key)
     router.use(auth);

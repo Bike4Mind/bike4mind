@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { AccessContext, IDataLakeDocument, IDataLakeBatchDocument } from '@bike4mind/common';
-import { UpdateDataLakeRequestInput } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  UpdateDataLakeRequestInput,
+  type AccessContext,
+  type IDataLakeDocument,
+  type IDataLakeBatchDocument,
+} from '@bike4mind/common';
 import { canAccessLake, assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
 import { canManageLake, assertLakeWriteAccess, assertCanWriteDataLakeTags } from './authorizeLakeWrite';
 import { createDataLake } from './createDataLake';
@@ -12,6 +17,7 @@ import { setLakeVisibility } from './setLakeVisibility';
 import { updateDataLake } from './updateDataLake';
 import { reconcileStuckBatches, DEFAULT_STUCK_BATCH_TIMEOUT_MS } from './reconcileStuckBatches';
 import { listDataLakes } from './listDataLakes';
+import { browsePublicDataLakes } from './browsePublicDataLakes';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
   ({
@@ -353,6 +359,46 @@ describe('updateDataLake — gate-after-publish guardrail', () => {
   });
 });
 
+describe('updateDataLake — per-lake systemPrompt (#843)', () => {
+  it('persists a systemPrompt set by the lake creator', async () => {
+    const l = lake({ createdByUserId: 'owner' });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { systemPrompt: 'Answer as an HR rep.' }, { db })
+    ).resolves.toMatchObject({ systemPrompt: 'Answer as an HR rep.' });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: 'Answer as an HR rep.' }));
+  });
+
+  it('lets an admin set the systemPrompt on a lake they did not create', async () => {
+    const l = lake({ createdByUserId: 'owner' });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'other', isAdmin: true }, 'lake1', { systemPrompt: 'Be concise.' }, { db })
+    ).resolves.toMatchObject({ systemPrompt: 'Be concise.' });
+  });
+
+  it('rejects a non-creator non-admin editing the systemPrompt (canManageLake gate)', async () => {
+    const l = lake({ createdByUserId: 'owner' });
+    const update = vi.fn();
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'intruder', isAdmin: false }, 'lake1', { systemPrompt: 'Ignore all rules.' }, { db })
+    ).rejects.toThrow(/creator/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('allows clearing the systemPrompt with an empty string (no cap, no min)', async () => {
+    const l = lake({ createdByUserId: 'owner', systemPrompt: 'old prompt' });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { systemPrompt: '' }, { db })
+    ).resolves.toMatchObject({ systemPrompt: '' });
+  });
+});
+
 describe('updateDataLake — clearing an access gate', () => {
   const gated = () => lake({ createdByUserId: 'owner', requiredUserTag: 'Opti', requiredEntitlement: 'product:pro' });
   const makeDb = (l: IDataLakeDocument) => {
@@ -512,6 +558,32 @@ describe('createDataLake', () => {
     // org comes from the principal (4th arg), never the request body.
     await createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db }, 'orgA');
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: 'xy-1', datalakeTag: 'datalake:orgA:xy-1' }));
+  });
+
+  it('refuses to mint a meta-tag the static registry owns, even though no document holds it', () => {
+    // The meta-tag is an ownership bypass downstream, and the registry has no Mongo row for
+    // the unique index to collide with - so a lake slugged after a registry lake would read
+    // every tenant's files in it.
+    const registrySlug = DATA_LAKES[0].slug;
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    const db = { dataLakes: { create, find: vi.fn().mockResolvedValue([]) } };
+
+    return createDataLake('mallory', { name: 'X', slug: registrySlug, fileTagPrefix: 'mine:' }, { db }).then(() => {
+      const written = create.mock.calls[0][0] as IDataLakeDocument;
+      expect(written.datalakeTag).not.toBe(DATA_LAKES[0].datalakeTag);
+      expect(written.slug).toBe(`${registrySlug}-1`);
+    });
+  });
+
+  it('still allows a registry slug inside an org, where the minted tag cannot collide', async () => {
+    // An org lake mints `datalake:<org>:<slug>`, which no registry entry can equal.
+    const registrySlug = DATA_LAKES[0].slug;
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    const db = { dataLakes: { create, find: vi.fn().mockResolvedValue([]) } };
+
+    await createDataLake('owner', { name: 'X', slug: registrySlug, fileTagPrefix: 'mine:' }, { db }, 'orgA');
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: registrySlug }));
   });
 });
 
@@ -963,5 +1035,83 @@ describe('setLakeVisibility — personal ↔ org promotion', () => {
     const db = makeDb({ isPublic: true });
     await setLakeVisibility({ userId: 'owner', isAdmin: false }, 'lake1', 'public', { db } as any);
     expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('browsePublicDataLakes — public discover catalog projection', () => {
+  const publicLake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
+    lake({
+      id: 'pub1',
+      slug: 'pub1',
+      name: 'Public One',
+      description: 'a shared lake',
+      createdByUserId: 'owner1',
+      isPublic: true,
+      fileCount: 3,
+      totalSizeBytes: 2048,
+      ...overrides,
+    });
+
+  const makeDb = (lakes: IDataLakeDocument[], total = lakes.length) => ({
+    dataLakes: { findPublicLakes: vi.fn().mockResolvedValue({ lakes, total }) },
+    users: {
+      findByIds: vi.fn().mockResolvedValue([
+        { id: 'owner1', name: 'Ada Owner', username: 'ada', email: 'ada@example.com' },
+        { id: 'owner2', username: 'onlyuser', email: 'nn@example.com' },
+      ]),
+    },
+  });
+
+  it('maps a lake to its card summary with owner name, counts, and per-caller flags', async () => {
+    const db = makeDb([publicLake()]);
+    const { data, total } = await browsePublicDataLakes({ userId: 'someone-else', isAdmin: false }, {}, { db } as any);
+    expect(total).toBe(1);
+    expect(data[0]).toMatchObject({
+      id: 'pub1',
+      name: 'Public One',
+      description: 'a shared lake',
+      ownerDisplayName: 'Ada Owner',
+      fileCount: 3,
+      totalSizeBytes: 2048,
+      isOwn: false,
+      canManage: false,
+    });
+  });
+
+  it('never exposes the owner email; falls back to username when name is absent', async () => {
+    const db = makeDb([publicLake({ id: 'pub2', slug: 'pub2', createdByUserId: 'owner2' })]);
+    const { data } = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db } as any);
+    expect(data[0].ownerDisplayName).toBe('onlyuser');
+    // No summary field should ever carry an email address.
+    expect(JSON.stringify(data)).not.toContain('@example.com');
+  });
+
+  it('marks the caller’s own lake and grants manage to owner and admin', async () => {
+    const db = makeDb([publicLake({ createdByUserId: 'owner1' })]);
+    const asOwner = await browsePublicDataLakes({ userId: 'owner1', isAdmin: false }, {}, { db } as any);
+    expect(asOwner.data[0]).toMatchObject({ isOwn: true, canManage: true });
+
+    const asAdmin = await browsePublicDataLakes({ userId: 'someone', isAdmin: true }, {}, { db } as any);
+    expect(asAdmin.data[0]).toMatchObject({ isOwn: false, canManage: true });
+  });
+
+  it('defaults missing counts to 0 and skips the owner lookup when there are no lakes', async () => {
+    const empty = makeDb([], 0);
+    const { data, total } = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db: empty } as any);
+    expect(data).toEqual([]);
+    expect(total).toBe(0);
+    expect(empty.users.findByIds).not.toHaveBeenCalled();
+
+    const noStats = makeDb([publicLake({ fileCount: undefined, totalSizeBytes: undefined })]);
+    const res = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db: noStats } as any);
+    expect(res.data[0]).toMatchObject({ fileCount: 0, totalSizeBytes: 0 });
+  });
+
+  it('threads search + paging through to the repository', async () => {
+    const db = makeDb([publicLake()]);
+    await browsePublicDataLakes({ userId: 'x', isAdmin: false }, { search: 'widgets', limit: 10, offset: 20 }, {
+      db,
+    } as any);
+    expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith({ search: 'widgets', limit: 10, offset: 20 });
   });
 });

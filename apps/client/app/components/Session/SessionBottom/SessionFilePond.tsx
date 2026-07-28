@@ -5,7 +5,7 @@ import { Box } from '@mui/joy';
 import 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.css';
 import 'filepond/dist/filepond.min.css';
 import { FilePond } from 'react-filepond';
-import { IFabFileDocument, ISessionDocument, KnowledgeType } from '@bike4mind/common';
+import { IFabFileDocument, ISessionDocument, KnowledgeType, isImageAttachment } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload, deleteFileUtility } from '@client/app/utils/filesAPICalls';
 import {
   setPendingMessageFiles,
@@ -171,7 +171,7 @@ export function SessionFilePond({
                 // optimistic 'complete') because the async S3-upload content-moderation scan
                 // hasn't resolved yet - GetFileIcon shows the scanning placeholder
                 // until the image_moderation_status websocket event flips it to clean/blocked.
-                const isImageUpload = typeof fabFile.mimeType === 'string' && fabFile.mimeType.startsWith('image/');
+                const isImageUpload = isImageAttachment(fabFile.mimeType);
                 setPendingMessageFiles(prev => {
                   const withRealFile = prev.map(item =>
                     item.fabFile.id === tempId

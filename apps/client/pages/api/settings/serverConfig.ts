@@ -5,7 +5,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { resolveWebSearchProvider } from '@bike4mind/services/llm/tools/implementation/websearch';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { ApiKeyType } from '@bike4mind/common';
+import { ApiKeyType, isPlaceholderApiKey } from '@bike4mind/common';
 import type { B4MLLMTools } from '@bike4mind/common';
 import { Resource } from 'sst';
 
@@ -167,7 +167,12 @@ export async function computeToolAvailability(userId: string | undefined): Promi
     // (or vice versa), the tool still shows as available and the semantic path falls back to
     // keyword search - deliberately lenient, since we'd rather under-gate KB than hide a tool
     // that still returns keyword results.
-    const hasEmbeddingKey = usable(llmKeys?.openai) || usable(llmKeys?.voyageai);
+    // A placeholder/dummy key is not a working key: reject it here so this stays in lock-step
+    // with embedding.ts defaultEmbeddingModelForEnv (which treats a placeholder as no cloud key
+    // and falls back to the local Ollama embedder) - otherwise KB would report a working cloud
+    // embedder that the vectorizer can't actually use.
+    const hasRealEmbeddingKey = (key: string | null | undefined) => usable(key) && !isPlaceholderApiKey(key);
+    const hasEmbeddingKey = hasRealEmbeddingKey(llmKeys?.openai) || hasRealEmbeddingKey(llmKeys?.voyageai);
 
     return {
       // web_search is available when any provider (SerpAPI or local SearXNG) resolves.

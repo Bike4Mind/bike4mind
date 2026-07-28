@@ -68,6 +68,12 @@ if ! bash scripts/check-no-account-ids.sh; then
   FINAL_EXIT_CODE=1
 fi
 
+# Check the staged lockfile for premium overlay leakage
+echo "Running overlay lockfile check..."
+if ! bash scripts/check-no-overlay-lockfile.sh --staged; then
+  FINAL_EXIT_CODE=1
+fi
+
 # Run gitleaks to check for secrets
 echo "Running gitleaks check..."
 if ! sh "$(dirname -- "$0")/gitleaks-pre-commit.sh"; then

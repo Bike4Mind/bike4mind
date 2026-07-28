@@ -15,20 +15,13 @@ import {
   Typography,
 } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
+import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
-
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 60);
-}
 
 function normalizeName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -38,6 +31,7 @@ export default function ConfigStep() {
   const theme = useTheme();
   const config = useDataLakeWizardStore(s => s.config);
   const setConfig = useDataLakeWizardStore(s => s.setConfig);
+  const setTagPrefix = useDataLakeWizardStore(s => s.setTagPrefix);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
   const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
@@ -63,6 +57,22 @@ export default function ConfigStep() {
           lake =>
             (lake.organizationId || undefined) === scopeOrgId && normalizeName(lake.name) === normalizeName(config.name)
         );
+
+  // Client mirror of the server's slug.min(2) rule so a name that slugifies to
+  // empty/too-short is caught here instead of failing at the final upload step.
+  // Append mode reuses the target lake's real slug (which may be disambiguated,
+  // e.g. "niche-2"), so show that rather than what the locked name slugifies to,
+  // and only gate creates.
+  const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
+  const slugTooShort = !targetLake && config.name.trim().length > 0 && slug.length < MIN_DATA_LAKE_SLUG_LENGTH;
+
+  // Tag Prefix's editable home is the taxonomy step (#829). Config only shows it read-only,
+  // EXCEPT the empty-prefix dead-end: the taxonomy step is skippable and inference can yield
+  // an empty prefix (e.g. no API key), yet Start Upload still gates on tagPrefix >= 2 chars.
+  // When create mode lands here with no usable prefix, fall back to an editable field so the
+  // user isn't stranded. Captured once via lazy init so typing in the fallback can't flip it
+  // read-only mid-edit; navigating back to taxonomy remounts this step and re-evaluates.
+  const [prefixEditable] = useState(() => !targetLake && config.tagPrefix.trim().length < MIN_DATA_LAKE_SLUG_LENGTH);
 
   const autoTriggered = useRef(false);
 
@@ -123,7 +133,7 @@ export default function ConfigStep() {
         )}
 
         {/* Name */}
-        <FormControl required>
+        <FormControl required error={slugTooShort}>
           <FormLabel>{DATA_LAKE} Name</FormLabel>
           <Input
             data-testid="config-name-input"
@@ -133,8 +143,14 @@ export default function ConfigStep() {
             disabled={!!targetLake}
           />
           <FormHelperText>
-            Slug: <code>{slugify(config.name) || '...'}</code>
+            Slug: <code>{slug || '...'}</code>
           </FormHelperText>
+          {slugTooShort && (
+            <FormHelperText data-testid="config-name-slug-error">
+              This name needs at least {MIN_DATA_LAKE_SLUG_LENGTH} letters or numbers - it currently makes an invalid
+              URL slug.
+            </FormHelperText>
+          )}
           {duplicateNameLake && (
             <FormHelperText data-testid="config-name-duplicate-warning" sx={{ color: 'warning.plainColor' }}>
               A data lake named &ldquo;{duplicateNameLake.name}&rdquo; already exists here. You can still continue -
@@ -155,23 +171,31 @@ export default function ConfigStep() {
           />
         </FormControl>
 
-        {/* Tag Prefix */}
-        <FormControl required>
+        {/* Tag Prefix - read-only here (its editable home is the taxonomy step in create
+            mode, or the target lake in append mode), unless the empty-prefix fallback applies. */}
+        <FormControl required={prefixEditable}>
           <FormLabel>Tag Prefix</FormLabel>
           <Input
+            data-testid="config-tag-prefix-input"
             value={config.tagPrefix}
-            onChange={e => setConfig({ tagPrefix: e.target.value })}
+            onChange={e => setTagPrefix(e.target.value)}
             onBlur={e => {
               const v = e.target.value.trim();
               if (v && !v.endsWith(':')) {
-                setConfig({ tagPrefix: v + ':' });
+                setTagPrefix(v + ':');
               }
             }}
             placeholder="e.g. legal:"
             sx={{ fontFamily: 'monospace' }}
-            disabled={!!targetLake}
+            disabled={!prefixEditable}
           />
-          <FormHelperText>All tags will be prefixed with this (must end with &quot;:&quot;)</FormHelperText>
+          <FormHelperText>
+            {prefixEditable
+              ? 'All tags will be prefixed with this (must end with ":"). No taxonomy prefix was set, so add one here.'
+              : targetLake
+                ? 'Inherited from the existing data lake.'
+                : 'Set on the AI Taxonomy step. Go back there to change it.'}
+          </FormHelperText>
         </FormControl>
 
         {/* Required User Tag */}

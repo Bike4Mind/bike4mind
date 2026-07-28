@@ -44,6 +44,9 @@ export type CreateDataLakeRequestInputType = z.infer<typeof CreateDataLakeReques
 export const UpdateDataLakeRequestInput = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().max(2000).optional(),
+  // Per-lake system prompt (see IDataLake.systemPrompt). Uncapped, matching the other system
+  // prompts in the codebase. Edit is gated to creator/admin by updateDataLake (canManageLake).
+  systemPrompt: z.string().optional(),
   // Empty string is the explicit "remove this gate" sentinel, accepted on UPDATE only (a
   // create has no gate to clear). It is stored as-is rather than unset: every read path
   // already treats '' as ungated - the access queries in DataLakeModel carry explicit
