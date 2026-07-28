@@ -63,6 +63,16 @@ describe('Hearth presence projection', () => {
     expect(presenceStateForReason(undefined)).toBe('running');
   });
 
+  it('maps every code-agent status onto itself', () => {
+    // The cc-bridge reports CcAgentStatus values as the reason, so each must map
+    // to the identical state. Without these the default would win and a
+    // disconnected or idle bridge session would show up as running - a roster
+    // reporting dead sessions as working is worse than no roster.
+    for (const status of CcAgentStatus.options) {
+      expect(presenceStateForReason(status), status).toBe(status);
+    }
+  });
+
   it('states are exactly the shared code-agent status vocabulary', () => {
     // Guards the whole point of the pivot: if someone adds a roster-only state
     // here, or the shared enum grows a value the ranking does not cover, this
@@ -95,6 +105,34 @@ describe('Hearth presence projection', () => {
     expect(second?._id.toString()).toBe(first?._id.toString());
     expect(second?.state).toBe('awaiting_permission');
     expect(second?.tool).toBe('Write');
+  });
+
+  it('projects a bridge-reported status onto the matching roster row', async () => {
+    const { channelId, actorId } = await setup('bluebike4mind (amber-otter)');
+
+    // What the cc-bridge handlers pass: the status value as the reason, plus the
+    // session id and slug. The state must equal the reported status exactly.
+    const blocked = await hearthRepository.upsertPresence(
+      presence(channelId, actorId, new Date('2026-07-27T10:00:00Z'), 'awaiting_permission', {
+        workspace: 'bluebike4mind',
+        sessionId: 'a67cd606-80f3-459d-88b5-3df6d3c11a31',
+        slug: 'amber-otter',
+      })
+    );
+    expect(blocked?.state).toBe('awaiting_permission');
+    expect(blocked?.slug).toBe('amber-otter');
+
+    const working = await hearthRepository.upsertPresence(
+      presence(channelId, actorId, new Date('2026-07-27T10:00:05Z'), 'running', { workspace: 'bluebike4mind' })
+    );
+    expect(working?.state).toBe('running');
+
+    // A session that ends must read as gone, not as still working.
+    const gone = await hearthRepository.upsertPresence(
+      presence(channelId, actorId, new Date('2026-07-27T10:00:09Z'), 'disconnected', { workspace: 'bluebike4mind' })
+    );
+    expect(gone?.state).toBe('disconnected');
+    expect(await HearthPresence.countDocuments({})).toBe(1);
   });
 
   it('clears detail the newer event no longer reports', async () => {

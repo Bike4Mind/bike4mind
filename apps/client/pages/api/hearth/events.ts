@@ -31,23 +31,50 @@ const MAX_MACHINE_PAYLOAD_BYTES = 64 * 1024;
 
 // Enum lists and body shapes come from the @bike4mind/hearth boundary schemas
 // (single source of truth); this schema only adds route-level size caps.
-const PostEventSchema = z.object({
-  channelId: z.string().min(1),
-  kind: hearthEventKindSchema.prefault('message'),
-  human: z.object({
-    text: z.string().min(1).max(16000),
-    format: z.enum(['md', 'text']).prefault('md'),
-  }),
-  machine: hearthMachineBodySchema
-    .extend({ schema: z.string().min(1).max(200) })
-    .refine(m => JSON.stringify(m.payload ?? null).length <= MAX_MACHINE_PAYLOAD_BYTES, {
-      message: `machine.payload exceeds ${MAX_MACHINE_PAYLOAD_BYTES} bytes when serialized`,
-      path: ['payload'],
-    })
-    .optional(),
-  refs: hearthEventRefsSchema.prefault({}),
-  actor: HearthActorParamSchema,
-});
+const PostEventSchema = z
+  .object({
+    channelId: z.string().min(1).optional(),
+    /**
+     * Alternative to channelId: address the channel by NAME and find-or-create
+     * it. Lets a reporter with no per-user configuration (the standalone Claude
+     * Code hook) still land in the user's shared default channel.
+     */
+    channelName: z.string().min(1).max(200).optional(),
+    kind: hearthEventKindSchema.prefault('message'),
+    human: z.object({
+      text: z.string().min(1).max(16000),
+      format: z.enum(['md', 'text']).prefault('md'),
+    }),
+    machine: hearthMachineBodySchema
+      .extend({ schema: z.string().min(1).max(200) })
+      .refine(m => JSON.stringify(m.payload ?? null).length <= MAX_MACHINE_PAYLOAD_BYTES, {
+        message: `machine.payload exceeds ${MAX_MACHINE_PAYLOAD_BYTES} bytes when serialized`,
+        path: ['payload'],
+      })
+      .optional(),
+    refs: hearthEventRefsSchema.prefault({}),
+    actor: HearthActorParamSchema,
+  })
+  // Exactly one addressing mode. Accepting both would leave the precedence
+  // ambiguous, and accepting neither has no sensible target.
+  .refine(b => (b.channelId === undefined) !== (b.channelName === undefined), {
+    message: 'Provide exactly one of channelId or channelName',
+    path: ['channelId'],
+  });
+
+/**
+ * `channelName` find-or-creates; `channelId` keeps its ownership check, so an
+ * id belonging to another user is still a 404 rather than a silent write.
+ */
+async function resolveTargetChannel(userId: string, body: { channelId?: string; channelName?: string }) {
+  if (body.channelName !== undefined) {
+    return hearthRepository.ensureChannelByName(userId, body.channelName);
+  }
+  if (body.channelId !== undefined) {
+    return hearthRepository.getOwnedChannel(userId, body.channelId);
+  }
+  return null;
+}
 
 const hearthLog = new HearthLog(hearthRepository.store);
 
@@ -60,13 +87,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.HEARTH_WRITE, ApiKeyScope
 
     const body = PostEventSchema.parse(req.body);
 
-    const channel = await hearthRepository.getOwnedChannel(req.user.id, body.channelId);
+    const channel = await resolveTargetChannel(req.user.id, body);
     if (!channel) throw new NotFoundError('Channel not found');
 
     const actor = await resolveRequestActor(req.user, body.actor);
 
     const event = await hearthLog.append({
-      channelId: body.channelId,
+      channelId: channel._id.toString(),
       actorId: actor._id.toString(),
       kind: body.kind,
       human: body.human,

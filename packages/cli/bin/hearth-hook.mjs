@@ -4,7 +4,11 @@
 //
 // Wire it in .claude/settings.json under hooks (Stop and/or Notification):
 //   { "type": "command", "command": "node <path>/hearth-hook.mjs" }
-// Requires: B4M_API_URL, B4M_API_KEY, B4M_HEARTH_CHANNEL env vars.
+// Requires: B4M_API_URL, B4M_API_KEY env vars.
+// Optional: B4M_HEARTH_CHANNEL - a channel id. Unset, the hook addresses the
+// shared default channel by NAME and the server find-or-creates it, so a fresh
+// install needs no per-user setup and lands in the same channel the cc-bridge
+// reports into (one roster, not two half-rosters).
 // Always exits 0 - a reporting hook must never block the session.
 //
 // DISCLOSURE. Everything sent here lands in an append-only log that other
@@ -32,6 +36,10 @@ const { B4M_API_URL, B4M_API_KEY, B4M_HEARTH_CHANNEL, B4M_HEARTH_LABEL, B4M_HEAR
 
 const DEFAULT_DISCLOSURE = 2;
 const MAX_DISCLOSURE = 2;
+
+/** Must match DEFAULT_HEARTH_CHANNEL_NAME in b4m-core/hearth; the hook is
+ *  dependency-free and cannot import it. */
+const DEFAULT_CHANNEL_NAME = 'agents';
 
 /** Clamped, so a typo or an out-of-range value can never disclose MORE than intended. */
 function disclosureTier() {
@@ -154,7 +162,7 @@ const chunks = [];
 process.stdin.on('data', c => chunks.push(c));
 process.stdin.on('end', async () => {
   try {
-    if (!B4M_API_URL || !B4M_API_KEY || !B4M_HEARTH_CHANNEL) return;
+    if (!B4M_API_URL || !B4M_API_KEY) return;
     const hook = JSON.parse(Buffer.concat(chunks).toString() || '{}');
 
     const tier = disclosureTier();
@@ -176,7 +184,7 @@ process.stdin.on('end', async () => {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': B4M_API_KEY },
       body: JSON.stringify({
-        channelId: B4M_HEARTH_CHANNEL,
+        ...(B4M_HEARTH_CHANNEL ? { channelId: B4M_HEARTH_CHANNEL } : { channelName: DEFAULT_CHANNEL_NAME }),
         kind: 'presence',
         human: { text: describe({ label, tier, workspace, activity }), format: 'text' },
         machine: { schema: 'hearth.claude-code-hook@1', payload },

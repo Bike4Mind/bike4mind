@@ -35,16 +35,23 @@ export const PRESENCE_STATE_RANK: Readonly<Record<HearthPresenceState, number>> 
 };
 
 /**
- * SINGLE SOURCE OF TRUTH for reason -> state. `reason` is the closed set the
- * Claude Code hook forwards (packages/cli/bin/hearth-hook.mjs): the documented
- * notification_type values plus the hook's own event-derived codes.
+ * SINGLE SOURCE OF TRUTH for reason -> state, across BOTH presence reporters:
+ * the Claude Code hook (packages/cli/bin/hearth-hook.mjs), whose reasons are
+ * the documented notification_type values plus its own event-derived codes, and
+ * the cc-bridge WS handlers (apps/client/server/websocket/ccAgentHearth.ts),
+ * whose reasons are already CcAgentStatus values.
  *
  * Anything unrecognized falls through to 'running', which is the safe default:
  * an unknown reason must never be reported as blocked on the human (that would
  * make the roster cry wolf) nor as idle/disconnected (that would hide a live
- * session).
+ * session). That default is exactly why the identity mappings below must be
+ * explicit - without them a bridge-reported 'disconnected' or 'idle' would land
+ * on 'running', i.e. the roster would show dead sessions as working.
  */
 const REASON_STATES: Readonly<Record<string, HearthPresenceState>> = {
+  // Bridge reasons ARE states. Derived from the enum rather than written out, so
+  // a status added to CcAgentStatus cannot silently start falling through.
+  ...(Object.fromEntries(CcAgentStatus.options.map(state => [state, state])) as Record<string, HearthPresenceState>),
   // A permission prompt halts the session outright - distinct from a question.
   permission_prompt: 'awaiting_permission',
   idle_prompt: 'awaiting_input',
