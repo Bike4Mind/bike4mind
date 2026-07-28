@@ -884,6 +884,9 @@ export function useDataLakes(enabled = true) {
           // Server-computed (admin or creator). Management affordances gate on this: the
           // list includes other users' read-only public lakes. See DataLakeConfig.canManage.
           canManage?: boolean;
+          // Editor-only, so the server sends it ONLY when canManage holds - a lake the caller
+          // can merely read arrives without it. See ManageableDataLakeConfig.systemPrompt.
+          systemPrompt?: string;
         }>;
       }>('/api/data-lakes');
       return response.data.data;
