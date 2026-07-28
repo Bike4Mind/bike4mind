@@ -219,6 +219,40 @@ describe('AnthropicCachingAdapter', () => {
       const tools = result.tools as Record<string, unknown>[];
       expect(tools[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
     });
+
+    it('anchors the history breakpoint before excluded trailing messages instead of the last one', () => {
+      const params = {
+        messages: [
+          { role: 'user', content: 'turn 1' },
+          { role: 'assistant', content: 'reply 1' },
+          { role: 'user', content: 'volatile reminder, rebuilt every iteration' },
+        ],
+      };
+      const result = adapter.applyCaching(params, {
+        enableCaching: true,
+        cacheConversationHistory: true,
+        historyCacheExcludeTrailingCount: 1,
+      });
+
+      const messages = result.messages as Record<string, unknown>[];
+      // The excluded trailing message is left untouched...
+      expect(messages[2].content).toBe('volatile reminder, rebuilt every iteration');
+      // ...and the breakpoint lands on the message before it instead.
+      const anchorContent = messages[1].content as Record<string, unknown>[];
+      expect(anchorContent[0].cache_control).toEqual(cacheControl);
+    });
+
+    it('skips history caching entirely when historyCacheExcludeTrailingCount covers the whole array', () => {
+      const params = { messages: [{ role: 'user', content: 'only message' }] };
+      const result = adapter.applyCaching(params, {
+        enableCaching: true,
+        cacheConversationHistory: true,
+        historyCacheExcludeTrailingCount: 1,
+      });
+
+      const messages = result.messages as Record<string, unknown>[];
+      expect(messages[0].content).toBe('only message');
+    });
   });
 });
 
