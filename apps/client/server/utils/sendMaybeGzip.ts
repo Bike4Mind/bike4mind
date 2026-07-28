@@ -75,7 +75,7 @@ export function sendMaybeGzip(req: Request, res: Response, body: unknown): void 
 
   // Pathname only: the query string would make the metric dimension unbounded. A route with path
   // params (/api/x/[id]) would still be high-cardinality here - give it a static label first.
-  const route = req.url.split('?')[0];
+  const route = (req.url ?? '').split('?')[0];
 
   req.logger.withMetadata({ uncompressedBytes, route, compressed: shouldCompress }).info('api-response-size');
 

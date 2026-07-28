@@ -12,7 +12,9 @@ vi.mock('@server/utils/cloudwatch', () => ({
 // sendMaybeGzip is not unit-tested here. Under this package's jsdom vitest environment a node:
 // builtin cannot be intercepted for the module under test (vi.mock does not reach it, and the
 // zlib namespace is non-configurable so vi.spyOn fails). The guarantee is enforced structurally:
-// gzipSync is called before the first setHeader/end. Keep that ordering when editing the helper.
+// gzipSync is called before Content-Encoding is set and before res.end(). Setting Vary earlier is
+// fine (setHeader never flushes); it is specifically the encoding header and the body that must
+// not land before compression succeeds. Keep that ordering when editing the helper.
 
 import {
   GZIP_THRESHOLD_BYTES,
@@ -32,14 +34,17 @@ function makeReq(acceptEncoding?: string): Request {
   } as unknown as Request;
 }
 
-function makeRes(existingHeaders: Record<string, string> = {}): Response {
-  const headers: Record<string, string> = { ...existingHeaders };
+// Node lowercases header names internally, so setHeader('vary') and getHeader('Vary') hit the same
+// slot. The mock mirrors that - a case-sensitive object would let a real clobbering bug pass here.
+function makeRes(existingHeaders: Record<string, string | string[]> = {}): Response {
+  const headers: Record<string, string | string[]> = {};
+  for (const [name, value] of Object.entries(existingHeaders)) headers[name.toLowerCase()] = value;
   return {
     json: vi.fn(),
     end: vi.fn(),
-    getHeader: vi.fn((name: string) => headers[name]),
+    getHeader: vi.fn((name: string) => headers[name.toLowerCase()]),
     setHeader: vi.fn((name: string, value: string) => {
-      headers[name] = value;
+      headers[name.toLowerCase()] = value;
     }),
     __headers: headers,
   } as unknown as Response;
@@ -68,7 +73,7 @@ describe('sendMaybeGzip', () => {
 
     expect(res.json).toHaveBeenCalledWith({ logs: [] });
     expect(res.end).not.toHaveBeenCalled();
-    expect(headersOf(res)['Content-Encoding']).toBeUndefined();
+    expect(headersOf(res)['content-encoding']).toBeUndefined();
   });
 
   it('gzips responses over the threshold when the client accepts gzip, and the output round-trips', () => {
@@ -78,8 +83,8 @@ describe('sendMaybeGzip', () => {
     sendMaybeGzip(req, res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
     expect(res.json).not.toHaveBeenCalled();
-    expect(headersOf(res)['Content-Type']).toBe('application/json; charset=utf-8');
-    expect(headersOf(res)['Content-Encoding']).toBe('gzip');
+    expect(headersOf(res)['content-type']).toBe('application/json; charset=utf-8');
+    expect(headersOf(res)['content-encoding']).toBe('gzip');
     expect(res.end).toHaveBeenCalledTimes(1);
 
     const compressed = (res.end as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as Buffer;
@@ -89,11 +94,11 @@ describe('sendMaybeGzip', () => {
   it('sets Vary: Accept-Encoding on both the compressed and uncompressed paths', () => {
     const compressedRes = makeRes();
     sendMaybeGzip(makeReq('gzip'), compressedRes, OVER_GZIP_THRESHOLD_PAYLOAD);
-    expect(headersOf(compressedRes)['Vary']).toBe('Accept-Encoding');
+    expect(headersOf(compressedRes)['vary']).toBe('Accept-Encoding');
 
     const plainRes = makeRes();
     sendMaybeGzip(makeReq('gzip'), plainRes, { logs: [] });
-    expect(headersOf(plainRes)['Vary']).toBe('Accept-Encoding');
+    expect(headersOf(plainRes)['vary']).toBe('Accept-Encoding');
   });
 
   it('appends to an existing Vary header instead of clobbering it', () => {
@@ -101,7 +106,7 @@ describe('sendMaybeGzip', () => {
 
     sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
-    expect(headersOf(res)['Vary']).toBe('Origin, Accept-Encoding');
+    expect(headersOf(res)['vary']).toBe('Origin, Accept-Encoding');
   });
 
   it('does not duplicate Accept-Encoding if it is already present in Vary', () => {
@@ -109,7 +114,31 @@ describe('sendMaybeGzip', () => {
 
     sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
 
-    expect(headersOf(res)['Vary']).toBe('Accept-Encoding');
+    expect(headersOf(res)['vary']).toBe('Accept-Encoding');
+  });
+
+  it('matches an existing Vary token case-insensitively and across multiple tokens', () => {
+    const res = makeRes({ Vary: 'origin, accept-encoding' });
+
+    sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+
+    expect(headersOf(res)['vary']).toBe('origin, accept-encoding');
+  });
+
+  it('appends to an array-valued Vary header', () => {
+    const res = makeRes({ Vary: ['Origin', 'Cookie'] });
+
+    sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+
+    expect(headersOf(res)['vary']).toBe('Origin, Cookie, Accept-Encoding');
+  });
+
+  it('does not treat a longer header name containing "accept-encoding" as a duplicate', () => {
+    const res = makeRes({ Vary: 'X-Accept-Encoding' });
+
+    sendMaybeGzip(makeReq('gzip'), res, OVER_GZIP_THRESHOLD_PAYLOAD);
+
+    expect(headersOf(res)['vary']).toBe('X-Accept-Encoding, Accept-Encoding');
   });
 
   it('does not compress when Accept-Encoding omits gzip', () => {
@@ -188,6 +217,7 @@ describe('sendMaybeGzip', () => {
     sendMaybeGzip(makeReq('br'), res, largePayload);
 
     const [, metrics] = mockEmitMetrics.mock.calls[0];
+    expect(metrics).toHaveLength(2);
     expect(metrics).toContainEqual({
       name: LARGE_UNCOMPRESSED_API_RESPONSE_METRIC,
       value: expectedBytes,
