@@ -1157,6 +1157,8 @@ export class ChatCompletionProcess {
           model,
           contextWindow,
           queryType: isSimpleQuery ? 'simple' : 'complex',
+          // Unlimited has no count, so name the page size that will actually be fetched.
+          historyFetchLimit: resolveHistoryFetchLimit(historyCount),
         });
       } else {
         const modelAwareMax = isSimpleQuery

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { isUnlimitedHistory, normalizeRequestedHistoryCount, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
+import {
+  ChatCompletionInvokeParamsSchema,
+  isUnlimitedHistory,
+  normalizeRequestedHistoryCount,
+  UNLIMITED_HISTORY_COUNT,
+} from '@bike4mind/common';
 import { resolveModelAwareHistoryCount } from './ChatCompletionProcess';
 
 /**
@@ -58,6 +63,32 @@ describe('normalizeRequestedHistoryCount', () => {
   it('leaves every other requested count untouched', () => {
     for (const requested of [0, 1, 5, 10, 12, 13, 15, 30, 60]) {
       expect(normalizeRequestedHistoryCount(requested)).toBe(requested);
+    }
+  });
+});
+
+/**
+ * The invoke schema carries wire values, which are translated into the internal marker later,
+ * in ChatCompletionProcess. Nothing outside should be able to hand the marker straight in.
+ */
+describe('ChatCompletionInvokeParamsSchema.historyCount', () => {
+  const historyCount = ChatCompletionInvokeParamsSchema.shape.historyCount;
+
+  it('refuses the internal unlimited marker', () => {
+    expect(historyCount.safeParse(UNLIMITED_HISTORY_COUNT).success).toBe(false);
+  });
+
+  it('refuses any other negative count', () => {
+    expect(historyCount.safeParse(-5).success).toBe(false);
+  });
+
+  it('accepts zero, which is how an image model asks for no history', () => {
+    expect(historyCount.safeParse(0).success).toBe(true);
+  });
+
+  it('accepts the client slider sentinel and ordinary counts', () => {
+    for (const wire of [1, 10, 14, 30, 150]) {
+      expect(historyCount.safeParse(wire).success).toBe(true);
     }
   });
 });

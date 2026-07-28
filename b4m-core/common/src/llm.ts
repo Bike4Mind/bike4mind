@@ -137,7 +137,14 @@ export const normalizeRequestedHistoryCount = (historyCount: number): number =>
 export const ChatCompletionInvokeParamsSchema = z.object({
   /** Notebook session ID */
   sessionId: z.string(),
-  historyCount: z.number(),
+  /**
+   * A wire value, so never UNLIMITED_HISTORY_COUNT: normalization happens later, in
+   * ChatCompletionProcess, and the marker lives only inside that call. Rejecting negatives
+   * here makes that invariant enforceable rather than merely conventional, so a future path
+   * that forwards a raw client number cannot smuggle the internal marker in from outside.
+   * Zero is legitimate (image models ask for no history).
+   */
+  historyCount: z.number().nonnegative(),
   /** Epoch ms when the client submitted the prompt (for the request-lifecycle status log). */
   clientSubmittedAt: z.number().optional(),
   imageConfig: GenerateImageToolCallSchema.optional(),
