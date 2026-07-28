@@ -102,6 +102,8 @@ export const agentCheckpointDepthExceededAlarm = isMonitoredStage
 
 export const websocketRouteOomAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WebSocketRouteOomAlarm') : undefined;
 
+export const largeApiResponseAlarm = isMonitoredStage ? new sst.aws.SnsTopic('LargeApiResponseAlarm') : undefined;
+
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
@@ -788,4 +790,32 @@ if (isMonitoredStage) {
       },
     });
   }
+
+  /**
+   * Alarm: Large API Response
+   *
+   * Fires when any API route reports an uncompressed JSON response body >= 5MB
+   * (emitted by sendMaybeGzip - apps/client/server/utils/sendMaybeGzip.ts). AWS Lambda enforces
+   * a hard, non-configurable ~6MB synchronous-invocation response limit; a response that
+   * crosses it fails as a bare 502 with nothing logged at the application level. This metric is
+   * the only advance warning before that happens, since Next.js's own "response exceeds 4MB"
+   * warning measures pre-gzip bytes and goes silent once the route ends a pre-compressed buffer.
+   */
+  new aws.cloudwatch.MetricAlarm('largeApiResponse', {
+    name: `${$app.name}-${$app.stage}-large-api-response`,
+    alarmDescription: 'An API response body is approaching the Lambda 6MB response-size limit (uncompressed >= 5MB)',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'LargeApiResponseBytes',
+    namespace: 'Lumina5/ApiResponse',
+    period: 300, // 5 minutes
+    statistic: 'Sum',
+    threshold: 0, // Alert on any occurrence
+    treatMissingData: 'notBreaching',
+    alarmActions: [largeApiResponseAlarm!.arn],
+    tags: {
+      Application: 'ApiResponse',
+      Severity: 'Medium',
+    },
+  });
 }
