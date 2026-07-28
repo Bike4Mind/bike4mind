@@ -45,6 +45,12 @@ export interface ElisionResult {
  * the real elided artifact in the originating bug plus the obvious siblings. Kept narrow on
  * purpose - each entry must be a phrase that has no business appearing in a comment inside a
  * finished deliverable. Notably absent: bare "TODO", which is common in legitimate scaffolding.
+ *
+ * MUST STAY IN SYNC with the NEVER ABBREVIATE paragraph of `ARTIFACT_EMISSION_PROMPT` in
+ * `@bike4mind/common` (`schemas/settings.ts`), which forbids the model from emitting these same
+ * phrases. Neither side imports the other - the prompt is prose for a model, these are regexes -
+ * so the coupling is by convention only, and the prompt is additionally live-editable per
+ * environment, meaning drift cannot be caught at build time. Change both in one commit.
  */
 const PLACEHOLDER_PATTERNS: readonly RegExp[] = [
   /\.\.\.\s*\(?\s*same\b/i,
@@ -63,7 +69,11 @@ const PLACEHOLDER_PATTERNS: readonly RegExp[] = [
   /\bomitted (?:for|to save|here)\b/i,
   /\b(?:rest|remainder|everything else|all else|the code|logic|markup) (?:\w+\s+){0,2}unchanged\b/i,
   /\bunchanged from (?:the )?(?:previous|original|above|earlier)\b/i,
-  /\brest of the\b/i,
+  // Qualified like its `omitted`/`unchanged` siblings. Bare `rest of the` was the one unqualified
+  // phrase in the list and fired HIGH on ordinary comments such as
+  // `// handle the rest of the items in the queue`.
+  /\brest of the (?:\w+\s+){0,2}(?:code|logic|markup|styles?|implementation|functions?|handlers?|rows?|items?|entries|sections?|content|body|file|script|html|css|js)\b[^\n]{0,40}\b(?:omitted|unchanged|elided|removed|truncated|abbreviated|goes here|is identical|as (?:above|before)|same)\b/i,
+  /\b(?:the )?rest of the (?:code|logic|markup|styles?|implementation|file|script|html|css|js)\b\s*(?:$|[.)\]}])/i,
   /<\s*rest of\b/i,
   /\bsame as (?:above|before)\b/i,
   /\b(?:code|implementation|logic|content) (?:goes )?here\b/i,
@@ -257,13 +267,22 @@ export function detectElidedContent(body: string, type?: ArtifactType): ElisionR
 
   signals.push(...findPlaceholderComments(body, type));
 
+  // An off-site <script src> defines globals this module cannot possibly know, so every bare call
+  // into them looks undefined. A working jQuery page reaches the 2-distinct-name threshold on `$`
+  // and `jQuery` alone, and a p5.js sketch flags on four. The reference signals are therefore
+  // SUPPRESSED - not merely raised - when such a script is present: with an unknown global namespace
+  // in play the signal carries no information, and a higher threshold would only postpone the same
+  // false positive to a slightly larger sketch. Placeholder comments and hollow bodies are
+  // unaffected, so the high-confidence signals still work on these artifacts.
+  const referencesAreKnowable = !hasOffsiteScript(body);
+
   if (type && JS_BEARING_TYPES.has(type)) {
     const js = type === 'react' ? [body] : extractScriptBodies(body);
     const declared = new Set<string>();
     const called = new Map<string, true>();
 
     // Stripped once and reused by every scan below - this is the expensive step on a large body.
-    const strippedSources = js.map(stripCommentsAndStrings);
+    const strippedSources = js.map(source => stripCommentsAndStrings(source));
 
     for (const stripped of strippedSources) {
       collectDeclaredNames(stripped, declared);
@@ -272,11 +291,18 @@ export function detectElidedContent(body: string, type?: ArtifactType): ElisionR
 
     // Belt-and-braces: a scanner desync (the string/comment stripper mis-tracking a nested
     // construct) can hide a real declaration and invent "undefined" names, which would flag a
-    // perfectly good artifact. Re-check every candidate against the RAW source before
-    // reporting it. Costs one regex per candidate and makes this class of bug non-fatal.
-    const rawJs = js.join('\n');
-    for (const name of called.keys()) {
-      if (!declared.has(name) && !AMBIENT_GLOBALS.has(name) && !isDeclaredInRawSource(name, rawJs)) {
+    // perfectly good artifact. So every candidate is re-checked against the RAW source.
+    //
+    // Harvested in ONE pass rather than a regex per candidate. The per-candidate form was
+    // O(names x body) and measured 10s on a 380KB artifact with ~30k names - synchronous on the
+    // completion worker AND on the publish click. This is deliberately LOOSE, matching declarations
+    // even inside comments or strings: a false "it exists" costs one missed detection, a false
+    // "it is missing" wrongly flags a working artifact.
+    const rawDeclared = new Set<string>();
+    collectDeclaredNames(js.join('\n'), rawDeclared);
+
+    for (const name of referencesAreKnowable ? called.keys() : []) {
+      if (!declared.has(name) && !AMBIENT_GLOBALS.has(name) && !rawDeclared.has(name)) {
         signals.push({ kind: 'undefined_reference', name });
       }
     }
@@ -293,9 +319,9 @@ export function detectElidedContent(body: string, type?: ArtifactType): ElisionR
     // HTML handler attributes live outside <script>, so they are scanned against the same
     // declared set - `onclick="renderBoard()"` with no renderBoard anywhere is the exact
     // shape an elided interactive page leaves behind.
-    if (type === 'html') {
+    if (type === 'html' && referencesAreKnowable) {
       for (const { attribute, name } of collectHandlerCalls(body)) {
-        if (!declared.has(name) && !AMBIENT_GLOBALS.has(name) && !isDeclaredInRawSource(name, rawJs)) {
+        if (!declared.has(name) && !AMBIENT_GLOBALS.has(name) && !rawDeclared.has(name)) {
           signals.push({ kind: 'undefined_handler', name, attribute });
         }
       }
@@ -335,18 +361,50 @@ const HOLLOW_BODY_HIGH_CONFIDENCE = 3;
  * sources, in which comments are blank space, so a stub body reads as pure whitespace. Matches
  * only bodies with no nested braces, which is all a stub has - any real implementation
  * containing a block simply will not match, so this cannot fire on working code.
+ *
+ * All three declaration forms are covered. The `function` keyword alone was not enough: react
+ * artifacts overwhelmingly use `const handleX = () => {}`, so a react artifact with every handler
+ * hollowed out - this detector's whole reason for existing, in the framework it most often has to
+ * work in - produced zero signals.
  */
 function collectCommentOnlyFunctions(strippedSources: string[]): string[] {
-  const hollow: string[] = [];
+  // A SET, not a list: the same hollow function matches several patterns below (`function foo() {}`
+  // matches both the declaration form and the method-shorthand form), and counting it twice would
+  // walk an artifact toward HOLLOW_BODY_HIGH_CONFIDENCE on half the evidence.
+  const hollow = new Set<string>();
   for (const stripped of strippedSources) {
-    const pattern = /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*\([^()]*\)\s*\{([^{}]*)\}/g;
-    let m: RegExpExecArray | null;
-    while ((m = pattern.exec(stripped)) !== null) {
-      if (m[2].trim() === '') hollow.push(m[1]);
+    for (const pattern of HOLLOW_BODY_PATTERNS) {
+      pattern.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = pattern.exec(stripped)) !== null) {
+        if ((m[2] ?? '').trim() !== '') continue;
+        // `if (x) { }` and `catch (e) { }` are shaped exactly like method shorthand.
+        if (CALL_LIKE_KEYWORDS.has(m[1]) || NEVER_HOLLOW_NAMES.has(m[1])) continue;
+        hollow.add(m[1]);
+      }
     }
   }
-  return hollow;
+  return [...hollow];
 }
+
+/** Names whose empty body is ordinary rather than a stub. */
+const NEVER_HOLLOW_NAMES: ReadonlySet<string> = new Set(['constructor', 'try', 'finally', 'else']);
+
+/**
+ * Declaration forms whose body can be checked for hollowness. Each captures the NAME in group 1 and
+ * the BODY in group 2, and each body pattern is `[^{}]*` so a nested block disqualifies the match -
+ * that is what keeps this from firing on real implementations.
+ */
+const HOLLOW_BODY_PATTERNS: readonly RegExp[] = [
+  // function declarations and named function expressions
+  /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*\([^()]*\)\s*\{([^{}]*)\}/g,
+  // arrow assigned to a binding: `const handleClick = () => {}`, `let f = async (a) => {}`
+  /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{([^{}]*)\}/g,
+  // arrow assigned to an existing or namespaced binding: `window.render = () => {}`
+  /(?:^|[\s;{}])(?:window\.)?([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{([^{}]*)\}/gm,
+  // object-literal / class method shorthand: `render() {}`, `async load() {}`
+  /(?:^|[\s;{,])(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^()]*\)\s*\{([^{}]*)\}/gm,
+];
 
 /**
  * Extracts comment text - and ONLY comment text - then matches the stub phrases against it.
@@ -355,138 +413,234 @@ function collectCommentOnlyFunctions(strippedSources: string[]): string[] {
  */
 function findPlaceholderComments(body: string, type?: ArtifactType): ElisionSignal[] {
   const found: ElisionSignal[] = [];
-  const lines = body.split('\n');
-  let inBlockComment = false;
-  let inHtmlComment = false;
+  const seenLines = new Set<number>();
 
-  lines.forEach((line, index) => {
-    const commentParts: string[] = [];
-    let rest = line;
-
-    // Continuations of a multi-line comment opened on an earlier line.
-    if (inBlockComment) {
-      const end = rest.indexOf('*/');
-      if (end === -1) {
-        commentParts.push(rest);
-        rest = '';
-      } else {
-        commentParts.push(rest.slice(0, end));
-        rest = rest.slice(end + 2);
-        inBlockComment = false;
+  for (const comment of collectComments(body, type)) {
+    const line = indexToLine(body, comment.start);
+    if (seenLines.has(line)) continue; // one signal per line is enough; keeps the payload small
+    for (const pattern of PLACEHOLDER_PATTERNS) {
+      if (pattern.test(comment.text)) {
+        seenLines.add(line);
+        found.push({ kind: 'placeholder_comment', match: comment.text.trim().slice(0, 200), line });
+        break;
       }
-    }
-    if (inHtmlComment && rest) {
-      const end = rest.indexOf('-->');
-      if (end === -1) {
-        commentParts.push(rest);
-        rest = '';
-      } else {
-        commentParts.push(rest.slice(0, end));
-        rest = rest.slice(end + 3);
-        inHtmlComment = false;
-      }
-    }
-
-    while (rest) {
-      const block = rest.indexOf('/*');
-      const html = rest.indexOf('<!--');
-      const lineComment = findLineCommentStart(rest);
-      const hash = type === 'python' ? findHashCommentStart(rest) : -1;
-      const next = [block, html, lineComment, hash].filter(i => i !== -1).sort((a, b) => a - b)[0];
-      if (next === undefined) break;
-
-      if (next === lineComment || next === hash) {
-        commentParts.push(rest.slice(next));
-        rest = '';
-      } else if (next === block) {
-        const end = rest.indexOf('*/', next + 2);
-        if (end === -1) {
-          commentParts.push(rest.slice(next + 2));
-          inBlockComment = true;
-          rest = '';
-        } else {
-          commentParts.push(rest.slice(next + 2, end));
-          rest = rest.slice(end + 2);
-        }
-      } else {
-        const end = rest.indexOf('-->', next + 4);
-        if (end === -1) {
-          commentParts.push(rest.slice(next + 4));
-          inHtmlComment = true;
-          rest = '';
-        } else {
-          commentParts.push(rest.slice(next + 4, end));
-          rest = rest.slice(end + 3);
-        }
-      }
-    }
-
-    for (const text of commentParts) {
-      for (const pattern of PLACEHOLDER_PATTERNS) {
-        const match = pattern.exec(text);
-        if (match) {
-          found.push({ kind: 'placeholder_comment', match: text.trim().slice(0, 200), line: index + 1 });
-          return; // one signal per line is enough; keeps the payload small
-        }
-      }
-    }
-  });
-
-  return found;
-}
-
-/**
- * Index of a `//` that starts a comment - skips `://` (URLs), `//` inside a quoted string, and a
- * protocol-relative URL (`//example.com/x`), which at column 0 has no preceding `:` to catch it.
- */
-function findLineCommentStart(line: string): number {
-  let quote: string | null = null;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (quote) {
-      if (ch === '\\') i++;
-      else if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === '`') {
-      quote = ch;
-      continue;
-    }
-    if (ch === '/' && line[i + 1] === '/' && line[i - 1] !== ':') {
-      if (PROTOCOL_RELATIVE_URL_REGEX.test(line.slice(i))) continue;
-      return i;
     }
   }
-  return -1;
+
+  return found.sort((a, b) => (a as { line: number }).line - (b as { line: number }).line);
+}
+
+/** A comment as located in the original body. `start` indexes the opening delimiter. */
+interface RawCommentSpan {
+  start: number;
+  text: string;
 }
 
 /**
- * A protocol-relative URL, e.g. `//cdn.example.com/lib.js`. Requires a dotted host immediately
- * after the slashes, which a real comment never has - `// example.com is down` has a space, and
- * `//TODO` has no dot. `localhost` is spelled out because it is the one routine dotless host;
- * admitting dotless hosts GENERALLY would read `//TODO: rest omitted` as a URL and stop scanning
- * a whole class of real stub comments, which is the far more expensive mistake.
+ * Every comment in the body, lexed by the rules of the language it is actually written in.
+ *
+ * Dispatching on type matters: in HTML, `//` is not a comment and a quote is either attribute
+ * syntax or ordinary apostrophe-bearing prose, while inside `<script>` the JS rules apply and `<!--`
+ * means nothing. Lexing one with the other's rules is what produced high-confidence false positives
+ * on artifacts that merely displayed sample code or assembled markup in a template literal.
  */
-const PROTOCOL_RELATIVE_URL_REGEX = /^\/\/(?:[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+|localhost)(?:[/:?#]|$)/;
+function collectComments(body: string, type?: ArtifactType): RawCommentSpan[] {
+  if (type === 'python') return collectHashComments(body);
+  if (type === 'html') return collectHtmlComments(body);
 
-/** Index of a python `#` comment marker outside any quoted string. */
-function findHashCommentStart(line: string): number {
+  // react / code / unknown: JS rules. The HTML sweep runs over the STRIPPED output, where every
+  // string, template and comment is already blanked, so `<!--` can only be found in live markup
+  // (a `code` artifact holding an HTML document) and never inside JS data.
+  const spans: RawCommentSpan[] = [];
+  const stripped = stripCommentsAndStrings(body, spans);
+  spans.push(...collectHtmlCommentDelimited(stripped, body, 0));
+  return spans;
+}
+
+/**
+ * HTML comments in a markup region, read from `scanIn` but with text taken from `textFrom` at the
+ * same offsets (so a blanked stripper output can locate them while the real text is reported).
+ */
+function collectHtmlCommentDelimited(scanIn: string, textFrom: string, offset: number): RawCommentSpan[] {
+  const spans: RawCommentSpan[] = [];
+  let from = 0;
+  for (;;) {
+    const open = scanIn.indexOf('<!--', from);
+    if (open === -1) break;
+    const close = scanIn.indexOf('-->', open + 4);
+    const end = close === -1 ? scanIn.length : close;
+    spans.push({ start: offset + open, text: textFrom.slice(open + 4, end) });
+    if (close === -1) break;
+    from = close + 3;
+  }
+  return spans;
+}
+
+/**
+ * Walks an HTML document, applying the right comment rules per region: `<!-- -->` in markup,
+ * JS rules inside `<script>`, and `/* *\/` inside `<style>`. Attribute values are skipped so a
+ * quoted `//` or `<!--` inside one cannot register.
+ */
+function collectHtmlComments(html: string): RawCommentSpan[] {
+  const spans: RawCommentSpan[] = [];
+  let i = 0;
+
+  while (i < html.length) {
+    if (html.startsWith('<!--', i)) {
+      const close = html.indexOf('-->', i + 4);
+      const end = close === -1 ? html.length : close;
+      spans.push({ start: i, text: html.slice(i + 4, end) });
+      if (close === -1) break;
+      i = close + 3;
+      continue;
+    }
+
+    const embedded = /^<(script|style)\b/i.exec(html.slice(i));
+    if (embedded) {
+      const tagName = embedded[1].toLowerCase();
+      const openEnd = html.indexOf('>', i);
+      if (openEnd === -1) break;
+      const closeTag = new RegExp(`</${tagName}\\s*>`, 'i').exec(html.slice(openEnd + 1));
+      const bodyStart = openEnd + 1;
+      const bodyEnd = closeTag ? bodyStart + closeTag.index : html.length;
+      const inner = html.slice(bodyStart, bodyEnd);
+
+      if (tagName === 'script') {
+        const innerSpans: RawCommentSpan[] = [];
+        stripCommentsAndStrings(inner, innerSpans);
+        for (const s of innerSpans) spans.push({ start: bodyStart + s.start, text: s.text });
+      } else {
+        for (const s of collectCssComments(inner)) spans.push({ start: bodyStart + s.start, text: s.text });
+      }
+
+      i = closeTag ? bodyEnd + closeTag[0].length : html.length;
+      continue;
+    }
+
+    if (html[i] === '<') {
+      i = skipHtmlTag(html, i);
+      continue;
+    }
+
+    i++;
+  }
+
+  return spans;
+}
+
+/** Index just past the tag starting at `open`, skipping quoted attribute values. */
+function skipHtmlTag(html: string, open: number): number {
+  let i = open + 1;
   let quote: string | null = null;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
+  while (i < html.length) {
+    const ch = html[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '>') {
+      return i + 1;
+    }
+    i++;
+  }
+  return html.length;
+}
+
+/** `/* *\/` comments in CSS. No line comments, no templates - strings only. */
+function collectCssComments(css: string): RawCommentSpan[] {
+  const spans: RawCommentSpan[] = [];
+  let i = 0;
+  let quote: string | null = null;
+  while (i < css.length) {
+    const ch = css[i];
     if (quote) {
       if (ch === '\\') i++;
       else if (ch === quote) quote = null;
+      i++;
       continue;
     }
     if (ch === '"' || ch === "'") {
       quote = ch;
+      i++;
       continue;
     }
-    if (ch === '#') return i;
+    if (ch === '/' && css[i + 1] === '*') {
+      const close = css.indexOf('*/', i + 2);
+      const end = close === -1 ? css.length : close;
+      spans.push({ start: i, text: css.slice(i + 2, end) });
+      if (close === -1) break;
+      i = close + 2;
+      continue;
+    }
+    i++;
   }
-  return -1;
+  return spans;
 }
+
+/** 1-based line number for a byte offset. */
+function indexToLine(source: string, index: number): number {
+  let line = 1;
+  for (let i = 0; i < index && i < source.length; i++) {
+    if (source[i] === '\n') line++;
+  }
+  return line;
+}
+
+// A protocol-relative-URL pattern used to live here, to stop `<script src="//cdn.example.com/x">`
+// being read as a line comment. It is gone because the cause is gone: HTML is now walked
+// tag-aware (see skipHtmlTag), so an attribute value is never scanned for comments in the first
+// place, and inside a <script> body a bare `//host/path` line IS a JS line comment - reading it as
+// one is correct, not a workaround. Both behaviours stay pinned by tests.
+
+/**
+ * Python `#` comments, skipping quoted strings including triple-quoted blocks (a docstring
+ * containing `#` or a stub phrase must not register - docstrings are prose by definition).
+ */
+function collectHashComments(source: string): RawCommentSpan[] {
+  const spans: RawCommentSpan[] = [];
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+
+    if (ch === '"' || ch === "'") {
+      const triple = source.startsWith(ch.repeat(3), i);
+      const delimiter = triple ? ch.repeat(3) : ch;
+      i += delimiter.length;
+      while (i < source.length && !source.startsWith(delimiter, i)) {
+        i += source[i] === '\\' ? 2 : 1;
+      }
+      i += delimiter.length;
+      continue;
+    }
+
+    if (ch === '#') {
+      const newline = source.indexOf('\n', i);
+      const end = newline === -1 ? source.length : newline;
+      spans.push({ start: i, text: source.slice(i + 1, end) });
+      i = end;
+      continue;
+    }
+
+    i++;
+  }
+  return spans;
+}
+
+/**
+ * Whether the body loads a script from another origin - `https://`, `http://`, or protocol-relative
+ * `//host/`. Root-relative sources are deliberately NOT counted: those are the self-hosted blessed
+ * libraries whose globals are already listed in AMBIENT_GLOBALS, so they remain knowable.
+ *
+ * Matched by attribute rather than by importing the blessed-path list, which lives in the
+ * `@bike4mind/common` barrel - and pulling the barrel in would defeat the point of this module
+ * having its own dependency-free subpath entry.
+ */
+function hasOffsiteScript(html: string): boolean {
+  OFFSITE_SCRIPT_REGEX.lastIndex = 0;
+  return OFFSITE_SCRIPT_REGEX.test(html);
+}
+
+const OFFSITE_SCRIPT_REGEX = /<script\b[^>]*\bsrc\s*=\s*["']?\s*(?:https?:)?\/\//i;
 
 function extractScriptBodies(html: string): string[] {
   const bodies: string[] = [];
@@ -501,13 +655,22 @@ function extractScriptBodies(html: string): string[] {
 /**
  * Blanks out comments and string/template literals so the identifier scans below never see
  * code-shaped text inside data. Regex literals are recognised by the usual "what preceded it"
- * heuristic - a `/` after an operator or opener starts a regex, a `/` after a value is division.
- * Replaces with spaces rather than deleting so nothing is falsely joined across the gap.
+ * heuristic - a `/` after an operator, opener, or value-less keyword starts a regex, a `/` after a
+ * value is division. Replaces with spaces rather than deleting so nothing is falsely joined across
+ * the gap, which also makes the output POSITION-IDENTICAL to the input - `collectInto` spans are
+ * therefore valid indices into the original source.
+ *
+ * Pass `collectInto` to also harvest every comment this pass identifies. That is the ONLY supported
+ * way to find comments in JS: the placeholder scan used to re-lex the raw body with a weaker
+ * line-by-line matcher that had no string or template state, so an artifact merely DISPLAYING
+ * `/* for brevity *\/` inside a string flagged at high confidence.
  */
-function stripCommentsAndStrings(source: string): string {
+function stripCommentsAndStrings(source: string, collectInto?: RawCommentSpan[]): string {
   let out = '';
   let i = 0;
   let prevMeaningful = '';
+  /** Preceding identifier/keyword run, needed because `return /re/` is a regex, not division. */
+  let prevWord = '';
   /**
    * Nested template-literal contexts, innermost last. Each entry is the `{` nesting depth
    * within the current `${ ... }` interpolation, or TEMPLATE_TEXT while in the literal's
@@ -563,19 +726,24 @@ function stripCommentsAndStrings(source: string): string {
     }
 
     if (ch === '/' && next === '/') {
+      const start = i;
       while (i < source.length && source[i] !== '\n') {
         out += ' ';
         i++;
       }
+      collectInto?.push({ start, text: source.slice(start + 2, i) });
       continue;
     }
     if (ch === '/' && next === '*') {
+      const start = i;
       out += '  ';
       i += 2;
+      const textStart = i;
       while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
         out += source[i] === '\n' ? '\n' : ' ';
         i++;
       }
+      collectInto?.push({ start, text: source.slice(textStart, i) });
       out += '  ';
       i += 2;
       continue;
@@ -606,7 +774,7 @@ function stripCommentsAndStrings(source: string): string {
       i++;
       continue;
     }
-    if (ch === '/' && startsRegexLiteral(prevMeaningful)) {
+    if (ch === '/' && startsRegexLiteral(prevMeaningful, prevWord)) {
       out += ' ';
       i++;
       while (i < source.length && source[i] !== '/' && source[i] !== '\n') {
@@ -633,6 +801,9 @@ function stripCommentsAndStrings(source: string): string {
 
     out += ch;
     if (!/\s/.test(ch)) prevMeaningful = ch;
+    // Accumulate the current identifier run so a keyword before `/` can be recognised.
+    if (/[A-Za-z_$]/.test(ch) || (prevWord && /[\w$]/.test(ch))) prevWord += ch;
+    else if (!/\s/.test(ch)) prevWord = '';
     i++;
   }
 
@@ -642,9 +813,32 @@ function stripCommentsAndStrings(source: string): string {
 /** Stack sentinel: we are in a template literal's text, not inside a `${ ... }` interpolation. */
 const TEMPLATE_TEXT = -1;
 
+/**
+ * Keywords after which a `/` opens a regex literal, because none of them evaluates to a value that
+ * could be divided. Without these, `return /\d+/.test(x)` lexed as division and the "regex" body
+ * stayed live code, leaking phantom identifiers into the undefined-reference scan.
+ */
+const REGEX_PRECEDING_KEYWORDS: ReadonlySet<string> = new Set([
+  'return',
+  'typeof',
+  'instanceof',
+  'in',
+  'of',
+  'case',
+  'delete',
+  'void',
+  'throw',
+  'new',
+  'do',
+  'else',
+  'yield',
+  'await',
+]);
+
 /** A `/` in these positions opens a regex literal rather than dividing. */
-function startsRegexLiteral(prevMeaningful: string): boolean {
+function startsRegexLiteral(prevMeaningful: string, prevWord = ''): boolean {
   if (!prevMeaningful) return true;
+  if (REGEX_PRECEDING_KEYWORDS.has(prevWord)) return true;
   return '(,=:[!&|?{};+-*%<>~^'.includes(prevMeaningful);
 }
 
@@ -656,6 +850,10 @@ const DECLARATION_PATTERNS: readonly RegExp[] = [
   /(?:^|[\s;{}])(?:window\.)?([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|\()/gm,
   // Object-literal / class method shorthand: `render() {`
   /(?:^|[\s;{,])([A-Za-z_$][\w$]*)\s*\([^()]*\)\s*\{/g,
+  // Property assigned a function: `render: function () {}`, `render: () => {}`. Over-inclusive by
+  // design (a ternary's `: fn(` also matches) - over-inclusive means a missed detection, never a
+  // false positive on working code.
+  /(?:^|[\s;{,])([A-Za-z_$][\w$]*)\s*:\s*(?:async\s+)?(?:function\b|\()/g,
   // import default / namespace
   /\bimport\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\b/g,
 ];
@@ -718,20 +916,10 @@ function harvestBoundNames(groupText: string, into: Set<string>): void {
  */
 const CALL_LOOKBACK_CHARS = 64;
 
-/**
- * Whether `name` is declared anywhere in the raw (un-stripped) source. A guard against a
- * stripper desync producing phantom "undefined" names, nothing more. Deliberately loose - it
- * matches a declaration even inside a comment or string, because a false "it exists" costs one
- * missed detection while a false "it is missing" wrongly flags a complete artifact.
- */
-function isDeclaredInRawSource(name: string, source: string): boolean {
-  const escaped = name.replace(/\$/g, '\\$');
-  return new RegExp(
-    `(?:function\\s*\\*?\\s*|class\\s+|const\\s+|let\\s+|var\\s+)${escaped}\\b` +
-      `|\\b${escaped}\\s*[:=]\\s*(?:async\\s*)?(?:function\\b|\\()` +
-      `|\\b${escaped}\\s*\\([^()]*\\)\\s*\\{`
-  ).test(source);
-}
+// The raw-source declaration guard used to be a per-candidate `isDeclaredInRawSource(name, source)`
+// that compiled a RegExp and rescanned the whole body for every candidate - O(names x body). It is
+// now one `collectDeclaredNames` pass over the raw source at the call site, membership-tested per
+// candidate. Same looseness, same purpose, without the quadratic blow-up on a large artifact.
 
 /** Bare-identifier call sites. Member calls (`obj.run()`) are excluded - we cannot resolve them. */
 function collectCalledNames(source: string): Set<string> {
