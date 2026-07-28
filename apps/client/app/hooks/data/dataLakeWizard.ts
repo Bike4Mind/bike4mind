@@ -853,8 +853,9 @@ export function useReprocessFabFile(dataLakeId: string | null) {
 }
 
 /**
- * Hook: Remove a single file from a data lake (soft-delete + chunk teardown).
- * Owner/admin only; the server verifies the file actually belongs to the lake.
+ * Hook: Remove a single file from a data lake. Drops the lake's membership tags from the file
+ * and leaves the file itself alone - no soft-delete, no chunk teardown. Owner/admin only; the
+ * server verifies the file actually belongs to the lake.
  */
 export function useRemoveFileFromDataLake(dataLakeId: string | null) {
   const queryClient = useQueryClient();
@@ -870,6 +871,12 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       if (dataLakeId) queryClient.invalidateQueries({ queryKey: ['dataLakeFiles', dataLakeId] });
       // Refresh the lake list so the cached fileCount reflects the removal.
       queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
+      // Removal also drops the file's tags under the lake's prefix, so every tag-derived view
+      // is stale. Invalidate on the bare key prefixes: these are keyed by an opti/datalakes
+      // source discriminator, and a fully-specified key would refresh only one surface.
+      queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
+      queryClient.invalidateQueries({ queryKey: ['dataLakeArticles'] });
+      queryClient.invalidateQueries({ queryKey: ['file-tags', 'counts'] });
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to remove file from data lake');

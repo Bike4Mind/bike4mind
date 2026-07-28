@@ -32,7 +32,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefined }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
-import { useBatchUpload } from './dataLakeWizard';
+import { useBatchUpload, useRemoveFileFromDataLake } from './dataLakeWizard';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
 const mountBatchUpload = () => {
@@ -439,5 +439,30 @@ describe('useBatchUpload rollback (#816)', () => {
     expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(true);
     expect(putCall('/api/data-lakes/batches/batch1')?.[1]).toMatchObject({ status: 'failed' });
     expect(toastMock.success).not.toHaveBeenCalled();
+  });
+});
+
+describe('useRemoveFileFromDataLake cache invalidation', () => {
+  it('invalidates every tag-derived view, not just the lake file list', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 0, totalSizeBytes: 0 } });
+
+    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    // Removal now drops the file's tags under the lake prefix, so the tag tree and the article
+    // surfaces are stale too. Bare key prefixes: both are keyed by a source discriminator, and
+    // a fully-specified key would refresh only one of the two surfaces.
+    expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
+    expect(keys).toContain(JSON.stringify(['dataLakeArticles']));
+    expect(keys).toContain(JSON.stringify(['file-tags', 'counts']));
   });
 });
