@@ -116,6 +116,26 @@ describe('FilesSection message-scoped files', () => {
     expect(screen.queryByTestId('files-section-promote-btn-m1')).toBeNull();
   });
 
+  it('refuses to promote an image that has not cleared moderation', () => {
+    // A knowledgeIds entry follows the file into clones, exports and the project
+    // fan-out, so an unscanned or blocked image must never acquire one.
+    messageFiles = [{ ...fab('m1', 'shot.png', 'me', 'image/png'), moderationStatus: 'pending' } as IFabFileDocument];
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId('files-section-promote-btn-m1'));
+
+    expect(mockAdd).not.toHaveBeenCalled();
+  });
+
+  it('promotes an image once it has cleared moderation', () => {
+    messageFiles = [{ ...fab('m1', 'shot.png', 'me', 'image/png'), moderationStatus: 'clean' } as IFabFileDocument];
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId('files-section-promote-btn-m1'));
+
+    expect(mockAdd).toHaveBeenCalledOnce();
+  });
+
   it('renders nothing when there are no files of any kind', () => {
     const { container } = renderPanel();
     expect(container.firstChild).toBeNull();

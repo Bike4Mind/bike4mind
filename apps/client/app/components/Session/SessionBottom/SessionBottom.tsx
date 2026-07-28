@@ -353,7 +353,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           .getState()
           .pendingMessageFiles.find(item => item.fabFile.id === msg.fabFileId);
         if (promoted?.scope === 'notebook') {
-          void addToNotebookContext(currentSessionId, promoted.fabFile, { propagateToProjects: false });
+          void addToNotebookContext(currentSessionId, promoted.fabFile, { propagateToProjects: false }).catch(() => {
+            // Already rolled back and surfaced by the hook.
+          });
         }
       } else {
         recordModerationStatus(msg.fabFileId, msg.moderationStatus);

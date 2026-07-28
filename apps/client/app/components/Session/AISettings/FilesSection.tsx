@@ -4,7 +4,7 @@ import { Badge, Box, Chip, CircularProgress, Divider, IconButton, Tooltip, Typog
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
-import { IFabFileDocument, MimeType, isImageAttachment } from '@bike4mind/common';
+import { IFabFileDocument, MimeType, isImageAttachment, isImageServeable } from '@bike4mind/common';
 import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
 import {
   useSessions,
@@ -287,10 +287,19 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
 
   const handlePromote = useCallback(
     (file: IFabFileDocument) => {
+      // An unscanned or blocked image must not acquire a knowledgeIds entry: that entry
+      // follows the file into clones, exports and the project fan-out. Documents resolve
+      // to 'clean' immediately, so this only ever holds back an image mid-scan.
+      if (isImageAttachment(file.mimeType) && !isImageServeable(file)) {
+        toast.error('That image is still being scanned - try again in a moment');
+        return;
+      }
       // An explicit user gesture, so project propagation keeps its default.
-      void addToNotebookContext(currentSessionId, file).then(() =>
-        toast.success(`"${file.fileName}" is now available to this whole notebook`)
-      );
+      void addToNotebookContext(currentSessionId, file)
+        .then(() => toast.success(`"${file.fileName}" is now available to this whole notebook`))
+        .catch(() => {
+          // Already rolled back and surfaced by the hook.
+        });
     },
     [currentSessionId, addToNotebookContext]
   );

@@ -8,12 +8,18 @@ import { isOptimisticId } from '@client/app/utils/llm';
 /**
  * The write path for a notebook's context files (`session.knowledgeIds`).
  *
- * Everything that adds or removes a notebook-context file should go through here
- * rather than pairing a `setWorkBenchFiles` call with its own persist. The older
- * idiom computed the new id list from a captured `currentSession`, which loses a
+ * The composer and file-manager paths write through here. The older idiom they
+ * replaced computed the new id list from a captured `currentSession`, which loses a
  * concurrent write, and persisted through a fire-and-forget helper that swallowed
  * failures - a silent no-op is the worst possible outcome for a feature whose entire
  * symptom is a file quietly missing from context.
+ *
+ * It is NOT yet the only writer. Roughly a dozen other surfaces still set
+ * `knowledgeIds` through `setCurrentSession` (Drive add, file browser, artifact and
+ * snippet cards, the workbench strip, paste) and keep the old captured-session idiom.
+ * They are safe from the propagation-leak class because the server only propagates the
+ * files a write ADDS, but they remain exposed to the lost-update race. Migrating them
+ * is follow-on work, not something this doc comment should pretend is done.
  *
  * `propagateToProjects` is threaded to the server deliberately. An upload that lands
  * in notebook context by DEFAULT has consented to this notebook, not to every project

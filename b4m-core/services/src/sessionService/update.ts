@@ -65,9 +65,19 @@ export const updateSession = async (
     throw new NotFoundError('Session not found');
   }
 
-  // If the knowledge IDs have changed, we need to update the projects
+  // Propagate only what this write ADDS, never the whole list.
+  //
+  // Propagating the full list makes the propagateToProjects flag leak across writes: a
+  // file added earlier with propagation off gets pushed into the project by the next
+  // write that happens to have it on, and a removal - which sends the surviving files -
+  // propagates all of them. Since project.fileIds is append-only and additive, the
+  // delta is the only set that ever needs propagating anyway.
   if (knowledgeIds && !isEqual(session.knowledgeIds, knowledgeIds) && propagateToProjects !== false) {
-    await addFilesToProjects(user, { session, fileIds: knowledgeIds }, adapters);
+    const alreadyKnown = new Set(session.knowledgeIds ?? []);
+    const addedFileIds = knowledgeIds.filter(id => !alreadyKnown.has(id));
+    if (addedFileIds.length > 0) {
+      await addFilesToProjects(user, { session, fileIds: addedFileIds }, adapters);
+    }
   }
 
   session.name = name || session.name;

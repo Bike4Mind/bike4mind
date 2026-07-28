@@ -156,6 +156,41 @@ describe('updateSession - project propagation opt-out', () => {
     expect(adapters.db.sessions.update.mock.calls[0][0].knowledgeIds).toEqual(['new-file']);
   });
 
+  it('propagates only the newly added file, not the whole list', async () => {
+    // Regression: propagating the full list let the flag leak across writes. A file
+    // added earlier with propagation OFF would be pushed into the project by the next
+    // write that had it ON - e.g. promoting one file publishing an unrelated one.
+    const { project, adapters } = makeAdapters();
+    adapters.db.sessions.shareable.findUpdateAccessById.mockResolvedValue({
+      id: 'session-1',
+      knowledgeIds: ['kept-private'],
+      artifactIds: [],
+      tags: [],
+      name: 'Session',
+    });
+
+    await updateSession(user, { id: 'session-1', knowledgeIds: ['kept-private', 'new-file'] }, adapters);
+
+    expect(project.fileIds).toEqual(['already-there', 'new-file']);
+    expect(project.fileIds).not.toContain('kept-private');
+  });
+
+  it('does not touch projects when a write only REMOVES files', async () => {
+    const { project, adapters } = makeAdapters();
+    adapters.db.sessions.shareable.findUpdateAccessById.mockResolvedValue({
+      id: 'session-1',
+      knowledgeIds: ['a', 'b'],
+      artifactIds: [],
+      tags: [],
+      name: 'Session',
+    });
+
+    await updateSession(user, { id: 'session-1', knowledgeIds: ['a'] }, adapters);
+
+    expect(project.fileIds).toEqual(['already-there']);
+    expect(adapters.db.projects.update).not.toHaveBeenCalled();
+  });
+
   it('propagates when propagateToProjects is explicitly true', async () => {
     const { project, adapters } = makeAdapters();
 

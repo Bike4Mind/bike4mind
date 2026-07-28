@@ -763,7 +763,10 @@ export async function processFabFilesServer(
   // divided up front or N files would each get the full allowance. Images are excluded:
   // they do not consume this text budget.
   const textFileCount = Math.max(1, fabFiles.filter(f => !isImageAttachment(f.mimeType)).length);
-  const maxTokens = Math.floor(attachedContentTokenBudget / textFileCount);
+  // Guard the per-file share against 0: the char caps below read a non-positive budget
+  // as "no budget supplied" and fall back to a flat MAX_FILE_SIZE per file, which at N
+  // files is unbounded. A caller that genuinely has no room should send no files.
+  const maxTokens = Math.max(1, Math.floor(attachedContentTokenBudget / textFileCount));
 
   const fileContentCache = new Map<string, string>();
 

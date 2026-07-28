@@ -176,6 +176,13 @@ const HISTORY_BUDGET_PERCENTAGE = 0.3;
  * first, keeps the majority. See attachedFileTokenBudget at its only use site.
  */
 const ATTACHED_CONTENT_SHARE = 0.35;
+/**
+ * Floor for the attached-content budget, as a share of the raw input window. Applies
+ * when subtracting SYSTEM_PROMPT_RESERVE would drive the budget to zero, which a small
+ * local model does routinely. See attachedFileTokenBudget for why zero is the dangerous
+ * value rather than the safe one.
+ */
+const MIN_ATTACHED_CONTENT_SHARE = 0.15;
 
 /**
  * Conservative fallback for simple query max history.
@@ -1426,17 +1433,22 @@ export class ChatCompletionProcess {
       // How much attached-file content may be extracted this turn.
       //
       // This used to be `max_tokens`, the model's OUTPUT cap, which is unrelated to how
-      // much of a file can be read and is often far smaller: a caller asking for short
-      // answers silently shrank its own retrieval, and a caller that omitted max_tokens
-      // fell back to a flat 6000 characters. Deriving it from the input window instead
-      // means a large-context model can actually use one, and a small local model is
-      // handed less than before rather than being pushed into a hard context overflow.
+      // much of a file can be read and is often far smaller - so asking for shorter
+      // answers silently shrank your own retrieval. Deriving it from the input window
+      // instead means a large-context model can actually use one.
       //
       // Held below the assembly budget on purpose. Extraction estimates at
       // CHARS_PER_TOKEN while assembly re-counts with the real tokenizer, so leaving
       // headroom keeps anything extracted from being dropped again downstream.
+      //
+      // The floor is load-bearing, not defensive. On a small local model the reserve
+      // subtraction goes negative, and a budget of 0 does NOT mean "send nothing" to
+      // processFabFilesServer - it means "no budget given", which restores a flat
+      // per-file cap applied once per file. Three files would then be handed more
+      // content than the whole input window. Flooring at a share of the raw window
+      // keeps the per-file division in effect, and assembly trims from there.
       const attachedFileTokenBudget = Math.max(
-        0,
+        Math.floor(maxSafeInputTokens * MIN_ATTACHED_CONTENT_SHARE),
         Math.floor((maxSafeInputTokens - SYSTEM_PROMPT_RESERVE) * ATTACHED_CONTENT_SHARE)
       );
 

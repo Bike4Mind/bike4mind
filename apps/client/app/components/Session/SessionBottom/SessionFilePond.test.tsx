@@ -25,9 +25,10 @@ vi.mock('@client/app/utils/filesAPICalls', () => ({
   deleteFileUtility: vi.fn(),
 }));
 
+const mockConsumeBuffered = vi.fn().mockReturnValue(undefined);
 vi.mock('@client/app/hooks/useSessionLayout', () => ({
   setPendingMessageFiles: (u: unknown) => mockSetPendingMessageFiles(u),
-  consumeBufferedModerationStatus: () => undefined,
+  consumeBufferedModerationStatus: (...a: unknown[]) => mockConsumeBuffered(...a),
   patchPendingMessageFileModerationStatus: (files: unknown) => files,
 }));
 
@@ -79,6 +80,7 @@ const makeFile = (name: string, type: string) => {
 describe('SessionFilePond attachment scope', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockConsumeBuffered.mockReturnValue(undefined);
     capturedProcess = null;
   });
 
@@ -119,6 +121,29 @@ describe('SessionFilePond attachment scope', () => {
   it('does NOT promote an opted-in image at upload time; that waits for the moderation scan', async () => {
     const add = vi.fn().mockResolvedValue(undefined);
     mockCreateFabFile.mockResolvedValue({ id: 'img1', fileName: 'shot.png', mimeType: 'image/png' });
+
+    await upload('notebook', makeFile('shot.png', 'image/png'), add);
+
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it('promotes an opted-in image whose clean scan arrived before the id swap', async () => {
+    // The WS promotion path matches on the real FabFile id. When the scan beats the
+    // temp-id swap the event is buffered instead, so that lookup finds nothing and the
+    // image would never be promoted. Consuming the buffer here is the last chance.
+    const add = vi.fn().mockResolvedValue(undefined);
+    mockCreateFabFile.mockResolvedValue({ id: 'img1', fileName: 'shot.png', mimeType: 'image/png' });
+    mockConsumeBuffered.mockReturnValue({ moderationStatus: 'clean' });
+
+    await upload('notebook', makeFile('shot.png', 'image/png'), add);
+
+    expect(add).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT promote when the buffered scan says blocked', async () => {
+    const add = vi.fn().mockResolvedValue(undefined);
+    mockCreateFabFile.mockResolvedValue({ id: 'img1', fileName: 'shot.png', mimeType: 'image/png' });
+    mockConsumeBuffered.mockReturnValue({ moderationStatus: 'blocked' });
 
     await upload('notebook', makeFile('shot.png', 'image/png'), add);
 

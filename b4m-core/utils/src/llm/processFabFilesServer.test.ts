@@ -131,10 +131,14 @@ describe('processFabFilesServer attached-content budget', () => {
     expect(emittedChars(large.userMessages)).toBeGreaterThan(emittedChars(small.userMessages));
   });
 
-  it('falls back to the flat cap when the budget is zero', async () => {
+  it('does not restore the flat per-file cap when the budget is zero', async () => {
+    // The trap: the char caps read a non-positive budget as "no budget supplied" and
+    // fall back to MAX_FILE_SIZE *per file*. With three files that is 18k characters,
+    // which on the small-context models that actually produce a zero budget exceeds the
+    // entire input window. A single-file test passes either way, so this uses three.
     const { userMessages } = await processFabFilesServer(
       embeddingFactory,
-      [textFile('a')],
+      [textFile('a'), textFile('b'), textFile('c')],
       'prompt',
       0,
       modelInfo,
@@ -142,7 +146,6 @@ describe('processFabFilesServer attached-content budget', () => {
       deps()
     );
 
-    expect(emittedChars(userMessages)).toBeLessThanOrEqual(MAX_FILE_SIZE + FRAMING_ALLOWANCE_PER_FILE);
-    expect(emittedChars(userMessages)).toBeGreaterThan(0);
+    expect(emittedChars(userMessages)).toBeLessThan(MAX_FILE_SIZE);
   });
 });

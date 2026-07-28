@@ -175,6 +175,15 @@ export function SessionFilePond({
                 // hasn't resolved yet - GetFileIcon shows the scanning placeholder
                 // until the image_moderation_status websocket event flips it to clean/blocked.
                 const isImageUpload = isImageAttachment(fabFile.mimeType);
+
+                // Consume the buffer BEFORE the state update, not inside the updater.
+                // The WS handler promotes notebook-scoped images once they clear, but it
+                // matches on the real FabFile id - and when the scan beat this swap the
+                // event was buffered instead, so that lookup found nothing. This is the
+                // only remaining chance to see it. Read out here so the promotion
+                // decision below does not depend on a state updater having already run.
+                const buffered = isImageUpload ? consumeBufferedModerationStatus(fabFile.id) : undefined;
+
                 setPendingMessageFiles(prev => {
                   const withRealFile = prev.map(item =>
                     item.fabFile.id === tempId
@@ -189,14 +198,8 @@ export function SessionFilePond({
                       : item
                   );
 
-                  if (!isImageUpload) return withRealFile;
-
-                  // The image_moderation_status websocket event can arrive before this
-                  // temp-id -> real-FabFile-id swap resolves (a race) - the
-                  // subscriber can't match it to a pending item yet and buffers it by
-                  // fabFileId instead. Replay it now so the item doesn't get stuck on the
+                  // Replay the buffered scan result so the item doesn't sit on the
                   // 'scanning' placeholder set just above.
-                  const buffered = consumeBufferedModerationStatus(fabFile.id);
                   if (!buffered) return withRealFile;
 
                   return patchPendingMessageFileModerationStatus(
@@ -215,8 +218,10 @@ export function SessionFilePond({
                 //
                 // propagateToProjects is false: landing in notebook context by default
                 // is consent to THIS notebook, not to every project containing it.
-                if (scope === 'notebook' && !isImageUpload) {
-                  void addToNotebookContext(uploadSessionId, fabFile, { propagateToProjects: false });
+                if (scope === 'notebook' && (!isImageUpload || buffered?.moderationStatus === 'clean')) {
+                  void addToNotebookContext(uploadSessionId, fabFile, { propagateToProjects: false }).catch(() => {
+                    // Already rolled back and surfaced by the hook.
+                  });
                 }
 
                 invalidateGearsStatusOnFirstFile();
