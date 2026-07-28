@@ -44,3 +44,100 @@ describe('FabFileChunkRepository.findVectorsByFabFileIds scoping', () => {
     expect(chunks).toEqual([]);
   });
 });
+
+/**
+ * The keyset contract the streaming ranker depends on. Without a total order and an exact cursor,
+ * paging a corpus can skip or repeat chunks and retrieval results stop being reproducible - which
+ * is the defect the unsorted `.limit(cap)` had.
+ */
+describe('FabFileChunkRepository.findVectorsByFabFileIds keyset paging', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  /** Insert in a deliberately non-ascending text order so ordering can't come from insertion. */
+  const seed = async (n: number) => {
+    const created = await FabFileChunk.create(
+      Array.from({ length: n }, (_, i) => ({
+        fabFileId: 'lake',
+        text: `chunk ${n - 1 - i}`,
+        tokenCount: 2,
+        vector: [0.1, 0.2],
+      }))
+    );
+    return created.map(c => String(c._id)).sort();
+  };
+
+  it('returns rows ascending by _id regardless of insertion order', async () => {
+    const ids = await seed(6);
+
+    const chunks = await fabFileChunkRepository.findVectorsByFabFileIds(['lake']);
+
+    expect(chunks.map(c => c.id)).toEqual(ids);
+  });
+
+  it('honours the limit', async () => {
+    await seed(6);
+
+    const chunks = await fabFileChunkRepository.findVectorsByFabFileIds(['lake'], { limit: 2 });
+
+    expect(chunks).toHaveLength(2);
+  });
+
+  it('afterChunkId resumes strictly after that row, so a full walk has no gaps or duplicates', async () => {
+    const ids = await seed(7);
+
+    const walked: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const rows = await fabFileChunkRepository.findVectorsByFabFileIds(['lake'], { limit: 3, afterChunkId: cursor });
+      if (rows.length === 0) break;
+      walked.push(...rows.map(r => r.id));
+      cursor = rows[rows.length - 1].id;
+    }
+
+    expect(walked).toEqual(ids);
+    expect(new Set(walked).size).toBe(walked.length);
+  });
+
+  it('two identical truncating reads return the same rows', async () => {
+    // The old unsorted query could return a different arbitrary slice each time.
+    await seed(8);
+
+    const first = await fabFileChunkRepository.findVectorsByFabFileIds(['lake'], { limit: 3 });
+    const second = await fabFileChunkRepository.findVectorsByFabFileIds(['lake'], { limit: 3 });
+
+    expect(second.map(c => c.id)).toEqual(first.map(c => c.id));
+  });
+
+  it('paging stays scoped to the requested files and still excludes vectorless chunks', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'lake', text: 'a', tokenCount: 1, vector: [0.1] },
+      { fabFileId: 'lake', text: 'no vector', tokenCount: 1, vector: [] },
+      { fabFileId: 'other', text: 'b', tokenCount: 1, vector: [0.1] },
+    ]);
+
+    const chunks = await fabFileChunkRepository.findVectorsByFabFileIds(['lake'], { limit: 10 });
+
+    expect(chunks.map(c => c.text)).toEqual(['a']);
+  });
+
+  it('is served by an index with no in-memory sort stage', async () => {
+    // If this regresses, paging a large lake silently becomes a blocking sort. The compound
+    // { fabFileId: 1, _id: 1 } index is what keeps the keyset walk streaming.
+    await seed(5);
+    await FabFileChunk.ensureIndexes();
+
+    const plan = await FabFileChunk.collection
+      .find({ fabFileId: { $in: ['lake'] }, vector: { $exists: true, $ne: [] } })
+      .sort({ _id: 1 })
+      .limit(3)
+      .explain('queryPlanner');
+
+    const stages = JSON.stringify(plan.queryPlanner.winningPlan);
+    expect(stages).toContain('IXSCAN');
+    expect(stages).not.toContain('"stage":"SORT"');
+  });
+});

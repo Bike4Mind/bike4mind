@@ -182,6 +182,26 @@ function resolveBudgets(budgets: SemanticSearchBudgets | undefined) {
 
 type ResolvedBudgets = ReturnType<typeof resolveBudgets>;
 
+/**
+ * Zeroed accounting for a search that never ran (no scope, blank query). Exported so callers that
+ * short-circuit before reaching the service still return the same `scan` shape - a consumer should
+ * never have to handle `scan` being absent on some responses.
+ */
+export function emptyScanAccounting(budgets?: SemanticSearchBudgets): SemanticSearchScanAccounting {
+  const resolved = resolveBudgets(budgets);
+  return {
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 0,
+    filesScoped: 0,
+    filesScanned: 0,
+    chunksScanned: 0,
+    chunksSkippedDimensionMismatch: 0,
+    budgets: { maxFiles: resolved.maxFiles, maxChunks: resolved.maxChunks },
+  };
+}
+
 function emptyResult(
   embeddingModel: string,
   budgets: ResolvedBudgets,
@@ -192,18 +212,7 @@ function emptyResult(
     totalChunksSearched: 0,
     filesInScope: 0,
     embeddingModel,
-    scan: {
-      truncated: false,
-      fileBudgetHit: false,
-      chunkBudgetHit: false,
-      filesMatching: 0,
-      filesScoped: 0,
-      filesScanned: 0,
-      chunksScanned: 0,
-      chunksSkippedDimensionMismatch: 0,
-      budgets: { maxFiles: budgets.maxFiles, maxChunks: budgets.maxChunks },
-      ...overrides,
-    },
+    scan: { ...emptyScanAccounting(budgets), ...overrides },
   };
 }
 
