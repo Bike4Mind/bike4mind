@@ -177,6 +177,75 @@ describe('ModelLifecycleTab', () => {
     expect(screen.queryByTestId('model-lifecycle-error')).not.toBeInTheDocument();
   });
 
+  it('shows the run own account of the suggestion in the accept confirmation', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        ...STATUS,
+        queue: [
+          {
+            modelId: 'gpt-sunset',
+            suggestion: {
+              ...STATUS.queue[0].suggestion,
+              detail: 'the provider names gpt-live to replace gpt-sunset, but it costs more',
+            },
+          },
+        ],
+      },
+    });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+
+    expect(screen.getByTestId('model-lifecycle-accept-detail')).toHaveTextContent('but it costs more');
+  });
+
+  it('turns a 409 into the blocker list plus an accept-anyway that re-sends the acknowledgement', async () => {
+    mockPost.mockRejectedValueOnce({
+      message: 'Request failed with status code 409',
+      response: {
+        status: 409,
+        data: {
+          code: 'replacement-blocked',
+          blockers: ['cost-not-lower'],
+          details: ['it costs more than the model it would replace'],
+        },
+      },
+    });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+    fireEvent.change(screen.getByTestId('model-lifecycle-note-input'), { target: { value: 'operator pick' } });
+    fireEvent.click(screen.getByTestId('model-lifecycle-accept-confirm-btn'));
+
+    const blockers = await screen.findByTestId('model-lifecycle-accept-blockers');
+    expect(blockers).toHaveTextContent('it costs more than the model it would replace');
+    // A refusal an operator may overrule is not the same thing as a failure.
+    expect(screen.queryByTestId('model-lifecycle-accept-error')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('model-lifecycle-accept-confirm-btn'));
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+    expect(mockPost.mock.calls[0][1]).not.toHaveProperty('acknowledgeBlockers');
+    expect(mockPost.mock.calls[1][1]).toMatchObject({ acknowledgeBlockers: true, replacedBy: 'gpt-live' });
+    await waitFor(() => expect(screen.queryByTestId('model-lifecycle-accept-modal')).not.toBeInTheDocument());
+  });
+
+  it('drops held blockers when the operator picks a different successor', async () => {
+    mockPost.mockRejectedValueOnce({
+      response: { status: 409, data: { code: 'replacement-blocked', details: ['it is not active'] } },
+    });
+    renderTab();
+    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+    fireEvent.change(screen.getByTestId('model-lifecycle-note-input'), { target: { value: 'operator pick' } });
+    fireEvent.click(screen.getByTestId('model-lifecycle-accept-confirm-btn'));
+    await screen.findByTestId('model-lifecycle-accept-blockers');
+
+    fireEvent.change(screen.getByTestId('model-lifecycle-replacedby-input'), { target: { value: 'gpt-newer' } });
+
+    expect(screen.queryByTestId('model-lifecycle-accept-blockers')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('model-lifecycle-accept-confirm-btn'));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+    expect(mockPost.mock.calls[1][1]).not.toHaveProperty('acknowledgeBlockers');
+  });
+
   it('labels the icon-only refresh control', async () => {
     renderTab();
     await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');

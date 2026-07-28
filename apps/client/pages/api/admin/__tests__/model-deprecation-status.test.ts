@@ -26,10 +26,14 @@ const mockAppend = vi.fn();
 const mockFindByModelId = vi.fn();
 const mockPendingSuggestions = vi.fn();
 const mockResolveSuggestion = vi.fn();
+const mockPriceRowsInForce = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   modelCatalogRepository: {
     rowsInForce: (...a: unknown[]) => mockRowsInForce(...a),
     append: (...a: unknown[]) => mockAppend(...a),
+  },
+  modelPriceRepository: {
+    rowsInForce: (...a: unknown[]) => mockPriceRowsInForce(...a),
   },
   modelDiscoveryStateRepository: {
     findByModelId: (...a: unknown[]) => mockFindByModelId(...a),
@@ -64,6 +68,15 @@ const catalogRow = (modelId: string, lifecycle: Record<string, string>) => ({
   effectiveFrom: new Date('2026-07-01T00:00:00Z'),
 });
 
+// The cost clause fails closed, so an accept only gets past it when both sides
+// carry a per-token row: these are what make the happy paths happy.
+const priceRow = (modelId: string, input: number, output: number) => ({
+  modelId,
+  unit: 'per_token',
+  pricing: { '0': { input, output } },
+  effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+});
+
 const SUGGESTION = {
   status: 'deprecated',
   deprecationDate: '2026-08-01',
@@ -88,6 +101,7 @@ beforeEach(() => {
     catalogRow('gpt-live', { status: 'active' }),
     catalogRow('gpt-sunset', { status: 'deprecated', deprecationDate: '2026-01-01' }),
   ]);
+  mockPriceRowsInForce.mockResolvedValue([priceRow('gpt-sunset', 2e-6, 8e-6), priceRow('gpt-live', 1e-6, 4e-6)]);
   mockPendingSuggestions.mockResolvedValue([{ modelId: 'gpt-sunset', suggestion: SUGGESTION }]);
   mockFindByModelId.mockResolvedValue({ modelId: 'gpt-sunset', suggestion: SUGGESTION });
   mockResolveSuggestion.mockResolvedValue({ modelId: 'gpt-sunset' });
@@ -268,12 +282,100 @@ describe('POST /api/admin/model-deprecation-status', () => {
 
   it('writes an accepted override in place of the suggested successor', async () => {
     mockGetAvailableModels.mockResolvedValue([LIVE_MODEL, { id: 'gpt-newer' }]);
+    mockRowsInForce.mockResolvedValue([
+      catalogRow('gpt-live', { status: 'active' }),
+      catalogRow('gpt-newer', { status: 'active' }),
+      catalogRow('gpt-sunset', { status: 'deprecated', deprecationDate: '2026-01-01' }),
+    ]);
+    mockPriceRowsInForce.mockResolvedValue([priceRow('gpt-sunset', 2e-6, 8e-6), priceRow('gpt-newer', 1e-6, 4e-6)]);
     const { run } = call({
       method: 'POST',
       body: { modelId: 'gpt-sunset', action: 'accept', note: 'operator pick', replacedBy: 'gpt-newer' },
     });
     await run();
     expect(mockAppend.mock.calls[0][0].patch.lifecycle.replacedBy).toBe('gpt-newer');
+    // Nothing was overruled, so the note is exactly what the operator wrote.
+    expect(mockAppend.mock.calls[0][0].note).toBe('operator pick');
+  });
+
+  it('answers 409 with the clauses the automation would have refused the successor on', async () => {
+    // The successor is more expensive: a clause the accept path had no analogue
+    // for, so this row used to go straight in as a sovereign operator row.
+    mockPriceRowsInForce.mockResolvedValue([priceRow('gpt-sunset', 1e-6, 4e-6), priceRow('gpt-live', 9e-6, 9e-6)]);
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'looks right to me' },
+    });
+    await run();
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toMatchObject({
+      code: 'replacement-blocked',
+      modelId: 'gpt-sunset',
+      replacedBy: 'gpt-live',
+      blockers: ['cost-not-lower'],
+    });
+    expect(res._getJSONData().details[0]).toMatch(/costs more/);
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockResolveSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('409s on a successor with no comparable price, because unverifiable is not verified', async () => {
+    mockPriceRowsInForce.mockResolvedValue([priceRow('gpt-sunset', 2e-6, 8e-6)]);
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'looks right to me' },
+    });
+    await run();
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData().blockers).toEqual(['cost-unverifiable']);
+  });
+
+  it('appends once the operator acknowledges the blockers, recording them in the note', async () => {
+    mockPriceRowsInForce.mockResolvedValue([priceRow('gpt-sunset', 1e-6, 4e-6), priceRow('gpt-live', 9e-6, 9e-6)]);
+    const { res, run } = call({
+      method: 'POST',
+      body: {
+        modelId: 'gpt-sunset',
+        action: 'accept',
+        note: 'billing signed off on the increase',
+        acknowledgeBlockers: true,
+      },
+    });
+    await run();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAppend).toHaveBeenCalledTimes(1);
+    // The override is only auditable if the row says what it overruled.
+    expect(mockAppend.mock.calls[0][0].note).toBe(
+      'billing signed off on the increase [override; acknowledged blockers: cost-not-lower]'
+    );
+    expect(mockAppend.mock.calls[0][0].patch.lifecycle.replacedBy).toBe('gpt-live');
+    expect(mockResolveSuggestion).toHaveBeenCalledWith('gpt-sunset', 'accepted');
+  });
+
+  it('409s on a successor the catalog does not hold, even though the live list does', async () => {
+    mockGetAvailableModels.mockResolvedValue([LIVE_MODEL, { id: 'gpt-ghost' }]);
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'operator pick', replacedBy: 'gpt-ghost' },
+    });
+    await run();
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData().blockers).toEqual(['unknown-model']);
+  });
+
+  it('leaves a clean accept at 200 with no blocker bookkeeping', async () => {
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-sunset', action: 'accept', note: 'anthropic deprecation page 2026-07' },
+    });
+    await run();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAppend.mock.calls[0][0].note).toBe('anthropic deprecation page 2026-07');
   });
 
   it('dismiss records the verdict and writes no catalog row', async () => {

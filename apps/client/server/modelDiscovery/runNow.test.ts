@@ -24,6 +24,11 @@ vi.mock('@aws-sdk/client-lambda', () => ({
 }));
 vi.mock('sst', () => ({ Resource: resource }));
 vi.mock('./scheduledRun', () => ({ runScheduledDiscovery }));
+// The real module pulls in the whole source registry; only the gate matters here.
+vi.mock('./startupLeg', () => ({
+  DISCOVERY_DRIVER_ENV: 'B4M_DISCOVERY_DRIVER',
+  isDiscoveryDriver: () => process.env.B4M_DISCOVERY_DRIVER === 'true',
+}));
 
 import { dispatchDiscoveryRunNow, DiscoveryDispatchUnavailableError } from './runNow';
 
@@ -31,16 +36,20 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } 
 
 describe('dispatchDiscoveryRunNow', () => {
   const selfHostFlag = process.env.B4M_SELF_HOST;
+  const driverFlag = process.env.B4M_DISCOVERY_DRIVER;
 
   beforeEach(() => {
     vi.clearAllMocks();
     resource.lambdaFunctionNames = { modelDiscovery: 'dev-model-discovery-fn' };
     delete process.env.B4M_SELF_HOST;
+    process.env.B4M_DISCOVERY_DRIVER = 'true';
   });
 
   afterEach(() => {
     if (selfHostFlag === undefined) delete process.env.B4M_SELF_HOST;
     else process.env.B4M_SELF_HOST = selfHostFlag;
+    if (driverFlag === undefined) delete process.env.B4M_DISCOVERY_DRIVER;
+    else process.env.B4M_DISCOVERY_DRIVER = driverFlag;
   });
 
   it('async-invokes the discovery function with a manual trigger on hosted', async () => {
@@ -77,6 +86,22 @@ describe('dispatchDiscoveryRunNow', () => {
     expect(runScheduledDiscovery).toHaveBeenCalledWith(logger, 'selfhost', { trigger: 'manual' });
     expect(lambdaSend).not.toHaveBeenCalled();
     release();
+  });
+
+  it('refuses the in-process run when this process is not a discovery driver', async () => {
+    process.env.B4M_SELF_HOST = 'true';
+    delete process.env.B4M_DISCOVERY_DRIVER;
+
+    await expect(dispatchDiscoveryRunNow(logger)).rejects.toThrow(/B4M_DISCOVERY_DRIVER=true/);
+    await expect(dispatchDiscoveryRunNow(logger)).rejects.toBeInstanceOf(DiscoveryDispatchUnavailableError);
+    expect(runScheduledDiscovery).not.toHaveBeenCalled();
+  });
+
+  it('does not read the driver flag on hosted, where the cron lambda is the driver', async () => {
+    delete process.env.B4M_DISCOVERY_DRIVER;
+
+    await expect(dispatchDiscoveryRunNow(logger)).resolves.toEqual({ dispatched: 'lambda' });
+    expect(lambdaSend).toHaveBeenCalledTimes(1);
   });
 
   it('logs rather than rejects when the in-process run throws', async () => {

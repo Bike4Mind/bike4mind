@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
-import { modelCatalogRepository, modelDiscoveryStateRepository } from '@bike4mind/database';
+import { modelCatalogRepository, modelDiscoveryStateRepository, modelPriceRepository } from '@bike4mind/database';
 import { FALLBACK_PREFERENCES, DEFAULT_FALLBACK_CHAIN } from '@bike4mind/utils';
 import {
   catalogLifecycles,
@@ -9,7 +9,9 @@ import {
   getAvailableModels,
   getExpiredCatalogModels,
   getExpiringModels,
+  resolveCatalogRecords,
 } from '@bike4mind/llm-adapters';
+import { modelDiscoveryService } from '@bike4mind/services';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 
 /**
@@ -19,7 +21,9 @@ import { BadRequestError, ForbiddenError } from '@server/utils/errors';
  *         queue of unresolved discovery suggestions, and the stale-reference
  *         report over the hardcoded model-id surfaces.
  * POST -> settle one queue item: 'dismiss' records the verdict, 'accept'
- *         appends an operator lifecycle row and then records it.
+ *         appends an operator lifecycle row and then records it. An accept
+ *         whose successor fails the auto-remap constraints answers 409 with the
+ *         blocker list until the operator re-sends acknowledgeBlockers.
  *
  * The expired view reads catalog lifecycle rather than getAvailableModels,
  * whose deprecation filter is precisely what hides these models - which is why
@@ -38,6 +42,12 @@ const ResolveBody = z.object({
   note: z.string().optional(),
   /** Overrides the suggested successor; validated like any other reference below. */
   replacedBy: z.string().min(1).optional(),
+  /**
+   * Proceed even though the successor fails auto-remap clauses. The first
+   * request never carries it: the 409 is what shows the operator what the
+   * automation refused before they overrule it.
+   */
+  acknowledgeBlockers: z.boolean().optional(),
 });
 
 const handler = baseApi()
@@ -93,9 +103,10 @@ const handler = baseApi()
     const note = parsed.data.note?.trim() ?? '';
     if (!note) throw new BadRequestError('note is required: it is the audit trail for this lifecycle change');
 
-    const [live, rows] = await Promise.all([
+    const [live, rows, priceRows] = await Promise.all([
       getAvailableModels(null, { includePrivate: true }),
       modelCatalogRepository.rowsInForce(),
+      modelPriceRepository.rowsInForce(),
     ]);
     const lifecycles = catalogLifecycles(rows);
     // This row owns the whole lifecycle group and the merge swaps the object
@@ -122,9 +133,8 @@ const handler = baseApi()
 
     const replacedBy = parsed.data.replacedBy ?? suggestion.replacedBy ?? current?.replacedBy;
     if (replacedBy) {
-      // An operator override is sovereign: the only clauses it has to pass are
-      // that the successor exists and is not itself sunset. Checked through the
-      // report's own predicate so the queue cannot accept what it would flag.
+      // Checked through the report's own predicate so the queue cannot accept
+      // what it would flag.
       const problem = classifyModelReference(replacedBy, { models: live, lifecycles });
       if (problem === 'unknown') {
         throw new BadRequestError(`replacedBy ${replacedBy} is unknown to the merged model list`);
@@ -136,6 +146,34 @@ const handler = baseApi()
         throw new BadRequestError(`replacedBy ${replacedBy} is ${problem} and cannot replace ${modelId}`);
       }
     }
+
+    // The same clauses the automated remap must pass with zero blockers. The
+    // default replacedBy here is whatever a docs parser scraped, so without this
+    // the human path would write - as a sovereign operator row that outranks
+    // every later discovery correction - a successor the automation refused.
+    // Sovereign, but not blind: an override needs the blockers acknowledged.
+    const blockers = replacedBy
+      ? modelDiscoveryService.verifyReplacement(replacedBy, modelId, {
+          resolvedInForce: resolveCatalogRecords(rows),
+          ratesInForce: modelDiscoveryService.perTokenRatesInForce(priceRows),
+          // Settling one queue item sunsets one model, and the identity clause
+          // inside verifyReplacement already covers it.
+          sunsetting: new Set([modelId]),
+        })
+      : [];
+    if (blockers.length > 0 && !parsed.data.acknowledgeBlockers) {
+      return res.status(409).json({
+        code: 'replacement-blocked',
+        modelId,
+        replacedBy,
+        blockers,
+        details: modelDiscoveryService.describeBlockers(blockers),
+        message: `${replacedBy} fails the auto-remap constraints for ${modelId}; re-submit with acknowledgeBlockers to override.`,
+      });
+    }
+
+    // The override is only auditable if the row itself says what was overruled.
+    const auditNote = blockers.length > 0 ? `${note} [override; acknowledged blockers: ${blockers.join(', ')}]` : note;
 
     const row = await modelCatalogRepository.append({
       modelId,
@@ -153,7 +191,7 @@ const handler = baseApi()
       // The admin id is the contributor: this row is their decision, taken on a
       // suggestion whose own source is recorded on the discovery state.
       contributors: [{ group: 'lifecycle', source: req.user.id }],
-      note,
+      note: auditNote,
     });
 
     return res.json({ row, state: await modelDiscoveryStateRepository.resolveSuggestion(modelId, 'accepted') });

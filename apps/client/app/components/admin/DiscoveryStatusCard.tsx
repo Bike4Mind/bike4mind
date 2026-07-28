@@ -201,7 +201,7 @@ export const DiscoveryStatusCard: React.FC = () => {
             auto-enable: {status?.autoEnable ?? '...'}
           </Chip>
           {discoveryDisabled && (
-            <Chip size="sm" variant="solid" color="danger" data-testid="discovery-status-disabled-chip">
+            <Chip size="sm" variant="soft" color="danger" data-testid="discovery-status-disabled-chip">
               disabled
             </Chip>
           )}

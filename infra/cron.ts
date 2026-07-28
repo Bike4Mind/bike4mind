@@ -573,6 +573,10 @@ const modelDiscoveryFunction = new sst.aws.Function('modelDiscoveryFunction', {
   handler: 'apps/client/server/cron/modelDiscovery.handler',
   runtime: 'nodejs24.x',
   timeout: '10 minutes',
+  // Both entry points are async invokes, so Lambda's default of 2 retries would
+  // re-issue the whole provider fan-out twice more on a failing run. A discovery
+  // run is not idempotent-cheap; the 6h cron below is the real retry.
+  retries: 0,
   link: [...allSecrets],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,

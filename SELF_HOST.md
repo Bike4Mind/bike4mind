@@ -535,7 +535,7 @@ B4M_DISCOVERY_DRIVER=true
 # MODEL_DISCOVERY_INTERVAL_MS=21600000
 ```
 
-The `worker` is the only service that acts on the flag, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval.
+The `worker` is the only service that runs discovery on a schedule, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval. The flag gates the admin "Run now" button too: without it the app answers 503 and starts nothing, so an install that never sets it stays offline however the run is asked for.
 
 Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure. Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
 

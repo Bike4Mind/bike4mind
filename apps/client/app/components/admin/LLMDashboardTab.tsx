@@ -40,6 +40,7 @@ import {
   useSaveLLMModelConfigurations,
 } from '@client/app/hooks/data/llmModelConfig';
 import { useGetUsers } from '@client/app/hooks/data/user';
+import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { KNOWN_ENTITLEMENT_KEYS } from '@client/lib/entitlements/registry';
 
@@ -77,6 +78,8 @@ const getModelVendor = (model: LLMModelConfig): string => {
   return typeof vendor === 'string' ? vendor : '';
 };
 
+const SEARCH_DEBOUNCE_MS = 250;
+
 // `query` must already be lowercased and trimmed.
 const matchesSearch = (model: LLMModelConfig, query: string): boolean =>
   [model.id, model.name, model.backend, getModelVendor(model)].some(field => field.toLowerCase().includes(query));
@@ -93,7 +96,13 @@ const LLMDashboardTab: React.FC = () => {
   const [filterType, setFilterType] = useState<'all' | 'text' | 'image'>('all');
   const [filterBackend, setFilterBackend] = useState<string>('all');
   const [filterEnabled, setFilterEnabled] = useState<'all' | 'enabled' | 'disabled'>('all');
-  const [searchQuery, setSearchQuery] = useState('');
+  // Debounced: discovery grows this catalog, so every keystroke would otherwise
+  // re-filter and re-sort a list that keeps getting longer.
+  const {
+    value: searchQuery,
+    debouncedValue: debouncedSearchQuery,
+    setValue: setSearchQuery,
+  } = useDebounceValue('', SEARCH_DEBOUNCE_MS);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [bulkNotice, setBulkNotice] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -147,7 +156,7 @@ const LLMDashboardTab: React.FC = () => {
   };
 
   const filteredModels = useMemo(() => {
-    const search = searchQuery.trim().toLowerCase();
+    const search = debouncedSearchQuery.trim().toLowerCase();
     const filtered = localModels.filter(model => {
       if (filterType !== 'all' && model.type !== filterType) return false;
       if (filterBackend !== 'all' && model.backend !== filterBackend) return false;
@@ -214,7 +223,16 @@ const LLMDashboardTab: React.FC = () => {
     }
 
     return filtered;
-  }, [localModels, filterType, filterBackend, filterEnabled, searchQuery, sortColumn, sortDirection, modelDates]);
+  }, [
+    localModels,
+    filterType,
+    filterBackend,
+    filterEnabled,
+    debouncedSearchQuery,
+    sortColumn,
+    sortDirection,
+    modelDates,
+  ]);
 
   // Pagination calculations
   const totalPages = Math.ceil(filteredModels.length / rowsPerPage);
@@ -237,7 +255,7 @@ const LLMDashboardTab: React.FC = () => {
   useEffect(() => {
     setCurrentPage(1);
     setBulkNotice(null);
-  }, [filterType, filterBackend, filterEnabled, searchQuery]);
+  }, [filterType, filterBackend, filterEnabled, debouncedSearchQuery]);
 
   const handlePageChange = (page: number) => {
     setCurrentPage(Math.max(1, Math.min(page, totalPages)));

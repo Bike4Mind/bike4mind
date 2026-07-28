@@ -6,7 +6,9 @@
  * to hand off - the frontend lambda's 60s timeout is far shorter than a run -
  * so it async-invokes the discovery function the cron already targets.
  * Self-host's Next server is a long-lived container, so it starts the run in
- * place.
+ * place - behind the same B4M_DISCOVERY_DRIVER gate every other leg on a
+ * long-lived process reads (./startupLeg), so an install that never set the
+ * flag still makes no discovery request at all.
  *
  * Concurrency is not this module's problem: the service's lease turns a second
  * trigger during an active run into a no-op ('skipped' / 'lease-held'), so the
@@ -45,6 +47,18 @@ export async function dispatchDiscoveryRunNow(logger: Logger): Promise<{ dispatc
     // Imported here, not at module scope: this branch is self-host-only and the
     // discovery source registry it pulls in is pure cold-start parse cost for
     // the hosted frontend lambda.
+    const { DISCOVERY_DRIVER_ENV, isDiscoveryDriver } = await import('./startupLeg');
+    // Same gate as the startup leg and the interval task: the driver flag is the
+    // ONE opt-in that decides whether this process may reach a provider at all,
+    // and a manual run is the biggest fan-out of the three (skipReasonFor waives
+    // the per-source freshness guard for trigger 'manual'). Without this an
+    // offline install that never set the flag would egress on one admin click.
+    if (!isDiscoveryDriver()) {
+      throw new DiscoveryDispatchUnavailableError(
+        `This process is not a discovery driver; set ${DISCOVERY_DRIVER_ENV}=true to let it run discovery.`
+      );
+    }
+
     const { runScheduledDiscovery } = await import('./scheduledRun');
     void runScheduledDiscovery(logger, 'selfhost', { trigger: 'manual' }).catch((error: unknown) => {
       logger.error('[model-discovery] manual run failed', {

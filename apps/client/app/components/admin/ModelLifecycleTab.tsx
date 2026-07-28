@@ -32,6 +32,12 @@ interface QueueItem {
     replacedBy?: string;
     source: string;
     suggestedAt: string;
+    /**
+     * The run's own sentence about the suggestion, including why it would not
+     * apply the remap itself. Optional because only runs that persist it carry
+     * one; older queue rows have none.
+     */
+    detail?: string;
   };
 }
 
@@ -85,6 +91,17 @@ const apiErrorMessage = (err: unknown, fallback: string) => {
   return e?.response?.data?.message || e?.message || fallback;
 };
 
+/**
+ * The accept route's 409 is the auto-remap clauses this successor missed - the
+ * one refusal an operator is allowed to overrule, so it renders as a decision
+ * rather than as an error. Anything else is a plain failure.
+ */
+const replacementBlockers = (err: unknown): string[] | null => {
+  const res = (err as { response?: { status?: number; data?: { code?: string; details?: string[] } } })?.response;
+  if (res?.status !== 409 || res.data?.code !== 'replacement-blocked') return null;
+  return res.data.details?.length ? res.data.details : ['the automation refused this successor'];
+};
+
 const formatDays = (days: number | undefined) => {
   if (days === undefined) return '-';
   return days <= 0 ? `${Math.abs(days)}d ago` : `in ${days}d`;
@@ -121,6 +138,9 @@ export const ModelLifecycleTab: React.FC = () => {
   const [modalError, setModalError] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [replacedBy, setReplacedBy] = useState('');
+  // Set only by a 409: the constraints the chosen successor missed, held until
+  // the operator either overrules them or picks a different successor.
+  const [blockers, setBlockers] = useState<string[] | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingDismissId, setPendingDismissId] = useState<string | null>(null);
 
@@ -145,15 +165,17 @@ export const ModelLifecycleTab: React.FC = () => {
     setNote('');
     setReplacedBy(item.suggestion?.replacedBy ?? '');
     setModalError(null);
+    setBlockers(null);
     setAcceptTarget(item);
   };
 
   const closeAccept = () => {
     setAcceptTarget(null);
     setModalError(null);
+    setBlockers(null);
   };
 
-  const submitAccept = async () => {
+  const submitAccept = async (acknowledgeBlockers = false) => {
     if (!acceptTarget) return;
     setIsSaving(true);
     setModalError(null);
@@ -163,11 +185,15 @@ export const ModelLifecycleTab: React.FC = () => {
         action: 'accept',
         note: note.trim(),
         ...(replacedBy.trim() ? { replacedBy: replacedBy.trim() } : {}),
+        ...(acknowledgeBlockers ? { acknowledgeBlockers: true } : {}),
       });
       setAcceptTarget(null);
+      setBlockers(null);
       await fetchStatus();
     } catch (err) {
-      setModalError(apiErrorMessage(err, 'Accept failed'));
+      const refused = replacementBlockers(err);
+      if (refused) setBlockers(refused);
+      else setModalError(apiErrorMessage(err, 'Accept failed'));
     } finally {
       setIsSaving(false);
     }
@@ -383,13 +409,41 @@ export const ModelLifecycleTab: React.FC = () => {
             Appends an operator row owning the lifecycle group, effective immediately. The model drops out of pickers
             once its deprecation date passes.
           </Typography>
+          {acceptTarget?.suggestion?.detail && (
+            <Typography level="body-xs" color="neutral" data-testid="model-lifecycle-accept-detail">
+              {acceptTarget.suggestion.detail}
+            </Typography>
+          )}
+          {blockers && (
+            <Alert color="warning" size="sm" sx={{ mt: 1 }} data-testid="model-lifecycle-accept-blockers">
+              <Box>
+                <Typography level="body-sm">
+                  Discovery would not apply {replacedBy.trim() || 'this successor'} on its own:
+                </Typography>
+                <Box component="ul" sx={{ my: 0.5, pl: 2.5 }}>
+                  {blockers.map(blocker => (
+                    <li key={blocker}>
+                      <Typography level="body-xs">{blocker}</Typography>
+                    </li>
+                  ))}
+                </Box>
+                <Typography level="body-xs">
+                  Accepting anyway records the override and these reasons in the row&apos;s note.
+                </Typography>
+              </Box>
+            </Alert>
+          )}
           <Stack spacing={1} sx={{ mt: 1 }}>
             <FormControl>
               <FormLabel>Successor (optional override of the suggested replacement)</FormLabel>
               <Input
                 size="sm"
                 value={replacedBy}
-                onChange={e => setReplacedBy(e.target.value)}
+                onChange={e => {
+                  // The held blockers describe the previous successor.
+                  setBlockers(null);
+                  setReplacedBy(e.target.value);
+                }}
                 slotProps={{ input: { 'data-testid': 'model-lifecycle-replacedby-input' } }}
               />
             </FormControl>
@@ -414,10 +468,11 @@ export const ModelLifecycleTab: React.FC = () => {
               <Button
                 disabled={note.trim() === '' || isSaving}
                 loading={isSaving}
-                onClick={submitAccept}
+                color={blockers ? 'warning' : 'primary'}
+                onClick={() => submitAccept(blockers !== null)}
                 data-testid="model-lifecycle-accept-confirm-btn"
               >
-                Append lifecycle row
+                {blockers ? 'Accept anyway' : 'Append lifecycle row'}
               </Button>
             </Stack>
           </Stack>

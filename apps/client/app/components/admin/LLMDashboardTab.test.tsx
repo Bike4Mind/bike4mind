@@ -1,6 +1,6 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ModelBackend, type LLMModelConfig } from '@bike4mind/common';
@@ -59,8 +59,18 @@ const inputIn = (testId: string) => {
   return input;
 };
 
-const search = (value: string) =>
+/** Longer than the tab's search debounce, so the filter has settled on return. */
+const SEARCH_SETTLE_MS = 500;
+
+const typeSearch = (value: string) =>
   fireEvent.change(screen.getByTestId('llm-dashboard-search-input'), { target: { value } });
+
+const settle = () => act(() => void vi.advanceTimersByTime(SEARCH_SETTLE_MS));
+
+const search = (value: string) => {
+  typeSearch(value);
+  settle();
+};
 
 const setStatusFilter = (label: string) => {
   fireEvent.click(within(screen.getByTestId('llm-dashboard-status-filter')).getByRole('combobox'));
@@ -72,8 +82,23 @@ const visibleModelIds = () =>
     .getAllByTestId(/^llm-dashboard-select-(?!all$)/)
     .map(node => node.getAttribute('data-testid')?.replace('llm-dashboard-select-', ''));
 
+// The search filter is debounced, so every test drives the clock rather than
+// waiting on it.
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
+
 describe('LLMDashboardTab search', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('leaves the table alone until the search debounce settles', () => {
+    renderTab();
+
+    typeSearch('preview');
+    expect(visibleModelIds()).toHaveLength(4);
+
+    settle();
+    expect(visibleModelIds()).toEqual(['gpt-5-preview', 'claude-opus-preview']);
+  });
 
   it('narrows the table to models whose id or name matches, case-insensitively', () => {
     renderTab();

@@ -53,6 +53,11 @@ vi.mock('@aws-sdk/client-lambda', () => ({
 }));
 vi.mock('sst', () => ({ Resource: resource }));
 vi.mock('@server/modelDiscovery/scheduledRun', () => ({ runScheduledDiscovery }));
+// The real module pulls the whole discovery source registry in; only its gate matters here.
+vi.mock('@server/modelDiscovery/startupLeg', () => ({
+  DISCOVERY_DRIVER_ENV: 'B4M_DISCOVERY_DRIVER',
+  isDiscoveryDriver: () => process.env.B4M_DISCOVERY_DRIVER === 'true',
+}));
 
 import handler from '../model-discovery';
 
@@ -88,11 +93,13 @@ function call(options: { method: 'GET' | 'POST'; isAdmin?: boolean }) {
 
 describe('/api/admin/model-discovery', () => {
   const selfHostFlag = process.env.B4M_SELF_HOST;
+  const driverFlag = process.env.B4M_DISCOVERY_DRIVER;
 
   beforeEach(() => {
     vi.clearAllMocks();
     resource.lambdaFunctionNames = { modelDiscovery: 'dev-model-discovery-fn' };
     delete process.env.B4M_SELF_HOST;
+    process.env.B4M_DISCOVERY_DRIVER = 'true';
     latestRun.mockResolvedValue(RUN);
     lastSuccessfulRun.mockResolvedValue({ ...RUN, startedAt: new Date('2026-07-26T06:00:00Z'), status: 'ok' });
     getSettingsValue.mockImplementation(async (key: string) => (key === 'modelDiscoveryMode' ? 'write' : 'manual'));
@@ -101,6 +108,8 @@ describe('/api/admin/model-discovery', () => {
   afterEach(() => {
     if (selfHostFlag === undefined) delete process.env.B4M_SELF_HOST;
     else process.env.B4M_SELF_HOST = selfHostFlag;
+    if (driverFlag === undefined) delete process.env.B4M_DISCOVERY_DRIVER;
+    else process.env.B4M_DISCOVERY_DRIVER = driverFlag;
   });
 
   it.each(['GET', 'POST'] as const)('rejects a non-admin %s', async method => {
@@ -192,6 +201,18 @@ describe('/api/admin/model-discovery', () => {
     expect(res._getStatusCode()).toBe(409);
     expect(res._getJSONData()).toMatchObject({ code: 'discovery-disabled' });
     expect(lambdaSend).not.toHaveBeenCalled();
+    expect(runScheduledDiscovery).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 on self-host when this process is not a discovery driver', async () => {
+    process.env.B4M_SELF_HOST = 'true';
+    delete process.env.B4M_DISCOVERY_DRIVER;
+
+    const { run, res } = call({ method: 'POST' });
+    await run();
+
+    expect(res._getStatusCode()).toBe(503);
+    expect(res._getJSONData().message).toMatch(/B4M_DISCOVERY_DRIVER=true/);
     expect(runScheduledDiscovery).not.toHaveBeenCalled();
   });
 
