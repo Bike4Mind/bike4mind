@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, Button, Chip, Input, List, ListItem, ListItemButton, Sheet, Stack, Typography } from '@mui/joy';
+import { useTheme } from '@mui/joy/styles';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { IHearthEventAction } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
@@ -27,6 +28,43 @@ function appendLiveEvent(prev: WireHearthEvent[], event: WireHearthEvent): WireH
   if (inChannel.length <= LIVE_CAP_PER_CHANNEL) return next;
   const evictId = inChannel[0].id;
   return next.filter(e => e.id !== evictId);
+}
+
+/**
+ * Per-actor colors: a FIXED palette, indexed by a hash of actorId. The hash is
+ * what makes the color stable - index-in-array or arrival order would repaint
+ * every actor whenever the tail changes or a reload reorders the buffer, and a
+ * shifting color is worse than no color for telling two agents apart.
+ *
+ * Deliberately small and hand-picked per theme mode rather than generated hues:
+ * unbounded HSL lands on colors that are unreadable on one surface or the other
+ * and indistinguishable from their neighbors. Hash collisions are expected and
+ * harmless because color is NEVER the only signal - the actor name and the kind
+ * chip identify the poster on their own (this also keeps color from being
+ * forgeable identity, per the actor-spoofing concern).
+ */
+const ACTOR_COLORS: ReadonlyArray<{ light: string; dark: string }> = [
+  { light: '#1d4ed8', dark: '#93c5fd' },
+  { light: '#047857', dark: '#6ee7b7' },
+  { light: '#b45309', dark: '#fcd34d' },
+  { light: '#7e22ce', dark: '#d8b4fe' },
+  { light: '#be123c', dark: '#fda4af' },
+  { light: '#0e7490', dark: '#67e8f9' },
+];
+
+/** Used when an event carries no usable actorId - never a generated hue. */
+const NEUTRAL_ACTOR_COLOR = { light: '#475569', dark: '#cbd5e1' };
+
+/**
+ * djb2 over the actorId, folded into the palette. Exported for the test that
+ * pins determinism: the same actorId must always map to the same slot.
+ */
+export function actorColorIndex(actorId: string): number {
+  let hash = 5381;
+  for (let i = 0; i < actorId.length; i++) {
+    hash = ((hash << 5) + hash + actorId.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash) % ACTOR_COLORS.length;
 }
 
 function useHearthChannels() {
@@ -57,6 +95,7 @@ function useChannelTail(channelId: string | null) {
  */
 export default function HearthChannelsView() {
   const queryClient = useQueryClient();
+  const theme = useTheme();
   const { subscribeToAction } = useWebsocket();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [liveEvents, setLiveEvents] = useState<WireHearthEvent[]>([]);
@@ -104,6 +143,12 @@ export default function HearthChannelsView() {
       setLiveEvents(prev => appendLiveEvent(prev, event));
     },
   });
+
+  // theme.palette.mode resolves 'system' to the real OS preference, which
+  // useColorScheme does not.
+  const shade = theme.palette.mode === 'dark' ? 'dark' : 'light';
+  const actorColor = (actorId: string) =>
+    (actorId ? ACTOR_COLORS[actorColorIndex(actorId)] : NEUTRAL_ACTOR_COLOR)[shade];
 
   const handleSend = useCallback(() => {
     const text = draft.trim();
@@ -166,16 +211,32 @@ export default function HearthChannelsView() {
             <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }} data-testid="hearth-event-list">
               {events.map(event => (
                 <Box key={event.id} sx={{ mb: 1 }}>
-                  <Stack direction="row" spacing={1} alignItems="baseline">
-                    <Typography level="title-sm">{event.actorName ?? event.actorId}</Typography>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Box
+                      data-testid="hearth-event-actor-swatch"
+                      sx={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        flexShrink: 0,
+                        backgroundColor: actorColor(event.actorId),
+                      }}
+                    />
+                    <Typography
+                      level="title-sm"
+                      data-testid="hearth-event-actor-name"
+                      sx={{ color: actorColor(event.actorId) }}
+                    >
+                      {event.actorName ?? event.actorId}
+                    </Typography>
                     <Typography level="body-xs" sx={{ opacity: 0.6 }}>
                       #{event.seq} {'\u00B7'} {new Date(event.createdAt).toLocaleTimeString()}
                     </Typography>
-                    {event.kind !== 'message' && (
-                      <Chip size="sm" variant="soft">
-                        {event.kind}
-                      </Chip>
-                    )}
+                    {/* Always rendered, including for 'message': the color must never be
+                        the only thing distinguishing one poster's events from another's. */}
+                    <Chip size="sm" variant="soft" data-testid="hearth-event-kind-chip">
+                      {event.kind}
+                    </Chip>
                   </Stack>
                   <Typography level="body-md" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                     {event.human.text}

@@ -17,7 +17,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ subscribeToAction: subscribeToActionMock }),
 }));
 
-import HearthChannelsView from './HearthChannelsView';
+import HearthChannelsView, { actorColorIndex } from './HearthChannelsView';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -124,6 +124,47 @@ describe('HearthChannelsView', () => {
       .map(n => n.textContent)
       .filter(t => t === 'second' || t === 'third');
     expect(order).toEqual(['second', 'third']);
+  });
+
+  it('colors each actor from a hash of actorId, so the color survives reordering', async () => {
+    apiPostMock.mockResolvedValue({
+      data: {
+        events: [
+          wireEvent({ id: 'a1', seq: 1, actorId: 'actor-1', actorName: 'erik' }),
+          wireEvent({ id: 'b1', seq: 2, actorId: 'actor-2', actorName: 'spock' }),
+          wireEvent({ id: 'a2', seq: 3, actorId: 'actor-1', actorName: 'erik' }),
+        ],
+        cursor: 3,
+      },
+    });
+    await openChannel();
+    await waitFor(() => expect(screen.getAllByTestId('hearth-event-actor-swatch')).toHaveLength(3));
+
+    const colors = screen.getAllByTestId('hearth-event-actor-swatch').map(n => getComputedStyle(n).backgroundColor);
+    // Guard against a vacuous pass: if jsdom stops resolving the emotion rule
+    // every color becomes '' and the equality assertions below mean nothing.
+    expect(colors.every(c => c.length > 0)).toBe(true);
+    // Same actor in rows 1 and 3 (different arrival positions) shares one color;
+    // index-derived color would have given all three different colors.
+    expect(colors[0]).toBe(colors[2]);
+    expect(colors[0]).not.toBe(colors[1]);
+  });
+
+  it('keeps name and kind chip as non-color signals on every event', async () => {
+    apiPostMock.mockResolvedValue({ data: { events: [wireEvent()], cursor: 1 } });
+    await openChannel();
+
+    // The kind chip renders even for 'message' - color is never the only signal.
+    expect(await screen.findByTestId('hearth-event-kind-chip')).toHaveTextContent('message');
+    expect(screen.getByTestId('hearth-event-actor-name')).toHaveTextContent('erik');
+  });
+
+  it('actorColorIndex is deterministic and stays inside the fixed palette', () => {
+    expect(actorColorIndex('actor-1')).toBe(actorColorIndex('actor-1'));
+    for (const id of ['a', 'actor-1', '6540b58d1f703ade3ea1e82c', '']) {
+      expect(actorColorIndex(id)).toBeGreaterThanOrEqual(0);
+      expect(actorColorIndex(id)).toBeLessThan(6);
+    }
   });
 
   it('dedupes the optimistic post against its own WS echo', async () => {

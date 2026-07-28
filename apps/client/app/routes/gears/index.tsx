@@ -33,6 +33,7 @@ import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
 import FunctionsOutlinedIcon from '@mui/icons-material/FunctionsOutlined';
 import CalculateOutlinedIcon from '@mui/icons-material/CalculateOutlined';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
+import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import { api } from '@client/app/contexts/ApiContext';
 import { useGearsStatus, type GearKey, type GearStatus } from '@client/app/hooks/useGearsStatus';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
@@ -55,6 +56,7 @@ const GEAR_ICONS: Partial<Record<GearKey, React.ReactNode>> = {
   datalakes: <DataLakeIcon />,
   files: <FolderSharedIcon />,
   published: <PublicOutlinedIcon />,
+  hearth: <LocalFireDepartmentOutlinedIcon />,
   image: <ImageOutlinedIcon />,
   models: <SwapHorizOutlinedIcon />,
   react: <CodeOutlinedIcon />,
@@ -97,6 +99,7 @@ const GearsPage = () => {
   const gearVisible = (key: GearKey) => {
     if (key === 'agents') return isFeatureEnabled('enableAgents');
     if (key === 'datalakes') return isAdminFeatureEnabled('EnableDataLakes');
+    if (key === 'hearth') return isFeatureEnabled('enableHearth');
     return true;
   };
   const gears = (data?.gears ?? []).filter(g => gearVisible(g.key));
