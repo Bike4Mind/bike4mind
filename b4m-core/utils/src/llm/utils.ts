@@ -1697,7 +1697,11 @@ export async function buildAndSortMessages(
 
       if (!contentExhausted) {
         const before = reducedContentMessages;
-        const reduced = processMessages(before, Math.max(0, estimateMessagesTokens(before) - excessInEstimateTokens));
+        // Measured WITH the notice, matching estimatedTotal above. Sizing the budget off bare content
+        // while the overage was measured on the annotated payload leaves the notice's tokens unaccounted
+        // for, so a turn that is over by about the notice's size needs an extra round to converge.
+        const budgetBasis = estimateMessagesTokens(withTruncationNotice(before));
+        const reduced = processMessages(before, Math.max(0, budgetBasis - excessInEstimateTokens));
         reducedContentMessages = reduced.messages;
         // Reported like the history branch below. These are messages the pass dropped on top of
         // whatever the primary allocation already removed, so they cannot be double-counted: this
