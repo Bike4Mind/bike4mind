@@ -8,9 +8,13 @@
  */
 
 import { FC, useCallback } from 'react';
-import { Button } from '@mui/joy';
+import { Button, CircularProgress } from '@mui/joy';
 import StopCircleOutlinedIcon from '@mui/icons-material/StopCircleOutlined';
-import { type AgentExecutionStatus, isActiveStatus } from '@client/app/stores/useAgentExecutionStore';
+import {
+  type AgentExecutionStatus,
+  isActiveStatus,
+  useAgentExecutionStore,
+} from '@client/app/stores/useAgentExecutionStore';
 import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
 
 interface AbortButtonProps {
@@ -20,10 +24,15 @@ interface AbortButtonProps {
 
 const AbortButton: FC<AbortButtonProps> = ({ executionId, status }) => {
   const { abort } = useAgentExecutionDispatch();
+  // Optimistic "aborting" flag: the run keeps going server-side until it hits
+  // its next abort-check boundary, so without this the click has no feedback.
+  const isAborting = useAgentExecutionStore(s => s.executions[executionId]?.isAborting ?? false);
+  const markAborting = useAgentExecutionStore(s => s.markAborting);
 
   const handleClick = useCallback(() => {
+    markAborting(executionId);
     abort(executionId);
-  }, [abort, executionId]);
+  }, [abort, markAborting, executionId]);
 
   if (!isActiveStatus(status)) {
     return null;
@@ -36,9 +45,16 @@ const AbortButton: FC<AbortButtonProps> = ({ executionId, status }) => {
       color="danger"
       size="sm"
       onClick={handleClick}
-      startDecorator={<StopCircleOutlinedIcon />}
+      disabled={isAborting}
+      startDecorator={
+        isAborting ? (
+          <CircularProgress size="sm" sx={{ '--CircularProgress-size': '16px' }} />
+        ) : (
+          <StopCircleOutlinedIcon />
+        )
+      }
     >
-      Stop
+      {isAborting ? 'Stopping…' : 'Stop'}
     </Button>
   );
 };
