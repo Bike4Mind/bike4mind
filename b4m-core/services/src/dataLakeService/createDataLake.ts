@@ -15,8 +15,11 @@ interface CreateDataLakeAdapters {
  * Builds the unique join meta-tag. Org-scoped lakes get `datalake:<org>:<slug>`;
  * org-less lakes get `datalake:<slug>`. Because the tag is the uniqueness key,
  * org-less lakes may not share a slug.
+ *
+ * Exported so read paths can check a persisted row's tag against the one its own slug/org
+ * would mint - a row where they disagree did not come through this function.
  */
-function buildDatalakeTag(slug: string, organizationId?: string): string {
+export function buildDatalakeTag(slug: string, organizationId?: string): string {
   return organizationId ? `datalake:${organizationId}:${slug}` : `datalake:${slug}`;
 }
 
