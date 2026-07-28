@@ -3010,9 +3010,11 @@ export class ChatCompletionProcess {
 
         // Process artifacts if enabled
         if (getSettingsValue('EnableArtifacts', defaultAdminSettings)) {
+          // The barrel is the only export path for these two; there is no artifactParser subpath
+          // that carries them, so this import stays as-is.
           const { parseArtifacts, convertCodeBlocksToArtifacts } = await import('@bike4mind/utils');
-          // Subpath rather than the barrel, matching the client - the detector has no dependencies
-          // and there is no reason for either side to pull the whole of @bike4mind/utils for it.
+          // The detector DOES have its own subpath, so use it here too - same reasoning as the
+          // client: nothing should pull the whole of @bike4mind/utils for a dependency-free scan.
           const { detectElidedContent } = await import('@bike4mind/utils/artifactElision');
           const artifactProcessingStartTime = Date.now();
 
@@ -3101,10 +3103,14 @@ export class ChatCompletionProcess {
           if (elisionHits.length > 0 && quest.promptMeta) {
             const confidence = elisionHits.some(h => h.confidence === 'high') ? 'high' : 'low';
             const allSignals = elisionHits.flatMap(h => h.signals);
+            // `details` is capped, so say so in the payload itself rather than letting a reader
+            // assume the list is complete. `signalCount` still carries the true total.
+            const shownSignals = allSignals.slice(0, MAX_ELISION_DETAILS);
+            const omittedSignals = allSignals.length - shownSignals.length;
             quest.promptMeta.suspectedElision = {
               confidence,
               signalCount: allSignals.length,
-              details: allSignals.slice(0, MAX_ELISION_DETAILS),
+              details: omittedSignals > 0 ? [...shownSignals, `(+${omittedSignals} more not shown)`] : shownSignals,
             };
             quest.promptMeta.warnings = [
               ...(quest.promptMeta.warnings ?? []),
