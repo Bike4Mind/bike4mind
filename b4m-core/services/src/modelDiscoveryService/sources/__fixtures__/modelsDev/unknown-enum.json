@@ -1,0 +1,20 @@
+{
+  "anthropic": {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "models": {
+      "claude-opus-6": {
+        "id": "claude-opus-6",
+        "name": "Claude Opus 6",
+        "status": "sunsetting",
+        "reasoning": true,
+        "tool_call": true,
+        "structured_output": true,
+        "temperature": false,
+        "modalities": { "input": ["text", "image", "pdf", "hologram"], "output": ["text", "hologram"] },
+        "limit": { "context": 2000000, "output": 200000 },
+        "cost": { "input": 8, "output": 40, "hologram": 400 }
+      }
+    }
+  }
+}

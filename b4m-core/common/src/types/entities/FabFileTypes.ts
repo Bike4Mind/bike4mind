@@ -233,11 +233,19 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   /** Count chunks that are terminal (have a vector OR are oversized) - for idempotent vectorizedChunkCount recompute. */
   countTerminalChunks(fabFileId: string, contextWindow: number): Promise<number>;
   /**
-   * Bulk-fetch vector-bearing chunks (id, fabFileId, text, vector) for many files in ONE
-   * indexed query, capped for memory safety. Powers semantic search (query embed -> cosine).
-   * Skips chunks without a vector at the DB layer.
+   * One page of vector-bearing chunks (id, fabFileId, text, vector) for the given files,
+   * ascending by `_id`. Skips chunks without a vector at the DB layer. Powers semantic search
+   * (query embed -> cosine).
+   *
+   * Contract callers rely on: `_id` is unique, so the ordering is total and `afterChunkId` is
+   * an exact cursor - paging a corpus never skips or duplicates a chunk, and the same inputs
+   * always yield the same page. An implementation that returns an arbitrary `limit` rows
+   * silently changes retrieval results, so ordering is part of the interface, not an optimization.
    */
-  findVectorsByFabFileIds(fabFileIds: string[], cap?: number): Promise<FabFileChunkVector[]>;
+  findVectorsByFabFileIds(
+    fabFileIds: string[],
+    options?: { limit?: number; afterChunkId?: string }
+  ): Promise<FabFileChunkVector[]>;
 }
 
 /**
@@ -319,6 +327,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       excludeContent?: boolean; // Exclude heavy fields (content, chunks, vector) for list queries
       excludeFilenameMarkers?: string[]; // Generic retrieval exclusion: leading word-boundary marker match (see @bike4mind/utils/retrievalExclusion)
       vectorizedOnly?: boolean; // Restrict to vectorized files only (excludes unvectorized)
+      stableSort?: boolean; // Add an `_id` tiebreaker so a multi-page walk can't drop/repeat a file (fileName sorts only)
     }
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 

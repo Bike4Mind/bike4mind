@@ -59,6 +59,22 @@ describe('getAvailableModels price catalog provider', () => {
     expect(calls).toBe(1);
   });
 
+  it('bounds a hanging price read instead of waiting out mongo socket timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      // Never settles: the deadline is the only thing that can end this read.
+      setModelPriceRowsProvider(() => new Promise<IModelPrice[]>(() => {}));
+
+      const pending = getAvailableModels(null);
+      await vi.advanceTimersByTimeAsync(5_000);
+      const models = await pending;
+
+      expect(models.find(m => m.id === TARGET)!.pricing[200_000].input).not.toBe(42 / 1_000_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('caches a failed catalog fetch briefly, not for the full TTL (transient blip recovers in seconds)', async () => {
     vi.useFakeTimers();
     try {

@@ -574,6 +574,13 @@ export const orangeAlpha = {
     28: alpha(orange[375], 0.28), // #fb923c47 / rgba(251, 146, 60, 0.28) - dark mode soft active bg
   },
 
+  // orange[450] (#FFA500) with opacity - Warning soft variants (Alert/chip bg)
+  450: {
+    15: alpha(orange[450], 0.15), // #FFA50026 - soft bg
+    22: alpha(orange[450], 0.22), // #FFA50038 - soft hover bg
+    28: alpha(orange[450], 0.28), // #FFA50047 - soft active bg
+  },
+
   // orange[550] (#f59e0b) with opacity - Amber for gradients
   550: {
     15: alpha(orange[550], 0.15), // #f59e0b26 / rgba(245, 158, 11, 0.15)

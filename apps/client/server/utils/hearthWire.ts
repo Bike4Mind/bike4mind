@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { HearthEvent } from '@bike4mind/hearth';
 import { hearthRepository } from '@bike4mind/database';
-import type { IHearthEventAction } from '@bike4mind/common';
+import { ApiKeyScope, ForbiddenError, type IHearthEventAction } from '@bike4mind/common';
 
 type WireHearthEvent = IHearthEventAction['event'];
 
@@ -27,17 +27,38 @@ export function toWireHearthEvent(event: HearthEvent, actorName?: string): WireH
 
 /**
  * Optional actor identity override shared by the /api/hearth routes.
- * Defaults to the caller's human actor; agents/devices (e.g. the Claude Code
- * hook) self-identify here. Deliberately omits 'system' - callers cannot
- * claim the system actor kind. Always owned by the authenticated user, so
- * this cannot impersonate another user's actors.
+ * Agents, gateways, and devices (e.g. the Claude Code hook) self-identify here.
+ *
+ * 'human' and 'system' are BOTH reserved and rejected: the human actor is
+ * derived from the authenticated session in resolveRequestActor, never from
+ * the request body. Allowing a caller to claim kind 'human' let any credential
+ * post an event that rendered indistinguishably from the account owner - and
+ * "who said this" is the entire purpose of an append-only audit log. An actor
+ * is always owned by the authenticated user, so this never crossed accounts,
+ * but it did forge identity within one.
  */
 export const HearthActorParamSchema = z
   .object({
-    kind: z.enum(['human', 'agent', 'gateway', 'device']).prefault('agent'),
+    kind: z.enum(['agent', 'gateway', 'device']).prefault('agent'),
     displayName: z.string().min(1).max(200),
   })
   .optional();
+
+/**
+ * Guard for Hearth operations that mutate state: appending events, creating
+ * channels, and advancing an actor cursor (consuming events out from under a
+ * legitimate agent reader is a mutation, not a read).
+ *
+ * Session/JWT callers hold full rights over their own data, so scopes do not
+ * apply to them. API-key callers must hold hearth:write (or admin:*, which is
+ * not treated as a wildcard anywhere else in apiKeyAuth either).
+ */
+export function assertHearthWriteScope(req: { apiKeyInfo?: { scopes?: string[] } }): void {
+  const scopes = req.apiKeyInfo?.scopes;
+  if (!scopes) return;
+  if (scopes.includes(ApiKeyScope.HEARTH_WRITE) || scopes.includes(ApiKeyScope.ADMIN)) return;
+  throw new ForbiddenError('This API key is read-only for Hearth; hearth:write is required');
+}
 
 type ActorParam = z.infer<typeof HearthActorParamSchema>;
 

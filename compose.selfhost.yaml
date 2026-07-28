@@ -231,6 +231,9 @@ services:
   # runs the task scheduler, calling the SAME handlers the hosted Lambdas use. Reuses the
   # chatcompletion image; only the command differs (runs server/worker/main.ts). No ports:
   # it dispatches nothing inbound. Logs: `docker compose -f compose.selfhost.yaml logs -f worker`.
+  # This is also the stack's only model-discovery driver: every service loads the same
+  # env file, and only this one acts on B4M_DISCOVERY_DRIVER. Discovery stays off (and
+  # makes no outbound request) until that flag is set - see SELF_HOST.md.
   worker:
     build:
       context: .
@@ -250,6 +253,10 @@ services:
     # matching the app/chatcompletion containers - background embedding needs it.
     extra_hosts:
       - 'host.docker.internal:host-gateway'
+    # server/worker/main.ts drains for up to 20s on SIGTERM (DRAIN_GRACE_MS). Docker's
+    # 10s default would SIGKILL through that, abandoning an in-flight scheduled run and
+    # stranding its Mongo lease until the TTL expires; keep this above the code budget.
+    stop_grace_period: 30s
     restart: unless-stopped
 
   # Realtime WebSocket gateway — the self-host replacement for AWS API Gateway

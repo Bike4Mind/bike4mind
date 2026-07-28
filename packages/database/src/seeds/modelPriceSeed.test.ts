@@ -1,3 +1,4 @@
+import { DISCOVERY_PRICE_NOTE_PREFIX } from '@bike4mind/common';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { collectStaticTextModels, generateModelPriceSeed } from './generateModelPriceSeed';
 import { seedModelPrices, SEED_NOTE } from './seedModelPrices';
@@ -11,6 +12,14 @@ const seed = seedFile as unknown as {
   entries: Array<{ modelId: string; pricing: Record<string, { input: number; output: number }> }>;
 };
 
+/**
+ * What this file asserts about the seed is the FALLBACK TIER'S INTERNAL
+ * CONSISTENCY: the checked-in seed equals the adapter literals it is generated
+ * from, and the seeder's precedence rules hold. It is NOT a claim that either
+ * matches what a provider currently charges - the seed is the last-resort
+ * fallback for a deployment with no discovery data. Reality-tracking belongs to
+ * the discovery reconciliation report and the monthly ProviderInvoice deltas.
+ */
 describe('model price seed (no DB)', () => {
   it('the checked-in seed file is fresh (regenerating from the adapter tables produces it)', async () => {
     // Fails when an adapter price literal changes without regenerating the
@@ -174,6 +183,52 @@ describe('seedModelPrices (round-trip)', () => {
 
     const history = await modelPriceRepository.historyForModel(realtime.modelId);
     expect(history).toHaveLength(2);
+  });
+
+  it('supersedes an older discovery row with different pricing (the automation carve-out)', async () => {
+    // Without this, one bad automated price would freeze seed corrections for
+    // that model permanently: seeding used to read any non-seed note as an
+    // operator reprice and skip it forever.
+    const target = seed.entries[0];
+    await modelPriceRepository.append({
+      modelId: target.modelId,
+      unit: 'per_token',
+      pricing: { '1000': { input: 99e-6, output: 99e-6 } },
+      effectiveFrom: new Date('2020-01-01T00:00:00Z'),
+      note: `${DISCOVERY_PRICE_NOTE_PREFIX}models.dev+litellm@2020-01-01T00:00:00.000Z`,
+      repricedBy: 'model-discovery',
+    });
+
+    await seedModelPrices(modelPriceRepository);
+
+    const history = await modelPriceRepository.historyForModel(target.modelId);
+    expect(history).toHaveLength(2);
+    expect(history[0].note).toBe(SEED_NOTE);
+  });
+
+  it('leaves a discovery row at or after the seed version alone (discovery is sticky against itself)', async () => {
+    const target = seed.entries[0];
+    for (const [modelId, effectiveFrom] of [
+      [target.modelId, new Date(seed.generatedAt)],
+      [seed.entries[1].modelId, new Date(new Date(seed.generatedAt).getTime() + 86_400_000)],
+    ] as const) {
+      await modelPriceRepository.append({
+        modelId,
+        unit: 'per_token',
+        pricing: { '1000': { input: 99e-6, output: 99e-6 } },
+        effectiveFrom,
+        note: `${DISCOVERY_PRICE_NOTE_PREFIX}openai@${effectiveFrom.toISOString()}`,
+        repricedBy: 'model-discovery',
+      });
+    }
+
+    await seedModelPrices(modelPriceRepository);
+
+    for (const entry of [target, seed.entries[1]]) {
+      const history = await modelPriceRepository.historyForModel(entry.modelId);
+      expect(history).toHaveLength(1);
+      expect(history[0].repricedBy).toBe('model-discovery');
+    }
   });
 
   it('never supersedes an operator-appended reprice, even an older one with different pricing', async () => {

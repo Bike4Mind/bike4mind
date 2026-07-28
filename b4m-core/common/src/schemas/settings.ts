@@ -210,6 +210,8 @@ export const SettingKeySchema = z.enum([
 
   // EMBEDDING SETTINGS
   'defaultEmbeddingModel',
+  'dataLakeSearchMaxFiles',
+  'dataLakeSearchMaxChunks',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -314,6 +316,14 @@ export const SettingKeySchema = z.enum([
 
   // AGENT ORCHESTRATION DEFAULTS
   'orchestrationDefaults',
+
+  // MODEL DISCOVERY (live model registry)
+  'enableModelDiscovery',
+  'modelDiscoveryMode',
+  'modelDiscoveryAutoEnable',
+  'modelDiscoveryAllowEgress',
+  'modelDiscoveryPriceBandPct',
+  'modelDiscoveryAutoRemap',
 ]);
 export type SettingKey = z.infer<typeof SettingKeySchema>;
 
@@ -597,6 +607,23 @@ function makeStringSetting(
       : z.string(),
   };
 }
+
+/**
+ * Data-lake semantic-search scan budgets. Declared here so the admin-settings default and the
+ * retrieval code that applies it cannot drift - `semanticDataLakeSearch` imports these same
+ * constants for the case where no setting row exists.
+ *
+ * Sized for the memory and latency a single search can afford, not for a deployment preference:
+ * the chunk cap is what bounds how long one query may scan, and exceeding either is reported as
+ * a truncated scan rather than silently dropping the remainder.
+ *
+ * The file cap is deliberately only a few pages. The scope walk uses skip pagination, so the last
+ * page's sort has to hold skip + limit documents - a much larger cap would trade the truncation
+ * this change exists to expose for a sort-memory failure on the same large lakes. Raise it only
+ * alongside keyset file pagination.
+ */
+export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
+export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
 
 function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number } & BaseSetting) {
   let numberSchema = z.coerce.number();
@@ -1203,7 +1230,11 @@ export const API_SERVICE_GROUPS = {
     name: 'Embedding Service',
     description: 'Embedding API integration settings',
     icon: 'AutoAwesome',
-    settings: [{ key: 'defaultEmbeddingModel', order: 1 }],
+    settings: [
+      { key: 'defaultEmbeddingModel', order: 1 },
+      { key: 'dataLakeSearchMaxFiles', order: 2 },
+      { key: 'dataLakeSearchMaxChunks', order: 3 },
+    ],
   },
   VOICE_SESSION: {
     id: 'voiceSessionService',
@@ -1508,6 +1539,20 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableEnhancedDateTime', order: 1 },
       { key: 'EnableHistoricalFeatures', order: 2 },
       { key: 'EnableAstronomyFeatures', order: 3 },
+    ],
+  },
+  MODEL_DISCOVERY: {
+    id: 'modelDiscoveryService',
+    name: 'Model Discovery',
+    description: 'Scheduled provider and aggregator discovery of models, capabilities, and lifecycle',
+    icon: 'AutoAwesome',
+    settings: [
+      { key: 'enableModelDiscovery', order: 1 },
+      { key: 'modelDiscoveryMode', order: 2 },
+      { key: 'modelDiscoveryAutoEnable', order: 3 },
+      { key: 'modelDiscoveryAllowEgress', order: 4 },
+      { key: 'modelDiscoveryPriceBandPct', order: 5 },
+      { key: 'modelDiscoveryAutoRemap', order: 6 },
     ],
   },
   RATE_LIMITING: {
@@ -2770,6 +2815,28 @@ export const settingsMap = {
       ...(process.env.B4M_SELF_HOST === 'true' ? Object.values(OllamaEmbeddingModel) : []),
     ],
   }),
+  dataLakeSearchMaxFiles: makeNumberSetting({
+    key: 'dataLakeSearchMaxFiles',
+    name: 'Data Lake Search Max Files',
+    defaultValue: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
+    min: 1,
+    description:
+      'Most files one data-lake semantic search will scope. Beyond this the search reports itself as truncated rather than silently ignoring the rest. Raising it well past a few thousand also deepens the paging offset, so prefer reporting truncation over a very large value.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 2,
+  }),
+  dataLakeSearchMaxChunks: makeNumberSetting({
+    key: 'dataLakeSearchMaxChunks',
+    name: 'Data Lake Search Max Chunks',
+    defaultValue: DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
+    min: 1,
+    description:
+      'Most chunk vectors one data-lake semantic search will score. Raising it trades query latency for coverage; lowering it makes truncation more likely (and reported).',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 3,
+  }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({
     key: 'slackSigningSecret',
@@ -3456,6 +3523,71 @@ export const settingsMap = {
     category: 'AI',
     order: 140,
     schema: OrchestrationDefaultsSchema,
+  }),
+  enableModelDiscovery: makeBooleanSetting({
+    key: 'enableModelDiscovery',
+    name: 'Enable Model Discovery',
+    defaultValue: true,
+    description:
+      'Master switch for scheduled model discovery. Off means no run starts on any driver; the catalog keeps serving the rows already in force.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 1,
+  }),
+  modelDiscoveryMode: makeStringSetting({
+    key: 'modelDiscoveryMode',
+    name: 'Model Discovery Mode',
+    defaultValue: 'report',
+    description:
+      '"report" runs the full discovery calculation and writes nothing but the run report - the soak default. "write" applies the diff to the model catalog.',
+    options: ['report', 'write'],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 2,
+  }),
+  modelDiscoveryAutoEnable: makeStringSetting({
+    key: 'modelDiscoveryAutoEnable',
+    name: 'Model Discovery Auto-Enable Policy',
+    defaultValue: 'priced',
+    description:
+      'When a newly discovered model becomes invocable. "priced": only with a trusted price. "manual": never without an admin click. "all": whenever the build can dispatch it. No policy can promote a model with no dispatch profile.',
+    options: ['priced', 'manual', 'all'],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 3,
+  }),
+  modelDiscoveryAllowEgress: makeBooleanSetting({
+    key: 'modelDiscoveryAllowEgress',
+    name: 'Allow Model Discovery Egress',
+    defaultValue: true,
+    description:
+      'Gates every network source, provider APIs included. Off means discovery makes no outbound request at all and each run reports "no new information".',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 4,
+  }),
+  modelDiscoveryPriceBandPct: makeNumberSetting({
+    key: 'modelDiscoveryPriceBandPct',
+    name: 'Model Discovery Price Band (%)',
+    defaultValue: 50,
+    description:
+      'The largest price move discovery applies without a human, in either direction, measured against the rate in the row it would supersede - so 200 passes anything up to a 3x change. A bigger move is flagged with both sources shown and the existing price keeps billing. 0 flags every move.',
+    min: 0,
+    max: 500,
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 5,
+  }),
+  modelDiscoveryAutoRemap: makeStringSetting({
+    key: 'modelDiscoveryAutoRemap',
+    name: 'Model Discovery Auto-Remap',
+    defaultValue: 'suggest',
+    description:
+      'What discovery does with the successor it computes for a model it deprecates. "suggest": record it for an admin to confirm. "apply": write it into the catalog, but only when the replacement exists, is active, is on the same backend, and does not cost more.',
+    options: ['suggest', 'apply'],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 6,
   }),
   // Add more settings as needed
 } satisfies {
