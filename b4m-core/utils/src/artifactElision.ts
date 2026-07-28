@@ -463,9 +463,11 @@ function findLineCommentStart(line: string): number {
 /**
  * A protocol-relative URL, e.g. `//cdn.example.com/lib.js`. Requires a dotted host immediately
  * after the slashes, which a real comment never has - `// example.com is down` has a space, and
- * `//TODO` has no dot.
+ * `//TODO` has no dot. `localhost` is spelled out because it is the one routine dotless host;
+ * admitting dotless hosts GENERALLY would read `//TODO: rest omitted` as a URL and stop scanning
+ * a whole class of real stub comments, which is the far more expensive mistake.
  */
-const PROTOCOL_RELATIVE_URL_REGEX = /^\/\/[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:[/:?#]|$)/;
+const PROTOCOL_RELATIVE_URL_REGEX = /^\/\/(?:[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+|localhost)(?:[/:?#]|$)/;
 
 /** Index of a python `#` comment marker outside any quoted string. */
 function findHashCommentStart(line: string): number {
