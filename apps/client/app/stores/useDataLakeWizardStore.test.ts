@@ -156,6 +156,53 @@ describe('useDataLakeWizardStore - deriveTagPrefixFromName', () => {
 
     expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('custom:');
   });
+
+  const inferPrefix = (prefix: string) =>
+    useDataLakeWizardStore.getState().setTaxonomy({
+      prefix,
+      suggestedName: 'Inferred Name',
+      tags: [],
+      fileAssignments: [],
+      attempted: true,
+      analyzing: false,
+    });
+
+  it('re-derives over a prefix inference supplied, once the taxonomy step is turned back off', () => {
+    // Inference shortens the name its own way (e.g. "pr10:"), so leaving it in place after the
+    // step is unticked both quotes a step that no longer runs and lets two unrelated lakes
+    // collide on one namespace.
+    setName('Untick AI Lake');
+    inferPrefix('uai:');
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('uai:');
+
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    const s = useDataLakeWizardStore.getState();
+    expect(s.config.tagPrefix).toBe('untick-ai-lake:');
+    expect(s.taxonomy.prefix).toBe('untick-ai-lake:');
+  });
+
+  it('keeps a prefix the user typed on the taxonomy step after unticking it', () => {
+    setName('Untick AI Lake');
+    inferPrefix('uai:');
+    useDataLakeWizardStore.getState().setTagPrefix('mine:');
+
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('mine:');
+  });
+
+  it('does not treat a suggestion it never adopted as inference-owned', () => {
+    // An existing value wins in setTaxonomy, so the rejected suggestion must not become the
+    // marker that lets a later derive overwrite the value that did win.
+    setName('Untick AI Lake');
+    useDataLakeWizardStore.getState().setTagPrefix('mine:');
+    inferPrefix('uai:');
+
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('mine:');
+  });
 });
 
 describe('useDataLakeWizardStore - optional step opt-ins', () => {

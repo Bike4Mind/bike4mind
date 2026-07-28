@@ -147,6 +147,7 @@ const freshSession = () => ({
   optionalSteps: { ...DEFAULT_OPTIONAL_STEPS },
   config: { ...DEFAULT_CONFIG },
   autoDerivedTagPrefix: '',
+  inferredTagPrefix: '',
   duplicateCheckResults: null,
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
@@ -199,6 +200,13 @@ interface DataLakeWizardStore {
    * hand-edited prefix stays untouched. Never read outside that action.
    */
   autoDerivedTagPrefix: string;
+  /**
+   * The last prefix inference supplied, so turning the AI Taxonomy step back off can re-derive
+   * over it. Without this the lake keeps a namespace named after a step it no longer runs -
+   * and, since inference tends to shorten a name the same way twice, two unrelated lakes can
+   * collide on one prefix. Cleared by setTagPrefix: once the user edits it, it is theirs.
+   */
+  inferredTagPrefix: string;
   duplicateCheckResults: { duplicateCount: number; checkedAt: number } | null;
   uploadProgress: UploadProgress;
   hashingProgress: { total: number; completed: number; status: 'idle' | 'hashing' | 'done' };
@@ -264,6 +272,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   optionalSteps: { ...DEFAULT_OPTIONAL_STEPS },
   config: { ...DEFAULT_CONFIG },
   autoDerivedTagPrefix: '',
+  inferredTagPrefix: '',
   duplicateCheckResults: null,
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
@@ -317,9 +326,11 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   // ── Preview Step ────────────────────────────────────────────────────────
 
   toggleFolderExclusion: path => {
-    const { folderTree } = get();
+    const { folderTree, excludedPatterns } = get();
     if (!folderTree) return;
-    const updated = toggleFolderExclusion(folderTree, path);
+    // Patterns go in so the toggled subtree's files are re-evaluated against them: excluding
+    // then re-including a folder must not resurrect the junk files inside it.
+    const updated = toggleFolderExclusion(folderTree, path, excludedPatterns);
     set({ folderTree: updated, allFiles: getAllFiles(updated) });
   },
 
@@ -351,6 +362,10 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
         name: get().config.name || result.suggestedName,
         tagPrefix: get().config.tagPrefix || result.prefix,
       },
+      // Remember an adopted suggestion as inference's, so unticking the step can re-derive over
+      // it. Only when it was actually adopted - an existing value wins above, and marking a
+      // value inference never applied would hand someone else's prefix away on the next derive.
+      inferredTagPrefix: get().config.tagPrefix ? get().inferredTagPrefix : result.prefix,
     }),
 
   setTaxonomyAnalyzing: analyzing => set(state => ({ taxonomy: { ...state.taxonomy, analyzing } })),
@@ -410,22 +425,28 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
     set(state => ({
       taxonomy: { ...state.taxonomy, prefix },
       config: { ...state.config, tagPrefix: prefix },
+      // A typed prefix is the user's; drop both provenance markers so neither a rename nor
+      // unticking the taxonomy step can derive over it.
+      autoDerivedTagPrefix: '',
+      inferredTagPrefix: '',
     })),
 
   /**
    * Derive the tag prefix from the lake name, for flows with no taxonomy step to supply one.
-   * Re-derives after a rename so the prefix can't keep referencing an abandoned name, but only
-   * while the prefix is still exactly what this last produced - once the user edits it on
-   * Config, their value is theirs to keep. Callers own the when (see DataLakeWizardModal's
-   * source-step guard); this owns the whether.
+   * Re-derives over a prefix this last produced (so a rename can't leave the prefix quoting an
+   * abandoned name) or one inference supplied (so unticking the AI step hands the namespace
+   * back to the name). A prefix the user typed is never touched. Callers own the when (see
+   * DataLakeWizardModal's source-step guard); this owns the whether.
    */
   deriveTagPrefixFromName: () =>
     set(state => {
       const current = state.config.tagPrefix.trim();
-      if (current && current !== state.autoDerivedTagPrefix) return state;
+      const isOurs = !current || current === state.autoDerivedTagPrefix || current === state.inferredTagPrefix;
+      if (!isOurs) return state;
       const prefix = `${slugifyDataLakeName(state.config.name)}:`;
       return {
         autoDerivedTagPrefix: prefix,
+        inferredTagPrefix: '',
         taxonomy: { ...state.taxonomy, prefix },
         config: { ...state.config, tagPrefix: prefix },
       };
