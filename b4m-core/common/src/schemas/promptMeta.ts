@@ -281,6 +281,23 @@ export const PromptMetaZodSchema = z.object({
    * letting the client render a truncated-artifact recovery affordance.
    */
   finishReason: z.string().optional(),
+  /**
+   * Set when an emitted artifact looks voluntarily abbreviated - placeholder comments in
+   * place of real code, or calls into functions that were never defined. The complement to
+   * `finishReason === 'max_tokens'`: truncation is a hard stop the provider reports, elision
+   * finishes cleanly and reports nothing, so this is the only completeness signal available
+   * for it (and the only one at all on backends that never emit a stop reason).
+   * Advisory - the client renders a "may be incomplete" notice; content is never altered.
+   */
+  suspectedElision: z
+    .object({
+      confidence: z.enum(['high', 'low']),
+      /** Total signals across every artifact in the reply. */
+      signalCount: z.number().nonnegative(),
+      /** Human-readable signal descriptions, capped for payload size. */
+      details: z.array(z.string()),
+    })
+    .optional(),
   statusLog: z
     .array(
       z.object({
