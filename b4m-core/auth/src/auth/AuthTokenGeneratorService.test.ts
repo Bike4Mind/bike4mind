@@ -204,6 +204,31 @@ describe('AuthTokenGeneratorService', () => {
     });
   });
 
+  describe('impersonation marker survives a refresh', () => {
+    // Regression: createRefreshToken previously ignored additionalPayload entirely, so an
+    // impersonated session that refreshed its access token silently lost impersonatedBy and
+    // logout.ts's "don't revoke the real customer" guard stopped applying.
+    it('createAccessToken embeds additionalPayload in BOTH the access and refresh token', () => {
+      const svc = makeService();
+      const { accessToken, refreshToken } = svc.createAccessToken('customer-1', 0, { impersonatedBy: 'admin-9' });
+
+      expect(svc.verifyToken(accessToken).impersonatedBy).toBe('admin-9');
+      expect(svc.verifyRefreshToken(refreshToken)!.impersonatedBy).toBe('admin-9');
+    });
+
+    it('createRefreshToken embeds additionalPayload directly', () => {
+      const svc = makeService();
+      const refreshToken = svc.createRefreshToken('customer-1', 0, { impersonatedBy: 'admin-9' });
+      expect(svc.verifyRefreshToken(refreshToken)!.impersonatedBy).toBe('admin-9');
+    });
+
+    it('a non-impersonated refresh token carries no impersonatedBy claim', () => {
+      const svc = makeService();
+      const { refreshToken } = svc.createAccessToken('user-123', 0);
+      expect(svc.verifyRefreshToken(refreshToken)!.impersonatedBy).toBeUndefined();
+    });
+  });
+
   describe('isTokenVersionCurrent', () => {
     // A token with no embedded version (issued before the field existed) must
     // still pass against a default user (version 0) - otherwise every live
