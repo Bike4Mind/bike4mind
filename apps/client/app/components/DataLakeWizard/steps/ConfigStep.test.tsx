@@ -263,6 +263,22 @@ describe('ConfigStep - Tag Prefix single home + empty-prefix fallback', () => {
     expect(screen.getByText(/No taxonomy prefix was set/i)).toBeInTheDocument();
   });
 
+  it('flags a reserved prefix even though the field is read-only here', () => {
+    // The prefix arrives from the taxonomy step, so the field is disabled - but the server
+    // rejects the datalake: namespace outright and Start Upload is gated on it. Without a
+    // message here the button is disabled with no visible reason.
+    seedConfig({ tagPrefix: 'datalake:' });
+
+    render(
+      <TestWrapper>
+        <ConfigStep />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-config-tagprefix-help').textContent).toMatch(/reserved/i);
+    expect(screen.queryByText(/Set on the AI Taxonomy step/i)).not.toBeInTheDocument();
+  });
+
   it('locks the prefix to the target lake in append mode (taxonomy step is skipped there)', () => {
     seedConfig({
       tagPrefix: 'niche:',

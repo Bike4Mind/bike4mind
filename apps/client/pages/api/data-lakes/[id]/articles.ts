@@ -74,6 +74,9 @@ const handler = baseApi()
           // matched only within owner/org access so a colliding prefix can't leak
           // another tenant's files. The unique datalakeTag above safely covers
           // membership; the scoped prefix additionally catches prefixed content tags.
+          // Both arms are membership signals, so removeFileFromDataLake clears BOTH -
+          // widening this scope means widening what removal clears, or a removed file
+          // starts showing up here again.
           scopedTagPrefixes: [dataLake.fileTagPrefix],
           // Single-lake browser: only this lake's files.
           restrictToDataLake: true,

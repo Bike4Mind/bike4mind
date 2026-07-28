@@ -1,4 +1,4 @@
-import { CODE_FILE_MIME_TYPES } from '@bike4mind/common';
+import { CODE_FILE_MIME_TYPES, normalizeTagPrefix } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { buildFilenameMarkerRegex } from '@bike4mind/utils/retrievalExclusion';
 import { USE_DOCUMENTDB } from '../utils/documentdb-compat';
@@ -195,8 +195,10 @@ export function buildOwnershipConditions(
   // below select files, so a single-lake view can't fall back to "all files the user owns".
   const conditions: object[] = options?.restrictToDataLake ? [] : [...baseAccess];
 
+  // Shared with the single-file removal write path (see normalizeTagPrefix): the prefixes
+  // matched here are exactly the ones a removal is allowed to clear.
   const validPrefixes = (prefixes: string[] | undefined) =>
-    (prefixes ?? []).map(p => p.trim()).filter(p => p.length > 0 && p.endsWith(':'));
+    (prefixes ?? []).map(normalizeTagPrefix).filter((p): p is string => p !== null);
 
   // Include data lake files accessible to this user (by exact meta-tag). The meta-tag
   // (`datalake:<org>:<slug>`) is uniquely namespaced and the accessible set is resolved

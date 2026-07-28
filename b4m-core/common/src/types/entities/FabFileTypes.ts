@@ -426,15 +426,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number>;
 
   /**
-   * Atomically remove a single tag (matched by exact name) from one file's tags array.
-   * Uses `$pull`, so concurrent removals of DIFFERENT tags on the same file don't clobber
-   * each other the way a read-filter-write `$set: { tags }` would. No-op if the tag is
-   * absent (idempotent).
+   * Atomically remove every tag matching one of `tagNames` (exact names) from one file's
+   * tags array, and clear `primaryTag` if it named one of them. Uses `$pull`, so concurrent
+   * removals of DIFFERENT tags on the same file don't clobber each other the way a
+   * read-filter-write `$set: { tags }` would. Absent names are a no-op (idempotent).
    * @param fabFileId - The ID of the file.
-   * @param tagName - The exact tag name to remove.
-   * @returns The number of files modified (0 if the tag was not present).
+   * @param tagNames - The exact tag names to remove. Empty is a no-op.
+   * @returns Documents modified by the pull. The schema has timestamps, so this can be 1
+   * even when no tag matched - do not read it as "a tag was removed".
    */
-  pullTagByFabFileId(fabFileId: string, tagName: string): Promise<number>;
+  pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
 
   /**
    * Find files by content hashes for a given user (deduplication).

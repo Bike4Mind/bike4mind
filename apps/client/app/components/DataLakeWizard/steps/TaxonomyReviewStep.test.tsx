@@ -115,4 +115,16 @@ describe('TaxonomyReviewStep - prefix + suffix', () => {
     fireEvent.change(prefixInput(), { target: { value: 'acme:' } });
     expect(screen.queryByTestId('taxonomy-tag-prefix-error')).toBeNull();
   });
+
+  it('rejects the reserved datalake: namespace, which the server refuses at create', () => {
+    // This field is the prefix's editable home, so it is where a user would type the one value
+    // the create schema rejects. Catching it here beats a blocked Start Upload two steps on.
+    seed('acme:', [mkTag({ suffix: 'type:report' })]);
+    renderStep();
+    expect(screen.queryByTestId('taxonomy-tag-prefix-error')).toBeNull();
+
+    fireEvent.change(prefixInput(), { target: { value: 'datalake:' } });
+
+    expect(screen.getByTestId('taxonomy-tag-prefix-error').textContent).toMatch(/reserved/i);
+  });
 });
