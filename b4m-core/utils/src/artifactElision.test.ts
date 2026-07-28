@@ -162,6 +162,38 @@ describe('detectElidedContent', () => {
       expect(detectElidedContent(body, 'html').elided).toBe(false);
     });
 
+    it('does not read a bare protocol-relative URL as a line comment', () => {
+      // At column 0 there is no preceding ':' to catch, so the host pattern is what saves it.
+      const body = `<html><body>
+        <script src="//cdn.example.com/lib.js"></script>
+        <script>
+//cdn.example.com/for-brevity-notes.js
+          function render() { document.title = 'ok'; }
+          render();
+        </script>
+      </body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('does not flag "from the previous" in its ordinary sense', () => {
+      const body = `<html><body><script>
+        function render() {
+          // Ported from the previous system, kept for parity
+          document.title = 'ok';
+        }
+        render();
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('still flags the stub reading of "from the previous"', () => {
+      const body = '<html><body><!-- markup copied from the previous version --><div></div></body></html>';
+
+      expect(detectElidedContent(body, 'html').confidence).toBe('high');
+    });
+
     it('does not read a URL as a line comment', () => {
       const body = `<html><body><script>
         const DOCS = 'https://example.com/docs';
@@ -371,6 +403,41 @@ func main() {
       // entirely on the empty bodies.
       expect(result.signals.some(s => s.kind === 'placeholder_comment')).toBe(false);
       expect(result.signals.some(s => s.kind === 'undefined_reference')).toBe(false);
+    });
+
+    it('does not fire on TWO deliberate no-ops with distinct names', () => {
+      // Hollow bodies never fire on their own below the conclusive threshold - they only
+      // corroborate a reference miss. Two ordinary no-ops must stay clean.
+      const body = `<html><body><script>
+        function noop() {
+          // intentionally does nothing - placeholder for the future export hook
+        }
+        function alsoNoop() {
+          // intentionally does nothing - reserved for the print hook
+        }
+        function render() {
+          document.title = 'ok';
+          noop();
+          alsoNoop();
+        }
+        render();
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('fires when a hollow body is corroborated by an undefined reference', () => {
+      const body = `<html><body><script>
+        function init() {
+          // Wire everything up
+        }
+        function start() { init(); renderBoard(); }
+        start();
+      </script></body></html>`;
+
+      const result = detectElidedContent(body, 'html');
+      expect(result.elided).toBe(true);
+      expect(result.confidence).toBe('low');
     });
 
     it('does not fire on a working artifact with one deliberate no-op', () => {
