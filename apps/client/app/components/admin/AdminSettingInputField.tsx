@@ -1,5 +1,5 @@
 import { useUpdateSettings } from '@client/app/hooks/data/settings';
-import { settingsMap } from '@bike4mind/common';
+import { isMaskedSensitiveSettingValue, settingsMap } from '@bike4mind/common';
 import SaveIcon from '@mui/icons-material/Save';
 import WarningIcon from '@mui/icons-material/Warning';
 import {
@@ -94,11 +94,25 @@ const AdminSettingInputField = ({
     return defaultValue ?? null;
   });
   const updateSettings = useUpdateSettings();
-  const [focused, setFocused] = useState(false);
   const [showEmbeddingWarning, setShowEmbeddingWarning] = useState(false);
 
   const isDirty = value !== defaultValue;
+  const showsStoredSecretMask = setting.isSensitive === true && isMaskedSensitiveSettingValue(value);
   const isEmbeddingModelSetting = setting.key === 'defaultEmbeddingModel';
+
+  const saveValue = (next: string | number | boolean) => {
+    updateSettings.mutate(
+      { key: setting.key, value: next },
+      {
+        // Drop the typed plaintext as soon as it is stored: the server answers a sensitive
+        // write with the mask, which is all this field should ever hold afterwards.
+        onSuccess: data => {
+          const saved = (data as { settingValue?: unknown } | undefined)?.settingValue;
+          if (setting.isSensitive && typeof saved === 'string') setValue(saved);
+        },
+      }
+    );
+  };
 
   const handleSaveSetting = () => {
     if (value === null) return;
@@ -110,12 +124,12 @@ const AdminSettingInputField = ({
     }
 
     // Save directly for other settings
-    updateSettings.mutate({ key: setting.key, value });
+    saveValue(value);
   };
 
   const confirmEmbeddingModelChange = () => {
     if (value === null) return;
-    updateSettings.mutate({ key: setting.key, value });
+    saveValue(value);
     setShowEmbeddingWarning(false);
   };
 
@@ -153,14 +167,19 @@ const AdminSettingInputField = ({
                   </Select>
                 ) : (
                   <Input
-                    value={
-                      setting.isSensitive && !focused && value
-                        ? '••••••••••••••••••••••••••••••••••••••'
-                        : (value as string) || ''
-                    }
+                    slotProps={{ input: { 'data-testid': `admin-setting-${setting.key}-input` } }}
+                    value={(value as string) || ''}
+                    placeholder={setting.isSensitive ? 'Enter a new value to replace the stored secret' : undefined}
                     onChange={e => setValue(e.target.value)}
-                    onFocus={() => setFocused(true)}
-                    onBlur={() => setFocused(false)}
+                    // A sensitive setting arrives already masked from the server, so there is
+                    // nothing to reveal. Clear the mask on focus so the admin types a fresh
+                    // value, and restore it on an untouched blur so the field stays non-dirty.
+                    onFocus={() => {
+                      if (showsStoredSecretMask) setValue('');
+                    }}
+                    onBlur={() => {
+                      if (setting.isSensitive && value === '') setValue((defaultValue as string) ?? '');
+                    }}
                   />
                 )
               ) : null}

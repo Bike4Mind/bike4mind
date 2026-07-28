@@ -7,6 +7,9 @@ import {
   experimentalFeatureSettingKeys,
   experimentalNonGroupSettingKeys,
   API_SERVICE_GROUPS,
+  SENSITIVE_SETTING_MASK,
+  maskSensitiveSettingValue,
+  isMaskedSensitiveSettingValue,
   type AdminSettingDoc,
 } from './settings';
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
@@ -243,6 +246,53 @@ describe('public settings projection (M2.5 security boundary)', () => {
       const setting: AdminSettingDoc = { settingName: 'enforceMFA', settingValue: 'true' };
       expect(redactSettingSecrets(setting)).toEqual(setting);
     });
+
+    it('masks EVERY isSensitive setting, not a hand-listed subset', () => {
+      const sensitiveKeys = (Object.values(settingsMap) as Array<{ key: string; isSensitive?: boolean }>)
+        .filter(s => s.isSensitive === true)
+        .map(s => s.key);
+      expect(sensitiveKeys.length).toBeGreaterThan(0);
+
+      for (const key of sensitiveKeys) {
+        const secret = `sk-live-${key}-tail`;
+        const redacted = redactSettingSecrets({ settingName: key, settingValue: secret });
+        expect(redacted.settingValue).not.toBe(secret);
+        expect(redacted.settingValue).toBe(`${SENSITIVE_SETTING_MASK}tail`);
+      }
+    });
+
+    it('leaves an unset sensitive setting empty rather than showing a mask', () => {
+      expect(redactSettingSecrets({ settingName: 'anthropicDemoKey', settingValue: '' }).settingValue).toBe('');
+    });
+  });
+});
+
+describe('sensitive setting masking', () => {
+  it('keeps only the last 4 characters', () => {
+    expect(maskSensitiveSettingValue('sk-ant-api03-abcdefgh')).toBe(`${SENSITIVE_SETTING_MASK}efgh`);
+  });
+
+  it('reveals nothing at all for a short value', () => {
+    // 4 of 8 chars would be half the secret, so the tail is dropped entirely.
+    expect(maskSensitiveSettingValue('12345678')).toBe(SENSITIVE_SETTING_MASK);
+  });
+
+  it('maps a missing or non-string value to empty', () => {
+    expect(maskSensitiveSettingValue('')).toBe('');
+    expect(maskSensitiveSettingValue(undefined)).toBe('');
+    expect(maskSensitiveSettingValue(null)).toBe('');
+    expect(maskSensitiveSettingValue({ nested: 'x' })).toBe('');
+  });
+
+  it('recognizes its own output as a write-back placeholder', () => {
+    expect(isMaskedSensitiveSettingValue(maskSensitiveSettingValue('sk-ant-api03-abcdefgh'))).toBe(true);
+    expect(isMaskedSensitiveSettingValue(maskSensitiveSettingValue('12345678'))).toBe(true);
+  });
+
+  it('does not mistake a real secret for a placeholder', () => {
+    expect(isMaskedSensitiveSettingValue('sk-ant-api03-abcdefgh')).toBe(false);
+    expect(isMaskedSensitiveSettingValue('')).toBe(false);
+    expect(isMaskedSensitiveSettingValue(undefined)).toBe(false);
   });
 });
 

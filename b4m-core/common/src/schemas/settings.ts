@@ -3651,13 +3651,49 @@ export interface AdminSettingDoc {
 }
 
 /**
- * Redact encrypted secrets from a single setting before it leaves the server.
- * Masks sreAgentConfig per-repo webhookSecret/callbackToken. Mirrors the v1->v2
- * migration so secrets land in repos[] before masking. Shared by the authed
- * fetch path and the public artifact (defense-in-depth - publicSafe settings
- * should never carry secrets, but redact anyway).
+ * Prefix of the value an `isSensitive` setting is reduced to on its way out of the
+ * server. Deliberately ASCII and 8 chars so it can never collide with a real
+ * provider key, which makes `isMaskedSensitiveSettingValue` a safe write-back test.
+ */
+export const SENSITIVE_SETTING_MASK = '********';
+
+/**
+ * Reduce a stored sensitive value to a display-only mask. Keeps the last 4 chars so
+ * an admin can tell WHICH key is loaded (matching the SystemSecrets mask), but only
+ * once the value is long enough that 4 chars is not a meaningful fraction of it.
+ */
+export function maskSensitiveSettingValue(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) return '';
+  return value.length <= 8 ? SENSITIVE_SETTING_MASK : `${SENSITIVE_SETTING_MASK}${value.slice(-4)}`;
+}
+
+/**
+ * True when a submitted value is one the server previously masked. The client is
+ * never sent the real value, so a mask coming back means "keep what is stored"
+ * rather than "set the value to these asterisks" - see the settings update handler.
+ */
+export function isMaskedSensitiveSettingValue(value: unknown): boolean {
+  return typeof value === 'string' && value.startsWith(SENSITIVE_SETTING_MASK);
+}
+
+/**
+ * Redact secrets from a single setting before it leaves the server.
+ *
+ * Two boundaries, both fail-closed against the stored value reaching a client:
+ *  - any setting tagged `isSensitive` collapses to a mask (never the real value),
+ *  - sreAgentConfig (which is NOT isSensitive) has its per-repo webhookSecret and
+ *    callbackToken masked; parsed through the schema first so the v1->v2 migration
+ *    moves secrets into repos[] where the masking looks for them.
+ *
+ * Shared by the authed fetch path and the public artifact (defense-in-depth -
+ * publicSafe settings should never carry secrets, but redact anyway).
  */
 export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc {
+  const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
+  if (definition?.isSensitive) {
+    return { ...setting, settingValue: maskSensitiveSettingValue(setting.settingValue) };
+  }
+
   if (setting.settingName !== 'sreAgentConfig' || !setting.settingValue) return setting;
   let config: SreAgentConfig;
   try {

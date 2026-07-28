@@ -1,4 +1,11 @@
-import { SettingKeySchema, SreAgentConfig, SRE_SECRET_PLACEHOLDER, settingsMap } from '@bike4mind/common';
+import {
+  SettingKeySchema,
+  SreAgentConfig,
+  SRE_SECRET_PLACEHOLDER,
+  isMaskedSensitiveSettingValue,
+  maskSensitiveSettingValue,
+  settingsMap,
+} from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 
@@ -14,9 +21,25 @@ const handler = baseApi().put(
   asyncHandler<unknown, unknown, { key: string; value: unknown }>(async (req, res) => {
     if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
 
+    // Authorize before any branch reads or returns stored setting data.
+    if (!req.ability) throw new NotFoundError('Ability not found');
+    if (!req.ability.can('update', AdminSettings)) throw new NotFoundError('Permission denied');
+
     const key = SettingKeySchema.parse(req.body.key);
 
     let value = settingsMap[key].schema.parse(req.body.value);
+
+    const isSensitiveSetting = settingsMap[key].isSensitive === true;
+
+    // The client is only ever sent a mask for a sensitive setting (see fetch.ts), so a
+    // mask arriving here means the admin edited some other field and submitted the form
+    // unchanged - keep the stored value instead of overwriting a real secret with
+    // asterisks. Same "placeholder means preserve" contract sreAgentConfig already uses.
+    if (isSensitiveSetting && isMaskedSensitiveSettingValue(value)) {
+      const existing = await AdminSettings.findOne({ settingName: key }).lean();
+      if (!existing) throw new NotFoundError('Admin setting not found');
+      return res.json({ ...existing, settingValue: maskSensitiveSettingValue(existing.settingValue) });
+    }
 
     // Encrypt sensitive fields before storing (v2 config: defaults + per-repo secrets)
     if (key === 'sreAgentConfig') {
@@ -53,11 +76,6 @@ const handler = baseApi().put(
 
       value = sreValue;
     }
-
-    if (!req.ability) throw new NotFoundError('Ability not found');
-
-    // Assuming you have a function to check permissions
-    if (!req.ability.can('update', AdminSettings)) throw new NotFoundError('Permission denied');
 
     const updatedSetting = await AdminSettings.findOneAndUpdate(
       { settingName: key },
@@ -101,6 +119,16 @@ const handler = baseApi().put(
       }
 
       (redacted as unknown as Record<string, unknown>).settingValue = redactedCfg;
+      return res.json(redacted);
+    }
+
+    // Never echo a sensitive value back, not even the one just submitted - the write
+    // response is the other way a stored secret could land in the browser payload.
+    if (isSensitiveSetting) {
+      const redacted = updatedSetting.toObject();
+      (redacted as unknown as Record<string, unknown>).settingValue = maskSensitiveSettingValue(
+        updatedSetting.settingValue
+      );
       return res.json(redacted);
     }
 
