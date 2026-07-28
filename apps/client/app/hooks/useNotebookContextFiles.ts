@@ -109,9 +109,12 @@ export function useNotebookContextFiles() {
       markPending(fabFileId, true);
       setWorkBenchFiles(sid, prev => prev.filter(f => f.id !== fabFileId));
       try {
-        // Removal never propagates: project.fileIds is append-only, so there is
-        // nothing on the project side for this to undo.
-        await persist(sid, true);
+        // Never propagate on removal. The server propagates whatever knowledgeIds it
+        // receives, and on a removal that is the SURVIVING files - so propagating here
+        // would push files that were deliberately kept out of projects (an automatic
+        // upload promotion) into them, as a side effect of deleting something else.
+        // Nothing needs propagating anyway: project.fileIds is append-only.
+        await persist(sid, false);
       } catch (error) {
         setWorkBenchFiles(sid, previous);
         toast.error('Could not remove that file from this notebook');

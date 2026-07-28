@@ -163,6 +163,25 @@ describe('useNotebookContextFiles', () => {
     expect(mockMutateAsync).not.toHaveBeenCalled();
   });
 
+  it('does not propagate survivors to projects when removing a file', async () => {
+    // Regression: the server propagates whatever knowledgeIds it is sent, and on a
+    // removal that is the SURVIVING list. Passing propagateToProjects: true here would
+    // push a file that was auto-promoted with propagation OFF into every containing
+    // project, as a side effect of deleting a different file.
+    const { result } = renderHook(() => useNotebookContextFiles());
+    await act(async () => {
+      await result.current.addToNotebookContext(SID, file('a'), { propagateToProjects: false });
+      await result.current.addToNotebookContext(SID, file('b'), { propagateToProjects: false });
+      await result.current.removeFromNotebookContext(SID, 'b');
+    });
+
+    expect(mockMutateAsync).toHaveBeenLastCalledWith({
+      id: SID,
+      knowledgeIds: ['a'],
+      propagateToProjects: false,
+    });
+  });
+
   it('removes a file and persists the remainder', async () => {
     const { result } = renderHook(() => useNotebookContextFiles());
     await act(async () => {
