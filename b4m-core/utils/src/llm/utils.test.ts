@@ -2445,6 +2445,55 @@ describe('allocation under a production-shaped system-prompt load', () => {
     expect(result.some(m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color'))).toBe(
       false
     );
-    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('Attached content dropped'));
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('could not be delivered usefully'));
+  });
+});
+
+// Two attachments each cut to an unusable fragment: summing them hides the case, because the total
+// clears the threshold while neither file individually says anything.
+describe('unusable attachments are judged one at a time', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const createDenseTokenizer = (charsPerToken: number): ITokenizer => ({
+    countTokens: vi.fn(async (text: string) => Math.ceil(text.length / charsPerToken)),
+    encodeTokens: vi.fn(async (text: string) => Array(Math.ceil(text.length / charsPerToken)).fill(1)),
+    clearCache: vi.fn(),
+    getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+    warmUpCache: vi.fn(async () => {}),
+  });
+
+  it('replaces two per-file slivers whose combined size clears the threshold', async () => {
+    const tokenizer = createDenseTokenizer(3.5);
+    const history = Array.from({ length: 40 }, (_, i) => ({
+      role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `history-${i}-` + 'h'.repeat(240),
+    }));
+    const bigCsv = (tag: string) => ({ role: 'user' as const, content: `${tag},col\n` + 'r,1\n'.repeat(3000) });
+
+    const result = await buildAndSortMessages(
+      history,
+      [{ role: 'system', content: 'S'.repeat(1500 * 3.5) }, bigCsv('alpha'), bigCsv('bravo')],
+      [{ role: 'user', content: 'What do the attached files contain?' }],
+      3096,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const note = result.find(
+      m => typeof m.content === 'string' && (m.content as string).includes('could not be included')
+    );
+    expect(note).toBeDefined();
+    expect(note!.content as string).toContain('2 attached file(s)');
+    // Neither useless fragment is sent alongside the explanation.
+    expect(result.some(m => typeof m.content === 'string' && (m.content as string).startsWith('alpha,col'))).toBe(
+      false
+    );
+    expect(result.some(m => typeof m.content === 'string' && (m.content as string).startsWith('bravo,col'))).toBe(
+      false
+    );
   });
 });

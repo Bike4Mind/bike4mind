@@ -113,18 +113,19 @@ const MAX_SAFETY_SHRINK_ROUNDS = 5;
  * Appended to attached-file content that had to be cut to fit. Without it a CSV sliced mid-row reads
  * as a complete file: the model treats the last surviving row as the final row and answers about it
  * confidently, which is indistinguishable from a correct answer unless you already hold the file.
- * Counted against the budget like any other content, because it is really sent.
+ * Counted against the budget like any other content, because it is really sent. Its presence is also
+ * how later steps recognise that a message was cut.
  */
-/**
- * Below this many tokens of an attached file, a slice is not worth sending. Handing the model a few
- * dozen characters of a CSV does not read as a truncated file - it reads as no file, and the model
- * says so confidently, which is the silent wrong answer this whole area exists to prevent. Replacing
- * the slice with a plain statement is both smaller and honest.
- */
-const MIN_USEFUL_ATTACHED_CONTENT_TOKENS = 200;
-
 const CONTENT_TRUNCATION_NOTICE =
   '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was not sent.]';
+
+/**
+ * Below this many tokens of a file, a slice is not worth sending. A few dozen characters of a CSV does
+ * not read as a truncated file - it reads as no file, and the model says so confidently, which is the
+ * silent wrong answer this whole area exists to prevent. Replacing the slice with a plain statement is
+ * both smaller and honest.
+ */
+const MIN_USEFUL_ATTACHED_CONTENT_TOKENS = 200;
 
 const estimateTokenLength = (text: string): number => {
   // Rough estimate: ~3.5 chars per token for English text
@@ -1578,39 +1579,49 @@ export async function buildAndSortMessages(
     }
   }
 
-  // A sliver of a file is worse than none: the model does not recognise it as file content and
-  // answers as though nothing was attached. Say so instead, and say it plainly enough that the model
-  // cannot report the file as absent.
+  // A sliver of a file is worse than none: the model does not recognise it as file content and answers
+  // as though nothing was attached. Decided per attachment rather than on the total, so two files each
+  // cut to an unusable fragment are both caught - summing them hides exactly that case. A message
+  // carrying the truncation notice is one that was cut, which is why the notice is applied at the
+  // truncation site rather than inferred.
   if (nonImageMessages.length > 0) {
-    // Measured with the notice stripped: it is our own text, and counting it makes a 40-token sliver
-    // look like a 70-token one, which is exactly enough to slip past the threshold below.
-    const deliveredTokens = estimateMessagesTokens(
-      processedContentMessages.map(msg =>
-        typeof msg.content === 'string' && msg.content.endsWith(CONTENT_TRUNCATION_NOTICE)
-          ? { ...msg, content: msg.content.slice(0, -CONTENT_TRUNCATION_NOTICE.length) }
-          : msg
-      )
-    );
-    const wantedTokens = estimateMessagesTokens(nonImageMessages);
-    // Only when content was actually lost. A small file delivered whole is fine however few tokens it
-    // is - the point is a useless FRACTION, not a small attachment.
-    const lostSome = deliveredTokens < wantedTokens;
-    if (lostSome && deliveredTokens > 0 && deliveredTokens < MIN_USEFUL_ATTACHED_CONTENT_TOKENS) {
-      const names = nonImageMessages.map(msg => messageContentText(msg).split('\n')[0].slice(0, 120)).join(' | ');
+    const fileTokens = (message: IMessage): number => {
+      const text = messageContentText(message);
+      return estimateTokenLength(
+        text.endsWith(CONTENT_TRUNCATION_NOTICE) ? text.slice(0, -CONTENT_TRUNCATION_NOTICE.length) : text
+      );
+    };
+    const isUnusableSliver = (message: IMessage): boolean =>
+      typeof message.content === 'string' &&
+      message.content.endsWith(CONTENT_TRUNCATION_NOTICE) &&
+      fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS;
+
+    const usable = processedContentMessages.filter(message => !isUnusableSliver(message));
+    // Anything missing from the output entirely was dropped whole, which is the worst case of all: the
+    // model is told nothing and will deny the file exists. Attachments that carried no extractable text
+    // in the first place are excluded - losing nothing is not a loss, and counting it would put a
+    // truncation on a completely healthy turn.
+    const attachmentsWithContent = nonImageMessages.filter(message => fileTokens(message) > 0);
+    const droppedCount = Math.max(0, attachmentsWithContent.length - processedContentMessages.length);
+    const sliverCount = processedContentMessages.length - usable.length;
+
+    if (droppedCount > 0 || sliverCount > 0) {
+      const names = attachmentsWithContent.map(msg => messageContentText(msg).split('\n')[0].slice(0, 120)).join(' | ');
       logger.warn(
-        `Attached content dropped: only ${deliveredTokens} token(s) of ${wantedTokens} ` +
-          `could be delivered, below the ${MIN_USEFUL_ATTACHED_CONTENT_TOKENS}-token minimum worth sending. ` +
+        `Attached content could not be delivered usefully: ${droppedCount} file(s) dropped whole and ` +
+          `${sliverCount} reduced below the ${MIN_USEFUL_ATTACHED_CONTENT_TOKENS}-token minimum worth sending. ` +
           `Context window is too small after system instructions and history. Affected: ${names}`
       );
       processedContentMessages = [
+        ...usable,
         {
           role: 'user',
           content:
-            `An attached file could not be included in this request. After system instructions and conversation ` +
-            `history there was only room for ${deliveredTokens} tokens of file content, which is too little to be ` +
-            `usable. The file IS attached - do not tell the user that no file was provided. Tell them the file could ` +
-            `not be read within this model's context window, and suggest a model with a larger context window, a ` +
-            `smaller file, or a shorter conversation. Affected: ${names}`,
+            `${droppedCount + sliverCount} attached file(s) could not be included in this request. After system ` +
+            `instructions and conversation history there was too little room left to send a usable amount of their ` +
+            `content. The file(s) ARE attached - do not tell the user that no file was provided. Tell them the file ` +
+            `could not be read within this model's context window, and suggest a model with a larger context window, ` +
+            `a smaller file, or a shorter conversation. Attached: ${names}`,
         },
       ];
       contentSqueezed = true;
