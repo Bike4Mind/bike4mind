@@ -41,6 +41,7 @@ const {
     ensureChannelByName: vi.fn(),
     getOwnedChannel: vi.fn(),
     ensureActor: vi.fn(),
+    upsertPresence: vi.fn(),
   },
   sendToClientMock: vi.fn(),
   resolveBridgeWsAuthMock: vi.fn(),
@@ -75,6 +76,8 @@ const USER = 'u1';
 const INSTANCE = 'a67cd606-80f3-459d-88b5-3df6d3c11a31';
 const DEVICE = 'dev-1';
 const SLUG = sessionSlug(INSTANCE);
+/** Append time of the stubbed event; the roster row must be stamped with it. */
+const EVENT_CREATED_AT = new Date('2026-07-28T12:00:00Z');
 
 /** Content-bearing values that must never reach the Hearth log. */
 const BAIT = [
@@ -133,15 +136,34 @@ function appendedEvent() {
   };
 }
 
+/** The single roster upsert the dual-write is expected to have made. */
+function upsertedPresence() {
+  expect(hearthRepositoryMock.upsertPresence).toHaveBeenCalledTimes(1);
+  return hearthRepositoryMock.upsertPresence.mock.calls[0][0] as {
+    channelId: string;
+    actorId: string;
+    userId: string;
+    lastSeen: Date;
+    reason: string;
+    workspace?: string;
+    sessionId?: string;
+    slug?: string;
+  };
+}
+
+/** Neither the appended event nor the projected roster row may carry content. */
 function expectNoBait() {
-  const wire = JSON.stringify(hearthRepositoryMock.store.appendEvent.mock.calls);
+  const wire = JSON.stringify([
+    hearthRepositoryMock.store.appendEvent.mock.calls,
+    hearthRepositoryMock.upsertPresence.mock.calls,
+  ]);
   for (const bait of BAIT) {
     expect(wire, `leaked ${bait}`).not.toContain(bait);
   }
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
+/** Happy-path mock state. Re-appliable, so a case can clear and re-arm mid-test. */
+function applyMockDefaults() {
   resolveBridgeWsAuthMock.mockResolvedValue({ userId: USER, apiKeyId: 'key-1' });
   canAccessTavernMock.mockResolvedValue(true);
   ccBridgeDeviceModelMock.findById.mockReturnValue({
@@ -162,13 +184,19 @@ beforeEach(() => {
     kind: 'presence',
     human: { text: 'x', format: 'text' },
     refs: {},
-    createdAt: new Date(),
+    createdAt: EVENT_CREATED_AT,
   });
+  hearthRepositoryMock.upsertPresence.mockResolvedValue({ _id: 'presence-1' });
   connectionMock.findOne.mockResolvedValue({ connectionId: 'conn-1', userId: USER });
   connectionMock.deleteOne.mockResolvedValue({ deletedCount: 1 });
   connectionMock.countDocuments.mockResolvedValue(1);
   querySubscriptionMock.updateMany.mockResolvedValue({ modifiedCount: 0 });
   activeCodeAgentRepositoryMock.removeByConnectionId.mockResolvedValue([]);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  applyMockDefaults();
 });
 
 const REGISTER_BODY = {
@@ -205,6 +233,24 @@ describe('cc_agent_register dual-write', () => {
     });
     expect(appended.human.text).toBe(`bluebike4mind (${SLUG}) started a session`);
     expectNoBait();
+  });
+
+  it('projects the session onto the roster row for the same channel and actor', async () => {
+    const func = await loadHandler('../ccAgentRegister');
+    await func(makeEvent(REGISTER_BODY), {}, makeLogger());
+
+    expect(upsertedPresence()).toEqual({
+      channelId: 'ch-default',
+      actorId: 'actor-1',
+      userId: USER,
+      // The event's append time, not the write's, so a delayed report cannot
+      // outrank a newer one.
+      lastSeen: EVENT_CREATED_AT,
+      reason: 'session_start',
+      workspace: 'bluebike4mind',
+      sessionId: INSTANCE,
+      slug: SLUG,
+    });
   });
 
   it('honors a per-device channel override', async () => {
@@ -279,6 +325,21 @@ describe('cc_agent_event dual-write', () => {
     expectNoBait();
   });
 
+  it('carries the status through to the roster row verbatim', async () => {
+    const func = await loadHandler('../ccAgentEvent');
+
+    // The roster derives its state from `reason` through presenceStateForReason,
+    // which maps each CcAgentStatus to itself - so the status must arrive
+    // unmapped and unrenamed or the row lands on the wrong state. That identity
+    // mapping is pinned in packages/database's presence-projection test; here we
+    // prove the bridge feeds it the raw status value.
+    await func(makeEvent(statusBody('awaiting_permission')), {}, makeLogger());
+    await func(makeEvent(statusBody('running')), {}, makeLogger());
+
+    const reasons = hearthRepositoryMock.upsertPresence.mock.calls.map(([row]) => (row as { reason: string }).reason);
+    expect(reasons).toEqual(['awaiting_permission', 'running']);
+  });
+
   it('ignores non-status events - message and tool traffic is content', async () => {
     const func = await loadHandler('../ccAgentEvent');
     await func(
@@ -294,20 +355,30 @@ describe('cc_agent_event dual-write', () => {
     );
 
     expect(hearthRepositoryMock.store.appendEvent).not.toHaveBeenCalled();
+    expect(hearthRepositoryMock.upsertPresence).not.toHaveBeenCalled();
     expect(activeCodeAgentRepositoryMock.touch).toHaveBeenCalledWith(INSTANCE, 'BAIT-message-text');
   });
 
   it('a Hearth failure leaves the status write and the metadata broadcast intact', async () => {
-    hearthRepositoryMock.store.appendEvent.mockRejectedValue(new Error('hearth down'));
-    const logger = makeLogger();
+    // Either half of the dual-write can fail independently; neither may cost the
+    // Tavern its status update.
+    for (const breakIt of [
+      () => hearthRepositoryMock.store.appendEvent.mockRejectedValue(new Error('log down')),
+      () => hearthRepositoryMock.upsertPresence.mockRejectedValue(new Error('roster down')),
+    ]) {
+      vi.clearAllMocks();
+      applyMockDefaults();
+      breakIt();
+      const logger = makeLogger();
 
-    const func = await loadHandler('../ccAgentEvent');
-    const res = await func(makeEvent(statusBody('idle')), {}, logger);
+      const func = await loadHandler('../ccAgentEvent');
+      const res = await func(makeEvent(statusBody('idle')), {}, logger);
 
-    expect(res.statusCode).toBe(200);
-    expect(activeCodeAgentRepositoryMock.updateStatus).toHaveBeenCalledTimes(1);
-    expect(sendToClientMock).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Presence report failed'), expect.any(Error));
+      expect(res.statusCode).toBe(200);
+      expect(activeCodeAgentRepositoryMock.updateStatus).toHaveBeenCalledTimes(1);
+      expect(sendToClientMock).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Presence report failed'), expect.any(Error));
+    }
   });
 });
 
@@ -326,6 +397,8 @@ describe('cc_agent_disconnect dual-write', () => {
     const appended = appendedEvent();
     expect(appended.machine.payload.reason).toBe('disconnected');
     expect(appended.human.text).toBe(`bluebike4mind (${SLUG}) disconnected`);
+    // The roster must read gone, not merely quiet - and never still running.
+    expect(upsertedPresence().reason).toBe('disconnected');
     expectNoBait();
   });
 
@@ -359,6 +432,9 @@ describe('$disconnect sweep dual-write', () => {
     expect(appended.channelId).toBe('ch-override');
     expect(appended.machine.payload.reason).toBe('disconnected');
     expect(appended.machine.payload.slug).toBe(SLUG);
+    const row = upsertedPresence();
+    expect(row.channelId).toBe('ch-override');
+    expect(row.reason).toBe('disconnected');
     expectNoBait();
   });
 
@@ -366,6 +442,7 @@ describe('$disconnect sweep dual-write', () => {
     const func = await loadHandler('../disconnect');
     await func(makeEvent({}), {}, makeLogger());
     expect(hearthRepositoryMock.store.appendEvent).not.toHaveBeenCalled();
+    expect(hearthRepositoryMock.upsertPresence).not.toHaveBeenCalled();
   });
 
   it('a Hearth failure does not stop the sweep or the despawn broadcast', async () => {

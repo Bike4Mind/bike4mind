@@ -3,9 +3,10 @@ import { DEFAULT_HEARTH_CHANNEL_NAME, HearthLog, sessionSlug } from '@bike4mind/
 import type { ICcAgentSource, ICcAgentStatus } from '@bike4mind/common';
 
 /**
- * cc-bridge as a Hearth gateway: the three bridge WS write points additionally
- * report session presence into the Hearth event log, so ONE roster covers both
- * bridge sessions and Claude Code hook sessions (bin/hearth-hook.mjs).
+ * cc-bridge as a Hearth gateway: the bridge WS write points additionally report
+ * session presence into the Hearth event log and its roster projection, so ONE
+ * roster covers both bridge sessions and Claude Code hook sessions
+ * (bin/hearth-hook.mjs).
  *
  * This is a dual-write, not a migration. The Tavern keeps reading
  * ActiveCodeAgent; nothing here changes what the bridge already persists or
@@ -111,10 +112,7 @@ export async function reportCcAgentPresence(input: CcAgentPresenceInput): Promis
     const displayName = `${workspaceName} (${slug})`;
     const actor = await hearthRepository.ensureActor(userId, 'agent', displayName);
 
-    // TODO: also upsert the presence roster row here once the roster model
-    // lands (that PR is still open). The event log below is durable and
-    // complete on its own; the roster is a projection of it.
-    await hearthLog.append({
+    const event = await hearthLog.append({
       channelId,
       actorId: actor._id.toString(),
       kind: 'presence',
@@ -131,6 +129,23 @@ export async function reportCcAgentPresence(input: CcAgentPresenceInput): Promis
         },
       },
       refs: {},
+    });
+
+    // Roster projection, in the same best-effort block: the log is the source of
+    // truth and the row is derived state that the next presence event repairs.
+    // `reason` is a CcAgentStatus value, which presenceStateForReason maps to
+    // itself - that identity mapping is what lets one function serve both the
+    // bridge and the hook.
+    await hearthRepository.upsertPresence({
+      channelId,
+      actorId: actor._id.toString(),
+      userId,
+      // Event time, not write time, so a delayed report cannot outrank a newer one.
+      lastSeen: event.createdAt,
+      reason,
+      workspace: workspaceName,
+      sessionId: instanceId,
+      slug,
     });
   } catch (err) {
     logger.warn(`[CC_AGENT_HEARTH] Presence report failed for ${instanceId} (non-fatal):`, err as Error);
