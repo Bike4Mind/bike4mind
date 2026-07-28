@@ -24,6 +24,12 @@ export enum ApiKeyScope {
    *  bound to (`agentId`). Like CC_BRIDGE, a leaked embed key has a narrow blast
    *  radius: it can talk to one agent from allow-listed origins, nothing else. */
   EMBED_CHAT = 'embed:chat',
+  /** Read a Hearth channel list and replay its events. Read-only: it cannot
+   *  advance an actor cursor, because consuming events out from under a
+   *  legitimate agent reader is a denial of context, not a read. */
+  HEARTH_READ = 'hearth:read',
+  /** Append Hearth events, create channels, and advance actor cursors. */
+  HEARTH_WRITE = 'hearth:write',
 }
 
 export enum ApiKeyStatus {

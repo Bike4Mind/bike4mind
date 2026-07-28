@@ -176,17 +176,52 @@ describe('POST /api/hearth/events', () => {
     expect(hearthLogAppendMock).toHaveBeenCalledWith(expect.objectContaining({ actorId: 'actor-1' }));
   });
 
-  it('actor override stays owned by the caller and cannot claim kind system', async () => {
+  it('actor override stays owned by the caller and cannot claim a reserved kind', async () => {
     const res = makeRes();
     await post()(makeReq({ channelId: 'ch-1', human: { text: 'hi' }, actor: { displayName: 'hook' } }), res);
     expect(ensureActorMock).toHaveBeenCalledWith('u1', 'agent', 'hook');
 
-    await expect(
-      post()(
-        makeReq({ channelId: 'ch-1', human: { text: 'hi' }, actor: { kind: 'system', displayName: 'x' } }),
-        makeRes()
-      )
-    ).rejects.toThrow();
+    // 'system' and 'human' are both reserved: the human actor is derived from the
+    // session, so no credential can forge an event that renders as the account owner.
+    for (const kind of ['system', 'human']) {
+      await expect(
+        post()(makeReq({ channelId: 'ch-1', human: { text: 'hi' }, actor: { kind, displayName: 'erik' } }), makeRes())
+      ).rejects.toThrow();
+    }
+    expect(ensureActorMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('caps the serialized machine payload', async () => {
+    const oversized = {
+      channelId: 'ch-1',
+      human: { text: 'hi' },
+      machine: { schema: 's@1', payload: { blob: 'A'.repeat(70 * 1024) } },
+    };
+    await expect(post()(makeReq(oversized), makeRes())).rejects.toThrow(/payload exceeds/i);
+    expect(hearthLogAppendMock).not.toHaveBeenCalled();
+
+    // A realistic typed payload still passes.
+    await post()(
+      makeReq({ channelId: 'ch-1', human: { text: 'hi' }, machine: { schema: 's@1', payload: { ok: true } } }),
+      makeRes()
+    );
+    expect(hearthLogAppendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an API key that lacks hearth:write', async () => {
+    const req = makeReq({ channelId: 'ch-1', human: { text: 'hi' } });
+    (req as unknown as { apiKeyInfo: { scopes: string[] } }).apiKeyInfo = { scopes: ['hearth:read'] };
+    await expect(post()(req, makeRes())).rejects.toThrow(/hearth:write/);
+    expect(hearthLogAppendMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts an API key holding hearth:write, and admin keys', async () => {
+    for (const scopes of [['hearth:write'], ['admin:*']]) {
+      const req = makeReq({ channelId: 'ch-1', human: { text: 'hi' } });
+      (req as unknown as { apiKeyInfo: { scopes: string[] } }).apiKeyInfo = { scopes };
+      await post()(req, makeRes());
+    }
+    expect(hearthLogAppendMock).toHaveBeenCalledTimes(2);
   });
 
   it('still returns 201 with the event when fanout throws', async () => {
@@ -222,6 +257,26 @@ describe('POST /api/hearth/catchup', () => {
     await post()(makeReq({ channelId: 'ch-1', advance: false, limit: 10 }), res);
     expect(hearthLogCatchupMock).toHaveBeenCalledWith('actor-1', 'ch-1', { advance: false, limit: 10 });
     expect((res.body as { cursor: number }).cursor).toBe(1);
+  });
+
+  it('a read-only key may tail but may not advance a cursor', async () => {
+    const readOnly = () => {
+      const req = makeReq({ channelId: 'ch-1' });
+      (req as unknown as { apiKeyInfo: { scopes: string[] } }).apiKeyInfo = { scopes: ['hearth:read'] };
+      return req;
+    };
+
+    // Tail is cursor-free, so a read key is enough.
+    await post()(Object.assign(readOnly(), { body: { channelId: 'ch-1', tail: 10 } }), makeRes());
+    expect(tailEventsMock).toHaveBeenCalledTimes(1);
+
+    // Advancing consumes events out from under other readers: write scope required.
+    await expect(post()(readOnly(), makeRes())).rejects.toThrow(/hearth:write/);
+    expect(hearthLogCatchupMock).not.toHaveBeenCalled();
+
+    // Peek mode (advance:false) leaves cursors alone, so read scope suffices.
+    await post()(Object.assign(readOnly(), { body: { channelId: 'ch-1', advance: false } }), makeRes());
+    expect(hearthLogCatchupMock).toHaveBeenCalledWith('actor-1', 'ch-1', { advance: false, limit: undefined });
   });
 
   it('tail mode never resolves an actor nor touches any cursor', async () => {
