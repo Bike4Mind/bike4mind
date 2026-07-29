@@ -199,10 +199,11 @@ const HISTORY_BUDGET_PERCENTAGE = 0.3;
  * first, keeps the majority. See attachedFileTokenBudget at its only use site.
  *
  * Three different stages, easily confused. HISTORY_BUDGET_PERCENTAGE above sizes the
- * history MESSAGE COUNT before anything is fetched. KNOWLEDGE_FILE_TOKEN_ALLOCATION in
- * utils.ts governs ASSEMBLY, trimming an already-extracted set to fit. This one governs
- * EXTRACTION - how much is read off disk at all - and is held below the assembly share
- * on purpose.
+ * history MESSAGE COUNT before anything is fetched. Two constants in utils.ts govern
+ * ASSEMBLY, trimming an already-extracted set to fit: KNOWLEDGE_FILE_TOKEN_ALLOCATION for
+ * an unwindowed request, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION as the floor for a windowed
+ * one. This constant governs EXTRACTION - how much is read off disk at all - and is held
+ * below the assembly share on purpose.
  */
 const ATTACHED_CONTENT_SHARE = 0.35;
 /**
