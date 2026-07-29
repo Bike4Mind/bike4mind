@@ -9,6 +9,22 @@ export class ChatPage extends BasePage {
   readonly creditsUsed = this.page.getByTestId('credits-used');
   readonly aiResponseRoot = this.page.getByTestId('ai-response-root-container');
 
+  /**
+   * Text of the newest mounted reply, or '' when none is mounted.
+   *
+   * The count() guard is load-bearing: the config sets no `actionTimeout`, so a bare
+   * `aiResponse.last().innerText()` on an empty chat auto-waits with NO timeout and blocks
+   * until the test times out. count() never waits; the bounded innerText then covers
+   * Virtuoso unmounting the reply between the two calls.
+   */
+  private async newestResponseText(): Promise<string> {
+    if ((await this.aiResponse.count()) === 0) return '';
+    return this.aiResponse
+      .last()
+      .innerText({ timeout: TIMEOUTS.ELEMENT_STATE })
+      .catch(() => '');
+  }
+
   async sendMessage(text: string) {
     await this.typeAndWaitForSendReady(text);
     await this.page.keyboard.press('Enter');
@@ -42,22 +58,26 @@ export class ChatPage extends BasePage {
   async sendMessageAndWaitForResponse(text: string, timeout: number = TIMEOUTS.AI_RESPONSE) {
     const maxAttempts = 2;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      // Track response count before sending so we can wait for the NEW response
-      const responsesBeforeSend = await this.aiResponseRoot.count();
+      // Never anchor on a pre-send index. ChatHistory renders the reply list through
+      // react-virtuoso, so only the replies near the viewport stay mounted (3 at 1280x720):
+      // a new reply evicts the oldest instead of growing the count, and
+      // `.nth(countBeforeSend)` waits forever on an index that can never mount. Anchor on
+      // `.last()` (as waitForImageResponse does, for a different reason) and use the newest
+      // reply's pre-send text as the baseline that proves what we read back is new.
+      const previousResponse = await this.newestResponseText();
 
       await this.typeAndWaitForSendReady(text);
       await this.page.keyboard.press('Enter');
 
-      // Wait for a new ai-response element to appear (beyond those already present)
-      await expect(this.aiResponseRoot.nth(responsesBeforeSend)).toBeVisible({ timeout });
+      // Waits for the first container to mount in a fresh chat; in a resumed chat the prior
+      // turn's container already satisfies it. Newness is proven by the streaming lifecycle
+      // plus the text baseline, not by this gate.
+      await expect(this.aiResponseRoot.last()).toBeVisible({ timeout });
 
       // Wait for streaming to complete by watching for "Stop Generation" button to disappear
-      await this.waitForStreamingComplete(timeout);
+      await this.waitForStreamingComplete(timeout, previousResponse);
 
-      const responseText = await this.aiResponse
-        .last()
-        .innerText()
-        .catch(() => '');
+      const responseText = await this.newestResponseText();
 
       // Retry once if the server timed out
       if (attempt < maxAttempts && responseText.includes('request timed out')) {
@@ -69,7 +89,15 @@ export class ChatPage extends BasePage {
     return '';
   }
 
-  private async waitForStreamingComplete(timeout: number = TIMEOUTS.AI_RESPONSE) {
+  /**
+   * Waits out the stop-generation lifecycle for the message just sent.
+   *
+   * `previousResponse` is the newest reply's text captured before sending. It exists only
+   * for the "stop button never appeared" fallback: chats are resumed across tests, so a
+   * prior turn's reply is normally already mounted and a bare `aiResponse.count() > 0`
+   * check would return immediately without this turn having produced anything.
+   */
+  private async waitForStreamingComplete(timeout: number = TIMEOUTS.AI_RESPONSE, previousResponse = '') {
     const stopButton = this.page.getByTestId('stop-generation-btn');
 
     // First, wait for the stop button to appear (streaming started)
@@ -82,10 +110,10 @@ export class ChatPage extends BasePage {
       // Guard the entire block - the page may have been closed by the time we get here
       // (e.g. test timeout / context teardown), in which case all locator calls throw.
       try {
-        const hasResponse = await this.aiResponse.count();
-        if (hasResponse > 0) return;
+        const currentResponse = await this.newestResponseText();
+        if (currentResponse !== '' && currentResponse !== previousResponse) return;
 
-        // No response yet - Smart Tools likely still processing. Wait for either
+        // No new response yet - Smart Tools likely still processing. Wait for either
         // the Stop button to eventually appear or an ai-response element to show up.
         await Promise.race([
           expect(stopButton)
@@ -112,16 +140,10 @@ export class ChatPage extends BasePage {
       await expect(stopButton).toBeHidden({ timeout });
     } catch {
       // Stop button still visible - check if the response text has stabilised
-      const text1 = await this.aiResponse
-        .last()
-        .innerText()
-        .catch(() => '');
+      const text1 = await this.newestResponseText();
       if (text1.length > 0) {
         await this.page.waitForTimeout(TIMEOUTS.POST_ACTION);
-        const text2 = await this.aiResponse
-          .last()
-          .innerText()
-          .catch(() => '');
+        const text2 = await this.newestResponseText();
         if (text1 === text2) {
           // Response hasn't changed - streaming is effectively done
           return;
