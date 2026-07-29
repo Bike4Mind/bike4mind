@@ -125,7 +125,8 @@ import {
   AnomalyAlertService,
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
-import type { ToolTelemetry, ToolErrorCategory } from '@bike4mind/common';
+import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail } from '@bike4mind/common';
+import { buildAlwaysOnFloorDetails } from './systemPromptFloorTelemetry';
 import {
   ContextTelemetryAlertsSchema,
   detectAgentMentions,
@@ -1891,6 +1892,22 @@ export class ChatCompletionProcess {
         });
       }
 
+      // Always-on system-prompt floor. Resolved once here (pure settings reads with
+      // built-in fallbacks) so the assembly below and the telemetry itemization further
+      // down measure the exact same content - see buildAlwaysOnFloorDetails.
+      const artifactEmissionEnabled = Boolean(getSettingsValue('EnableArtifacts', defaultAdminSettings));
+      // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings); falls back
+      // to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared, so a blank value can
+      // never strip artifact guidance from completions.
+      const artifactEmissionContent = getSettingsValue(
+        'ArtifactEmissionPrompt',
+        defaultAdminSettings,
+        ARTIFACT_EMISSION_PROMPT
+      );
+      // Admin-editable via the `HelpCenterPrompt` setting; a blank value falls back to the built-in
+      // default so the nudge can never be silently stripped.
+      const helpCenterContent = getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT);
+
       // Extracted so the overflow-guard safety net below can rebuild with a trimmed
       // history without duplicating this (long, order-sensitive) system/context block.
       const contextAndSystemMessages: IMessage[] = [
@@ -1899,30 +1916,11 @@ export class ChatCompletionProcess {
         // Artifact emission guidance. Without this, correct <artifact> usage
         // is left to the model's defaults and large HTML/code can leak into the chat
         // body as raw markup. Gated on the same EnableArtifacts flag as extraction.
-        ...(getSettingsValue('EnableArtifacts', defaultAdminSettings)
-          ? [
-              {
-                role: 'system' as const,
-                // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings);
-                // falls back to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared,
-                // so a blank value can never strip artifact guidance from completions.
-                content: getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
-              },
-            ]
-          : []),
+        ...(artifactEmissionEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : []),
         // Help-center awareness. Makes the model aware of the in-app
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
-        // gets pointed to it instead of an ungrounded guess. Admin-editable via the
-        // `HelpCenterPrompt` setting; a blank value falls back to the built-in default so the
-        // nudge can never be silently stripped. Skipped for local models (lean prompt).
-        ...(isLocalModel
-          ? []
-          : [
-              {
-                role: 'system' as const,
-                content: getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT),
-              },
-            ]),
+        // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).
+        ...(isLocalModel ? [] : [{ role: 'system' as const, content: helpCenterContent }]),
         // Inject view registry summary when navigate_view tool is enabled
         ...(enabledTools.includes('navigate_view')
           ? [
@@ -2184,12 +2182,6 @@ export class ChatCompletionProcess {
       if (telemetryBuilder) {
         try {
           // Build system prompt details for telemetry
-          type SystemPromptDetail = {
-            source: 'hardcoded' | 'admin' | 'user' | 'project' | 'session' | 'org';
-            name: string;
-            tokenCount: number;
-            wasIncluded: boolean;
-          };
           const systemPromptDetails: SystemPromptDetail[] = [];
 
           // Date/time context (hardcoded)
@@ -2275,6 +2267,16 @@ export class ChatCompletionProcess {
               wasIncluded: true,
             });
           }
+
+          // Always-on floor blocks (artifact-emission, help-center) billed on every basic
+          // turn. Previously invisible inside the systemPrompts residual; itemized here so
+          // the fixed prompt cost is auditable in the Context Inspector (#810).
+          systemPromptDetails.push(
+            ...(await buildAlwaysOnFloorDetails(
+              { artifactEmissionEnabled, artifactEmissionContent, isLocalModel, helpCenterContent },
+              content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
+            ))
+          );
 
           // Calculate total system prompt tokens
           const systemPromptTokensTotal = systemPromptDetails.reduce((sum, p) => sum + p.tokenCount, 0);
