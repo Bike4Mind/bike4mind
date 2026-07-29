@@ -170,11 +170,97 @@ const SYSTEM_PROMPT_RESERVE = 4000;
 const RESPONSE_RESERVE = 8000;
 
 /**
+ * Usable input window: the context window less the output this request will reserve, less a safety
+ * buffer. Deliberately NOT clamped at zero - the empty-prompt guard depends on seeing a non-positive
+ * budget for a genuinely misconfigured text model.
+ *
+ * Image and video models return media rather than tokens, and every image backend here sets
+ * max_tokens equal to contextWindow because both are the prompt-length limit, so reserving it as
+ * output left no room for the prompt itself. Two callers need this figure - the assembly budget and
+ * the verbatim-history window - and they must not drift apart.
+ */
+const safeInputWindow = (modelInfo: ModelInfo, requestedMaxTokens: number, safetyBuffer = 1000): number => {
+  const contextLimit = modelInfo.contextWindow ?? 200000;
+  const modelMaxOutput = modelInfo.max_tokens ?? 16384;
+  const returnsMedia = modelInfo.type === 'image' || modelInfo.type === 'video';
+  const reservedOutput = returnsMedia ? 0 : Math.min(requestedMaxTokens, modelMaxOutput);
+  return contextLimit - reservedOutput - safetyBuffer;
+};
+
+/**
  * Share of the context budget this file assumes history will take when sizing a history count. It
  * does NOT mirror how buildAndSortMessages splits the budget: that depends on historyCount, giving
  * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise.
  */
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
+/**
+ * Share of the usable input window that attached-file content may be EXTRACTED into.
+ * Kept a minority share so conversational history, which is what users notice losing
+ * first, keeps the majority. See attachedFileTokenBudget at its only use site.
+ *
+ * Three different stages, easily confused. HISTORY_BUDGET_PERCENTAGE above sizes the
+ * history MESSAGE COUNT before anything is fetched. KNOWLEDGE_FILE_TOKEN_ALLOCATION in
+ * utils.ts governs ASSEMBLY, trimming an already-extracted set to fit. This one governs
+ * EXTRACTION - how much is read off disk at all - and is held below the assembly share
+ * on purpose.
+ */
+const ATTACHED_CONTENT_SHARE = 0.35;
+/**
+ * Floor for the attached-content budget, as a share of the raw input window. Applies
+ * when subtracting SYSTEM_PROMPT_RESERVE would drive the budget to zero, which a small
+ * local model does routinely. See attachedFileTokenBudget for why zero is the dangerous
+ * value rather than the safe one.
+ */
+const MIN_ATTACHED_CONTENT_SHARE = 0.15;
+
+/**
+ * Fraction of the space ACTUALLY AVAILABLE FOR HISTORY (safe input minus the
+ * non-history overhead reserved below) kept as VERBATIM conversation history
+ * before older turns are folded into contextSummary. The fraction tunes the
+ * verbatim/summary split of whatever room is left after overhead; it is NOT a
+ * fraction of the raw window. Overridable per-deploy via the
+ * ContextVerbatimWindowFraction admin setting.
+ */
+const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
+
+/**
+ * Non-history input competes with the verbatim window for the same safe-input
+ * budget: system prompts, tool schemas, the injected contextSummary, and the
+ * current prompt. The verbatim budget must reserve room for these or the window
+ * grows until history ALONE nears safe input while total input has already
+ * overflowed - the turn then hits the hard overflow guard (which throws before
+ * the reactive summarizer's onComplete can run) instead of compacting. These are
+ * conservative floors used only to pick the summary boundary; the exact tokenizer
+ * still enforces the real budget downstream in buildAndSortMessages.
+ */
+const SYSTEM_PROMPT_RESERVE_TOKENS = 1200; // persona + artifact/help/date guidance, typical floor
+const PER_TOOL_SCHEMA_RESERVE_TOKENS = 120; // rough serialized {name,description,input_schema} per enabled tool
+
+/** Coerce an admin-setting value to a fraction in (0, 1], falling back when invalid. */
+export function clampFraction(raw: unknown, fallback: number): number {
+  const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw));
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= 1 ? parsed : fallback;
+}
+
+/**
+ * Drop the oldest conversation turn from a verbatim history built by
+ * fetchAndProcessPreviousMessages. A human turn starts at a user message with
+ * STRING content; tool results are user messages with ARRAY content, so slicing
+ * at the second string-content user message removes the oldest turn WHOLE
+ * (prompt + assistant reply + any tool_use/tool_result pairs) and leaves the
+ * remainder starting on a clean turn boundary - never a dangling tool_result that
+ * would break provider pairing. Returns null when fewer than two turns remain
+ * (nothing safe left to shed). Used only by the overflow-guard safety net.
+ */
+export function dropOldestHistoryTurn(history: IMessage[]): IMessage[] | null {
+  const turnStarts: number[] = [];
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i];
+    if (m.role === 'user' && typeof m.content === 'string') turnStarts.push(i);
+  }
+  if (turnStarts.length < 2) return null;
+  return history.slice(turnStarts[1]);
+}
 
 /**
  * Conservative fallback for simple query max history.
@@ -1401,10 +1487,45 @@ export class ChatCompletionProcess {
         ...(embeddingProvider === 'ollama' && { ollamaBaseUrl: apiKeyTable?.ollama }),
       });
 
-      // Fetch previous messages
-      const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, { db: this.db });
+      // Fetch previous messages. Token-bound the verbatim window to a fraction of
+      // the model's context so older turns fall outside it and get folded into
+      // contextSummary (see ContextSummarizationFeature); keeps a heavy session from
+      // re-sending its entire history every turn.
+      const verbatimWindowFraction = clampFraction(
+        getSettingsValue('ContextVerbatimWindowFraction', defaultAdminSettings),
+        DEFAULT_VERBATIM_WINDOW_FRACTION
+      );
+      // Budget is a fraction of the SAFE INPUT budget, not the raw context window:
+      // on a model whose output reserve is large relative to its window, a fraction
+      // of the raw window can exceed the usable input, so verbatim history would
+      // never be bounded before buildAndSortMessages' hard trim (which does not
+      // advance the summary boundary) and the turn overflows instead of compacting.
+      // Shares safeInputWindow with the assembly budget below, so the two cannot drift.
+      const modelMaxOutput = modelInfo.max_tokens ?? 16384;
+      const safeInputTokens = Math.max(0, safeInputWindow(modelInfo, params.max_tokens ?? modelMaxOutput));
+      // Reserve the non-history overhead that shares this budget before applying the
+      // fraction, so heavier-payload turns (more tools, a longer running summary, a
+      // large prompt) compact SOONER rather than overflowing first - this is the
+      // account-to-account difference QA saw, where a larger tool block overflowed
+      // where a lean one did not. The tokenizer isn't run here (that would be N async
+      // calls over the whole history on every turn); char/4 estimates keep boundary
+      // selection synchronous and are only a conservative floor. enabledTools here
+      // undercounts MCP-expanded tools, which the overflow-guard safety net catches.
+      const estTokens = (text: string | undefined | null): number => (text ? Math.ceil(text.length / 4) : 0);
+      const nonHistoryOverhead =
+        SYSTEM_PROMPT_RESERVE_TOKENS +
+        enabledTools.length * PER_TOOL_SCHEMA_RESERVE_TOKENS +
+        estTokens(message) +
+        estTokens(session.contextSummary);
+      const availableForVerbatim = Math.max(0, safeInputTokens - nonHistoryOverhead);
+      const verbatimTokenBudget = Math.floor(availableForVerbatim * verbatimWindowFraction);
+      const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, {
+        db: this.db,
+        verbatimTokenBudget,
+      });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
+      const verbatimExcludedCount = cacheInfo.excludedOlderQuestCount ?? 0;
 
       // Local (Ollama) models run on modest hardware with small context budgets and
       // are easily derailed by prose that isn't about the task. Give them a leaner
@@ -1463,6 +1584,47 @@ export class ChatCompletionProcess {
       // Step 3: Fetching and Converting Fab Files (Feature contexts already loaded above)
       timer.phase('data_sources');
       this.sendStatusUpdate(quest, 'Gathering data sources...', { statusAt: new Date() });
+      // Input-window limits, needed BEFORE building messages because the amount of
+      // attached-file content we extract has to be derived from them.
+      const contextLimit = modelInfo.contextWindow ?? 200000;
+      const modelMaxOutputTokens = modelInfo.max_tokens ?? 16384;
+      let safeMaxTokens = maxTokens;
+
+      if (maxTokens > modelMaxOutputTokens) {
+        safeMaxTokens = modelMaxOutputTokens;
+      }
+
+      const safetyBuffer = 1000; // Emergency buffer
+      const maxSafeInputTokens = safeInputWindow(modelInfo, maxTokens, safetyBuffer);
+
+      // How much attached-file content may be extracted this turn.
+      //
+      // This used to be `max_tokens`, the model's OUTPUT cap, which is unrelated to how
+      // much of a file can be read and is often far smaller - so asking for shorter
+      // answers silently shrank your own retrieval. Deriving it from the input window
+      // instead means a large-context model can actually use one.
+      //
+      // Held below the assembly budget on purpose. Extraction estimates at
+      // CHARS_PER_TOKEN while assembly re-counts with the real tokenizer, so leaving
+      // headroom keeps anything extracted from being dropped again downstream.
+      //
+      // The floor is load-bearing, not defensive. On a small local model the reserve
+      // subtraction goes negative, and a budget of 0 does NOT mean "send nothing" to
+      // processFabFilesServer - it means "no budget given", which restores a flat
+      // per-file cap applied once per file. Three files would then be handed more
+      // content than the whole input window. Flooring at a share of the raw window
+      // keeps the per-file division in effect, and assembly trims from there.
+      // Outer clamp is not redundant: on a tiny context window maxSafeInputTokens is
+      // itself negative (contextLimit - output cap - buffer), so both inner terms are
+      // negative and a negative budget would reach processFabFilesServer.
+      const attachedFileTokenBudget = Math.max(
+        0,
+        Math.max(
+          Math.floor(maxSafeInputTokens * MIN_ATTACHED_CONTENT_SHARE),
+          Math.floor((maxSafeInputTokens - SYSTEM_PROMPT_RESERVE) * ATTACHED_CONTENT_SHARE)
+        )
+      );
+
       const dataSources = await this.buildDataSources({
         defaultAdminSettings,
         sessionFabFileIds,
@@ -1470,6 +1632,7 @@ export class ChatCompletionProcess {
         sessionKnowledgeIds: session.knowledgeIds ?? [],
         message,
         maxTokens,
+        attachedFileTokenBudget,
         quest,
         embeddingFactory,
         modelInfo,
@@ -1686,23 +1849,6 @@ export class ChatCompletionProcess {
       // Step 6: Building and Sorting Messages
       timer.phase('message_building');
       const messageBuildingStartTime = Date.now();
-      // Calculate safe input token limits BEFORE building messages
-      const contextLimit = modelInfo.contextWindow ?? 200000;
-      const modelMaxOutputTokens = modelInfo.max_tokens ?? 16384;
-      let safeMaxTokens = maxTokens;
-
-      if (maxTokens > modelMaxOutputTokens) {
-        safeMaxTokens = modelMaxOutputTokens;
-      }
-
-      const safetyBuffer = 1000; // Emergency buffer
-      // Image and video models return media, not tokens, so max_tokens on those entries is not an
-      // output reserve - every image backend in the repo sets it equal to contextWindow (both are the
-      // prompt-length limit). Subtracting it left no input room at all, which the empty-prompt guard
-      // below then reports as a misconfiguration on a request that fits perfectly well.
-      const reservesTextOutput = modelInfo.type !== 'image' && modelInfo.type !== 'video';
-      const maxSafeInputTokens = contextLimit - (reservesTextOutput ? safeMaxTokens : 0) - safetyBuffer;
-
       // Generate current date context for the AI.
       // Use user's browser timezone if available, otherwise fall back to server timezone.
       //
@@ -1741,9 +1887,9 @@ export class ChatCompletionProcess {
         });
       }
 
-      let messages = await buildAndSortMessages(
-        previousMessages,
-        [
+      // Extracted so the overflow-guard safety net below can rebuild with a trimmed
+      // history without duplicating this (long, order-sensitive) system/context block.
+      const contextAndSystemMessages: IMessage[] = [
           dateTimeContext, // Always provide current date/time awareness
           ...extraContextMessages, // Add extra context messages from external sources at the top
           // Artifact emission guidance. Without this, correct <artifact> usage
@@ -1840,8 +1986,12 @@ export class ChatCompletionProcess {
             : []),
           ...urlMessages,
           ...fabMessages,
-        ],
-        [{ role: 'user', content: effectiveUserPrompt }],
+        ];
+      const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
+      let messages = await buildAndSortMessages(
+        previousMessages,
+        contextAndSystemMessages,
+        currentUserPromptMessages,
         maxSafeInputTokens,
         defaultAdminSettings,
         historyCount,
@@ -1963,16 +2113,65 @@ export class ChatCompletionProcess {
           }ms`
         );
 
+        // OVERFLOW SAFETY NET (see also the verbatim-budget reservation above). Part 1's
+        // reserve normally makes compaction fire BEFORE a turn overflows, but overhead we
+        // can't see when the summary boundary is chosen - MCP-expanded tool schemas, an
+        // unusually large running summary - can still push a turn over. Throwing here would
+        // kill the turn before the reactive summarizer's onComplete runs, permanently
+        // bricking a heavy session. Instead shed the oldest verbatim turns and rebuild (via
+        // the same tested buildAndSortMessages, so tool pairing stays intact) until the REAL
+        // tokenizer says it fits, or nothing is left to shed. Only the overflow path pays this;
+        // the common path is unchanged. NOTE: these shed turns are dropped from THIS turn only
+        // and are not folded into contextSummary (the message layer has no quest-id boundary);
+        // the estimate-layer boundary keeps advancing normally on subsequent turns.
+        let effectiveTotalTokens = totalTokens;
+        let effectiveHistoryTokens = historyTokens;
+        if (inputTokens > maxSafeInputTokens && previousMessages.length > 0) {
+          let recoveryHistory: IMessage[] = previousMessages;
+          let shedTurns = 0;
+          while (inputTokens > maxSafeInputTokens) {
+            const trimmed = dropOldestHistoryTurn(recoveryHistory);
+            if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
+            recoveryHistory = trimmed;
+            const rebuilt = await buildAndSortMessages(
+              recoveryHistory,
+              contextAndSystemMessages,
+              currentUserPromptMessages,
+              maxSafeInputTokens,
+              defaultAdminSettings,
+              historyCount,
+              logger,
+              this.tokenizer
+            );
+            if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
+            messages = rebuilt;
+            shedTurns++;
+            [effectiveTotalTokens, effectiveHistoryTokens] = await Promise.all([
+              calculateTotalTokenLength(messages, tokenCalcOptions),
+              calculateTotalTokenLength(recoveryHistory, tokenCalcOptions),
+            ]);
+            inputTokens = effectiveTotalTokens + toolSchemaTokens;
+          }
+          if (shedTurns > 0) {
+            logger.warn(
+              `⚠️ [Context Overflow Recovery] Shed ${shedTurns} oldest verbatim turn(s) and rebuilt; ` +
+                `inputTokens now ${inputTokens}/${maxSafeInputTokens}. The verbatim budget under-reserved ` +
+                `overhead this turn (likely MCP tools or a large running summary).`
+            );
+          }
+        }
+
         // System prompts = the messages-only total (totalTokens) minus the known message sources.
         // This avoids double-counting (mementos/project are system-role but tracked separately) and
         // captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.).
         // Derived from totalTokens, NOT inputTokens, so the tool-schema count never inflates it.
-        const knownSourceTokens = fabTokens + historyTokens + mementoTokens + urlTokens + userPromptTokens;
-        const systemPromptTokens = Math.max(0, totalTokens - knownSourceTokens);
+        // Uses the post-recovery effective totals so a shed turn isn't double-counted as history.
+        const knownSourceTokens = fabTokens + effectiveHistoryTokens + mementoTokens + urlTokens + userPromptTokens;
+        const systemPromptTokens = Math.max(0, effectiveTotalTokens - knownSourceTokens);
 
         tokensBySource = {
           systemPrompts: systemPromptTokens,
-          conversationHistory: historyTokens,
+          conversationHistory: effectiveHistoryTokens,
           mementos: mementoTokens,
           fabFiles: fabTokens,
           urlContent: urlTokens,
@@ -3541,6 +3740,7 @@ export class ChatCompletionProcess {
           utilizationPercentage: parseFloat(utilizationPercentage.toFixed(2)),
           overflowDetected: inputTokens > maxSafeInputTokens,
           overflowAmount: inputTokens > maxSafeInputTokens ? inputTokens - maxSafeInputTokens : undefined,
+          verbatimTurnsExcluded: verbatimExcludedCount > 0 ? verbatimExcludedCount : undefined,
         };
 
         // Message truncation tracking
@@ -3864,7 +4064,7 @@ export class ChatCompletionProcess {
         fireAndForgetFeatures.forEach(feature => {
           this.features
             .get(feature)
-            ?.onComplete({ quest, session, messages, questMaster, model, historyCount, oldestIncludedQuestId })
+            ?.onComplete({ quest, session, messages, questMaster, model, historyCount, oldestIncludedQuestId, verbatimExcludedCount })
             ?.catch(err => logger.error(`Error in fire-and-forget ${feature} onComplete:`, err));
         });
 
@@ -3881,7 +4081,7 @@ export class ChatCompletionProcess {
           .map(feature =>
             this.features
               .get(feature)
-              ?.onComplete({ quest, session, messages, questMaster, model, historyCount, oldestIncludedQuestId })
+              ?.onComplete({ quest, session, messages, questMaster, model, historyCount, oldestIncludedQuestId, verbatimExcludedCount })
           )
           .filter(p => p);
 
@@ -4138,7 +4338,7 @@ export class ChatCompletionProcess {
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
     message: string,
-    max_tokens: number,
+    attachedFileTokenBudget: number,
     modelInfo: ModelInfo
   ) {
     const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
@@ -4154,7 +4354,7 @@ export class ChatCompletionProcess {
       embeddingFactory,
       convertedFabFiles,
       message,
-      max_tokens,
+      attachedFileTokenBudget,
       modelInfo,
       async status => {
         this.sendStatusUpdate(quest, status, { statusAt: new Date() });
@@ -4482,6 +4682,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     sessionKnowledgeIds,
     message,
     maxTokens,
+    attachedFileTokenBudget,
     quest,
     embeddingFactory,
     modelInfo,
@@ -4494,6 +4695,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     sessionKnowledgeIds: string[];
     message: string;
     maxTokens: number;
+    attachedFileTokenBudget: number;
     quest: IChatHistoryItemDocument;
     embeddingFactory: EmbeddingFactory;
     modelInfo: ModelInfo;
@@ -4515,7 +4717,13 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       Array.from(this.features.entries()).map(async ([key, feature]) => {
         const featureContextIndividualStartTime = Date.now();
         try {
-          const messages = await feature.getContextMessages(quest, embeddingFactory, message, maxTokens, modelInfo);
+          const messages = await feature.getContextMessages(
+            quest,
+            embeddingFactory,
+            message,
+            modelInfo,
+            attachedFileTokenBudget
+          );
 
           const elapsed = Date.now() - featureContextIndividualStartTime;
           logger.info(
@@ -4610,7 +4818,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
         quest,
         embeddingFactory,
         message,
-        maxTokens,
+        attachedFileTokenBudget,
         modelInfo
       ).then(result => {
         logger.info(

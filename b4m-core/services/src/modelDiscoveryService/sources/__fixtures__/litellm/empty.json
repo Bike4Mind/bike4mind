@@ -1,0 +1,9 @@
+{
+  "sample_spec": {
+    "max_tokens": 8192,
+    "input_cost_per_token": 0.0000002,
+    "output_cost_per_token": 0.0000002,
+    "litellm_provider": "one of the providers",
+    "mode": "one of: chat, embedding, completion"
+  }
+}

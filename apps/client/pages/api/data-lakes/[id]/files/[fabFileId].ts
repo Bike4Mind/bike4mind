@@ -7,8 +7,9 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 
 /**
  * DELETE /api/data-lakes/:id/files/:fabFileId
- * Removes a single file from a data lake (lake-scoped: drops the lake's datalake tag +
- * stat recompute; the file and its chunks survive - see removeFileFromDataLake).
+ * Removes a single file from a data lake (lake-scoped: drops every tag that makes the file a
+ * member of this lake, then recomputes stats; the file and its chunks survive - see
+ * removeFileFromDataLake).
  * Access-gated like the articles list (org-aware, not-found-style denial); the write is
  * then further restricted to owner/admin inside the service.
  */

@@ -6,6 +6,30 @@
  */
 export const DATALAKE_TAG_PREFIX = 'datalake:';
 
+/**
+ * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
+ * (non-empty, ends with ':'), else null. An empty prefix would match every tag, so it is
+ * rejected rather than honored.
+ *
+ * Shared by `buildOwnershipConditions`' prefix arms and the single-file removal write, which
+ * is what keeps a removal clearing the same prefixed tags the lake read scope matches. Other
+ * prefix readers (the tag-count aggregates) still build their own regexes, so this is a
+ * guarantee about those two, not about every prefix match in the codebase.
+ */
+export const normalizeTagPrefix = (prefix: string | undefined | null): string | null => {
+  const trimmed = typeof prefix === 'string' ? prefix.trim() : '';
+  return trimmed.length > 0 && trimmed.endsWith(':') ? trimmed : null;
+};
+
+/**
+ * True when a would-be `fileTagPrefix` sits inside the `datalake:` namespace, which holds every
+ * lake's membership meta-tag. Such a prefix would make one lake's content prefix match other
+ * lakes' membership tags. Shared by the create schema and the wizard's client-side gate so the
+ * form blocks it instead of failing at submit.
+ */
+export const isReservedTagPrefix = (prefix: string | undefined | null): boolean =>
+  typeof prefix === 'string' && prefix.trim().startsWith(DATALAKE_TAG_PREFIX);
+
 export interface DataLakeConfig {
   id: string;
   /**

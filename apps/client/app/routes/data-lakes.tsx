@@ -20,6 +20,7 @@ export default function DataLakesHome() {
   const navigate = useNavigate();
   const { article } = useSearch({ strict: false }) as { article?: string };
   const openManager = useDataLakeWizardStore(s => s.openManager);
+  const openWizard = useDataLakeWizardStore(s => s.openWizard);
 
   // No docked chat on this surface - "Ask about this article" prefills the composer
   // and drops the user into a fresh chat to send it.
@@ -40,6 +41,7 @@ export default function DataLakesHome() {
       onAskAbout={handleAskAbout}
       onManage={openManager}
       onDiscover={() => openManager('discover')}
+      onCreate={openWizard}
     />
   );
 }

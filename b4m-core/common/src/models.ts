@@ -1,4 +1,7 @@
 import { z } from 'zod';
+// Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
+// import here would close a runtime cycle. These two are erased at compile time.
+import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
 
 /**
  * Model backends
@@ -551,6 +554,18 @@ export type ModelInfo = {
   disabled?: boolean;
   /** Human-readable reason surfaced in the picker (tooltip) and the server-side rejection when `disabled` is true. */
   disabledReason?: string;
+  /**
+   * Which backend constructor serves this model. Present only on models the
+   * catalog resolved; getLlmByModel dispatches on it and falls back to the
+   * legacy id switch when it is absent (see llm-adapters/src/index.ts).
+   */
+  adapterFamily?: AdapterFamily;
+  /**
+   * How to shape a request for this model. Present only on models the catalog
+   * resolved; every request builder that reads it prefers it over its hardcoded
+   * id tables, and reproduces today's behavior exactly when it is absent.
+   */
+  dispatchProfile?: ModelDispatchProfile;
 };
 
 // Pricing info type. Optional cache_read / cache_write override the defaults

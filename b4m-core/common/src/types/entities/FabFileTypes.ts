@@ -233,11 +233,19 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   /** Count chunks that are terminal (have a vector OR are oversized) - for idempotent vectorizedChunkCount recompute. */
   countTerminalChunks(fabFileId: string, contextWindow: number): Promise<number>;
   /**
-   * Bulk-fetch vector-bearing chunks (id, fabFileId, text, vector) for many files in ONE
-   * indexed query, capped for memory safety. Powers semantic search (query embed -> cosine).
-   * Skips chunks without a vector at the DB layer.
+   * One page of vector-bearing chunks (id, fabFileId, text, vector) for the given files,
+   * ascending by `_id`. Skips chunks without a vector at the DB layer. Powers semantic search
+   * (query embed -> cosine).
+   *
+   * Contract callers rely on: `_id` is unique, so the ordering is total and `afterChunkId` is
+   * an exact cursor - paging a corpus never skips or duplicates a chunk, and the same inputs
+   * always yield the same page. An implementation that returns an arbitrary `limit` rows
+   * silently changes retrieval results, so ordering is part of the interface, not an optimization.
    */
-  findVectorsByFabFileIds(fabFileIds: string[], cap?: number): Promise<FabFileChunkVector[]>;
+  findVectorsByFabFileIds(
+    fabFileIds: string[],
+    options?: { limit?: number; afterChunkId?: string }
+  ): Promise<FabFileChunkVector[]>;
 }
 
 /**
@@ -319,6 +327,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       excludeContent?: boolean; // Exclude heavy fields (content, chunks, vector) for list queries
       excludeFilenameMarkers?: string[]; // Generic retrieval exclusion: leading word-boundary marker match (see @bike4mind/utils/retrievalExclusion)
       vectorizedOnly?: boolean; // Restrict to vectorized files only (excludes unvectorized)
+      stableSort?: boolean; // Add an `_id` tiebreaker so a multi-page walk can't drop/repeat a file (fileName sorts only)
     }
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
@@ -417,15 +426,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number>;
 
   /**
-   * Atomically remove a single tag (matched by exact name) from one file's tags array.
-   * Uses `$pull`, so concurrent removals of DIFFERENT tags on the same file don't clobber
-   * each other the way a read-filter-write `$set: { tags }` would. No-op if the tag is
-   * absent (idempotent).
+   * Atomically remove every tag matching one of `tagNames` (exact names) from one file's
+   * tags array, and clear `primaryTag` if it named one of them. Uses `$pull`, so concurrent
+   * removals of DIFFERENT tags on the same file don't clobber each other the way a
+   * read-filter-write `$set: { tags }` would. Absent names are a no-op (idempotent).
    * @param fabFileId - The ID of the file.
-   * @param tagName - The exact tag name to remove.
-   * @returns The number of files modified (0 if the tag was not present).
+   * @param tagNames - The exact tag names to remove. Empty is a no-op.
+   * @returns Documents modified by the pull. The schema has timestamps, so this can be 1
+   * even when no tag matched - do not read it as "a tag was removed".
    */
-  pullTagByFabFileId(fabFileId: string, tagName: string): Promise<number>;
+  pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
 
   /**
    * Find files by content hashes for a given user (deduplication).

@@ -11,6 +11,7 @@ import {
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query } from 'mongoose';
+import { NotFoundError } from '@bike4mind/utils';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
 import BaseRepository from '@bike4mind/db-core';
@@ -439,6 +440,14 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       ],
       { new: true }
     );
+  }
+
+  async incrementTokenVersion(userId: string): Promise<number> {
+    const updated = await this.model.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } }, { new: true });
+    // A null result means the user was deleted between the caller's findById and this $inc.
+    // Falling back to 0 would report a successful revoke that never happened - fail loudly instead.
+    if (!updated) throw new NotFoundError(`User ${userId} not found`);
+    return updated.tokenVersion;
   }
 
   /**

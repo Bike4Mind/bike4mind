@@ -1514,6 +1514,82 @@ describe('Context Management Tests', () => {
       });
     });
 
+    describe('verbatim token-bounding', () => {
+      // Each item's prompt is ~4000 chars -> ~1146 estimated tokens (chars/3.5).
+      const BIG = 'x'.repeat(4000);
+      const makeBigItem = (n: number) => makeItem(n, { prompt: BIG, reply: `reply ${n}`, replies: [`reply ${n}`] });
+
+      it('keeps only the newest turns that fit the budget and reports the excluded count', async () => {
+        // newest-first input [4,3,2,1] -> reverse [1,2,3,4] -> pop 4 -> [1,2,3] (each ~1146 tokens)
+        const items = [makeBigItem(4), makeBigItem(3), makeBigItem(2), makeBigItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        // Budget ~1500 fits only the single newest kept turn (item 3); 2 would be ~2292.
+        const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          verbatimTokenBudget: 1500,
+        });
+
+        expect(count).toBe(1);
+        expect(meta.oldestIncludedQuestId).toBe(makeItem(3).id);
+        expect(meta.excludedOlderQuestCount).toBe(2);
+      });
+
+      it('keeps multiple turns when the budget allows and excludes the rest', async () => {
+        const items = [makeBigItem(4), makeBigItem(3), makeBigItem(2), makeBigItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        // ~2500 fits two turns (~2292) but not three (~3438).
+        const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          verbatimTokenBudget: 2500,
+        });
+
+        expect(count).toBe(2);
+        expect(meta.oldestIncludedQuestId).toBe(makeItem(2).id);
+        expect(meta.excludedOlderQuestCount).toBe(1);
+      });
+
+      it('always keeps the most recent turn even if it alone exceeds the budget', async () => {
+        const items = [makeBigItem(3), makeBigItem(2), makeBigItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        // Tiny budget: still keep exactly the newest kept turn, never zero.
+        const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          verbatimTokenBudget: 1,
+        });
+
+        expect(count).toBe(1);
+        expect(meta.oldestIncludedQuestId).toBe(makeItem(2).id);
+        expect(meta.excludedOlderQuestCount).toBe(1);
+      });
+
+      it('excludes nothing (excludedOlderQuestCount 0) when history fits the budget', async () => {
+        const items = [makeBigItem(3), makeBigItem(2), makeBigItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          verbatimTokenBudget: 1_000_000,
+        });
+
+        expect(meta.oldestIncludedQuestId).toBe(makeItem(1).id);
+        expect(meta.excludedOlderQuestCount).toBe(0);
+      });
+
+      it('is a no-op when no budget is provided (legacy behavior)', async () => {
+        const items = [makeBigItem(3), makeBigItem(2), makeBigItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(count).toBe(2);
+        expect(meta.oldestIncludedQuestId).toBe(makeItem(1).id);
+        expect(meta.excludedOlderQuestCount).toBe(0);
+      });
+    });
+
     describe('recentGeneratedImages', () => {
       const makeImgItem = (n: number, images: string[]) => makeItem(n, { images });
 
