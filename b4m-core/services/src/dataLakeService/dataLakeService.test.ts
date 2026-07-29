@@ -7,7 +7,12 @@ import {
   type IDataLakeBatchDocument,
 } from '@bike4mind/common';
 import { canAccessLake, assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
-import { canManageLake, assertLakeWriteAccess, assertCanWriteDataLakeTags } from './authorizeLakeWrite';
+import {
+  canManageLake,
+  assertLakeWriteAccess,
+  assertCanWriteDataLakeTags,
+  assertCanReplaceDataLakeTags,
+} from './authorizeLakeWrite';
 import { createDataLake } from './createDataLake';
 import { unarchiveDataLake } from './unarchiveDataLake';
 import { restoreDeletedDataLake } from './restoreDeletedDataLake';
@@ -253,6 +258,14 @@ describe('canManageLake — the single write/manage rule (creator or admin)', ()
     const gated = lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' });
     expect(canAccessLake(gated, ctx({ userId: 'reader', userTags: ['opti'] }))).toBe(true);
     expect(canManageLake(gated, { userId: 'reader', isAdmin: false })).toBe(false);
+  });
+
+  // A bare `===` would grant here, and this rule now decides tag REMOVAL, so a both-missing
+  // match would hand a destructive write to a caller with no claim on the lake.
+  it('denies when the lake records no creator and the actor has no id', () => {
+    expect(canManageLake({ createdByUserId: undefined } as never, { userId: undefined as never, isAdmin: false })).toBe(
+      false
+    );
   });
 
   it('denies a stranger on a PUBLIC lake — the read-can-write asymmetry now that public grants read', () => {
@@ -1207,5 +1220,206 @@ describe('browsePublicDataLakes — public discover catalog projection', () => {
       db,
     } as any);
     expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith({ search: 'widgets', limit: 10, offset: 20 });
+  });
+});
+
+describe('assertCanReplaceDataLakeTags — wholesale tag replace gate', () => {
+  // Keyed by lookup tag so one case can put a DIFFERENT lake on each side of the diff.
+  const makeDb = (lakes: Record<string, IDataLakeDocument | null>) => ({
+    dataLakes: { findByDatalakeTag: vi.fn(async (tag: string) => lakes[tag] ?? null) },
+  });
+  const owned = lake({ id: 'lakeA', createdByUserId: 'owner', datalakeTag: 'datalake:lake' });
+  const reader = { userId: 'reader', isAdmin: false };
+  const creator = { userId: 'owner', isAdmin: false };
+
+  it('lets a non-manager KEEP a meta-tag the file already carries, without a lookup', async () => {
+    // The rename path echoes the file's whole stored tag array back; that must not need
+    // manage rights or every collaborator edit would 400.
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags(
+        reader,
+        { stored: ['datalake:lake', 'notes'], next: ['datalake:lake', 'notes'] },
+        { db }
+      )
+    ).resolves.toEqual({ affectedLakes: [], clearPrimaryTag: false });
+    expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-manager DROPPING a meta-tag', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(assertCanReplaceDataLakeTags(reader, { stored: ['datalake:lake'], next: [] }, { db })).rejects.toThrow(
+      /remove files/i
+    );
+  });
+
+  it('lets the lake creator drop it and reports the lake for a stats recompute', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags(creator, { stored: ['datalake:lake'], next: [] }, { db })
+    ).resolves.toEqual({ affectedLakes: [{ id: 'lakeA', datalakeTag: 'datalake:lake' }], clearPrimaryTag: false });
+  });
+
+  it('lets an admin drop a meta-tag on a lake owned by someone else', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags({ userId: 'root', isAdmin: true }, { stored: ['datalake:lake'], next: [] }, { db })
+    ).resolves.toMatchObject({ affectedLakes: [{ id: 'lakeA' }] });
+  });
+
+  it('treats an empty next array as removing every meta-tag', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags(reader, { stored: ['notes', 'datalake:lake'], next: [] }, { db })
+    ).rejects.toThrow(/remove files/i);
+  });
+
+  it('still gates an ADDED meta-tag and reports it for a recompute', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(assertCanReplaceDataLakeTags(reader, { stored: [], next: ['datalake:lake'] }, { db })).rejects.toThrow(
+      /add files/i
+    );
+    await expect(
+      assertCanReplaceDataLakeTags(creator, { stored: [], next: ['datalake:lake'] }, { db })
+    ).resolves.toMatchObject({ affectedLakes: [{ id: 'lakeA', datalakeTag: 'datalake:lake' }] });
+  });
+
+  it('rejects an added meta-tag that resolves to no lake (forged or stale)', async () => {
+    const db = makeDb({});
+    await expect(
+      assertCanReplaceDataLakeTags(creator, { stored: [], next: ['datalake:ghost'] }, { db })
+    ).rejects.toThrow(/add files/i);
+  });
+
+  // Blocking this would strand the tag on the file forever: the DELETE door 404s the missing
+  // lake and the toggle door rejects the tag.
+  it('ALLOWS dropping a meta-tag whose lake no longer exists', async () => {
+    const db = makeDb({});
+    await expect(
+      assertCanReplaceDataLakeTags(reader, { stored: ['datalake:org:ghost'], next: [] }, { db })
+    ).resolves.toEqual({ affectedLakes: [], clearPrimaryTag: false });
+  });
+
+  // A built-in lake has no Mongo document, so `findByDatalakeTag` returns null for a REAL lake.
+  // Admin, to prove this is the read-only rule and not a manage check.
+  it('refuses to drop a built-in lake meta-tag, even for an admin', async () => {
+    const db = makeDb({});
+    await expect(
+      assertCanReplaceDataLakeTags(
+        { userId: 'root', isAdmin: true },
+        { stored: [DATA_LAKES[0].datalakeTag], next: [] },
+        { db }
+      )
+    ).rejects.toThrow(/read-only/i);
+  });
+
+  // The stats aggregate and the meta-tag read arm both match exactly, so a case rewrite really
+  // does evict the file - a case-folded diff would wave it through as a no-op.
+  it('treats a case-only rewrite as dropping the tag', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags(reader, { stored: ['datalake:lake'], next: ['DataLake:Lake'] }, { db })
+    ).rejects.toThrow(/creator/i);
+  });
+
+  it('resolves a mixed-case added tag through its canonical lowercase key', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await assertCanReplaceDataLakeTags(creator, { stored: [], next: ['DataLake:Lake'] }, { db });
+    expect(db.dataLakes.findByDatalakeTag).toHaveBeenCalledWith('datalake:lake');
+  });
+
+  it('recomputes a lake ONCE when a case rewrite lands it on both sides', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    const result = await assertCanReplaceDataLakeTags(
+      creator,
+      { stored: ['datalake:lake'], next: ['DataLake:Lake'] },
+      { db }
+    );
+    expect(result.affectedLakes).toEqual([{ id: 'lakeA', datalakeTag: 'datalake:lake' }]);
+  });
+
+  // Pins the documented asymmetry: a tag matching a lake's fileTagPrefix is NOT gated,
+  // because the prefix is user-chosen and collides with ordinary tags.
+  it('ignores non-meta tags on both sides, including a lake-prefixed one', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags(reader, { stored: ['lk:notes', 'keep'], next: ['keep'] }, { db })
+    ).resolves.toEqual({ affectedLakes: [], clearPrimaryTag: false });
+    expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  it('tolerates malformed entries on both sides without throwing a TypeError', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags(
+        reader,
+        { stored: [null, 42, {}, 'datalake:lake'] as unknown[], next: [undefined, ['x']] as unknown[] },
+        { db }
+      )
+    ).rejects.toThrow(/remove files/i);
+  });
+
+  it('reports BOTH the dropped and the added lake', async () => {
+    const other = lake({ id: 'lakeB', createdByUserId: 'owner', datalakeTag: 'datalake:other' });
+    const db = makeDb({ 'datalake:lake': owned, 'datalake:other': other });
+    const result = await assertCanReplaceDataLakeTags(
+      creator,
+      { stored: ['datalake:lake'], next: ['datalake:other'] },
+      { db }
+    );
+    expect(result.affectedLakes).toEqual([
+      { id: 'lakeB', datalakeTag: 'datalake:other' },
+      { id: 'lakeA', datalakeTag: 'datalake:lake' },
+    ]);
+  });
+
+  it('does not require manage rights to CLEAR primaryTag', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags(reader, { stored: ['notes'], next: ['notes'], primaryTag: null }, { db })
+    ).resolves.toEqual({ affectedLakes: [], clearPrimaryTag: false });
+    expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  it('gates SETTING primaryTag to a lake the file is not already in', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags(reader, { stored: [], next: [], primaryTag: 'datalake:lake' }, { db })
+    ).rejects.toThrow(/add files/i);
+  });
+
+  // Re-gating an unchanged one would make a stale primaryTag impossible to clear.
+  it('does not re-gate a primaryTag that is merely echoed back unchanged', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags(
+        reader,
+        { stored: ['notes'], next: ['notes'], primaryTag: 'datalake:lake', storedPrimaryTag: 'datalake:lake' },
+        { db }
+      )
+    ).resolves.toMatchObject({ affectedLakes: [] });
+    expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  // Left in place, the stale primaryTag lands on the ADD side of the NEXT request and 400s
+  // that file forever.
+  it('asks the caller to clear a primaryTag naming the dropped lake', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    const result = await assertCanReplaceDataLakeTags(
+      creator,
+      { stored: ['datalake:lake'], next: [], storedPrimaryTag: 'datalake:lake' },
+      { db }
+    );
+    expect(result.clearPrimaryTag).toBe(true);
+  });
+
+  it('leaves primaryTag alone when nothing was dropped', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    const result = await assertCanReplaceDataLakeTags(
+      creator,
+      { stored: ['datalake:lake'], next: ['datalake:lake'], storedPrimaryTag: 'datalake:lake' },
+      { db }
+    );
+    expect(result.clearPrimaryTag).toBe(false);
   });
 });

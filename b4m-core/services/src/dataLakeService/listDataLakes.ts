@@ -15,7 +15,7 @@ const toConfig = (dl: IDataLakeDocument): DataLakeConfig => toDataLakeConfig(dl)
  * local rather than importing authorizeLakeWrite to avoid a cycle - it is a one-liner.
  */
 const canManage = (dl: Pick<IDataLakeDocument, 'createdByUserId'>, ctx: AccessContext): boolean =>
-  ctx.isAdmin || dl.createdByUserId === ctx.userId;
+  ctx.isAdmin || (!!dl.createdByUserId && dl.createdByUserId === ctx.userId);
 
 /**
  * Lists data lakes accessible to the user (org-aware datastore filter + hardcoded
