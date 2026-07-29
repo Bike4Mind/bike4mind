@@ -16,17 +16,17 @@ paths = [
   ".*\\.bundle\\.js$",
   ".*build/.*",
   ".*dist/.*",
-  # Test fixtures and test files — strings here are by definition not live credentials
+  # Test fixtures and test files - strings here are by definition not live credentials
   ".*/__fixtures__/.*",
   ".*/__mocks__/.*",
   ".*\\.test\\.[tj]sx?$",
   ".*\\.spec\\.[tj]sx?$",
   ".*/__tests__/.*",
-  # Documentation — placeholder strings are expected here
+  # Documentation - placeholder strings are expected here
   ".*docs/.*",
   ".*docs-site/.*",
   ".*README\\.md$",
-  # Environment example files — values here are intentional placeholders
+  # Environment example files - values here are intentional placeholders
   "\\.env\\.example$",
   "\\.env\\..*\\.example$"
 ]
@@ -34,7 +34,7 @@ paths = [
 regexes = [
   # Pre-existing
   "SHORTKEY=",
-  # AWS documentation canonical fake access key — never a real credential
+  # AWS documentation canonical fake access key - never a real credential
   "AKIAIOSFODNN7EXAMPLE",
   # Slack sample workspace / channel / token patterns from Slack docs
   "T00000000",
@@ -70,9 +70,9 @@ regexes = [
   "mongodb(\\+srv)?://username:password@cluster",
   "mongodb(\\+srv)?://\\$\\{",
   "mongodb(\\+srv)?://\\{\\{",
-  # Literal ellipsis placeholder — used in console.log usage examples
+  # Literal ellipsis placeholder - used in console.log usage examples
   "mongodb(\\+srv)?://\\.\\.\\.",
-  # Documentation example in echo statements — user:pass with known placeholder hostnames only
+  # Documentation example in echo statements - user:pass with known placeholder hostnames only
   "mongodb(\\+srv)?://user:pass@(localhost|127\\.0\\.0\\.1|example\\.com|cluster\\.|docdb\\.|your-cluster)"
 ]
 
@@ -119,7 +119,7 @@ entropy = 3.5
 [rules.allowlist]
 regexTarget = "secret"
 regexes = [
-  # Redaction test fixtures — the value is input to sanitizeErrorMessage(), not a live key
+  # Redaction test fixtures - the value is input to sanitizeErrorMessage(), not a live key
   "sanitizeErrorMessage",
   "REDACTED",
   "redact",
