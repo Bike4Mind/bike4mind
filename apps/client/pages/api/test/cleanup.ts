@@ -23,13 +23,12 @@ import {
   Organization,
 } from '@bike4mind/database';
 import mongoose from 'mongoose';
-
-// Only sweep EPHEMERAL test users, which always carry a numeric timestamp segment
-// (e.g. setup-admin-12345678-e2e@test.com - see e2e/core.setup.ts + apiCreateTestUser).
-// Standing seeded QA accounts (qa-admin-e2e@test.com / qa-user-e2e@test.com from
-// UserSeeder) deliberately omit the timestamp so this cleanup never deletes them -
-// otherwise every Playwright/CI run would wipe the accounts QA logs in with.
-const BASE_E2E_EMAIL_PATTERN = /-\d+-e2e@test\.com$/i;
+import {
+  BASE_E2E_EMAIL_PATTERN,
+  buildE2EEmailPattern,
+  resolveStaleSweepMinutes,
+  sanitizeTestId,
+} from '@server/utils/e2eCleanupScope';
 
 const handler = baseApi({ auth: false }).delete(
   asyncHandler(async (req, res) => {
@@ -45,13 +44,39 @@ const handler = baseApi({ auth: false }).delete(
       return res.status(401).json({ error: 'Invalid cleanup secret' });
     }
 
-    // Optional: scope cleanup to a specific test ID (for multi-tester isolation on shared preview builds)
-    const { testId } = req.query as { testId?: string };
-    const emailPattern = testId ? new RegExp(`${testId}-[0-9]+-e2e@test\\.com$`, 'i') : BASE_E2E_EMAIL_PATTERN;
+    // Scope cleanup to one run's users (multi-tester isolation, and in CI a per-run id so
+    // concurrent suites never delete each other's live users - see .github/workflows/e2e-run.yml).
+    // Unscoped is the local-dev fallback only: it matches EVERY ephemeral e2e user on the stage.
+    const testId = sanitizeTestId(req.query.testId);
+    const emailPattern = buildE2EEmailPattern(testId);
 
-    const users = await User.find({ email: { $regex: emailPattern } }, { _id: 1 }).lean();
-    const userIds = users.map(u => u._id);
-    const userIdStrings = userIds.map(id => id.toString());
+    const scoped = await User.find({ email: { $regex: emailPattern } }, { _id: 1 }).lean();
+    const byId = new Map(scoped.map(u => [u._id.toString(), u._id] as const));
+
+    // Aged sweep: reclaims users orphaned by runs that died before their own teardown
+    // (cancelled job, runner timeout). Necessary because a per-run testId scope never matches
+    // a previous run's leftovers, so nothing else would ever collect them - and it is also the
+    // only thing that reaches specs whose emails carry no testId at all (mfa/admin/signup).
+    // Age is createdAt, not the email's digits: those are a truncated clock, not a real time.
+    // The window is floored server-side, so this only ever sees runs that are long finished,
+    // and a doc with no createdAt is skipped rather than assumed old.
+    let staleSwept = 0;
+    if (req.query.staleMinutes !== undefined) {
+      const cutoff = new Date(Date.now() - resolveStaleSweepMinutes(req.query.staleMinutes) * 60_000);
+      const orphans = await User.find(
+        { email: { $regex: BASE_E2E_EMAIL_PATTERN }, createdAt: { $lt: cutoff } },
+        { _id: 1 }
+      ).lean();
+      for (const orphan of orphans) {
+        const key = orphan._id.toString();
+        if (byId.has(key)) continue;
+        byId.set(key, orphan._id);
+        staleSwept++;
+      }
+    }
+
+    const userIds = [...byId.values()];
+    const userIdStrings = [...byId.keys()];
 
     if (userIds.length === 0) {
       return res.json({ success: true, cleaned: { users: 0 }, message: 'No e2e test users found' });
@@ -133,6 +158,7 @@ const handler = baseApi({ auth: false }).delete(
       success: true,
       cleaned: {
         users: userIds.length,
+        staleSwept,
         sessions: sessionIds.length,
         files: counts.files || 0,
         agents: counts.agents || 0,
