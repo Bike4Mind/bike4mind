@@ -150,10 +150,19 @@ regexes = [
 #
 # generic-api-key stays off. It is a pure entropy heuristic with no credential
 # shape, and it fires on ordinary camelCase identifiers - every `key: 'xEnabled'`
-# in the settings schema scores above its threshold. There is no narrower fix that
-# works on both gitleaks versions in play: a `paths` allowlist would exempt the
-# whole file from ALL rules (8.26 ignores `targetRules` and `matchCondition` on a
-# global allowlist), and secret/stopword allowlists are ignored entirely by 8.24.3.
+# in the settings schema scores above its threshold.
+#
+# Allowlist-based narrowing does not work across the two gitleaks versions in play
+# (CI pins 8.24.3, brew ships 8.26.0): a `paths` allowlist exempts the file from ALL
+# rules rather than one, because 8.26 ignores `targetRules` and `matchCondition` on
+# a global allowlist, and secret/stopword allowlists are ignored outright by 8.24.3.
+#
+# Redefining the rule with a raised entropy floor DOES work on both versions, and is
+# the alternative to this line. It is not used here because it requires vendoring
+# gitleaks' builtin regex into this file, where it would silently go stale as
+# upstream tunes the rule - the same class of silent staleness as the
+# [useBuiltinRules] bug above. Revisit if generic-api-key coverage is wanted back.
+#
 # Specific-shape rules (aws, github, stripe, anthropic, gemini, slack, mongodb,
 # JWT/session secrets) all remain active and are what actually catch leaks.
 [extend]
