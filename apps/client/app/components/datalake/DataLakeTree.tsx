@@ -25,46 +25,17 @@ import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
-import type { Hue } from '@client/app/components/datalake/deckChrome';
+import {
+  COUNT_CHIP_SX,
+  FOOTER_BTN_SX,
+  ICON_BTN_SX,
+  TREE_LIST_SX,
+  hueForBranch,
+  humanizeSegment,
+  treeRowSx,
+} from '@client/app/components/datalake/treeChrome';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { gray } from '@client/app/utils/themes/colors';
-
-const PREFIX_LABELS: Record<string, string> = {
-  opti: 'Optimization Knowledge',
-};
-
-/** Hue-code branches by their top-level prefix so different root namespaces read apart at a
- *  glance. Only `opti` gets a distinct hue today; every other branch falls back to amber. */
-const PREFIX_HUES: Record<string, Hue> = {
-  opti: HUES.emerald,
-};
-
-const hueForBranch = (segment: string, breadcrumb: string[]): Hue =>
-  PREFIX_HUES[breadcrumb[0] ?? segment] ?? HUES.amber;
-
-/** Shared chrome sizing for the tree's 32px controls (header icons + footer buttons). */
-const CONTROL_SX = { borderRadius: '6px' } as const;
-const ICON_BTN_SX = { ...CONTROL_SX, '--IconButton-size': '32px' } as const;
-const FOOTER_BTN_SX = { ...CONTROL_SX, flex: 1, minHeight: 32, height: 32, fontWeight: 400, fontSize: 14 } as const;
-
-const CATEGORY_LABELS: Record<string, string> = {
-  offering: 'Offering Lines',
-  type: 'Content Type',
-  vertical: 'Customer Verticals',
-  competitor: 'Competitors',
-  stage: 'Sales Stage',
-  content: 'Content Type',
-  family: 'Pattern Families',
-  solver: 'Solvers',
-  level: 'Difficulty Level',
-  industry: 'Industries',
-};
-
-function humanizeSegment(segment: string, depth: number): string {
-  if (depth === 0 && PREFIX_LABELS[segment]) return PREFIX_LABELS[segment];
-  if (depth === 1 && CATEGORY_LABELS[segment]) return CATEGORY_LABELS[segment];
-  return segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
-}
 
 interface DataLakeTreeProps {
   tree: TagNode[];
@@ -279,10 +250,7 @@ export default function DataLakeTree({
           </Box>
         ) : showFiles ? (
           /* File list at leaf */
-          <List
-            size="sm"
-            sx={{ py: 0, '--List-gap': '4px', '--ListItem-paddingX': '8px', '--ListItem-paddingY': '0px' }}
-          >
+          <List size="sm" sx={TREE_LIST_SX}>
             {files.length === 0 ? (
               <Box sx={{ p: 2, textAlign: 'center' }}>
                 <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
@@ -296,14 +264,7 @@ export default function DataLakeTree({
                     selected={selectedFileId === file.id}
                     onClick={() => onSelectFile(file)}
                     data-testid={`datalake-file-${file.id}`}
-                    sx={{
-                      borderRadius: '8px',
-                      gap: '8px',
-                      minHeight: '28px',
-                      py: 0,
-                      transition: 'background 0.15s',
-                      '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
-                    }}
+                    sx={treeRowSx(theme.palette.notebooklist.hoverBg)}
                   >
                     <ArticleOutlinedIcon
                       sx={{
@@ -327,10 +288,7 @@ export default function DataLakeTree({
           </List>
         ) : (
           /* Folder tree */
-          <List
-            size="sm"
-            sx={{ py: 0, '--List-gap': '4px', '--ListItem-paddingX': '8px', '--ListItem-paddingY': '0px' }}
-          >
+          <List size="sm" sx={TREE_LIST_SX}>
             {filteredNodes.length === 0 ? (
               <Box sx={{ p: 2, textAlign: 'center' }}>
                 <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
@@ -344,16 +302,7 @@ export default function DataLakeTree({
                   <ListItem key={node.segment}>
                     <ListItemButton
                       onClick={() => onNavigate([...breadcrumb, node.segment])}
-                      sx={{
-                        borderRadius: '8px',
-                        gap: '8px',
-                        minHeight: '28px',
-                        py: 0,
-                        transition: 'background 0.15s',
-                        // Match the sidenav nav-item hover. ListItemButton reads its hover bg from
-                        // this Joy var, so a plain '&:hover' loses to Joy's built-in rule.
-                        '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
-                      }}
+                      sx={treeRowSx(theme.palette.notebooklist.hoverBg)}
                       data-testid={`datalake-node-${node.segment}`}
                     >
                       <FolderOutlinedIcon sx={{ fontSize: 16, color: branchInk, flexShrink: 0 }} />
@@ -362,12 +311,7 @@ export default function DataLakeTree({
                           {humanizeSegment(node.segment, breadcrumb.length)}
                         </Typography>
                       </ListItemContent>
-                      <Chip
-                        size="sm"
-                        variant="soft"
-                        color="neutral"
-                        sx={{ bgcolor: 'transparent', '--Chip-paddingInline': '0px', '--Chip-minHeight': 'auto' }}
-                      >
+                      <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
                         {node.fileCount}
                       </Chip>
                     </ListItemButton>

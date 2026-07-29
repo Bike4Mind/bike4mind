@@ -4,36 +4,15 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import DataLakeListPanel, { DataLakeSettingsModal } from './DataLakeListPanel';
+import { DataLakeSettingsModal } from './DataLakeSettingsModal';
 
 const updateMutate = vi.fn();
 const visibilityMutate = vi.fn();
 const warn = vi.fn();
 
-vi.mock('@client/app/hooks/data/dataLakes', () => {
-  const mutation = () => ({ mutate: vi.fn(), isPending: false });
-  return {
-    useUpdateDataLake: () => ({ mutate: updateMutate, isPending: false }),
-    useSetLakeVisibility: () => ({ mutate: visibilityMutate, isPending: false }),
-    useArchiveDataLake: mutation,
-    useUnarchiveDataLake: mutation,
-    useRestoreDeletedDataLake: mutation,
-    usePermanentDeleteDataLake: mutation,
-    useCleanupDataLake: mutation,
-    useGetArchivedDataLakes: () => ({ data: undefined }),
-    useGetDeletedDataLakes: () => ({ data: undefined }),
-  };
-});
-
-const useDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
-vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
-  useDataLakes: () => useDataLakes(),
-}));
-
-// Default (flag on) is established per-describe; tests override per-case.
-const isFeatureEnabled = vi.fn();
-vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
-  useAdminSettingsCache: () => ({ isFeatureEnabled }),
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  useUpdateDataLake: () => ({ mutate: updateMutate, isPending: false }),
+  useSetLakeVisibility: () => ({ mutate: visibilityMutate, isPending: false }),
 }));
 
 // The settings modal derives org-visibility state from the account switcher (useAccounts),
@@ -47,9 +26,6 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: (...a: unknown[]) => warn(...a) },
 }));
-
-// Keep the sibling viewer import light - it isn't rendered by the settings modal.
-vi.mock('./DataLakeViewer', () => ({ default: () => null }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -186,91 +162,5 @@ describe('DataLakeSettingsModal — public visibility', () => {
     await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
 
     expect(visibilityMutate).not.toHaveBeenCalled();
-  });
-});
-
-describe('DataLakeListPanel - EnableDataLakes gating', () => {
-  beforeEach(() => {
-    isFeatureEnabled.mockReset();
-    isFeatureEnabled.mockReturnValue(true);
-  });
-
-  it('renders the panel when the feature is on', () => {
-    render(
-      <Wrapper>
-        <DataLakeListPanel />
-      </Wrapper>
-    );
-
-    expect(screen.getByTestId('datalake-list-panel')).toBeInTheDocument();
-  });
-
-  it('renders nothing when the feature is off (shared choke point for every manager entry)', () => {
-    isFeatureEnabled.mockImplementation((key: string) => key !== 'EnableDataLakes');
-
-    render(
-      <Wrapper>
-        <DataLakeListPanel />
-      </Wrapper>
-    );
-
-    // The panel's lakes queries 403 when the feature is off, and its empty state
-    // is a dead end - so the panel must not render at all, mirroring
-    // SendToDataLakeModal's render guard.
-    expect(screen.queryByTestId('datalake-list-panel')).not.toBeInTheDocument();
-  });
-});
-
-describe('DataLakeListPanel - management affordances gate on canManage', () => {
-  beforeEach(() => {
-    isFeatureEnabled.mockReset();
-    isFeatureEnabled.mockReturnValue(true);
-    useDataLakes.mockReset();
-  });
-
-  const listLake = (over: Record<string, unknown>) => ({
-    id: 'lk',
-    name: 'Lake',
-    slug: 'lake',
-    fileTagPrefix: 'lk:',
-    datalakeTag: 'datalake:lake',
-    ...over,
-  });
-
-  it('shows Add files / Settings / Archive on a lake the caller can manage', () => {
-    useDataLakes.mockReturnValue({
-      data: [listLake({ id: 'mine', name: 'Mine', canManage: true })],
-      isLoading: false,
-    });
-
-    render(
-      <Wrapper>
-        <DataLakeListPanel />
-      </Wrapper>
-    );
-
-    expect(screen.getByTestId('datalake-addfiles-btn-mine')).toBeInTheDocument();
-    expect(screen.getByTestId('datalake-settings-btn-mine')).toBeInTheDocument();
-    expect(screen.getByTestId('datalake-archive-btn-mine')).toBeInTheDocument();
-  });
-
-  it("hides all three on a lake the caller cannot manage (someone else's public lake)", () => {
-    useDataLakes.mockReturnValue({
-      data: [listLake({ id: 'theirs', name: 'Theirs', isPublic: true, canManage: false })],
-      isLoading: false,
-    });
-
-    render(
-      <Wrapper>
-        <DataLakeListPanel />
-      </Wrapper>
-    );
-
-    // The read-only row still renders (and opens the viewer on click) - only the
-    // management affordances are gated.
-    expect(screen.getByTestId('datalake-card-theirs')).toBeInTheDocument();
-    expect(screen.queryByTestId('datalake-addfiles-btn-theirs')).toBeNull();
-    expect(screen.queryByTestId('datalake-settings-btn-theirs')).toBeNull();
-    expect(screen.queryByTestId('datalake-archive-btn-theirs')).toBeNull();
   });
 });

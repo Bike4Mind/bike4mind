@@ -4,7 +4,7 @@ import { create } from 'zustand';
 
 import FileBrowserContent from './Browser/Content';
 import DataLakeWizardModal from '../DataLakeWizard/DataLakeWizardModal';
-import DataLakeListPanel from '../DataLakeWizard/DataLakeListPanel';
+import DataLakeManagerPanel from '../DataLakeWizard/DataLakeManagerPanel';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { IFabFileDocument } from '@bike4mind/common';
 
@@ -60,15 +60,24 @@ const FileBrowser: FC = () => {
         </ModalDialog>
       </Modal>
       <DataLakeWizardModal />
-      {/* Data Lakes management surface: list + add files + lifecycle. Store-driven so
-          it's reachable from the Upload Files menu on both desktop and mobile. */}
+      {/* Data Lakes management surface: one persistent two-pane layout (lakes/files nav on
+          the left, lake details or file content on the right). Store-driven so it's
+          reachable from the Upload Files menu and the in-chat tree's Manage button. */}
       <Modal open={isManagerOpen} onClose={closeManager}>
         <ModalDialog
           data-testid="data-lake-manager-modal"
-          sx={{ width: { xs: '95%', sm: '32rem' }, maxWidth: '32rem', maxHeight: '85vh', overflow: 'auto', p: 0 }}
+          sx={{
+            width: { xs: '100vw', md: '90vw' },
+            maxWidth: '80rem',
+            height: { xs: '100dvh', md: '85vh' },
+            maxHeight: { xs: '100%', md: '85vh' },
+            p: 0,
+            overflow: 'hidden',
+            borderRadius: { xs: 0, md: 'md' },
+          }}
         >
           <ModalClose data-testid="data-lake-manager-close-btn" />
-          <DataLakeListPanel />
+          {isManagerOpen ? <DataLakeManagerPanel /> : null}
         </ModalDialog>
       </Modal>
     </>
