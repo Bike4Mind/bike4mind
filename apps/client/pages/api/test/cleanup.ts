@@ -47,7 +47,10 @@ const handler = baseApi({ auth: false }).delete(
     // Scope cleanup to one run's users (multi-tester isolation, and in CI a per-run id so
     // concurrent suites never delete each other's live users - see .github/workflows/e2e-run.yml).
     // Unscoped is the local-dev fallback only: it matches EVERY ephemeral e2e user on the stage.
-    const testId = sanitizeTestId(req.query.testId);
+    // Cast because baseApi types req.query as unknown; both values are re-validated below
+    // (sanitizeTestId / resolveStaleSweepMinutes tolerate arrays and non-strings).
+    const { testId: rawTestId, staleMinutes } = req.query as { testId?: string; staleMinutes?: string };
+    const testId = sanitizeTestId(rawTestId);
     const emailPattern = buildE2EEmailPattern(testId);
 
     const scoped = await User.find({ email: { $regex: emailPattern } }, { _id: 1 }).lean();
@@ -61,8 +64,8 @@ const handler = baseApi({ auth: false }).delete(
     // The window is floored server-side, so this only ever sees runs that are long finished,
     // and a doc with no createdAt is skipped rather than assumed old.
     let staleSwept = 0;
-    if (req.query.staleMinutes !== undefined) {
-      const cutoff = new Date(Date.now() - resolveStaleSweepMinutes(req.query.staleMinutes) * 60_000);
+    if (staleMinutes !== undefined) {
+      const cutoff = new Date(Date.now() - resolveStaleSweepMinutes(staleMinutes) * 60_000);
       const orphans = await User.find(
         { email: { $regex: BASE_E2E_EMAIL_PATTERN }, createdAt: { $lt: cutoff } },
         { _id: 1 }
