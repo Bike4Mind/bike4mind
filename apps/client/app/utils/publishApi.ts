@@ -1,5 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
 import type {
+  ArtifactType,
   CommentPolicy,
   PublishResult,
   PublishScopeTier,
@@ -7,7 +8,7 @@ import type {
   ReportReason,
   UploadUrlResponse,
 } from '@bike4mind/common';
-import { ArtifactTypeSchema, ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX } from '@bike4mind/common';
+import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX } from '@bike4mind/common';
 import { detectElidedContent } from '@bike4mind/utils/artifactElision';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
 
@@ -408,7 +409,13 @@ export function artifactBundlePublisher(input: {
  */
 export function buildArtifactPublishWiring(input: {
   artifactId: string;
-  type: string;
+  /**
+   * Narrowed to the union rather than `string`. A plain string would let an unrecognised value through
+   * to the detector, where the JS-bearing scans are gated on html/react and would silently switch
+   * themselves off - the exact class of silent miss this feature exists to catch. Both callers already
+   * pass a value constrained by `ArtifactModel`, so this costs them nothing.
+   */
+  type: ArtifactType;
   content: string;
   title: string;
   userId: string;
@@ -425,13 +432,7 @@ export function buildArtifactPublishWiring(input: {
     // A /p/ link is the point of no return: it can be handed to a client before anyone
     // notices the artifact's buttons are inert. Computed here rather than in the dialog so
     // every publish surface that routes through this wiring inherits the check.
-    // `input.type` is a plain string from the caller, so it is PARSED rather than cast: an
-    // unrecognised value silently disables the JS-bearing scans (they are gated on html/react), and
-    // a cast would hide that. Parsing to undefined makes the degradation explicit - comment
-    // scanning still runs for every type, so the loudest signal is never lost.
-    ...(detectElidedContent(input.content, ArtifactTypeSchema.safeParse(input.type).data).elided
-      ? { incompleteWarning: ELISION_PUBLISH_BODY }
-      : {}),
+    ...(detectElidedContent(input.content, input.type).elided ? { incompleteWarning: ELISION_PUBLISH_BODY } : {}),
   };
 }
 
