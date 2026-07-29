@@ -45,6 +45,8 @@ function toDomainEvent(doc: IHearthEventDoc): HearthEvent {
  * and the insert, that seq is burned and the channel has a numbering gap.
  * Readers are unaffected - eventsSince orders by seq and never assumes
  * density - so this is an accepted trade for lock-free concurrent appends.
+ * The presence TTL in HearthEventModel is the other, routine source of gaps
+ * and relies on this same density-independence.
  */
 export class MongoHearthStore implements HearthStore {
   async appendEvent(input: AppendEventInput): Promise<HearthEvent> {
