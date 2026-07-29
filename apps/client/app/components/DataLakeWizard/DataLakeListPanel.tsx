@@ -513,9 +513,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // Sent even when blank - '' is the backend's "remove this gate" sentinel.
         requiredUserTag: requiredUserTag.trim(),
         requiredEntitlement: requiredEntitlement.trim(),
-        // Only when the field was actually shown: for a non-editor the server withholds the
-        // stored prompt, so sending our blank state would silently wipe a value we never saw.
-        // Blank from an EDITOR is a deliberate clear, and '' is what unsets it.
+        // Only when the field was actually shown. Defense in depth for a state that should be
+        // unreachable: the gear button is gated on canManage too, and updateDataLake rejects a
+        // non-manager's whole request with a 400 rather than applying part of it - so this branch
+        // guards a path no user can currently take. Blank from an EDITOR is a deliberate clear,
+        // and '' is what unsets it.
         ...(lake.canManage ? { systemPrompt: systemPrompt.trim() } : {}),
       },
       { onSuccess: onClose }
@@ -562,7 +564,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     data-testid="datalake-systemprompt-input"
                   />
                   <FormHelperText data-testid="datalake-systemprompt-help">
-                    {`Extra instructions applied to chats that use this lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text.${
+                    {`Extra instructions applied to your chats, and to your organization's chats, while this lake is accessible - not only when the lake is used. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
                       // Count what SAVE will persist (trimmed), not the raw field contents.
                       systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
                     }`}
