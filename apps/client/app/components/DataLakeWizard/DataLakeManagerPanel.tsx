@@ -45,7 +45,7 @@ import {
   humanizeSegment,
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
-import { gray } from '@client/app/utils/themes/colors';
+import { brandAlpha, gray } from '@client/app/utils/themes/colors';
 import { useDataLakeFiles, useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
 import { useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import {
@@ -957,20 +957,19 @@ function ManagerOverview() {
         textAlign: 'center',
       }}
     >
+      {/* Empty-state icon badge - matches the advanced-search drawer's empty state. */}
       <Box
         sx={{
+          width: 40,
+          height: 40,
+          borderRadius: '10px',
+          bgcolor: theme => (theme.palette.mode === 'dark' ? brandAlpha[100][12] : brandAlpha[400][8]),
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          width: 56,
-          height: 56,
-          borderRadius: 'md',
-          backgroundColor: 'background.surface2',
-          border: '1px solid',
-          borderColor: 'divider',
         }}
       >
-        <StorageIcon sx={{ fontSize: 24, color: 'text.tertiary' }} />
+        <StorageIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
       </Box>
       <Typography level="title-lg" sx={{ color: 'text.primary' }}>
         Select a data lake
