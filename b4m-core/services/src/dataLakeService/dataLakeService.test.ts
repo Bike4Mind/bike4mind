@@ -1412,8 +1412,7 @@ describe('assertCanReplaceDataLakeTags - wholesale tag replace gate', () => {
     expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
   });
 
-  // Left in place, the stale primaryTag lands on the ADD side of the NEXT request and 400s
-  // that file forever.
+  // Otherwise the file keeps a primary label naming a tag it no longer carries.
   it('asks the caller to clear a primaryTag naming the dropped lake', async () => {
     const db = makeDb({ 'datalake:lake': owned });
     const result = await assertCanReplaceDataLakeTags(
@@ -1422,6 +1421,60 @@ describe('assertCanReplaceDataLakeTags - wholesale tag replace gate', () => {
       { db }
     );
     expect(result.clearPrimaryTag).toBe(true);
+  });
+
+  // The set-primary UI action sends primaryTag with NO tags key, so next === stored. Without the
+  // already-carried check, promoting a lake's own meta-tag to primary would read as an ADD and
+  // 400 a plain relabel for everyone but the lake owner.
+  it('lets a non-manager promote a meta-tag the file already carries to primary', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags(
+        reader,
+        {
+          stored: ['datalake:lake'],
+          next: ['datalake:lake'],
+          primaryTag: 'datalake:lake',
+          storedPrimaryTag: 'notes',
+        },
+        { db }
+      )
+    ).resolves.toMatchObject({ affectedLakes: [] });
+    expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  // The body wins over the stored value, or a request that drops the old primary AND names a new
+  // one would have the caller's new label silently nulled out.
+  it('does not clear a NEW primaryTag just because the old one named the dropped lake', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    const result = await assertCanReplaceDataLakeTags(
+      creator,
+      { stored: ['datalake:lake', 'notes'], next: ['notes'], primaryTag: 'notes', storedPrimaryTag: 'datalake:lake' },
+      { db }
+    );
+    expect(result.clearPrimaryTag).toBe(false);
+  });
+
+  // Deliberately looser than the sibling's exact $in: a label left pointing at a case-variant of
+  // a dropped tag is still wrong.
+  it('clears a primaryTag that differs from the dropped tag only by case', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    const result = await assertCanReplaceDataLakeTags(
+      creator,
+      { stored: ['datalake:lake'], next: [], storedPrimaryTag: 'DataLake:Lake' },
+      { db }
+    );
+    expect(result.clearPrimaryTag).toBe(true);
+  });
+
+  it('looks a lake up once when primaryTag repeats a tag the same request adds', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await assertCanReplaceDataLakeTags(
+      creator,
+      { stored: [], next: ['datalake:lake'], primaryTag: 'DATALAKE:LAKE' },
+      { db }
+    );
+    expect(db.dataLakes.findByDatalakeTag).toHaveBeenCalledTimes(1);
   });
 
   it('leaves primaryTag alone when nothing was dropped', async () => {

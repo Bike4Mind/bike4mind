@@ -140,13 +140,17 @@ export const assertCanReplaceDataLakeTags = async (
   // Diff on RAW names. Both the meta-tag read arm and `computeDataLakeStats` match exactly, so
   // rewriting `datalake:x` to `DataLake:X` really does evict the file; folding case here would
   // read that as a no-op and authorize nothing. Lowercase builds the lookup key only.
+  // Collapses names sharing a lookup key purely to save a duplicate findByDatalakeTag round-trip;
+  // the once-per-lake recompute is guaranteed by keying `affected` on lake id, not by this.
   const dedupeByKey = (names: string[]): string[] => [
     ...new Map(names.map(name => [name.toLowerCase(), name])).values(),
   ];
   const added = [...nextNames].filter(name => isDatalakeMetaTag(name) && !storedNames.has(name));
   const removed = dedupeByKey([...storedNames].filter(name => isDatalakeMetaTag(name) && !nextNames.has(name)));
-  // Pointing primaryTag at a lake the file is not already in is an add; leaving it as-is is not,
-  // even when it is stale, or clearing an orphaned one would be impossible.
+  // Pointing primaryTag at a lake the file is NOT already in is an add. Promoting a meta-tag the
+  // file already carries is not: the UI's set-primary action sends primaryTag with no `tags` key,
+  // so gating that would 400 a plain relabel. Nor is echoing a stale one back, or an orphaned
+  // primaryTag could never be cleared.
   if (isDatalakeMetaTag(primaryTag) && !storedNames.has(primaryTag) && primaryTag !== storedPrimaryTag) {
     added.push(primaryTag);
   }
@@ -178,10 +182,11 @@ export const assertCanReplaceDataLakeTags = async (
     affected.set(lake.id, { id: lake.id, datalakeTag: lake.datalakeTag });
   }
 
-  // A primaryTag naming a tag the file no longer carries lands on the ADD side of the NEXT
-  // request and 400s that file forever, so an authorized removal has to clear it - the DELETE
-  // path's pullTagsByFabFileId $unsets it for the same reason. Matched case-insensitively
-  // because clearing a cosmetic hint is harmless, unlike the gate above.
+  // A primaryTag naming a tag the file no longer carries is a wrong label, so an authorized
+  // removal clears it - the same reason the DELETE path's pullTagsByFabFileId $unsets it. It does
+  // NOT unblock a future request: the add rule above already ignores a primaryTag echoed back
+  // unchanged. Matched case-insensitively, unlike that gate and unlike the sibling's exact $in,
+  // because clearing a cosmetic label costs nothing if it fires a shade too eagerly.
   const effectivePrimaryTag = primaryTag !== undefined ? primaryTag : storedPrimaryTag;
   const clearPrimaryTag =
     typeof effectivePrimaryTag === 'string' &&

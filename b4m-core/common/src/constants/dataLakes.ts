@@ -150,11 +150,24 @@ export const isDatalakeMetaTag = (name: unknown): name is string =>
 /**
  * True when a meta-tag names one of the hardcoded DATA_LAKES lakes. Those lakes have no Mongo
  * document, so `findByDatalakeTag` returns null for a tag naming a REAL, live lake - an
- * unresolved lookup is NOT proof that no lake owns the tag. Callers pass an already-lowercased
- * key; registry tags are authored canonically lowercase.
+ * unresolved lookup is NOT proof that no lake owns the tag.
+ *
+ * Compared case-insensitively rather than trusting callers' lowercased key to match: the premium
+ * half of the registry is JSON parsed from env and validated only for field presence, so nothing
+ * enforces the lowercase convention that persisted lakes get from their slug regex. A mixed-case
+ * overlay tag matching by luck is the difference between refusing a removal and allowing one.
  */
 export const isRegistryDatalakeTag = (datalakeTag: string): boolean =>
-  DATA_LAKES.some(lake => lake.datalakeTag === datalakeTag);
+  DATA_LAKES.some(lake => lake.datalakeTag?.toLowerCase() === datalakeTag.toLowerCase());
+
+/** A FabFile tag as the update schema demands it: a named tag with a numeric strength. */
+export interface FabFileTagRef {
+  name: string;
+  strength: number;
+}
+
+/** Meta-tags are stamped with full strength wherever a lake claims a file. */
+const DEFAULT_TAG_STRENGTH = 1;
 
 /**
  * Tag array for a system-written file whose tags get replaced wholesale (the notebook-summary
@@ -162,14 +175,25 @@ export const isRegistryDatalakeTag = (datalakeTag: string): boolean =>
  * authorize against, so a `datalake:*` name arriving from the source would inject the file into a
  * lake, and omitting one the file already carries would evict it. Keeps the source's ordinary
  * tags, ignores its meta-tags, and carries the file's existing membership forward.
+ *
+ * Output is normalized because `storedTags` comes off a schema-less `[Object]` array while the
+ * update path parses tags with a strict `{name: string, strength: number}` zod schema: passing a
+ * legacy row through verbatim would throw, and the only caller rethrows anything that is not a
+ * storage-limit error, turning one malformed tag into a permanently failing summarization.
  */
-export const preserveDataLakeMembership = <T extends { name?: unknown }>(
-  sourceTags: readonly T[] | undefined | null,
-  storedTags: readonly T[] | undefined | null
-): T[] => [
-  ...(sourceTags ?? []).filter(tag => !isDatalakeMetaTag(tag?.name)),
-  ...(storedTags ?? []).filter(tag => isDatalakeMetaTag(tag?.name)),
-];
+export const preserveDataLakeMembership = (
+  sourceTags: readonly { name?: unknown; strength?: unknown }[] | undefined | null,
+  storedTags: readonly { name?: unknown; strength?: unknown }[] | undefined | null
+): FabFileTagRef[] =>
+  [
+    ...(sourceTags ?? []).filter(tag => !isDatalakeMetaTag(tag?.name)),
+    ...(storedTags ?? []).filter(tag => isDatalakeMetaTag(tag?.name)),
+  ]
+    .filter((tag): tag is { name: string; strength?: unknown } => typeof tag?.name === 'string')
+    .map(tag => ({
+      name: tag.name,
+      strength: typeof tag.strength === 'number' && Number.isFinite(tag.strength) ? tag.strength : DEFAULT_TAG_STRENGTH,
+    }));
 
 /**
  * Canonical normalization for entitlement keys + `requiredEntitlement` values - the ONE

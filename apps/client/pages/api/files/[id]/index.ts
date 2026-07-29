@@ -106,8 +106,8 @@ const handler = baseApi()
             notes: req.body.notes,
             // Pass through null so "unset primary" clears the field; ?? undefined
             // would coalesce null to undefined and get dropped from the $set. Forced to null when
-            // this write drops the tag it names, or the stale value lands on the ADD side of the
-            // next request and 400s this file for good.
+            // this write drops the tag it names, so the file is not left labelled with a tag it
+            // no longer carries.
             primaryTag: clearPrimaryTag ? null : req.body.primaryTag,
             tags: req.body.tags,
             error: req.body.error,

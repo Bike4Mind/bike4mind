@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Flipped only after the transaction callback resolves, so a recompute moved INSIDE the
+  // transaction is distinguishable from one that runs after the commit.
+  committed: { value: false },
   assertCanReplaceDataLakeTags: vi.fn(),
   recomputeLakeStats: vi.fn(),
   updateFabFile: vi.fn(),
@@ -37,7 +40,11 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {},
   userRepository: {},
   User: { findById: vi.fn() },
-  withTransaction: async (fn: (session: unknown) => Promise<unknown>) => fn({}),
+  withTransaction: async (fn: (session: unknown) => Promise<unknown>) => {
+    const result = await fn({});
+    h.committed.value = true;
+    return result;
+  },
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
@@ -72,8 +79,12 @@ const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unkno
 const gateArgs = () => h.assertCanReplaceDataLakeTags.mock.calls[0][1];
 
 describe('PUT /api/files/[id] - data-lake membership authorization', () => {
+  let seenCommittedAtRecompute: boolean[] = [];
+
   beforeEach(() => {
+    seenCommittedAtRecompute = [];
     vi.clearAllMocks();
+    h.committed.value = false;
     h.findAccessibleById.mockResolvedValue({
       id: FILE_ID,
       tags: [{ name: 'datalake:lake', strength: 1 }, { name: 'notes' }],
@@ -81,7 +92,10 @@ describe('PUT /api/files/[id] - data-lake membership authorization', () => {
     });
     h.assertCanReplaceDataLakeTags.mockResolvedValue({ affectedLakes: [], clearPrimaryTag: false });
     h.updateFabFile.mockResolvedValue({ id: FILE_ID, filePath: 'p.txt' });
-    h.recomputeLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 10 });
+    h.recomputeLakeStats.mockImplementation(async () => {
+      seenCommittedAtRecompute.push(h.committed.value);
+      return { fileCount: 1, totalSizeBytes: 10 };
+    });
     h.logEvent.mockResolvedValue(undefined);
   });
 
@@ -142,7 +156,7 @@ describe('PUT /api/files/[id] - data-lake membership authorization', () => {
     expect(gateArgs()).toMatchObject({ primaryTag: 'datalake:other', storedPrimaryTag: 'notes' });
   });
 
-  // Left stale, the primaryTag lands on the ADD side of the next request and 400s this file.
+  // Otherwise the file keeps a primary label naming a tag it no longer carries.
   it('clears primaryTag when the gate says the write drops the tag it names', async () => {
     h.assertCanReplaceDataLakeTags.mockResolvedValue({ affectedLakes: [], clearPrimaryTag: true });
     const { res } = makeRes();
@@ -168,6 +182,9 @@ describe('PUT /api/files/[id] - data-lake membership authorization', () => {
     expect(h.recomputeLakeStats).toHaveBeenCalledWith('lakeA', 'datalake:a', expect.anything());
     expect(h.recomputeLakeStats).toHaveBeenCalledWith('lakeB', 'datalake:b', expect.anything());
     expect(h.updateFabFile.mock.invocationCallOrder[0]).toBeLessThan(h.recomputeLakeStats.mock.invocationCallOrder[0]);
+    // Not merely "after updateFabFile" - after the transaction COMMITTED, so a stats failure
+    // cannot roll the write back and the retried callback cannot recompute repeatedly.
+    expect(seenCommittedAtRecompute).toEqual([true, true]);
   });
 
   it('does not recompute when no lake membership changed', async () => {
@@ -213,10 +230,12 @@ describe('PUT /api/files/[id] - data-lake membership authorization', () => {
     expect(h.recomputeLakeStats).toHaveBeenCalledWith('lakeA', 'datalake:a', expect.anything());
   });
 
-  it('404s a malformed id before reading or authorizing anything', async () => {
+  // 'abcdefghijkl' is 12 bytes, so ObjectId.isValid ACCEPTS it; only the round-trip clause
+  // rejects it. Without that clause the unvalidated id reaches the stored-tag read as a CastError.
+  it.each(['not-an-object-id', 'abcdefghijkl'])('404s the malformed id %o before touching anything', async id => {
     const { res, status } = makeRes();
 
-    await call(makeReq({ tags: [] }, 'not-an-object-id'), res);
+    await call(makeReq({ tags: [] }, id), res);
 
     expect(status).toHaveBeenCalledWith(404);
     expect(h.findAccessibleById).not.toHaveBeenCalled();

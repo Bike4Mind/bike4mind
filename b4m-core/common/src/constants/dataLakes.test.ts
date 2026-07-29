@@ -259,4 +259,33 @@ describe('preserveDataLakeMembership', () => {
     const stored = [null, { name: null }, 42, tag('datalake:real')] as unknown as { name?: unknown }[];
     expect(preserveDataLakeMembership([], stored)).toEqual([tag('datalake:real')]);
   });
+
+  // `tags` is a schema-less [Object] array, so a legacy row can lack `strength` - but the update
+  // path parses tags with a strict {name, strength} schema and the only caller rethrows the
+  // resulting error, so one such row would permanently break summarization.
+  it('gives a stored tag with no numeric strength a usable one', () => {
+    const stored = [{ name: 'datalake:legacy' }, { name: 'datalake:nan', strength: Number.NaN }] as unknown as {
+      name?: unknown;
+    }[];
+    expect(preserveDataLakeMembership([], stored)).toEqual([
+      { name: 'datalake:legacy', strength: 1 },
+      { name: 'datalake:nan', strength: 1 },
+    ]);
+  });
+
+  // A malformed SOURCE entry survives the meta-tag filter (it is not a meta-tag), so without a
+  // name check it would reach the strict update schema as {name: null} and throw.
+  it('drops a source tag whose name is not a string', () => {
+    const source = [{ name: null }, { name: 42 }, { name: 'ok', strength: 2 }] as unknown as { name?: unknown }[];
+    expect(preserveDataLakeMembership(source, [])).toEqual([{ name: 'ok', strength: 2 }]);
+  });
+
+  it('keeps a real strength untouched, including zero', () => {
+    const stored = [{ name: 'datalake:zero', strength: 0 }];
+    expect(preserveDataLakeMembership([], stored)).toEqual([{ name: 'datalake:zero', strength: 0 }]);
+  });
+
+  it('recognizes a registry tag whatever its case, since env-supplied entries are unnormalized', () => {
+    expect(isRegistryDatalakeTag(DATA_LAKES[0].datalakeTag.toUpperCase())).toBe(true);
+  });
 });
