@@ -47,6 +47,8 @@ export const removeFileFromLake = async (
 
   const file = await db.fabFiles.findById(fabFileId);
   const tagNames = (file?.tags ?? []).map(t => t.name).filter((name): name is string => typeof name === 'string');
+  // Normalized through the same predicate the read arms use, so a lake whose prefix no query
+  // matches (empty, or missing its trailing colon) also gets nothing cleared by prefix.
   const prefix = normalizeTagPrefix(lake.fileTagPrefix);
   // Positive ownership: both ids must be present AND equal, so a file with no owner does not
   // fall through as a match.
@@ -57,6 +59,8 @@ export const removeFileFromLake = async (
     throw new NotFoundError('File not found in this data lake');
   }
 
+  // One atomic $pull for both signals. Two writes would leave a window - and on a crash, a
+  // permanent state - where the meta-tag is gone but a prefixed tag still matches this lake.
   await db.fabFiles.pullTagsByFabFileId(file.id, [
     lake.datalakeTag,
     // Never strip another lake's membership: a lake whose fileTagPrefix sits inside the

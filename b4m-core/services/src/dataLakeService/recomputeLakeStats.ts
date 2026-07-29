@@ -10,8 +10,8 @@ export interface RecomputeLakeStatsAdapters {
 /**
  * Recomputes a lake's authoritative fileCount/totalSizeBytes from the SOURCE file
  * records (indexed aggregate) and persists them - never from running batch counters.
- * Called at batch completion and on the reconcile read path so transient counter
- * drift self-heals.
+ * Called at batch completion, on the reconcile read path, and by every door that changes a
+ * file's membership, so transient counter drift self-heals.
  */
 export const recomputeLakeStats = async (
   lakeId: string,
