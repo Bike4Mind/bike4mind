@@ -31,15 +31,11 @@ const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
     ...overrides,
   }) as IDataLakeDocument;
 
-/** The scope resolver reads the lake creator's groups; every lifecycle adapter needs this. */
-const usersRepo = (groups: string[] = []) => ({ findById: vi.fn().mockResolvedValue({ groups }) });
-
-/** The membership scope the `lake()` fixture resolves to. */
+/** The membership scope the `lake()` fixture yields. */
 const lakeScope = {
   datalakeTag: 'datalake:lake',
   fileTagPrefix: 'lk:',
   creatorUserId: 'owner',
-  creatorGroupIds: [],
 };
 
 const ctx = (overrides: Partial<AccessContext> = {}): AccessContext => ({
@@ -618,9 +614,8 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
     };
-    const users = usersRepo();
     const result = await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
-      db: { dataLakes, fabFiles, users },
+      db: { dataLakes, fabFiles },
     });
     // The dedup probe stays on the bare meta-tag: it decides which copy gets hard-deleted, and
     // fileTagPrefix is not unique, so a widened probe could nominate another lake's file.
@@ -646,9 +641,7 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
       computeDataLakeStats: vi.fn(),
     };
     await expect(
-      restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
-        db: { dataLakes, fabFiles, users: usersRepo() },
-      })
+      restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } })
     ).rejects.toThrow(/'active' status/i);
   });
 
@@ -670,7 +663,7 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
       setStats: vi.fn().mockResolvedValue(lake()),
     };
     const result = await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
-      db: { dataLakes, fabFiles, users: usersRepo() },
+      db: { dataLakes, fabFiles },
     });
     expect(fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['d1']);
     // Same narrow probe as the unarchive path, for the same reason.
@@ -693,7 +686,6 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
         hardDeleteByDataLakeTag: vi.fn().mockResolvedValue(['f1', 'f2']),
       },
       fabFileChunks: { deleteManyByFabFileId: vi.fn().mockResolvedValue(undefined) },
-      users: usersRepo(),
     },
   });
 
@@ -856,7 +848,6 @@ describe('removeFileFromDataLake — single-file removal', () => {
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
       },
-      users: usersRepo(),
     },
   });
 

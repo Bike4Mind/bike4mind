@@ -3,10 +3,9 @@ import type {
   IDataLakeBatchRepository,
   IFabFileRepository,
   IFabFileChunkRepository,
-  IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { resolveLakeMembershipScope } from './lakeMembershipScope';
+import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 
@@ -16,7 +15,6 @@ interface CleanupDeletedDataLakeAdapters {
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
     fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'hardDeleteByDataLakeTag'>;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
-    users: Pick<IUserRepository, 'findById'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
@@ -63,7 +61,7 @@ export const cleanupDeletedDataLake = async (
   // lake doesn't fan out unbounded (Lambda timeout/memory); each delete is a no-op on
   // already-purged data, so a DLQ retry resumes safely.
   await warnOnPrefixCollision(db, existing, logger);
-  const scope = await resolveLakeMembershipScope(existing, { db, logger });
+  const scope = lakeMembershipScope(existing);
   const fileIds = await db.fabFiles.findIdsByDataLakeTag(scope);
   await inChunks(fileIds, chunkSize, id => db.fabFileChunks.deleteManyByFabFileId(id));
 

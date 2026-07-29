@@ -1,7 +1,7 @@
-import type { IDataLakeRepository, IFabFileRepository, IUserRepository } from '@bike4mind/common';
+import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { recomputeLakeStats } from './recomputeLakeStats';
-import { resolveLakeMembershipScope } from './lakeMembershipScope';
+import { lakeMembershipScope } from './lakeMembershipScope';
 
 export interface UnarchiveResult {
   restoredCount: number;
@@ -19,9 +19,7 @@ interface UnarchiveDataLakeAdapters {
       | 'deleteManyInIds'
       | 'computeDataLakeStats'
     >;
-    users: Pick<IUserRepository, 'findById'>;
   };
-  logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
 
 /**
@@ -32,7 +30,7 @@ interface UnarchiveDataLakeAdapters {
 export const unarchiveDataLake = async (
   actor: { userId: string; isAdmin: boolean },
   dataLakeId: string,
-  { db, logger }: UnarchiveDataLakeAdapters
+  { db }: UnarchiveDataLakeAdapters
 ): Promise<UnarchiveResult> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -49,7 +47,7 @@ export const unarchiveDataLake = async (
 
   await db.dataLakes.update({ id: dataLakeId, status: 'restoring' });
 
-  const scope = await resolveLakeMembershipScope(existing, { db, logger });
+  const scope = lakeMembershipScope(existing);
 
   // Dedup pass: a LIVE (non-archived, non-deleted) file with the same hash means the
   // file was re-uploaded while archived - the live copy wins.
@@ -76,7 +74,7 @@ export const unarchiveDataLake = async (
   const restoredCount = await db.fabFiles.unarchiveByDataLakeTag(scope);
 
   await db.dataLakes.update({ id: dataLakeId, status: 'active' });
-  await recomputeLakeStats(existing, { db, logger }, scope);
+  await recomputeLakeStats(existing, { db });
 
   return { restoredCount, skippedDuplicates };
 };

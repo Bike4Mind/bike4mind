@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, dataLakeBatchRepository, fabFileRepository, userRepository } from '@bike4mind/database';
+import { dataLakeRepository, dataLakeBatchRepository, fabFileRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -34,36 +34,26 @@ const handler = baseApi()
     switch (action) {
       case 'archive': {
         const result = await dataLakeService.archiveDataLake(actor, lake.id, {
-          db: {
-            dataLakes: dataLakeRepository,
-            batches: dataLakeBatchRepository,
-            fabFiles: fabFileRepository,
-            users: userRepository,
-          },
+          db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
         });
         return res.json(result);
       }
       case 'unarchive': {
         const result = await dataLakeService.unarchiveDataLake(actor, lake.id, {
-          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, users: userRepository },
+          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
         });
         return res.json(result);
       }
       case 'restore': {
         // Recover a soft-deleted (phase-1) lake back to active.
         const result = await dataLakeService.restoreDeletedDataLake(actor, lake.id, {
-          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, users: userRepository },
+          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
         });
         return res.json(result);
       }
       case 'delete': {
         const result = await dataLakeService.deleteDataLake(actor, lake.id, {
-          db: {
-            dataLakes: dataLakeRepository,
-            batches: dataLakeBatchRepository,
-            fabFiles: fabFileRepository,
-            users: userRepository,
-          },
+          db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
         });
         return res.json(result);
       }

@@ -9,7 +9,7 @@ const LAKE = {
 
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
-  resolveLakeMembershipScope: vi.fn(),
+  lakeMembershipScope: vi.fn(),
   search: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'viewer-9', isAdmin: false })),
 }));
@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () =>
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
-    resolveLakeMembershipScope: h.resolveLakeMembershipScope,
+    lakeMembershipScope: h.lakeMembershipScope,
   },
   fabFilesService: { search: h.search },
 }));
@@ -59,11 +59,10 @@ const makeRes = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   h.assertLakeAccess.mockResolvedValue(LAKE);
-  h.resolveLakeMembershipScope.mockResolvedValue({
+  h.lakeMembershipScope.mockReturnValue({
     datalakeTag: LAKE.datalakeTag,
     fileTagPrefix: LAKE.fileTagPrefix,
     creatorUserId: LAKE.createdByUserId,
-    creatorGroupIds: ['creator-group'],
   });
   h.search.mockResolvedValue({ data: [], total: 0, hasMore: false });
 });
@@ -73,7 +72,7 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     const { res } = makeRes();
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
 
-    expect(h.resolveLakeMembershipScope).toHaveBeenCalledWith(LAKE, expect.anything());
+    expect(h.lakeMembershipScope).toHaveBeenCalledWith(LAKE);
     const [, , , serverOptions] = h.search.mock.calls[0];
     // The creator, NOT the viewer: a viewer's own file that merely carries a colliding tag
     // prefix is not a member of someone else's lake, and a per-viewer answer could never match
@@ -82,7 +81,6 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
       datalakeTag: 'datalake:org1:acme-docs',
       fileTagPrefix: 'acme:',
       creatorUserId: 'creator-1',
-      creatorGroupIds: ['creator-group'],
     });
     expect(serverOptions.lakeMembership.creatorUserId).not.toBe('viewer-9');
   });

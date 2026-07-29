@@ -255,22 +255,20 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
 }
 
 /**
- * Identifies a data lake for file-membership matching: a file belongs on an exact
- * `datalakeTag` match OR on a `fileTagPrefix` match the lake's CREATOR can access. The
- * predicate itself is `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives
- * here so `IFabFileRepository` can name it without the packages depending on each other.
+ * Identifies a data lake for file-membership matching: a file belongs on an exact `datalakeTag`
+ * match OR on a `fileTagPrefix` match against a file the lake's CREATOR OWNS. The predicate itself
+ * is `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives here so
+ * `IFabFileRepository` can name it without the packages depending on each other.
  *
- * Always build this from the lake DOCUMENT, never from request input: `creatorUserId` widens
- * what the filter selects, so a caller-supplied scope would reach another user's files - and on
- * the lifecycle paths, destroy them.
+ * Always build this from the lake DOCUMENT, never from request input: `creatorUserId` widens what
+ * the filter selects, so a caller-supplied scope would reach another user's files - and on the
+ * lifecycle paths, destroy them.
  */
 export interface DataLakeMembershipScope {
   datalakeTag: string;
   fileTagPrefix?: string | null;
   /** The lake's `createdByUserId` - the identity the prefix arm is anchored to. */
   creatorUserId?: string | null;
-  /** The creator's `user.groups`; absent/empty simply drops the group arm. */
-  creatorGroupIds?: string[] | null;
 }
 
 /**
@@ -486,8 +484,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
 
   // ── Data lake lifecycle. Scoped by DataLakeMembershipScope - the lake's meta-tag OR a
-  // fileTagPrefix match the lake's creator can access. See buildDataLakeMembershipFilter
-  // in @bike4mind/database for the rule and why the prefix arm needs the access conjunct. ──
+  // fileTagPrefix match on a file the lake's creator OWNS. See buildDataLakeMembershipFilter
+  // in @bike4mind/database for the rule and why the prefix arm needs the ownership conjunct. ──
 
   /**
    * Authoritative lake stats recomputed from source records via an aggregate (NOT

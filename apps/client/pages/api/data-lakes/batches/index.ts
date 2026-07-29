@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeBatchRepository, dataLakeRepository, fabFileRepository, userRepository } from '@bike4mind/database';
+import { dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { CreateBatchRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
@@ -18,12 +18,7 @@ const handler = baseApi()
     // terminal state (guarded), and recompute lake stats from source. The daily
     // dataLakeBatchReconcile cron is the fallback for batches nobody ever opens the list for.
     await dataLakeService.reconcileStuckBatches(active, dataLakeService.DEFAULT_STUCK_BATCH_TIMEOUT_MS, {
-      db: {
-        dataLakes: dataLakeRepository,
-        batches: dataLakeBatchRepository,
-        fabFiles: fabFileRepository,
-        users: userRepository,
-      },
+      db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
       logger: console,
       // Forced-terminal is rare, so the awaited emit only costs latency on the exceptional path; the
       // stuck gauge is deliberately omitted here (it belongs on the cron's fixed cadence, not per read).

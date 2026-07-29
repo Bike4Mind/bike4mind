@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, dataLakeBatchRepository, fabFileRepository, userRepository } from '@bike4mind/database';
+import { dataLakeRepository, dataLakeBatchRepository, fabFileRepository } from '@bike4mind/database';
 import { UpdateDataLakeRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -49,7 +49,6 @@ const handler = baseApi()
     const archived = await dataLakeService.archiveDataLake({ userId: ctx.userId, isAdmin: ctx.isAdmin }, lake.id, {
       db: {
         dataLakes: dataLakeRepository,
-        users: userRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
       },

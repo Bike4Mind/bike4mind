@@ -2,7 +2,6 @@ import { CODE_FILE_MIME_TYPES, normalizeTagPrefix, type DataLakeMembershipScope 
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { buildFilenameMarkerRegex } from '@bike4mind/utils/retrievalExclusion';
 import { USE_DOCUMENTDB } from '../utils/documentdb-compat';
-import { buildBaseAccessConditions } from './baseAccessConditions';
 import { buildDataLakeMembershipFilter } from './dataLakeLifecycleScope';
 
 /**
@@ -181,7 +180,32 @@ export function buildOwnershipConditions(
     lakeMembership?: DataLakeMembershipScope;
   }
 ): object[] {
-  const baseAccess = buildBaseAccessConditions(userId, options?.userGroups ?? []);
+  // Base access: the file genuinely belongs to / is shared with this user. Reused both
+  // as top-level $or arms and to scope the dynamic-lake prefix match.
+  const baseAccess: object[] = [
+    { userId }, // Files owned by user
+    {
+      // Files explicitly shared with user
+      users: {
+        $elemMatch: {
+          userId,
+          permissions: { $in: ['read', 'write'] },
+        },
+      },
+    },
+  ];
+
+  // Add group-level sharing if user has groups (organization sharing)
+  if (options?.userGroups && options.userGroups.length > 0) {
+    baseAccess.push({
+      groups: {
+        $elemMatch: {
+          groupId: { $in: options.userGroups },
+          permissions: { $in: ['read', 'write'] },
+        },
+      },
+    });
+  }
 
   // In lake-scoped mode, start with NO broad ownership arms - only the lake tag/prefix arms
   // below select files, so a single-lake view can't fall back to "all files the user owns".
@@ -405,6 +429,7 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
       dataLakeTagPrefixes: options.dataLakeTagPrefixes,
       scopedTagPrefixes: options.scopedTagPrefixes,
       restrictToDataLake: options.restrictToDataLake,
+      lakeMembership: options.lakeMembership,
     });
     andConditions.push({ $or: ownershipConds });
   } else {

@@ -1,4 +1,4 @@
-import { dataLakeBatchRepository, dataLakeRepository, fabFileRepository, userRepository } from '@bike4mind/database';
+import { dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { IDataLakeBatchDocument } from '@bike4mind/common';
 import { recordBatchCompletion } from '@server/utils/cloudwatch';
@@ -12,7 +12,7 @@ import { recordBatchCompletion } from '@server/utils/cloudwatch';
  */
 export async function finalizeBatchIfComplete(
   batch: IDataLakeBatchDocument | null,
-  logger: { error: (msg: string) => void; warn: (msg: string, ...args: unknown[]) => void }
+  logger: { error: (msg: string) => void }
 ): Promise<void> {
   if (!batch) return;
   if (batch.vectorizedFiles + batch.failedFiles + batch.skippedFiles < batch.totalFiles) return;
@@ -29,8 +29,7 @@ export async function finalizeBatchIfComplete(
     const lake = await dataLakeRepository.findById(batch.dataLakeId);
     if (lake) {
       await dataLakeService.recomputeLakeStats(lake, {
-        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, users: userRepository },
-        logger,
+        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
       });
     }
   } catch (error) {

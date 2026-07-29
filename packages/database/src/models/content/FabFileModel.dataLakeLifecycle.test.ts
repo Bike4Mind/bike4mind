@@ -27,7 +27,6 @@ const scope: DataLakeMembershipScope = {
   datalakeTag: DATALAKE_TAG,
   fileTagPrefix: 'acme:',
   creatorUserId: CREATOR,
-  creatorGroupIds: [CREATOR_GROUP],
 };
 
 /** The pre-fix scope: what these methods matched when they only knew the meta-tag. */
@@ -46,10 +45,10 @@ const makeFile = async (
   });
 
 /**
- * Four rows spanning every membership signal, plus the row that must never be touched.
- * `hostile` is prefix-tagged but owned by an unrelated user with no share to the creator:
- * `fileTagPrefix` has no uniqueness constraint, so without the creator-access conjunct a
- * whole-lake write would reach into a stranger's files.
+ * The two rows that ARE members, plus three prefix-tagged rows owned by someone else that must
+ * never be touched. `fileTagPrefix` has no uniqueness constraint, so the prefix arm is anchored to
+ * files the creator OWNS - a read share or a group share must not make a stranger's file a member,
+ * because these queries archive and hard-delete what they match.
  */
 async function seedLakeRows() {
   const metaTagged = await makeFile({
@@ -62,20 +61,22 @@ async function seedLakeRows() {
     userId: CREATOR,
     tags: [{ name: 'acme:report' }],
   });
+  // Shared TO the creator, read-only. Not a member: the creator does not own it.
   const prefixSharedToCreator = await makeFile({
     fileName: 'prefix-shared.txt',
     userId: STRANGER,
     tags: [{ name: 'acme:shared' }],
     users: [{ userId: CREATOR, permissions: ['read'] }],
   });
+  // Shared to a group the creator belongs to. Also not a member, for the same reason.
   const prefixSharedToCreatorGroup = await makeFile({
     fileName: 'prefix-group.txt',
     userId: STRANGER,
     tags: [{ name: 'acme:group' }],
     groups: [{ groupId: CREATOR_GROUP, permissions: ['read'] }],
   });
-  const hostile = await makeFile({
-    fileName: 'hostile.txt',
+  const unrelated = await makeFile({
+    fileName: 'unrelated.txt',
     userId: STRANGER,
     tags: [{ name: 'acme:not-yours' }],
   });
@@ -83,10 +84,12 @@ async function seedLakeRows() {
   return {
     metaTagged,
     prefixOwned,
+    memberIds: [metaTagged, prefixOwned].map(f => f._id.toString()),
+    // Prefix-tagged but owned by someone else, however they reach the creator.
+    strangerIds: [prefixSharedToCreator, prefixSharedToCreatorGroup, unrelated].map(f => f._id.toString()),
     prefixSharedToCreator,
     prefixSharedToCreatorGroup,
-    hostile,
-    memberIds: [metaTagged, prefixOwned, prefixSharedToCreator, prefixSharedToCreatorGroup].map(f => f._id.toString()),
+    unrelated,
   };
 }
 
@@ -94,13 +97,15 @@ const readRaw = async (id: string) => FabFile.collection.findOne({ _id: new mong
 
 describe('FabFile data lake lifecycle membership', () => {
   describe('computeDataLakeStats', () => {
-    it('counts every member signal and excludes the stranger-owned prefix match', async () => {
+    it('counts both member signals and excludes every stranger-owned prefix match', async () => {
       await seedLakeRows();
 
       const stats = await fabFileRepository.computeDataLakeStats(scope);
 
-      expect(stats.fileCount).toBe(4);
-      expect(stats.totalSizeBytes).toBe(400);
+      // The meta-tagged file and the creator's own prefix-tagged file. The three stranger-owned
+      // rows are excluded even though two of them are shared to the creator.
+      expect(stats.fileCount).toBe(2);
+      expect(stats.totalSizeBytes).toBe(200);
     });
 
     it('counted only the meta-tagged file before the prefix arm existed', async () => {
@@ -118,23 +123,27 @@ describe('FabFile data lake lifecycle membership', () => {
       await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { archivedAt: new Date() } });
       await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { deletedAt: new Date() } });
 
-      expect((await fabFileRepository.computeDataLakeStats(scope)).fileCount).toBe(2);
+      expect((await fabFileRepository.computeDataLakeStats(scope)).fileCount).toBe(0);
     });
   });
 
   describe('archiveByDataLakeTag / unarchiveByDataLakeTag', () => {
-    it('archives every member and leaves the stranger-owned prefix match live', async () => {
+    it('archives the members and leaves every stranger-owned prefix match live', async () => {
       const rows = await seedLakeRows();
 
       const archived = await fabFileRepository.archiveByDataLakeTag(scope);
 
-      expect(archived).toBe(4);
+      expect(archived).toBe(2);
       for (const id of rows.memberIds) {
         expect((await readRaw(id))?.archivedAt).not.toBeNull();
       }
-      const hostile = await readRaw(rows.hostile._id.toString());
-      expect(hostile?.archivedAt ?? null).toBeNull();
-      expect(hostile?.deletedAt ?? null).toBeNull();
+      // Including the two shared to the creator: hiding a file someone else owns is not this
+      // operation's business, and a read share must not make it a lake member.
+      for (const id of rows.strangerIds) {
+        const row = await readRaw(id);
+        expect(row?.archivedAt ?? null).toBeNull();
+        expect(row?.deletedAt ?? null).toBeNull();
+      }
     });
 
     it('restores everything it archived, so no member is stranded', async () => {
@@ -143,7 +152,7 @@ describe('FabFile data lake lifecycle membership', () => {
       await fabFileRepository.archiveByDataLakeTag(scope);
       const restored = await fabFileRepository.unarchiveByDataLakeTag(scope);
 
-      expect(restored).toBe(4);
+      expect(restored).toBe(2);
       for (const id of rows.memberIds) {
         expect((await readRaw(id))?.archivedAt ?? null).toBeNull();
       }
@@ -155,23 +164,20 @@ describe('FabFile data lake lifecycle membership', () => {
 
       const found = await fabFileRepository.findArchivedByDataLakeTag(scope);
 
-      expect(found.map(f => f.fileName).sort()).toEqual([
-        'meta.txt',
-        'prefix-group.txt',
-        'prefix-owned.txt',
-        'prefix-shared.txt',
-      ]);
+      expect(found.map(f => f.fileName).sort()).toEqual(['meta.txt', 'prefix-owned.txt']);
     });
   });
 
   describe('softDeleteByDataLakeTag / undeleteByDataLakeTag', () => {
-    it('soft-deletes every member and spares the stranger-owned prefix match', async () => {
+    it('soft-deletes the members and spares every stranger-owned prefix match', async () => {
       const rows = await seedLakeRows();
 
       const ids = await fabFileRepository.softDeleteByDataLakeTag(scope);
 
       expect(ids.sort()).toEqual([...rows.memberIds].sort());
-      expect((await readRaw(rows.hostile._id.toString()))?.deletedAt ?? null).toBeNull();
+      for (const id of rows.strangerIds) {
+        expect((await readRaw(id))?.deletedAt ?? null).toBeNull();
+      }
     });
 
     it('round-trips a prefix-only member back to live', async () => {
@@ -180,7 +186,7 @@ describe('FabFile data lake lifecycle membership', () => {
       await fabFileRepository.softDeleteByDataLakeTag(scope);
       const restored = await fabFileRepository.undeleteByDataLakeTag(scope);
 
-      expect(restored).toBe(4);
+      expect(restored).toBe(2);
       expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt ?? null).toBeNull();
     });
 
@@ -190,7 +196,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
       const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [rows.prefixOwned._id.toString()]);
 
-      expect(restored).toBe(3);
+      expect(restored).toBe(1);
       expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt).not.toBeNull();
     });
 
@@ -200,7 +206,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
       const found = await fabFileRepository.findDeletedByDataLakeTag(scope);
 
-      expect(found).toHaveLength(4);
+      expect(found).toHaveLength(2);
     });
   });
 
@@ -212,10 +218,10 @@ describe('FabFile data lake lifecycle membership', () => {
       const ids = await fabFileRepository.findIdsByDataLakeTag(scope);
 
       expect(ids.sort()).toEqual([...rows.memberIds].sort());
-      expect(ids).not.toContain(rows.hostile._id.toString());
+      for (const id of rows.strangerIds) expect(ids).not.toContain(id);
     });
 
-    it('purges every member and leaves the stranger-owned prefix match intact', async () => {
+    it('purges the members and destroys no file the creator does not own', async () => {
       const rows = await seedLakeRows();
       await FabFile.updateOne({ _id: rows.prefixSharedToCreator._id }, { $set: { deletedAt: new Date() } });
 
@@ -225,9 +231,12 @@ describe('FabFile data lake lifecycle membership', () => {
       for (const id of rows.memberIds) {
         expect(await readRaw(id)).toBeNull();
       }
-      // The row that must survive: a permanent delete of one lake cannot destroy the files of
-      // an unrelated user who happens to use the same tag prefix.
-      expect(await readRaw(rows.hostile._id.toString())).not.toBeNull();
+      // The rows that must survive. Deleting your own lake cannot destroy a file another user
+      // owns - not one that merely carries the same tag prefix, and not one they shared with you.
+      // This runs on the hostile rows themselves, not on a mock.
+      for (const id of rows.strangerIds) {
+        expect(await readRaw(id)).not.toBeNull();
+      }
     });
 
     it('left prefix-only members behind before the widening', async () => {

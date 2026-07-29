@@ -90,8 +90,10 @@ export const setLakeVisibility = async (
       excludeLakeId: existing.id,
     });
     if (prefixClash) {
+      // Unnamed unless the mover created it, for the same reason as createDataLake.
+      const naming = prefixClash.createdByUserId === existing.createdByUserId ? ` ("${prefixClash.name}")` : '';
       throw new BadRequestError(
-        `The tag prefix "${existing.fileTagPrefix}" overlaps the data lake "${prefixClash.name}" in the target scope - change one first.`
+        `The tag prefix "${existing.fileTagPrefix}" overlaps an existing data lake${naming} in the target scope - change one first.`
       );
     }
   }

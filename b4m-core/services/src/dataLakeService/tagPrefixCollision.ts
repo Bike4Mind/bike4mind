@@ -6,7 +6,7 @@ import {
   type IDataLakeRepository,
 } from '@bike4mind/common';
 
-type PrefixScopeLake = Pick<IDataLakeDocument, 'id' | 'name' | 'fileTagPrefix'>;
+type PrefixScopeLake = Pick<IDataLakeDocument, 'id' | 'name' | 'fileTagPrefix' | 'createdByUserId'>;
 
 interface PrefixCollisionAdapters {
   dataLakes: Pick<IDataLakeRepository, 'find'>;

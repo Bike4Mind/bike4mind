@@ -78,8 +78,12 @@ async function assertPrefixAvailable(
   }
   const [clash] = await findCollidingPrefixLakes(db, rawPrefix, { createdByUserId: userId, organizationId });
   if (clash) {
+    // The clash is named only when the caller created it. An org lake gated by a tag or
+    // entitlement the caller lacks is invisible to them everywhere else, and echoing its name
+    // here would turn this into a guess-confirm oracle for lakes they cannot read.
+    const naming = clash.createdByUserId === userId ? ` ("${clash.name}")` : ' in this organization';
     throw new BadRequestError(
-      `Tag prefix "${rawPrefix}" overlaps the data lake "${clash.name}" (${clash.fileTagPrefix}) - choose a different prefix.`
+      `Tag prefix "${rawPrefix}" overlaps an existing data lake${naming} - choose a different prefix.`
     );
   }
 }

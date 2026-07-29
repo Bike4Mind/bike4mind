@@ -21,7 +21,6 @@ describe('buildDataLakeMembershipFilter', () => {
         datalakeTag: TAG,
         fileTagPrefix,
         creatorUserId: 'creator-1',
-        creatorGroupIds: ['g1'],
       });
       expect(filter).toEqual(metaOnly);
     });
@@ -41,42 +40,28 @@ describe('buildDataLakeMembershipFilter', () => {
   });
 
   describe('with a usable prefix and creator', () => {
-    it('ORs the meta-tag with a prefix arm ANDed against the creator access arms', () => {
+    it('ORs the meta-tag with a prefix arm ANDed against creator OWNERSHIP', () => {
       const filter = buildDataLakeMembershipFilter({
         datalakeTag: TAG,
         fileTagPrefix: 'acme:',
         creatorUserId: 'creator-1',
-        creatorGroupIds: ['g1'],
       });
 
       expect(filter).toEqual({
-        $or: [
-          metaOnly,
-          {
-            $and: [
-              { 'tags.name': { $regex: /^acme:/ } },
-              {
-                $or: [
-                  { userId: 'creator-1' },
-                  { users: { $elemMatch: { userId: 'creator-1', permissions: { $in: ['read', 'write'] } } } },
-                  { groups: { $elemMatch: { groupId: { $in: ['g1'] }, permissions: { $in: ['read', 'write'] } } } },
-                ],
-              },
-            ],
-          },
-        ],
+        $or: [metaOnly, { $and: [{ 'tags.name': { $regex: /^acme:/ } }, { userId: 'creator-1' }] }],
       });
     });
 
-    it('omits the group arm when the creator has no groups', () => {
-      const filter = buildDataLakeMembershipFilter({
-        datalakeTag: TAG,
-        fileTagPrefix: 'acme:',
-        creatorUserId: 'creator-1',
-        creatorGroupIds: [],
-      });
-      const prefixArm = (filter.$or as Record<string, unknown>[])[1].$and as Record<string, unknown>[];
-      expect(prefixArm[1].$or).toHaveLength(2);
+    it('has no share or group arm, so a file merely shared to the creator is not a member', () => {
+      // This predicate hard-deletes what it matches. A `users`/`groups` arm here would let a lake
+      // owner purge a file another user owns and shared with them, and would list it to every
+      // visitor of a public lake.
+      const serialized = JSON.stringify(
+        buildDataLakeMembershipFilter({ datalakeTag: TAG, fileTagPrefix: 'acme:', creatorUserId: 'creator-1' })
+      );
+      expect(serialized).not.toContain('users');
+      expect(serialized).not.toContain('groups');
+      expect(serialized).not.toContain('permissions');
     });
 
     it('escapes regex metacharacters so a crafted prefix cannot widen the match', () => {

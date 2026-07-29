@@ -57,10 +57,7 @@ const handler = baseApi()
     // browse lists exactly what archiving or permanently deleting the lake would act on.
     // Passed outside the parsed params because it names the creator whose access the lake's
     // prefix arm rides on (see SearchFabFilesServerOptions).
-    const lakeMembership = await dataLakeService.resolveLakeMembershipScope(dataLake, {
-      db: { users: userRepository },
-      logger: req.logger,
-    });
+    const lakeMembership = dataLakeService.lakeMembershipScope(dataLake);
 
     // User-provided tags are an additional AND filter, never mixed into lake scoping with OR
     // semantics, and `restrictToDataLake` drops the broad owner/shared arms so this view returns
