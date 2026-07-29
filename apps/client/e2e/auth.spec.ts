@@ -10,13 +10,20 @@ import { apiCreateTestUser, apiGetOtcCode, apiLoginViaOtc } from './helpers/api'
  * the user holds (tokenVersion bump), so a test that logs out MUST NOT use a shared spec user -
  * it would kill that user's session for every parallel spec. The email mirrors the setup
  * convention (`...-<id>-e2e@test.com`) so global-teardown's cleanup sweep matches and removes it.
+ *
+ * The retry index is baked into the identity: attempt 0 already created (and logged out)
+ * `auth-<label>0-...`, and createUser rejects a duplicate username OR email, so without this a
+ * retry would die inside apiCreateTestUser instead of re-running the test - defeating the retry
+ * safety net for exactly these tests. The marker stays BEFORE the `<id>-<runId>` tail so both
+ * cleanup regexes in pages/api/test/cleanup.ts still match.
  */
 async function createLogoutUser(request: APIRequestContext, label: string) {
   const e2eId = getE2ETestId();
   const idSuffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
-  const email = `auth-${label}-${idSuffix}-e2e@test.com`;
+  const slug = `auth-${label}${test.info().retry}`;
+  const email = `${slug}-${idSuffix}-e2e@test.com`;
   const result = await apiCreateTestUser(request, {
-    username: `auth-${label}-${idSuffix}`,
+    username: `${slug}-${idSuffix}`,
     email,
     name: `Auth ${label} ${idSuffix}`,
     password: `E2eAuth${label}Pass123!`,

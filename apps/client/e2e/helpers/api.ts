@@ -190,7 +190,15 @@ export async function apiLoginViaOtc(
   if (!verifyResponse.ok()) {
     throw new Error(`OTC verify failed: ${verifyResponse.status()} ${verifyResponse.statusText()}`);
   }
-  const body = (await verifyResponse.json()) as { accessToken: string; refreshToken: string };
+  // /api/otc/verify returns 200 without tokens in some envs (MFA-enforced ->
+  // mfaRequired/mfaSetupRequired; registrationRequired -> no tokens). Fail loud and local
+  // here instead of returning undefined tokens that surface later as an opaque auth-seed 401.
+  const body = (await verifyResponse.json()) as { accessToken?: string; refreshToken?: string };
+  if (!body.accessToken || !body.refreshToken) {
+    throw new Error(
+      `OTC verify returned no tokens (mfaRequired/registrationRequired?): keys=${Object.keys(body).join(',')}`
+    );
+  }
   return { accessToken: body.accessToken, refreshToken: body.refreshToken };
 }
 
