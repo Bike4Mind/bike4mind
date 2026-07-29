@@ -5,6 +5,7 @@ import {
   parseArtifactsWithFallback,
   isSvgGraphicallyEmpty,
   shouldWarnElidedArtifact,
+  elidedReplyWarning,
 } from './artifactParser';
 
 describe('extractReactDependencies', () => {
@@ -427,5 +428,55 @@ describe('shouldWarnElidedArtifact', () => {
         artifacts: [COMPLETE, ELIDED],
       })
     ).toBe(true);
+  });
+});
+
+describe('elidedReplyWarning', () => {
+  const ELIDED_MARKDOWN = `Here is the dashboard.
+
+<artifact identifier="board" type="text/html" title="Board">
+<html><body><script>
+  function init() {
+    // All the interactive JS from the previous complete artifact
+  }
+  init();
+</script></body></html>
+</artifact>`;
+
+  const CLEAN_MARKDOWN = `Here is the dashboard.
+
+<artifact identifier="board" type="text/html" title="Board">
+<html><body><script>
+  function init() { document.title = 'Board'; }
+  init();
+</script></body></html>
+</artifact>`;
+
+  it('trusts the server verdict when it survived the save', () => {
+    expect(
+      elidedReplyWarning({ suspectedElision: { confidence: 'low', signalCount: 2, details: [] } }, undefined)
+    ).toBe(true);
+  });
+
+  it('falls back to scanning the markdown when there is no server verdict', () => {
+    expect(elidedReplyWarning({}, ELIDED_MARKDOWN)).toBe(true);
+    expect(elidedReplyWarning(undefined, ELIDED_MARKDOWN)).toBe(true);
+    expect(elidedReplyWarning(null, ELIDED_MARKDOWN)).toBe(true);
+  });
+
+  it('does not warn on a reply whose artifact is complete', () => {
+    expect(elidedReplyWarning({}, CLEAN_MARKDOWN)).toBe(false);
+  });
+
+  it('does not warn when there is nothing to share', () => {
+    expect(elidedReplyWarning({}, undefined)).toBe(false);
+    expect(elidedReplyWarning({}, '')).toBe(false);
+  });
+
+  it('does not warn on ordinary prose that merely discusses abbreviation', () => {
+    // The reply body is prose, not code, so the comment-context anchoring is what has to hold here -
+    // this surface scans raw markdown with no artifact type to gate on.
+    const prose = 'The changelog below is abbreviated for brevity; the rest of the entries are omitted.';
+    expect(elidedReplyWarning({}, prose)).toBe(false);
   });
 });
