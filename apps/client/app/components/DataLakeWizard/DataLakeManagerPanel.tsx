@@ -320,11 +320,11 @@ function ManagerNav({
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-        // Same floating-card chrome as the in-chat tree (DataLakeTree).
+        // Floating-card chrome like the in-chat tree (DataLakeTree), slightly tighter radius.
         backgroundColor: 'background.surface2',
         border: '1px solid',
         borderColor,
-        borderRadius: '10px',
+        borderRadius: '8px',
       }}
     >
       {/* Search bar + sort toggle - same toolbar as the in-chat tree. */}

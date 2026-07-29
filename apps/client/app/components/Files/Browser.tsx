@@ -72,6 +72,7 @@ const FileBrowser: FC = () => {
             height: { xs: '100dvh', md: '85vh' },
             maxHeight: { xs: '100%', md: '85vh' },
             p: 0,
+            border: 'none',
             overflow: 'hidden',
             borderRadius: { xs: 0, md: 'md' },
           }}
