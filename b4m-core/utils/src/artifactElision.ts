@@ -74,7 +74,12 @@ const PLACEHOLDER_PATTERNS: readonly RegExp[] = [
   // Flagging a phrase the prompt never warned against is the safe direction of this drift: the model
   // is not being punished for following instructions, and a reader gets a warning either way.
   /\bprevious (?:complete|working|full)\b/i,
-  /\bfor brevity\b/i,
+  // Adjacency-anchored `for brevity` matched the bare form and nothing else, so an interpolated
+  // variant ("for the sake of brevity", "in the interest of brevity") walked straight past it while
+  // its own sibling `TRUNCATED ... FOR BREVITY` matched - one phrasing of the same marker detected
+  // and the other not. The filler window is bounded, and whitespace after the preposition is still
+  // required, so a hyphenated path segment like `for-brevity-notes.js` stays unmatched.
+  /\b(?:for|in) (?:\w+\s+){0,4}brevity\b/i,
   // "omitted" and "unchanged" are qualified rather than bare: `// optional fields omitted from
   // the payload` and `// props unchanged, skip re-render` are ordinary comments in working
   // code, and a single match here returns HIGH confidence. Only the stub readings are matched.
@@ -91,10 +96,30 @@ const PLACEHOLDER_PATTERNS: readonly RegExp[] = [
   /\bsame as (?:above|before)\b/i,
   /\b(?:code|implementation|logic|content) (?:goes )?here\b/i,
   /\bgoes here\b/i,
+  // A continuation instruction addressed to the reader. Chat scaffolding that leaked into the
+  // artifact body has no innocent reading in a finished deliverable - the artifact is a standalone
+  // document, so there is no "next response" for it to be continued in, and nothing inside it can
+  // ask the user to reply. Observed verbatim in a shipped artifact that published with no warning.
+  /\b(?:respond|reply|answer|say|type) (?:with )?["'`*]{0,2}continue\b/i,
+  // `in` is deliberately not an alternative here: "// in the next response we get the cursor" is an
+  // ordinary pagination comment, while "see next response" has no such reading.
+  /\b(?:see|continued? in|continues in) (?:the )?next (?:response|message|reply|turn)s?\b/i,
+  // Omission behind a count, narrowed to the two shapes with no innocent reading. First person in
+  // artifact source is the giveaway: shipped code never promises what its author is about to write.
+  // The trailing object is required to keep this off "// I will add validation later", which is a
+  // prose TODO - and bare TODO is excluded from this list by design.
+  /\bI (?:will|shall|'ll|am going to) (?:now |then |immediately )?(?:include|add|send|provide|write|emit|list|continue)\b[^\n]{0,30}\b(?:remaining|rest|others?|further|additional|entries|\d+)\b/i,
+  /\b(?:following|remaining) \d+ [\w-]+ (?:are|will be) (?:all )?(?:individually |each )?(?:defined|included|listed|written|implemented|present)\b/i,
 ];
-// Deliberately NOT patterns: "truncated" and "abbreviated" describe what plenty of real code
-// legitimately does ("// label truncated to fit the column"), and they are high-confidence
-// matches, so a single such comment would flag a working artifact.
+// Deliberately NOT patterns, all for the same reason - a single match here returns HIGH confidence,
+// so a phrase that reads innocently in working code would flag a complete artifact:
+//  - "truncated" and "abbreviated", which plenty of real code legitimately does
+//    ("// label truncated to fit the column").
+//  - a bare `N further items`-style count ("// the remaining 3 bytes are padding"). The elided
+//    artifact that motivated the count patterns above carried all three of its phrasings, so it
+//    still flags on the two that ARE matched.
+//  - a comment whose whole text is `...`. Plausibly a stub marker, but the pattern would be broad
+//    enough to deserve its own decision rather than riding along with these.
 
 /**
  * Identifiers that resolve without a declaration in the artifact sandbox: JS/DOM globals,
