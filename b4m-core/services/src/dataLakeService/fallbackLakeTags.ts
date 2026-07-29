@@ -90,27 +90,29 @@ export const createDataLakeFallbackTagger = ({ db }: LakeTagAdapters): DataLakeF
     const departed = previousMetaTags.filter(tag => !currentMetaTags.includes(tag));
     if (currentMetaTags.length === 0 && departed.length === 0) return tags as (T | FileTag)[];
 
-    const additions: FileTag[] = [];
-    const retractions = new Set<string>();
-
+    // Deduped by prefix, not by lake: nothing makes `fileTagPrefix` unique, so two lakes can
+    // share one and a single tag covers the file for both.
+    const currentPrefixes = new Set<string>();
     for (const metaTag of currentMetaTags) {
       const resolved = await resolvePrefix(metaTag);
-      if (!resolved) continue;
-      const fallbackName = `${resolved.prefix}${UNCATEGORIZED_TAG_SUFFIX}`;
-      // Check against pending additions too: two lakes can share a prefix, and the file should
-      // pick up one fallback, not one per lake.
-      if (satisfiesPrefix([...tags, ...additions], resolved.prefix)) continue;
-      additions.push({ name: fallbackName, strength: 1 });
+      if (resolved) currentPrefixes.add(resolved.prefix);
     }
 
+    const additions: FileTag[] = [];
+    for (const prefix of currentPrefixes) {
+      if (satisfiesPrefix([...tags, ...additions], prefix)) continue;
+      additions.push({ name: `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`, strength: 1 });
+    }
+
+    const retractions = new Set<string>();
     for (const metaTag of departed) {
       const resolved = await resolvePrefix(metaTag);
-      if (!resolved) continue;
+      // Keep a fallback whose prefix a lake the file STILL belongs to also claims - dropping it
+      // would strip the file's only category tag from a lake it never left.
+      if (!resolved || currentPrefixes.has(resolved.prefix)) continue;
       retractions.add(`${resolved.prefix}${UNCATEGORIZED_TAG_SUFFIX}`);
     }
 
-    // A prefix shared with a lake the file still belongs to must keep its fallback.
-    for (const addition of additions) retractions.delete(addition.name);
     if (additions.length === 0 && retractions.size === 0) return tags as (T | FileTag)[];
 
     const kept = retractions.size > 0 ? tags.filter(tag => !retractions.has(tag?.name)) : tags;
