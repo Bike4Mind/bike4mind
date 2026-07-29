@@ -51,6 +51,17 @@ export const assertLakeWriteAccess = async (
 
 type LakeTagAdapters = { dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'> };
 
+/**
+ * A built-in lake has no Mongo document, so an unresolved tag can still name a REAL, live lake -
+ * one nobody may write to, creator or admin. Saying "only the creator can ..." would be misleading
+ * for those, since they have no creator.
+ */
+const assertNotBuiltInLake = (tagKey: string): void => {
+  if (isRegistryDatalakeTag(tagKey)) {
+    throw new BadRequestError(BUILT_IN_READ_ONLY);
+  }
+};
+
 /** Resolve a meta-tag's lake and assert the actor may write into it, else throw `deniedMessage`. */
 const assertManageableByTag = async (
   tagKey: string,
@@ -59,7 +70,11 @@ const assertManageableByTag = async (
   deniedMessage: string
 ): Promise<IDataLakeDocument> => {
   const lake = await db.dataLakes.findByDatalakeTag(tagKey);
-  if (!lake || !canManageLake(lake, actor)) {
+  if (!lake) {
+    assertNotBuiltInLake(tagKey);
+    throw new BadRequestError(deniedMessage);
+  }
+  if (!canManageLake(lake, actor)) {
     throw new BadRequestError(deniedMessage);
   }
   return lake;
@@ -151,7 +166,18 @@ export const assertCanReplaceDataLakeTags = async (
   // file already carries is not: the UI's set-primary action sends primaryTag with no `tags` key,
   // so gating that would 400 a plain relabel. Nor is echoing a stale one back, or an orphaned
   // primaryTag could never be cleared.
-  if (isDatalakeMetaTag(primaryTag) && !storedNames.has(primaryTag) && primaryTag !== storedPrimaryTag) {
+  //
+  // Compared case-insensitively, unlike the tags diff above: primaryTag is a cosmetic label that
+  // confers no membership, so re-casing it is not an eviction and must not demand manage rights.
+  // A tag naming a DIFFERENT lake still fails both conjuncts, so the gate keeps its teeth.
+  const storedKeys = new Set([...storedNames].map(name => name.toLowerCase()));
+  const sameTag = (a: unknown, b: unknown): boolean =>
+    typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
+  if (
+    isDatalakeMetaTag(primaryTag) &&
+    !storedKeys.has(primaryTag.toLowerCase()) &&
+    !sameTag(primaryTag, storedPrimaryTag)
+  ) {
     added.push(primaryTag);
   }
 
@@ -167,13 +193,10 @@ export const assertCanReplaceDataLakeTags = async (
     const tagKey = name.toLowerCase();
     const lake = await db.dataLakes.findByDatalakeTag(tagKey);
     if (!lake) {
-      // A built-in lake has no document, so an unresolved tag can still name a REAL, live lake -
-      // read-only for everyone, exactly as the DELETE path enforces via assertLakeWritable. Any
-      // other unresolved tag names no lake at all, so allow it: blocking would strand the tag on
+      // Read-only for everyone, exactly as the DELETE path enforces via assertLakeWritable. Any
+      // OTHER unresolved tag names no lake at all, so allow it: blocking would strand the tag on
       // the file forever (DELETE 404s the missing lake and the toggle door rejects the tag).
-      if (isRegistryDatalakeTag(tagKey)) {
-        throw new BadRequestError(BUILT_IN_READ_ONLY);
-      }
+      assertNotBuiltInLake(tagKey);
       continue;
     }
     if (!canManageLake(lake, actor)) {

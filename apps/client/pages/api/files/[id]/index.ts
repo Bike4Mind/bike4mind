@@ -65,7 +65,10 @@ const handler = baseApi()
       // Read the tags this write REPLACES through the accessor updateFabFile itself uses, so an
       // inaccessible file yields no stored tags and still 404s from the service - an unscoped read
       // would turn the gate below into a file-existence oracle. Inside the transaction so
-      // authorization and the write decide on one snapshot.
+      // authorization and the write decide on one snapshot: db-core enables mongoose's
+      // `transactionAsyncLocalStorage`, so calls in here join the ambient session without being
+      // handed it (see withTransaction's own note) - the DELETE branch below passes `session`
+      // explicitly only because logEvent takes it as an option.
       const storedFile = await fabFileRepository.shareable.findAccessibleById(req.user, fabFileId);
       const storedTagNames = (storedFile?.tags ?? []).map(tag => tag?.name);
 

@@ -1445,6 +1445,48 @@ describe('assertCanReplaceDataLakeTags - wholesale tag replace gate', () => {
 
   // The body wins over the stored value, or a request that drops the old primary AND names a new
   // one would have the caller's new label silently nulled out.
+  // A built-in lake has no creator, so "only the creator can add" would misdescribe the refusal.
+  it('refuses a primaryTag naming a built-in lake as read-only, not as a creator denial', async () => {
+    const db = makeDb({});
+    await expect(
+      assertCanReplaceDataLakeTags(
+        { userId: 'root', isAdmin: true },
+        { stored: [], next: [], primaryTag: DATA_LAKES[0].datalakeTag },
+        { db }
+      )
+    ).rejects.toThrow(/read-only/i);
+  });
+
+  it('refuses an ADDED built-in meta-tag as read-only, not as a creator denial', async () => {
+    const db = makeDb({});
+    await expect(
+      assertCanReplaceDataLakeTags(
+        { userId: 'root', isAdmin: true },
+        { stored: [], next: [DATA_LAKES[0].datalakeTag] },
+        { db }
+      )
+    ).rejects.toThrow(/read-only/i);
+  });
+
+  // primaryTag confers no membership, so re-casing the label on a lake the file already belongs to
+  // is not an eviction and must not demand manage rights.
+  it('lets a non-manager re-case a primaryTag naming a lake the file already carries', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags(
+        reader,
+        {
+          stored: ['datalake:lake'],
+          next: ['datalake:lake'],
+          primaryTag: 'DATALAKE:LAKE',
+          storedPrimaryTag: 'datalake:lake',
+        },
+        { db }
+      )
+    ).resolves.toMatchObject({ affectedLakes: [] });
+    expect(db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
   it('does not clear a NEW primaryTag just because the old one named the dropped lake', async () => {
     const db = makeDb({ 'datalake:lake': owned });
     const result = await assertCanReplaceDataLakeTags(
