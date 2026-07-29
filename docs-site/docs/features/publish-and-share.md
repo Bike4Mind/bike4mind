@@ -43,6 +43,26 @@ Defaults depend on where you publish (your **user** space defaults to *private*;
 A **public** link works for anyone, even logged out. A **private/project/organization** link requires the viewer to be signed in and authorized — anonymous visitors get a 401.
 :::
 
+## Search engines
+
+**Public does not mean listed in Google.** These are two different promises, and Bike4Mind keeps them separate:
+
+- **"Anyone with the link can view"** — what *public* means. The page loads for anyone you send the URL to, signed in or not.
+- **"Findable by searching"** — a *separate* opt-in, off by default.
+
+Every published page is served with `noindex, nofollow` (as both an `X-Robots-Tag` header and an in-page `<meta name="robots">`) unless you explicitly turn on **List in search engines** in the share dialog. That switch appears only for a public, ungated item, because it can't do anything otherwise.
+
+What the opt-out does *not* affect:
+
+- **Link previews still work.** Pasting the URL into Slack, Discord, iMessage, or a social post still renders a title/description card. Unfurlers read Open Graph tags and ignore robots directives; search crawlers honor them.
+- **The link still works.** Anyone you send it to can open it. Not being indexed is not access control.
+
+Turning the switch back off purges the CDN copy immediately, so the page stops being served as indexable right away. Note that removing a page from a search index that already crawled it is up to the search engine — use the gates below if the content is actually sensitive.
+
+:::warning
+Never rely on a URL being hard to guess. If content shouldn't be seen by everyone, use a **passphrase**, a **domain restriction**, or a non-public visibility tier — not the absence of a search listing.
+:::
+
 ## Managing what you've published
 
 - **List:** `GET /api/publish/artifacts` returns everything you can see (yours + anything shared with you).
@@ -51,8 +71,8 @@ A **public** link works for anyone, even logged out. A **private/project/organiz
 
 ## Safety notes
 
-- **Public means public.** Anyone with a public link can view it — don't publish anything you wouldn't post openly.
-- **Published artifact bundles are static.** For security, author-supplied inline JavaScript is **not executed** when a bundle is served from the app origin — inline scripts are stripped and the page renders without them. Interactive (JS-driven) artifacts will be supported once bundles are served from an isolated sandbox origin (tracked separately). Today, lean on HTML/CSS and SVG for rich visual artifacts.
+- **Public means public.** Anyone with a public link can view it — don't publish anything you wouldn't post openly. Being absent from search results is not protection; see [Search engines](#search-engines).
+- **Published artifact bundles run sandboxed.** A bundle is served inside an `<iframe sandbox="allow-scripts">` with no `allow-same-origin`, so author JavaScript executes on an opaque origin: it cannot read the app origin's cookies or localStorage, or call `/api/*` with your credentials. Open-public bundles additionally get their own per-artifact origin (`{id}.usercontent.app.<domain>`) for artifact-vs-artifact isolation.
 - Bundles are validated at publish time: no `iframe`s, no `eval`/`new Function`/`document.write`, and assets/scripts must come from an allowlist.
 
 ## API reference (power users)
@@ -67,5 +87,5 @@ All publish endpoints require auth (`x-api-key` or a bearer token). See the [Pub
 | `POST /api/publish/artifact/finalize` | Step 3: validate + publish the uploaded bundle |
 | `GET /api/publish/artifacts` | List artifacts you can see |
 | `GET /api/publish/artifacts/{publicId}` | Fetch one |
-| `PATCH /api/publish/artifacts/{publicId}` | Update title/description/visibility |
+| `PATCH /api/publish/artifacts/{publicId}` | Update title/description/visibility, or `{"discoverable": true\|false}` to change the search listing |
 | `DELETE /api/publish/artifacts/{publicId}` | Unpublish (soft-delete) |

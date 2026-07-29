@@ -152,9 +152,12 @@ const ASSET_CSP = [
 // is what makes a token rotation/revoke take effect immediately (no stale CDN/browser copy).
 const SHARE_CACHE_CONTROL = 'private, no-store, must-revalidate';
 // In-document belt-and-suspenders for the X-Robots-Tag / Referrer-Policy headers, for
-// UAs that honor the <meta> but not the header (and vice versa).
-const SHARE_NOINDEX_META =
-  '<meta name="robots" content="noindex,nofollow">\n<meta name="referrer" content="no-referrer">';
+// UAs that honor the <meta> but not the header (and vice versa). Emitted on every page
+// that is not opted into discovery (see `searchIndexable`). The two directives travel
+// together on purpose: a page we keep out of the search index is one whose URL is
+// effectively unlisted, so it must not leak via the Referer header on an outbound link
+// the author included either.
+const NOINDEX_META = '<meta name="robots" content="noindex,nofollow">\n<meta name="referrer" content="no-referrer">';
 
 const handler = baseApi({ auth: false }).get(async (req: Request, res: Response) => {
   // Optional-auth shims populate req.user from a Bearer JWT or X-API-Key; anonymous
@@ -246,6 +249,33 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Share links have their own always-no-store policy and are handled by kind.
   const isOpenPublic = artifact.visibility === 'public' && !artifact.accessGate;
 
+  // Search-engine indexability is an explicit owner opt-in (`discoverable`), NOT a
+  // side effect of being public. "Anyone with the link may view" and "listed in every
+  // search engine" are different promises, and owners reliably read the first as the
+  // second; defaulting to noindex means the surprising outcome requires a deliberate
+  // choice. Everything not opted in - gated, private, share-token links, and public
+  // artifacts whose owner never asked for it - is noindexed at BOTH layers (this
+  // header and the in-document <meta>), since a UA may honor one and not the other.
+  //
+  // Set ONCE here, before any response branch below, so a new branch inherits the safe
+  // default instead of having to remember the header. Only an opted-in open-public
+  // artifact skips it.
+  //
+  // Deliberately NOT paired with a robots.txt Disallow. A crawler blocked from FETCHING
+  // a page can still index the URL from a link it found elsewhere, and will never read
+  // the noindex it was blocked from seeing. Allowing the crawl and serving noindex is
+  // the combination that actually keeps a page out of the index; disallow-without-
+  // noindex is the misconfiguration that has burned several LLM share features.
+  // `!isShare` is load-bearing, not redundant with isOpenPublic: a /a/<token> link can
+  // resolve to an artifact that is ALSO open-public and opted in, and an unlisted
+  // capability URL must stay out of the index no matter what the owner chose for the
+  // canonical /p page. Possession of the token is the grant; a search result would
+  // hand that grant to everyone.
+  const searchIndexable = !isShare && isOpenPublic && artifact.discoverable === true;
+  if (!searchIndexable) {
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  }
+
   // The isolated `/uc` origin is an OPEN-public-only surface (a distinct SOP
   // partition with no /api routes and an app-host-scoped proof cookie). If an
   // artifact was embedded open-public and later GAINED a gate, existing /uc
@@ -299,7 +329,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       );
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('X-Robots-Tag', 'noindex');
+      // X-Robots-Tag already set above: a gated artifact is never searchIndexable.
       if (isShare) res.setHeader('Referrer-Policy', 'no-referrer');
       return res.status(200).send(renderPassphraseShell());
     }
@@ -348,11 +378,12 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       : undefined;
 
   if (isShare) {
-    // No-sign-in links are unlisted capabilities: keep them out of search indexes,
-    // and stop the token leaking to third parties via the Referer header on any
-    // outbound link the artifact author included. Set once here so every share
-    // response below (viewer page, asset, wrapper) inherits them.
-    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    // No-sign-in links are unlisted capabilities: stop the token leaking to third
+    // parties via the Referer header on any outbound link the artifact author
+    // included. Set once here so every share response below (viewer page, asset,
+    // wrapper) inherits it. The matching X-Robots-Tag is already set above - a share
+    // link resolves through the token, never through `discoverable`, so it can never
+    // be searchIndexable.
     res.setHeader('Referrer-Policy', 'no-referrer');
   }
 
@@ -418,7 +449,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // an iframe navigation cannot send - so it would dead-end at a nested loader shell. For those
     // we render the placeholder card instead of a frame that can never load.
     const canFrameArtifacts = isOpenPublic || isShare || passphraseVerified;
-    const page = renderViewerPage(artifact, isShare, selfPath, canFrameArtifacts);
+    const page = renderViewerPage(artifact, !searchIndexable, selfPath, canFrameArtifacts);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
     // slipped past the sanitizer); embedded artifacts run only inside their own sandboxed
@@ -663,6 +694,12 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // more than the JS shell. Gated shares (access gate OR non-public) deliberately do
   // not - the pre-auth shells carry no artifact data, and even post-auth renders skip
   // the SEO surface so a gate regression can never leak meta to crawlers.
+  //
+  // Intentionally keyed on isOpenPublic and NOT on `discoverable`: unfurling and search
+  // indexing are different things. Pasting a link into Slack should still produce a
+  // title card for a non-discoverable artifact - unfurlers read OG tags and ignore
+  // robots directives, while search crawlers honor the noindex above. Owners who opt
+  // out of discovery are opting out of the index, not out of link previews.
   const shareMeta =
     !isShare && isOpenPublic
       ? prepareShareMeta({
@@ -691,7 +728,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     requestedVersion,
     isolatedSrc,
     shareMeta,
-    isShare,
+    !searchIndexable,
     isEmbed,
     pillHref,
     barHref,
@@ -778,7 +815,7 @@ function renderBundleWrapper(
   const reportHref = `/report/${encodeURIComponent(artifact.publicId)}`;
   const versionBar = buildVersionSwitcherHtml(artifact, requestedVersion);
   const metaHead = shareMeta ? `\n${shareMeta.metaTags}\n${shareMeta.alternateLink}` : '';
-  const noindexHead = noindex ? `\n${SHARE_NOINDEX_META}` : '';
+  const noindexHead = noindex ? `\n${NOINDEX_META}` : '';
   const noscriptBody = shareMeta ? `\n${shareMeta.noscriptBody}` : '';
   // Embedded render drops the interactive chrome (version switcher + comment
   // overlay) so the widget is just the content. The canonical link back to the
@@ -1033,6 +1070,9 @@ interface PublishedArtifactLean {
    *  Appended to frame-ancestors on both the wrapper and the isolated bundle. */
   embedOrigins?: string[];
   commentPolicy?: 'none' | 'open' | 'restricted';
+  /** Owner opt-in to search-engine indexing. Absent on rows predating the field,
+   *  which reads as false - the safe direction (see the model's field comment). */
+  discoverable?: boolean;
   ownerId: string;
   storageKeyPrefix: string;
   manifest: Array<{ path: string; mimeType: string }>;
@@ -1251,7 +1291,7 @@ function renderViewerPage(
     displayTitle = cleanViewerTitle(artifact.title, artifacts);
   }
   const titleHtml = escapeHtml(displayTitle);
-  const noindexHead = noindex ? `\n${SHARE_NOINDEX_META}` : '';
+  const noindexHead = noindex ? `\n${NOINDEX_META}` : '';
 
   return `<!doctype html>
 <html lang="en">

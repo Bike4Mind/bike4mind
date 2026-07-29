@@ -3,6 +3,7 @@ import { Box, CircularProgress, Divider } from '@mui/joy';
 import { ShareActions } from './ShareActions';
 import { AccessGateEditor } from './AccessGateEditor';
 import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
+import { DiscoverableToggle } from './DiscoverableToggle';
 import { getPublishedManageState, type PublishAccessGateRead } from '@client/app/utils/publishApi';
 
 export interface ManageSharingPanelProps {
@@ -24,6 +25,7 @@ export function ManageSharingPanel({ publicId, title, shareUrl, visibility }: Ma
   const [loading, setLoading] = useState(true);
   const [gate, setGate] = useState<PublishAccessGateRead>(null);
   const [initialOrigins, setInitialOrigins] = useState<string[]>([]);
+  const [initialDiscoverable, setInitialDiscoverable] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -33,6 +35,7 @@ export function ManageSharingPanel({ publicId, title, shareUrl, visibility }: Ma
         if (!active) return;
         setGate(state.accessGate);
         setInitialOrigins(state.embedOrigins);
+        setInitialDiscoverable(state.discoverable);
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -57,6 +60,13 @@ export function ManageSharingPanel({ publicId, title, shareUrl, visibility }: Ma
       <ShareActions title={title} url={shareUrl} />
       <Divider />
       <AccessGateEditor publicId={publicId} visibility={visibility} initialGate={gate} onGateChange={setGate} />
+      {isOpenPublic && <Divider />}
+      <DiscoverableToggle
+        publicId={publicId}
+        initialDiscoverable={initialDiscoverable}
+        isOpenPublic={isOpenPublic}
+        testIdPrefix="manage-discoverable"
+      />
       {isOpenPublic && <Divider />}
       <EmbedAllowlistEditor
         publicId={publicId}

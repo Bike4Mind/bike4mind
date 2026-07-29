@@ -43,6 +43,10 @@ const PatchSchema = z.object({
   description: z.string().max(1000).optional(),
   visibility: VisibilitySchema.optional(),
   commentPolicy: CommentPolicySchema.optional(),
+  // Search-engine opt-in. Accepted at any visibility (owners commonly set it before
+  // flipping to public), but only has an effect while the artifact is open-public -
+  // the serve route ANDs it with isOpenPublic on every request.
+  discoverable: z.boolean().optional(),
   accessGate: AccessGatePatchSchema.optional(),
   // Raw strings; validateEmbedOrigins normalizes and applies the host/open-public
   // rules server-side. `[]` clears the allowlist. Bounded here so a huge payload
@@ -169,6 +173,11 @@ const handler = baseApi()
       });
     }
     if (parsed.data.commentPolicy !== undefined) artifact.commentPolicy = parsed.data.commentPolicy;
+    // Tracked for the CDN purge below: this flag changes the served X-Robots-Tag AND
+    // the in-document robots <meta>, both of which are part of the cached public bytes.
+    const discoverableChanged =
+      parsed.data.discoverable !== undefined && parsed.data.discoverable !== !!artifact.discoverable;
+    if (parsed.data.discoverable !== undefined) artifact.discoverable = parsed.data.discoverable;
 
     // Embed allowlist. Validated against the artifact's FINAL open-public state
     // (after any visibility/gate change above), so a gate + embed grant in the
@@ -189,11 +198,13 @@ const handler = baseApi()
     await artifact.save();
 
     // Any change that alters the CACHED public response must purge the CDN, or the
-    // stale copy keeps serving up to its TTL. Two triggers: (a) leaving open-public
+    // stale copy keeps serving up to its TTL. Three triggers: (a) leaving open-public
     // (downgrade OR newly-gated) removes the page from cache-eligibility; (b) the
     // embed allowlist changed while still open-public - the served frame-ancestors
-    // CSP header is part of the cached bytes. Fire-and-forget, best-effort.
-    if ((wasOpenPublic && !isOpenPublicNow) || (isOpenPublicNow && embedOriginsChanged)) {
+    // CSP header is part of the cached bytes; (c) discoverability changed - the robots
+    // header and <meta> are cached too, and an owner turning discovery OFF must not
+    // keep serving an indexable copy for up to an hour. Fire-and-forget, best-effort.
+    if ((wasOpenPublic && !isOpenPublicNow) || (isOpenPublicNow && (embedOriginsChanged || discoverableChanged))) {
       void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
     }
     const json = artifact.toJSON() as Record<string, unknown> & {

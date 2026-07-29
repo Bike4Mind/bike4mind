@@ -65,7 +65,7 @@ describe('PublishShareModal — update seeds controls from the prior publication
     // The regression: without seeding, this would be 'public' + comments on.
     expect(radio('private')?.checked).toBe(true);
     expect(radio('public')?.checked).toBe(false);
-    expect((screen.getByRole('switch') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId('publish-share-comments-toggle') as HTMLInputElement).checked).toBe(false);
   });
 
   it('carries a PUBLIC, comments-open publication through unchanged', async () => {
@@ -94,7 +94,7 @@ describe('PublishShareModal — update seeds controls from the prior publication
 
     expect(radio('public')?.checked).toBe(true);
     expect(radio('private')?.checked).toBe(false);
-    expect((screen.getByRole('switch') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId('publish-share-comments-toggle') as HTMLInputElement).checked).toBe(true);
   });
 });
 
@@ -134,7 +134,7 @@ describe('PublishShareModal — update re-asserts the PRESERVED comment policy',
 
     await screen.findByTestId('publish-share-mode-update');
     // Seeded on because 'restricted' still allows comments.
-    expect((screen.getByRole('switch') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId('publish-share-comments-toggle') as HTMLInputElement).checked).toBe(true);
 
     fireEvent.click(screen.getByTestId('publish-share-create'));
 
@@ -158,7 +158,7 @@ describe('PublishShareModal — update re-asserts the PRESERVED comment policy',
 
     await screen.findByTestId('publish-share-mode-update');
     // Seeded off because the prior policy was 'none'.
-    expect((screen.getByRole('switch') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId('publish-share-comments-toggle') as HTMLInputElement).checked).toBe(false);
 
     fireEvent.click(screen.getByTestId('publish-share-create'));
 
@@ -443,5 +443,68 @@ describe('PublishShareModal - embed allowlist', () => {
     await renderShared({ accessGate: { kind: 'domain', allowedDomains: ['milliononmars.com'] } });
     await waitFor(() => expect(apiGet).toHaveBeenCalled());
     expect(screen.queryByTestId('publish-share-embed-section')).toBeNull();
+  });
+});
+
+describe('PublishShareModal — search-engine listing is opt-in', () => {
+  const renderModal = (props: Partial<React.ComponentProps<typeof PublishShareModal>> = {}) =>
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={noopPublish}
+          title="My artifact"
+          defaultVisibility="public"
+          {...props}
+        />
+      </Wrapper>
+    );
+
+  it('defaults the search-listing toggle to OFF for a fresh public publish', () => {
+    renderModal();
+    const toggle = screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+  });
+
+  it('tells the user a public link stays out of search engines by default', () => {
+    renderModal();
+    // The public warning must say what "public" does NOT mean - this is the exact
+    // expectation gap that made "anyone with the link" read as "unlisted".
+    expect(screen.getByText(/stays out of search engines unless you turn on/i)).toBeTruthy();
+    expect(screen.getByText(/won't show up in Google/i)).toBeTruthy();
+  });
+
+  it('hides the toggle for a private item - it could never take effect there', () => {
+    renderModal({ defaultVisibility: 'private' });
+    expect(screen.queryByTestId('publish-share-discoverable-toggle')).toBeNull();
+  });
+
+  it('seeds the toggle ON from a prior publication that opted in', async () => {
+    renderModal({
+      resolveExisting: () =>
+        Promise.resolve({
+          title: 'My artifact',
+          versionsCount: 1,
+          slug: 's',
+          visibility: 'public',
+          commentPolicy: 'none',
+          discoverable: true,
+        }),
+    });
+    await waitFor(() => {
+      const toggle = screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement;
+      expect(toggle.checked).toBe(true);
+    });
+  });
+
+  it('does not PATCH discoverable while still staging a fresh publish', () => {
+    apiPatch.mockClear();
+    renderModal();
+    fireEvent.click(screen.getByTestId('publish-share-discoverable-toggle'));
+    // Nothing exists to PATCH yet; the choice is applied after publish succeeds.
+    expect(apiPatch).not.toHaveBeenCalledWith(expect.stringContaining('/api/publish/artifacts/'), {
+      discoverable: true,
+    });
   });
 });

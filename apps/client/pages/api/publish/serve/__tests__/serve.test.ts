@@ -1387,7 +1387,7 @@ describe('GET /api/publish/serve - access gates (issue #383)', () => {
     expect(data).not.toContain('My Artifact');
     expect(data).not.toContain('pub1');
     expect(res.getHeader('Cache-Control')).toBe('no-store');
-    expect(res.getHeader('X-Robots-Tag')).toBe('noindex');
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
     // The credential-input page must not be frame-able (clickjacking).
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("frame-ancestors 'self'");
@@ -1747,5 +1747,102 @@ describe('GET /api/publish/serve - embed allowlist', () => {
       else process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO = prev;
       vi.resetModules();
     }
+  });
+});
+
+describe('GET /api/publish/serve - search-engine discoverability is opt-in', () => {
+  const ROBOTS_META = '<meta name="robots" content="noindex,nofollow">';
+
+  it('a public bundle is NOT indexable by default (no `discoverable` on the record)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+    expect(res._getData() as string).toContain(ROBOTS_META);
+  });
+
+  it('an explicitly non-discoverable public bundle is noindexed', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: false }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+    expect(res._getData() as string).toContain(ROBOTS_META);
+  });
+
+  it('opting in drops BOTH the robots header and the meta - the only indexable case', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBeUndefined();
+    expect(res._getData() as string).not.toContain('name="robots"');
+  });
+
+  it('opting in does NOT survive a gate: discoverable + accessGate is still noindexed', async () => {
+    // The serve route ANDs `discoverable` with isOpenPublic, so a stale opt-in left on a
+    // newly-gated artifact can never re-expose it to crawlers.
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true, accessGate: { kind: 'passphrase' } }));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('opting in does NOT survive a visibility downgrade: discoverable + private is noindexed', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true, visibility: 'private' }));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
+    await promise;
+
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('a share-token link is noindexed even when the artifact opted in', async () => {
+    // Possession of the token is the capability; an unlisted link must never be
+    // reachable from a search result regardless of the owner's discovery choice.
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+    expect(res._getData() as string).toContain(ROBOTS_META);
+  });
+
+  it('keeps OG/unfurl meta on a non-discoverable public page - previews are not indexing', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ description: 'A thing' }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain(ROBOTS_META);
+    // Unfurlers read OG tags and ignore robots directives, so a link pasted into a chat
+    // app still renders a card while the page stays out of the search index.
+    expect(data).toContain('og:title');
+  });
+
+  it('the ?format=raw plain-text surface is noindexed unless opted in', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { format: 'raw' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
   });
 });

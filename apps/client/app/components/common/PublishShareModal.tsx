@@ -22,6 +22,7 @@ import LinkIcon from '@mui/icons-material/Link';
 import KeyIcon from '@mui/icons-material/Key';
 import DomainIcon from '@mui/icons-material/Domain';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind/common';
@@ -36,6 +37,7 @@ import {
   revokeShareToken,
   updatePublishedVisibility,
   updatePublishedCommentPolicy,
+  updatePublishedDiscoverable,
   updatePublishedAccessGate,
   getPublishedEmbedState,
   type PublishAccessGateInput,
@@ -72,6 +74,8 @@ export interface PublishShareModalProps {
     // one-click re-publish can't silently widen visibility or re-enable comments.
     visibility: PublishVisibility;
     commentPolicy?: CommentPolicy;
+    /** Whether the prior publication opted into search-engine indexing. */
+    discoverable?: boolean;
   } | null>;
   /**
    * When set, offers a "Team" (organization) visibility choice, publishing an org-scoped
@@ -164,6 +168,9 @@ export function PublishShareModal({
 }: PublishShareModalProps) {
   const [visibility, setVisibility] = useState<PublishVisibility>(defaultVisibility);
   const [commentsOn, setCommentsOn] = useState(true);
+  // Search-engine opt-IN, off by default. Publishing publicly must never imply
+  // "list this in Google" - that has to be a deliberate click.
+  const [discoverableOn, setDiscoverableOn] = useState(false);
   const [result, setResult] = useState<PublishResult | null>(null);
   const [busy, setBusy] = useState(false);
   // A prior publication of this artifact, resolved asynchronously after the dialog opens.
@@ -175,6 +182,7 @@ export function PublishShareModal({
     versionsCount: number;
     slug: string;
     commentPolicy?: CommentPolicy;
+    discoverable?: boolean;
   } | null>(null);
   const [mode, setMode] = useState<PublishMode>('new');
   // The opt-in no-sign-in (`/a/<token>`) share link, minted lazily only when the owner asks.
@@ -197,6 +205,7 @@ export function PublishShareModal({
       setResult(null);
       setVisibility(defaultVisibility);
       setCommentsOn(true);
+      setDiscoverableOn(false);
       setBusy(false);
       setExisting(null);
       setMode('new');
@@ -244,6 +253,7 @@ export function PublishShareModal({
           versionsCount: found.versionsCount || 1,
           slug: found.slug,
           commentPolicy: found.commentPolicy,
+          discoverable: found.discoverable,
         });
         setMode('update');
         // Carry the existing publication's exposure into the (now default) "update" action.
@@ -252,6 +262,10 @@ export function PublishShareModal({
         // the owner had turned off - on a plain "add a new version".
         setVisibility(found.visibility);
         setCommentsOn(found.commentPolicy === 'open' || found.commentPolicy === 'restricted');
+        // Unlike visibility/commentPolicy, finalize does NOT $set discoverable, so an
+        // update can't widen it. Seeded anyway so the toggle shows the artifact's real
+        // current state instead of a misleading "off".
+        setDiscoverableOn(!!found.discoverable);
       })
       .catch(() => {
         /* lookup failure -> no choice shown; publishes as new */
@@ -337,6 +351,13 @@ export function PublishShareModal({
           toast.warning('Published, but enabling comments failed - you can toggle them below.');
         });
       }
+      // Only ever PATCHed when ON. The server default is already false, so a failed
+      // call here leaves the artifact non-indexable - the safe direction.
+      if (discoverableOn) {
+        await updatePublishedDiscoverable(r.publicId, true).catch(() => {
+          toast.warning('Published, but the search-listing setting failed - you can toggle it below.');
+        });
+      }
       setResult(r);
       toast.success('Share link ready', { id });
     } catch (err) {
@@ -362,6 +383,31 @@ export function PublishShareModal({
     } catch {
       setCommentsOn(prev);
       toast.error('Failed to update comments');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Toggle search-engine listing. Live-PATCH once published; otherwise stage the choice.
+  const onToggleDiscoverable = async (next: boolean) => {
+    if (busy) return;
+    if (phase !== 'shared' || !result) {
+      setDiscoverableOn(next);
+      return;
+    }
+    const prev = discoverableOn;
+    setDiscoverableOn(next);
+    setBusy(true);
+    try {
+      await updatePublishedDiscoverable(result.publicId, next);
+      toast.success(
+        next
+          ? 'Search engines may now list this page'
+          : 'Hidden from search engines - the link still works for anyone you send it to'
+      );
+    } catch {
+      setDiscoverableOn(prev);
+      toast.error('Failed to update search listing');
     } finally {
       setBusy(false);
     }
@@ -562,7 +608,8 @@ export function PublishShareModal({
               Access note below tells the truth instead. */}
           {isPublic && gateKind === 'none' && !existing && !gateTouched && (
             <Typography level="body-xs" sx={{ mt: 0.75, color: AMBER }}>
-              ⚠ Public: anyone with the link will be able to view this.
+              ⚠ Public: anyone with the link will be able to view this. It stays out of search engines unless you turn
+              on &quot;List in search engines&quot; below.
             </Typography>
           )}
         </FormControl>
@@ -657,6 +704,35 @@ export function PublishShareModal({
           </FormControl>
         )}
 
+        {/* Search listing. Offered ONLY for an ungated public item, matching the server
+            rule (discoverable is ANDed with isOpenPublic on every request) - showing it
+            for a private or gated item would promise something that never takes effect. */}
+        {isPublic && gateKind === 'none' && (
+          <FormControl
+            orientation="horizontal"
+            sx={{ mb: 2, justifyContent: 'space-between', alignItems: 'center', gap: 1 }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <TravelExploreIcon fontSize="small" />
+              <Box>
+                <FormLabel sx={{ mb: 0 }}>List in search engines</FormLabel>
+                <Typography level="body-xs" sx={{ opacity: 0.75 }}>
+                  Off by default. When off, the link still works for anyone you send it to - it just won&apos;t show up
+                  in Google. Link previews in chat apps work either way.
+                </Typography>
+              </Box>
+            </Box>
+            <Switch
+              checked={discoverableOn}
+              disabled={busy}
+              onChange={e => void onToggleDiscoverable(e.target.checked)}
+              // On the INPUT slot, not the root: Joy spreads bare props to the root span,
+              // where a test can't read `.checked`.
+              slotProps={{ input: { 'data-testid': 'publish-share-discoverable-toggle' } }}
+            />
+          </FormControl>
+        )}
+
         <FormControl
           orientation="horizontal"
           sx={{ mb: 2, justifyContent: 'space-between', alignItems: 'center', gap: 1 }}
@@ -674,7 +750,7 @@ export function PublishShareModal({
             checked={commentsOn}
             disabled={busy}
             onChange={e => void onToggleComments(e.target.checked)}
-            data-testid="publish-share-comments-toggle"
+            slotProps={{ input: { 'data-testid': 'publish-share-comments-toggle' } }}
           />
         </FormControl>
 

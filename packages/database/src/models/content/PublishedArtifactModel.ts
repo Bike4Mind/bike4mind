@@ -137,6 +137,16 @@ const PublishedArtifactSchema = new Schema(
       default: 'none',
     },
 
+    /** Search-engine opt-IN, orthogonal to `visibility` (who may view) the same way
+     *  `commentPolicy` is. Default false means EVERY viewer surface is served
+     *  `noindex` until the owner explicitly asks to be discoverable, and only ever
+     *  takes effect while the artifact is open-public (public AND ungated).
+     *  Backfill is deliberately omitted: an absent field reads as falsy, so every
+     *  existing row becomes non-indexable on deploy. That is the safe direction -
+     *  artifacts published under the old always-indexable behavior opt back IN
+     *  rather than staying silently exposed. */
+    discoverable: { type: Boolean, default: false },
+
     ownerId: { type: String, required: true },
     lastPublishedBy: { type: String },
 
