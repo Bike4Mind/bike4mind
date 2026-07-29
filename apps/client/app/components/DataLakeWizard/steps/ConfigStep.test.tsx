@@ -73,6 +73,30 @@ describe('ConfigStep - Tag Prefix single editable home', () => {
     expect(screen.getByText(/Derived from the name/i)).toBeInTheDocument();
   });
 
+  it('flags a reserved prefix even though the field is read-only here', () => {
+    // The prefix arrives from the taxonomy step, so the field is disabled - but the server
+    // rejects the datalake: namespace outright and Start Upload is gated on it. Without a
+    // message here the button is disabled with no visible reason. taxonomyStep is what makes
+    // the field read-only now, so the case has to be seeded with the step in the flow.
+    seedConfig({ tagPrefix: 'datalake:', taxonomyStep: true });
+
+    renderStep();
+
+    expect(screen.getByTestId('datalake-config-tagprefix-help').textContent).toMatch(/reserved/i);
+    expect(screen.queryByText(/Set on the AI Taxonomy step/i)).not.toBeInTheDocument();
+  });
+
+  it('flags a reserved prefix while editable here too, where the derive could produce one', () => {
+    // A lake named "Datalake" derives exactly this prefix, so the editable path needs the
+    // same message - see the guard in deriveTagPrefixFromName.
+    seedConfig({ tagPrefix: 'datalake:', taxonomyStep: false });
+
+    renderStep();
+
+    expect(screen.getByTestId('datalake-config-tagprefix-help').textContent).toMatch(/reserved/i);
+    expect(prefixInput().disabled).toBe(false);
+  });
+
   it('locks the prefix to the target lake in append mode (taxonomy is never offered there)', () => {
     seedConfig({
       tagPrefix: 'niche:',

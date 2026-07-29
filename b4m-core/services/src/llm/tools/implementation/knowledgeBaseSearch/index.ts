@@ -14,7 +14,10 @@ import {
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
   SemanticChunkResult,
+  type SemanticSearchBudgets,
+  type SemanticSearchScanAccounting,
 } from '../../../../dataLakeService/semanticDataLakeSearch';
+import { resolveSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
 import { getEffectiveLLMApiKeys } from '../../../../apiKeyService';
 import { recordOperationalUsage } from '../../../../billing';
 
@@ -39,13 +42,19 @@ function prettyFileName(fn: string): string {
 }
 
 /** Format semantic passages WITH their content so the model can answer without retrieving. */
-function formatSemanticResults(results: SemanticChunkResult[]): string {
+function formatSemanticResults(results: SemanticChunkResult[], scan?: SemanticSearchScanAccounting): string {
   const blocks = results.map((r, i) => {
     const text = r.chunkText.trim();
     const clipped = text.length > CHUNK_TEXT_CAP ? `${text.slice(0, CHUNK_TEXT_CAP)}…` : text;
     return `${i + 1}. **${prettyFileName(r.fileName)}** (relevance ${r.score.toFixed(2)})\n${clipped}`;
   });
+  // A truncated scan ranked only part of the corpus. Say so, or the model will read "no further
+  // matches" into what is really "we stopped looking" and assert the library holds nothing else.
+  const partial = scan?.truncated
+    ? `NOTE: this search covered only ${scan.filesScanned} of ${scan.filesMatching} documents (a scan budget was reached), so these passages may be incomplete. Do not state or imply the knowledge base has nothing further on this topic.\n\n`
+    : '';
   return (
+    partial +
     `Found ${results.length} relevant passage(s) in the knowledge base — the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
     blocks.join('\n\n---\n\n')
   );
@@ -60,6 +69,7 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   embeddingModel: SupportedEmbeddingModel;
   provider: string;
   apiKeyTable: Awaited<ReturnType<typeof getEffectiveLLMApiKeys>>;
+  budgets: SemanticSearchBudgets;
 } | null> {
   const adminSettings = context.db.adminSettings;
   const apiKeys = context.db.apiKeys;
@@ -80,7 +90,9 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   // Ollama base URL lives in apiKeyTable.ollama (self-host); without it, fall back to keyword.
   if (provider === 'ollama' && !apiKeyTable?.ollama) return null;
 
-  return { embeddingModel, provider, apiKeyTable };
+  const budgets = await resolveSearchBudgets({ adminSettings }, context.logger);
+
+  return { embeddingModel, provider, apiKeyTable, budgets };
 }
 
 /**
@@ -180,7 +192,7 @@ async function trySemanticKbSearch(
   try {
     const embedCtx = await resolveEmbeddingContext(context);
     if (!embedCtx) return null;
-    const { embeddingModel, provider, apiKeyTable } = embedCtx;
+    const { embeddingModel, provider, apiKeyTable, budgets } = embedCtx;
 
     const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
     if (dataLakeTags.length === 0) return null; // no accessible data lake — keyword search owns the user's own files
@@ -198,6 +210,7 @@ async function trySemanticKbSearch(
         dataLakeTags,
         dataLakeTagPrefixes,
         scopedTagPrefixes,
+        budgets,
         // Retrieval exclusion (opt-in) - agree with the surface's listing predicate. No-op when unset.
         retrievalFilter: context.retrievalFilter,
         logger: context.logger,
@@ -219,7 +232,7 @@ async function trySemanticKbSearch(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)})`
     );
 
-    return formatSemanticResults(ranked);
+    return formatSemanticResults(ranked, search.scan);
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
     return null;
@@ -245,7 +258,7 @@ async function tryScopedSemanticKbSearch(
   try {
     const embedCtx = await resolveEmbeddingContext(context);
     if (!embedCtx) return null;
-    const { embeddingModel, provider, apiKeyTable } = embedCtx;
+    const { embeddingModel, provider, apiKeyTable, budgets } = embedCtx;
 
     const search = await fileScopedSemanticSearch(
       {
@@ -255,6 +268,7 @@ async function tryScopedSemanticKbSearch(
         minScore: 0,
         embeddingModel,
         apiKeyTable,
+        budgets,
         logger: context.logger,
       },
       { db: { fabfiles: context.db.fabfiles, fabfilechunks: chunkRepo } }
@@ -266,7 +280,7 @@ async function tryScopedSemanticKbSearch(
 
     const ranked = search.results.slice(0, maxResults);
     await emitSemanticCitables(context, ranked, "this agent's knowledge base");
-    return formatSemanticResults(ranked);
+    return formatSemanticResults(ranked, search.scan);
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
     return null;
@@ -425,8 +439,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
 
           // Dedup (the lake can contain duplicate uploads) and relevance-rank by how well each
           // file's metadata matches the query - since the underlying search sorts by fileName
-          // ASC, the most relevant files would otherwise be buried. Metadata-only proxy ranking;
-          // true semantic (embedding) ranking is the planned follow-up.
+          // ASC, the most relevant files would otherwise be buried. Metadata-only proxy ranking:
+          // this is the KEYWORD fallback, reached only when the semantic arms above are
+          // unavailable or found nothing, so embedding ranking is not an option here.
           const queryTerms = Array.from(
             new Set(
               query

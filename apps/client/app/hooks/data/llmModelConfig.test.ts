@@ -26,4 +26,9 @@ describe('getDefaultModelConfig', () => {
     expect(getDefaultModelConfig(makeModelInfo({ private: false })).enabled).toBe(true);
     expect(getDefaultModelConfig(makeModelInfo({ private: true })).enabled).toBe(false);
   });
+
+  it('never defaults a catalog-disabled model to enabled', () => {
+    expect(getDefaultModelConfig(makeModelInfo({ disabled: true })).enabled).toBe(false);
+    expect(getDefaultModelConfig(makeModelInfo({ disabled: false })).enabled).toBe(true);
+  });
 });

@@ -205,3 +205,97 @@ describe('FabFileRepository.search data-lake tag prefixes', () => {
     expect(contained.total).toBe(0);
   });
 });
+
+// The promise behind removing a file from a lake: it stops appearing in that lake. Asserted
+// against the lake read scope itself rather than the mutation, because the defect was that the
+// two disagreed - the write cleared one membership signal and the scope honored two.
+describe('a file removed from a lake no longer matches that lake read scope', () => {
+  setupMongoTest();
+
+  const ownerId = 'lake-owner';
+  const pagination = { page: 1, limit: 20 };
+  const order = { by: 'fileName', direction: 'asc' } as const;
+
+  const LAKE = { datalakeTag: 'datalake:org:mylake', fileTagPrefix: 'mylake:' };
+  const OTHER_LAKE = { datalakeTag: 'datalake:org:otherlake', fileTagPrefix: 'other:' };
+
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  const seed = (fileName: string, tagNames: string[]) =>
+    FabFile.create({
+      userId: ownerId,
+      fileName,
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: tagNames.map(name => ({ name, strength: 1 })),
+    });
+
+  // The single-lake browser's option set, verbatim (see the lake articles route). Keep in sync:
+  // if that route's scope widens, removal has to clear whatever the new arm matches.
+  const browseLake = (lake: { datalakeTag: string; fileTagPrefix: string }) =>
+    fabFileRepository.search(ownerId, '', {}, pagination, order, {
+      includeShared: true,
+      userGroups: [],
+      dataLakeTags: [lake.datalakeTag],
+      scopedTagPrefixes: [lake.fileTagPrefix],
+      restrictToDataLake: true,
+      excludeContent: true,
+    });
+
+  const removeFromLake = async (fileId: string, lake: { datalakeTag: string; fileTagPrefix: string }) => {
+    const doc = await FabFile.findById(fileId);
+    const names = (doc?.tags ?? []).map(t => (t as { name: string }).name);
+    await fabFileRepository.pullTagsByFabFileId(fileId, [
+      lake.datalakeTag,
+      ...names.filter(name => name.startsWith(lake.fileTagPrefix)),
+    ]);
+  };
+
+  it('drops a wizard-ingested file carrying BOTH the meta-tag and a prefixed tag', async () => {
+    // Pulling only the meta-tag left this file matching the prefix arm forever, which is the
+    // bug: the lake count said it was gone while the browse and retrieval still served it.
+    const file = await seed('invoice.pdf', ['mylake:invoices', LAKE.datalakeTag]);
+    expect((await browseLake(LAKE)).total).toBe(1);
+
+    await removeFromLake(file.id as string, LAKE);
+
+    expect((await browseLake(LAKE)).total).toBe(0);
+  });
+
+  it('still matches the lake when only the meta-tag is cleared', async () => {
+    // Characterizes the read scope that made the old removal insufficient, and pins the reason
+    // removal has to clear both signals. If the prefix arm is ever dropped from the lake scope,
+    // this goes red and whoever does it can see the tradeoff instead of guessing.
+    const file = await seed('invoice.pdf', ['mylake:invoices', LAKE.datalakeTag]);
+
+    await fabFileRepository.pullTagsByFabFileId(file.id as string, [LAKE.datalakeTag]);
+
+    expect((await browseLake(LAKE)).total).toBe(1);
+  });
+
+  it('drops a file whose only membership signal is a prefixed tag', async () => {
+    const file = await seed('legacy.pdf', ['mylake:invoices']);
+    // The prefix arm is a real grant, so this file IS a member as far as the browse is concerned.
+    expect((await browseLake(LAKE)).total).toBe(1);
+
+    await removeFromLake(file.id as string, LAKE);
+
+    expect((await browseLake(LAKE)).total).toBe(0);
+  });
+
+  it('leaves the file in a second lake it also belongs to', async () => {
+    const file = await seed('shared.pdf', [
+      'mylake:invoices',
+      LAKE.datalakeTag,
+      'other:handbook',
+      OTHER_LAKE.datalakeTag,
+    ]);
+
+    await removeFromLake(file.id as string, LAKE);
+
+    expect((await browseLake(LAKE)).total).toBe(0);
+    expect((await browseLake(OTHER_LAKE)).data.map(f => f.id)).toEqual([file.id as string]);
+  });
+});

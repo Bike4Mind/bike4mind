@@ -131,6 +131,7 @@ const ComplianceModal = () => {
                     <tr>
                       <th>When</th>
                       <th>Event</th>
+                      <th>Actor</th>
                       <th>IP</th>
                       <th>User agent</th>
                     </tr>
@@ -138,13 +139,16 @@ const ComplianceModal = () => {
                   <tbody>
                     {data.recentAuthEvents.length === 0 ? (
                       <tr>
-                        <td colSpan={4}>No recent events.</td>
+                        <td colSpan={5}>No recent events.</td>
                       </tr>
                     ) : (
                       data.recentAuthEvents.map((e, i) => (
                         <tr key={i}>
                           <td>{fmt(e.createdAt)}</td>
                           <td>{e.event}</td>
+                          {/* actorUserId is only set for admin-driven events (e.g. session_revoked) - a
+                              self-initiated logout has no distinct actor to show. */}
+                          <td>{e.actorUserId ?? '-'}</td>
                           <td>{e.actorIp}</td>
                           <td>{e.userAgent}</td>
                         </tr>

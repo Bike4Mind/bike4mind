@@ -19,6 +19,9 @@ import { useEffect, useRef } from 'react';
 import { useDataLakeWizardStore, isTaxonomyStepActive } from '@client/app/stores/useDataLakeWizardStore';
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
 import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
+// The name, its slug rule, and the duplicate-name hint moved to the source step (#824), so
+// their imports live there now; only the reserved-prefix guard is still needed here.
+import { isReservedTagPrefix } from '@bike4mind/common';
 
 export default function ConfigStep() {
   const theme = useTheme();
@@ -30,6 +33,7 @@ export default function ConfigStep() {
   const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const duplicateCheckResults = useDataLakeWizardStore(s => s.duplicateCheckResults);
+  const reservedTagPrefix = isReservedTagPrefix(config.tagPrefix);
   const hashingProgress = useDataLakeWizardStore(s => s.hashingProgress);
 
   const computeHashes = useComputeHashes();
@@ -120,9 +124,11 @@ export default function ConfigStep() {
           />
         </FormControl>
 
-        {/* Tag Prefix - read-only here (its editable home is the taxonomy step in create
-            mode, or the target lake in append mode), unless the empty-prefix fallback applies. */}
-        <FormControl required={prefixEditable}>
+        {/* Tag Prefix - editable here only when no other step owns it (see prefixEditable);
+            read-only when the taxonomy step is in the flow, locked in append mode. Still flags
+            a reserved prefix even when read-only, so a value inherited from the taxonomy step
+            shows its reason here rather than only disabling Start Upload. */}
+        <FormControl required={prefixEditable} error={reservedTagPrefix}>
           <FormLabel>Tag Prefix</FormLabel>
           <Input
             data-testid="config-tag-prefix-input"
@@ -138,12 +144,14 @@ export default function ConfigStep() {
             sx={{ fontFamily: 'monospace' }}
             disabled={!prefixEditable}
           />
-          <FormHelperText>
-            {prefixEditable
-              ? 'All tags will be prefixed with this (must end with ":"). Derived from the name - change it if you like.'
-              : targetLake
-                ? 'Inherited from the existing data lake.'
-                : 'Set on the AI Taxonomy step. Go back there to change it.'}
+          <FormHelperText data-testid="datalake-config-tagprefix-help">
+            {reservedTagPrefix
+              ? '"datalake:" is reserved for lake membership. Pick another prefix, such as legal:'
+              : prefixEditable
+                ? 'All tags will be prefixed with this (must end with ":"). Derived from the name - change it if you like.'
+                : targetLake
+                  ? 'Inherited from the existing data lake.'
+                  : 'Set on the AI Taxonomy step. Go back there to change it.'}
           </FormHelperText>
         </FormControl>
 

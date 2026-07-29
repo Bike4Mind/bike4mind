@@ -101,13 +101,26 @@ describe('registerResources', () => {
 
   it('reads one notebook as pretty-printed JSON contents', async () => {
     const notebook = { id: 'n1', name: 'NB' };
-    const entry = collectResources(mockClient({ getNotebook: vi.fn().mockResolvedValue(notebook) })).get('notebook')!;
+    const getNotebook = vi.fn().mockResolvedValue(notebook);
+    const entry = collectResources(mockClient({ getNotebook })).get('notebook')!;
 
     const result = await entry.read(new URL('b4m://notebook/n1'), { id: 'n1' });
 
+    expect(getNotebook).toHaveBeenCalledWith('n1');
     expect(result.contents).toEqual([
       { uri: 'b4m://notebook/n1', mimeType: 'application/json', text: JSON.stringify(notebook, null, 2) },
     ]);
+  });
+
+  it('falls back to the raw id variable when it has a malformed percent-escape', async () => {
+    const getNotebook = vi.fn().mockResolvedValue({ id: '%zz', name: 'NB' });
+    const entry = collectResources(mockClient({ getNotebook })).get('notebook')!;
+
+    // decodeURIComponent('%zz') throws URIError; safeDecode must catch it and pass
+    // the raw variable through instead of letting the error escape past mapApiError.
+    await entry.read(new URL('b4m://notebook/n1'), { id: '%zz' });
+
+    expect(getNotebook).toHaveBeenCalledWith('%zz');
   });
 
   it('throws a scoped, mapped error when a notebook read fails', async () => {
@@ -153,10 +166,12 @@ describe('registerResources', () => {
 
   it('reads one file record as JSON contents', async () => {
     const record = { id: 'f1', fileName: 'notes.md', fileUrl: 'https://signed.example/notes.md' };
-    const entry = collectResources(mockClient({ getFile: vi.fn().mockResolvedValue(record) })).get('file')!;
+    const getFile = vi.fn().mockResolvedValue(record);
+    const entry = collectResources(mockClient({ getFile })).get('file')!;
 
     const result = await entry.read(new URL('b4m://file/f1'), { id: 'f1' });
 
+    expect(getFile).toHaveBeenCalledWith('f1');
     expect(result.contents).toEqual([
       { uri: 'b4m://file/f1', mimeType: 'application/json', text: JSON.stringify(record, null, 2) },
     ]);
@@ -201,10 +216,12 @@ describe('registerResources', () => {
 
   it('reads one project record as JSON contents', async () => {
     const record = { id: 'p1', name: 'Apollo' };
-    const entry = collectResources(mockClient({ getProject: vi.fn().mockResolvedValue(record) })).get('project')!;
+    const getProject = vi.fn().mockResolvedValue(record);
+    const entry = collectResources(mockClient({ getProject })).get('project')!;
 
     const result = await entry.read(new URL('b4m://project/p1'), { id: 'p1' });
 
+    expect(getProject).toHaveBeenCalledWith('p1');
     expect(result.contents).toEqual([
       { uri: 'b4m://project/p1', mimeType: 'application/json', text: JSON.stringify(record, null, 2) },
     ]);

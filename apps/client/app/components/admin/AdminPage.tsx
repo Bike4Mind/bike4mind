@@ -74,6 +74,7 @@ import {
   type SidebarGate,
   type SidebarItem,
 } from './adminSidebarConfig';
+import { useAdminModal } from './useAdminModal';
 
 export { AdminTab } from './adminSidebarConfig';
 
@@ -88,6 +89,7 @@ const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: 
 const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
+const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
 const SecurityDashboardMock = dynamic(() => import('./SecurityDashboardMock'), { ssr: false });
 const Team = lazy(() => import('./Team'));
@@ -104,18 +106,6 @@ const SecopsTriageTab = dynamic(() => import('./SecopsTriageTab'), { ssr: false 
 const PublishedArtifactsTab = dynamic(() => import('./PublishedArtifactsTab'), { ssr: false });
 const ArchitectureDiagramsTab = dynamic(() => import('./ArchitectureDiagramsTab'), { ssr: false });
 const DependenciesTab = dynamic(() => import('./DependenciesTab'), { ssr: false });
-
-export const useAdminModal = create<{
-  open: boolean;
-  activeTab: AdminTab | string | null;
-  setOpen: (open: boolean | ((open: boolean) => boolean)) => void;
-  setActiveTab: (activeTab: AdminTab | string | null) => void;
-}>((set, get) => ({
-  open: true, // open by default
-  activeTab: AdminTab.Users, // defaults to Users; overridden when migration is available
-  setOpen: open => set({ open: typeof open === 'function' ? open(get().open) : open }),
-  setActiveTab: (activeTab: AdminTab | string | null) => set({ activeTab }),
-}));
 
 export const useAdminNotifications = create<{
   hiddenNotifications: string[];
@@ -563,6 +553,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.ModelLogs}>{activeTab === AdminTab.ModelLogs && <ModelLogsTab />}</TabPanel>
               <TabPanel value={AdminTab.ModelMetrics}>
                 {activeTab === AdminTab.ModelMetrics && <ModelMetricsTab />}
+              </TabPanel>
+              <TabPanel value={AdminTab.ModelLifecycle}>
+                {activeTab === AdminTab.ModelLifecycle && <ModelLifecycleTab />}
               </TabPanel>
               <TabPanel value={AdminTab.ContextInspector}>
                 {activeTab === AdminTab.ContextInspector && <ContextInspectorTab />}

@@ -192,6 +192,24 @@ describe('useDataLakeWizardStore - deriveTagPrefixFromName', () => {
     expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('mine:');
   });
 
+  it('refuses to derive into the reserved datalake: namespace', () => {
+    // The server rejects it and Start Upload gates on it, so seeding it would block the user
+    // over a value they never typed. Leaving it empty keeps the field theirs to fill.
+    setName('Datalake');
+
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('');
+  });
+
+  it('still derives for a name that merely starts with the reserved word', () => {
+    setName('Datalake Archive');
+
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('datalake-archive:');
+  });
+
   it('does not treat a suggestion it never adopted as inference-owned', () => {
     // An existing value wins in setTaxonomy, so the rejected suggestion must not become the
     // marker that lets a later derive overwrite the value that did win.

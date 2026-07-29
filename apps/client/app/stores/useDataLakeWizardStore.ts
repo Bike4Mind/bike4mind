@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { TaxonomyFileAssignment } from '@bike4mind/common';
+import { isReservedTagPrefix } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
 import { slugifyDataLakeName } from '../hooks/data/dataLakeSlug';
 import {
@@ -444,6 +445,10 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
       const isOurs = !current || current === state.autoDerivedTagPrefix || current === state.inferredTagPrefix;
       if (!isOurs) return state;
       const prefix = `${slugifyDataLakeName(state.config.name)}:`;
+      // A lake named "Datalake" derives the reserved membership namespace, which the server
+      // rejects and Start Upload gates on - leaving the user blocked over a value they never
+      // typed. Leave the field for them to fill instead of seeding one that cannot be used.
+      if (isReservedTagPrefix(prefix)) return state;
       return {
         autoDerivedTagPrefix: prefix,
         inferredTagPrefix: '',

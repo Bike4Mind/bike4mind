@@ -1,0 +1,142 @@
+{
+  "models": [
+    {
+      "name": "qwen3.6:35b-a3b-q4_K_M",
+      "model": "qwen3.6:35b-a3b-q4_K_M",
+      "modified_at": "2026-07-26T05:52:19.181062713Z",
+      "size": 23938333577,
+      "digest": "07d35212591fc27746f0a317c975a6d68754fb38e9053d82e25f06057af28522",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen35moe",
+        "families": [
+          "qwen35moe"
+        ],
+        "parameter_size": "36.0B",
+        "quantization_level": "Q4_K_M",
+        "context_length": 262144,
+        "embedding_length": 2048
+      },
+      "capabilities": [
+        "vision",
+        "completion",
+        "tools",
+        "thinking"
+      ]
+    },
+    {
+      "name": "gemma4:26b-a4b-it-q4_K_M",
+      "model": "gemma4:26b-a4b-it-q4_K_M",
+      "modified_at": "2026-07-26T05:37:46.517490147Z",
+      "size": 17987581215,
+      "digest": "5571076f3d70050487b26b341705799e0ab29b808164f90d20d4cf84f699d251",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "gemma4",
+        "families": [
+          "gemma4"
+        ],
+        "parameter_size": "25.8B",
+        "quantization_level": "Q4_K_M"
+      },
+      "capabilities": [
+        "completion",
+        "tools",
+        "thinking"
+      ]
+    },
+    {
+      "name": "qwen3-embedding:0.6b",
+      "model": "qwen3-embedding:0.6b",
+      "modified_at": "2026-07-26T05:31:11.291023955Z",
+      "size": 639150858,
+      "digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen3",
+        "families": [
+          "qwen3"
+        ],
+        "parameter_size": "595.78M",
+        "quantization_level": "Q8_0",
+        "context_length": 32768,
+        "embedding_length": 1024
+      },
+      "capabilities": [
+        "embedding"
+      ]
+    },
+    {
+      "name": "qwen3.5:2b-q4_K_M",
+      "model": "qwen3.5:2b-q4_K_M",
+      "modified_at": "2026-07-21T04:30:42.41866594Z",
+      "size": 1945323638,
+      "digest": "124a03c347777e8e4e5955c33610ae01d9d90d8c2a718bfba069c498d5c7f3c9",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "qwen35",
+        "families": [
+          "qwen35"
+        ],
+        "parameter_size": "2.3B",
+        "quantization_level": "Q4_K_M",
+        "context_length": 262144,
+        "embedding_length": 2048
+      },
+      "capabilities": [
+        "vision",
+        "completion",
+        "tools",
+        "thinking"
+      ]
+    },
+    {
+      "name": "nomic-embed-text:latest",
+      "model": "nomic-embed-text:latest",
+      "modified_at": "2026-07-20T05:38:14.552012268Z",
+      "size": 274302450,
+      "digest": "0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "nomic-bert",
+        "families": [
+          "nomic-bert"
+        ],
+        "parameter_size": "137M",
+        "quantization_level": "F16",
+        "context_length": 2048,
+        "embedding_length": 768
+      },
+      "capabilities": [
+        "embedding"
+      ]
+    },
+    {
+      "name": "bge-m3:latest",
+      "model": "bge-m3:latest",
+      "modified_at": "2026-07-17T16:00:25.435647357Z",
+      "size": 1157672605,
+      "digest": "7907646426070047a77226ac3e684fbbe8410524f7b4a74d02837e43f2146bab",
+      "details": {
+        "parent_model": "",
+        "format": "gguf",
+        "family": "bert",
+        "families": [
+          "bert"
+        ],
+        "parameter_size": "566.70M",
+        "quantization_level": "F16",
+        "context_length": 8192,
+        "embedding_length": 1024
+      },
+      "capabilities": [
+        "embedding"
+      ]
+    }
+  ]
+}
