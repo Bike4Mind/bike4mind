@@ -189,10 +189,11 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
       res
     );
 
-    // The meta-tag appears twice: the route appends its own on top of the client's copy and has
-    // never deduped. Harmless (the counters exclude datalake:* and the ownership arms use
-    // $elemMatch) and out of scope here, so this asserts only that a meta-tag does not count as
-    // a content tag - without the exclusion, the file would look categorized and get no stamp.
-    expect(tagNamesOf()).toContain('acme:uncategorized');
+    // Two things at once: a meta-tag does not count as a content tag (without that exclusion the
+    // file would look categorized and get no stamp), and the server's injected copy is deduped
+    // against the client's rather than persisted twice.
+    const names = tagNamesOf();
+    expect(names).toContain('acme:uncategorized');
+    expect(names.filter(n => n === 'datalake:orga:acme-2026')).toHaveLength(1);
   });
 });

@@ -196,6 +196,12 @@ async function main(opts: Options): Promise<number> {
     // Create the FabFile. Tags are what fabFileSearchQuery scopes on:
     //  - `datalake:system-help` -> the meta-tag (dataLakeTags match)
     //  - `help:<slug>`          -> the `help:` prefix match + encodes the slug for deep-linking
+    //
+    // MUST STAY IN SYNC with the invariant in dataLakeService/fallbackLakeTags: a file carrying a
+    // lake meta-tag must also carry a tag under that lake's fileTagPrefix, or it is invisible to
+    // tag-counts and to the Explorer tag tree. This writes through the repository rather than an
+    // API door, so no reconciler runs here - the `help:<slug>` tag is what satisfies it, and
+    // dropping it would silently reproduce the bug this invariant exists to prevent.
     const fileBody = `# ${entry.title}\n\n${markdown}`;
     const fabFile = await fabFileRepository.create({
       userId: opts.userId,

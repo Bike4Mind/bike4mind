@@ -112,10 +112,13 @@ const handler = baseApi().post(async (req: Request, res) => {
       // This is the flat-upload path. The wizard derives content tags from folder structure, so
       // a file picked through "Upload Files..." (relativePath with no separator) contributes
       // none, and append mode has no taxonomy step to supply them either.
-      const tags = await applyFallbackTags([
-        ...(fileItem.tags || []),
-        ...(datalakeTag ? [{ name: datalakeTag, strength: 1.0 }] : []),
-      ]);
+      // Deduped by name: a client may smuggle the same meta-tag the server injects, and there is
+      // no reason to persist it twice. First occurrence wins, so a client-supplied strength does
+      // not override the server's.
+      const merged = [...(fileItem.tags || []), ...(datalakeTag ? [{ name: datalakeTag, strength: 1.0 }] : [])].filter(
+        (tag, i, all) => all.findIndex(other => other.name === tag.name) === i
+      );
+      const tags = await applyFallbackTags(merged);
 
       // Stamp batchId so the existing pipeline (objectCreated -> chunk -> vectorize)
       // correlates the file to its batch and updates batch progress. Without this the
