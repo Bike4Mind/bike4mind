@@ -115,19 +115,34 @@ export function kimiReasoningParams(model: string, input: KimiReasoningInput): R
 }
 
 /**
- * Temperature and top_p for one model. Moonshot pins both on most current Kimi
- * ids (temperature 1.0, top_p 0.95) and documents them as unmodifiable, so they
- * are omitted rather than sent-and-ignored: NO_TEMPERATURE_MODELS is the shared
- * set the catalog's temperatureMode also lands on.
+ * Sampling parameters for one model. Moonshot pins temperature (1.0) and top_p
+ * (0.95) on every current Kimi and documents them as unmodifiable, so they are
+ * omitted rather than sent-and-ignored; NO_TEMPERATURE_MODELS is the shared set
+ * the catalog's temperatureMode also lands on.
+ *
+ * The penalties and `n` ride the same gate. Moonshot documents the whole sampling
+ * group as fixed on these ids, B4M sends penalties on essentially every turn, and
+ * an unmodifiable parameter here is a 400 rather than a silently ignored field -
+ * so the conservative reading is the safe one. Only the moonshot-v1 family, which
+ * this build does not ship, accepts any of them.
  */
 export function kimiSamplingParams(
   model: string,
-  input: { temperature?: number; topP?: number }
+  input: {
+    temperature?: number;
+    topP?: number;
+    presencePenalty?: number;
+    frequencyPenalty?: number;
+    n?: number;
+  }
 ): Record<string, unknown> {
   if (NO_TEMPERATURE_MODELS.has(model)) return {};
   const params: Record<string, unknown> = {};
   if (input.temperature !== undefined) params.temperature = input.temperature;
   if (input.topP !== undefined) params.top_p = input.topP;
+  if (input.presencePenalty !== undefined) params.presence_penalty = input.presencePenalty;
+  if (input.frequencyPenalty !== undefined) params.frequency_penalty = input.frequencyPenalty;
+  if (input.n !== undefined) params.n = input.n;
   return params;
 }
 

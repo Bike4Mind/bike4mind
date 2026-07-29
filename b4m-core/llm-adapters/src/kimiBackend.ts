@@ -143,7 +143,7 @@ export class KimiBackend implements ICompletionBackend {
         releaseDate: '2026-04-21',
         trainingCutoff: '2025-01-01',
         description:
-          "Moonshot's multimodal workhorse for agent loops, coding, and visual context. The one current Kimi that still accepts a temperature and lets thinking be turned off.",
+          "Moonshot's multimodal workhorse for agent loops, coding, and visual context. Thinking can be turned off on this one, unlike the K2.7 code models.",
       },
       {
         id: ChatModels.KIMI_K2_5,
@@ -217,12 +217,17 @@ export class KimiBackend implements ICompletionBackend {
     };
 
     Object.assign(parameters, {
-      ...kimiSamplingParams(model, { temperature: options.temperature, topP: options.topP }),
+      // Every pinned sampling parameter goes through this one gate - sending any
+      // of them to a model that fixes them is a 400, so none may be set here.
+      ...kimiSamplingParams(model, {
+        temperature: options.temperature,
+        topP: options.topP,
+        presencePenalty: options.presencePenalty,
+        frequencyPenalty: options.frequencyPenalty,
+        n: options.n,
+      }),
       ...kimiReasoningParams(model, { thinking: options.thinking, reasoningEffort: options.reasoningEffort }),
-      n: options.n || 1,
       stop: options.stop,
-      presence_penalty: options.presencePenalty,
-      frequency_penalty: options.frequencyPenalty,
       stream: useStreaming,
       // `max_tokens` is deprecated upstream; Moonshot documents
       // max_completion_tokens as the supported spelling.
@@ -259,7 +264,13 @@ export class KimiBackend implements ICompletionBackend {
     }
     const nativeFormat = options.responseFormat?.type === 'json_schema';
 
-    const thinkingRequested = 'thinking' in parameters || 'reasoning_effort' in parameters;
+    // NO GATE on reasoning capture, deliberately. Deriving this from "did we send a
+    // reasoning parameter" drops reasoning on the common path: K3 always reasons and
+    // kimiReasoningParams sends nothing when no explicit effort was set (the default,
+    // since reasoningEffort is only populated on an explicit user override), and
+    // k2.6/k2.5 default thinking ON when the parameter is omitted. Any
+    // reasoning_content Moonshot returns was billed as output tokens, so discarding
+    // it would charge the user for text they never see.
 
     // Moonshot's context caching is automatic with no parameter or header to set;
     // the adapter exists to read `usage.cached_tokens` back out.
@@ -281,12 +292,13 @@ export class KimiBackend implements ICompletionBackend {
       for (const c of response.choices) {
         if (!c.message) continue;
 
-        // Kimi returns thinking on `reasoning_content`, same field xAI uses.
-        if (thinkingRequested && (c.message as any).reasoning_content) {
-          const reasoningContent = (c.message as any).reasoning_content;
-          streamedText[c.index] = `<think>${reasoningContent}</think>${c.message.content || ''}`;
-          continue;
-        }
+        // Kimi returns thinking on `reasoning_content`, same field xAI uses. It is
+        // read here but NOT returned early: a reasoning model that also calls a
+        // tool populates both, and handling reasoning first would hand back the
+        // monologue as the whole answer and never run the tool. That is not
+        // hypothetical for Kimi - the k2.7-code ids cannot turn thinking off, and
+        // they are the agentic models most likely to call something.
+        const reasoningContent = (c.message as any).reasoning_content as string | undefined;
 
         if (c.message.tool_calls && c.message.tool_calls.length > 0) {
           for (const toolCall of c.message.tool_calls) {
@@ -406,8 +418,23 @@ export class KimiBackend implements ICompletionBackend {
             return;
           }
         } else {
-          streamedText[c.index] = c.message.content || '';
+          const content = c.message.content || '';
+          streamedText[c.index] = reasoningContent ? `<think>${reasoningContent}</think>${content}` : content;
         }
+      }
+
+      // A turn that produced neither prose nor a tool call is a failure, not an
+      // empty answer, and the most likely cause on Kimi is a reasoning model that
+      // spent its whole max_completion_tokens budget thinking. Without this the
+      // user gets a silent blank reply. The Bedrock path has the same guard in
+      // bedrockBackend/base.ts; the direct path needs its own.
+      if (streamedText.every(text => !text) && toolsUsed.length === 0) {
+        const finish = response.choices[0]?.finish_reason;
+        throw new Error(
+          finish === 'length'
+            ? `Moonshot returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`
+            : `Moonshot returned no content for ${model} (finish_reason: ${finish ?? 'unknown'}).`
+        );
       }
 
       let cacheStats: CacheUsageStats | undefined;
@@ -448,7 +475,9 @@ export class KimiBackend implements ICompletionBackend {
           streamFinishReason = c.finish_reason;
         }
 
-        if (thinkingRequested && (c.delta as any).reasoning_content) {
+        // Ungated, for the same reason as the non-streaming path: reasoning arrives
+        // by default on every current Kimi and is billed either way.
+        if ((c.delta as any).reasoning_content) {
           if (!isInThinkingBlock) {
             isInThinkingBlock = true;
             streamedText[c.index] = '<think>' + (c.delta as any).reasoning_content;
@@ -664,11 +693,9 @@ export class KimiBackend implements ICompletionBackend {
       role: 'tool',
       content: JSON.stringify({ result }),
       tool_call_id: tool.id,
+      // Moonshot's tool-call guide shows `name` on the result message alongside
+      // tool_call_id, unlike OpenAI where the id alone suffices.
+      name: tool.name,
     } as unknown as IMessage);
-  }
-
-  async modelSupportsThinking(model: string): Promise<boolean> {
-    const modelInfo = await this.getModelInfo();
-    return modelInfo.find(m => m.id === model)?.can_think === true;
   }
 }

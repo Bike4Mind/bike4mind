@@ -406,13 +406,17 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
   ChatModels.CLAUDE_5_OPUS,
-  // Moonshot pins temperature (1.0) and top_p (0.95) on these and documents them
-  // as unmodifiable; models.dev reports the same as `temperature: false`, so the
-  // runtime and whatever discovery writes as temperatureMode agree. kimi-k2.6 is
-  // deliberately absent - it is the one current Kimi that still takes a value.
+  // Moonshot pins temperature and top_p on every current Kimi and documents them
+  // as unmodifiable: the chat API reference states only the moonshot-v1 family
+  // accepts them, and the thinking guide says outright that for kimi-k2.7-code
+  // and kimi-k2.6 temperature is not modifiable and should not be passed. k2.6
+  // was briefly excluded here on the strength of models.dev reporting
+  // `temperature: true`; the primary docs are the authority and the aggregator is
+  // the outlier.
   ChatModels.KIMI_K3,
   ChatModels.KIMI_K2_7_CODE,
   ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
+  ChatModels.KIMI_K2_6,
   ChatModels.KIMI_K2_5,
 ]);
 

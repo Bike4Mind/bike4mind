@@ -47,12 +47,24 @@ describe('kimi source normalization', () => {
     expect(normalizeKimiModels(malformed).map(r => r.modelId)).toEqual(['kimi-k3']);
   });
 
-  it('omits type for an id whose namespace does not state a modality, and skips a non-model object', () => {
+  it('classifies by modality marker before namespace, and skips a non-model object', () => {
     const records = normalizeKimiModels(unknownNamespace);
     expect(records.map(r => r.modelId)).toEqual(['kimi-k3', 'moonshot-embedding-1']);
-    // Fail closed: a future embedding model is a dropped-and-counted record
-    // downstream, not a chat model offered in the picker.
-    expect(records.find(r => r.modelId === 'moonshot-embedding-1')?.patch.type).toBeUndefined();
+    // The marker wins over the namespace: an embedding model must never be
+    // labelled 'text' just because it sits in a namespace we recognize.
+    expect(records.find(r => r.modelId === 'moonshot-embedding-1')?.patch.type).toBe('embedding');
+  });
+
+  it('reads a modality marker inside the live kimi- namespace, not just the legacy one', () => {
+    // The inverse of what the first cut did: it guarded moonshot-v1- (dead since
+    // 2024) and blanket-labelled every kimi- id 'text', so the first kimi TTS
+    // model would have shipped as a chat model.
+    const typeOf = (id: string) => normalizeKimiModels({ data: [{ id, object: 'model' }] })[0]?.patch.type;
+    expect(typeOf('kimi-tts-preview')).toBe('tts');
+    expect(typeOf('kimi-embedding-v1')).toBe('embedding');
+    expect(typeOf('kimi-k3')).toBe('text');
+    // A vision-preview chat model accepts images; it is not an image model.
+    expect(typeOf('moonshot-v1-128k-vision-preview')).toBe('text');
   });
 
   it('returns nothing for an empty list rather than inventing rows', () => {

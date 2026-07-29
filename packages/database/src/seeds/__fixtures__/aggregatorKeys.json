@@ -1,7 +1,14 @@
 {
   "notice": "Aggregator key universes captured 2026-07-26 from models.dev/api.json (ETag 97c7bbb38bbf69bf51d022718f331faf) and github.com/BerriAI/litellm@v1.93.0/model_prices_and_context_window.json. Keys only, no values: this fixture exists so the join-coverage guard and the dead-alias check run without egress. modelsDev holds only the providers MODELS_DEV_PROVIDER_BY_BACKEND maps a backend to; litellm holds only first-party keys, because a key whose gateway prefix survives normalization can never match one of our ids and must never be aliased to. The moonshotai provider keys and the first-party moonshot/* litellm keys were added 2026-07-28 when the Kimi backend landed; the litellm side is still read at v1.93.0, the models.dev side from a later fetch than the ETag above.",
   "capturedAt": "2026-07-26",
-  "modelsDevProviders": ["amazon-bedrock", "anthropic", "google", "moonshotai", "openai", "xai"],
+  "modelsDevProviders": [
+    "amazon-bedrock",
+    "anthropic",
+    "google",
+    "moonshotai",
+    "openai",
+    "xai"
+  ],
   "litellmRef": "v1.93.0",
   "modelsDev": [
     "amazon.nova-2-lite-v1:0",

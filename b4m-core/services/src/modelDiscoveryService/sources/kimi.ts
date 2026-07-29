@@ -38,12 +38,29 @@ interface KimiModelList {
 }
 
 /**
- * Moonshot ships only chat models on this endpoint today, but 'text' is asserted
- * from the id namespace rather than assumed for everything: a future
- * `moonshot-embedding-*` should be a dropped-and-counted record, not an embedding
- * model mislabeled as chat and offered in the picker.
+ * Moonshot ships only chat models on this endpoint today, so the namespaces are
+ * classified as 'text' - but modality markers are checked FIRST, the way
+ * ./openai does it. Prefix alone is not enough: `kimi-` is the live namespace and
+ * will be where a `kimi-tts-*` or `kimi-embedding-*` eventually appears, so
+ * matching it blindly would label the next modality as chat and offer it in the
+ * picker. An unrecognized marker returns undefined, which drops the record and
+ * counts it rather than guessing.
  */
+const MODALITY_MARKERS: ReadonlyArray<[RegExp, ModelRecord['type']]> = [
+  [/(^|-)tts(-|$)/, 'tts'],
+  [/(^|-)embedding(s)?(-|$)/, 'embedding'],
+  [/(^|-)(asr|transcribe|whisper)(-|$)/, 'speech-to-text'],
+  [/(^|-)(video|sora)(-|$)/, 'video'],
+  [/(^|-)realtime(-|$)/, 'realtime-voice'],
+  [/(^|-)image(-|$)/, 'image'],
+];
+
 function inferType(id: string): ModelRecord['type'] | undefined {
+  for (const [marker, type] of MODALITY_MARKERS) {
+    if (marker.test(id)) return type;
+  }
+  // `-vision-preview` is a moonshot-v1 chat model that ACCEPTS images, not an
+  // image model, so it deliberately falls through to 'text' below.
   if (id.startsWith('kimi-') || id.startsWith('moonshot-v1-')) return 'text';
   return undefined;
 }

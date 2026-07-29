@@ -25,6 +25,59 @@ export interface BackendGateContext {
 }
 
 /**
+ * The provider-keyed shape `getEffectiveLLMApiKeys` returns. Declared here rather
+ * than imported from @bike4mind/auth because this package cannot depend on auth,
+ * and structural typing makes the real return value assignable anyway.
+ */
+export interface EffectiveLLMKeys {
+  openai?: string | null;
+  anthropic?: string | null;
+  gemini?: string | null;
+  bfl?: string | null;
+  ollama?: string | null;
+  xai?: string | null;
+  kimi?: string | null;
+  voyageai?: string | null;
+  /** The getEffectiveLLMApiKeys spelling of the local-image base URL. */
+  imageGen?: string | null;
+}
+
+/**
+ * Translate resolved provider keys into the backend-keyed table every
+ * getAvailableModels / getLlmByModel caller passes.
+ *
+ * THIS FUNCTION EXISTS TO BE A RATCHET. `ApiKeyTable` is a Partial, so for years
+ * every call site hand-wrote this literal and every new provider was silently
+ * absent from whichever ones nobody remembered - the Kimi launch missed five of
+ * them at once, and the picker listed no Kimi model at all as a result. The
+ * `table` local below is a TOTAL Record<ModelBackend, ...>, so adding a
+ * ModelBackend member is a compile error here, once, instead of five silent
+ * omissions. Prefer this over a fresh literal in any new caller.
+ *
+ * A backend that takes no credential (Bedrock, AWS - both AWS-IAM) maps to
+ * undefined: absence here means "no key to pass", and `isBackendUsable` decides
+ * their availability from `isSelfHost` instead.
+ */
+export function buildApiKeyTable(keys: EffectiveLLMKeys): ApiKeyTable {
+  const table: Record<ModelBackend, string | null | undefined> = {
+    [ModelBackend.OpenAI]: keys.openai || undefined,
+    [ModelBackend.Anthropic]: keys.anthropic || undefined,
+    [ModelBackend.Gemini]: keys.gemini || undefined,
+    [ModelBackend.BFL]: keys.bfl || undefined,
+    [ModelBackend.Ollama]: keys.ollama || undefined,
+    [ModelBackend.XAI]: keys.xai || undefined,
+    [ModelBackend.Kimi]: keys.kimi || undefined,
+    [ModelBackend.VoyageAI]: keys.voyageai || undefined,
+    // `imageGen` has no backend of that name; leaving it un-normalized drops
+    // every local image model on the floor.
+    [ModelBackend.LocalImage]: keys.imageGen || undefined,
+    [ModelBackend.Bedrock]: undefined,
+    [ModelBackend.AWS]: undefined,
+  };
+  return table;
+}
+
+/**
  * Listing backends that take no credential. They still need real AWS credentials
  * at dispatch, which a self-host install does not have (its AWS_ACCESS_KEY_ID is
  * the local MinIO credential), so `isSelfHost` withholds them rather than

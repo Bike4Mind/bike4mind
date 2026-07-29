@@ -34,12 +34,18 @@ export const getApiKeyTypeFromBackend = (backend: ModelBackend): ApiKeyType | nu
       return ApiKeyType.ollama;
     case ModelBackend.XAI:
       return ApiKeyType.xai;
-    case ModelBackend.Bedrock:
-      // Bedrock doesn't use API keys from the system - uses AWS credentials
-      return null;
+    case ModelBackend.Kimi:
+      return ApiKeyType.kimi;
     case ModelBackend.VoyageAI:
       return ApiKeyType.voyageai;
-    default:
+    // AWS-credentialed backends hold no API key of their own, and local-image is
+    // a base URL. Enumerated rather than left to `default` so that adding a
+    // ModelBackend is a compile error here: this function's null return is the
+    // "no key configured" diagnostic, so a provider that falls through silently
+    // loses its error message as well as its key.
+    case ModelBackend.Bedrock:
+    case ModelBackend.AWS:
+    case ModelBackend.LocalImage:
       return null;
   }
 };

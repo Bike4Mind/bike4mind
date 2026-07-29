@@ -67,26 +67,47 @@ describe('kimiReasoningParams', () => {
 });
 
 describe('kimiSamplingParams', () => {
-  it('omits temperature and top_p on the models that pin them', () => {
+  /**
+   * Every current Kimi pins the sampling group. Moonshot's chat reference says
+   * only the moonshot-v1 family accepts temperature/top_p, and the thinking guide
+   * names k2.6 and k2.7-code explicitly as not modifiable. k2.6 was briefly
+   * treated as an exception here on the strength of models.dev reporting
+   * `temperature: true`; the primary docs win.
+   */
+  it('omits the whole sampling group on every shipped Kimi id', () => {
     for (const model of [
       ChatModels.KIMI_K3,
       ChatModels.KIMI_K2_7_CODE,
       ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
+      ChatModels.KIMI_K2_6,
       ChatModels.KIMI_K2_5,
     ]) {
-      expect(kimiSamplingParams(model, { temperature: 0.7, topP: 0.5 })).toEqual({});
+      expect(
+        kimiSamplingParams(model, {
+          temperature: 0.7,
+          topP: 0.5,
+          presencePenalty: 0.2,
+          frequencyPenalty: 0.3,
+          n: 2,
+        })
+      ).toEqual({});
     }
   });
 
-  it('passes temperature and top_p through on K2.6, the one that still takes them', () => {
-    expect(kimiSamplingParams(ChatModels.KIMI_K2_6, { temperature: 0.7, topP: 0.5 })).toEqual({
-      temperature: 0.7,
-      top_p: 0.5,
-    });
+  it('passes the group through for a model outside the pinned set', () => {
+    expect(
+      kimiSamplingParams('moonshot-v1-8k', {
+        temperature: 0.7,
+        topP: 0.5,
+        presencePenalty: 0.2,
+        frequencyPenalty: 0.3,
+        n: 2,
+      })
+    ).toEqual({ temperature: 0.7, top_p: 0.5, presence_penalty: 0.2, frequency_penalty: 0.3, n: 2 });
   });
 
   it('sends nothing it was not given', () => {
-    expect(kimiSamplingParams(ChatModels.KIMI_K2_6, {})).toEqual({});
+    expect(kimiSamplingParams('moonshot-v1-8k', {})).toEqual({});
   });
 });
 

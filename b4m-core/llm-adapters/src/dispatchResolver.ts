@@ -26,7 +26,20 @@ const BEDROCK_FAMILY_BY_VENDOR: Readonly<Record<string, AdapterFamily>> = {
   anthropic: 'bedrock-anthropic',
   meta: 'bedrock-llama',
   deepseek: 'bedrock-deepseek',
+  // BOTH spellings, because AWS ships both: k2.5 is `moonshotai.` and
+  // k2-thinking is `moonshot.` on bedrock-runtime. Mapping only one would leave
+  // every discovered model on the other prefix permanently un-dispatchable.
+  moonshot: 'bedrock-moonshot',
+  moonshotai: 'bedrock-moonshot',
 };
+
+/**
+ * Moonshot direct. Its own constant rather than PROVIDER_NATIVE_PROFILE because
+ * Moonshot deprecated `max_tokens` in favor of `max_completion_tokens`, which is
+ * exactly the kind of thing the profile exists to record - and exactly what
+ * kimiBackend sends.
+ */
+const KIMI_PROFILE: ModelDispatchProfile = { maxTokensParam: 'max_completion_tokens', toolTransport: 'chat' };
 
 /** Backends whose family is the backend, with a request shape this build fixes. */
 const FAMILY_BY_BACKEND: Readonly<Partial<Record<ModelBackend, AdapterFamily>>> = {
@@ -73,6 +86,12 @@ export function resolveDispatchForRecord(record: Pick<ModelRecord, 'id' | 'backe
 
   if (record.backend === ModelBackend.Anthropic) {
     return { adapterFamily: 'anthropic-messages', dispatchProfile: ANTHROPIC_MESSAGES_PROFILE };
+  }
+
+  // Moonshot direct: family and profile are both known, but the profile is not the
+  // provider-native one (see KIMI_PROFILE).
+  if (record.backend === ModelBackend.Kimi) {
+    return { adapterFamily: 'kimi', dispatchProfile: KIMI_PROFILE };
   }
 
   const adapterFamily = FAMILY_BY_BACKEND[record.backend];

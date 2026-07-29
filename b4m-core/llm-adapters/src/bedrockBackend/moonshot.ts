@@ -1,6 +1,25 @@
 import { ChatModels, IMessage, ModelBackend, type ModelInfo } from '@bike4mind/common';
-import { ChoiceEndReason, ChoiceStatus, ICompletionOptions, ICompletionResponseChunk } from '../backend';
+import {
+  ChoiceEndReason,
+  ChoiceStatus,
+  ICompletionOptions,
+  ICompletionOptionTools,
+  ICompletionResponseChunk,
+  IChoiceEndToolUse,
+} from '../backend';
 import { BaseBedrockBackend } from './base';
+
+/** The assistant payload Moonshot returns, on `message` or streamed as `delta`. */
+interface MoonshotMessage {
+  content?: string;
+  reasoning_content?: string;
+  tool_calls?: Array<{
+    index?: number;
+    id?: string;
+    type?: string;
+    function?: { name?: string; arguments?: string };
+  }>;
+}
 
 /**
  * Moonshot's Kimi models served through Bedrock's InvokeModel path.
@@ -16,10 +35,21 @@ import { BaseBedrockBackend } from './base';
  * - k2-thinking is text-only on Bedrock; k2.5 takes images (3 MB payload cap).
  * - The two ids do not share a prefix. That is AWS's inconsistency, not ours.
  *
+ * NO INFERENCE-PROFILE PREFIX, unlike every other Bedrock id added here since
+ * 2025 (`us.deepseek.r1-v1:0`, `global.anthropic.claude-opus-4-8`). Both model
+ * cards list Geo AND Global inference as "Not supported", so these models are
+ * In-Region only and no `us.`/`global.` profile exists to prefix with. That makes
+ * them dependent on getRegionForModel's us-east-2 default (base.ts), which is a
+ * supported In-Region for both - but it is a coupling worth knowing about if that
+ * default ever changes.
+ *
  * @see https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-5.html
  * @see https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html
  */
 export default class MoonshotBedrockBackend extends BaseBedrockBackend {
+  /** Streaming-only: whether an unclosed `<think>` tag has been emitted. */
+  private isInThinkingBlock = false;
+
   async getModelInfo(): Promise<ModelInfo[]> {
     return [
       {
@@ -31,11 +61,12 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         max_tokens: 16_384,
         can_stream: true,
         pricing: {
-          // $0.60 / 1M in, $3.00 / 1M out in us-east-1, us-east-2 and us-west-2.
-          // Other regions are quoted higher (ap-south-1 and friends bill $0.72 /
-          // $3.60); the catalog holds one rate, so this is the US-region rate and
-          // a deployment in a pricier region will under-report until an operator
-          // row corrects it. @see https://aws.amazon.com/bedrock/pricing/
+          // $0.60 / 1M in, $3.00 / 1M out. This is the us-east-2 rate, which is
+          // the only one that can apply: getRegionForModel (base.ts) sends every
+          // id outside its us-east-1 allowlist to us-east-2, and both Kimi ids
+          // are In-Region only - the model cards list Geo and Global inference as
+          // unsupported, so there is no cross-region profile that could route a
+          // call to a pricier region. @see https://aws.amazon.com/bedrock/pricing/
           262_144: { input: 0.6 / 1_000_000, output: 3 / 1_000_000 },
         },
         can_think: true,
@@ -103,6 +134,14 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     if (typeof options.topP === 'number') body.top_p = options.topP;
     if (Array.isArray(options.stop) && options.stop.length > 0) body.stop = options.stop;
 
+    if (options.tools?.length) {
+      body.tools = this.formatTools(options.tools);
+      if (options.tool_choice !== undefined) body.tool_choice = options.tool_choice;
+    }
+
+    // A fresh request starts outside any thinking block; see translateStreamChunk.
+    this.isInThinkingBlock = false;
+
     return {
       modelId: model,
       contentType: 'application/json',
@@ -111,11 +150,42 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     };
   }
 
+  /** OpenAI tool shape, which is what Moonshot takes on the Invoke path. */
+  formatTools(tools: ICompletionOptionTools[] = []) {
+    return tools.map(tool => ({
+      type: 'function' as const,
+      function: tool.toolSchema,
+    }));
+  }
+
   translateChunk(model: string, chunk: Record<string, unknown>): { done: boolean; chunk: ICompletionResponseChunk } {
+    return this.translate(model, chunk, { streaming: false });
+  }
+
+  /**
+   * Streaming needs its own pass for one reason: `reasoning_content` arrives as a
+   * delta per chunk, so wrapping each one in its own `<think></think>` (as a
+   * straight delegation to translateChunk would) renders one thinking block per
+   * token. The open tag is emitted once and closed when prose starts, matching
+   * kimiBackend and xaiBackend; `isInThinkingBlock` is reset in getPayload so a
+   * new request never inherits the previous one's state.
+   */
+  translateStreamChunk(
+    model: string,
+    chunk: Record<string, unknown>
+  ): { done: boolean; chunk: ICompletionResponseChunk } {
+    return this.translate(model, chunk, { streaming: true });
+  }
+
+  private translate(
+    model: string,
+    chunk: Record<string, unknown>,
+    opts: { streaming: boolean }
+  ): { done: boolean; chunk: ICompletionResponseChunk } {
     const response = chunk as {
       choices?: Array<{
-        message?: { content?: string; reasoning_content?: string };
-        delta?: { content?: string; reasoning_content?: string };
+        message?: MoonshotMessage;
+        delta?: MoonshotMessage;
         finish_reason?: string;
       }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number };
@@ -129,45 +199,92 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       output_tokens: response.usage?.completion_tokens ?? 0,
     };
 
-    return {
-      done: true,
-      chunk: {
-        model,
-        choices: (response.choices || []).map((choice, index) => {
-          const reasoning = choice.message?.reasoning_content ?? choice.delta?.reasoning_content;
-          const content = choice.message?.content ?? choice.delta?.content ?? '';
-          return {
+    const choices: ICompletionResponseChunk['choices'] = [];
+
+    for (const [index, choice] of (response.choices || []).entries()) {
+      const payload = choice.message ?? choice.delta ?? {};
+      const usageForIndex = index === 0 ? { usage } : {};
+
+      // Tool calls are checked BEFORE reasoning. A thinking model that also calls
+      // a tool emits both, and handling reasoning first would return the monologue
+      // as the whole answer and never run the tool.
+      const toolCalls = Array.isArray(payload.tool_calls) ? payload.tool_calls : [];
+      if (toolCalls.length > 0) {
+        for (const [toolIndex, call] of toolCalls.entries()) {
+          choices.push({
             status: ChoiceStatus.END,
-            statusEndReason:
-              choice.finish_reason === 'stop' || choice.finish_reason === 'length'
-                ? ChoiceEndReason.STOP
-                : ChoiceEndReason.COMPLETE,
-            index,
-            // Thinking arrives on its own field, so it is wrapped rather than
-            // stripped - the same <think> envelope the direct Kimi and xAI
-            // backends emit, which is what the client already renders.
-            chunkText: reasoning ? `<think>${reasoning}</think>${content}` : content,
-            // Only the first choice carries usage, matching how the base reads it.
-            ...(index === 0 ? { usage } : {}),
-          };
-        }),
-      },
-    };
+            statusEndReason: ChoiceEndReason.TOOL_USE,
+            // Keyed by the tool's own index so the base's streaming accumulator
+            // can assemble arguments per call when several arrive at once.
+            index: call.index ?? toolIndex,
+            chunkText: call.function?.arguments || '',
+            tool: {
+              id: call.id || '',
+              name: call.function?.name || '',
+              parameters: call.function?.arguments || '',
+            },
+            ...usageForIndex,
+          });
+        }
+        continue;
+      }
+
+      const reasoning = payload.reasoning_content ?? '';
+      const content = payload.content ?? '';
+
+      let chunkText: string;
+      if (!opts.streaming) {
+        chunkText = reasoning ? `<think>${reasoning}</think>${content}` : content;
+      } else if (reasoning) {
+        chunkText = this.isInThinkingBlock ? reasoning : `<think>${reasoning}`;
+        this.isInThinkingBlock = true;
+      } else if (this.isInThinkingBlock && content) {
+        this.isInThinkingBlock = false;
+        chunkText = `</think>${content}`;
+      } else {
+        chunkText = content;
+      }
+
+      choices.push({
+        status: ChoiceStatus.END,
+        statusEndReason:
+          choice.finish_reason === 'stop' || choice.finish_reason === 'length'
+            ? ChoiceEndReason.STOP
+            : ChoiceEndReason.COMPLETE,
+        index,
+        chunkText,
+        ...usageForIndex,
+      });
+    }
+
+    return { done: true, chunk: { model, choices } };
   }
 
-  translateStreamChunk(
-    model: string,
-    chunk: Record<string, unknown>
-  ): { done: boolean; chunk: ICompletionResponseChunk } {
-    return this.translateChunk(model, chunk);
-  }
+  /**
+   * OpenAI-shaped tool history: an assistant turn carrying `tool_calls`, then a
+   * `role: 'tool'` message keyed by `tool_call_id`. `name` is included because
+   * Moonshot's tool-call guide shows it on the result message.
+   */
+  pushToolMessages(messages: IMessage[], tool: IChoiceEndToolUse['tool'], result: string): unknown {
+    messages.push({
+      content: null,
+      role: 'assistant',
+      tool_calls: [
+        {
+          id: tool.id,
+          type: 'function',
+          function: { name: tool.name, arguments: tool.parameters },
+        },
+      ],
+    } as unknown as IMessage);
 
-  pushToolMessages(
-    messages: IMessage[],
-    _tool: { name: string; id: string; parameters: string },
-    _result: string,
-    _thinkingBlocks?: unknown[]
-  ): unknown {
+    messages.push({
+      role: 'tool',
+      tool_call_id: tool.id,
+      name: tool.name,
+      content: JSON.stringify({ result }),
+    } as unknown as IMessage);
+
     return messages;
   }
 }

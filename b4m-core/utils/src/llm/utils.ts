@@ -847,7 +847,12 @@ export async function processFabFilesServer(
 
         switch (modelInfo?.backend) {
           case ModelBackend.OpenAI:
-          case ModelBackend.XAI: {
+          case ModelBackend.XAI:
+          // Moonshot takes OpenAI's base64 `image_url` block verbatim. Grouped
+          // here rather than given its own case because the payload is identical;
+          // without it every Kimi model advertising supportsVision would accept
+          // an attachment, drop it at `default`, and answer as if blind.
+          case ModelBackend.Kimi: {
             // Download image from S3 and send as base64 data URL.
             // Presigned S3 URLs cause timeouts when OpenAI/XAI servers try to fetch them.
             const openaiImageBuffer = await storage.download(file.filePath!);
@@ -914,6 +919,26 @@ export async function processFabFilesServer(
                 },
               });
               // Add filename and fabFileId as text context to prevent hallucinated filenames
+              imageContent.push({
+                type: 'text',
+                text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
+              });
+            } else if (modelInfo.id.startsWith('moonshot')) {
+              // Bedrock-served Kimi speaks OpenAI on the Invoke path, so it takes
+              // the base64 `image_url` block rather than the Anthropic `source`
+              // block the branch above builds. Without this it would fall to the
+              // warn below while still advertising supportsVision.
+              const moonshotBuffer = await resizeImageForModel(
+                await storage.download(file.filePath!),
+                undefined,
+                logger
+              );
+              const { mime: moonshotMimeType } = await getFileType(moonshotBuffer, file.fileName, file.mimeType);
+
+              imageContent.push({
+                type: 'image_url',
+                image_url: { url: `data:${moonshotMimeType};base64,${moonshotBuffer.toString('base64')}` },
+              });
               imageContent.push({
                 type: 'text',
                 text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,

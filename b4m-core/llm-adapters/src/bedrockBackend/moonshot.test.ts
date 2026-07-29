@@ -1,6 +1,6 @@
 import { ChatModels, type IMessage } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { ChoiceStatus } from '../backend';
+import { ChoiceEndReason, ChoiceStatus } from '../backend';
 import MoonshotBedrockBackend from './moonshot';
 
 const backend = new MoonshotBedrockBackend();
@@ -78,5 +78,130 @@ describe('MoonshotBedrockBackend response translation', () => {
 
   it('tolerates a response with no choices at all', () => {
     expect(backend.translateChunk(ChatModels.KIMI_K2_5_BEDROCK, {}).chunk.choices).toEqual([]);
+  });
+});
+
+describe('MoonshotBedrockBackend tool calling', () => {
+  const toolSchema = { name: 'search', description: 'search the web', parameters: { type: 'object' } };
+  const tools = [{ toolSchema, toolFn: async () => 'ok' }] as never;
+
+  it('sends tools in the OpenAI shape Moonshot takes on the Invoke path', () => {
+    const body = JSON.parse(backend.getPayload(ChatModels.KIMI_K2_5_BEDROCK, messages, { tools }).body);
+    expect(body.tools).toEqual([{ type: 'function', function: toolSchema }]);
+  });
+
+  it('omits tools and tool_choice entirely when the caller sent none', () => {
+    const body = JSON.parse(backend.getPayload(ChatModels.KIMI_K2_5_BEDROCK, messages, {}).body);
+    expect(body).not.toHaveProperty('tools');
+    expect(body).not.toHaveProperty('tool_choice');
+  });
+
+  it('emits TOOL_USE with the tool payload the base class reads', () => {
+    // base.ts keys entirely off statusEndReason === TOOL_USE and choice.tool; a
+    // response that carried tool_calls without these would run nothing.
+    const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [
+        {
+          message: {
+            content: '',
+            tool_calls: [{ id: 'search:0', type: 'function', function: { name: 'search', arguments: '{"q":"x"}' } }],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    });
+
+    expect(chunk.choices).toHaveLength(1);
+    expect(chunk.choices[0].statusEndReason).toBe(ChoiceEndReason.TOOL_USE);
+    expect('tool' in chunk.choices[0] && chunk.choices[0].tool).toEqual({
+      id: 'search:0',
+      name: 'search',
+      parameters: '{"q":"x"}',
+    });
+  });
+
+  it('prefers tool calls over reasoning, so a thinking model still runs its tool', () => {
+    // The direct backend had this inverted at first: handling reasoning first
+    // returned the monologue as the whole answer and silently ran no tool.
+    const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [
+        {
+          message: {
+            content: '',
+            reasoning_content: 'I should search',
+            tool_calls: [{ id: 't1', type: 'function', function: { name: 'search', arguments: '{}' } }],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+    });
+    expect(chunk.choices[0].statusEndReason).toBe(ChoiceEndReason.TOOL_USE);
+  });
+
+  it('emits one choice per tool call so several in a turn can be assembled', () => {
+    const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_5_BEDROCK, {
+      choices: [
+        {
+          message: {
+            tool_calls: [
+              { index: 0, id: 'a', function: { name: 'one', arguments: '{}' } },
+              { index: 1, id: 'b', function: { name: 'two', arguments: '{}' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+    });
+    expect(chunk.choices.map(c => c.index)).toEqual([0, 1]);
+  });
+
+  it('round-trips a tool result as OpenAI-shaped history with the name Moonshot expects', () => {
+    const history: IMessage[] = [];
+    backend.pushToolMessages(history, { id: 't1', name: 'search', parameters: '{"q":"x"}' }, 'the answer');
+    expect(history).toHaveLength(2);
+    expect(history[1]).toMatchObject({ role: 'tool', tool_call_id: 't1', name: 'search' });
+  });
+});
+
+describe('MoonshotBedrockBackend streaming', () => {
+  it('opens <think> once across many reasoning deltas and closes it when prose starts', () => {
+    // Delegating translateStreamChunk to translateChunk wrapped EVERY delta,
+    // rendering one thinking block per token.
+    const fresh = new MoonshotBedrockBackend();
+    // getPayload resets the block state, mirroring the start of a real request.
+    fresh.getPayload(ChatModels.KIMI_K2_THINKING_BEDROCK, messages, {});
+
+    const deltas = [{ reasoning_content: 'first' }, { reasoning_content: ' second' }, { content: 'answer' }];
+    const rendered = deltas
+      .map(delta => fresh.translateStreamChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, { choices: [{ delta }] }))
+      .map(({ chunk }) => ('chunkText' in chunk.choices[0] ? chunk.choices[0].chunkText : ''))
+      .join('');
+
+    expect(rendered).toBe('<think>first second</think>answer');
+    expect(rendered.match(/<think>/g)).toHaveLength(1);
+  });
+
+  it('does not inherit the previous request thinking state', () => {
+    const fresh = new MoonshotBedrockBackend();
+    fresh.getPayload(ChatModels.KIMI_K2_THINKING_BEDROCK, messages, {});
+    fresh.translateStreamChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [{ delta: { reasoning_content: 'unclosed' } }],
+    });
+
+    // A new request starts clean, so the next reasoning delta opens its own tag
+    // rather than continuing the abandoned one.
+    fresh.getPayload(ChatModels.KIMI_K2_THINKING_BEDROCK, messages, {});
+    const { chunk } = fresh.translateStreamChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [{ delta: { reasoning_content: 'again' } }],
+    });
+    expect('chunkText' in chunk.choices[0] && chunk.choices[0].chunkText).toBe('<think>again');
+  });
+
+  it('still wraps a whole non-streaming reasoning payload in one block', () => {
+    const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [{ message: { content: 'answer', reasoning_content: 'because' }, finish_reason: 'stop' }],
+    });
+    expect('chunkText' in chunk.choices[0] && chunk.choices[0].chunkText).toBe('<think>because</think>answer');
   });
 });
