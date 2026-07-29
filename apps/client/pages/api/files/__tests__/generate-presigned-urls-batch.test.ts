@@ -196,4 +196,18 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     expect(names).toContain('acme:uncategorized');
     expect(names.filter(n => n === 'datalake:orga:acme-2026')).toHaveLength(1);
   });
+
+  it('keeps the server strength on the meta-tag when a client sends its own', async () => {
+    const { res } = makeRes();
+    await run(
+      {
+        files: [file({ tags: [{ name: 'datalake:orga:acme-2026', strength: 0.01 }] })],
+        dataLakeSlug: 'acme-2026',
+      },
+      res
+    );
+
+    const persisted = (h.createFabFile.mock.calls[0][0] as { tags: { name: string; strength: number }[] }).tags;
+    expect(persisted.find(t => t.name === 'datalake:orga:acme-2026')?.strength).toBe(1.0);
+  });
 });

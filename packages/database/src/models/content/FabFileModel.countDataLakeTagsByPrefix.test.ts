@@ -119,4 +119,14 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
 
     expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
   });
+
+  it('counts a padded prefix, which builds no usable regex untrimmed', async () => {
+    // Both counters share usableTagPrefixes; the sibling suite pins this too, so a future edit
+    // dropping the trim is caught on either side rather than only one.
+    await makeFile({ tags: ['acme:uncategorized'] });
+
+    const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, [' acme:']);
+
+    expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
+  });
 });

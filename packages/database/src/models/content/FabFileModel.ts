@@ -403,13 +403,22 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // One indexed countDocuments per prefix (few lakes), plus one for the combined total.
     // $elemMatch on the anchored prefix regex lets MongoDB use the tags.name index and
     // counts each file once regardless of how many matching tags it carries.
+    //
+    // The `$not` mirrors countDataLakeTagsByPrefix: a membership meta-tag is never content, so a
+    // legacy lake whose fileTagPrefix sits in the `datalake:` namespace must not have every one
+    // of its members counted through their meta-tags. New lakes cannot reach this (the create
+    // schema rejects a reserved prefix), but the two counters should not disagree.
+    const notMetaTag = { $not: /^datalake:/ };
     const anyPrefixRegex = new RegExp(`^(${usablePrefixes.map(p => escapeRegex(p)).join('|')})`);
     const [total, ...prefixCounts] = await Promise.all([
-      this.fabFileModel.countDocuments({ ...baseMatch, tags: { $elemMatch: { name: { $regex: anyPrefixRegex } } } }),
+      this.fabFileModel.countDocuments({
+        ...baseMatch,
+        tags: { $elemMatch: { name: { $regex: anyPrefixRegex, ...notMetaTag } } },
+      }),
       ...usablePrefixes.map(prefix =>
         this.fabFileModel.countDocuments({
           ...baseMatch,
-          tags: { $elemMatch: { name: { $regex: new RegExp(`^${escapeRegex(prefix)}`) } } },
+          tags: { $elemMatch: { name: { $regex: new RegExp(`^${escapeRegex(prefix)}`), ...notMetaTag } } },
         })
       ),
     ]);

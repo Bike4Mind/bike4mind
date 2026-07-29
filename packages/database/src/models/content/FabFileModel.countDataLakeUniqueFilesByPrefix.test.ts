@@ -92,6 +92,16 @@ describe('FabFileRepository.countDataLakeUniqueFilesByPrefix', () => {
     expect(result).toEqual({ total: 1, byPrefix: { 'acme:': 1 } });
   });
 
+  it('never counts a membership meta-tag as content, even for a datalake:-prefixed lake', async () => {
+    // Mirrors countDataLakeTagsByPrefix. Only legacy rows can have such a prefix (the create
+    // schema rejects it now), but the two counters must not disagree about what is content.
+    await makeFile({ tags: ['datalake:acme'] });
+
+    const result = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, ['datalake:']);
+
+    expect(result).toEqual({ total: 0, byPrefix: { 'datalake:': 0 } });
+  });
+
   it('counts a padded prefix under its trimmed key', async () => {
     await makeFile({ tags: ['acme:industry'] });
 

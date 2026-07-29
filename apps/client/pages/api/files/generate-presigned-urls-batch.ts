@@ -113,9 +113,9 @@ const handler = baseApi().post(async (req: Request, res) => {
       // a file picked through "Upload Files..." (relativePath with no separator) contributes
       // none, and append mode has no taxonomy step to supply them either.
       // Deduped by name: a client may smuggle the same meta-tag the server injects, and there is
-      // no reason to persist it twice. First occurrence wins, so a client-supplied strength does
-      // not override the server's.
-      const merged = [...(fileItem.tags || []), ...(datalakeTag ? [{ name: datalakeTag, strength: 1.0 }] : [])].filter(
+      // no reason to persist it twice. The server's copy is spread FIRST and first occurrence
+      // wins, so a client-supplied strength on the meta-tag cannot override it.
+      const merged = [...(datalakeTag ? [{ name: datalakeTag, strength: 1.0 }] : []), ...(fileItem.tags || [])].filter(
         (tag, i, all) => all.findIndex(other => other.name === tag.name) === i
       );
       const tags = await applyFallbackTags(merged);
