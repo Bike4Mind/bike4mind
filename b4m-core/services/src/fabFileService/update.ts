@@ -78,11 +78,10 @@ export const updateFabFile = async (
 
   if (!fabFile) throw new NotFoundError('Invalid ID');
 
-  // Guarded on `!== undefined`, not truthiness: this update REPLACES the tags array, and the
-  // route always sends the key, so an edit that touches only the name or notes arrives with
-  // `tags: undefined` and must stay that way. Reconciling there would spread `undefined` into
-  // the persisted document and cost a lake lookup on every rename. An explicit `[]` still
-  // reconciles - it is a real replacement that can drop a lake's meta-tag.
+  // This update REPLACES the tags array, and the route always sends the key, so an edit that
+  // touches only the name or notes arrives with `tags: undefined`. The reconciler's first act is
+  // `tags.map(...)`, so handing it that would throw a TypeError and turn every rename into a 500.
+  // An explicit `[]` still reconciles: it is a real replacement that can drop a lake's meta-tag.
   if (params.tags !== undefined) {
     params.tags = await reconcileTags(params.tags, fabFile.tags ?? []);
   }
