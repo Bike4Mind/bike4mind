@@ -124,11 +124,22 @@ describe('DataLakeManagerPanel - root view', () => {
     // fileCount is absent from the list entry, so this 3 proves the tag-counts fallback.
     expect(screen.getByTestId('datalake-manager-lake-mine')).toHaveTextContent('3');
     expect(screen.getByTestId('datalake-manager-lake-theirs')).toBeInTheDocument();
-    // Root right pane: pick-a-lake hint + the lifecycle sections + Create in the footer.
-    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
+    // Sidebar accordions: lakes + the lifecycle sections; right pane shows the hint,
+    // footer keeps Create.
+    expect(screen.getByTestId('datalake-manager-lakes-section')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-archived-section')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-deleted-section')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-create-btn')).toBeInTheDocument();
+  });
+
+  it('collapses the Data Lakes accordion, hiding the lake rows', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByTestId('datalake-manager-lakes-section-toggle'));
+    expect(screen.queryByTestId('datalake-manager-lake-mine')).not.toBeInTheDocument();
+    // The lifecycle accordions are unaffected.
+    expect(screen.getByTestId('datalake-archived-section')).toBeInTheDocument();
   });
 });
 

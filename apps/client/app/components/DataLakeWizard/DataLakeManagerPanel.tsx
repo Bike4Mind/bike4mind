@@ -2,7 +2,6 @@ import { useCallback, useMemo, useState } from 'react';
 import {
   Box,
   Button,
-  Card,
   Chip,
   DialogActions,
   DialogContent,
@@ -16,7 +15,6 @@ import {
   Modal,
   ModalDialog,
   Skeleton,
-  Stack,
   Tooltip,
   Typography,
   useTheme,
@@ -229,6 +227,19 @@ function ManagerNav({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'count' | 'alpha'>('count');
 
+  // Root accordions: active lakes open by default; the lifecycle lists stay collapsed (their
+  // queries only fire once expanded, same as the old right-pane sections).
+  const [showLakes, setShowLakes] = useState(true);
+  const [showArchived, setShowArchived] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [purgeTarget, setPurgeTarget] = useState<{ id: string; name: string } | null>(null);
+  const unarchiveLake = useUnarchiveDataLake();
+  const restoreDeletedLake = useRestoreDeletedDataLake();
+  const deleteLake = usePermanentDeleteDataLake();
+  const cleanupLake = useCleanupDataLake();
+  const { data: archivedLakes } = useGetArchivedDataLakes(showArchived);
+  const { data: deletedLakes } = useGetDeletedDataLakes(showDeleted);
+
   const { data: filesResult, isLoading: filesLoading, isError: filesError } = useDataLakeFiles(activeLake?.id ?? null);
   const articles = useMemo(() => filesResult?.data ?? [], [filesResult]);
 
@@ -295,6 +306,14 @@ function ManagerNav({
       sortBy === 'count' ? (lakeCount(b) ?? 0) - (lakeCount(a) ?? 0) : a.name.localeCompare(b.name)
     );
   }, [lakes, searchQuery, sortBy, lakeCount]);
+
+  // The sidebar search also narrows the lifecycle lists; undefined stays undefined so the
+  // sections keep their loading skeleton.
+  const filterByName = <T extends { name: string }>(list: T[] | undefined): T[] | undefined => {
+    if (!list || !searchQuery.trim()) return list;
+    const q = searchQuery.toLowerCase();
+    return list.filter(l => l.name.toLowerCase().includes(q));
+  };
 
   const handleBack = () => {
     if (!activeLake || atLakeRoot) onExitLake();
@@ -381,47 +400,164 @@ function ManagerNav({
         )}
 
         {!activeLake ? (
-          /* Root: the lakes themselves, rendered exactly like tree folders. */
-          lakesLoading ? (
-            <NavSkeletons />
-          ) : (
-            <List size="sm" sx={TREE_LIST_SX}>
-              {filteredLakes.length === 0 ? (
-                <EmptyHint text={searchQuery ? 'No matches' : 'No data lakes yet'} />
-              ) : (
-                filteredLakes.map(lake => {
-                  const count = lakeCount(lake);
-                  return (
-                    <ListItem key={lake.id}>
-                      <ListItemButton
-                        onClick={() => onSelectLake(lake)}
-                        data-testid={`datalake-manager-lake-${lake.id}`}
-                        sx={treeRowSx(hoverBg)}
-                      >
-                        <FolderOutlinedIcon
-                          sx={{
-                            fontSize: 16,
-                            color: inkFor(hueForBranch(prefixSegments(lake.fileTagPrefix)[0] ?? '', []), isDark),
-                            flexShrink: 0,
-                          }}
-                        />
-                        <ListItemContent>
-                          <Typography noWrap sx={rowTypographySx}>
-                            {lake.name}
-                          </Typography>
-                        </ListItemContent>
-                        {typeof count === 'number' && (
-                          <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
-                            {count}
-                          </Chip>
-                        )}
-                      </ListItemButton>
-                    </ListItem>
-                  );
-                })
+          /* Root: accordions - active lakes (tree-folder rows) + the lifecycle lists. */
+          <>
+            <Box data-testid="datalake-manager-lakes-section">
+              <NavSectionHeader
+                label="Data Lakes"
+                open={showLakes}
+                onToggle={() => setShowLakes(v => !v)}
+                testid="datalake-manager-lakes-section-toggle"
+                hoverBg={hoverBg}
+              />
+              {showLakes &&
+                (lakesLoading ? (
+                  <NavSkeletons />
+                ) : (
+                  <List size="sm" sx={TREE_LIST_SX}>
+                    {filteredLakes.length === 0 ? (
+                      <EmptyHint text={searchQuery ? 'No matches' : 'No data lakes yet'} />
+                    ) : (
+                      filteredLakes.map(lake => {
+                        const count = lakeCount(lake);
+                        return (
+                          <ListItem key={lake.id}>
+                            <ListItemButton
+                              onClick={() => onSelectLake(lake)}
+                              data-testid={`datalake-manager-lake-${lake.id}`}
+                              sx={treeRowSx(hoverBg)}
+                            >
+                              <FolderOutlinedIcon
+                                sx={{
+                                  fontSize: 16,
+                                  color: inkFor(hueForBranch(prefixSegments(lake.fileTagPrefix)[0] ?? '', []), isDark),
+                                  flexShrink: 0,
+                                }}
+                              />
+                              <ListItemContent>
+                                <Typography noWrap sx={rowTypographySx}>
+                                  {lake.name}
+                                </Typography>
+                              </ListItemContent>
+                              {typeof count === 'number' && (
+                                <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
+                                  {count}
+                                </Chip>
+                              )}
+                            </ListItemButton>
+                          </ListItem>
+                        );
+                      })
+                    )}
+                  </List>
+                ))}
+            </Box>
+
+            {/* Archived (reversible) */}
+            <NavLifecycleSection
+              label="Archived"
+              open={showArchived}
+              onToggle={() => setShowArchived(v => !v)}
+              testid="datalake-archived-section"
+              emptyText="No archived data lakes."
+              lakes={showArchived ? filterByName(archivedLakes) : undefined}
+              hoverBg={hoverBg}
+              renderActions={lake => (
+                <>
+                  <Tooltip title="Restore" size="sm">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="success"
+                      data-testid={`datalake-restore-btn-${lake.id}`}
+                      onClick={() => unarchiveLake.mutate(lake.id)}
+                      sx={{ '--IconButton-size': '24px' }}
+                    >
+                      <UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Delete (recoverable)" size="sm">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="danger"
+                      data-testid={`datalake-delete-btn-${lake.id}`}
+                      onClick={() => deleteLake.mutate(lake.id)}
+                      sx={{ '--IconButton-size': '24px' }}
+                    >
+                      <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                </>
               )}
-            </List>
-          )
+            />
+
+            {/* Deleted (recoverable until purged) */}
+            <NavLifecycleSection
+              label="Deleted (recoverable)"
+              open={showDeleted}
+              onToggle={() => setShowDeleted(v => !v)}
+              testid="datalake-deleted-section"
+              emptyText="No deleted data lakes."
+              lakes={showDeleted ? filterByName(deletedLakes) : undefined}
+              hoverBg={hoverBg}
+              renderActions={lake => (
+                <>
+                  <Tooltip title="Restore" size="sm">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="success"
+                      data-testid={`datalake-restore-deleted-btn-${lake.id}`}
+                      onClick={() => restoreDeletedLake.mutate(lake.id)}
+                      sx={{ '--IconButton-size': '24px' }}
+                    >
+                      <RestoreIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Purge permanently" size="sm">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="danger"
+                      data-testid={`datalake-purge-btn-${lake.id}`}
+                      onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
+                      sx={{ '--IconButton-size': '24px' }}
+                    >
+                      <DeleteForeverIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                </>
+              )}
+            />
+
+            {/* Irreversible purge confirmation */}
+            <Modal open={!!purgeTarget} onClose={() => setPurgeTarget(null)}>
+              <ModalDialog data-testid="datalake-purge-confirm" role="alertdialog">
+                <DialogTitle>Permanently purge data lake?</DialogTitle>
+                <DialogContent>
+                  This irreversibly deletes “{purgeTarget?.name}” and all its files, chunks, and batches. This cannot be
+                  undone.
+                </DialogContent>
+                <DialogActions>
+                  <Button
+                    variant="solid"
+                    color="danger"
+                    data-testid="datalake-purge-confirm-btn"
+                    loading={cleanupLake.isPending}
+                    onClick={() => {
+                      if (purgeTarget) cleanupLake.mutate(purgeTarget.id, { onSuccess: () => setPurgeTarget(null) });
+                    }}
+                  >
+                    Purge permanently
+                  </Button>
+                  <Button variant="plain" color="neutral" onClick={() => setPurgeTarget(null)}>
+                    Cancel
+                  </Button>
+                </DialogActions>
+              </ModalDialog>
+            </Modal>
+          </>
         ) : filesError ? (
           <Box sx={{ p: 2, textAlign: 'center' }} data-testid="datalake-manager-error">
             <Typography level="body-xs" sx={{ color: 'danger.400' }}>
@@ -553,6 +689,117 @@ function EmptyHint({ text }: { text: string }) {
   );
 }
 
+/** Accordion header for the sidebar's root sections, styled like the tree rows. */
+function NavSectionHeader({
+  label,
+  open,
+  onToggle,
+  testid,
+  hoverBg,
+}: {
+  label: string;
+  open: boolean;
+  onToggle: () => void;
+  testid: string;
+  hoverBg: string;
+}) {
+  return (
+    <ListItemButton
+      onClick={onToggle}
+      data-testid={testid}
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        px: '8px',
+        mb: '4px',
+        height: '32px',
+        minHeight: '32px',
+        borderRadius: '8px',
+        transition: 'background 0.15s',
+        '--variant-plainHoverBg': hoverBg,
+      }}
+    >
+      <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: gray[200] }}>
+        {label}
+      </Typography>
+      {open ? (
+        <ExpandLessIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
+      ) : (
+        <ExpandMoreIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
+      )}
+    </ListItemButton>
+  );
+}
+
+interface LifecycleSectionLake {
+  id: string;
+  name: string;
+  fileTagPrefix: string;
+}
+
+/** Sidebar accordion for archived/deleted lakes: tree-style rows with restore/delete actions.
+ *  `lakes` undefined -> loading skeleton (the query fires only once the section is expanded). */
+function NavLifecycleSection({
+  label,
+  open,
+  onToggle,
+  testid,
+  emptyText,
+  lakes,
+  hoverBg,
+  renderActions,
+}: {
+  label: string;
+  open: boolean;
+  onToggle: () => void;
+  testid: string;
+  emptyText: string;
+  lakes: LifecycleSectionLake[] | undefined;
+  hoverBg: string;
+  renderActions: (lake: LifecycleSectionLake) => React.ReactNode;
+}) {
+  return (
+    <Box data-testid={testid} sx={{ mt: '8px' }}>
+      <NavSectionHeader label={label} open={open} onToggle={onToggle} testid={`${testid}-toggle`} hoverBg={hoverBg} />
+      {open &&
+        (!lakes ? (
+          <Box sx={{ px: '8px', pb: 1 }}>
+            <Skeleton variant="rectangular" height={28} sx={{ borderRadius: 'sm' }} />
+          </Box>
+        ) : lakes.length === 0 ? (
+          <Typography level="body-xs" sx={{ color: 'text.tertiary', px: '8px', pb: 1 }}>
+            {emptyText}
+          </Typography>
+        ) : (
+          <List size="sm" sx={TREE_LIST_SX}>
+            {lakes.map(lake => (
+              <ListItem key={lake.id}>
+                <Box
+                  data-testid={`${testid}-card-${lake.id}`}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    px: '8px',
+                    minHeight: '28px',
+                    width: '100%',
+                  }}
+                >
+                  <FolderOutlinedIcon sx={{ fontSize: 16, color: 'text.tertiary', flexShrink: 0 }} />
+                  <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: gray[200] }}>
+                    {lake.name}
+                  </Typography>
+                  {renderActions(lake)}
+                </Box>
+              </ListItem>
+            ))}
+          </List>
+        ))}
+    </Box>
+  );
+}
+
 // Right pane: selected lake's details + management actions
 
 function LakeInfoPanel({
@@ -668,212 +915,32 @@ function LakeInfoPanel({
   );
 }
 
-// Right pane at root: pick-a-lake hint + the archive/delete lifecycle sections
+// Right pane at root: pick-a-lake hint (the lifecycle sections live in the sidebar accordions)
 
 function ManagerOverview() {
-  const [showArchived, setShowArchived] = useState(false);
-  const [showDeleted, setShowDeleted] = useState(false);
-  const [purgeTarget, setPurgeTarget] = useState<{ id: string; name: string } | null>(null);
-
-  const unarchiveLake = useUnarchiveDataLake();
-  const restoreDeletedLake = useRestoreDeletedDataLake();
-  const deleteLake = usePermanentDeleteDataLake();
-  const cleanupLake = useCleanupDataLake();
-  const { data: archivedLakes } = useGetArchivedDataLakes(showArchived);
-  const { data: deletedLakes } = useGetDeletedDataLakes(showDeleted);
-
   return (
-    <Box data-testid="datalake-manager-overview" sx={{ flex: 1, overflow: 'auto', minWidth: 0 }}>
-      <Box
-        sx={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 2,
-          px: 4,
-          pt: 8,
-          pb: 4,
-          color: 'text.tertiary',
-          textAlign: 'center',
-        }}
-      >
-        <StorageIcon sx={{ fontSize: 48, opacity: 0.4 }} />
-        <Typography level="title-lg" sx={{ color: 'text.secondary' }}>
-          Select a data lake
-        </Typography>
-        <Typography level="body-sm" sx={{ maxWidth: 380 }}>
-          Pick a lake on the left to see its details and browse its files, or create a new one.
-        </Typography>
-      </Box>
-
-      <Box sx={{ maxWidth: 560, mx: 'auto', px: 3, pb: 3 }}>
-        {/* Archived (reversible) */}
-        <LifecycleSection
-          label="Archived"
-          open={showArchived}
-          onToggle={() => setShowArchived(v => !v)}
-          testid="datalake-archived-section"
-          emptyText="No archived data lakes."
-          lakes={showArchived ? archivedLakes : undefined}
-          renderActions={lake => (
-            <>
-              <Tooltip title="Restore" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="success"
-                  data-testid={`datalake-restore-btn-${lake.id}`}
-                  onClick={() => unarchiveLake.mutate(lake.id)}
-                >
-                  <UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Delete (recoverable)" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="danger"
-                  data-testid={`datalake-delete-btn-${lake.id}`}
-                  onClick={() => deleteLake.mutate(lake.id)}
-                >
-                  <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-            </>
-          )}
-        />
-
-        {/* Deleted (recoverable until purged) */}
-        <LifecycleSection
-          label="Deleted (recoverable)"
-          open={showDeleted}
-          onToggle={() => setShowDeleted(v => !v)}
-          testid="datalake-deleted-section"
-          emptyText="No deleted data lakes."
-          lakes={showDeleted ? deletedLakes : undefined}
-          renderActions={lake => (
-            <>
-              <Tooltip title="Restore" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="success"
-                  data-testid={`datalake-restore-deleted-btn-${lake.id}`}
-                  onClick={() => restoreDeletedLake.mutate(lake.id)}
-                >
-                  <RestoreIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Purge permanently" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="danger"
-                  data-testid={`datalake-purge-btn-${lake.id}`}
-                  onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
-                >
-                  <DeleteForeverIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-            </>
-          )}
-        />
-      </Box>
-
-      {/* Irreversible purge confirmation */}
-      <Modal open={!!purgeTarget} onClose={() => setPurgeTarget(null)}>
-        <ModalDialog data-testid="datalake-purge-confirm" role="alertdialog">
-          <DialogTitle>Permanently purge data lake?</DialogTitle>
-          <DialogContent>
-            This irreversibly deletes “{purgeTarget?.name}” and all its files, chunks, and batches. This cannot be
-            undone.
-          </DialogContent>
-          <DialogActions>
-            <Button
-              variant="solid"
-              color="danger"
-              data-testid="datalake-purge-confirm-btn"
-              loading={cleanupLake.isPending}
-              onClick={() => {
-                if (purgeTarget) cleanupLake.mutate(purgeTarget.id, { onSuccess: () => setPurgeTarget(null) });
-              }}
-            >
-              Purge permanently
-            </Button>
-            <Button variant="plain" color="neutral" onClick={() => setPurgeTarget(null)}>
-              Cancel
-            </Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
-    </Box>
-  );
-}
-
-interface LifecycleSectionLake {
-  id: string;
-  name: string;
-  fileTagPrefix: string;
-}
-
-function LifecycleSection({
-  label,
-  open,
-  onToggle,
-  testid,
-  emptyText,
-  lakes,
-  renderActions,
-}: {
-  label: string;
-  open: boolean;
-  onToggle: () => void;
-  testid: string;
-  emptyText: string;
-  lakes: LifecycleSectionLake[] | undefined;
-  renderActions: (lake: LifecycleSectionLake) => React.ReactNode;
-}) {
-  return (
-    <Box sx={{ mt: 2 }} data-testid={testid}>
-      <Button
-        size="sm"
-        variant="plain"
-        color="neutral"
-        fullWidth
-        endDecorator={open ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-        sx={{ justifyContent: 'space-between' }}
-        onClick={onToggle}
-        data-testid={`${testid}-toggle`}
-      >
-        {label}
-      </Button>
-      {open && (
-        <Stack gap={1} sx={{ mt: 1 }}>
-          {!lakes ? (
-            <Skeleton variant="rectangular" height={56} sx={{ borderRadius: 'md' }} />
-          ) : lakes.length === 0 ? (
-            <Typography level="body-xs" color="neutral" sx={{ px: 1, py: 1 }}>
-              {emptyText}
-            </Typography>
-          ) : (
-            lakes.map(lake => (
-              <Card key={lake.id} variant="soft" sx={{ p: 1.5 }} data-testid={`${testid}-card-${lake.id}`}>
-                <Stack direction="row" alignItems="center" gap={1.5}>
-                  <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography level="title-sm" noWrap>
-                      {lake.name}
-                    </Typography>
-                    <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '10px', mt: 0.25 }}>
-                      {lake.fileTagPrefix}
-                    </Chip>
-                  </Box>
-                  {renderActions(lake)}
-                </Stack>
-              </Card>
-            ))
-          )}
-        </Stack>
-      )}
+    <Box
+      data-testid="datalake-manager-overview"
+      sx={{
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 2,
+        px: 4,
+        color: 'text.tertiary',
+        textAlign: 'center',
+      }}
+    >
+      <StorageIcon sx={{ fontSize: 48, opacity: 0.4 }} />
+      <Typography level="title-lg" sx={{ color: 'text.secondary' }}>
+        Select a data lake
+      </Typography>
+      <Typography level="body-sm" sx={{ maxWidth: 380 }}>
+        Pick a lake on the left to see its details and browse its files, or create a new one.
+      </Typography>
     </Box>
   );
 }
