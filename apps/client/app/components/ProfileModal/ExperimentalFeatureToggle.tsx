@@ -153,6 +153,18 @@ export default function ExperimentalFeatureToggle() {
         loading={false}
         onChange={() => handleToggle('enableBmPi')}
       />
+      {(getServerSettingValue('EnableHearth') || currentUser?.isAdmin) && (
+        <FeatureContainer
+          title="Hearth"
+          featureKey="enableHearth"
+          description="A shared append-only event log where you, your agents, and your devices all post and catch up as actors."
+          enabled={isFeatureEnabled('enableHearth')}
+          disabled={!getServerSettingValue('EnableHearth')}
+          disabledReason={!getServerSettingValue('EnableHearth') ? 'Disabled by administrator' : undefined}
+          loading={false}
+          onChange={() => handleToggle('enableHearth')}
+        />
+      )}
       {(getServerSettingValue('EnableLattice') || currentUser?.isAdmin) && (
         <FeatureContainer
           title="Lattice"

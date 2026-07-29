@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-24T17:33:11.725Z",
+  "generatedAt": "2026-07-26T21:18:09.827Z",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -376,8 +376,8 @@
       "unit": "per_token",
       "pricing": {
         "1000000": {
-          "input": 0.000015,
-          "output": 0.000075
+          "input": 0.000005,
+          "output": 0.000025
         }
       }
     },
@@ -888,8 +888,8 @@
       "unit": "per_token",
       "pricing": {
         "200000": {
-          "input": 3e-7,
-          "output": 0.0000015
+          "input": 0.000003,
+          "output": 0.000015
         }
       }
     },

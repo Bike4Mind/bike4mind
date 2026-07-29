@@ -1,11 +1,12 @@
 import { hearthRepository } from '@bike4mind/database';
-import { BadRequestError, UnauthorizedError } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError, UnauthorizedError } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { requireUser } from '@server/middlewares/requireUser';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { assertHearthWriteScope } from '@server/utils/hearthWire';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { z } from 'zod';
 
@@ -15,7 +16,10 @@ const CreateChannelSchema = z.object({
   name: z.string().min(1).max(200),
 });
 
-const handler = baseApi()
+// GET needs only read scope; POST asserts write scope in-handler.
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.HEARTH_READ, ApiKeyScope.HEARTH_WRITE, ApiKeyScope.ADMIN],
+})
   .use(requireFeatureEnabled('EnableHearth'))
   .use(requireUser)
   .get<NextApiRequest, NextApiResponse>(async (req, res) => {
@@ -33,6 +37,7 @@ const handler = baseApi()
   })
   .post<NextApiRequest, NextApiResponse>(csrfProtection(), createRateLimit, async (req, res) => {
     if (!req.user?.id) throw new UnauthorizedError('User required');
+    assertHearthWriteScope(req);
 
     const { name } = CreateChannelSchema.parse(req.body);
 

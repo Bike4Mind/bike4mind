@@ -10,6 +10,7 @@ import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
+import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
@@ -258,6 +259,23 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             onClick: () => {
               closeOnMobile();
               navigate({ to: '/profile', search: { tab: 'published' } });
+            },
+          },
+        ]
+      : []),
+    // Double-gated like the earned destinations above: the experimental flag says
+    // the feature exists for this user, the gear says they have actually used it
+    // (>=1 channel). Sits beside Tavern/Gears - the shared-log destination.
+    ...(isFeatureEnabled('enableHearth') && gearOpen('hearth')
+      ? [
+          {
+            key: 'hearth',
+            label: t('sidenav.hearth', 'Hearth'),
+            icon: iconSlot(<LocalFireDepartmentOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname.startsWith('/hearth'),
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/hearth' });
             },
           },
         ]

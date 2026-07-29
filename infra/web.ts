@@ -9,7 +9,7 @@ import {
   notebookImportFunction,
 } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
-import { attackSimulationFunction } from './cron';
+import { attackSimulationFunction, modelDiscoveryFunction } from './cron';
 import { emailJobQueue, emailBatchQueue, emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
 import {
   emailIngestionQueue,
@@ -125,6 +125,9 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
 const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
   properties: {
     attackSimulation: attackSimulationFunction.name,
+    // Admin "Run now" (pages/api/admin/model-discovery) invokes the same
+    // function the discovery cron targets, with { trigger: 'manual' }.
+    modelDiscovery: modelDiscoveryFunction.name,
   },
 });
 
@@ -341,6 +344,10 @@ export const web = new sst.aws.Nextjs(
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       NEXT_PUBLIC_WEBSOCKET_URL: websocketApi.url,
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
+      // Kill-switch for in-handler response gzip (apps/client/server/utils/sendMaybeGzip.ts).
+      // Declared here so the lever is greppable from infra and survives a redeploy; set to
+      // 'true' to fall back to plain res.json on every route using the helper.
+      DISABLE_RESPONSE_GZIP: process.env.DISABLE_RESPONSE_GZIP || '',
       APP_URL: $dev ? 'http://localhost:3000' : router.url,
       // Direct SSE completions endpoint advertised to the CLI via /api/settings/serverConfig.
       // Local `sst dev` has no CloudFront router mapping /api/ai/v1/completions to the

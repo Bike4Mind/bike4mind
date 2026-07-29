@@ -37,17 +37,30 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
   }
 
   /**
-   * Bulk-fetch vector-bearing chunks for many files in ONE indexed query (uses the
-   * `fabFileId` index, filters out vectorless chunks at the DB layer, projects only the
-   * fields semantic search needs, and caps total rows for Lambda memory safety). Mirrors
-   * the query previously inlined in /api/opti/semantic-search so the shared service can run
-   * in-process. `.lean()` skips Mongoose hydration - cheap for thousands of chunks.
+   * One deterministic page of vector-bearing chunks for the given files, ascending by `_id`.
+   * Vectorless chunks are filtered at the DB layer and only the fields semantic search needs
+   * are projected; `.lean()` skips Mongoose hydration.
+   *
+   * `_id` is unique, so sorting on it is a TOTAL order and `_id > afterChunkId` is an exact
+   * keyset cursor - no rows skipped or duplicated across pages regardless of the query plan.
+   * That is what lets a caller walk a corpus larger than memory and still get a reproducible
+   * result; the previous unsorted `.limit(cap)` returned an arbitrary slice instead.
+   * At normal selectivity the { fabFileId: 1, _id: 1 } index serves this as a non-blocking
+   * SORT_MERGE across the $in. When the id list covers most of the collection the planner may
+   * prefer an _id range scan instead; the `limit` keeps that bounded either way.
    */
-  async findVectorsByFabFileIds(fabFileIds: string[], cap = 10_000) {
+  async findVectorsByFabFileIds(fabFileIds: string[], options: { limit?: number; afterChunkId?: string } = {}) {
+    if (fabFileIds.length === 0) return [];
+    const { limit = 10_000, afterChunkId } = options;
     const docs = await this.fabFileChunkModel
-      .find({ fabFileId: { $in: fabFileIds }, vector: { $exists: true, $ne: [] } })
+      .find({
+        fabFileId: { $in: fabFileIds },
+        vector: { $exists: true, $ne: [] },
+        ...(afterChunkId ? { _id: { $gt: afterChunkId } } : {}),
+      })
       .select({ _id: 1, fabFileId: 1, text: 1, vector: 1 })
-      .limit(cap)
+      .sort({ _id: 1 })
+      .limit(limit)
       .lean();
     return docs.map(d => ({
       id: String(d._id),
@@ -102,6 +115,11 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
 
 FabFileChunkSchema.index({ _id: 1, fabFileId: 1 });
 FabFileChunkSchema.index({ fabFileId: 1 });
+// Equality on the prefix + sort on `_id` lets the planner SORT_MERGE the per-file index scans
+// instead of collecting and sorting them, which is what keeps findVectorsByFabFileIds' keyset
+// paging non-blocking. `{ fabFileId: 1 }` above is now a redundant prefix of this index and is
+// droppable once this one is confirmed in use; kept for now so no query loses its index mid-deploy.
+FabFileChunkSchema.index({ fabFileId: 1, _id: 1 });
 
 export const FabFileChunk =
   (mongoose.models.FabFileChunk as IFabFileChunkModel) ??
@@ -144,6 +162,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];
       vectorizedOnly?: boolean;
+      stableSort?: boolean;
     }
   ) {
     const query = buildFabFileSearchQuery({ userId, search, filters, pagination, order, options });
@@ -603,11 +622,31 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
-  async pullTagByFabFileId(fabFileId: string, tagName: string): Promise<number> {
-    // Atomic $pull by exact tag name: removes only the matching element, so concurrent
+  async pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number> {
+    // The schema has timestamps, so an empty $in would still rewrite updatedAt and report a
+    // modification for a write that removes nothing.
+    if (tagNames.length === 0) return 0;
+    // Atomic $pull by exact tag names: removes only the matching elements, so concurrent
     // removals of different tags on the same file can't clobber each other. Idempotent -
-    // a no-op (modifiedCount 0) if the tag is already absent.
-    const result = await this.fabFileModel.updateOne({ _id: fabFileId }, { $pull: { tags: { name: tagName } } });
+    // absent names are a no-op. Exact names only, deliberately: a prefix pattern here would
+    // mean building a regex from a user-chosen prefix, and an empty one matches every tag.
+    const result = await this.fabFileModel.updateOne(
+      { _id: fabFileId },
+      { $pull: { tags: { name: { $in: tagNames } } } }
+    );
+    // A primaryTag naming a tag the file no longer carries later fails the data-lake write
+    // gate on PUT /api/files/[id], which round-trips the stale value. Separate filtered write
+    // because a plain update can't clear a field conditionally on its own value; it is a
+    // no-op unless primaryTag actually went.
+    // Deliberately NOT folded into the $pull above: an aggregation-pipeline update could do both
+    // in one write, but only by rewriting the whole tags array, which loses the element-level
+    // concurrency $pull buys. The cost of two writes is that a crash between them leaves a
+    // primaryTag pointing at a removed tag, which the gate above then rejects until it is set
+    // again. A stale label that blocks one edit beats a lost concurrent removal.
+    await this.fabFileModel.updateOne(
+      { _id: fabFileId, primaryTag: { $in: tagNames } },
+      { $unset: { primaryTag: '' } }
+    );
     return result.modifiedCount;
   }
 }

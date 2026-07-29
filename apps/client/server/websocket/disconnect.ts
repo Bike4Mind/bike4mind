@@ -1,5 +1,6 @@
 import { activeCodeAgentRepository, Connection, QuerySubscription, User, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
+import { reportCcAgentPresence } from '@server/websocket/ccAgentHearth';
 import { sendToClient, withWebSocketContext } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
@@ -43,13 +44,13 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // own connections, and cleanup must run regardless of the user's current tag -
   // gating it would leak orphaned sprites if access were revoked mid-session.
   if (userId) {
-    const orphanedInstanceIds = await activeCodeAgentRepository.removeByConnectionId(connectionId);
-    if (orphanedInstanceIds.length > 0) {
-      logger.info(`[DISCONNECT] Swept ${orphanedInstanceIds.length} cc_agent record(s) for connection ${connectionId}`);
+    const orphaned = await activeCodeAgentRepository.removeByConnectionId(connectionId);
+    if (orphaned.length > 0) {
+      logger.info(`[DISCONNECT] Swept ${orphaned.length} cc_agent record(s) for connection ${connectionId}`);
       try {
         await sendToClient(userId, endpoint, {
           action: 'tavern_scene_broadcast' as const,
-          commands: orphanedInstanceIds.map(instanceId => ({
+          commands: orphaned.map(({ instanceId }) => ({
             type: 'remove_entity' as const,
             id: `cc_agent_${instanceId}`,
           })),
@@ -57,6 +58,29 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       } catch (err) {
         logger.warn('[DISCONNECT] Failed to broadcast cc_agent removal (non-fatal):', err as Error);
       }
+
+      // Hearth dual-write, after the despawn broadcast. See ccAgentHearth.ts
+      // for the scope/authority and content-free rationale.
+      //
+      // Concurrent, not sequential: a single disconnect can sweep several
+      // orphaned sessions, and awaiting each in turn would add their latencies
+      // together on a handler that already has a timeout budget. allSettled
+      // because these are best-effort - one failing report must not abandon
+      // the rest, and reportCcAgentPresence already swallows and logs its own
+      // errors, so a rejection here would be unexpected rather than routine.
+      await Promise.allSettled(
+        orphaned.map(swept =>
+          reportCcAgentPresence({
+            userId: userId.toString(),
+            instanceId: swept.instanceId,
+            workspaceName: swept.workspaceName,
+            reason: 'disconnected',
+            source: swept.source,
+            deviceId: swept.deviceId,
+            logger,
+          })
+        )
+      );
     }
   }
 

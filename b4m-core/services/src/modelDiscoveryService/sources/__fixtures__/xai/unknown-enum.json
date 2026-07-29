@@ -1,0 +1,14 @@
+{
+  "models": [
+    {
+      "id": "grok-5-omni",
+      "input_modalities": ["text", "image", "hologram"],
+      "output_modalities": ["text", "hologram"],
+      "prompt_text_token_price": 40000,
+      "cached_prompt_text_token_price": 10000,
+      "completion_text_token_price": 120000,
+      "reasoning_mode": "continuous",
+      "aliases": []
+    }
+  ]
+}

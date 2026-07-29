@@ -41,6 +41,14 @@ export interface SessionsContextProps {
 
   currentSession: ISessionDocument | null;
   setCurrentSession: Dispatch<SetStateAction<ISessionDocument | null>>;
+  /**
+   * Updates currentSession WITHOUT the knowledgeIds auto-persist that
+   * `setCurrentSession` performs. For callers that have already written to the
+   * server themselves - going through `setCurrentSession` instead would fire a
+   * second, redundant PUT that carries none of the first one's options
+   * (`propagateToProjects`, notably), silently undoing them.
+   */
+  setCurrentSessionRaw: Dispatch<SetStateAction<ISessionDocument | null>>;
 
   addMessageToSession: (message: IChatHistoryItem) => Promise<void>;
 
@@ -453,9 +461,12 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
         id: sessionId,
         knowledgeIds: knowledgeIds,
       });
-    } catch {
-      // Don't throw - this is a background operation
-      // Silent failure to avoid console noise
+    } catch (error) {
+      // Don't throw - callers treat this as a background operation. But it must not be
+      // silent: a dropped knowledgeIds write is invisible in the UI and looks exactly
+      // like the file was never attached. Callers that can surface it should use
+      // useNotebookContextFiles instead, which rolls back and tells the user.
+      console.error('Failed to persist session knowledgeIds', error);
     }
   }, []);
 
@@ -661,6 +672,7 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
       changeSession,
       currentSession,
       setCurrentSession: setCurrentSessionWithPersistence, // Use enhanced version
+      setCurrentSessionRaw: setCurrentSession,
       addMessageToSession,
       currentSessionId,
       setCurrentSessionId,

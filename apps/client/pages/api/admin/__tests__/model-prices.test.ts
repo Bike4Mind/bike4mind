@@ -163,6 +163,20 @@ describe('POST /api/admin/model-prices', () => {
     expect(mockAppend).not.toHaveBeenCalled();
   });
 
+  it('rejects the reserved discovery: note prefix (a newer seed may supersede automation rows)', async () => {
+    const { run } = call({
+      method: 'POST',
+      body: {
+        modelId: 'gpt-x',
+        unit: 'per_token',
+        pricing: { '0': TIER },
+        note: 'discovery:openrouter@2026-07-20',
+      },
+    });
+    await expect(run()).rejects.toThrow(/reserved for discovery provenance/i);
+    expect(mockAppend).not.toHaveBeenCalled();
+  });
+
   it('revert-to-seed appends the CURRENT generator rates under the seed note (server-computed, not client-supplied)', async () => {
     mockGenerateSeed.mockResolvedValue([
       { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': { input: 9e-6, output: 27e-6 } } },

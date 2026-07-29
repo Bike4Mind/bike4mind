@@ -19,3 +19,5 @@ export * from './reconcileStuckBatches';
 export * from './getDynamicDataLakeTags';
 export * from './getDataLakePrompts';
 export * from './semanticDataLakeSearch';
+export * from './boundedTopK';
+export * from './resolveSearchBudgets';
