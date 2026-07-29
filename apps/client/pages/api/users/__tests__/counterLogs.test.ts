@@ -146,6 +146,37 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     expect(orphanRow!.users[0].userEmail).toBe('');
   });
 
+  it('does not abort the aggregation when a userId is not a valid ObjectId', async () => {
+    // Distinct from the orphaned-user case above, which uses a VALID ObjectId with no matching
+    // User (that exercises preserveNullAndEmptyArrays). This covers the $convert onError: null
+    // arm: a non-ObjectId userId such as 'SYSTEM' must fail to join rather than throw. With the
+    // previous $toObjectId, one such row aborted the entire aggregation with a ConversionFailure,
+    // 500ing the whole admin analytics page.
+    await CounterLog.create({
+      userId: 'SYSTEM',
+      userName: 'System',
+      userLevel: 'System',
+      counterName: 'Session Created',
+      counterValue: 1,
+      datetime: new Date('2026-07-21T10:00:00.000Z'),
+      metadata: { sessionId: 'session-system' },
+    });
+
+    const { res, promise } = run({ startDate: '2026-07-21', endDate: '2026-07-21' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const rows = JSON.parse(JSON.stringify(res._getJSONData())).logs as Array<{
+      metadata: { sessionId: string };
+      users: Array<{ userId: string; userEmail: string }>;
+    }>;
+
+    const systemRow = rows.find(r => r.metadata.sessionId === 'session-system');
+    expect(systemRow, 'the row must still be returned, not dropped or thrown on').toBeDefined();
+    expect(systemRow!.users[0].userId).toBe('SYSTEM');
+    expect(systemRow!.users[0].userEmail).toBe('');
+  });
+
   it('builds the user $lookup with an inner $project restricted to non-secret fields', () => {
     // Asserts on the EXPORTED builder the handler calls, so deleting or widening the production
     // $project fails here. Do not inline a copy of the stages: the $lookup's projection has no
