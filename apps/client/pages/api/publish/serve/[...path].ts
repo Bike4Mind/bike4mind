@@ -151,13 +151,22 @@ const ASSET_CSP = [
 // Share links are served same-origin, sandboxed, and must never be cached: no-store
 // is what makes a token rotation/revoke take effect immediately (no stale CDN/browser copy).
 const SHARE_CACHE_CONTROL = 'private, no-store, must-revalidate';
-// In-document belt-and-suspenders for the X-Robots-Tag / Referrer-Policy headers, for
-// UAs that honor the <meta> but not the header (and vice versa). Emitted on every page
-// that is not opted into discovery (see `searchIndexable`). The two directives travel
-// together on purpose: a page we keep out of the search index is one whose URL is
-// effectively unlisted, so it must not leak via the Referer header on an outbound link
-// the author included either.
-const NOINDEX_META = '<meta name="robots" content="noindex,nofollow">\n<meta name="referrer" content="no-referrer">';
+// In-document belt-and-suspenders for the X-Robots-Tag header, for UAs that honor the
+// <meta> but not the header (and vice versa). Emitted on every page that is not opted
+// into discovery (see `searchIndexable`).
+const NOINDEX_META = '<meta name="robots" content="noindex,nofollow">';
+// Referrer suppression, kept SEPARATE from NOINDEX_META and scoped to share links only.
+// These two are independent decisions that must not ride along with each other:
+//   - noindex applies to the default state of every public page.
+//   - no-referrer exists to stop a /a/<shareToken> CAPABILITY leaking to third parties
+//     via the Referer header on an outbound link the artifact author included.
+// Applying no-referrer to all public pages would silently kill outbound referral
+// attribution for every author, and would blank `document.referrer` inside the isolated
+// bundle - which makes PIN_BRIDGE_JS fall back to `PO = '*'` and skip its inbound
+// `e.origin` check. Pairing it with the noindex meta is what made that the DEFAULT
+// configuration rather than a deliberate choice. Emitted alongside the matching
+// Referrer-Policy header, so meta and header always agree.
+const NO_REFERRER_META = '<meta name="referrer" content="no-referrer">';
 
 const handler = baseApi({ auth: false }).get(async (req: Request, res: Response) => {
   // Optional-auth shims populate req.user from a Bearer JWT or X-API-Key; anonymous
@@ -266,20 +275,39 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // the noindex it was blocked from seeing. Allowing the crawl and serving noindex is
   // the combination that actually keeps a page out of the index; disallow-without-
   // noindex is the misconfiguration that has burned several LLM share features.
-  // Opting in makes exactly ONE url indexable: the canonical `/p/...` page. The three
-  // exclusions below are each load-bearing, not redundant with isOpenPublic:
-  //  - isShare:    a /a/<token> link can resolve to an artifact that is ALSO open-public
-  //                and opted in. Possession of the token is the grant; a search result
-  //                would hand that grant to everyone.
-  //  - isIsolated: the `{publicId}.usercontent...` origin serves the BARE bundle with no
-  //                wrapper, branding, or canonical link. Indexing it would compete with
-  //                the real page and land visitors on an implementation-detail host.
-  //  - embed=1:    the embed render is meant to be framed inside someone else's page,
-  //                not to stand alone as a search result.
+  // Opting in makes exactly ONE url indexable: the artifact's canonical `/p/...` page.
+  // `isCanonicalDoc` below is that page and nothing else. Every other surface this route
+  // can serve is a duplicate, a fragment, or a superseded copy of it, and each would
+  // compete with the real page in results while lacking its wrapper, branding, and (for
+  // the non-HTML ones) any way to carry a canonical link at all:
+  //  - isShare:      a /a/<token> link can resolve to an artifact that is ALSO open-public
+  //                  and opted in. Possession of the token is the grant; a search result
+  //                  would hand that grant to everyone.
+  //  - isIsolated:   the `{publicId}.usercontent...` origin serves the BARE bundle.
+  //  - embed=1:      built to be framed inside someone else's page, not to stand alone.
+  //  - ?v=<sha>:     a SUPERSEDED version. The version switcher emits real crawlable
+  //                  <a> anchors, so a replaced v1 is reachable and would otherwise be
+  //                  indexed alongside the v2 that replaced it. rel=canonical is a hint,
+  //                  not a guarantee - this is the one that actually bites.
+  //  - ?format=raw:  text/plain, so it can carry NEITHER a robots meta nor a canonical
+  //                  tag - the header here is its only control. Advertised to crawlers
+  //                  via rel="alternate" on the page that just became indexable.
+  //  - ?raw=1:       the loader shell's internal srcdoc fetch, not a page.
+  //  - ?a=<N>:       one embedded sub-artifact as a bare srcdoc document.
+  //  - assetPath:    an individual bundle file. A bundle may ship .html assets, which
+  //                  would otherwise be standalone indexable pages with no wrapper.
   // Read `embed` off the query directly: the `isEmbed` binding is computed further down,
   // after several response branches that must already carry the right header.
-  const searchIndexable =
-    !isShare && !isIsolated && req.query.embed !== '1' && isOpenPublic && artifact.discoverable === true;
+  const isCanonicalDoc =
+    !isShare &&
+    !isIsolated &&
+    !isRaw &&
+    !isFormatRaw &&
+    req.query.embed !== '1' &&
+    !req.query.v &&
+    !req.query.a &&
+    !(resolved.kind === 'bundle' && resolved.assetPath);
+  const searchIndexable = isCanonicalDoc && isOpenPublic && artifact.discoverable === true;
   if (!searchIndexable) {
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
   }
@@ -457,7 +485,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // an iframe navigation cannot send - so it would dead-end at a nested loader shell. For those
     // we render the placeholder card instead of a frame that can never load.
     const canFrameArtifacts = isOpenPublic || isShare || passphraseVerified;
-    const page = renderViewerPage(artifact, !searchIndexable, selfPath, canFrameArtifacts);
+    const page = renderViewerPage(artifact, !searchIndexable, isShare, selfPath, canFrameArtifacts);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
     // slipped past the sanitizer); embedded artifacts run only inside their own sandboxed
@@ -737,6 +765,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     isolatedSrc,
     shareMeta,
     !searchIndexable,
+    isShare,
     isEmbed,
     pillHref,
     barHref,
@@ -788,6 +817,8 @@ function renderBundleWrapper(
   isolatedSrc: string,
   shareMeta: { metaTags: string; noscriptBody: string; alternateLink: string } | null,
   noindex: boolean,
+  /** Share links only - suppresses Referer so the capability token can't leak outbound. */
+  noReferrer: boolean,
   embed = false,
   pillHref = '',
   barHref = '',
@@ -823,7 +854,7 @@ function renderBundleWrapper(
   const reportHref = `/report/${encodeURIComponent(artifact.publicId)}`;
   const versionBar = buildVersionSwitcherHtml(artifact, requestedVersion);
   const metaHead = shareMeta ? `\n${shareMeta.metaTags}\n${shareMeta.alternateLink}` : '';
-  const noindexHead = noindex ? `\n${NOINDEX_META}` : '';
+  const noindexHead = `${noindex ? `\n${NOINDEX_META}` : ''}${noReferrer ? `\n${NO_REFERRER_META}` : ''}`;
   const noscriptBody = shareMeta ? `\n${shareMeta.noscriptBody}` : '';
   // Embedded render drops the interactive chrome (version switcher + comment
   // overlay) so the widget is just the content. The canonical link back to the
@@ -1261,6 +1292,8 @@ function renderArtifactBlock(artifact: ParsedArtifact, index: number, selfPath: 
 function renderViewerPage(
   artifact: PublishedArtifactLean,
   noindex: boolean,
+  /** Share links only - see NO_REFERRER_META. */
+  noReferrer: boolean,
   selfPath = '',
   canFrameArtifacts = false
 ): string {
@@ -1299,7 +1332,7 @@ function renderViewerPage(
     displayTitle = cleanViewerTitle(artifact.title, artifacts);
   }
   const titleHtml = escapeHtml(displayTitle);
-  const noindexHead = noindex ? `\n${NOINDEX_META}` : '';
+  const noindexHead = `${noindex ? `\n${NOINDEX_META}` : ''}${noReferrer ? `\n${NO_REFERRER_META}` : ''}`;
 
   return `<!doctype html>
 <html lang="en">

@@ -13,6 +13,7 @@ import {
   Radio,
   FormControl,
   FormLabel,
+  FormHelperText,
   Switch,
 } from '@mui/joy';
 import PublicIcon from '@mui/icons-material/Public';
@@ -351,14 +352,20 @@ export function PublishShareModal({
           toast.warning('Published, but enabling comments failed - you can toggle them below.');
         });
       }
-      // Only ever PATCHed when ON, and only when the artifact actually published as
-      // open-public. Staging the toggle ON and then picking Private (or adding a gate)
-      // hides the switch but leaves the flag set - persisting it there would arm a
-      // silent opt-in that fires later, the moment someone widens the artifact back to
-      // public. The server default is already false, so a failed call here leaves the
-      // artifact non-indexable: the safe direction.
-      if (discoverableOn && visibility === 'public' && gateKind === 'none') {
-        await updatePublishedDiscoverable(r.publicId, true).catch(() => {
+      // Search listing. `finalize` does not $set `discoverable` (unlike commentPolicy), so
+      // a re-publish PRESERVES whatever was stored - which means the OFF direction has to
+      // be written explicitly too, or a listed artifact can never be de-listed from this
+      // dialog. Hence "on change", not "when on": `wanted` is what the user is asking for,
+      // `existing?.discoverable` is what storage currently holds.
+      //
+      // The visibility/gate guard forces `wanted` to false rather than skipping the call:
+      // staging the switch ON and then picking Private (or adding a gate) hides the
+      // control, and persisting `true` there would arm a silent opt-in that fires the
+      // moment someone widens the artifact back to public. A failed call leaves the
+      // artifact at its stored value, and the server de-arms on any downgrade anyway.
+      const wanted = discoverableOn && visibility === 'public' && gateKind === 'none';
+      if (wanted !== !!existing?.discoverable) {
+        await updatePublishedDiscoverable(r.publicId, wanted).catch(() => {
           toast.warning('Published, but the search-listing setting failed - you can toggle it below.');
         });
       }
@@ -493,6 +500,10 @@ export function PublishShareModal({
       // Embedding is open-public only, so hide the embed editor the moment a gate
       // goes on (and reveal it again when the gate is cleared) - matches the server rule.
       setEmbedGated(gate !== null);
+      // The PATCH above left open-public, so the server de-armed `discoverable`. Mirror
+      // that here rather than leaving the switch showing a value storage no longer holds.
+      // Clearing a gate does NOT restore it - re-opting-in is an explicit choice.
+      if (gate !== null) setDiscoverableOn(false);
       toast.success(
         gate === null
           ? 'Link is open to anyone again'
@@ -509,9 +520,12 @@ export function PublishShareModal({
 
   const onPickGate = (next: GateKind) => {
     if (busy) return;
-    // Same reasoning as onPick: adding a gate hides the listing switch, so retire the
-    // staged choice instead of leaving it set behind a control the user can't see.
-    if (next !== 'none') setDiscoverableOn(false);
+    // Deliberately does NOT touch discoverableOn. Unlike a visibility pick, a gate pick is
+    // not persisted here - it waits for the explicit "Update access" button - so resetting
+    // now would make the switch disagree with storage the moment the user picks `none`
+    // again. applyGateLive does the reset, once the gate is actually live and the server
+    // has de-armed the flag. While gated the switch is hidden anyway, and the staged-
+    // publish path forces `wanted` to false independently.
     setGateKind(next);
     setGateTouched(true);
   };
@@ -727,10 +741,13 @@ export function PublishShareModal({
               <TravelExploreIcon fontSize="small" />
               <Box>
                 <FormLabel sx={{ mb: 0 }}>List in search engines</FormLabel>
-                <Typography level="body-xs" sx={{ opacity: 0.75 }}>
+                {/* FormHelperText, not Typography: only a FormHelperText child registers itself into
+                    Joy's FormControl context and lands in the switch's aria-describedby, so a screen-
+                    reader user actually hears this caveat instead of just the label. */}
+                <FormHelperText sx={{ opacity: 0.75 }}>
                   Off by default. When off, the link still works for anyone you send it to - it just won&apos;t show up
                   in Google. Link previews in chat apps work either way.
-                </Typography>
+                </FormHelperText>
               </Box>
             </Box>
             <Switch

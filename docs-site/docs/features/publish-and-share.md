@@ -72,7 +72,7 @@ Never rely on a URL being hard to guess. If content shouldn't be seen by everyon
 ## Safety notes
 
 - **Public means public.** Anyone with a public link can view it — don't publish anything you wouldn't post openly. Being absent from search results is not protection; see [Search engines](#search-engines).
-- **Published artifact bundles run sandboxed.** A bundle is served inside an `<iframe sandbox="allow-scripts">` with no `allow-same-origin`, so author JavaScript executes on an opaque origin: it cannot read the app origin's cookies or localStorage, or call `/api/*` with your credentials. Open-public bundles additionally get their own per-artifact origin (`{id}.usercontent.app.<domain>`) for artifact-vs-artifact isolation.
+- **Published artifact bundles run on a separate origin.** Author JavaScript does execute, but never on the app's origin. On a normal deployment each artifact is framed from **its own per-artifact origin** (`{id}.usercontent.app.<domain>`) — that separate origin *is* the isolation boundary, and it also isolates artifacts from each other. Because it is cross-origin to the app, code in the bundle cannot read the app's cookies or `localStorage`, and cannot call `/api/*` with your credentials. (Where that per-artifact host isn't provisioned, the bundle falls back to a same-origin `<iframe sandbox="allow-scripts">` `srcdoc` with **no** `allow-same-origin`, which puts it on an opaque origin instead. Both paths keep the app origin out of reach; they differ in mechanism.)
 - Bundles are validated at publish time: no `iframe`s, no `eval`/`new Function`/`document.write`, and assets/scripts must come from an allowlist.
 
 ## API reference (power users)

@@ -173,16 +173,27 @@ const handler = baseApi()
       });
     }
     if (parsed.data.commentPolicy !== undefined) artifact.commentPolicy = parsed.data.commentPolicy;
-    // Tracked for the CDN purge below: this flag changes the served X-Robots-Tag AND
-    // the in-document robots <meta>, both of which are part of the cached public bytes.
-    const discoverableChanged =
-      parsed.data.discoverable !== undefined && parsed.data.discoverable !== !!artifact.discoverable;
+    const discoverableBefore = !!artifact.discoverable;
     if (parsed.data.discoverable !== undefined) artifact.discoverable = parsed.data.discoverable;
 
     // Embed allowlist. Validated against the artifact's FINAL open-public state
     // (after any visibility/gate change above), so a gate + embed grant in the
     // same PATCH is rejected as a pair rather than by apply order.
     const isOpenPublicNow = artifact.visibility === 'public' && !artifact.accessGate;
+
+    // DE-ARM on leaving open-public. `discoverable` only has an effect while an artifact
+    // is public AND ungated, so a downgrade or a new gate leaves it set but inert - and
+    // widening the artifact again later would silently re-arm indexing that nobody chose
+    // in that context. Clearing it here (the authoritative layer) means the flag never
+    // outlives the exposure it was granted against, and the client's optimistic reset
+    // when the user picks Private / adds a gate becomes a truthful view of storage
+    // rather than local-only state. The owner re-opts-in explicitly if they want it back.
+    if (!isOpenPublicNow && artifact.discoverable) artifact.discoverable = false;
+
+    // Tracked for the CDN purge below: this flag changes the served X-Robots-Tag AND the
+    // in-document robots <meta>, both of which are part of the cached public bytes.
+    // Compared against the pre-PATCH value so an implicit de-arm counts as a change too.
+    const discoverableChanged = !!artifact.discoverable !== discoverableBefore;
     let embedOriginsChanged = false;
     if (parsed.data.embedOrigins !== undefined) {
       const check = validateEmbedOrigins(parsed.data.embedOrigins, { isOpenPublic: isOpenPublicNow });

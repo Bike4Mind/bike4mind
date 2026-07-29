@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, FormControl, FormLabel, Switch, Typography } from '@mui/joy';
+import { Box, FormControl, FormHelperText, FormLabel, Switch } from '@mui/joy';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { toast } from 'sonner';
 import { updatePublishedDiscoverable } from '@client/app/utils/publishApi';
@@ -63,10 +63,13 @@ export function DiscoverableToggle({
         <TravelExploreIcon fontSize="small" />
         <Box>
           <FormLabel sx={{ mb: 0 }}>List in search engines</FormLabel>
-          <Typography level="body-xs" sx={{ opacity: 0.75 }}>
+          {/* FormHelperText, not Typography: only a FormHelperText child registers itself into
+              Joy's FormControl context and lands in the switch's aria-describedby, so a screen-
+              reader user actually hears this caveat instead of just the label. */}
+          <FormHelperText sx={{ opacity: 0.75 }}>
             Off by default. When off, the link still works for anyone you send it to - it just won&apos;t show up in
             Google. Link previews in chat apps work either way.
-          </Typography>
+          </FormHelperText>
         </Box>
       </Box>
       <Switch
