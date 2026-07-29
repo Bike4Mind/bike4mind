@@ -5,9 +5,12 @@ import {
   getAccessibleDataLakes,
   getDataLakeTags,
   lakeMatchesAccess,
+  isDatalakeMetaTag,
+  isRegistryDatalakeTag,
   isReservedTagPrefix,
   normalizeEntitlementKey,
   normalizeTagPrefix,
+  preserveDataLakeMembership,
   toDataLakeConfig,
 } from './dataLakes';
 
@@ -198,5 +201,62 @@ describe('isReservedTagPrefix', () => {
 
   it.each(['acme:', 'opti:', 'data:', undefined, null])('allows %o', prefix => {
     expect(isReservedTagPrefix(prefix as string | undefined | null)).toBe(false);
+  });
+});
+
+describe('isDatalakeMetaTag', () => {
+  it.each(['datalake:lake', 'datalake:org:lake', 'DataLake:Lake'])('flags %o as a meta-tag', name => {
+    expect(isDatalakeMetaTag(name)).toBe(true);
+  });
+
+  // The write paths hand over raw body entries, so a non-string must read as "not a meta-tag"
+  // rather than throwing - the gate then treats it as removing membership and fails closed.
+  it.each([undefined, null, 42, {}, ['datalake:lake'], 'acme:notes', ' datalake:lake'])('does not flag %o', name => {
+    expect(isDatalakeMetaTag(name)).toBe(false);
+  });
+});
+
+describe('isRegistryDatalakeTag', () => {
+  it('recognizes a built-in lake, whose meta-tag resolves to no Mongo document', () => {
+    expect(isRegistryDatalakeTag(DATA_LAKES[0].datalakeTag)).toBe(true);
+  });
+
+  it.each(['datalake:org:persisted', 'datalake:persisted', 'acme:notes', ''])('rejects %o', tag => {
+    expect(isRegistryDatalakeTag(tag)).toBe(false);
+  });
+});
+
+describe('preserveDataLakeMembership', () => {
+  const tag = (name: string) => ({ name, strength: 1 });
+
+  it('carries the stored membership forward when the source omits it', () => {
+    expect(preserveDataLakeMembership([tag('notes')], [tag('datalake:lake'), tag('stale')])).toEqual([
+      tag('notes'),
+      tag('datalake:lake'),
+    ]);
+  });
+
+  // A system job has no actor to authorize against, so a meta-tag it supplies must not confer
+  // membership the user-facing write paths would have gated.
+  it('drops a meta-tag supplied by the source', () => {
+    expect(preserveDataLakeMembership([tag('notes'), tag('datalake:injected')], [])).toEqual([tag('notes')]);
+  });
+
+  it('keeps a stored meta-tag even when the source supplies a different one', () => {
+    expect(preserveDataLakeMembership([tag('datalake:injected')], [tag('datalake:real')])).toEqual([
+      tag('datalake:real'),
+    ]);
+  });
+
+  it.each([
+    [undefined, undefined],
+    [null, null],
+  ])('treats %o / %o as empty', (source, stored) => {
+    expect(preserveDataLakeMembership(source, stored)).toEqual([]);
+  });
+
+  it('tolerates malformed entries without throwing', () => {
+    const stored = [null, { name: null }, 42, tag('datalake:real')] as unknown as { name?: unknown }[];
+    expect(preserveDataLakeMembership([], stored)).toEqual([tag('datalake:real')]);
   });
 });

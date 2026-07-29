@@ -140,6 +140,38 @@ export const DATA_LAKES: DataLakeConfig[] = [
 ];
 
 /**
+ * True when a tag name is a lake-membership meta-tag. Takes `unknown` because the file write
+ * paths hand over raw request-body entries (`{ name: null }`), so narrowing here is what keeps a
+ * malformed payload failing closed instead of throwing a TypeError.
+ */
+export const isDatalakeMetaTag = (name: unknown): name is string =>
+  typeof name === 'string' && name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX);
+
+/**
+ * True when a meta-tag names one of the hardcoded DATA_LAKES lakes. Those lakes have no Mongo
+ * document, so `findByDatalakeTag` returns null for a tag naming a REAL, live lake - an
+ * unresolved lookup is NOT proof that no lake owns the tag. Callers pass an already-lowercased
+ * key; registry tags are authored canonically lowercase.
+ */
+export const isRegistryDatalakeTag = (datalakeTag: string): boolean =>
+  DATA_LAKES.some(lake => lake.datalakeTag === datalakeTag);
+
+/**
+ * Tag array for a system-written file whose tags get replaced wholesale (the notebook-summary
+ * FabFile). The source's own tags must never decide lake membership: this runs with no actor to
+ * authorize against, so a `datalake:*` name arriving from the source would inject the file into a
+ * lake, and omitting one the file already carries would evict it. Keeps the source's ordinary
+ * tags, ignores its meta-tags, and carries the file's existing membership forward.
+ */
+export const preserveDataLakeMembership = <T extends { name?: unknown }>(
+  sourceTags: readonly T[] | undefined | null,
+  storedTags: readonly T[] | undefined | null
+): T[] => [
+  ...(sourceTags ?? []).filter(tag => !isDatalakeMetaTag(tag?.name)),
+  ...(storedTags ?? []).filter(tag => isDatalakeMetaTag(tag?.name)),
+];
+
+/**
  * Canonical normalization for entitlement keys + `requiredEntitlement` values - the ONE
  * rule, applied at write time (create/update/stamp) and at match time. Mirrors the
  * entitlement registry's `normalizeTag` (trim + lowercase) so a value authored in any
