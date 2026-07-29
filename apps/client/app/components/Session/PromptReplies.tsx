@@ -68,6 +68,7 @@ import NavigationButtons from './NavigationButtons';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
+import { getReplyTruncationState } from '@client/app/utils/replyTruncation';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
@@ -86,11 +87,6 @@ import {
 // Code block registry: stable IDs for code blocks during streaming
 
 const codeBlockRegistry = new Map<string, Set<string>>();
-
-// Provider stop reasons that indicate the model finished its turn normally (vs being
-// cut off at the output-token ceiling). Used to tell a genuinely truncated artifact
-// apart from a completed reply that merely mentions `<artifact` in prose.
-const CLEAN_FINISH_REASONS = new Set(['end_turn', 'stop', 'tool_use', 'stop_sequence']);
 
 function simpleHash(str: string): string {
   let hash = 0;
@@ -1337,34 +1333,22 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     ? userSettings.rechartsDisplayMode || 'inline'
     : 'inline';
 
-  // An <artifact> tag that opened but never closed. This happens in two states:
-  //  - still streaming: we hide the partial to avoid flicker, OR
-  //  - COMPLETED while truncated: the model hit the output-token limit mid-artifact
-  //    (e.g. cut off inside a <script>), so the closing </artifact> never arrived.
-  // In the completed case the raw partial must NOT fall through to the markdown
-  // renderer, where it shows as broken/escaped HTML in the chat bubble.
-  const hasUnclosedArtifact = useMemo(() => {
-    if (!cleanReply) return false;
-    // Compare open/close tag counts rather than a bare substring check so a reply that
-    // emits one CLOSED artifact followed by a second UNCLOSED one is still detected
-    // (a substring check would see the lone </artifact> and miss the dangling tag).
-    const opens = (cleanReply.match(/<artifact\b/gi) || []).length;
-    const closes = (cleanReply.match(/<\/artifact>/gi) || []).length;
-    return opens > closes;
-  }, [cleanReply]);
-
-  const isStreamingArtifact = hasUnclosedArtifact && !completed;
-
-  // Distinguish a genuinely truncated artifact from a completed reply that merely
-  // *mentions* `<artifact` in prose or inline code (the artifact system prompt makes
-  // such mentions more likely). The server records the provider stop reason on
-  // promptMeta.finishReason: a clean finish (end_turn / stop / tool_use /
-  // stop_sequence) means the unclosed `<artifact` is a mention, not truncation - so we
-  // must NOT mangle it into a card. When the stop reason is 'max_tokens' (or absent -
-  // older quests / backends that don't report one) we fall back to containment so raw
-  // HTML can never leak.
-  const finishedCleanly = !!promptMeta?.finishReason && CLEAN_FINISH_REASONS.has(promptMeta.finishReason);
-  const isTruncatedArtifact = hasUnclosedArtifact && !!completed && !finishedCleanly;
+  // How the output-token ceiling affected this reply: an artifact left unclosed (still
+  // streaming vs completed-and-truncated), a reply cut off in prose, or one that produced
+  // nothing at all before the limit. See replyTruncation.ts for the exact rules.
+  const {
+    isStreamingArtifact,
+    isTruncatedArtifact,
+    notice: truncationNotice,
+  } = useMemo(
+    () =>
+      getReplyTruncationState({
+        reply: cleanReply,
+        completed: !!completed,
+        finishReason: promptMeta?.finishReason,
+      }),
+    [cleanReply, completed, promptMeta?.finishReason]
+  );
 
   const { artifacts, processedContent } = useMemo(() => {
     if (!cleanReply) return { artifacts: [], processedContent: '' };
@@ -1521,7 +1505,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       {/* Truncated-artifact recovery banner: the response hit the output-token
           limit before the artifact closed. The partial is best-effort recovered into a
           card below the reply; never leak the raw HTML into the bubble. */}
-      {isTruncatedArtifact && (
+      {truncationNotice === 'artifact' && (
         <Alert
           data-testid="artifact-truncated-warning"
           color="warning"
@@ -1531,7 +1515,25 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           <Typography level="title-sm">⚠️ Artifact was truncated</Typography>
           <Typography level="body-sm">
             This response reached the output length limit before the artifact finished generating. The preview below may
-            be incomplete — ask me to regenerate it (or to continue or shorten it) for a complete version.
+            be incomplete - ask me to regenerate it (or to continue or shorten it) for a complete version.
+          </Typography>
+        </Alert>
+      )}
+
+      {/* Truncation that landed before any artifact tag was emitted. Without this the
+          bubble renders blank (or stops mid-sentence) with no explanation at all. */}
+      {(truncationNotice === 'reply-empty' || truncationNotice === 'reply-partial') && (
+        <Alert
+          data-testid="reply-truncated-warning"
+          color="warning"
+          variant="soft"
+          sx={{ my: 1, flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}
+        >
+          <Typography level="title-sm">⚠️ Response was cut off</Typography>
+          <Typography level="body-sm">
+            {truncationNotice === 'reply-empty'
+              ? 'This response reached the output length limit before it produced any content. Try a smaller or more focused request, or ask for the work in parts.'
+              : 'This response reached the output length limit and stopped early. Ask me to continue, or try a smaller or more focused request.'}
           </Typography>
         </Alert>
       )}
