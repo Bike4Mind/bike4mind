@@ -71,7 +71,12 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         },
         can_think: true,
         supportsVision: true,
-        supportsTools: true,
+        // Tools disabled on the Bedrock path pending #1119: this model emits Kimi's
+        // native <|tool_call...|> token format inside the reasoning stream instead of
+        // structured tool_calls, which nothing parses (it would leak as raw text and
+        // never execute). The direct-served Kimi ids keep tools. See #1119 for the
+        // native-token parser that re-enables this.
+        supportsTools: false,
         supportsImageVariation: false,
         releaseDate: '2026-01-27',
         rank: 10,
@@ -93,7 +98,10 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         can_think: true,
         // Text-only on Bedrock, unlike the direct-served Kimi family.
         supportsVision: false,
-        supportsTools: true,
+        // Tools disabled on the Bedrock path pending #1119 (native tool-call tokens
+        // are emitted in the reasoning stream, not as structured tool_calls). The
+        // direct-served Kimi ids keep tools.
+        supportsTools: false,
         supportsImageVariation: false,
         releaseDate: '2025-11-06',
         rank: 10,
