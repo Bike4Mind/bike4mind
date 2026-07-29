@@ -1,6 +1,6 @@
 import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH } from '@bike4mind/common';
 import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
 import { canManageLake } from '../dataLakeService/authorizeLakeWrite';
 import { removeFileFromLake, type MembershipActor, type MembershipLake } from '../dataLakeService/lakeMembership';
@@ -108,7 +108,16 @@ export const reconcileLakeTags = async (
     tagsToPersist: [...ordinaryTags, ...metaTagsToPersist.map(name => ({ name, strength: DATALAKE_TAG_STRENGTH }))],
     commit: async () => {
       for (const lake of leaves) {
-        await removeFileFromLake(actor, lake, fabFileId, { db });
+        try {
+          await removeFileFromLake(actor, lake, fabFileId, { db });
+        } catch (error) {
+          // A concurrent removal landing between the array write and this one leaves nothing to
+          // remove, which is the state the caller asked for. Mirrors the tag-toggle door, so both
+          // whole-array callers treat "already gone" the same way. Note that leaving two lakes
+          // with the SAME fileTagPrefix in one call does NOT reach here: the first pull excludes
+          // the reserved datalake: namespace, so the second lake's meta-tag survives it.
+          if (!(error instanceof NotFoundError)) throw error;
+        }
       }
       // Joins need no write here: the caller has already persisted the canonical meta-tag as part
       // of `tagsToPersist`, and their gate ran above, before that write. They still need stats.

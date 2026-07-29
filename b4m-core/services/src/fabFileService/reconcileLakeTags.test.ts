@@ -137,6 +137,38 @@ describe('reconcileLakeTags', () => {
     await expect(run(adapters, ['datalake:lake'], [])).rejects.toThrow(/only the creator can remove/i);
   });
 
+  // Two lakes can share a fileTagPrefix - nothing makes it unique. Leaving both in one call is
+  // safe because the first pull excludes the reserved datalake: namespace, so the second lake's
+  // meta-tag survives it and that lake is still seen as a member.
+  it('leaves two lakes sharing a fileTagPrefix in one call', async () => {
+    const lakeA = lake({ id: 'lakeA', datalakeTag: 'datalake:a', fileTagPrefix: 'qa:' });
+    const lakeB = lake({ id: 'lakeB', datalakeTag: 'datalake:b', fileTagPrefix: 'qa:' });
+    const stored = [tag('datalake:a', 1), tag('datalake:b', 1), tag('qa:shared', 1)];
+    const adapters = makeAdapters(stored);
+    adapters.db.dataLakes.findByDatalakeTag = vi.fn(async (t: string) => (t === 'datalake:a' ? lakeA : lakeB));
+
+    const result = await run(adapters, ['datalake:a', 'datalake:b', 'qa:shared'], [tag('qa:shared', 1)]);
+    await expect(result.commit()).resolves.toBeUndefined();
+
+    const pulled = adapters.db.fabFiles.pullTagsByFabFileId.mock.calls.map(c => c[1]);
+    expect(pulled).toEqual([
+      ['datalake:a', 'qa:shared'],
+      ['datalake:b', 'qa:shared'],
+    ]);
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats a concurrent removal as the outcome the caller asked for', async () => {
+    const adapters = makeAdapters([tag('datalake:lake', 1)]);
+    const result = await run(adapters, ['datalake:lake'], []);
+    // The tag went between the array write and the membership write.
+    adapters.db.fabFiles.findById = vi.fn().mockResolvedValue({ id: 'f1', userId: 'owner', tags: [] });
+
+    await expect(result.commit()).resolves.toBeUndefined();
+    // Stats still recompute, so the lake's counts reflect whoever won the race.
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses a built-in fallback lake', async () => {
     const fallback = lake({ id: DATA_LAKES[0].id, datalakeTag: DATA_LAKES[0].datalakeTag, createdByUserId: 'owner' });
     const adapters = makeAdapters([], fallback);
