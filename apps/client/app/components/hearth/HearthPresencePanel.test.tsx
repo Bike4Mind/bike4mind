@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -126,5 +126,75 @@ describe('HearthPresencePanel', () => {
     await pushWs({ action: 'hearth_event', event: { channelId: 'ch-1', kind: 'message' } });
 
     await waitFor(() => expect(apiGetMock).toHaveBeenCalledTimes(1));
+  });
+  // The four cases below all carry comments in the component asserting they
+  // matter, and none of them were exercised.
+
+  it('a failed load says so, and never claims the channel is empty', async () => {
+    apiGetMock.mockRejectedValue(new Error('boom'));
+    renderPanel();
+
+    expect(await screen.findByTestId('hearth-presence-error')).toBeInTheDocument();
+    // The distinction is the whole point: "nobody is here" is a claim about the
+    // world, and a 500 is not evidence for it. With retry: false and no refetch
+    // on focus, that wrong claim used to be permanent.
+    expect(screen.queryByTestId('hearth-presence-empty')).not.toBeInTheDocument();
+  });
+
+  it('a failed load can be retried, since nothing else will', async () => {
+    apiGetMock.mockRejectedValueOnce(new Error('boom'));
+    renderPanel();
+
+    const retry = await screen.findByTestId('hearth-presence-retry-btn');
+    apiGetMock.mockResolvedValue(respondWith([row('busy', 'running')]));
+    fireEvent.click(retry);
+
+    await screen.findByText('Working');
+    expect(screen.queryByTestId('hearth-presence-error')).not.toBeInTheDocument();
+  });
+
+  it('an unknown state falls back to Working rather than to the top of the roster', async () => {
+    apiGetMock.mockResolvedValue(respondWith([row('mystery', 'ascended')]));
+    renderPanel();
+
+    // Guessing at a state must never escalate: an unrecognized value renders as
+    // the neutral working case, not as a claim on the human's attention.
+    expect(await screen.findByTestId('hearth-presence-state-chip')).toHaveTextContent('Working');
+  });
+
+  it('dims a stale row without dimming the timestamp that explains why', async () => {
+    apiGetMock.mockResolvedValue(
+      respondWith([
+        // staleAfterMs is 300000, so this row is well past it.
+        row('old', 'idle', { lastSeen: new Date(Date.now() - 45 * 60 * 1000).toISOString() }),
+      ])
+    );
+    renderPanel();
+
+    const rowEl = await screen.findByTestId('hearth-presence-row');
+    expect(rowEl).toHaveStyle({ opacity: '0.7' });
+    // Not 0.6: multiplied by the row's dim that gave ~0.36, below AA, on the one
+    // element carrying the staleness information.
+    expect(screen.getByTestId('hearth-presence-last-seen')).toHaveStyle({ opacity: '1' });
+    expect(screen.getByTestId('hearth-presence-last-seen')).toHaveTextContent('45m ago');
+  });
+
+  it('a fresh row leaves the timestamp de-emphasized', async () => {
+    apiGetMock.mockResolvedValue(respondWith([row('busy', 'running')]));
+    renderPanel();
+
+    await screen.findByText('Working');
+    expect(screen.getByTestId('hearth-presence-row')).toHaveStyle({ opacity: '1' });
+    expect(screen.getByTestId('hearth-presence-last-seen')).toHaveStyle({ opacity: '0.6' });
+  });
+
+  it('caps its own height so the roster cannot crowd out the composer', async () => {
+    renderPanel();
+    // Rows are permanent and per-session, so without this the panel grows without
+    // bound and the event stream - the only shrinkable child of the column -
+    // absorbs all of it until the composer is clipped out of the viewport.
+    const panel = await screen.findByTestId('hearth-presence-panel');
+    expect(panel).toHaveStyle({ overflowY: 'auto' });
+    expect(getComputedStyle(panel).maxHeight).toBe('30dvh');
   });
 });
