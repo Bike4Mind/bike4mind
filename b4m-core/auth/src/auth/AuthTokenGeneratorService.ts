@@ -70,14 +70,10 @@ export class AuthTokenGeneratorService {
 
   createRefreshToken(id: string, tokenVersion: number, additionalPayload?: Record<string, unknown>): string {
     // typ set after the spread (authoritative), same ordering rule as createAccessToken's payload.
-    return jwt.sign(
-      { id, tokenVersion, ...additionalPayload, typ: 'refresh' as const },
-      this.options.refreshTokenSecret,
-      {
-        algorithm: 'HS256',
-        expiresIn: this.options.refreshTokenExpiresIn,
-      } as jwt.SignOptions
-    );
+    return jwt.sign({ id, tokenVersion, ...additionalPayload, typ: 'refresh' as const }, this.options.refreshTokenSecret, {
+      algorithm: 'HS256',
+      expiresIn: this.options.refreshTokenExpiresIn,
+    } as jwt.SignOptions);
   }
 
   verifyToken(token: string, previousSecret?: string): JwtPayload {

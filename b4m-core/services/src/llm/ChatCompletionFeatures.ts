@@ -1804,7 +1804,8 @@ export class ContextSummarizationFeature implements ChatCompletionFeature {
     //    Compare against the resolved page size: the unlimited marker is negative,
     //    so comparing against it raw would read as "everything overflows".
     const tokenPressure = (verbatimExcludedCount ?? 0) > 0;
-    const countPressure = !!session.messageCount && session.messageCount > resolveHistoryFetchLimit(historyCount);
+    const countPressure =
+      !!session.messageCount && session.messageCount > resolveHistoryFetchLimit(historyCount);
     if (!tokenPressure && !countPressure) return;
 
     // Rate-limit: skip if summarized recently

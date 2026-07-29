@@ -50,8 +50,7 @@ export function ContextCompactionNote({ show, turns, onDismiss }: ContextCompact
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <CompressRoundedIcon sx={{ fontSize: '18px', color: accent, flexShrink: 0 }} />
         <Typography data-testid="context-compaction-note-text" sx={{ fontSize: '12px', color: 'text.secondary' }}>
-          Condensed {turns} earlier {turns === 1 ? 'turn' : 'turns'} into working memory to keep this conversation
-          going.
+          Condensed {turns} earlier {turns === 1 ? 'turn' : 'turns'} into working memory to keep this conversation going.
         </Typography>
       </Box>
       <IconButton
