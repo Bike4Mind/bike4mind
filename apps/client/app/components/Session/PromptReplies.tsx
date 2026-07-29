@@ -45,7 +45,7 @@ import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
 import { IAgent } from '@bike4mind/common';
-import { ELISION_BANNER_TITLE, ELISION_BANNER_BODY } from '@bike4mind/common';
+import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
@@ -1560,19 +1560,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           abbreviated (placeholder comments, or handlers calling functions that were never
           defined). Deliberately softer than the truncation copy above - this is a heuristic,
           and the artifact below is shown exactly as generated. */}
-      {isElidedArtifact && (
-        <Alert
-          data-testid="artifact-elided-warning"
-          color="warning"
-          variant="soft"
-          sx={{ my: 1, flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}
-        >
-          <Typography level="title-sm">⚠️ {ELISION_BANNER_TITLE}</Typography>
-          <Typography level="body-sm">
-            {ELISION_BANNER_BODY} Check it before sharing - or ask me to write it out in full.
-          </Typography>
-        </Alert>
-      )}
+      {isElidedArtifact && <ArtifactElisionBanner />}
 
       {showSyntaxHighlight ? (
         <SyntaxHighlighter style={oneDark}>{processedContent || cleanReply}</SyntaxHighlighter>
