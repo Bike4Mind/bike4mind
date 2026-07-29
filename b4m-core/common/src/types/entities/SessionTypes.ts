@@ -21,26 +21,46 @@ export interface IPendingAction {
  * extracts it, persists it on the quest, and the client dispatches it.
  * Discriminated union - add new variants here as needed.
  */
+
+/** A job-shop scheduling problem - the bare payload a formulate/edit tool populates. */
+export type SchedulingProblemPayload = {
+  name: string;
+  description?: string;
+  jobs: Array<{
+    id: number;
+    name: string;
+    operations: Array<{ jobId: number; machineId: number; duration: number }>;
+  }>;
+  machines: Array<{ id: number; name: string }>;
+};
+
+/**
+ * Optional solver-run outputs a solve tool can carry alongside a populated problem so the
+ * client can surface the run without re-solving. `results`/`result` are opaque here (the
+ * full set and/or a single winner; their shape is validated by the tool that emits them),
+ * `errors` are per-solver failure messages, and `solvedAt` is an ISO solve timestamp.
+ */
+export type PopulatedSolveOutputs = {
+  results?: unknown[];
+  result?: unknown;
+  errors?: string[];
+  solvedAt?: string;
+};
+
 export type UiSideEffect =
   | {
       type: 'populateProblem';
-      payload: {
-        name: string;
-        description?: string;
-        jobs: Array<{
-          id: number;
-          name: string;
-          operations: Array<{ jobId: number; machineId: number; duration: number }>;
-        }>;
-        machines: Array<{ id: number; name: string }>;
-      };
+      // Either the bare scheduling problem (a formulate/edit tool) or that problem nested
+      // under `problem` with optional solve outputs (a solve tool). Consumers must handle
+      // both arms and must not assume the payload IS the problem.
+      payload: SchedulingProblemPayload | ({ problem: SchedulingProblemPayload } & PopulatedSolveOutputs);
     }
   | {
-      // The eight unified families (routing/packing/assignment/...) carry their familyId
-      // alongside the family-specific problem shape. Emitted by optihashi_formulate;
-      // `problem` is validated server-side by FAMILY_PROBLEM_SCHEMAS before serialization.
+      // The unified families carry their familyId alongside the family-specific problem
+      // shape, optionally wrapped with solve outputs. `problem` is validated server-side
+      // before serialization.
       type: 'populateFamilyProblem';
-      payload: { familyId: string; problem: unknown };
+      payload: { familyId: string; problem: unknown } & PopulatedSolveOutputs;
     };
 
 export type SessionProps = {
