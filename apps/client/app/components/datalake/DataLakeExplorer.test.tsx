@@ -40,9 +40,13 @@ vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () =>
 // The explorer calls useSetDataLakeMode at render (for the tree close button); its persist
 // logic is covered in useSetDataLakeMode.test. Spy so the close-wiring test below can assert
 // without needing a QueryClient.
-const { setModeSpy, toastInfo } = vi.hoisted(() => ({ setModeSpy: vi.fn(), toastInfo: vi.fn() }));
+const { setModeSpy, toastInfo, toastError } = vi.hoisted(() => ({
+  setModeSpy: vi.fn(),
+  toastInfo: vi.fn(),
+  toastError: vi.fn(),
+}));
 vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => setModeSpy }));
-vi.mock('sonner', () => ({ toast: { info: toastInfo, error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { info: toastInfo, error: toastError } }));
 
 // Stub the tree so we can trigger onSelectFile/onClose deterministically and read the
 // highlight prop.
@@ -134,9 +138,9 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(setModeSpy).toHaveBeenCalledWith(false);
   });
 
-  it('on /new (no session yet): file click guides via toast - no workbench write, no layout switch', () => {
-    // Session creation is deferred to the first message; the viewer reads the session
-    // workbench, so with no session it would render empty and auto-hide (reads as a dead click).
+  it('no session + no createSessionForFile (overlay): file click guides via toast, writes nothing', () => {
+    // The viewer reads the session workbench, so with no session it would render empty and
+    // auto-hide (reads as a dead click); hosts without a create path get guidance instead.
     sessionState.currentSessionId = null;
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-select-file'));
@@ -145,5 +149,29 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(setSessionLayout).not.toHaveBeenCalled();
     // The pick still highlights so the guidance has a visible anchor.
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
+  });
+
+  it('no session + createSessionForFile (main app /new): mints the session, then opens the file in the viewer', async () => {
+    sessionState.currentSessionId = null;
+    const createSessionForFile = vi.fn().mockResolvedValue('sess-new');
+    renderExplorer({ createSessionForFile });
+    fireEvent.click(screen.getByTestId('mock-select-file'));
+    await vi.waitFor(() => {
+      expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-new', expect.any(Function));
+      expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
+    });
+    expect(createSessionForFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('no session + createSessionForFile rejection: toasts an error and opens nothing', async () => {
+    sessionState.currentSessionId = null;
+    const createSessionForFile = vi.fn().mockRejectedValue(new Error('boom'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderExplorer({ createSessionForFile });
+    fireEvent.click(screen.getByTestId('mock-select-file'));
+    await vi.waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+    expect(setSessionLayout).not.toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 });

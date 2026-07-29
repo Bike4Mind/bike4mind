@@ -8,12 +8,21 @@ import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: { id: 's1', forceKnowledgeRetrieval: false } }),
 }));
+// The surface wires useCreateDataLakeSession into the explorer's file-click-on-/new path;
+// stub it so this test needs no router/query providers.
+vi.mock('@client/app/hooks/useCreateDataLakeSession', () => ({
+  default: () => async () => ({ id: 'sess-new' }),
+}));
 // Stub the heavy explorer so the test asserts only the conditional wrapping + the
 // chat-embedded contract (file clicks may own the layout only when the chat is inside).
 vi.mock('./DataLakeExplorer', () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
-  default: ({ chatSlot, chatEmbedded }: any) => (
-    <div data-testid="explorer" data-chat-embedded={String(!!chatEmbedded)}>
+  default: ({ chatSlot, chatEmbedded, createSessionForFile }: any) => (
+    <div
+      data-testid="explorer"
+      data-chat-embedded={String(!!chatEmbedded)}
+      data-can-create-session={String(typeof createSessionForFile === 'function')}
+    >
       {chatSlot}
     </div>
   ),
@@ -38,5 +47,7 @@ describe('DataLakeChatSurface', () => {
     expect(explorer).toContainElement(screen.getByTestId('chat'));
     // The chat lives IN the explorer here, so file clicks may drive the KnowledgeViewer layout.
     expect(explorer).toHaveAttribute('data-chat-embedded', 'true');
+    // ...and /new file clicks can mint the grounded session instead of dead-ending.
+    expect(explorer).toHaveAttribute('data-can-create-session', 'true');
   });
 });

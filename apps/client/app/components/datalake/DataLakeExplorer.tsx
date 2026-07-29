@@ -49,6 +49,12 @@ interface DataLakeExplorerProps {
    * surfaces, so it can't tell who owns the chat.
    */
   chatEmbedded?: boolean;
+  /**
+   * Called when a file is clicked with NO active session (/new, where creation is deferred to
+   * the first message): must create + adopt the session and resolve its id so the click can
+   * proceed into the normal open-in-viewer flow. Omitted (overlay) -> a guidance toast instead.
+   */
+  createSessionForFile?: () => Promise<string>;
 }
 
 /** True only for drags carrying real files (not text/image-from-page drags). */
@@ -62,6 +68,7 @@ export default function DataLakeExplorer({
   onCreateLake,
   chatSlot,
   chatEmbedded = false,
+  createSessionForFile,
 }: DataLakeExplorerProps) {
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
 
@@ -75,17 +82,36 @@ export default function DataLakeExplorer({
   const setDataLakeMode = useSetDataLakeMode();
   // Id of the file most recently opened in the viewer, kept to highlight it in the tree.
   const [viewerFileId, setViewerFileId] = useState<string | null>(articleId ?? null);
+  // Guards double-clicks while createSessionForFile's POST is in flight - a second click
+  // would otherwise mint a second session.
+  const creatingSessionRef = useRef(false);
   const openFileInViewer = useCallback(
-    (file: IFabFileDocument) => {
-      if (!currentSessionId) {
+    async (file: IFabFileDocument) => {
+      let sessionId = currentSessionId;
+      if (!sessionId) {
         // /new: session creation is deferred to the first message, so there is no workbench
-        // to attach the file to and the viewer would render empty (then auto-hide). Guide
-        // instead of silently no-oping; the highlight below still marks the pick.
-        toast.info('Start the chat with a first message - lake files will then open right here.');
-        setViewerFileId(file.id);
-        return;
+        // to attach the file to and the viewer would render empty (then auto-hide). Hosts
+        // that can mint the grounded session do so here; otherwise guide instead of silently
+        // no-oping. The highlight below still marks the pick either way.
+        if (!createSessionForFile || creatingSessionRef.current) {
+          if (!createSessionForFile) {
+            toast.info('Start the chat with a first message - lake files will then open right here.');
+            setViewerFileId(file.id);
+          }
+          return;
+        }
+        creatingSessionRef.current = true;
+        try {
+          sessionId = await createSessionForFile();
+        } catch (error) {
+          console.error('Data Lake session create failed:', error);
+          toast.error("Couldn't start the chat - please try again.");
+          return;
+        } finally {
+          creatingSessionRef.current = false;
+        }
       }
-      setWorkBenchFiles(currentSessionId, prev => (prev.some(f => f.id === file.id) ? prev : [...prev, file]));
+      setWorkBenchFiles(sessionId, prev => (prev.some(f => f.id === file.id) ? prev : [...prev, file]));
       if (chatEmbedded) {
         // Chat is embedded in our right pane: show the KnowledgeViewer split with this file's tab.
         setSessionLayout({ layout: 'vertical', selectedArtifactId: file.id });
@@ -94,7 +120,7 @@ export default function DataLakeExplorer({
       }
       setViewerFileId(file.id);
     },
-    [currentSessionId, setWorkBenchFiles, chatEmbedded]
+    [currentSessionId, setWorkBenchFiles, chatEmbedded, createSessionForFile]
   );
 
   // Drag-to-ingest: an overlay invites dropping files/folders, which then open a lake
@@ -164,7 +190,7 @@ export default function DataLakeExplorer({
   useEffect(() => {
     if (deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
       openedDeepLinkRef.current = deepLinkTarget.id;
-      openFileInViewer(deepLinkTarget);
+      void openFileInViewer(deepLinkTarget);
     }
   }, [deepLinkTarget, openFileInViewer]);
 
@@ -184,7 +210,7 @@ export default function DataLakeExplorer({
 
   const handleSelectFile = useCallback(
     (file: IFabFileDocument) => {
-      openFileInViewer(file);
+      void openFileInViewer(file);
     },
     [openFileInViewer]
   );

@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
+import useCreateDataLakeSession from '@client/app/hooks/useCreateDataLakeSession';
 import DataLakeExplorer from './DataLakeExplorer';
 
 /**
@@ -19,10 +20,15 @@ export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode })
   const seedFromSession = useDataLakeMode(s => s.seedFromSession);
   const openManager = useDataLakeWizardStore(s => s.openManager);
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
+  const createDataLakeSession = useCreateDataLakeSession();
 
   useEffect(() => {
     seedFromSession(currentSession);
   }, [currentSession, seedFromSession]);
+
+  // File click on /new: mint the grounded session right away (same creation the first-send
+  // seam uses) so the file opens in the viewer immediately instead of waiting for a message.
+  const createSessionForFile = useCallback(async () => (await createDataLakeSession()).id, [createDataLakeSession]);
 
   if (!enabled) return <>{chat}</>;
 
@@ -34,6 +40,7 @@ export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode })
       chatEmbedded
       onManage={openManager}
       onCreateLake={openWizard}
+      createSessionForFile={createSessionForFile}
     />
   );
 }

@@ -6,8 +6,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation, useSearch } from '@tanstack/react-router';
 import { createOptimisticPromptBubble, createOptimisticSessionId } from '@client/app/utils/llm';
 import { useSessionRouter } from '@client/app/hooks/useSessionRouter';
-import { api } from '@client/app/contexts/ApiContext';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
+import useCreateDataLakeSession from '@client/app/hooks/useCreateDataLakeSession';
 
 import {
   B4MLLMTools,
@@ -146,6 +146,7 @@ export function useSendMessage({
   const recordImageTemplateUse = useRecordImageTemplateUse();
   const navigate = useNavigate();
   const location = useLocation();
+  const createDataLakeSession = useCreateDataLakeSession();
   const { projectId: routerProjectId } = useSearch({ strict: false }) as { projectId?: string };
   const { data: modelInfo } = useModelInfo();
   const { accessibleModels, userTags } = useAccessibleModels();
@@ -365,50 +366,22 @@ export function useSendMessage({
     }
 
     // Set before the Data Lake create block below so a rapid second Enter (e.g. double
-    // Enter-key) can't race the `await api.post` and fire a second session creation.
+    // Enter-key) can't race the awaited session create and fire a second creation.
     setSubmitting(true);
 
-    // Data Lake mode with no session yet: create a normal-surface session up front with
-    // grounding ON so the FIRST message is retrieval-grounded. surface is intentionally
-    // omitted (stays null) so the chat remains in the main sidebar list. See datalake-in-chat-mode.
+    // Data Lake mode with no session yet: create the grounded session up front so the FIRST
+    // message is retrieval-grounded. Creation (cache seeding, adoption, /new -> notebook URL
+    // swap) lives in useCreateDataLakeSession, shared with the explorer's file-click path.
     let dataLakeCreated: ISessionDocument | null = null;
     if (!currentSession && useDataLakeMode.getState().enabled) {
-      let created: ISessionDocument;
       try {
-        const res = await api.post<ISessionDocument>('/api/sessions/create', {
-          name: 'New Notebook',
-          forceKnowledgeRetrieval: true,
-          ...(routerProjectId ? { projectId: routerProjectId } : {}),
-        });
-        created = res.data;
+        dataLakeCreated = await createDataLakeSession();
       } catch (error) {
         console.error('Data Lake session create failed:', error);
         setSubmitting(false);
         toast.error("Couldn't start the chat - please try again.");
         return;
       }
-      queryClient.setQueryData(['sessions', created.id], created);
-      updateAllQueryData(queryClient, 'sessions', 'write', created, { keysAllowedToCreate: [['sessions', 'own']] });
-      setCurrentSession(created);
-      setCurrentSessionId(created.id);
-      if (location.pathname === '/new') {
-        navigate({
-          to: '/notebooks/$id',
-          params: { id: created.id },
-          search: routerProjectId ? { projectId: routerProjectId } : {},
-          replace: true,
-        });
-      }
-      // Match the invalidation set in `useGenerateNewSession.onSuccess` / the
-      // agent-executor branch below so a Data Lake seam session created while
-      // viewing a project refreshes that project's session list + activity
-      // feed immediately, instead of waiting for the next unrelated refetch.
-      if (routerProjectId) {
-        queryClient.invalidateQueries({ queryKey: ['sessions', 'projects', routerProjectId] });
-        queryClient.invalidateQueries({ queryKey: ['projects', routerProjectId] });
-        queryClient.invalidateQueries({ queryKey: ['activities'] });
-      }
-      dataLakeCreated = created;
     }
 
     setSessionLayout({ selectedArtifactId: undefined, artifactData: undefined });
