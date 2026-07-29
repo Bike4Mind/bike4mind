@@ -142,7 +142,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
+      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[];

@@ -8,6 +8,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   IMessage,
+  isAudioMimeType,
   isImageAttachment,
   isImageServeable,
   ISessionDocument,
@@ -843,6 +844,18 @@ export async function processFabFilesServer(
 
   const processFileInParallel = async (file: IFabFileDocument): Promise<void> => {
     try {
+      // Audio (generated TTS / sound effects) is never LLM input: no model
+      // accepts audio, and the non-image branch below would otherwise try to
+      // read the bytes as text. This is the authoritative attachment guard -
+      // every chat/agent path funnels through here, so a file that slips past
+      // the attach UI still can't reach the model.
+      if (isAudioMimeType(file.mimeType)) {
+        logger.warn(
+          `[processFabFilesServer] Skipping audio file ${file.fileName} — audio is not attachable to an LLM.`
+        );
+        return;
+      }
+
       if (supportsVision && isImageAttachment(file.mimeType)) {
         // Never send a not-yet-clean or blocked uploaded image to the model.
         if (!isImageServeable(file)) {
