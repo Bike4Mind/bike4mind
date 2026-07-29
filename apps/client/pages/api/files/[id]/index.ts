@@ -87,7 +87,7 @@ const handler = baseApi()
             error: req.body.error,
           },
           {
-            db: { fabFiles: fabFileRepository },
+            db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository },
             storage: {
               upload: (filepath, content, option) => {
                 return getFilesStorage().upload(content, filepath, option);

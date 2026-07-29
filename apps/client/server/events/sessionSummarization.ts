@@ -2,6 +2,7 @@ import { withEventContext } from '@server/events/utils';
 import { SessionEvents } from '@server/utils/eventBus';
 import {
   adminSettingsRepository,
+  dataLakeRepository,
   fabFileRepository,
   Quest,
   Session,
@@ -197,6 +198,7 @@ export const handler = withEventContext(async (event, logger) => {
           {
             db: {
               fabFiles: fabFileRepository,
+              dataLakes: dataLakeRepository,
             },
             storage: {
               upload: (filepath, content, options) => {
