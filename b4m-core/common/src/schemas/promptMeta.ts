@@ -144,6 +144,9 @@ const PromptMetaContextSchema = z.object({
       utilizationPercentage: z.number(),
       overflowDetected: z.boolean().optional(),
       overflowAmount: z.number().optional(),
+      // Older turns dropped from the verbatim window this turn and folded into
+      // contextSummary (drives the client's "earlier turns condensed" note).
+      verbatimTurnsExcluded: z.number().optional(),
     })
     .optional(),
   // Phase 2: Message truncation tracking

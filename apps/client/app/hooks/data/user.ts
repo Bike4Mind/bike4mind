@@ -40,15 +40,16 @@ export const useGetIdentify = () => {
       const response = await api.get<{ user: IUserDocument; accessToken: string }>('/api/identify');
       return response.data;
     },
-    // Only seed initialData when the cached user is a FULL record (has `preferences`).
-    // The persisted stub from UserContext (`pickPersistedFields`) deliberately omits
-    // `preferences` - and UserSettingsContext keys `isHydrated` on `'preferences' in currentUser`.
-    // Feeding the stub as initialData makes React Query treat it as fresh for the entire
-    // staleTime window and skip the /api/identify network call, so preferences never land,
-    // isHydrated never flips, and ExperimentalFeatureGate hangs forever on cold loads
-    // of gated routes (e.g. /agents).
+    // Seed initialData from the persisted user so the UI renders instantly on
+    // cold load (no loading spinner). `initialDataUpdatedAt: 0` marks it
+    // immediately stale so React Query fires a background /api/identify refetch
+    // right away. Without this, the staleTime window suppresses the network call
+    // and the identify effect feeds the stale persisted accessToken back into the
+    // store -- which can overwrite a token the 401 interceptor just refreshed,
+    // leaving data queries permanently failed (the "name shows but no data" bug).
     initialData:
       currentUser && accessToken && 'preferences' in currentUser ? { user: currentUser, accessToken } : undefined,
+    initialDataUpdatedAt: 0,
     staleTime: 1000 * 60 * 5, // 5 minutes
     // Only run query when there's an access token to avoid 401 errors for unauthenticated users
     enabled: !!accessToken,

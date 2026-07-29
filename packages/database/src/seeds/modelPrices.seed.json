@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-24T17:33:11.725Z",
+  "generatedAt": "2026-07-28T23:36:58.378Z",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -376,8 +376,8 @@
       "unit": "per_token",
       "pricing": {
         "1000000": {
-          "input": 0.000015,
-          "output": 0.000075
+          "input": 0.000005,
+          "output": 0.000025
         }
       }
     },
@@ -784,6 +784,61 @@
       }
     },
     {
+      "modelId": "kimi-k2.5",
+      "unit": "per_token",
+      "pricing": {
+        "262144": {
+          "input": 6e-7,
+          "output": 0.000003,
+          "cache_read": 1.0000000000000001e-7
+        }
+      }
+    },
+    {
+      "modelId": "kimi-k2.6",
+      "unit": "per_token",
+      "pricing": {
+        "262144": {
+          "input": 9.499999999999999e-7,
+          "output": 0.000004,
+          "cache_read": 1.6e-7
+        }
+      }
+    },
+    {
+      "modelId": "kimi-k2.7-code",
+      "unit": "per_token",
+      "pricing": {
+        "262144": {
+          "input": 9.499999999999999e-7,
+          "output": 0.000004,
+          "cache_read": 1.9e-7
+        }
+      }
+    },
+    {
+      "modelId": "kimi-k2.7-code-highspeed",
+      "unit": "per_token",
+      "pricing": {
+        "262144": {
+          "input": 0.0000018999999999999998,
+          "output": 0.000008,
+          "cache_read": 3.8e-7
+        }
+      }
+    },
+    {
+      "modelId": "kimi-k3",
+      "unit": "per_token",
+      "pricing": {
+        "1048576": {
+          "input": 0.000003,
+          "output": 0.000015,
+          "cache_read": 3e-7
+        }
+      }
+    },
+    {
       "modelId": "meta.llama3-70b-instruct-v1:0",
       "unit": "per_token",
       "pricing": {
@@ -800,6 +855,26 @@
         "8000": {
           "input": 3e-7,
           "output": 6e-7
+        }
+      }
+    },
+    {
+      "modelId": "moonshot.kimi-k2-thinking",
+      "unit": "per_token",
+      "pricing": {
+        "262144": {
+          "input": 6e-7,
+          "output": 0.0000025
+        }
+      }
+    },
+    {
+      "modelId": "moonshotai.kimi-k2.5",
+      "unit": "per_token",
+      "pricing": {
+        "262144": {
+          "input": 6e-7,
+          "output": 0.000003
         }
       }
     },
@@ -888,8 +963,8 @@
       "unit": "per_token",
       "pricing": {
         "200000": {
-          "input": 3e-7,
-          "output": 0.0000015
+          "input": 0.000003,
+          "output": 0.000015
         }
       }
     },

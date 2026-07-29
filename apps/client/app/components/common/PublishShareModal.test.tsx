@@ -65,7 +65,7 @@ describe('PublishShareModal — update seeds controls from the prior publication
     // The regression: without seeding, this would be 'public' + comments on.
     expect(radio('private')?.checked).toBe(true);
     expect(radio('public')?.checked).toBe(false);
-    expect((screen.getByRole('switch') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId('publish-share-comments-toggle') as HTMLInputElement).checked).toBe(false);
   });
 
   it('carries a PUBLIC, comments-open publication through unchanged', async () => {
@@ -94,7 +94,7 @@ describe('PublishShareModal — update seeds controls from the prior publication
 
     expect(radio('public')?.checked).toBe(true);
     expect(radio('private')?.checked).toBe(false);
-    expect((screen.getByRole('switch') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId('publish-share-comments-toggle') as HTMLInputElement).checked).toBe(true);
   });
 });
 
@@ -134,7 +134,7 @@ describe('PublishShareModal — update re-asserts the PRESERVED comment policy',
 
     await screen.findByTestId('publish-share-mode-update');
     // Seeded on because 'restricted' still allows comments.
-    expect((screen.getByRole('switch') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByTestId('publish-share-comments-toggle') as HTMLInputElement).checked).toBe(true);
 
     fireEvent.click(screen.getByTestId('publish-share-create'));
 
@@ -158,7 +158,7 @@ describe('PublishShareModal — update re-asserts the PRESERVED comment policy',
 
     await screen.findByTestId('publish-share-mode-update');
     // Seeded off because the prior policy was 'none'.
-    expect((screen.getByRole('switch') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId('publish-share-comments-toggle') as HTMLInputElement).checked).toBe(false);
 
     fireEvent.click(screen.getByTestId('publish-share-create'));
 
@@ -489,5 +489,179 @@ describe('PublishShareModal - incomplete-artifact warning', () => {
     fireEvent.click(screen.getByTestId('publish-share-create'));
 
     expect(noopPublish).not.toHaveBeenCalled();
+  });
+});
+
+describe('PublishShareModal — search-engine listing is opt-in', () => {
+  const renderModal = (props: Partial<React.ComponentProps<typeof PublishShareModal>> = {}) =>
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={noopPublish}
+          title="My artifact"
+          defaultVisibility="public"
+          {...props}
+        />
+      </Wrapper>
+    );
+
+  it('defaults the search-listing toggle to OFF for a fresh public publish', () => {
+    renderModal();
+    const toggle = screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+  });
+
+  it('tells the user a public link stays out of search engines by default', () => {
+    renderModal();
+    // The public warning must say what "public" does NOT mean - this is the exact
+    // expectation gap that made "anyone with the link" read as "unlisted".
+    expect(screen.getByText(/stays out of search engines unless you turn on/i)).toBeTruthy();
+    expect(screen.getByText(/won't show up in Google/i)).toBeTruthy();
+  });
+
+  it('hides the toggle for a private item - it could never take effect there', () => {
+    renderModal({ defaultVisibility: 'private' });
+    expect(screen.queryByTestId('publish-share-discoverable-toggle')).toBeNull();
+  });
+
+  it('seeds the toggle ON from a prior publication that opted in', async () => {
+    renderModal({
+      resolveExisting: () =>
+        Promise.resolve({
+          title: 'My artifact',
+          versionsCount: 1,
+          slug: 's',
+          visibility: 'public',
+          commentPolicy: 'none',
+          discoverable: true,
+        }),
+    });
+    await waitFor(() => {
+      const toggle = screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement;
+      expect(toggle.checked).toBe(true);
+    });
+  });
+
+  it('drops a staged listing choice when the user switches away from Public', () => {
+    // Otherwise the flag is parked on a hidden control and silently arms itself the
+    // next time someone widens the artifact back to public.
+    renderModal();
+    fireEvent.click(screen.getByTestId('publish-share-discoverable-toggle'));
+    expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
+    expect(screen.queryByTestId('publish-share-discoverable-toggle')).toBeNull();
+
+    // Back to Public: starts from OFF, not from the stale staged choice.
+    fireEvent.click(screen.getByTestId('publish-share-visibility-public'));
+    expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('keeps the staged listing choice consistent with storage across a gate round-trip', () => {
+    // Review point (c): resetting on a gate PICK was local-only, because a gate is not
+    // persisted until "Update access". That made the switch read OFF while storage still
+    // said true. The switch now holds its value; what stops a gated artifact from being
+    // persisted as listed is the publish-time guard (covered separately below).
+    renderModal();
+    fireEvent.click(screen.getByTestId('publish-share-discoverable-toggle'));
+
+    fireEvent.click(radio('passphrase')!);
+    expect(screen.queryByTestId('publish-share-discoverable-toggle')).toBeNull();
+
+    fireEvent.click(radio('none')!);
+    expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(true);
+  });
+
+  const publishAndWait = async (props: Partial<React.ComponentProps<typeof PublishShareModal>> = {}) => {
+    const publish = vi.fn().mockResolvedValue({ publicId: 'pub-1', url: '/p/u/me/s', tier: 'user' });
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={publish}
+          title="My artifact"
+          defaultVisibility="public"
+          {...props}
+        />
+      </Wrapper>
+    );
+    return publish;
+  };
+
+  it('PATCHes discoverable:true after publishing when the switch was staged ON', async () => {
+    // The feature's primary happy path: stage ON, publish, artifact becomes discoverable.
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    await publishAndWait();
+    fireEvent.click(screen.getByTestId('publish-share-discoverable-toggle'));
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+
+    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', { discoverable: true }));
+  });
+
+  it('does NOT PATCH discoverable:true when a gate was staged alongside it', async () => {
+    // The `gateKind === 'none'` conjunct is load-bearing: persisting true on a gated
+    // artifact would arm a silent opt-in for whenever the gate is later removed.
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    await publishAndWait();
+    fireEvent.click(screen.getByTestId('publish-share-discoverable-toggle'));
+    fireEvent.click(radio('passphrase')!);
+    // The gate radio and the passphrase Input share this testid, so query by input type.
+    fireEvent.change(document.querySelector('input[type="password"]')!, {
+      target: { value: 'a-long-enough-passphrase' },
+    });
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+
+    await waitFor(() => expect(screen.queryByTestId('publish-share-url')).not.toBeNull());
+    expect(apiPatch).not.toHaveBeenCalledWith('/api/publish/artifacts/pub-1', { discoverable: true });
+  });
+
+  it('PATCHes discoverable:false to DE-LIST a previously-listed artifact', async () => {
+    // finalize does not $set discoverable, so a re-publish preserves it - the OFF
+    // direction has to be written explicitly or the dialog can never turn it off.
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    await publishAndWait({
+      resolveExisting: () =>
+        Promise.resolve({
+          title: 'My artifact',
+          versionsCount: 1,
+          slug: 's',
+          visibility: 'public',
+          commentPolicy: 'none',
+          discoverable: true,
+        }),
+    });
+    // Wait for seeding, then switch it off before publishing.
+    await waitFor(() =>
+      expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(true)
+    );
+    fireEvent.click(screen.getByTestId('publish-share-discoverable-toggle'));
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+
+    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', { discoverable: false }));
+  });
+
+  it('rolls the live toggle back when the PATCH fails', async () => {
+    await publishAndWait();
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await screen.findByTestId('publish-share-url');
+
+    apiPatch.mockClear().mockRejectedValueOnce(new Error('nope'));
+    fireEvent.click(screen.getByTestId('publish-share-discoverable-toggle'));
+    await waitFor(() =>
+      expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(false)
+    );
+  });
+
+  it('does not PATCH discoverable while still staging a fresh publish', () => {
+    apiPatch.mockClear();
+    renderModal();
+    fireEvent.click(screen.getByTestId('publish-share-discoverable-toggle'));
+    // Nothing exists to PATCH yet; the choice is applied after publish succeeds.
+    expect(apiPatch).not.toHaveBeenCalledWith(expect.stringContaining('/api/publish/artifacts/'), {
+      discoverable: true,
+    });
   });
 });

@@ -58,6 +58,10 @@ export const ttsRequestSchema = z.object({
   // that mispronounces short, isolated tokens (a bare "2", acronyms, names).
   // Best-effort: ignored by providers/models that don't support it.
   languageCode: z.string().optional(),
+  // When true, the result is a throwaway audition (e.g. the Settings voice
+  // preview) and is never saved to the File Browser, regardless of the user's
+  // saveGeneratedAudio preference.
+  preview: z.boolean().optional(),
 });
 
 export type TTSRequest = z.infer<typeof ttsRequestSchema>;

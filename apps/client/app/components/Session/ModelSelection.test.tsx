@@ -4,9 +4,14 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, ModelName } from '@bike4mind/common';
 import { ModelBackend } from '@bike4mind/common';
+import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
+// The real store, not a stub: it must stay reachable from ModelSelection without
+// dragging in AdminPage (the import cycle this module split exists to prevent).
+import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import ModelSelection, { getModelBackend, SELF_HOSTED_BACKEND } from './ModelSelection';
 
 const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
+const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
 
 const textModel = {
   id: 'gpt-text-model',
@@ -43,6 +48,12 @@ vi.mock('@client/app/hooks/useAccessibleModels', () => ({
 vi.mock('@client/app/contexts/LLMContext', () => ({
   useLLM: (selector: (state: { setLLM: typeof setLLM }) => unknown) => selector({ setLLM }),
 }));
+
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector: (state: { isAdmin: boolean }) => unknown) => selector({ isAdmin: admin.isAdmin }),
+}));
+
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => admin.navigate }));
 
 vi.mock('@client/app/hooks/data/useModelStats', () => ({
   useModelStats: () => ({ data: { popularity: {}, avgResponseTime: {} }, isLoading: false }),
@@ -125,6 +136,32 @@ describe('ModelSelection apply behavior', () => {
     expect(setModel).toHaveBeenCalledWith(imageModel.id);
     expect(onSettingsClick).toHaveBeenCalledWith(imageModel);
     expect(onSelectionComplete).not.toHaveBeenCalled();
+  });
+});
+
+describe('ModelSelection admin quick link', () => {
+  beforeEach(() => {
+    admin.isAdmin = false;
+    admin.navigate.mockClear();
+    useAdminModal.setState({ activeTab: AdminTab.Users });
+  });
+
+  it('stays hidden for a non-admin user', () => {
+    renderSelection({});
+
+    expect(screen.queryByTestId('model-selection-manage-models-btn')).not.toBeInTheDocument();
+  });
+
+  it('sends an admin to the LLM Dashboard tab and closes the picker first', () => {
+    admin.isAdmin = true;
+    const onSelectionComplete = vi.fn();
+    renderSelection({ onSelectionComplete });
+
+    fireEvent.click(screen.getByTestId('model-selection-manage-models-btn'));
+
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.LLMDashboard);
+    expect(onSelectionComplete).toHaveBeenCalledOnce();
+    expect(admin.navigate).toHaveBeenCalledWith({ to: '/admin' });
   });
 });
 

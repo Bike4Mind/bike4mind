@@ -1,4 +1,5 @@
 import z from 'zod';
+import { DATALAKE_TAG_PREFIX, isReservedTagPrefix } from '../constants/dataLakes';
 
 // Slug validation
 
@@ -19,7 +20,8 @@ export const CreateDataLakeRequestInput = z.object({
     .string()
     .min(2)
     .max(30)
-    .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")'),
+    .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")')
+    .refine(s => !isReservedTagPrefix(s), `Tag prefix cannot use the reserved "${DATALAKE_TAG_PREFIX}" namespace`),
   requiredUserTag: z.string().min(1).max(100).optional(),
   // Entitlement keys are namespaced (must contain ":") so a bare user-tag value can never
   // be a requiredEntitlement - tags pass through 1:1 as entitlement keys, so an un-namespaced

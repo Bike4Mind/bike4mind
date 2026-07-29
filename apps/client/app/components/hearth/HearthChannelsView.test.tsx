@@ -17,7 +17,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ subscribeToAction: subscribeToActionMock }),
 }));
 
-import HearthChannelsView from './HearthChannelsView';
+import HearthChannelsView, { actorColorIndex } from './HearthChannelsView';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -47,16 +47,39 @@ function wireEvent(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-/** The WS handler captured from subscribeToAction so tests can push events. */
-let pushWs: (message: unknown) => Promise<void> | void = () => {};
+const NOW = new Date().toISOString();
+
+type WsHandler = (message: unknown) => Promise<void> | void;
+
+/**
+ * Every hearth_event subscriber, not just the last one: the view and the nested
+ * presence panel both subscribe, and a mock that kept one callback would silently
+ * stop delivering events to the view.
+ */
+let wsHandlers: WsHandler[] = [];
+const pushWs = async (message: unknown) => {
+  for (const handler of [...wsHandlers]) await handler(message);
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
-  subscribeToActionMock.mockImplementation((_action: string, cb: typeof pushWs) => {
-    pushWs = cb;
-    return () => {};
+  wsHandlers = [];
+  subscribeToActionMock.mockImplementation((_action: string, cb: WsHandler) => {
+    wsHandlers.push(cb);
+    return () => {
+      wsHandlers = wsHandlers.filter(h => h !== cb);
+    };
   });
-  apiGetMock.mockResolvedValue({ data: { channels: [{ id: 'ch-1', name: 'ops', createdAt: '' }] } });
+  apiGetMock.mockImplementation(async (url: string) =>
+    url.startsWith('/api/hearth/presence')
+      ? {
+          data: {
+            presence: [{ actorId: 'actor-1', actorName: 'erik', state: 'idle', lastSeen: NOW }],
+            staleAfterMs: 300000,
+          },
+        }
+      : { data: { channels: [{ id: 'ch-1', name: 'ops', createdAt: '' }] } }
+  );
   apiPostMock.mockResolvedValue({ data: { events: [], cursor: 0 } });
 });
 
@@ -74,6 +97,17 @@ describe('HearthChannelsView', () => {
 
     expect(apiPostMock).toHaveBeenCalledWith('/api/hearth/catchup', { channelId: 'ch-1', tail: 100 });
     await screen.findByText('hello from the log');
+  });
+
+  it('shows the presence roster above the event stream', async () => {
+    await openChannel();
+
+    const panel = await screen.findByTestId('hearth-presence-panel');
+    const list = screen.getByTestId('hearth-event-list');
+    // DOCUMENT_POSITION_FOLLOWING: the stream comes after the roster, because
+    // "who is blocked on me" is the question asked on arrival.
+    expect(panel.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await screen.findByTestId('hearth-presence-row');
   });
 
   it('merges WS pushes with the HTTP tail, deduping by id', async () => {
@@ -126,6 +160,47 @@ describe('HearthChannelsView', () => {
     expect(order).toEqual(['second', 'third']);
   });
 
+  it('colors each actor from a hash of actorId, so the color survives reordering', async () => {
+    apiPostMock.mockResolvedValue({
+      data: {
+        events: [
+          wireEvent({ id: 'a1', seq: 1, actorId: 'actor-1', actorName: 'erik' }),
+          wireEvent({ id: 'b1', seq: 2, actorId: 'actor-2', actorName: 'spock' }),
+          wireEvent({ id: 'a2', seq: 3, actorId: 'actor-1', actorName: 'erik' }),
+        ],
+        cursor: 3,
+      },
+    });
+    await openChannel();
+    await waitFor(() => expect(screen.getAllByTestId('hearth-event-actor-swatch')).toHaveLength(3));
+
+    const colors = screen.getAllByTestId('hearth-event-actor-swatch').map(n => getComputedStyle(n).backgroundColor);
+    // Guard against a vacuous pass: if jsdom stops resolving the emotion rule
+    // every color becomes '' and the equality assertions below mean nothing.
+    expect(colors.every(c => c.length > 0)).toBe(true);
+    // Same actor in rows 1 and 3 (different arrival positions) shares one color;
+    // index-derived color would have given all three different colors.
+    expect(colors[0]).toBe(colors[2]);
+    expect(colors[0]).not.toBe(colors[1]);
+  });
+
+  it('keeps name and kind chip as non-color signals on every event', async () => {
+    apiPostMock.mockResolvedValue({ data: { events: [wireEvent()], cursor: 1 } });
+    await openChannel();
+
+    // The kind chip renders even for 'message' - color is never the only signal.
+    expect(await screen.findByTestId('hearth-event-kind-chip')).toHaveTextContent('message');
+    expect(screen.getByTestId('hearth-event-actor-name')).toHaveTextContent('erik');
+  });
+
+  it('actorColorIndex is deterministic and stays inside the fixed palette', () => {
+    expect(actorColorIndex('actor-1')).toBe(actorColorIndex('actor-1'));
+    for (const id of ['a', 'actor-1', '6540b58d1f703ade3ea1e82c', '']) {
+      expect(actorColorIndex(id)).toBeGreaterThanOrEqual(0);
+      expect(actorColorIndex(id)).toBeLessThan(6);
+    }
+  });
+
   it('dedupes the optimistic post against its own WS echo', async () => {
     await openChannel();
 
@@ -144,5 +219,59 @@ describe('HearthChannelsView', () => {
     await waitFor(() => {
       expect(screen.getAllByText('posted!')).toHaveLength(1);
     });
+  });
+  // The `hearth` gear unlocks on owning >= 1 channel, so THIS request is what
+  // earns the reveal - but useGearsStatus caches for 5 minutes, so without an
+  // explicit invalidation the sidenav row the user just earned stays hidden for
+  // up to that long. Now that the row fails closed, hidden is the default.
+  it('invalidates the gears status after creating a channel, so the reveal is not stale', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // The helper only invalidates while the gear is still LOCKED, so the cache
+    // has to hold that state or the call correctly no-ops and proves nothing.
+    queryClient.setQueryData(['gears', 'status'], { gears: [{ key: 'hearth', unlocked: false }] });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <QueryClientProvider client={queryClient}>
+          <HearthChannelsView />
+        </QueryClientProvider>
+      </CssVarsProvider>
+    );
+
+    apiPostMock.mockResolvedValueOnce({ data: { channel: { id: 'ch-2', name: 'ops2' } } });
+    // Joy Input renders the testid on a wrapper; the native input is inside it.
+    const nameInput = (await screen.findByTestId('hearth-new-channel-input')).querySelector('input');
+    fireEvent.change(nameInput!, { target: { value: 'ops2' } });
+    fireEvent.click(screen.getByTestId('hearth-create-channel-btn'));
+
+    await waitFor(() => expect(apiPostMock).toHaveBeenCalledWith('/api/hearth/channels', { name: 'ops2' }));
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ['gears', 'status'] }))
+    );
+  });
+
+  it('does not invalidate the gears status once the gear is already unlocked', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(['gears', 'status'], { gears: [{ key: 'hearth', unlocked: true }] });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <QueryClientProvider client={queryClient}>
+          <HearthChannelsView />
+        </QueryClientProvider>
+      </CssVarsProvider>
+    );
+
+    apiPostMock.mockResolvedValueOnce({ data: { channel: { id: 'ch-2', name: 'ops2' } } });
+    // Joy Input renders the testid on a wrapper; the native input is inside it.
+    const nameInput = (await screen.findByTestId('hearth-new-channel-input')).querySelector('input');
+    fireEvent.change(nameInput!, { target: { value: 'ops2' } });
+    fireEvent.click(screen.getByTestId('hearth-create-channel-btn'));
+
+    await waitFor(() => expect(apiPostMock).toHaveBeenCalledWith('/api/hearth/channels', { name: 'ops2' }));
+    // Every subsequent channel would otherwise re-fetch the whole gears catalog.
+    expect(invalidateSpy).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: ['gears', 'status'] }));
   });
 });

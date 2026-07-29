@@ -1,6 +1,7 @@
 import { activeCodeAgentRepository, CcBridgeDevice, ccBridgeDeviceRepository } from '@bike4mind/database';
 import { CcAgentRegisterAction, type ICcAgentCapability, type ICcAgentSource } from '@bike4mind/common';
 import { resolveBridgeWsAuth } from '@server/websocket/ccAgentAuth';
+import { reportCcAgentPresence } from '@server/websocket/ccAgentHearth';
 import { connectionUserCanAccessTavern } from '@server/websocket/tavernWsAuth';
 import { sendToClient, withWebSocketContext } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
@@ -208,6 +209,20 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     // a WS round-trip per event.
     { sourceFilter: 'web' }
   );
+
+  // Hearth dual-write, after the broadcast so it can never delay the live
+  // scene update. See ccAgentHearth.ts for the scope/authority and
+  // content-free rationale.
+  await reportCcAgentPresence({
+    userId,
+    instanceId,
+    workspaceName,
+    reason: 'session_start',
+    source,
+    claudeVersion,
+    hearthChannelId: device.hearthChannelId,
+    logger,
+  });
 
   return { statusCode: 200 };
 });

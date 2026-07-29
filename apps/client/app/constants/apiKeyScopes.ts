@@ -89,6 +89,18 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     description: 'Chat with a single bound agent from an embedded widget on an allow-listed site',
     endpoints: ['POST /api/embed/chat'],
   },
+  {
+    value: ApiKeyScope.HEARTH_READ,
+    label: 'Hearth: Read',
+    description: 'List Hearth channels and replay their events without advancing any cursor',
+    endpoints: ['GET /api/hearth/channels', 'POST /api/hearth/catchup'],
+  },
+  {
+    value: ApiKeyScope.HEARTH_WRITE,
+    label: 'Hearth: Write',
+    description: 'Append Hearth events, create channels, and advance actor cursors',
+    endpoints: ['POST /api/hearth/events', 'POST /api/hearth/channels', 'POST /api/hearth/catchup'],
+  },
 ];
 
 /** All user-selectable scope values, e.g. for a "Select All" action. */

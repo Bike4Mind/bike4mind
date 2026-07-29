@@ -43,6 +43,7 @@ export * from './FavoriteTypes';
 export * from './CreditTransactionTypes';
 export * from './UsageEventTypes';
 export * from './ModelPriceTypes';
+export * from './ModelCatalogTypes';
 export * from './ProviderInvoiceTypes';
 export * from './CreditHolderTypes';
 export * from './CreditLotTypes';
