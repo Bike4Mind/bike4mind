@@ -26,10 +26,15 @@ export const ADAPTER_FAMILIES = [
   'bedrock-anthropic',
   'bedrock-llama',
   'bedrock-deepseek',
+  'bedrock-moonshot',
   'bedrock-jurassic',
   'bedrock-titan',
   'gemini',
   'xai',
+  // Moonshot direct. Not 'openai-chat': the envelope matches but the reasoning
+  // controls, the sampling pins and max_completion_tokens do not, so a Kimi row
+  // routed to the OpenAI shaper would 400.
+  'kimi',
   'ollama',
   'bfl',
   'local-image',

@@ -3,6 +3,7 @@ import {
   AWSBackend,
   BFLBackend,
   GeminiBackend,
+  KimiBackend,
   OpenAIBackend,
   UndifferentiatedBedrockBackend,
   XAIBackend,
@@ -36,6 +37,7 @@ export async function collectStaticCatalogModels(): Promise<ModelInfo[]> {
     new UndifferentiatedBedrockBackend(),
     new GeminiBackend('seed-key'),
     new XAIBackend('seed-key'),
+    new KimiBackend('seed-key'),
     new AWSBackend(),
     new BFLBackend('seed-key'),
   ];
