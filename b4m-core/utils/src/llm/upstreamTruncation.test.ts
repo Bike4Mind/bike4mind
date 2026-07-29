@@ -217,6 +217,54 @@ describe('content cut before assembly is declared to the model', () => {
     });
   });
 
+  describe('log labels never echo attachment content', () => {
+    it('names a vectorized file from its header, not from a quoted span in its data', async () => {
+      // `Data for x.csv:` carries no quotes, so a scan for any quoted span fell through to the
+      // file's own text - and a quoted CSV field is ordinary. The squeeze warning then carried
+      // user data into logs while the docstring claimed it could not.
+      const quoted = Array.from({ length: 8 }, (_, i) => ({
+        id: `chunk-${i}`,
+        text: `"SECRET-FIELD-${i}",more,"ANOTHER-QUOTED-${i}"`,
+        vector: [1, i / 8],
+      }));
+      await runFabFiles({ vectorized: true, embeddingModel: 'text-embedding-ada-002' }, 60, quoted);
+
+      const assembled = await buildAndSortMessages(
+        [],
+        [{ role: 'user', content: `Data for roster.csv:\n"SECRET-FIELD-0",more,"ANOTHER-QUOTED-0"`.repeat(40) }],
+        [{ role: 'user', content: 'what does it say' }],
+        1200,
+        {},
+        5,
+        mockLogger as any,
+        tokenizer as any
+      );
+      expect(assembled.length).toBeGreaterThan(0);
+      expect(warnings()).not.toContain('SECRET-FIELD');
+      expect(warnings()).not.toContain('ANOTHER-QUOTED');
+    });
+
+    it('still names a single fab file from its own quoted header', async () => {
+      // The header shape that motivated the quoted-span scan in the first place must keep working.
+      await buildAndSortMessages(
+        [],
+        [
+          {
+            role: 'user',
+            content: `Here is the content from the attached file "payroll.csv" for context:\n\n${'D'.repeat(20000)}`,
+          },
+        ],
+        [{ role: 'user', content: 'summarise' }],
+        1200,
+        {},
+        5,
+        mockLogger as any,
+        tokenizer as any
+      );
+      expect(warnings()).toContain('"payroll.csv"');
+    });
+  });
+
   describe('an upstream notice survives a later assembly cut', () => {
     it('keeps the excerpt wording instead of replacing it with the head-slice wording', async () => {
       // Assembly's cut slices the tail, taking the excerpt notice with it, and used to append the

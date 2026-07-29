@@ -166,9 +166,16 @@ const URL_TRUNCATION_NOTICE =
  * Matched by prefix because the excerpt notice carries a filename. A file whose own text ends with
  * this sentence would be misread, but the only consequence is which true-either-way notice is
  * appended, so an exact-match guard is not worth the code.
+ *
+ * The content notice is recognised for the same reason, though no visible fragment of it is
+ * reachable today: extraction appends it before assembly ever sees the message, so assembly can
+ * re-cut an already-annotated message, but `truncateMessageContent` keeps at most 0.9 of the length
+ * and a fragment long enough to read as a notice needs more than that. Holding it out makes the
+ * invariant structural instead of a consequence of that 0.9.
  */
 const upstreamNoticeIn = (text: string): string | null => {
   if (text.endsWith(URL_TRUNCATION_NOTICE)) return URL_TRUNCATION_NOTICE;
+  if (text.endsWith(CONTENT_TRUNCATION_NOTICE)) return CONTENT_TRUNCATION_NOTICE;
   const start = text.lastIndexOf(EXCERPT_NOTICE_PREFIX);
   return start !== -1 && text.endsWith(']') ? text.slice(start) : null;
 };
@@ -182,6 +189,18 @@ const IMAGE_TOKEN_ESTIMATE = 1600;
 
 /** Bounded so building a log label never walks a multi-MB attachment. */
 const ATTACHMENT_LABEL_SCAN_CHARS = 400;
+
+/**
+ * The attachment headers that carry a filename, anchored to a line start. Must stay in sync with the
+ * message builders in processFabFilesServer: the single-file header, the multi-file `--- File N:`
+ * blocks, and a vectorized file's `Data for` header. Anything else - notably URL-derived content,
+ * which opens with the fetched page body - has no name to read and is labelled positionally.
+ */
+const ATTACHMENT_NAME_HEADERS = [
+  /^Here is the content from the attached file "(.{1,120})" for context:$/gm,
+  /^--- File \d+: (.{1,120}) ---$/gm,
+  /^Data for (.{1,120}):$/gm,
+];
 
 const estimateTokenLength = (text: string): number => {
   // Rough estimate: ~3.5 chars per token for English text
@@ -1810,13 +1829,20 @@ export async function buildAndSortMessages(
     return result.messages;
   };
 
-  // Content-free descriptor for logs. An attachment's first line is a quoted filename header for fab
-  // files but raw fetched page body for URL-derived content (the `For context:` message built above),
-  // so this quotes only what the header itself quotes and never falls back to echoing the body.
+  // Content-free descriptor for logs. Names are read only from the three headers that carry one
+  // (see the message builders above), each anchored to a line start so a quoted or bracketed span
+  // inside the file's own text cannot be mistaken for a header - a CSV field is quoted as often as
+  // not. URL-derived content opens with the fetched page body and has no header at all, so it is
+  // labelled positionally rather than by echoing what it contains.
   const attachmentLabel = (message: IMessage, index: number): string => {
     const head = messageContentText(message).slice(0, ATTACHMENT_LABEL_SCAN_CHARS);
-    const named = head.match(/"[^"\n]{1,120}"|--- File \d+: [^\n]{1,120} ---/g);
-    return `${named ? named.join(', ') : `attachment ${index + 1}`} (~${estimateMessageTokens(message)} est. tokens)`;
+    const named: string[] = [];
+    for (const pattern of ATTACHMENT_NAME_HEADERS) {
+      // Shared /g regexes carry lastIndex between calls, so reset before each scan.
+      pattern.lastIndex = 0;
+      for (let match = pattern.exec(head); match; match = pattern.exec(head)) named.push(`"${match[1]}"`);
+    }
+    return `${named.length ? named.join(', ') : `attachment ${index + 1}`} (~${estimateMessageTokens(message)} est. tokens)`;
   };
 
   // A windowed request allocates content a floor and gives history the rest; an unwindowed one splits
