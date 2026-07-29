@@ -94,7 +94,8 @@ export default function DataLakeArticlePanel({
       data-testid="datalake-article"
       sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}
     >
-      <Box sx={{ px: 3, pt: 2.5, pb: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
+      {/* pr clears the host modal's absolutely-positioned ModalClose (top-right). */}
+      <Box sx={{ px: 3, pr: 6, pt: 2.5, pb: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {title}

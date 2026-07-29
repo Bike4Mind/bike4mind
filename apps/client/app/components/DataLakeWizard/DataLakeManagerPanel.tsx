@@ -141,64 +141,50 @@ export default function DataLakeManagerPanel() {
   if (!isFeatureEnabled('EnableDataLakes')) return null;
 
   return (
-    <Box data-testid="datalake-manager-panel" sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Header. pr clears the modal's absolutely-positioned ModalClose (top-right). */}
-      <Box
-        sx={{
-          px: 2,
-          py: 1.5,
-          pr: 6,
-          borderBottom: '1px solid',
-          borderColor: 'divider',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 1,
+    // No header bar: the nav floats as a full-height card (same chrome as the in-chat tree)
+    // and the modal's ModalClose sits in the top-right corner across from it.
+    <Box
+      data-testid="datalake-manager-panel"
+      sx={{ display: 'flex', height: '100%', minHeight: 0, overflow: 'hidden', p: '12px', gap: '12px' }}
+    >
+      <ManagerNav
+        lakes={dataLakes}
+        lakesLoading={isLoading}
+        lakeCount={lakeCount}
+        activeLake={activeLake}
+        path={path}
+        selectedFileId={selectedFile?.id ?? null}
+        onSelectLake={selectLake}
+        onNavigate={p => {
+          setPath(p);
+          setSelectedFile(null);
         }}
-      >
-        <StorageIcon sx={{ fontSize: 20, color: 'primary.400' }} />
-        <Typography level="title-md">Data Lakes</Typography>
-      </Box>
-
-      <Box sx={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        <ManagerNav
-          lakes={dataLakes}
-          lakesLoading={isLoading}
-          lakeCount={lakeCount}
-          activeLake={activeLake}
-          path={path}
-          selectedFileId={selectedFile?.id ?? null}
-          onSelectLake={selectLake}
-          onNavigate={p => {
-            setPath(p);
-            setSelectedFile(null);
-          }}
-          onExitLake={() => {
-            setLakeId(null);
-            setPath([]);
-            setSelectedFile(null);
-          }}
-          onSelectFile={setSelectedFile}
-          onCreateLake={openWizard}
-        />
-        {activeLake ? (
-          selectedFile ? (
-            <DataLakeArticlePanel
-              file={selectedFile}
-              dataLakeId={activeLake.id}
-              canManage={activeLake.canManage}
-              onRemoved={() => setSelectedFile(null)}
-            />
-          ) : (
-            <LakeInfoPanel
-              lake={activeLake}
-              fileCount={lakeCount(activeLake)}
-              onOpenSettings={() => setEditingLakeId(activeLake.id)}
-            />
-          )
+        onExitLake={() => {
+          setLakeId(null);
+          setPath([]);
+          setSelectedFile(null);
+        }}
+        onSelectFile={setSelectedFile}
+        onCreateLake={openWizard}
+      />
+      {activeLake ? (
+        selectedFile ? (
+          <DataLakeArticlePanel
+            file={selectedFile}
+            dataLakeId={activeLake.id}
+            canManage={activeLake.canManage}
+            onRemoved={() => setSelectedFile(null)}
+          />
         ) : (
-          <ManagerOverview />
-        )}
-      </Box>
+          <LakeInfoPanel
+            lake={activeLake}
+            fileCount={lakeCount(activeLake)}
+            onOpenSettings={() => setEditingLakeId(activeLake.id)}
+          />
+        )
+      ) : (
+        <ManagerOverview />
+      )}
 
       <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLakeId(null)} />
     </Box>
@@ -334,9 +320,11 @@ function ManagerNav({
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-        borderRight: '1px solid',
-        borderColor,
+        // Same floating-card chrome as the in-chat tree (DataLakeTree).
         backgroundColor: 'background.surface2',
+        border: '1px solid',
+        borderColor,
+        borderRadius: '10px',
       }}
     >
       {/* Search bar + sort toggle - same toolbar as the in-chat tree. */}
@@ -585,7 +573,8 @@ function LakeInfoPanel({
       data-testid="datalake-manager-lakeinfo"
       sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}
     >
-      <Box sx={{ px: 3, pt: 2.5, pb: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
+      {/* pr clears the modal's absolutely-positioned ModalClose (top-right). */}
+      <Box sx={{ px: 3, pr: 6, pt: 2.5, pb: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {lake.name}
