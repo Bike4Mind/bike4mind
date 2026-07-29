@@ -7,6 +7,14 @@
 export const DATALAKE_TAG_PREFIX = 'datalake:';
 
 /**
+ * Relevance weight stored on the membership meta-tag itself. Membership is binary - the tag is
+ * either there or it isn't - so this is a constant, not a score. It exists only because every
+ * tag carries a strength; keep every door that stamps the meta-tag agreeing on one value, or the
+ * same membership reads as differently weighted depending on which door wrote it.
+ */
+export const DATALAKE_TAG_STRENGTH = 1;
+
+/**
  * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
  * (non-empty, ends with ':'), else null. An empty prefix would match every tag, so it is
  * rejected rather than honored.

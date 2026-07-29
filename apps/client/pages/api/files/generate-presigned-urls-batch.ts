@@ -1,6 +1,11 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { BatchPresignedUrlRequestInput, KnowledgeType, type IDataLakeBatchFile } from '@bike4mind/common';
+import {
+  BatchPresignedUrlRequestInput,
+  DATALAKE_TAG_STRENGTH,
+  KnowledgeType,
+  type IDataLakeBatchFile,
+} from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createFabFile } from '@server/managers/fabFileManager';
 import { adminSettingsRepository, dataLakeBatchRepository, dataLakeRepository } from '@bike4mind/database';
@@ -103,7 +108,7 @@ const handler = baseApi().post(async (req: Request, res) => {
       // Merge data lake meta-tag with file-specific tags
       const tags = [...(fileItem.tags || [])];
       if (datalakeTag) {
-        tags.push({ name: datalakeTag, strength: 1.0 });
+        tags.push({ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH });
       }
 
       // Stamp batchId so the existing pipeline (objectCreated -> chunk -> vectorize)
