@@ -1382,7 +1382,7 @@ const AISettingsTab: React.FC<{
             mb: { xs: 1, sm: 3 },
           }}
         >
-          <Typography sx={{ color: 'text.primary', fontSize: '24px', fontWeight: '500' }}>AI Settings</Typography>
+          <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>AI Settings</Typography>
           <Typography sx={{ color: 'text.primary50', fontSize: '14px', pr: { sm: 4 }, lineHeight: '1.4' }}>
             Welcome to model selection — choose from powerful text or images AI models, and personalize the settings to
             fit your unique goals. Dive in and pick the right tool for your next project!
@@ -1961,16 +1961,18 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                       maxHeight: '40px',
                       height: { sm: '40px' },
                       display: 'flex',
-                      gap: 0,
+                      gap: '4px',
                       '& .MuiTab-root': {
                         fontSize: { xs: '14px', sm: '16px' },
                         fontWeight: 400,
-                        py: 0,
-                        px: { xs: 1.5, sm: 3 },
+                        p: 0,
                         color: 'text.primary50',
                         flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                        maxWidth: { xs: 'none', sm: 'unset' },
-                        minWidth: { xs: 0, sm: 'unset' },
+                        // Bounds set here, not in each Tab's own sx: this `& .MuiTab-root`
+                        // descendant selector outranks a Tab's single-class sx, so widths
+                        // set there would lose to this rule.
+                        maxWidth: { xs: 'none', sm: '200px' },
+                        minWidth: { xs: 0, sm: '160px' },
                         textAlign: 'center',
                         '&.Mui-selected': {
                           color: 'text.primary',
@@ -1981,7 +1983,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                     <Tab
                       value="ai-settings"
                       sx={{
-                        width: { xs: 'auto', sm: '200px' },
+                        width: 'auto',
                         flex: { xs: '1 1 0%', sm: '0 0 auto' },
                       }}
                     >
@@ -1991,7 +1993,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                     <Tab
                       value="research-mode"
                       sx={{
-                        width: { xs: 'auto', sm: '200px' },
+                        width: 'auto',
                         flex: { xs: '1 1 0%', sm: '0 0 auto' },
                       }}
                     >
