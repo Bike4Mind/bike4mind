@@ -3169,7 +3169,7 @@
           "supported": true
         },
         "supportsVision": false,
-        "supportsTools": false,
+        "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
           "status": "active"
@@ -3202,7 +3202,7 @@
           "supported": true
         },
         "supportsVision": true,
-        "supportsTools": false,
+        "supportsTools": true,
         "supportsImageVariation": false,
         "lifecycle": {
           "status": "active"

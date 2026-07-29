@@ -330,3 +330,124 @@ describe('MoonshotBedrockBackend live Bedrock shapes', () => {
     ).toBe(false);
   });
 });
+
+// Kimi on Bedrock non-deterministically emits tool calls as native <|tool_call...|>
+// tokens inside the reasoning stream instead of structured tool_calls. These frames
+// are captured verbatim from live moonshot.kimi-k2-thinking (us-east-2). The helper
+// mirrors base.ts's streaming accumulator so we prove the tokens become an EXECUTED
+// tool call, not leaked text.
+describe('MoonshotBedrockBackend native tool-call tokens', () => {
+  // Reproduce base.ts's streaming func[] accumulation over a sequence of frames.
+  function drive(frames: Record<string, unknown>[]) {
+    const be = new MoonshotBedrockBackend();
+    be.getPayload(ChatModels.KIMI_K2_THINKING_BEDROCK, messages, {});
+    const func: { name?: string; id?: string; parameters?: string }[] = [];
+    let text = '';
+    for (const f of frames) {
+      const { chunk } = be.translateStreamChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, f);
+      for (const c of chunk.choices) {
+        func[c.index] ||= {};
+        func[c.index].name ||= c.tool?.name;
+        func[c.index].id ||= c.tool?.id;
+        if (func[c.index].name && c.statusEndReason !== ChoiceEndReason.TOOL_USE) {
+          func[c.index].parameters ??= '';
+          func[c.index].parameters += c.chunkText || '';
+        }
+        if (!func.some(x => x?.name)) text += c.chunkText || '';
+      }
+    }
+    return { func: func.filter(Boolean), text };
+  }
+
+  it('streaming: parallel native tool calls become structured, args intact, no token leak', () => {
+    // The exact three content deltas Bedrock streamed for a two-tool turn.
+    const frames = [
+      {
+        choices: [
+          {
+            delta: {
+              content:
+                "<reasoning> I'll compute the math problem and get the weather for Paris for you. <|tool_calls_section_begin|> <|tool_call_begin|> functions.math_evaluate:0 <|tool_call_argument_begin|></reasoning>",
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            delta: {
+              content:
+                '<reasoning> {"expression": "12*15"} <|tool_call_end|> <|tool_call_begin|> functions.get_weather:1 <|tool_call_argument_begin|> {"city": "Paris</reasoning>',
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            delta: { content: '<reasoning>"} <|tool_call_end|> <|tool_calls_section_end|></reasoning>' },
+            finish_reason: 'stop',
+          },
+        ],
+        'amazon-bedrock-invocationMetrics': { inputTokenCount: 236, outputTokenCount: 49 },
+      },
+    ];
+    const { func, text } = drive(frames);
+    expect(func).toEqual([
+      { name: 'math_evaluate', id: 'functions.math_evaluate:0', parameters: '{"expression": "12*15"}' },
+      { name: 'get_weather', id: 'functions.get_weather:1', parameters: '{"city": "Paris"}' },
+    ]);
+    // The pre-call reasoning survives as a <think> block; no raw token leaks as text.
+    expect(text).toContain("I'll compute the math problem");
+    expect(text).not.toContain('<|');
+  });
+
+  it('streaming: usage still resolves from invocationMetrics on a native-token turn', () => {
+    const fresh = new MoonshotBedrockBackend();
+    fresh.getPayload(ChatModels.KIMI_K2_THINKING_BEDROCK, messages, {});
+    let usage: unknown;
+    for (const f of [
+      {
+        choices: [
+          {
+            delta: {
+              content:
+                '<reasoning> ok <|tool_calls_section_begin|> <|tool_call_begin|> functions.math_evaluate:0 <|tool_call_argument_begin|> {"expression":"1+1"} <|tool_call_end|> <|tool_calls_section_end|></reasoning>',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+        'amazon-bedrock-invocationMetrics': { inputTokenCount: 40, outputTokenCount: 12 },
+      },
+    ]) {
+      const { chunk } = fresh.translateStreamChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, f);
+      for (const c of chunk.choices) if (c.usage) usage = c.usage;
+    }
+    expect(usage).toEqual({ input_tokens: 40, output_tokens: 12 });
+  });
+
+  it('non-streaming: a native tool section becomes a TOOL_USE end with full args', () => {
+    const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [
+        {
+          message: {
+            content:
+              '<reasoning> I will use the tool. <|tool_calls_section_begin|> <|tool_call_begin|> functions.math_evaluate:0 <|tool_call_argument_begin|> {"expression": "384*27"} <|tool_call_end|> <|tool_calls_section_end|></reasoning>',
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+      usage: { prompt_tokens: 46, completion_tokens: 30 },
+    });
+    const tool = chunk.choices.find(c => c.statusEndReason === ChoiceEndReason.TOOL_USE);
+    expect(tool?.tool).toEqual({
+      id: 'functions.math_evaluate:0',
+      name: 'math_evaluate',
+      parameters: '{"expression": "384*27"}',
+    });
+    // reasoning survives, no raw tokens leak
+    const joined = chunk.choices.map(c => ('chunkText' in c ? c.chunkText : '')).join('');
+    expect(joined).toContain('<think>');
+    expect(joined).not.toContain('<|');
+  });
+});

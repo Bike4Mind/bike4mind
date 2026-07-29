@@ -8,6 +8,7 @@ import {
   IChoiceEndToolUse,
 } from '../backend';
 import { BaseBedrockBackend } from './base';
+import { hasNativeToolMarker, parseNativeToolSection, KimiNativeToolStream } from './kimiNativeTools';
 
 /** The assistant payload Moonshot returns, on `message` or streamed as `delta`. */
 interface MoonshotMessage {
@@ -50,6 +51,13 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
   /** Streaming-only: whether an unclosed `<think>` tag has been emitted. */
   private isInThinkingBlock = false;
 
+  /**
+   * Streaming-only: extracts Kimi's native `<|tool_call...|>` tokens out of the
+   * reasoning stream into structured calls. One instance per request; reset in
+   * getPayload. See kimiNativeTools.
+   */
+  private nativeToolStream = new KimiNativeToolStream();
+
   async getModelInfo(): Promise<ModelInfo[]> {
     return [
       {
@@ -71,12 +79,11 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         },
         can_think: true,
         supportsVision: true,
-        // Tools disabled on the Bedrock path pending #1119: this model emits Kimi's
-        // native <|tool_call...|> token format inside the reasoning stream instead of
-        // structured tool_calls, which nothing parses (it would leak as raw text and
-        // never execute). The direct-served Kimi ids keep tools. See #1119 for the
-        // native-token parser that re-enables this.
-        supportsTools: false,
+        // This model non-deterministically emits tool calls as Kimi's native
+        // <|tool_call...|> tokens inside the reasoning stream instead of structured
+        // tool_calls; kimiNativeTools filters those into structured calls (translate),
+        // so tools work on the Bedrock path too. (#1119)
+        supportsTools: true,
         supportsImageVariation: false,
         releaseDate: '2026-01-27',
         rank: 10,
@@ -98,10 +105,9 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         can_think: true,
         // Text-only on Bedrock, unlike the direct-served Kimi family.
         supportsVision: false,
-        // Tools disabled on the Bedrock path pending #1119 (native tool-call tokens
-        // are emitted in the reasoning stream, not as structured tool_calls). The
-        // direct-served Kimi ids keep tools.
-        supportsTools: false,
+        // Native <|tool_call...|> tokens in the reasoning stream are filtered into
+        // structured calls by kimiNativeTools, so tools work here too. (#1119)
+        supportsTools: true,
         supportsImageVariation: false,
         releaseDate: '2025-11-06',
         rank: 10,
@@ -170,8 +176,10 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       if (options.tool_choice !== undefined) body.tool_choice = options.tool_choice;
     }
 
-    // A fresh request starts outside any thinking block; see translateStreamChunk.
+    // A fresh request starts outside any thinking block, with an empty native-tool
+    // buffer; see translateStreamChunk.
     this.isInThinkingBlock = false;
+    this.nativeToolStream = new KimiNativeToolStream();
 
     return {
       modelId: model,
@@ -288,41 +296,114 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
 
       const reasoning = payload.reasoning_content ?? '';
       const content = payload.content ?? '';
-
       // Bedrock Kimi does NOT populate `reasoning_content`; it inlines the monologue
       // in `content` wrapped in <reasoning>...</reasoning> -- a self-contained,
-      // balanced pair per streamed delta. Convert that envelope to the <think>
-      // convention the client renders, or the raw tags show verbatim in the answer.
-      // Per-delta conversion (rather than merging into one block via
-      // isInThinkingBlock) is deliberate: each Bedrock delta is already balanced, and
-      // a reasoning-to-tool turn would otherwise strand an open <think> the base
-      // cannot close once a tool frame appears. `reasoning_content` is still honored
-      // as a fallback spelling for any variant that emits it.
+      // balanced pair per streamed delta -- which we convert to the <think>
+      // convention the client renders. It ALSO non-deterministically emits tool
+      // calls as native <|tool_call...|> tokens INSIDE that reasoning rather than as
+      // structured tool_calls (see kimiNativeTools); those are filtered into
+      // structured calls so they execute and never leak as raw text.
+      const endReason =
+        choice.finish_reason === 'stop' || choice.finish_reason === 'length'
+          ? ChoiceEndReason.STOP
+          : ChoiceEndReason.COMPLETE;
       const convertTags = (t: string) => t.replace(/<reasoning>/g, '<think>').replace(/<\/reasoning>/g, '</think>');
 
-      let chunkText: string;
-      if (!opts.streaming) {
-        chunkText = (reasoning ? `<think>${reasoning}</think>` : '') + convertTags(content);
-      } else if (reasoning) {
-        chunkText = this.isInThinkingBlock ? reasoning : `<think>${reasoning}`;
-        this.isInThinkingBlock = true;
-      } else if (this.isInThinkingBlock && content) {
-        this.isInThinkingBlock = false;
-        chunkText = `</think>${convertTags(content)}`;
-      } else {
-        chunkText = convertTags(content);
+      if (opts.streaming) {
+        // `reasoning_content` fallback spelling: merge into one <think> block.
+        if (reasoning) {
+          const chunkText = this.isInThinkingBlock ? reasoning : `<think>${reasoning}`;
+          this.isInThinkingBlock = true;
+          choices.push({ status: ChoiceStatus.STREAM, index, chunkText, ...usageForIndex });
+          continue;
+        }
+
+        // Real Bedrock: reasoning inlined as <reasoning> tags, tool calls possibly
+        // inside it as native tokens. Filter the reasoning inner text.
+        if (content.includes('<reasoning>')) {
+          const inner = content.replace(/<\/?reasoning>/g, '');
+          const { text: safe, toolCalls: nativeCalls } = this.nativeToolStream.push(inner);
+          for (const call of nativeCalls) {
+            // Same header + plain-argument-delta contract the structured path uses,
+            // so base.ts accumulates the arguments (never TOOL_USE on the arg frame).
+            choices.push({
+              status: ChoiceStatus.STREAM,
+              index: call.index,
+              chunkText: '',
+              tool: { id: call.id, name: call.name },
+            });
+            if (call.arguments) {
+              choices.push({ status: ChoiceStatus.STREAM, index: call.index, chunkText: call.arguments });
+            }
+          }
+          const think = safe + (choice.finish_reason ? this.nativeToolStream.flush() : '');
+          choices.push({
+            status: ChoiceStatus.END,
+            statusEndReason: endReason,
+            index,
+            chunkText: think ? `<think>${think}</think>` : '',
+            ...usageForIndex,
+          });
+          continue;
+        }
+
+        // Prose, or the close of an open `reasoning_content` block.
+        if (this.isInThinkingBlock && content) {
+          this.isInThinkingBlock = false;
+          choices.push({
+            status: ChoiceStatus.END,
+            statusEndReason: endReason,
+            index,
+            chunkText: `</think>${content}`,
+            ...usageForIndex,
+          });
+          continue;
+        }
+        choices.push({
+          status: ChoiceStatus.END,
+          statusEndReason: endReason,
+          index,
+          chunkText: content,
+          ...usageForIndex,
+        });
+        continue;
       }
 
-      choices.push({
-        status: ChoiceStatus.END,
-        statusEndReason:
-          choice.finish_reason === 'stop' || choice.finish_reason === 'length'
-            ? ChoiceEndReason.STOP
-            : ChoiceEndReason.COMPLETE,
-        index,
-        chunkText,
-        ...usageForIndex,
-      });
+      // Non-streaming: the whole message is in hand. Extract a native tool section if
+      // present; otherwise convert the inline <reasoning> envelope to <think>.
+      if (hasNativeToolMarker(content)) {
+        const inner = content.replace(/<\/?reasoning>/g, '');
+        const begin = inner.indexOf('<|tool_calls_section_begin|>');
+        const before = (begin >= 0 ? inner.slice(0, begin) : inner).trim();
+        const nativeCalls = parseNativeToolSection(inner);
+        const think = [reasoning, before].filter(Boolean).join(' ').trim();
+        let usageAttached = false;
+        if (think) {
+          choices.push({
+            status: ChoiceStatus.END,
+            statusEndReason: endReason,
+            index,
+            chunkText: `<think>${think}</think>`,
+            ...usageForIndex,
+          });
+          usageAttached = true;
+        }
+        for (const call of nativeCalls) {
+          choices.push({
+            status: ChoiceStatus.END,
+            statusEndReason: ChoiceEndReason.TOOL_USE,
+            index: call.index,
+            chunkText: call.arguments,
+            tool: { id: call.id, name: call.name, parameters: call.arguments },
+            ...(usageAttached ? {} : usageForIndex),
+          });
+          usageAttached = true;
+        }
+        continue;
+      }
+
+      const chunkText = (reasoning ? `<think>${reasoning}</think>` : '') + convertTags(content);
+      choices.push({ status: ChoiceStatus.END, statusEndReason: endReason, index, chunkText, ...usageForIndex });
     }
 
     return { done: true, chunk: { model, choices } };
