@@ -961,5 +961,30 @@ export function shouldWarnElidedArtifact(input: {
   return input.artifacts.some(a => detectElidedContent(a.content, a.type).elided);
 }
 
+/**
+ * Whether sharing a whole REPLY should warn that it may be incomplete.
+ *
+ * Separate from `shouldWarnElidedArtifact` because the inputs differ: the reply-share surface has no
+ * parsed artifact list and no artifact type, only the raw markdown it is about to snapshot. Publishing
+ * a reply persists that markdown INCLUDING any `<artifact>` body, so this surface can put an elided
+ * artifact behind a public link just as the artifact surfaces can.
+ *
+ * Prefers the server verdict; falls back to scanning the markdown. The fallback is weaker on purpose
+ * and not a bug: with no type to gate on, the JS-bearing scans (undefined references, hollow bodies)
+ * do not run, so only the placeholder-comment signal applies. That is the loudest, highest-confidence
+ * signal, and a missed warning here leaves the surface exactly as it was before this existed.
+ *
+ * Note this is NOT subordinate to truncation the way the chat banner is: there is no truncation
+ * affordance in the share dialog to defer to, so suppressing here would just lose the warning.
+ */
+export function elidedReplyWarning(
+  promptMeta: { suspectedElision?: unknown } | null | undefined,
+  markdown: string | undefined
+): boolean {
+  if (promptMeta?.suspectedElision) return true;
+  if (!markdown) return false;
+  return detectElidedContent(markdown).elided;
+}
+
 // Re-export validation functions from the core utils package
 export { validateMermaidSyntax } from '@bike4mind/utils/artifactParser';
