@@ -4,6 +4,7 @@ import {
   IShareableDocument,
   KnowledgeType,
   UpdateFabFileRequestInputType,
+  normalizeTagPrefix,
   type IFabFileDocument,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
@@ -775,9 +776,13 @@ export function useDataLakeArticleCounts(): { total: number; sales: number; opti
   const unique = data?.uniqueArticleCounts;
   // The premium lake (if any) is whatever the overlay contributes beyond the base opti lake.
   const premiumLake = DATA_LAKES.find(l => l.id !== 'opti-knowledge');
+  // `byPrefix` is keyed by the NORMALIZED prefix, and the premium lake's comes from a JSON env
+  // var that is only checked for truthiness - so index it through the same predicate or a
+  // padded value silently reads 0.
+  const premiumPrefix = premiumLake ? normalizeTagPrefix(premiumLake.fileTagPrefix) : null;
   return {
     total: unique?.total ?? 0,
-    sales: premiumLake ? (unique?.byPrefix[premiumLake.fileTagPrefix] ?? 0) : 0,
+    sales: premiumPrefix ? (unique?.byPrefix[premiumPrefix] ?? 0) : 0,
     opti: unique?.byPrefix['opti:'] ?? 0,
   };
 }

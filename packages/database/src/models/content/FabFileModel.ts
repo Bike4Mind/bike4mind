@@ -14,13 +14,18 @@ import { ShareableDocumentRepository, ShareableDocumentSchema } from './Sharable
 import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
 
 /**
- * Drop prefixes that cannot be anchored into a meaningful regex. A blank entry contributes an
- * empty alternation, so `['acme:', '']` becomes `^(acme:|)` and matches every tag name - one
- * bad entry would return the caller's entire non-deleted tag cloud. An all-blank list would
- * likewise become `^()`. Callers resolving prefixes from lake records normalize first
- * (see `normalizeTagPrefix`); this is the backstop for a direct caller.
+ * Trim, then drop prefixes that cannot be anchored into a meaningful regex. A blank entry
+ * contributes an empty alternation, so `['acme:', '']` becomes `^(acme:|)` and matches every tag
+ * name - one bad entry would return the caller's entire non-deleted tag cloud. An all-blank list
+ * would likewise become `^()`.
+ *
+ * Trimming matters as much as filtering: a padded `' acme:'` builds `^( acme:)` and matches
+ * nothing, so the lake reads as empty while its files stay browsable. Callers resolving prefixes
+ * from lake records already normalize (see `normalizeTagPrefix`); this keeps a direct caller
+ * consistent with them. NOTE for `countDataLakeUniqueFilesByPrefix`: `byPrefix` is therefore
+ * keyed by the TRIMMED prefix, so a consumer indexing it with a raw stored value must normalize.
  */
-const usableTagPrefixes = (tagPrefixes: string[]): string[] => tagPrefixes.filter(p => p.trim().length > 0);
+const usableTagPrefixes = (tagPrefixes: string[]): string[] => tagPrefixes.map(p => p.trim()).filter(p => p.length > 0);
 
 interface IFabFileChunkModel extends Model<IFabFileChunkDocument> {}
 

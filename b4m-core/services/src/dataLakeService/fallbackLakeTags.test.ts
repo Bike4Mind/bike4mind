@@ -44,12 +44,37 @@ describe('reconcileDataLakeFallbackTags', () => {
     expect(names(result)).toEqual(['acme:uncategorized', META, 'important']);
   });
 
-  it('does not treat the meta-tag itself as satisfying its own lake prefix', async () => {
-    // Reachable because fileTagPrefix is only validated as 2-30 chars ending in ':', so a lake
-    // may be stored with the datalake: prefix. The counters exclude datalake:* from the tree.
+  it('stamps nothing for a lake whose prefix sits in the reserved namespace', async () => {
+    // Create-time validation rejects such a prefix, so only a legacy row can reach this. The
+    // stamp would be excluded from the tree by the counters and skipped by removal, and since a
+    // datalake:* tag never satisfies a prefix it would be re-appended on every single write.
     const db = makeDb({ [META]: lake({ fileTagPrefix: 'datalake:' }) });
     const result = await reconcileDataLakeFallbackTags([tag(META)], { db });
-    expect(names(result)).toEqual([META, 'datalake:uncategorized']);
+    expect(names(result)).toEqual([META]);
+  });
+
+  it('does not accumulate a duplicate stamp across repeated writes', async () => {
+    const db = makeDb({ [META]: lake() });
+    let tags: { name: string; strength: number }[] = [tag(META)];
+    for (let i = 0; i < 4; i++) {
+      tags = (await reconcileDataLakeFallbackTags(tags, { db })) as typeof tags;
+    }
+    expect(names(tags)).toEqual(['acme:uncategorized', META]);
+  });
+
+  it('stamps nested prefixes in a stable order regardless of tag order', async () => {
+    const lakes = {
+      'datalake:outer': lake({ id: 'outer', fileTagPrefix: 'a:', datalakeTag: 'datalake:outer' }),
+      'datalake:inner': lake({ id: 'inner', fileTagPrefix: 'a:x:', datalakeTag: 'datalake:inner' }),
+    };
+    const forward = await reconcileDataLakeFallbackTags([tag('datalake:outer'), tag('datalake:inner')], {
+      db: makeDb(lakes),
+    });
+    const reversed = await reconcileDataLakeFallbackTags([tag('datalake:inner'), tag('datalake:outer')], {
+      db: makeDb(lakes),
+    });
+    expect(names(forward)).toEqual(names(reversed));
+    expect(names(forward)).toContain('a:uncategorized');
   });
 
   it('does not treat a bare prefix with no suffix as satisfying', async () => {

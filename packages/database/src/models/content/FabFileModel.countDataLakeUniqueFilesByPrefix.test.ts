@@ -80,4 +80,23 @@ describe('FabFileRepository.countDataLakeUniqueFilesByPrefix', () => {
 
     expect(result).toEqual({ total: 0, byPrefix: {} });
   });
+
+  it('ignores a blank entry inside a non-empty prefix list', async () => {
+    // A blank contributes an empty alternation, so `^(acme:|)` would match every tag and sweep
+    // in the unrelated file below.
+    await makeFile({ tags: ['acme:industry'] });
+    await makeFile({ tags: ['personal-note'] });
+
+    const result = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, ['acme:', '']);
+
+    expect(result).toEqual({ total: 1, byPrefix: { 'acme:': 1 } });
+  });
+
+  it('counts a padded prefix under its trimmed key', async () => {
+    await makeFile({ tags: ['acme:industry'] });
+
+    const result = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, [' acme:']);
+
+    expect(result).toEqual({ total: 1, byPrefix: { 'acme:': 1 } });
+  });
 });

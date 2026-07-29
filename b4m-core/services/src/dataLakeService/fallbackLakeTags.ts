@@ -1,5 +1,5 @@
 import type { IDataLakeRepository } from '@bike4mind/common';
-import { DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
+import { DATALAKE_TAG_PREFIX, isReservedTagPrefix, normalizeTagPrefix } from '@bike4mind/common';
 import { extractDataLakeMetaTags } from './authorizeLakeWrite';
 
 /**
@@ -72,13 +72,19 @@ export const createDataLakeFallbackTagger = ({ db }: LakeTagAdapters): DataLakeF
     const cached = lakeCache.get(metaTag);
     if (cached) return cached;
     const pending = db.dataLakes.findByDatalakeTag(metaTag).then(lake => {
-      // No lake: the write gate rejects such a tag before we run, so this is only reachable for
-      // a stale tag on an existing file. Skip it rather than throwing - a rename must not 400.
+      // No lake: either a stale tag on an existing file, or a STATIC-registry lake, which has no
+      // Mongo document. Both are already unreachable through a gated door - the write gate uses
+      // this same lookup and rejects what it cannot resolve - so skipping is the whole story
+      // here. Skip rather than throw: a rename must not 400 over a tag it never touched.
       if (!lake) return null;
       // An unusable prefix is dropped by the read arms and by the removal path too, so a tag
-      // built on it would be invisible to every query and swept by nothing.
+      // built on it would be invisible to every query and swept by nothing. A prefix inside the
+      // reserved `datalake:` namespace is the same case for different reasons: the counters
+      // exclude `datalake:*` from the tree and removal deliberately refuses to strip it, and
+      // since such a stamp can never satisfy its own prefix it would be re-appended on every
+      // write. Create-time validation rejects that prefix, so only legacy rows can reach it.
       const prefix = normalizeTagPrefix(lake.fileTagPrefix);
-      return prefix ? { prefix } : null;
+      return prefix && !isReservedTagPrefix(prefix) ? { prefix } : null;
     });
     lakeCache.set(metaTag, pending);
     return pending;
@@ -113,8 +119,12 @@ export const createDataLakeFallbackTagger = ({ db }: LakeTagAdapters): DataLakeF
     // first would skip the addition and then retract the very tag it relied on.
     const kept = retractions.size > 0 ? tags.filter(tag => !retractions.has(tag?.name)) : tags;
 
+    // Sorted, because prefixes can nest and a longer one's stamp satisfies a shorter one:
+    // with `a:` and `a:x:`, stamping the inner lake first would leave the outer lake covered
+    // only by `a:x:uncategorized`. Iterating shortest-first gives every lake its own node and
+    // makes the result independent of the order tags happened to arrive in.
     const additions: FileTag[] = [];
-    for (const prefix of currentPrefixes) {
+    for (const prefix of [...currentPrefixes].sort()) {
       if (satisfiesPrefix([...kept, ...additions], prefix)) continue;
       additions.push({ name: `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`, strength: 1 });
     }
