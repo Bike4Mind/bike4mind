@@ -1,5 +1,5 @@
 import { connectDB, DataLakeModel } from '@bike4mind/database';
-import { normalizeTagPrefix } from '@bike4mind/common';
+import { tagPrefixesOverlap } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { Config } from '../utils/config';
 
@@ -30,9 +30,6 @@ interface LakeRow {
   organizationId?: string | null;
 }
 
-/** Bidirectional, because a `docs:` lake matches a `docs:legal:foo` tag and vice versa. */
-const overlaps = (a: string, b: string) => a === b || a.startsWith(b) || b.startsWith(a);
-
 const sharesScope = (a: LakeRow, b: LakeRow) =>
   (!!a.createdByUserId && a.createdByUserId === b.createdByUserId) ||
   (!!a.organizationId && a.organizationId === b.organizationId);
@@ -55,9 +52,8 @@ async function main() {
   for (let i = 0; i < lakes.length; i++) {
     for (let j = i + 1; j < lakes.length; j++) {
       const [a, b] = [lakes[i], lakes[j]];
-      const pa = normalizeTagPrefix(a.fileTagPrefix)?.toLowerCase();
-      const pb = normalizeTagPrefix(b.fileTagPrefix)?.toLowerCase();
-      if (!pa || !pb || !overlaps(pa, pb) || !sharesScope(a, b)) continue;
+      // Same predicate the runtime guard uses, so the audit cannot report a different answer.
+      if (!tagPrefixesOverlap(a.fileTagPrefix, b.fileTagPrefix) || !sharesScope(a, b)) continue;
       pairs.push(
         `  "${a.name}" (${a.fileTagPrefix}, id=${a._id}) <-> "${b.name}" (${b.fileTagPrefix}, id=${b._id})` +
           ` [org=${a.organizationId ?? '<none>'} creator=${a.createdByUserId ?? '<none>'}]`
