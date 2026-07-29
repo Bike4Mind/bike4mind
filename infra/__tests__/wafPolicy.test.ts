@@ -27,19 +27,38 @@ function commonRuleSetScopeDown(stage: string): any {
   return (rule.Statement.ManagedRuleGroupStatement as any)?.ScopeDownStatement;
 }
 
-/** Search strings the statement matches against UriPath, at any nesting depth. */
-function uriPathMatches(scopeDown: any): string[] {
-  const found: string[] = [];
+interface UriPathMatch {
+  searchString: string;
+  positionalConstraint: string;
+  textTransformations: string[];
+}
+
+/**
+ * Every UriPath match in the statement, at any nesting depth. Returns the match constraint and
+ * transformations too, not just the path - a path exemption that silently widens from EXACTLY to
+ * STARTS_WITH would otherwise pass unnoticed.
+ */
+function uriPathMatches(scopeDown: any): UriPathMatch[] {
+  const found: UriPathMatch[] = [];
   const walk = (node: any): void => {
     if (!node || typeof node !== 'object') return;
     const byteMatch = node.ByteMatchStatement;
     if (byteMatch?.FieldToMatch?.UriPath && typeof byteMatch.SearchString === 'string') {
-      found.push(byteMatch.SearchString);
+      found.push({
+        searchString: byteMatch.SearchString,
+        positionalConstraint: byteMatch.PositionalConstraint,
+        textTransformations: (byteMatch.TextTransformations ?? []).map((t: { Type: string }) => t.Type),
+      });
     }
     Object.values(node).forEach(walk);
   };
   walk(scopeDown);
   return found;
+}
+
+/** The settings-update exemption entry, or undefined if it is missing entirely. */
+function settingsUpdateExemption(stage: string): UriPathMatch | undefined {
+  return uriPathMatches(commonRuleSetScopeDown(stage)).find(m => m.searchString === '/api/settings/update');
 }
 
 describe('wafPolicy', () => {
@@ -180,9 +199,19 @@ describe('wafPolicy', () => {
       // would apply to these paths ONLY, leaving every other route unprotected.
       expect(scopeDown.NotStatement).toBeDefined();
 
-      const exempt = uriPathMatches(scopeDown);
-      expect(exempt).toContain('/api/settings/update');
-      expect(exempt).toContain('/api/modals/');
+      const paths = uriPathMatches(scopeDown).map(m => m.searchString);
+      expect(paths).toContain('/api/settings/update');
+      expect(paths).toContain('/api/modals/');
+    });
+
+    // EXACTLY, not STARTS_WITH: a prefix match would hand the exemption to any future sibling route
+    // such as /api/settings/update-bulk. LOWERCASE so casing cannot change which requests match.
+    it('scopes the /api/settings/update exemption to an exact, lowercased path match', () => {
+      expect(settingsUpdateExemption('dev')).toEqual({
+        searchString: '/api/settings/update',
+        positionalConstraint: 'EXACTLY',
+        textTransformations: ['LOWERCASE'],
+      });
     });
   });
 
@@ -254,9 +283,17 @@ describe('wafPolicy', () => {
       // See the dev-stage counterpart: dropping the NotStatement inverts the scope-down.
       expect(scopeDown.NotStatement).toBeDefined();
 
-      const exempt = uriPathMatches(scopeDown);
-      expect(exempt).toContain('/api/settings/update');
-      expect(exempt).toContain('/api/modals/');
+      const paths = uriPathMatches(scopeDown).map(m => m.searchString);
+      expect(paths).toContain('/api/settings/update');
+      expect(paths).toContain('/api/modals/');
+    });
+
+    it('scopes the /api/settings/update exemption to an exact, lowercased path match', () => {
+      expect(settingsUpdateExemption('production')).toEqual({
+        searchString: '/api/settings/update',
+        positionalConstraint: 'EXACTLY',
+        textTransformations: ['LOWERCASE'],
+      });
     });
   });
 });
