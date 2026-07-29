@@ -53,7 +53,12 @@ export const useUpdateFileTag = () => {
       return result.data;
     },
     onSuccess: data => {
-      queryClient.setQueryData(['file-tags'], (prev: IFileTag[]) => prev.map(t => (t.id === data.id ? data : t)));
+      // Merge rather than replace: PUT /api/files/tags/[id] echoes back only the fields it
+      // accepted, so a wholesale swap drops fileCount and the sidebar badge reads (0) until the
+      // next refetch.
+      queryClient.setQueryData(['file-tags'], (prev: IFileTag[]) =>
+        prev.map(t => (t.id === data.id ? { ...t, ...data } : t))
+      );
       queryClient.invalidateQueries({ queryKey: ['file-tags', 'counts'] });
       toast.success('Tag updated successfully');
     },
