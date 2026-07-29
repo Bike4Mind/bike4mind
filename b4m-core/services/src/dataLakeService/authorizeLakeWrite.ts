@@ -42,6 +42,29 @@ export const assertLakeWriteAccess = async (
 };
 
 /**
+ * The distinct `datalake:*` meta-tags in a raw tag-name list, lowercased for lookup
+ * (`datalakeTag` values are canonically lowercase, so a mixed-case meta-tag still resolves to
+ * its real lake).
+ *
+ * `readonly unknown[]`: some callers (e.g. PUT /api/files/{id}) pass raw, un-validated tag
+ * names, so a malformed entry (`{ name: null }`) can reach here. Narrowing to string here makes
+ * a bad payload fail closed at the caller, never a TypeError -> 500.
+ *
+ * Shared by the write GATE below and the fallback stamper (see `fallbackLakeTags`) so the two
+ * cannot disagree about what counts as a meta-tag: a name one recognizes and the other does not
+ * is either an ungated write or an unenforced invariant.
+ */
+export const extractDataLakeMetaTags = (tagNames: readonly unknown[]): string[] =>
+  Array.from(
+    new Set(
+      tagNames
+        .filter((name): name is string => typeof name === 'string')
+        .map(name => name.toLowerCase())
+        .filter(name => name.startsWith(DATALAKE_TAG_PREFIX))
+    )
+  );
+
+/**
  * Gate the file-tag write paths (Send-to-Data-Lake, direct create/update, tag toggle): given the
  * `datalake:*` meta-tags a caller is applying to a file, assert they may write into EVERY
  * referenced lake. Non-meta tags are ignored. A meta-tag that resolves to no lake, or to a lake
@@ -50,22 +73,10 @@ export const assertLakeWriteAccess = async (
  */
 export const assertCanWriteDataLakeTags = async (
   actor: ManageActor,
-  // `readonly unknown[]`: some callers (e.g. PUT /api/files/{id}) pass raw, un-validated tag
-  // names, so a malformed entry (`{ name: null }`) can reach here. Narrowing to string BELOW
-  // makes a bad payload fail closed as a 400, never a TypeError -> 500.
   tagNames: readonly unknown[],
   { db }: { db: { dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'> } }
 ): Promise<void> => {
-  // `datalakeTag` values are canonically lowercase (slug + hex org id), so normalize the lookup
-  // key - a mixed-case meta-tag still resolves to (and is authorized against) its real lake.
-  const metaTags = Array.from(
-    new Set(
-      tagNames
-        .filter((name): name is string => typeof name === 'string')
-        .map(name => name.toLowerCase())
-        .filter(name => name.startsWith(DATALAKE_TAG_PREFIX))
-    )
-  );
+  const metaTags = extractDataLakeMetaTags(tagNames);
   for (const tag of metaTags) {
     const lake = await db.dataLakes.findByDatalakeTag(tag);
     if (!lake || !canManageLake(lake, actor)) {

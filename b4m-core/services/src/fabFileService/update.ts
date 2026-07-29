@@ -42,6 +42,19 @@ interface UpdateFabFileAdapters {
   db: {
     fabFiles: Pick<IFabFileRepository, 'shareable' | 'update'>;
   };
+  /**
+   * Reconcile the REPLACEMENT tag list against data-lake membership before it is persisted
+   * (see dataLakeService `reconcileDataLakeFallbackTags`). Injected rather than imported so
+   * fabFileService keeps no dependency on dataLakeService.
+   *
+   * Required, not optional: a caller that silently omitted it would gate lake tag writes and
+   * then never maintain the invariant they imply, so typecheck should make every caller say
+   * which behavior it wants.
+   */
+  reconcileTags: (
+    tags: { name: string; strength: number }[],
+    previousTags: { name: string }[]
+  ) => Promise<{ name: string; strength: number }[]>;
   storage: {
     upload: (filePath: string, content: string, metadata?: Record<string, unknown>) => Promise<unknown>;
     generateSignedUrl: (path: string, expireInSeconds: number) => Promise<string>;
@@ -57,13 +70,22 @@ interface UpdateFabFileAdapters {
 export const updateFabFile = async (
   user: IUserDocument,
   parameters: UpdateFabFileParameters,
-  { db, storage }: UpdateFabFileAdapters
+  { db, reconcileTags, storage }: UpdateFabFileAdapters
 ) => {
   const { id, fileContent, ...params } = secureParameters(parameters, updateFabFileSchema);
 
   const fabFile = await db.fabFiles.shareable.findAccessibleById(user, id);
 
   if (!fabFile) throw new NotFoundError('Invalid ID');
+
+  // Guarded on `!== undefined`, not truthiness: this update REPLACES the tags array, and the
+  // route always sends the key, so an edit that touches only the name or notes arrives with
+  // `tags: undefined` and must stay that way. Reconciling there would spread `undefined` into
+  // the persisted document and cost a lake lookup on every rename. An explicit `[]` still
+  // reconciles - it is a real replacement that can drop a lake's meta-tag.
+  if (params.tags !== undefined) {
+    params.tags = await reconcileTags(params.tags, fabFile.tags ?? []);
+  }
 
   if (fileContent !== undefined && !fabFile.mimeType.startsWith('image/')) {
     const mimeType = params.mimeType ?? fabFile.mimeType;

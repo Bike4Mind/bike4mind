@@ -61,6 +61,12 @@ const handler = baseApi().post(
         { db: { dataLakes: dataLakeRepository } }
       );
 
+      // A file joining a lake must also land under that lake's content prefix, or it is
+      // invisible to tag-counts and to the Explorer's tag tree.
+      const tags = await dataLakeService.reconcileDataLakeFallbackTags(data.tags ?? [], {
+        db: { dataLakes: dataLakeRepository },
+      });
+
       // Reject unsupported/binary types (e.g. .exe) - the chunker can't
       // vectorize them, and the prior `mime.extension()` guard let generic
       // binaries (application/octet-stream mapped to "bin") slip through.
@@ -92,7 +98,9 @@ const handler = baseApi().post(
           ...(data.contentHash && { contentHash: data.contentHash }),
           ...(data.batchId && { batchId: data.batchId }),
           ...(data.relativePath && { relativePath: data.relativePath }),
-          ...(data.tags && { tags: data.tags }),
+          // Keyed on the reconciled list, not `data.tags`: a lake-bound upload that sent no tags
+          // still has a fallback to persist.
+          ...(tags.length > 0 && { tags }),
         },
         req.ability!
       );

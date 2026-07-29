@@ -95,16 +95,27 @@ const handler = baseApi().post(async (req: Request, res) => {
   const totalBatchSize = data.files.reduce((sum, f) => sum + (f.fileSize || 0), 0);
   await checkStorageLimit(req.user, totalBatchSize);
 
+  // One tagger for the whole request: it memoizes the lake lookup per meta-tag, so a batch of
+  // hundreds of files into one lake costs a single read.
+  const applyFallbackTags = dataLakeService.createDataLakeFallbackTagger({ db: { dataLakes: dataLakeRepository } });
+
   const results = await Promise.all(
     resolvedFiles.map(async ({ item: fileItem, mimeType }) => {
       const ext = mime.extension(mimeType);
       const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
 
-      // Merge data lake meta-tag with file-specific tags
-      const tags = [...(fileItem.tags || [])];
-      if (datalakeTag) {
-        tags.push({ name: datalakeTag, strength: 1.0 });
-      }
+      // Merge data lake meta-tag with file-specific tags, then guarantee the file also lands
+      // under the lake's content prefix. Reconciling AFTER the injection is load-bearing: the
+      // meta-tag is resolved server-side from `dataLakeSlug` and never appears in the client
+      // payload, so a reconcile over `fileItem.tags` alone would see no lake at all.
+      //
+      // This is the flat-upload path. The wizard derives content tags from folder structure, so
+      // a file picked through "Upload Files..." (relativePath with no separator) contributes
+      // none, and append mode has no taxonomy step to supply them either.
+      const tags = await applyFallbackTags([
+        ...(fileItem.tags || []),
+        ...(datalakeTag ? [{ name: datalakeTag, strength: 1.0 }] : []),
+      ]);
 
       // Stamp batchId so the existing pipeline (objectCreated -> chunk -> vectorize)
       // correlates the file to its batch and updates batch progress. Without this the

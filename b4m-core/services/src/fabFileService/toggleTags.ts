@@ -14,12 +14,22 @@ interface FabFileToggleTagsAdapters {
     fileTags: Pick<IFileTagRepository, 'incrementFileCountBy'>;
     users: { findById: (id: string) => Promise<IUserDocument | null> };
   };
+  /**
+   * Reconcile each file's post-toggle tag list against data-lake membership (see
+   * dataLakeService `reconcileDataLakeFallbackTags`). Required, because this door can toggle a
+   * lake meta-tag in EITHER direction: an absent reconciler would both skip the fallback on the
+   * way in and strand one on the way out.
+   */
+  reconcileTags: (
+    tags: { name: string; strength: number }[],
+    previousTags: { name: string }[]
+  ) => Promise<{ name: string; strength: number }[]>;
 }
 
 export const toggleTags = async (
   userId: string,
   params: FabFileToggleTagsParameters,
-  { db }: FabFileToggleTagsAdapters
+  { db, reconcileTags }: FabFileToggleTagsAdapters
 ) => {
   const { ids, tags } = fabFileToggleTagsSchema.parse(params);
 
@@ -39,6 +49,8 @@ export const toggleTags = async (
 
   const updatedFabFiles = await Promise.all(
     fabFiles.map(async f => {
+      const previousTags = [...(f.tags ?? [])];
+
       tags.forEach(tag => {
         tagCounters[tag] ||= 0;
 
@@ -50,6 +62,11 @@ export const toggleTags = async (
           tagCounters[tag] += 1;
         }
       });
+
+      // After the toggles, over the array about to be persisted: toggling a lake's meta-tag ON
+      // stamps the lake's fallback, and toggling it OFF retracts the one we stamped instead of
+      // leaving the file behind as a prefix-only member of a lake it just left.
+      f.tags = await reconcileTags(f.tags ?? [], previousTags);
 
       await db.fabFiles.update(f);
       return f;

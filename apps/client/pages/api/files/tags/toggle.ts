@@ -36,6 +36,11 @@ const handler = baseApi().post(
           fileTags: fileTagRepository,
           users: userRepository,
         },
+        reconcileTags: (tags, previousTags) =>
+          dataLakeService.reconcileDataLakeFallbackTags(tags, {
+            db: { dataLakes: dataLakeRepository },
+            previousTags,
+          }),
       }
     );
 

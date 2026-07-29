@@ -88,6 +88,15 @@ const handler = baseApi()
           },
           {
             db: { fabFiles: fabFileRepository },
+            // `tags` only - deliberately NOT primaryTag, even though the gate above inspects it.
+            // primaryTag lives outside the tags array and no lake query reads it, so treating it
+            // as membership would stamp a prefix tag onto a file carrying no meta-tag: exactly
+            // the prefix-only shape this invariant exists to avoid, minted from nothing.
+            reconcileTags: (tags, previousTags) =>
+              dataLakeService.reconcileDataLakeFallbackTags(tags, {
+                db: { dataLakes: dataLakeRepository },
+                previousTags,
+              }),
             storage: {
               upload: (filepath, content, option) => {
                 return getFilesStorage().upload(content, filepath, option);
