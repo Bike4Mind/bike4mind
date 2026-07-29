@@ -634,15 +634,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { _id: fabFileId },
       { $pull: { tags: { name: { $in: tagNames } } } }
     );
-    // A primaryTag naming a tag the file no longer carries later fails the data-lake write
-    // gate on PUT /api/files/[id], which round-trips the stale value. Separate filtered write
-    // because a plain update can't clear a field conditionally on its own value; it is a
-    // no-op unless primaryTag actually went.
+    // A primaryTag naming a tag the file no longer carries is a wrong label, so clear it here -
+    // PUT /api/files/[id] clears it for the same reason when its own gate authorizes a removal.
+    // Separate filtered write because a plain update can't clear a field conditionally on its own
+    // value; it is a no-op unless primaryTag actually went.
     // Deliberately NOT folded into the $pull above: an aggregation-pipeline update could do both
     // in one write, but only by rewriting the whole tags array, which loses the element-level
     // concurrency $pull buys. The cost of two writes is that a crash between them leaves a
-    // primaryTag pointing at a removed tag, which the gate above then rejects until it is set
-    // again. A stale label that blocks one edit beats a lost concurrent removal.
+    // primaryTag pointing at a removed tag - cosmetic only, since the write gate ignores a
+    // primaryTag that is merely echoed back unchanged. A stale label beats a lost removal.
     await this.fabFileModel.updateOne(
       { _id: fabFileId, primaryTag: { $in: tagNames } },
       { $unset: { primaryTag: '' } }

@@ -289,6 +289,17 @@ describe('listDataLakes - per-lake canManage flag for the UI', () => {
     expect(result.find(l => l.id === 'theirs')?.canManage).toBe(false);
   });
 
+  // Mirrors canManageLake's positive-ownership rule: a lake with no recorded creator must not
+  // read as manageable just because the caller has no id either.
+  it('marks a lake with no recorded creator read-only for a caller with no id', async () => {
+    const orphan = lake({ id: 'orphan', slug: 'orphan', createdByUserId: undefined as never });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([orphan]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: undefined as never }), { db });
+
+    expect(result.find(l => l.id === 'orphan')?.canManage).toBe(false);
+  });
+
   it('marks every DB lake manageable for an admin', async () => {
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other' });
     const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
@@ -1223,7 +1234,7 @@ describe('browsePublicDataLakes — public discover catalog projection', () => {
   });
 });
 
-describe('assertCanReplaceDataLakeTags — wholesale tag replace gate', () => {
+describe('assertCanReplaceDataLakeTags - wholesale tag replace gate', () => {
   // Keyed by lookup tag so one case can put a DIFFERENT lake on each side of the diff.
   const makeDb = (lakes: Record<string, IDataLakeDocument | null>) => ({
     dataLakes: { findByDatalakeTag: vi.fn(async (tag: string) => lakes[tag] ?? null) },
