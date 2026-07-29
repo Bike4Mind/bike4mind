@@ -331,38 +331,45 @@ const ModelOption = React.memo(
       </Tooltip>
     );
 
+    const favoriteLabel = isFavorite ? 'Remove from favorites' : 'Add to favorites';
     const favoriteToggle = onToggleFavorite && (
-      <IconButton
-        data-testid={`favorite-toggle-${model.id}`}
-        variant="plain"
-        size="sm"
-        sx={{
-          minWidth: '28px',
-          minHeight: '28px',
-          width: '28px',
-          height: '28px',
-          // Joy's SvgIcon resolves its colour from `--Icon-color`; the filled star opts out
-          // by declaring its own.
-          '--Icon-color': 'var(--joy-palette-text-tertiary)',
-          '& .MuiSvgIcon-root': {
-            transition: 'color 0.2s',
-          },
-          '&:hover': {
-            backgroundColor: 'transparent',
-            '--Icon-color': 'var(--joy-palette-text-primary)',
-          },
-        }}
-        onClick={e => {
-          e.stopPropagation();
-          onToggleFavorite(model.id);
-        }}
-      >
-        {isFavorite ? (
-          <StarRounded sx={{ fontSize: '20px', color: 'primary.solidBg' }} />
-        ) : (
-          <StarBorderRounded sx={{ fontSize: '20px' }} />
-        )}
-      </IconButton>
+      <Tooltip title={favoriteLabel} placement="bottom">
+        <IconButton
+          data-testid={`favorite-toggle-${model.id}`}
+          aria-label={favoriteLabel}
+          variant="plain"
+          size="sm"
+          sx={{
+            minWidth: '28px',
+            minHeight: '28px',
+            width: '28px',
+            height: '28px',
+            // Joy's SvgIcon resolves its colour from `--Icon-color`; the filled star opts out
+            // by declaring its own.
+            '--Icon-color': 'var(--joy-palette-text-tertiary)',
+            '& .MuiSvgIcon-root': {
+              transition: 'color 0.2s',
+            },
+            '&:hover': {
+              backgroundColor: 'transparent',
+              '--Icon-color': 'var(--joy-palette-text-primary)',
+              // The filled star ignores --Icon-color, so give it the same solid-button hover
+              // token the New Agent button uses to signal that clicking unfavorites.
+              ...(isFavorite && { '& .MuiSvgIcon-root': { color: 'primary.solidHoverBg' } }),
+            },
+          }}
+          onClick={e => {
+            e.stopPropagation();
+            onToggleFavorite(model.id);
+          }}
+        >
+          {isFavorite ? (
+            <StarRounded sx={{ fontSize: '20px', color: 'primary.solidBg' }} />
+          ) : (
+            <StarBorderRounded sx={{ fontSize: '20px' }} />
+          )}
+        </IconButton>
+      </Tooltip>
     );
 
     // Selects the model and opens its detail & settings dialog (all viewports).
@@ -1325,7 +1332,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
             >
               <AccordionSummary sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: '48px' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                  <StarRounded sx={{ fontSize: '18px', color: 'warning.400' }} />
+                  <StarRounded sx={{ fontSize: '18px', color: 'primary.solidBg' }} />
                   <Typography
                     level="h4"
                     sx={{
