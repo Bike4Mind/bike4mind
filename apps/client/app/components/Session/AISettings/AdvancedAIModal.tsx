@@ -1903,8 +1903,9 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 gap: '0px',
                 width: '100%',
                 height: '100%',
-                px: { xs: 2, sm: 4 },
-                py: { xs: 0, sm: 4 },
+                // Mobile keeps zero vertical padding: MobileTopBar owns the top edge and
+                // the TabPanel heights below are calc'd against a full-height viewport.
+                padding: { xs: '0 16px', sm: '24px' },
               }}
             >
               {/* Close Button and Help */}
