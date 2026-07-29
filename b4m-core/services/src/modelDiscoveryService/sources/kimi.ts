@@ -6,31 +6,47 @@ import type {
   DiscoverySource,
   SourceResult,
 } from '../types';
-import { compact, fetchJson, text } from './http';
+import { boolean, compact, count, fetchJson, text } from './http';
 
 export const KIMI_MODELS_URL = 'https://api.moonshot.ai/v1/models';
 
 /**
- * Moonshot's list is OpenAI-shaped and just as thin - id, object, owned_by - and
- * unlike xAI there is no second endpoint carrying prices or context lengths.
- * So this source is an availability signal only, exactly like `./openai`: it
- * says what exists at the backend, and every capability, limit and rate is the
- * aggregators' job.
+ * Moonshot's `/v1/models` is OpenAI-shaped in envelope but NOT thin: verified
+ * against the live endpoint on 2026-07-28, each entry carries `context_length`,
+ * `supports_image_in`, `supports_video_in`, `supports_reasoning`, and - on the
+ * models that take it - a `reasoning_efforts` block naming the valid effort
+ * levels and the default. That makes this a capability source closer to xAI's
+ * than to `./openai`, and it is why this driver claims limits and modalities
+ * rather than availability alone.
  *
- * Emits NO `name` and NO `contextWindow`, for the reasons openai.ts documents at
- * length: a provider outranks an aggregator on any field it claims, so a
- * `contextWindow: 0` here would beat models.dev's real 1M and a `name: id` would
- * append a row every run forever.
+ * Still emits NO `name`: the endpoint does not publish a display name, and
+ * `name: id` would overwrite every seeded label with a lowercase id and append a
+ * row on every run forever.
  *
- * Consequence, stated rather than hidden: a Kimi model Moonshot lists that the
- * catalog has never held cannot be added by this source alone - it has no context
- * window from anywhere - and lands in the run's dropped records until an
- * aggregator picks it up or an operator seeds it.
+ * NO pricing either - Moonshot publishes none here, so rates remain the
+ * aggregators' job (and for k3 and the k2.7-code pair, which litellm does not yet
+ * carry, the seeded price stands until a second aggregator agrees).
+ *
+ * Because `context_length` IS available, a Kimi model Moonshot lists that the
+ * catalog has never held can be added by this source alone - unlike the OpenAI
+ * source, which has to wait for an aggregator to supply a context window.
  */
 interface KimiModel {
   id?: unknown;
   object?: unknown;
   owned_by?: unknown;
+  context_length?: unknown;
+  supports_image_in?: unknown;
+  supports_video_in?: unknown;
+  supports_reasoning?: unknown;
+  /** Present only on the ids that take `reasoning_effort` (k3 today). */
+  reasoning_efforts?: {
+    support?: unknown;
+    valid_efforts?: unknown;
+    default_effort?: unknown;
+  };
+  /** 'only' means the model cannot be asked to stop reasoning (k3). */
+  supports_thinking_type?: unknown;
 }
 
 interface KimiModelList {
@@ -65,6 +81,30 @@ function inferType(id: string): ModelRecord['type'] | undefined {
   return undefined;
 }
 
+/**
+ * The reasoning group, from the two independent signals Moonshot publishes:
+ * `supports_reasoning` (does it think) and `reasoning_efforts` (what levels the
+ * effort parameter takes). The effort levels are read from the feed rather than
+ * hardcoded, so a future fourth level arrives without a deploy - kimiParams'
+ * mapping is the runtime contract, this is the catalog's record of it.
+ *
+ * `style` is deliberately NOT claimed: it decides how a request builder shapes
+ * the call, and no feed may author that (see ModelCatalogTypes' dispatch note).
+ */
+function reasoningOf(entry: KimiModel): NonNullable<ModelRecord['reasoning']> | undefined {
+  const supported = boolean(entry?.supports_reasoning);
+  const efforts = Array.isArray(entry?.reasoning_efforts?.valid_efforts)
+    ? (entry.reasoning_efforts!.valid_efforts as unknown[]).filter((v): v is string => typeof v === 'string')
+    : [];
+  if (supported === undefined && efforts.length === 0) return undefined;
+  return compact({
+    // A model that publishes effort levels reasons by definition, even if the
+    // boolean is absent.
+    supported: supported ?? efforts.length > 0,
+    effortLevels: efforts.length > 0 ? efforts : undefined,
+  });
+}
+
 export function normalizeKimiModels(payload: unknown): DiscoveredModel[] {
   const list = payload as KimiModelList | null;
   const data = Array.isArray(list?.data) ? (list.data as KimiModel[]) : [];
@@ -84,6 +124,13 @@ export function normalizeKimiModels(payload: unknown): DiscoveredModel[] {
         vendor: 'moonshotai',
         backend: ModelBackend.Kimi,
         type: inferType(id),
+        // Only when positive: `count` rejects 0 and non-numbers, so a feed that
+        // omits the field falls through to whatever the catalog already believes
+        // instead of overwriting a real window with a guess.
+        contextWindow: count(entry?.context_length),
+        canStream: true,
+        supportsVision: boolean(entry?.supports_image_in),
+        reasoning: reasoningOf(entry),
       }),
     });
   }

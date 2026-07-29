@@ -1,15 +1,139 @@
 {
   "object": "list",
   "data": [
-    { "id": "kimi-k2-0905-preview", "object": "model", "owned_by": "moonshot" },
-    { "id": "kimi-k2-thinking", "object": "model", "owned_by": "moonshot" },
-    { "id": "kimi-k2.5", "object": "model", "owned_by": "moonshot" },
-    { "id": "kimi-k2.6", "object": "model", "owned_by": "moonshot" },
-    { "id": "kimi-k2.7-code", "object": "model", "owned_by": "moonshot" },
-    { "id": "kimi-k2.7-code-highspeed", "object": "model", "owned_by": "moonshot" },
-    { "id": "kimi-k3", "object": "model", "owned_by": "moonshot" },
-    { "id": "kimi-latest", "object": "model", "owned_by": "moonshot" },
-    { "id": "moonshot-v1-8k", "object": "model", "owned_by": "moonshot" },
-    { "id": "moonshot-v1-128k-vision-preview", "object": "model", "owned_by": "moonshot" }
+    {
+      "id": "kimi-k2.5",
+      "object": "model",
+      "owned_by": "moonshot",
+      "root": "",
+      "parent": "",
+      "context_length": 262144,
+      "supports_image_in": true,
+      "supports_video_in": true,
+      "supports_reasoning": true
+    },
+    {
+      "id": "kimi-k2.6",
+      "object": "model",
+      "owned_by": "moonshot",
+      "root": "",
+      "parent": "",
+      "context_length": 262144,
+      "supports_image_in": true,
+      "supports_video_in": true,
+      "supports_reasoning": true
+    },
+    {
+      "id": "kimi-k2.7-code",
+      "object": "model",
+      "owned_by": "moonshot",
+      "root": "",
+      "parent": "",
+      "context_length": 262144,
+      "supports_image_in": true,
+      "supports_video_in": true,
+      "supports_reasoning": true
+    },
+    {
+      "id": "kimi-k2.7-code-highspeed",
+      "object": "model",
+      "owned_by": "moonshot",
+      "root": "",
+      "parent": "",
+      "context_length": 262144,
+      "supports_image_in": true,
+      "supports_video_in": true,
+      "supports_reasoning": true
+    },
+    {
+      "id": "kimi-k3",
+      "object": "model",
+      "owned_by": "moonshot",
+      "root": "",
+      "parent": "",
+      "context_length": 1048576,
+      "supports_image_in": true,
+      "supports_video_in": true,
+      "supports_reasoning": true,
+      "supports_dynamic_tools": true,
+      "supports_thinking_type": "only",
+      "reasoning_efforts": {
+        "support": true,
+        "valid_efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "default_effort": "max"
+      },
+      "think_efforts": {
+        "support": true,
+        "valid_efforts": [
+          "low",
+          "high",
+          "max"
+        ],
+        "default_effort": "max"
+      }
+    },
+    {
+      "id": "moonshot-v1-128k",
+      "object": "model",
+      "owned_by": "moonshot",
+      "root": "",
+      "parent": "",
+      "context_length": 131072
+    },
+    {
+      "id": "moonshot-v1-128k-vision-preview",
+      "object": "model",
+      "owned_by": "moonshot",
+      "root": "",
+      "parent": "",
+      "context_length": 131072,
+      "supports_image_in": true
+    },
+    {
+      "id": "moonshot-v1-32k",
+      "object": "model",
+      "owned_by": "moonshot",
+      "root": "",
+      "parent": "",
+      "context_length": 32768
+    },
+    {
+      "id": "moonshot-v1-32k-vision-preview",
+      "object": "model",
+      "owned_by": "moonshot",
+      "root": "",
+      "parent": "",
+      "context_length": 32768,
+      "supports_image_in": true
+    },
+    {
+      "id": "moonshot-v1-8k",
+      "object": "model",
+      "owned_by": "moonshot",
+      "root": "",
+      "parent": "",
+      "context_length": 8192
+    },
+    {
+      "id": "moonshot-v1-8k-vision-preview",
+      "object": "model",
+      "owned_by": "moonshot",
+      "root": "",
+      "parent": "",
+      "context_length": 8192,
+      "supports_image_in": true
+    },
+    {
+      "id": "moonshot-v1-auto",
+      "object": "model",
+      "owned_by": "moonshot",
+      "root": "",
+      "parent": "",
+      "context_length": 131072
+    }
   ]
 }

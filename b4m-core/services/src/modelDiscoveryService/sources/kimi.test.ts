@@ -6,20 +6,30 @@ import unknownNamespace from './__fixtures__/kimi/unknown-namespace.json';
 import { expectDegradesOnFailure, makeContext, stubFetch } from './__fixtures__/testSupport';
 import { createKimiSource, KIMI_MODELS_URL, normalizeKimiModels } from './kimi';
 
+/**
+ * `models.json` is a real capture of the live endpoint (see the fixture README),
+ * not a hand-written guess - which matters, because the guess it replaced invented
+ * two models Moonshot does not serve and assumed the payload carried nothing but
+ * ids.
+ */
 describe('kimi source normalization', () => {
+  const byId = (id: string) => normalizeKimiModels(models).find(r => r.modelId === id);
+
   it('emits one text record per listed model, sorted by id', () => {
     const records = normalizeKimiModels(models);
     expect(records.map(r => r.modelId)).toEqual([
-      'kimi-k2-0905-preview',
-      'kimi-k2-thinking',
       'kimi-k2.5',
       'kimi-k2.6',
       'kimi-k2.7-code',
       'kimi-k2.7-code-highspeed',
       'kimi-k3',
-      'kimi-latest',
+      'moonshot-v1-128k',
       'moonshot-v1-128k-vision-preview',
+      'moonshot-v1-32k',
+      'moonshot-v1-32k-vision-preview',
       'moonshot-v1-8k',
+      'moonshot-v1-8k-vision-preview',
+      'moonshot-v1-auto',
     ]);
     for (const record of records) {
       expect(record.patch.backend).toBe('kimi');
@@ -28,13 +38,55 @@ describe('kimi source normalization', () => {
     }
   });
 
-  it('never invents a name or a context window it cannot know', () => {
-    // The endpoint carries neither, and a provider record outranks an
-    // aggregator's - so guessing here would overwrite models.dev's real 1M with 0.
+  it('claims the context window the endpoint actually publishes', () => {
+    // The first cut discarded this on the assumption the endpoint was as thin as
+    // OpenAI's. It is not, and throwing it away meant a model discovery found
+    // could not be added without an aggregator supplying a window.
+    expect(byId('kimi-k3')?.patch.contextWindow).toBe(1_048_576);
+    expect(byId('kimi-k2.6')?.patch.contextWindow).toBe(262_144);
+    expect(byId('moonshot-v1-8k')?.patch.contextWindow).toBe(8_192);
+  });
+
+  it('reads vision off supports_image_in rather than guessing from the id', () => {
+    expect(byId('kimi-k3')?.patch.supportsVision).toBe(true);
+    // A moonshot-v1 model WITHOUT the vision suffix does not accept images, and
+    // the flag is absent rather than false - so the field is simply not claimed.
+    expect(byId('moonshot-v1-8k')?.patch.supportsVision).toBeUndefined();
+    expect(byId('moonshot-v1-8k-vision-preview')?.patch.supportsVision).toBe(true);
+  });
+
+  it('records the effort levels the feed names, rather than hardcoding them', () => {
+    // k3 publishes reasoning_efforts.valid_efforts = [low, high, max]; this is the
+    // catalog's record of what kimiParams maps B4M's six levels onto.
+    expect(byId('kimi-k3')?.patch.reasoning).toEqual({
+      supported: true,
+      effortLevels: ['low', 'high', 'max'],
+    });
+  });
+
+  it('marks a reasoning model with no effort block as reasoning without levels', () => {
+    // k2.7-code reasons but takes the `thinking` object, not reasoning_effort.
+    expect(byId('kimi-k2.7-code')?.patch.reasoning).toEqual({ supported: true });
+  });
+
+  it('claims no reasoning group at all for a model that reports neither signal', () => {
+    expect(byId('moonshot-v1-8k')?.patch.reasoning).toBeUndefined();
+  });
+
+  it('never invents a display name, which the endpoint does not publish', () => {
+    // `name: id` would overwrite every seeded label with a lowercase id and append
+    // a row on every single run.
     for (const record of normalizeKimiModels(models)) {
       expect(record.patch).not.toHaveProperty('name');
-      expect(record.patch).not.toHaveProperty('contextWindow');
     }
+  });
+
+  it('does not serve kimi-k2-thinking or kimi-latest, which the aggregators do list', () => {
+    // Pinning a real absence: both exist in models.dev and litellm, so an earlier
+    // hand-written fixture included them. The live endpoint does not.
+    const ids = normalizeKimiModels(models).map(r => r.modelId);
+    expect(ids).not.toContain('kimi-k2-thinking');
+    expect(ids).not.toContain('kimi-latest');
   });
 
   it('claims no pricing, because the endpoint publishes none', () => {
@@ -93,7 +145,7 @@ describe('kimi source fetch', () => {
         // One endpoint lists everything, so a 200 IS exhaustive - which is what
         // lets absence bookkeeping eventually deprecate a withdrawn model.
         expect(result.authoritativeFor).toEqual(['kimi']);
-        expect(result.records).toHaveLength(10);
+        expect(result.records).toHaveLength(12);
       }
     } finally {
       restore();

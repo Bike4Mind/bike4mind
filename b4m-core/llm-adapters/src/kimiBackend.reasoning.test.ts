@@ -107,6 +107,70 @@ describe('KimiBackend reasoning capture', () => {
     await expect(runTurn(backend, ChatModels.KIMI_K3)).rejects.toThrow(/output budget was exhausted/);
   });
 
+  /**
+   * Moonshot's `prompt_tokens` is CACHE-INCLUSIVE. Verified live 2026-07-28: a
+   * repeated 1220-token prompt came back `prompt_tokens: 1220` WITH
+   * `cached_tokens: 1220` - the same tokens counted once, not 1220 fresh plus 1220
+   * cached. getTextModelCost expects Anthropic's cache-EXCLUSIVE convention, so the
+   * backend has to split them or the user pays the full input rate ($0.95/MTok on
+   * k2.6) for tokens Moonshot billed at $0.16.
+   */
+  it('splits cache-inclusive prompt_tokens so a hit is billed at the cache rate', async () => {
+    const { backend } = backendReturning([{ index: 0, message: { content: 'OK' }, finish_reason: 'stop' }], {
+      prompt_tokens: 1220,
+      completion_tokens: 31,
+      cached_tokens: 1220,
+    } as never);
+
+    const frames = await runTurn(backend, ChatModels.KIMI_K2_6, { cacheStrategy: { enableCaching: true } });
+    const info = frames.at(-1)!.info;
+
+    // All 1220 were cache reads, so nothing remains at the full input rate.
+    expect(info.inputTokens).toBe(0);
+    expect(info.cacheReadInputTokens).toBe(1220);
+    // The two must sum back to what the provider reported, or the turn is either
+    // over- or under-billed.
+    expect((info.inputTokens ?? 0) + (info.cacheReadInputTokens ?? 0)).toBe(1220);
+  });
+
+  it('reads the nested OpenAI cached_tokens spelling too, since Moonshot sends both', async () => {
+    const { backend } = backendReturning([{ index: 0, message: { content: 'OK' }, finish_reason: 'stop' }], {
+      prompt_tokens: 100,
+      completion_tokens: 5,
+      prompt_tokens_details: { cached_tokens: 40 },
+    } as never);
+
+    const info = (await runTurn(backend, ChatModels.KIMI_K2_6, { cacheStrategy: { enableCaching: true } })).at(
+      -1
+    )!.info;
+    expect(info.inputTokens).toBe(60);
+    expect(info.cacheReadInputTokens).toBe(40);
+  });
+
+  it('leaves inputTokens whole and claims no cache read when nothing was cached', async () => {
+    const { backend } = backendReturning([{ index: 0, message: { content: 'OK' }, finish_reason: 'stop' }], {
+      prompt_tokens: 100,
+      completion_tokens: 5,
+    } as never);
+
+    const info = (await runTurn(backend, ChatModels.KIMI_K2_6)).at(-1)!.info;
+    expect(info.inputTokens).toBe(100);
+    expect(info.cacheReadInputTokens).toBeUndefined();
+  });
+
+  it('never reports negative input if a feed claims more cached than prompt tokens', async () => {
+    // A negative input count would silently credit the user.
+    const { backend } = backendReturning([{ index: 0, message: { content: 'OK' }, finish_reason: 'stop' }], {
+      prompt_tokens: 50,
+      completion_tokens: 5,
+      cached_tokens: 900,
+    } as never);
+
+    const info = (await runTurn(backend, ChatModels.KIMI_K2_6)).at(-1)!.info;
+    expect(info.inputTokens).toBe(0);
+    expect(info.cacheReadInputTokens).toBe(50);
+  });
+
   it('does not fire the empty guard for a turn that legitimately only called a tool', async () => {
     const { backend } = backendReturning([
       {
@@ -121,8 +185,6 @@ describe('KimiBackend reasoning capture', () => {
 
     // executeTools: false makes the tool turn terminal, so the guard would be
     // reached if it were keyed on text alone.
-    await expect(
-      runTurn(backend, ChatModels.KIMI_K2_6, { executeTools: false, tools: [] })
-    ).resolves.not.toThrow();
+    await expect(runTurn(backend, ChatModels.KIMI_K2_6, { executeTools: false, tools: [] })).resolves.not.toThrow();
   });
 });
