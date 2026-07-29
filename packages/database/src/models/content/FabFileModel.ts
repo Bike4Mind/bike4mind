@@ -45,9 +45,10 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
    * keyset cursor - no rows skipped or duplicated across pages regardless of the query plan.
    * That is what lets a caller walk a corpus larger than memory and still get a reproducible
    * result; the previous unsorted `.limit(cap)` returned an arbitrary slice instead.
-   * At normal selectivity the { fabFileId: 1, _id: 1 } index serves this as a non-blocking
-   * SORT_MERGE across the $in. When the id list covers most of the collection the planner may
-   * prefer an _id range scan instead; the `limit` keeps that bounded either way.
+   * Up to a couple hundred file ids the { fabFileId: 1, _id: 1 } index serves this as a
+   * non-blocking SORT_MERGE across the $in. Past the planner's $in-explosion limit it cannot build
+   * that plan and falls back to an _id range scan with a filter - a cap on the number of ids, not
+   * on how much of the collection they cover; the `limit` keeps that bounded either way.
    */
   async findVectorsByFabFileIds(fabFileIds: string[], options: { limit?: number; afterChunkId?: string } = {}) {
     if (fabFileIds.length === 0) return [];
@@ -115,10 +116,12 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
 
 // Equality on the prefix + sort on `_id` lets the planner SORT_MERGE the per-file index scans
 // instead of collecting and sorting them, which is what keeps findVectorsByFabFileIds' keyset
-// paging non-blocking. Deliberately the only index here: its leftmost prefix already serves the
-// bare `fabFileId` reads (findByFabFileId, deleteManyByFabFileId, countTerminalChunks), so a
-// separate `{ fabFileId: 1 }` would only add write amplification on bulk chunk inserts.
-// fabFileChunkIndexes.test.ts pins this set, since autoIndex rebuilds whatever is declared here.
+// paging non-blocking. Deliberately the only declaration: this compound's leftmost prefix already
+// serves the bare `fabFileId` reads (findByFabFileId, deleteManyByFabFileId, countTerminalChunks),
+// and a `{ _id: 1, fabFileId: 1 }` buys nothing over `_id_` since `vector` is in neither index, so
+// both plans fetch anyway. Environments deployed before this still hold those two as orphans until
+// a drop migration removes them; nothing recreates them, because autoIndex only builds what is
+// declared here. fabFileChunkIndexes.test.ts pins the set.
 FabFileChunkSchema.index({ fabFileId: 1, _id: 1 });
 
 export const FabFileChunk =
