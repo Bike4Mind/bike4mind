@@ -4,6 +4,7 @@ import type {
   InferTaxonomyRequestInputType,
   IMessageDataToClient,
   IFabFileDocument,
+  ManageableDataLakeConfig,
   TaxonomyFileAssignment,
 } from '@bike4mind/common';
 import { isSupportedFabFileMimeType } from '@bike4mind/common';
@@ -867,28 +868,11 @@ export function useDataLakes(enabled = true) {
     enabled,
     retry: false,
     queryFn: async () => {
-      const response = await api.get<{
-        data: Array<{
-          id: string;
-          name: string;
-          slug: string;
-          description?: string;
-          fileTagPrefix: string;
-          requiredUserTag?: string;
-          requiredEntitlement?: string;
-          organizationId?: string;
-          isPublic?: boolean;
-          datalakeTag: string;
-          fileCount?: number;
-          createdAt: string;
-          // Server-computed (admin or creator). Management affordances gate on this: the
-          // list includes other users' read-only public lakes. See DataLakeConfig.canManage.
-          canManage?: boolean;
-          // Editor-only, so the server sends it ONLY when canManage holds - a lake the caller
-          // can merely read arrives without it. See ManageableDataLakeConfig.systemPrompt.
-          systemPrompt?: string;
-        }>;
-      }>('/api/data-lakes');
+      // The server's own shape, not a hand-maintained twin: `canManage` and the editor-only
+      // `systemPrompt` are attached per lake by listDataLakes, and the latter only when the
+      // caller may manage that lake. The former inline type also declared `createdAt` and
+      // `fileCount`, neither of which this projection returns.
+      const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
       return response.data.data;
     },
     refetchOnWindowFocus: false,
