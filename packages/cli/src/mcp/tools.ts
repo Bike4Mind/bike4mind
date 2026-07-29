@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { B4mApiClient, mapApiError, type RawNotebook } from './b4mApiClient.js';
+import { B4mApiClient, mapApiError, type RawFile, type RawNotebook } from './b4mApiClient.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
 export interface ToolMeta {
@@ -51,6 +51,13 @@ export const TOOL_META: ToolMeta[] = [
     description: "Fetch a file's metadata and a signed download URL.",
     scope: 'files:read',
   },
+  {
+    name: 'generate_sound_effect',
+    title: 'Generate sound effect',
+    description:
+      'Generate a sound effect from a text description. Returns the saved audio file (with a signed download URL) when the caller keeps generated audio, otherwise the audio inline.',
+    scope: 'ai:generate',
+  },
 ];
 
 export const TOOL_NAMES = TOOL_META.map(t => t.name);
@@ -90,6 +97,26 @@ const listFilesShape = {
 
 const getFileShape = {
   fileId: z.string().describe('The file id'),
+};
+
+// Bounds mirror `soundEffectsRequestSchema` (@bike4mind/common) and the ElevenLabs
+// sound-generation limits; keep in sync with the route's parse.
+const generateSoundEffectShape = {
+  text: z.string().min(1).max(1000).describe('Text description of the sound effect to generate'),
+  provider: z.enum(['elevenlabs']).default('elevenlabs').describe('Sound-generation provider'),
+  durationSeconds: z
+    .number()
+    .min(0.5)
+    .max(30)
+    .optional()
+    .describe('Length of the sound in seconds (0.5-30); omit to let the provider choose'),
+  promptInfluence: z
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .describe('How strictly to follow the prompt (0 = loose, 1 = strict)'),
+  format: z.string().optional().describe('Provider output encoding token, e.g. mp3_44100_128'),
 };
 
 function notebookSummary(n: RawNotebook) {
@@ -160,6 +187,32 @@ export async function getFile(client: B4mApiClient, args: { fileId: string }) {
   return client.getFile(args.fileId);
 }
 
+/**
+ * Outcome of a sound-effects generation, in the two shapes the route can yield:
+ * a persisted FabFile (resolved to metadata + a signed download URL, like
+ * {@link getFile}) when the caller keeps generated audio, or the raw bytes when
+ * it does not - so a caller who opted out of persistence still receives what it
+ * was billed for.
+ */
+export type SoundEffectOutcome =
+  | { saved: true; provider: string; contentType: string; byteLength: number; file: RawFile }
+  | { saved: false; provider: string; contentType: string; byteLength: number; audioBase64: string };
+
+export async function generateSoundEffect(
+  client: B4mApiClient,
+  args: { text: string; provider: string; durationSeconds?: number; promptInfluence?: number; format?: string }
+): Promise<SoundEffectOutcome> {
+  const { audio, contentType, saved, fabFileId } = await client.generateSoundEffect(args);
+  const base = { provider: args.provider, contentType, byteLength: audio.length };
+
+  // Prefer the persisted-file reference (signed URL) over inlining bytes, mirroring
+  // get_file; the route already uploaded it, so we only resolve the download URL.
+  if (saved && fabFileId) {
+    return { ...base, saved: true, file: await client.getFile(fabFileId) };
+  }
+  return { ...base, saved: false, audioBase64: audio.toString('base64') };
+}
+
 function toResult(value: unknown): CallToolResult {
   const structuredContent =
     value && typeof value === 'object' && !Array.isArray(value)
@@ -176,7 +229,34 @@ function errorResult(message: string): CallToolResult {
 }
 
 /**
- * Register the seven Bike4Mind tools on `server`. Each handler is wrapped so an
+ * Render a {@link SoundEffectOutcome} as an MCP result. A persisted file becomes
+ * a JSON metadata result (carrying the signed URL), exactly like get_file. When
+ * the audio was not persisted, it is returned inline as an `audio` content block
+ * so the bytes are not lost; the base64 is kept out of structuredContent to avoid
+ * duplicating a potentially large payload.
+ */
+function soundEffectResult(outcome: SoundEffectOutcome): CallToolResult {
+  if (outcome.saved) {
+    return toResult({
+      saved: true,
+      provider: outcome.provider,
+      contentType: outcome.contentType,
+      byteLength: outcome.byteLength,
+      file: outcome.file,
+    });
+  }
+  const { audioBase64, ...meta } = outcome;
+  return {
+    content: [
+      { type: 'text', text: JSON.stringify(meta, null, 2) },
+      { type: 'audio', data: audioBase64, mimeType: outcome.contentType },
+    ],
+    structuredContent: meta,
+  };
+}
+
+/**
+ * Register the Bike4Mind MCP tools on `server`. Each handler is wrapped so an
  * API failure becomes a structured `isError` result carrying a friendly message
  * (see {@link mapApiError}) rather than throwing across the transport.
  */
@@ -244,5 +324,21 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
     'get_file',
     { title: meta('get_file').title, description: meta('get_file').description, inputSchema: getFileShape },
     args => run('files:read', () => getFile(client, args))
+  );
+
+  server.registerTool(
+    'generate_sound_effect',
+    {
+      title: meta('generate_sound_effect').title,
+      description: meta('generate_sound_effect').description,
+      inputSchema: generateSoundEffectShape,
+    },
+    async args => {
+      try {
+        return soundEffectResult(await generateSoundEffect(client, args));
+      } catch (err) {
+        return errorResult(mapApiError(err, baseURL, 'ai:generate'));
+      }
+    }
   );
 }

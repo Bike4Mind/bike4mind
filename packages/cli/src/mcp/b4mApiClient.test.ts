@@ -3,10 +3,12 @@ import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 
 
 const mockGet = vi.fn();
 const mockPost = vi.fn();
+const mockAxiosPost = vi.fn();
 vi.mock('../auth/ApiClient', () => ({
   ApiClient: class {
     get = mockGet;
     post = mockPost;
+    getAxiosInstance = () => ({ post: mockAxiosPost });
   },
 }));
 
@@ -120,6 +122,65 @@ describe('B4mApiClient', () => {
     mockGet.mockResolvedValue({ id: 'f1' });
     await client.getFile('f1');
     expect(mockGet).toHaveBeenCalledWith('/api/files/f1');
+  });
+
+  it('generates a sound effect, requesting bytes and reading the persisted-file headers', async () => {
+    mockAxiosPost.mockResolvedValue({
+      data: Buffer.from('audio-bytes'),
+      headers: { 'content-type': 'audio/mpeg', 'x-b4m-audio-saved': 'true', 'x-b4m-audio-fab-file-id': 'fab1' },
+    });
+
+    const result = await client.generateSoundEffect({
+      provider: 'elevenlabs',
+      text: 'thunderclap',
+      durationSeconds: 3,
+      promptInfluence: 0.5,
+      format: 'mp3_44100_128',
+    });
+
+    expect(mockAxiosPost).toHaveBeenCalledWith(
+      '/api/ai/sound-effects',
+      {
+        provider: 'elevenlabs',
+        text: 'thunderclap',
+        durationSeconds: 3,
+        promptInfluence: 0.5,
+        format: 'mp3_44100_128',
+      },
+      { responseType: 'arraybuffer' }
+    );
+    expect(result).toEqual({
+      audio: Buffer.from('audio-bytes'),
+      contentType: 'audio/mpeg',
+      saved: true,
+      fabFileId: 'fab1',
+    });
+  });
+
+  it('omits optional sound-effect fields and reports not-saved when no fab-file header is set', async () => {
+    mockAxiosPost.mockResolvedValue({
+      data: Buffer.from('bytes'),
+      headers: { 'content-type': 'audio/mpeg' },
+    });
+
+    const result = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'wind' });
+
+    expect(mockAxiosPost).toHaveBeenCalledWith(
+      '/api/ai/sound-effects',
+      { provider: 'elevenlabs', text: 'wind' },
+      { responseType: 'arraybuffer' }
+    );
+    expect(result.saved).toBe(false);
+    expect(result.fabFileId).toBeUndefined();
+  });
+
+  it('decodes an arraybuffer error body so mapApiError can read the server message', async () => {
+    const bodyBytes = Buffer.from(JSON.stringify({ error: 'Sound generation failed' }));
+    mockAxiosPost.mockRejectedValue(axiosError(502, { data: bodyBytes }));
+
+    await expect(client.generateSoundEffect({ provider: 'elevenlabs', text: 'x' })).rejects.toMatchObject({
+      response: { data: { error: 'Sound generation failed' } },
+    });
   });
 
   it('lists projects with nested pagination and normalizes the envelope', async () => {

@@ -11,13 +11,14 @@ import {
   createNotebook,
   sendMessage,
   searchKnowledgeBase,
+  generateSoundEffect,
 } from './tools';
 
 const mockClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>>): B4mApiClient =>
   ({ baseURL: 'http://localhost:3000', ...overrides }) as unknown as B4mApiClient;
 
 describe('TOOL_NAMES', () => {
-  it('exposes exactly the seven v1 tools', () => {
+  it('exposes exactly the registered tools', () => {
     expect(TOOL_NAMES).toEqual([
       'list_notebooks',
       'get_notebook',
@@ -26,6 +27,7 @@ describe('TOOL_NAMES', () => {
       'search_knowledge_base',
       'list_files',
       'get_file',
+      'generate_sound_effect',
     ]);
   });
 });
@@ -134,6 +136,48 @@ describe('tool handlers', () => {
 
     expect(result).toEqual({ results: [{ sessionId: 's1', maxSimilarity: 0.9, matchingMessages: 1 }] });
   });
+
+  it('generate_sound_effect resolves a persisted FabFile to a file reference (signed URL)', async () => {
+    const getFile = vi.fn().mockResolvedValue({ id: 'fab1', fileName: 'sound-effect.mp3', fileUrl: 'https://signed' });
+    const client = mockClient({
+      generateSoundEffect: vi
+        .fn()
+        .mockResolvedValue({ audio: Buffer.from('abc'), contentType: 'audio/mpeg', saved: true, fabFileId: 'fab1' }),
+      getFile,
+    });
+
+    const result = await generateSoundEffect(client, { text: 'thunder', provider: 'elevenlabs' });
+
+    expect(getFile).toHaveBeenCalledWith('fab1');
+    expect(result).toEqual({
+      saved: true,
+      provider: 'elevenlabs',
+      contentType: 'audio/mpeg',
+      byteLength: 3,
+      file: { id: 'fab1', fileName: 'sound-effect.mp3', fileUrl: 'https://signed' },
+    });
+  });
+
+  it('generate_sound_effect returns the audio inline (base64) when it was not persisted', async () => {
+    const getFile = vi.fn();
+    const client = mockClient({
+      generateSoundEffect: vi
+        .fn()
+        .mockResolvedValue({ audio: Buffer.from('abc'), contentType: 'audio/mpeg', saved: false }),
+      getFile,
+    });
+
+    const result = await generateSoundEffect(client, { text: 'thunder', provider: 'elevenlabs' });
+
+    expect(getFile).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      saved: false,
+      provider: 'elevenlabs',
+      contentType: 'audio/mpeg',
+      byteLength: 3,
+      audioBase64: Buffer.from('abc').toString('base64'),
+    });
+  });
 });
 
 describe('registerTools', () => {
@@ -148,7 +192,7 @@ describe('registerTools', () => {
     return tools;
   };
 
-  it('registers all seven tools', () => {
+  it('registers every tool in TOOL_NAMES', () => {
     const tools = collectTools(mockClient({}));
     expect([...tools.keys()]).toEqual(TOOL_NAMES);
   });
@@ -177,6 +221,68 @@ describe('registerTools', () => {
     expect(result.content[0]).toMatchObject({
       type: 'text',
       text: "API key forbidden: check the key's scopes and account access (recommended scope: files:read)",
+    });
+  });
+
+  it('generate_sound_effect surfaces a persisted file as a JSON result with the signed URL', async () => {
+    const tools = collectTools(
+      mockClient({
+        generateSoundEffect: vi
+          .fn()
+          .mockResolvedValue({ audio: Buffer.from('abc'), contentType: 'audio/mpeg', saved: true, fabFileId: 'fab1' }),
+        getFile: vi.fn().mockResolvedValue({ id: 'fab1', fileUrl: 'https://signed' }),
+      })
+    );
+
+    const result = await tools.get('generate_sound_effect')!({ text: 'rain', provider: 'elevenlabs' });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ saved: true, file: { id: 'fab1', fileUrl: 'https://signed' } });
+    expect(result.content.some(c => c.type === 'audio')).toBe(false);
+  });
+
+  it('generate_sound_effect returns an audio content block when the bytes were not persisted', async () => {
+    const tools = collectTools(
+      mockClient({
+        generateSoundEffect: vi
+          .fn()
+          .mockResolvedValue({ audio: Buffer.from('abc'), contentType: 'audio/mpeg', saved: false }),
+      })
+    );
+
+    const result = await tools.get('generate_sound_effect')!({ text: 'rain', provider: 'elevenlabs' });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContainEqual({
+      type: 'audio',
+      data: Buffer.from('abc').toString('base64'),
+      mimeType: 'audio/mpeg',
+    });
+    // The base64 payload stays out of structuredContent to avoid duplicating it.
+    expect(result.structuredContent).toEqual({
+      saved: false,
+      provider: 'elevenlabs',
+      contentType: 'audio/mpeg',
+      byteLength: 3,
+    });
+  });
+
+  it('generate_sound_effect maps an API failure to a structured isError naming ai:generate', async () => {
+    const forbidden = new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status: 403,
+      statusText: '',
+      data: {},
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ generateSoundEffect: vi.fn().mockRejectedValue(forbidden) }));
+
+    const result = await tools.get('generate_sound_effect')!({ text: 'rain', provider: 'elevenlabs' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: "API key forbidden: check the key's scopes and account access (recommended scope: ai:generate)",
     });
   });
 });
