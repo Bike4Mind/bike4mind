@@ -29,12 +29,25 @@ const canManage = (dl: Pick<IDataLakeDocument, 'createdByUserId'>, ctx: AccessCo
  * manage flag, and `systemPrompt` ONLY when that flag holds. `toDataLakeConfig` has no actor and
  * so cannot carry it (see ManageableDataLakeConfig); the raw-document exits use the sibling
  * `redactLakeForActor` instead. A blank/whitespace prompt is treated as unset so the client
- * doesn't have to distinguish '' from absent.
+ * doesn't have to distinguish '' from absent, and the value is sent TRIMMED so seeding the editor
+ * from this response and saving it back cannot rewrite stored padding the user never touched.
  */
 const toManageableConfig = (dl: IDataLakeDocument, manageable: boolean): ManageableDataLakeConfig => ({
   ...toConfig(dl),
   canManage: manageable,
-  ...(manageable && dl.systemPrompt?.trim() ? { systemPrompt: dl.systemPrompt } : {}),
+  ...(manageable && dl.systemPrompt?.trim() ? { systemPrompt: dl.systemPrompt.trim() } : {}),
+});
+
+/**
+ * Fallback (built-in) registry entries as list results. Routed through `toDataLakeConfig` rather
+ * than spread, so the "an actor-less projection cannot carry an editor-only field" invariant holds
+ * on this arm too: `PREMIUM_DATA_LAKES` is `JSON.parse`d from env and keeps unknown keys, so an
+ * overlay entry carrying a `systemPrompt` would otherwise be served to every caller. Fallbacks have
+ * no owner and are read-only for everyone, so `canManage` is always false.
+ */
+const toFallbackConfig = (dl: DataLakeConfig): ManageableDataLakeConfig => ({
+  ...toDataLakeConfig(dl),
+  canManage: false,
 });
 
 /**
@@ -66,7 +79,7 @@ export const listDataLakes = async (
   const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
   const accessibleFallbacks = fallbacks
     .filter(dl => lakeMatchesAccess(dl, normalizedUserTags, normalizedKeys))
-    .map(dl => ({ ...dl, canManage: false }));
+    .map(toFallbackConfig);
 
   return [...dynamicConfigs, ...accessibleFallbacks];
 };
@@ -86,7 +99,7 @@ export const listAllDataLakes = async ({ db }: ListDataLakesAdapters): Promise<M
 
   const dynamicConfigs = dynamicLakes.map(dl => toManageableConfig(dl, true));
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
-  const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id)).map(dl => ({ ...dl, canManage: false }));
+  const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id)).map(toFallbackConfig);
 
   return [...dynamicConfigs, ...fallbacks];
 };
