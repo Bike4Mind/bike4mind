@@ -934,10 +934,26 @@ export async function processFabFilesServer(
                 logger
               );
               const { mime: moonshotMimeType } = await getFileType(moonshotBuffer, file.fileName, file.mimeType);
+              const moonshotBase64 = moonshotBuffer.toString('base64');
+
+              // Bedrock caps the Invoke body around 3 MB. If even the resized image
+              // still exceeds it, skip with the same friendly re-upload guidance the
+              // Anthropic branch gives rather than letting Bedrock reject the whole
+              // request with a raw ValidationException. Checked post-resize so we only
+              // reject images that are genuinely too large.
+              const MOONSHOT_MAX_BASE64_BYTES = 3_000_000;
+              if (moonshotBase64.length > MOONSHOT_MAX_BASE64_BYTES) {
+                const encodedMB = (moonshotBase64.length / (1024 * 1024)).toFixed(1);
+                const errorMsg = `⚠️ Image "${file.fileName}" (${encodedMB}MB encoded) is too large for ${modelInfo.name}. Max ~3MB. Please delete this file and re-upload a smaller image.`;
+                logger.warn(errorMsg);
+                await sendStatusUpdate(errorMsg);
+                errorMessages.push({ role: 'error', content: errorMsg });
+                return;
+              }
 
               imageContent.push({
                 type: 'image_url',
-                image_url: { url: `data:${moonshotMimeType};base64,${moonshotBuffer.toString('base64')}` },
+                image_url: { url: `data:${moonshotMimeType};base64,${moonshotBase64}` },
               });
               imageContent.push({
                 type: 'text',
