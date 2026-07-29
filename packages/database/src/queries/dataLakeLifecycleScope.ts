@@ -1,6 +1,6 @@
 import { isReservedTagPrefix, normalizeTagPrefix, type DataLakeMembershipScope } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { buildBaseAccessConditions } from './fabFileSearchQuery';
+import { buildBaseAccessConditions } from './baseAccessConditions';
 
 /**
  * The ONE membership predicate: a file belongs to a lake on an exact meta-tag match OR on a

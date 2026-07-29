@@ -160,6 +160,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
       restrictToDataLake?: boolean;
+      /** Server-supplied only - see buildOwnershipConditions.lakeMembership. */
+      lakeMembership?: DataLakeMembershipScope;
       skipOwnership?: boolean;
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];

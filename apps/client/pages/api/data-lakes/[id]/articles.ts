@@ -53,11 +53,19 @@ const handler = baseApi()
     const sortBy = req.query.sortBy === 'createdAt' ? ('createdAt' as const) : ('fileName' as const);
     const sortDir = req.query.sortDir === 'desc' ? ('desc' as const) : ('asc' as const);
 
-    // User-provided tags are an additional AND filter. Lake scoping is handled by the
-    // ownership conditions (dataLakeTags + scopedTagPrefixes) - NOT mixed into the tag
-    // filter with OR semantics - and `restrictToDataLake` drops the broad owner/shared
-    // arms so this view returns ONLY this lake's files, not every file the user owns
-    // (other lakes' files were bleeding into every lake's "Uncategorized").
+    // Lake membership comes from ONE predicate shared with the whole-lake writes, so this
+    // browse lists exactly what archiving or permanently deleting the lake would act on.
+    // Passed outside the parsed params because it names the creator whose access the lake's
+    // prefix arm rides on (see SearchFabFilesServerOptions).
+    const lakeMembership = await dataLakeService.resolveLakeMembershipScope(dataLake, {
+      db: { users: userRepository },
+      logger: req.logger,
+    });
+
+    // User-provided tags are an additional AND filter, never mixed into lake scoping with OR
+    // semantics, and `restrictToDataLake` drops the broad owner/shared arms so this view returns
+    // ONLY this lake's files rather than every file the viewer owns (other lakes' files were
+    // bleeding into every lake's "Uncategorized").
     const result = await fabFilesService.search(
       userId,
       {
@@ -69,15 +77,6 @@ const handler = baseApi()
           textSearch: !!search,
           includeShared: true,
           userGroups: req.user.groups ?? [],
-          dataLakeTags: [datalakeTag],
-          // This is a single DYNAMIC lake, so its user-controlled prefix is SCOPED -
-          // matched only within owner/org access so a colliding prefix can't leak
-          // another tenant's files. The unique datalakeTag above safely covers
-          // membership; the scoped prefix additionally catches prefixed content tags.
-          // Both arms are membership signals, so removeFileFromDataLake clears BOTH -
-          // widening this scope means widening what removal clears, or a removed file
-          // starts showing up here again.
-          scopedTagPrefixes: [dataLake.fileTagPrefix],
           // Single-lake browser: only this lake's files.
           restrictToDataLake: true,
           excludeContent: true,
@@ -99,7 +98,8 @@ const handler = baseApi()
             }
           },
         },
-      }
+      },
+      { lakeMembership }
     );
 
     return res.json({ data: result.data, total: result.total, hasMore: result.hasMore });
