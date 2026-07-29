@@ -81,8 +81,15 @@ export const MAX_PRESENCE_FIELD_LENGTH = 200;
  * raw presence events safe later: the current state no longer lives only in
  * the event history.
  *
- * The log remains the source of truth. This row is derived and disposable; it
- * can be rebuilt by replaying presence events.
+ * The log remains the source of truth for FACTS, but this row is only
+ * rebuildable from it inside the presence retention window
+ * (PRESENCE_EVENT_RETENTION_SECONDS in HearthEventModel). Once the events
+ * behind a row have expired, THIS ROW IS THE ONLY RECORD of that actor's
+ * presence - derived, but no longer derivable.
+ *
+ * So do not drop or truncate this collection expecting a replay to restore it:
+ * anything older than the retention window would be lost silently. Rebuilding
+ * is safe only for actors whose presence events are still within the window.
  */
 export interface IHearthPresenceDoc {
   _id: Types.ObjectId;
