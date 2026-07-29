@@ -436,12 +436,36 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * tags array, and clear `primaryTag` if it named one of them. Uses `$pull`, so concurrent
    * removals of DIFFERENT tags on the same file don't clobber each other the way a
    * read-filter-write `$set: { tags }` would. Absent names are a no-op (idempotent).
+   *
+   * Matching is case-SENSITIVE, unlike its `pushTagsByFabFileId` counterpart: names must be
+   * given exactly as stored, resolved from the loaded document rather than from user input.
+   * Passing a user's `foo` against a stored `Foo` removes nothing and reports no error.
    * @param fabFileId - The ID of the file.
    * @param tagNames - The exact tag names to remove. Empty is a no-op.
    * @returns Documents modified by the pull. The schema has timestamps, so this can be 1
    * even when no tag matched - do not read it as "a tag was removed".
    */
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
+
+  /**
+   * Atomically add each of `tagNames` to one file's tags array, skipping any already present.
+   * The add counterpart to `pullTagsByFabFileId`: one filtered `$push` per name, so concurrent
+   * adds of DIFFERENT tags on the same file don't clobber each other and a re-add is a no-op
+   * rather than a duplicate.
+   *
+   * Presence is compared case-INSENSITIVELY - a stored `Foo` blocks `foo` and keeps its own
+   * spelling - while a genuinely new name is stored with the caller's casing, never lowercased.
+   * The invariant is at most one tag per case-insensitive name. A filter is not a unique index,
+   * so two SIMULTANEOUS adds of the same name can both pass; `pullTagsByFabFileId` removes both.
+   * @param fabFileId - The ID of the file.
+   * @param tagNames - Tag names to add, deduplicated case-insensitively (first spelling wins).
+   * Empty is a no-op.
+   * @param strength - Relevance weight stored on each new tag. Defaults to 0; the data-lake
+   * membership meta-tag is written at 1.
+   * @returns The number of tags actually inserted. Unlike the pull half this IS meaningful: a
+   * name already present fails its filter, so it neither counts nor bumps updatedAt.
+   */
+  pushTagsByFabFileId(fabFileId: string, tagNames: string[], strength?: number): Promise<number>;
 
   /**
    * Find files by content hashes for a given user (deduplication).

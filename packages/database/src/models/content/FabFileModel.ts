@@ -622,6 +622,38 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
+  async pushTagsByFabFileId(fabFileId: string, tagNames: string[], strength = 0): Promise<number> {
+    // Skip the round trip: the batch caller hits this whenever a file has nothing to add.
+    if (tagNames.length === 0) return 0;
+    // First spelling wins. Each filter below is evaluated against the STORED document, so two
+    // case variants of one name are only guaranteed to collapse into a single insert if they
+    // never become two ops - collapsing them here keeps that true without leaning on the server
+    // applying a batch in order.
+    const seen = new Set<string>();
+    const names = tagNames.filter(name => {
+      const key = name.toLocaleLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    // One filtered $push per name, the atomic counterpart to the $pull above. Not $addToSet:
+    // it dedupes on whole-element equality, so { name: 'x', strength: 1 } would land alongside
+    // an existing { name: 'x', strength: 0 }. Not a single $each push either - that has no
+    // per-element guard, so one already-present name either poisons the batch or duplicates.
+    const result = await this.fabFileModel.bulkWrite(
+      names.map(name => ({
+        updateOne: {
+          // The invariant is at most one tag per case-insensitive name, so a stored `Foo`
+          // blocks `foo` and keeps its own spelling. Anchored and escaped: unescaped, a tag
+          // named `a.b` would match a stored `axb` and silently skip a real insert.
+          filter: { _id: fabFileId, 'tags.name': { $not: new RegExp(`^${escapeRegex(name)}$`, 'i') } },
+          update: { $push: { tags: { name, strength } } },
+        },
+      }))
+    );
+    return result.modifiedCount;
+  }
+
   async pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number> {
     // The schema has timestamps, so an empty $in would still rewrite updatedAt and report a
     // modification for a write that removes nothing.
