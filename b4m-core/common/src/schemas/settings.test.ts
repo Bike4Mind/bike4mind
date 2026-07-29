@@ -264,10 +264,49 @@ describe('public settings projection (M2.5 security boundary)', () => {
     it('leaves an unset sensitive setting empty rather than showing a mask', () => {
       expect(redactSettingSecrets({ settingName: 'anthropicDemoKey', settingValue: '' }).settingValue).toBe('');
     });
+
+    it('every isSensitive setting is a plain free-text string setting', () => {
+      // The whole mask/preserve protocol assumes a string. A sensitive setting that is a
+      // number, boolean, object, or a string with `options` breaks three ways at once: it
+      // masks to '' and renders as unset, it never routes through the input's focus/blur
+      // edit tracking, and isMaskedSensitiveSettingValue('') is false so the preserve branch
+      // can never fire - leaving it one Save away from being wiped. Fail here instead.
+      const offenders = (
+        Object.values(settingsMap) as Array<{
+          key: string;
+          isSensitive?: boolean;
+          type?: string;
+          options?: unknown[];
+        }>
+      )
+        .filter(s => s.isSensitive === true && (s.type !== 'string' || s.options !== undefined))
+        .map(s => s.key);
+
+      expect(offenders, `isSensitive settings that are not plain string inputs: ${offenders.join(', ')}`).toEqual([]);
+    });
   });
 });
 
 describe('sensitive setting masking', () => {
+  it('pins the literal mask, because its exact shape is a wire contract', () => {
+    // Every other assertion is written relative to the constant, so lengthening or changing
+    // it would silently turn every stale browser tab's write-back into a literal overwrite
+    // of a live credential. Pin the literal so that change has to be deliberate.
+    expect(SENSITIVE_SETTING_MASK).toBe('********');
+  });
+
+  it('treats the shorter SystemSecrets mask as a placeholder too', () => {
+    // system-secrets/index.ts masks with FOUR asterisks. Both screens can show the same
+    // credential, so a value copied from there must never be stored literally.
+    expect(isMaskedSensitiveSettingValue('****abcd')).toBe(true);
+    expect(isMaskedSensitiveSettingValue('****')).toBe(true);
+  });
+
+  it('does not treat a short asterisk run as a placeholder', () => {
+    expect(isMaskedSensitiveSettingValue('***')).toBe(false);
+    expect(isMaskedSensitiveSettingValue('a****bcd')).toBe(false);
+  });
+
   it('keeps only the last 4 characters', () => {
     expect(maskSensitiveSettingValue('sk-ant-api03-abcdefgh')).toBe(`${SENSITIVE_SETTING_MASK}efgh`);
   });

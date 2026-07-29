@@ -19,11 +19,21 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
   // Only fetch the specific settings that users are allowed to see
   const settings = await AdminSettings.find({ settingName: { $in: permittedKeys } }).lean();
 
-  // isSensitive gates WHO may fetch a setting; it does not by itself keep the value
-  // out of the response. Redact on the way out so a sensitive value never reaches the
-  // browser at all - admins get a mask and write a replacement, never a round-trip of
-  // the stored secret. Server-side consumers (apiKeyService.getEffective*) read
-  // AdminSettings directly and are unaffected by this endpoint.
+  // isSensitive gates WHO may fetch a setting; it does not by itself keep the value out
+  // of the response. Redact on the way out so a sensitive value never reaches the browser
+  // THROUGH THIS ENDPOINT - admins get a mask and write a replacement, never a round-trip
+  // of the stored secret.
+  //
+  // Scope, deliberately stated: this closes the HTTP read path only. It is NOT a
+  // system-wide guarantee. The `adminsettings` WebSocket subscription
+  // (UserSettingsContext) still fans unredacted documents out to admin browsers and
+  // lands them in the same react-query cache key this endpoint fills, and
+  // GET /api/settings returns the collection unredacted. Both are pre-existing and
+  // tracked separately. The real chokepoint for all three would be a redacting
+  // toJSON/toObject transform on AdminSettingsSchema.
+  //
+  // Server-side consumers (apiKeyService.getEffective*) read AdminSettings directly and
+  // are unaffected by this endpoint.
   const redacted: AdminSettingDoc[] = (settings ?? []).map(setting =>
     redactSettingSecrets(setting as unknown as AdminSettingDoc)
   );

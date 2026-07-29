@@ -27,6 +27,9 @@ const renderSensitiveField = (defaultValue: string) =>
   );
 
 const input = () => screen.getByTestId('admin-setting-anthropicDemoKey-input') as HTMLInputElement;
+// Qualified by testid: an unqualified getByRole('button') breaks with a confusing
+// "multiple elements" error the moment another button lands in this card.
+const saveButton = () => screen.getByTestId('admin-setting-anthropicDemoKey-save-btn');
 
 describe('AdminSettingInputField sensitive setting', () => {
   beforeEach(() => {
@@ -56,7 +59,7 @@ describe('AdminSettingInputField sensitive setting', () => {
     fireEvent.focus(input());
 
     expect(input().value).toBe('');
-    expect(screen.getByRole('button')).toBeDisabled();
+    expect(saveButton()).toBeDisabled();
   });
 
   it('does not write when Save is clicked after focus without typing', () => {
@@ -66,9 +69,22 @@ describe('AdminSettingInputField sensitive setting', () => {
     // blur the input first (macOS Safari and Firefox do not focus buttons on click), so
     // the write path is guarded independently of event ordering.
     fireEvent.focus(input());
-    fireEvent.click(screen.getByRole('button'));
+    fireEvent.click(saveButton());
 
     expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it('hides typed plaintext so a pasted key does not stay rendered after blur', () => {
+    renderSensitiveField(maskedValue);
+    // The server mask stays readable, so its last-4 tail is usable.
+    expect(input().getAttribute('type')).toBe('text');
+
+    fireEvent.focus(input());
+    fireEvent.change(input(), { target: { value: 'sk-ant-api03-fresh' } });
+
+    // Once real plaintext is in the field it must not be readable over someone's shoulder,
+    // which is the property main had via its re-mask-on-blur and this PR would otherwise drop.
+    expect(input().getAttribute('type')).toBe('password');
   });
 
   it('still allows an admin to deliberately clear a stored secret', () => {
@@ -79,16 +95,16 @@ describe('AdminSettingInputField sensitive setting', () => {
     fireEvent.change(input(), { target: { value: 'x' } });
     fireEvent.change(input(), { target: { value: '' } });
 
-    expect(screen.getByRole('button')).not.toBeDisabled();
-    fireEvent.click(screen.getByRole('button'));
-    expect(mutate).toHaveBeenCalledWith({ key: 'anthropicDemoKey', value: '' }, expect.anything());
+    expect(saveButton()).not.toBeDisabled();
+    fireEvent.click(saveButton());
+    expect(mutate).toHaveBeenCalledWith({ key: 'anthropicDemoKey', value: '', confirmClear: true }, expect.anything());
   });
 
   it('submits a newly typed secret and then holds only what the server returns', () => {
     renderSensitiveField(maskedValue);
     fireEvent.focus(input());
     fireEvent.change(input(), { target: { value: 'sk-ant-api03-fresh' } });
-    fireEvent.click(screen.getByRole('button'));
+    fireEvent.click(saveButton());
 
     expect(mutate).toHaveBeenCalledWith(
       { key: 'anthropicDemoKey', value: 'sk-ant-api03-fresh' },

@@ -109,14 +109,17 @@ const AdminSettingInputField = ({
   const isEmbeddingModelSetting = setting.key === 'defaultEmbeddingModel';
 
   const saveValue = (next: string | number | boolean) => {
-    // Focusing a sensitive field clears the mask, which enables Save. Blur restores it,
-    // but a click is not guaranteed to blur the input first (macOS Safari and Firefox do
-    // not focus buttons on click), so an untouched empty value must never reach the server
-    // - it would overwrite the stored key with ''. Only an explicit edit can clear a key.
+    // Backstop, intentionally unreachable while isDirty excludes the untouched-empty state
+    // above: focusing a sensitive field clears the mask, and a click is not guaranteed to
+    // blur the input first (macOS Safari and Firefox do not focus buttons on click). If the
+    // dirty logic is ever loosened, this still stops '' overwriting a stored key. Kept
+    // deliberately - do not delete it as redundant.
     if (setting.isSensitive && next === '' && !secretEdited) return;
 
     updateSettings.mutate(
-      { key: setting.key, value: next },
+      // An empty value on a sensitive setting destroys a live credential, so the server
+      // requires the intent to be explicit rather than inferred from an absent value.
+      { key: setting.key, value: next, ...(setting.isSensitive && next === '' ? { confirmClear: true } : {}) },
       {
         // Drop the typed plaintext as soon as it is stored: the server answers a sensitive
         // write with the mask, which is all this field should ever hold afterwards.
@@ -182,6 +185,11 @@ const AdminSettingInputField = ({
                 ) : (
                   <Input
                     slotProps={{ input: { 'data-testid': `admin-setting-${setting.key}-input` } }}
+                    // Once the admin has typed, the field holds real plaintext. main used to
+                    // re-hide it on blur; keep that property by switching to a password field
+                    // rather than leaving a pasted key rendered until the page is left. The
+                    // server mask stays plain text so its last-4 tail is readable.
+                    type={setting.isSensitive && secretEdited ? 'password' : 'text'}
                     value={(value as string) || ''}
                     placeholder={setting.isSensitive ? 'Enter a new value to replace the stored secret' : undefined}
                     onChange={e => {

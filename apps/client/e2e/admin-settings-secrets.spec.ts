@@ -41,7 +41,7 @@ async function gotoAdminSettings(page: Page, adminPage: { gotoAdmin: () => Promi
     await section.click();
   }
 
-  const navButton = page.getByTestId('admin-admin-settings-btn').filter({ visible: true }).first();
+  const navButton = page.getByTestId('admin-settings-btn').filter({ visible: true }).first();
   await expect(navButton).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   await navButton.scrollIntoViewIfNeeded();
   await navButton.click();
@@ -86,10 +86,17 @@ test.describe('Admin Settings - sensitive values never reach the browser', () =>
 
     expect(payloads.length, 'expected at least one /api/settings/fetch response').toBeGreaterThan(0);
 
-    const offenders = payloads
-      .flat()
-      .filter(s => SENSITIVE_KEY_SET.has(s.settingName) && !isMaskedOrEmpty(s.settingValue))
-      .map(s => s.settingName);
+    const sensitiveSeen = payloads.flat().filter(s => SENSITIVE_KEY_SET.has(s.settingName));
+
+    // Without this the assertion below is vacuous: an environment where every sensitive
+    // setting is unset trivially has no offenders. core.setup seeds one so it cannot happen.
+    const configured = sensitiveSeen.filter(s => s.settingValue !== '' && s.settingValue != null);
+    expect(
+      configured.length,
+      'no configured sensitive setting was present, so masking was never actually exercised'
+    ).toBeGreaterThan(0);
+
+    const offenders = sensitiveSeen.filter(s => !isMaskedOrEmpty(s.settingValue)).map(s => s.settingName);
 
     // Report names only - never echo the offending value into CI logs.
     expect(offenders, `sensitive settings returned unmasked: ${offenders.join(', ')}`).toEqual([]);
@@ -116,15 +123,19 @@ test.describe('Admin Settings - sensitive values never reach the browser', () =>
     await gotoAdminSettings(page, adminPage);
 
     const target = await findConfiguredSecretField(page);
-    test.skip(target === null, 'no sensitive setting is configured on this environment');
+    // A hard failure rather than test.skip: core.setup seeds a throwaway sensitive setting, so
+    // finding none means the seed regressed, and a silent skip would hide that permanently.
+    expect(target, 'no configured sensitive field found - did core.setup seeding regress?').not.toBeNull();
     const { field, save } = target!;
 
     await field.scrollIntoViewIfNeeded();
     await field.focus();
 
     // Focus clears the mask so a replacement can be typed. It must not swap in a real value,
-    // and the resulting empty field must not register as an edit.
-    await expect(field).toHaveValue('');
+    // and the resulting empty field must not register as an edit. Assert on a derived boolean:
+    // toHaveValue prints the actual value into the report, which on the exact regression this
+    // test exists to catch would be a live secret.
+    expect(await field.inputValue(), 'focus must clear the field, not reveal a value').toBe('');
     await expect(save).toBeDisabled();
   });
 
@@ -132,7 +143,7 @@ test.describe('Admin Settings - sensitive values never reach the browser', () =>
     await gotoAdminSettings(page, adminPage);
 
     const target = await findConfiguredSecretField(page);
-    test.skip(target === null, 'no sensitive setting is configured on this environment');
+    expect(target, 'no configured sensitive field found - did core.setup seeding regress?').not.toBeNull();
     const { field, save } = target!;
 
     const writes: string[] = [];
@@ -142,7 +153,7 @@ test.describe('Admin Settings - sensitive values never reach the browser', () =>
 
     await field.scrollIntoViewIfNeeded();
     await field.focus();
-    await expect(field).toHaveValue('');
+    expect(await field.inputValue(), 'focus must clear the field, not reveal a value').toBe('');
 
     // Before the guard this path wrote '' straight over the stored key. force:true bypasses
     // Playwright's actionability wait so a disabled button still receives the click, which is
@@ -153,7 +164,9 @@ test.describe('Admin Settings - sensitive values never reach the browser', () =>
     expect(writes, 'an empty sensitive value must never be written').toEqual([]);
 
     // Blur restores the mask rather than leaving the field blank, so the value is still stored.
+    // Compared as a boolean so a regression cannot print the restored value into the report.
     await field.blur();
-    await expect(field).toHaveValue(new RegExp(`^\\*{${SENSITIVE_SETTING_MASK.length}}`));
+    const restored = await field.inputValue();
+    expect(restored.startsWith(SENSITIVE_SETTING_MASK), 'blur must restore the mask, not a real value').toBe(true);
   });
 });

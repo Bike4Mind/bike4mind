@@ -12,13 +12,13 @@ import { invalidateSettingsCache } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
-import { ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { encryptSecret, isEncrypted } from '@server/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 
 // Update Admin Setting
 const handler = baseApi().put(
-  asyncHandler<unknown, unknown, { key: string; value: unknown }>(async (req, res) => {
+  asyncHandler<unknown, unknown, { key: string; value: unknown; confirmClear?: boolean }>(async (req, res) => {
     if (!req.user.isAdmin) throw new ForbiddenError('Permission denied');
 
     // Authorize before any branch reads or returns stored setting data.
@@ -32,13 +32,26 @@ const handler = baseApi().put(
     const isSensitiveSetting = settingsMap[key].isSensitive === true;
 
     // The client is only ever sent a mask for a sensitive setting (see fetch.ts), so a
-    // mask arriving here means the admin edited some other field and submitted the form
-    // unchanged - keep the stored value instead of overwriting a real secret with
-    // asterisks. Same "placeholder means preserve" contract sreAgentConfig already uses.
+    // mask arriving here is never a real value - keep what is stored rather than
+    // overwriting a secret with asterisks. Same "placeholder means preserve" contract
+    // sreAgentConfig already uses.
+    //
+    // The reachable path is the post-save window: the field adopts the new mask while its
+    // defaultValue prop still holds the old one, so it reads as dirty and a second Save
+    // submits the mask. A stale browser tab holding a mask from a previous page load does
+    // the same.
     if (isSensitiveSetting && isMaskedSensitiveSettingValue(value)) {
       const existing = await AdminSettings.findOne({ settingName: key }).lean();
       if (!existing) throw new NotFoundError('Admin setting not found');
       return res.json({ ...existing, settingValue: maskSensitiveSettingValue(existing.settingValue) });
+    }
+
+    // Clearing a sensitive setting is a legitimate admin action, but it destroys a live
+    // credential and an empty value is also what an accidental submit produces. The UI
+    // guards its own accidental path; require the intent to be explicit on the wire too,
+    // so the destructive case cannot be reached by a bare PUT that merely omits a value.
+    if (isSensitiveSetting && value === '' && req.body.confirmClear !== true) {
+      throw new BadRequestError(`Refusing to clear ${key}: send confirmClear: true to unset a sensitive setting.`);
     }
 
     // Encrypt sensitive fields before storing (v2 config: defaults + per-repo secrets)

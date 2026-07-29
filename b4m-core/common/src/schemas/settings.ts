@@ -3658,9 +3658,9 @@ export interface AdminSettingDoc {
 export const SENSITIVE_SETTING_MASK = '********';
 
 /**
- * Reduce a stored sensitive value to a display-only mask. Keeps the last 4 chars so
- * an admin can tell WHICH key is loaded (matching the SystemSecrets mask), but only
- * once the value is long enough that 4 chars is not a meaningful fraction of it.
+ * Reduce a stored sensitive value to a display-only mask. Keeps the last 4 chars so an
+ * admin can tell WHICH key is loaded, but only once the value is long enough that 4 chars
+ * is not a meaningful fraction of it.
  */
 export function maskSensitiveSettingValue(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0) return '';
@@ -3668,12 +3668,26 @@ export function maskSensitiveSettingValue(value: unknown): string {
 }
 
 /**
- * True when a submitted value is one the server previously masked. The client is
- * never sent the real value, so a mask coming back means "keep what is stored"
- * rather than "set the value to these asterisks" - see the settings update handler.
+ * Leading-asterisk run that counts as a mask on write-back. Four rather than eight on
+ * purpose: SystemSecrets masks the same underlying credentials with only four asterisks
+ * (apps/client/pages/api/admin/system-secrets/index.ts), and an admin who copies a value
+ * from that screen into an Admin Settings field must not have it stored literally - that
+ * would destroy the real secret. Recognizing the shorter run makes both shapes preserve.
+ */
+const MASK_WRITE_BACK_PATTERN = /^\*{4,}/;
+
+/**
+ * True when a submitted value is one some admin surface previously masked. The client is
+ * never sent the real value, so a mask coming back means "keep what is stored" rather than
+ * "set the value to these asterisks" - see the settings update handler.
+ *
+ * Deliberately broader than the exact output of `maskSensitiveSettingValue`: it also
+ * matches the SystemSecrets mask shape. The cost is that a genuine secret beginning with
+ * four asterisks cannot be stored, which no provider key does; the benefit is that no
+ * masked value from any admin screen can ever be written over a live credential.
  */
 export function isMaskedSensitiveSettingValue(value: unknown): boolean {
-  return typeof value === 'string' && value.startsWith(SENSITIVE_SETTING_MASK);
+  return typeof value === 'string' && MASK_WRITE_BACK_PATTERN.test(value);
 }
 
 /**

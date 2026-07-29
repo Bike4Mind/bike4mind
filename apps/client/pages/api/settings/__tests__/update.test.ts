@@ -36,12 +36,12 @@ const stageWriteResult = (settingName: string, settingValue: unknown) => {
   });
 };
 
-const runHandler = async (key: string, value: unknown) => {
+const runHandler = async (key: string, value: unknown, extra: Record<string, unknown> = {}) => {
   const json = vi.fn((x: unknown) => x);
   const req = {
     user: { isAdmin: true },
     ability: { can: () => true },
-    body: { key, value },
+    body: { key, value, ...extra },
     logger: { info: vi.fn(), error: vi.fn() },
   };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, { json });
@@ -87,6 +87,33 @@ describe('settings/update sensitive value handling', () => {
     stored = null;
     await expect(runHandler('anthropicDemoKey', `${SENSITIVE_SETTING_MASK}inal`)).rejects.toThrow();
     expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses to clear a sensitive setting without explicit intent', async () => {
+    // The client guards its own accidental-empty path, but the server must not accept a
+    // credential-destroying write that merely omits a value. This is the one destructive
+    // case the PR would otherwise leave guarded only in the browser.
+    await expect(runHandler('anthropicDemoKey', '')).rejects.toThrow(/confirmClear/);
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('allows a deliberate clear when intent is explicit', async () => {
+    stageWriteResult('anthropicDemoKey', '');
+    await runHandler('anthropicDemoKey', '', { confirmClear: true });
+
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'anthropicDemoKey' },
+      { $set: { settingValue: '' } },
+      expect.anything()
+    );
+  });
+
+  it('does not require intent to clear a non-sensitive setting', async () => {
+    // The guard is scoped to isSensitive - emptying an ordinary string setting is not
+    // destructive and must not suddenly need a flag.
+    stageWriteResult('tagLineMain', '');
+    await runHandler('tagLineMain', '');
+    expect(findOneAndUpdate).toHaveBeenCalled();
   });
 
   it('leaves non-sensitive settings echoed in full', async () => {
