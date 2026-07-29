@@ -176,13 +176,17 @@ const SYSTEM_PROMPT_RESERVE = 4000;
  */
 const RESPONSE_RESERVE = 8000;
 
-/**
- * Cap on elision signal descriptions persisted to promptMeta. A heavily stubbed artifact can
- * produce dozens; the client only needs enough to explain the notice, and promptMeta is stored
- * per quest.
- */
 // The elision rollup, its caps, and the truncation helper live in ./elisionStamp so they can be
 // tested without standing up a harness for this module.
+
+/**
+ * Compile-time exhaustiveness check for the elision signal formatter. Reached only if a new
+ * `ElisionSignal` kind is added without a case, which TypeScript then rejects here rather than letting
+ * the signal be described with the wrong sentence at runtime.
+ */
+function assertNeverElisionSignal(signal: never): never {
+  throw new Error(`Unhandled elision signal kind: ${JSON.stringify(signal)}`);
+}
 
 /**
  * Share of the context budget this file assumes history will take when sizing a history count.
@@ -3084,7 +3088,19 @@ export class ChatCompletionProcess {
           const { parseArtifacts, convertCodeBlocksToArtifacts } = await import('@bike4mind/utils');
           // The detector DOES have its own subpath, so use it here too - same reasoning as the
           // client: nothing should pull the whole of @bike4mind/utils for a dependency-free scan.
-          const { detectElidedContent } = await import('@bike4mind/utils/artifactElision');
+          //
+          // Resolved defensively rather than destructured directly: this is the one part of the elision
+          // path that runs OUTSIDE the crash guards below, and an unresolvable subpath here would land
+          // in the catch that overwrites `quest.reply` with an error - turning every completed artifact
+          // reply into an error quest over an advisory feature. The subpath is wired (package.json
+          // exports + tsdown entry) so this is not currently reachable; the guard is for build drift.
+          type ElisionDetector = typeof import('@bike4mind/utils/artifactElision').detectElidedContent;
+          let detectElision: ElisionDetector | null = null;
+          try {
+            detectElision = (await import('@bike4mind/utils/artifactElision')).detectElidedContent;
+          } catch (importError) {
+            logger.warn('[Elision] Detector subpath failed to load; skipping elision detection', importError);
+          }
           const artifactProcessingStartTime = Date.now();
 
           // Elision hits accumulate across every reply/artifact, then get stamped on promptMeta
@@ -3102,8 +3118,8 @@ export class ChatCompletionProcess {
             // protective try/catch around post-streaming processing further down. A crash degrades
             // to "nothing detected"; the reply and its artifacts always stand.
             try {
-              for (const artifact of artifacts) {
-                const elision = detectElidedContent(artifact.content, artifact.type);
+              for (const artifact of detectElision ? artifacts : []) {
+                const elision = detectElision!(artifact.content, artifact.type);
                 if (!elision.elided) continue;
                 elisionHits.push({
                   confidence: elision.confidence,
@@ -3111,12 +3127,20 @@ export class ChatCompletionProcess {
                     // Capped: the title and the matched comment text are both model-authored and
                     // unbounded, and these strings are persisted on the quest.
                     const title = truncateElisionText(artifact.title, ELISION_TITLE_MAX);
+                    // Exhaustive on purpose. With a `default:` branch, a fifth ElisionSignal kind was
+                    // silently described as "calls X(), never defined" - wrong, and invisible. The
+                    // assertNever below makes adding a kind a compile error here instead.
                     switch (signal.kind) {
                       case 'placeholder_comment':
                         return `"${title}" line ${signal.line}: placeholder comment - ${truncateElisionText(
                           signal.match,
                           ELISION_MATCH_MAX
                         )}`;
+                      case 'undefined_reference':
+                        return `"${title}": calls ${truncateElisionText(
+                          signal.name,
+                          ELISION_NAME_MAX
+                        )}(), never defined`;
                       case 'undefined_handler':
                         return `"${title}": ${signal.attribute} calls ${truncateElisionText(
                           signal.name,
@@ -3128,10 +3152,7 @@ export class ChatCompletionProcess {
                           ELISION_NAME_MAX
                         )}() has no body, only a comment`;
                       default:
-                        return `"${title}": calls ${truncateElisionText(
-                          signal.name,
-                          ELISION_NAME_MAX
-                        )}(), never defined`;
+                        return assertNeverElisionSignal(signal);
                     }
                   }),
                 });
@@ -3206,6 +3227,13 @@ export class ChatCompletionProcess {
             if (stamp && quest.promptMeta) {
               quest.promptMeta.suspectedElision = stamp.suspectedElision;
               quest.promptMeta.warnings = stamp.warnings;
+              // DATA CLASSIFICATION: `details[0]` carries up to ~280 chars of model-authored artifact
+              // text (a capped title plus a matched comment). Every other log line in this file emits
+              // lengths and ids rather than reply content, so this one deliberately crosses that line -
+              // without the matched text the entry cannot be acted on, since the whole point is which
+              // phrase tripped the detector. The content is already persisted on the quest in Mongo; the
+              // only change is that a snippet also lands in the log tier, which has its own retention
+              // and access rules. Keep it capped, and do not extend this to the full artifact body.
               logger.warn(
                 `[Elision] Suspected abbreviated artifact (model=${currentModel.id}, confidence=${stamp.suspectedElision.confidence}, signals=${stamp.suspectedElision.signalCount}): ${stamp.suspectedElision.details[0]}`
               );
