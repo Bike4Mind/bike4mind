@@ -141,6 +141,10 @@ export function useCreateFabFileWithUpload(options?: {
       });
 
       queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
+      // A created file can carry tags, and per-tag counts are derived from the files holding each
+      // tag. This hook has no callers today; the invalidation is here so wiring it up later cannot
+      // silently reintroduce the stale-count bug the other write paths were fixed for.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       options?.onSuccess?.(newFabFile);
       return newFabFile;
     } catch (err) {
