@@ -1369,26 +1369,6 @@ const AISettingsTab: React.FC<{
         ...scrollbarStyles,
       }}
     >
-      {/* Title and Description - Desktop Only */}
-      {!isMobile && (
-        <Stack
-          direction="column"
-          alignItems="flex-start"
-          justifyContent="flex-start"
-          gap={1}
-          sx={{
-            width: 'auto',
-            mx: 0,
-            mb: { xs: 1, sm: 3 },
-          }}
-        >
-          <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>AI Settings</Typography>
-          <Typography sx={{ color: 'text.primary50', fontSize: '14px', pr: { sm: 4 }, lineHeight: '1.4' }}>
-            Welcome to model selection — choose from powerful text or images AI models, and personalize the settings to
-            fit your unique goals. Dive in and pick the right tool for your next project!
-          </Typography>
-        </Stack>
-      )}
       <ModelSelection
         model={model}
         setModel={handleModelSelection}
@@ -1399,6 +1379,25 @@ const AISettingsTab: React.FC<{
         onModelFilterChange={handleModelChange}
         onSettingsClick={onViewDetails}
         isResearchModeFeatureEnabled={isResearchModeFeatureEnabled}
+        stickyHeader={
+          !isMobile && (
+            <Stack
+              direction="column"
+              alignItems="flex-start"
+              gap={1}
+              sx={{
+                width: 'auto',
+                // Only when tabs render; the untabbed path never had this margin.
+                mt: { sm: isResearchModeFeatureEnabled ? 3 : 0 },
+              }}
+            >
+              <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>AI Settings</Typography>
+              <Typography sx={{ color: 'text.primary50', fontSize: '14px', pr: { sm: 4 }, lineHeight: '1.4' }}>
+                Choose an AI model, then open its settings to tune it to your needs.
+              </Typography>
+            </Stack>
+          )
+        }
       />
     </Box>
   );
@@ -1903,8 +1902,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 gap: '0px',
                 width: '100%',
                 height: '100%',
-                // Mobile keeps zero vertical padding: MobileTopBar owns the top edge and
-                // the TabPanel heights below are calc'd against a full-height viewport.
+                // Mobile keeps zero vertical padding: the TabPanel heights below are calc'd
+                // against a full-height viewport.
                 padding: { xs: '0 16px', sm: '24px' },
               }}
             >
@@ -1956,7 +1955,9 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                     sx={{
                       backgroundColor: 'transparent',
                       borderBottom: theme => `1px solid ${theme.palette.divider}`,
-                      mb: { xs: 2, sm: 3 },
+                      // Desktop spacing lives on the title instead, so it scrolls away and the
+                      // sticky search row pins right under the tabs. Mobile has no title.
+                      mb: { xs: 2, sm: 0 },
                       p: 0,
                       boxShadow: 'none',
                       maxHeight: '40px',
@@ -1969,9 +1970,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                         p: 0,
                         color: 'text.primary50',
                         flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                        // Bounds set here, not in each Tab's own sx: this `& .MuiTab-root`
-                        // descendant selector outranks a Tab's single-class sx, so widths
-                        // set there would lose to this rule.
+                        // Bounds must live here: this descendant selector outranks a Tab's own sx.
                         maxWidth: { xs: 'none', sm: '200px' },
                         minWidth: { xs: 0, sm: '160px' },
                         textAlign: 'center',

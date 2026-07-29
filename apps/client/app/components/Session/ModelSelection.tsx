@@ -25,7 +25,7 @@ import {
 } from '@mui/icons-material';
 import ClearIcon from '@mui/icons-material/Clear';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import SettingsIcon from '@mui/icons-material/Settings';
+import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
 import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
@@ -54,7 +54,6 @@ import MetadataChip from './AISettings/MetaDataChips';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { isImageModel } from '@client/app/utils/commands';
 import { green, greenAlpha, orange } from '@client/app/utils/themes/colors';
-import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { useFavoriteModels } from '@client/app/hooks/useFavoriteModels';
 
 // List of model IDs to exclude from the dropdown
@@ -164,6 +163,8 @@ interface ModelSelectionProps {
   onModelFilterChange?: (filter: 'all' | 'text' | 'image' | 'video') => void;
   onSettingsClick?: (model: ModelInfo) => void;
   isResearchModeFeatureEnabled?: boolean;
+  /** Rendered inside the sticky header, above the search/filter row, so it pins with it. */
+  stickyHeader?: React.ReactNode;
 }
 
 // Format large numbers with commas
@@ -580,6 +581,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   onModelFilterChange,
   onSettingsClick,
   isResearchModeFeatureEnabled = false,
+  stickyHeader,
 }) => {
   const { isLoading, error } = useModelInfo();
   const {
@@ -861,10 +863,9 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     const timer = window.setTimeout(() => {
       const card = container.querySelector<HTMLElement>(`[data-testid="model-card-${model}"]`);
       if (!card) return;
-      const containerRect = container.getBoundingClientRect();
-      const cardRect = card.getBoundingClientRect();
-      const offset = cardRect.top - containerRect.top - container.clientHeight / 2 + card.clientHeight / 2;
-      container.scrollBy({ top: offset, behavior: 'auto' });
+      // scrollIntoView resolves the real scrolling ancestor; this component's root box is not
+      // one, so scrollBy-ing it would silently no-op.
+      card.scrollIntoView({ block: 'center', behavior: 'auto' });
       hasScrolledRef.current = true;
     }, 50);
 
@@ -929,11 +930,11 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
         display: 'flex',
         flexDirection: 'column',
         gap: 2,
-        maxHeight: { xs: 'auto' },
-        overflow: 'auto',
+        // Must not be a scrollport: with no bounded height, `overflow: auto` here captures the
+        // sticky row below and pins it to a box that never scrolls. The consumer scrolls.
+        overflow: 'visible',
         px: 0,
         pr: { xs: 0, sm: 1 },
-        ...scrollbarStyles,
       }}
     >
       {/* Search Input and Filter Dropdown */}
@@ -942,16 +943,25 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
           position: 'sticky',
           top: 0,
           zIndex: 10,
-          backgroundColor: 'var(--joy-palette-background-var(--joy-palette-background-body)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '16px',
+          // Opaque, matching the enclosing Sheet: cards scroll under this header.
+          backgroundColor: 'background.surface',
+          // Covers the container gap below without taking layout space, so cards don't
+          // show in the space between the pinned header and the first card.
+          boxShadow: `0 16px 0 var(--joy-palette-background-surface)`,
         }}
       >
+        {stickyHeader}
+
         <Stack
           direction="row"
-          spacing={1}
           sx={{
             alignItems: 'center',
             width: '100%',
             px: 0,
+            gap: '8px',
             backgroundColor: 'background.surface',
           }}
         >
@@ -974,6 +984,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               backgroundColor: 'var(--joy-palette-background-body)',
               border: '1px solid var(--joy-palette-divider)',
               borderRadius: '8px',
+              boxShadow: 'none',
               '& input': {
                 fontSize: '14px',
                 '&::placeholder': {
@@ -1000,8 +1011,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                     color: 'text.primary',
                     width: '16px',
                     height: '16px',
-                    ml: { xs: 0, sm: '2px' },
-                    mr: { xs: 0, sm: '-2px' },
                   }}
                 />
               }
@@ -1026,9 +1035,11 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                 border: '1px solid var(--joy-palette-divider)',
                 borderRadius: '8px',
                 justifyContent: 'center',
-                ml: '16px !important',
+                boxShadow: 'none',
                 py: 0,
-                px: 1,
+                // Zero on mobile: the button is 32px square and the 16px icon does not fit
+                // inside 8px side padding, which knocked it off centre.
+                paddingInline: { xs: 0, sm: '8px' },
                 '& .MuiSelect-button': {
                   display: { xs: 'flex', sm: 'flex' },
                   position: { xs: 'absolute', sm: 'relative' },
@@ -1045,8 +1056,21 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                   lineHeight: { xs: 0, sm: 'normal' },
                   color: { xs: 'transparent', sm: 'text.primary' },
                 },
+                // Desktop shows the label alone. Mobile hides the label and chevron, so the
+                // icon is the only affordance there and must stay - centred by overlaying the
+                // whole square rather than relying on the root's flex/padding.
                 '& .MuiSelect-startDecorator': {
-                  mr: { xs: 0, sm: 1 },
+                  display: { xs: 'flex', sm: 'none' },
+                  // Joy's start decorator pulls its icon left by --Select-paddingInline / -4
+                  // (-3px at sizeMd) and adds --Select-gap on the end; both knock the icon off
+                  // centre in the 32px mobile square.
+                  '--Icon-margin': '0',
+                  margin: 0,
+                  position: 'absolute',
+                  inset: 0,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  pointerEvents: 'none',
                 },
                 '& .MuiSelect-endDecorator': {
                   display: { xs: 'none', sm: 'inline-flex' },
@@ -1110,15 +1134,15 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                 aria-label="Manage models"
                 sx={{
                   flexShrink: 0,
-                  width: '32px',
-                  height: '32px !important',
-                  minHeight: '32px !important',
+                  // Drives min-width/min-height together; a plain `width` loses to Joy's
+                  // size-variant min-width (36px at sizeMd).
+                  '--IconButton-size': '32px',
                   backgroundColor: 'var(--joy-palette-background-body)',
                   border: '1px solid var(--joy-palette-divider)',
                   borderRadius: '8px',
                 }}
               >
-                <SettingsIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
+                <AdminPanelSettingsOutlinedIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
               </IconButton>
             </Tooltip>
           )}
