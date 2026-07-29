@@ -53,11 +53,20 @@ const handler = baseApi()
     const sortBy = req.query.sortBy === 'createdAt' ? ('createdAt' as const) : ('fileName' as const);
     const sortDir = req.query.sortDir === 'desc' ? ('desc' as const) : ('asc' as const);
 
-    // Lake membership comes from ONE predicate shared with the whole-lake writes, so this
-    // browse lists exactly what archiving or permanently deleting the lake would act on.
-    // Passed outside the parsed params because it names the creator whose OWNED files the lake's
-    // prefix arm matches (see SearchFabFilesServerOptions).
-    const lakeMembership = dataLakeService.lakeMembershipScope(dataLake);
+    // A built-in registry lake has a different membership model and needs the OPEN prefix arm:
+    // its files carry only prefixed content tags (no write path can stamp its meta-tag -
+    // assertLakeWritable refuses writes to fallbacks wholesale), and it has no creator to anchor
+    // an ownership arm to. That prefix comes from the hardcoded registry, not from user input,
+    // which is what makes the ownership bypass safe here. Nothing else needs to agree with this
+    // arm: archive, delete and stats all resolve the lake through the DB and so can never run
+    // against a fallback at all.
+    const isFallback = dataLakeService.isFallbackLake(dataLake);
+
+    // For a DB lake, membership is ONE predicate shared with the whole-lake writes, so this browse
+    // lists exactly what archiving or permanently deleting the lake would act on. Passed outside
+    // the parsed params because it names the creator whose OWNED files the prefix arm matches
+    // (see SearchFabFilesServerOptions).
+    const lakeMembership = isFallback ? undefined : dataLakeService.lakeMembershipScope(dataLake);
 
     // User-provided tags are an additional AND filter, never mixed into lake scoping with OR
     // semantics, and `restrictToDataLake` drops the broad owner/shared arms so this view returns
@@ -74,6 +83,7 @@ const handler = baseApi()
           textSearch: !!search,
           includeShared: true,
           userGroups: req.user.groups ?? [],
+          ...(isFallback ? { dataLakeTags: [datalakeTag], dataLakeTagPrefixes: [dataLake.fileTagPrefix] } : {}),
           // Single-lake browser: only this lake's files.
           restrictToDataLake: true,
           excludeContent: true,

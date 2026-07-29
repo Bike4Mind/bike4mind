@@ -19,6 +19,13 @@ interface RestoreDeletedDataLakeAdapters {
  * file was re-uploaded while the lake was deleted, the live copy wins and the deleted
  * duplicate is left discarded (not un-deleted). Owner or admin only. Mirrors
  * unarchiveDataLake but on the deletedAt axis. Only valid from the 'deleted' state.
+ *
+ * Known asymmetry: this un-deletes every member currently carrying deletedAt, not only the ones
+ * phase 1 deleted, because nothing records which those were. So a member the creator had already
+ * deleted on their own comes back with the lake. True for meta-tagged members before the prefix arm
+ * existed; the arm widens the set to the creator's whole prefix namespace. Nothing is lost either
+ * way - a file reappears rather than disappearing - and bounding it properly needs a recorded
+ * teardown timestamp on the lake, which is not in this change's scope.
  */
 export const restoreDeletedDataLake = async (
   actor: { userId: string; isAdmin: boolean },

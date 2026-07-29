@@ -7,11 +7,12 @@ import type {
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
+import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 
 interface ArchiveDataLakeAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'find'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'archiveByDataLakeTag' | 'computeDataLakeStats'>;
   };
@@ -55,6 +56,10 @@ export const archiveDataLake = async (
 
   // Step 3: soft-hide files + best-effort index removal. The scope covers prefix-tagged
   // members too, so a file that never got the meta-tag no longer stays browsable here.
+  // Archive hides files, so a colliding sibling lake loses its prefix-tagged files from every
+  // browse (they filter archivedAt: null) - and unarchiving either lake brings back BOTH lakes'
+  // archived files, since the flip matches on archivedAt alone.
+  await warnOnPrefixCollision(db, existing, logger);
   await db.fabFiles.archiveByDataLakeTag(lakeMembershipScope(existing));
   await bestEffortIndexRemove(retrievalIndex, existing.datalakeTag, logger);
 

@@ -50,7 +50,6 @@ describe('findCollidingPrefixLakes', () => {
   describe('which prefixes overlap', () => {
     it.each([
       ['identical', 'acme:', 'acme:'],
-      ['differing only in case', 'ACME:', 'acme:'],
       ['padded', '  acme:  ', 'acme:'],
       ['candidate nested under an existing lake', 'docs:legal:', 'docs:'],
       ['existing lake nested under the candidate', 'docs:', 'docs:legal:'],
@@ -65,6 +64,7 @@ describe('findCollidingPrefixLakes', () => {
     it.each([
       ['a merely similar prefix', 'acme-docs:', 'acme:x:'],
       ['a different prefix', 'globex:', 'acme:'],
+      ['a prefix differing only in case', 'ACME:', 'acme:'],
     ])('allows %s', async (_label, wanted, existing) => {
       const dataLakes = repo([lakeRow({ fileTagPrefix: existing })]);
 
@@ -97,7 +97,8 @@ describe('collidesWithRegistryPrefix', () => {
     const registryPrefix = DATA_LAKES[0]?.fileTagPrefix;
     expect(registryPrefix).toBeTruthy();
     expect(collidesWithRegistryPrefix(registryPrefix)).toBe(true);
-    expect(collidesWithRegistryPrefix(registryPrefix?.toUpperCase())).toBe(true);
+    // Upper-cased is a genuinely different prefix: the registry's arm is an unflagged ^regex.
+    expect(collidesWithRegistryPrefix(registryPrefix?.toUpperCase())).toBe(false);
   });
 
   it('allows an unrelated prefix', () => {

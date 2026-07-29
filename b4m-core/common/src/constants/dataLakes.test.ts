@@ -205,7 +205,6 @@ describe('isReservedTagPrefix', () => {
 describe('tagPrefixesOverlap', () => {
   it.each([
     ['identical prefixes', 'acme:', 'acme:'],
-    ['differing only in case', 'ACME:', 'acme:'],
     ['padded values', '  acme:  ', 'acme:'],
     ['a nested prefix', 'docs:legal:', 'docs:'],
     ['a nested prefix the other way round', 'docs:', 'docs:legal:'],
@@ -216,6 +215,8 @@ describe('tagPrefixesOverlap', () => {
   it.each([
     ['unrelated prefixes', 'globex:', 'acme:'],
     ['a shared word that is not a prefix boundary', 'acme-docs:', 'acme:x:'],
+    // The predicate builds an unflagged ^regex, so these two cannot reach each other's tags.
+    ['prefixes differing only in case', 'ACME:', 'acme:'],
   ])('reports %s as safe', (_label, a, b) => {
     expect(tagPrefixesOverlap(a, b)).toBe(false);
   });

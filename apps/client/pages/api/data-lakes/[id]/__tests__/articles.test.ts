@@ -10,6 +10,7 @@ const LAKE = {
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   lakeMembershipScope: vi.fn(),
+  isFallbackLake: vi.fn(),
   search: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'viewer-9', isAdmin: false })),
 }));
@@ -29,6 +30,7 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
     lakeMembershipScope: h.lakeMembershipScope,
+    isFallbackLake: h.isFallbackLake,
   },
   fabFilesService: { search: h.search },
 }));
@@ -59,6 +61,7 @@ const makeRes = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   h.assertLakeAccess.mockResolvedValue(LAKE);
+  h.isFallbackLake.mockReturnValue(false);
   h.lakeMembershipScope.mockReturnValue({
     datalakeTag: LAKE.datalakeTag,
     fileTagPrefix: LAKE.fileTagPrefix,
@@ -96,6 +99,22 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     expect(params.options).not.toHaveProperty('scopedTagPrefixes');
     expect(params.options).not.toHaveProperty('dataLakeTags');
     expect(params.options.restrictToDataLake).toBe(true);
+  });
+
+  it('browses a built-in registry lake by its OPEN prefix arm, not the ownership predicate', async () => {
+    // A fallback lake is owner-less and no write path can stamp its meta-tag, so its files carry
+    // only prefixed content tags. Scoping it by creator ownership would return nothing at all.
+    h.isFallbackLake.mockReturnValue(true);
+    h.assertLakeAccess.mockResolvedValue({ ...LAKE, createdByUserId: '' });
+    const { res } = makeRes();
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+
+    const [, params, , serverOptions] = h.search.mock.calls[0];
+    expect(params.options.dataLakeTagPrefixes).toEqual(['acme:']);
+    expect(params.options.dataLakeTags).toEqual(['datalake:org1:acme-docs']);
+    expect(serverOptions?.lakeMembership).toBeUndefined();
+    expect(h.lakeMembershipScope).not.toHaveBeenCalled();
   });
 
   it('still returns an empty page for a lake with no meta-tag, without searching', async () => {

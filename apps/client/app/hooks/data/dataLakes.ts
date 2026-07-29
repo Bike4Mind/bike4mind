@@ -41,8 +41,8 @@ export function useGetDataLakes() {
  * the wizard blocks before submit. Best-effort only - the lake list cannot show an org peer's
  * gated lake, so the server stays the authority.
  *
- * Overlap is bidirectional and case-insensitive: `docs:` matches a `docs:legal:foo` tag, so
- * `docs:` and `docs:legal:` conflict either way round.
+ * Overlap is bidirectional: `docs:` matches a `docs:legal:foo` tag, so `docs:` and `docs:legal:`
+ * conflict either way round.
  */
 export function useDuplicatePrefixLake(prefix: string, skip = false): DataLakeConfig | undefined {
   const { data: allLakes } = useGetDataLakes();
