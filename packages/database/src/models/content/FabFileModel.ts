@@ -113,12 +113,12 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
   }
 );
 
-FabFileChunkSchema.index({ _id: 1, fabFileId: 1 });
-FabFileChunkSchema.index({ fabFileId: 1 });
 // Equality on the prefix + sort on `_id` lets the planner SORT_MERGE the per-file index scans
 // instead of collecting and sorting them, which is what keeps findVectorsByFabFileIds' keyset
-// paging non-blocking. `{ fabFileId: 1 }` above is now a redundant prefix of this index and is
-// droppable once this one is confirmed in use; kept for now so no query loses its index mid-deploy.
+// paging non-blocking. Deliberately the only index here: its leftmost prefix already serves the
+// bare `fabFileId` reads (findByFabFileId, deleteManyByFabFileId, countTerminalChunks), so a
+// separate `{ fabFileId: 1 }` would only add write amplification on bulk chunk inserts.
+// fabFileChunkIndexes.test.ts pins this set, since autoIndex rebuilds whatever is declared here.
 FabFileChunkSchema.index({ fabFileId: 1, _id: 1 });
 
 export const FabFileChunk =
