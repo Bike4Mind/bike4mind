@@ -76,7 +76,10 @@ export * from './functionQueueRunner';
 export * from './fabfile';
 export * from './office/officeEdit';
 export * from './artifactParser';
-export * from './artifactElision';
+// NOT barrel-exported on purpose: `artifactElision` is reached only via the
+// `@bike4mind/utils/artifactElision` subpath. Re-exporting it here pulled the whole detector
+// (pattern tables + ambient-global set) into every barrel consumer's bundle, including the CLI,
+// which tripped its size baseline. Every consumer imports the subpath already.
 export * from './adminSettings';
 export * from './notificationDeduplicator';
 export * from './tokenCounting';
