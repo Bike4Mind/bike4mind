@@ -55,20 +55,44 @@ const handler = baseApi()
 
     req.logger.updateMetadata({ userId, fileId: fabFileId });
 
-    // Data-lake membership is conferred by the lake's `datalake:*` meta-tag. Applying one is a
-    // WRITE into that lake, so gate it with the same creator/admin check the remove path uses -
-    // otherwise a read-only member could inject files via Send-to-Data-Lake.
-    const candidateTagNames = [
-      ...(req.body.tags?.map(t => t.name) ?? []),
-      ...(req.body.primaryTag ? [req.body.primaryTag] : []),
-    ];
-    await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, candidateTagNames, {
-      db: { dataLakes: dataLakeRepository },
-    });
+    // Mirrors the DELETE branch below: the stored-tag read runs before the service's own
+    // validation, so a garbage id has to 404 here rather than surface as a CastError.
+    if (!Types.ObjectId.isValid(fabFileId) || new Types.ObjectId(fabFileId).toString() !== fabFileId) {
+      return res.status(404).json({ msg: 'File not found' });
+    }
 
-    const updatedFabFile = await withTransaction(async () => {
+    const { updatedFabFile, affectedLakes } = await withTransaction(async () => {
+      // Read the tags this write REPLACES through the accessor updateFabFile itself uses, so an
+      // inaccessible file yields no stored tags and still 404s from the service - an unscoped read
+      // would turn the gate below into a file-existence oracle. Inside the transaction so
+      // authorization and the write decide on one snapshot.
+      const storedFile = await fabFileRepository.shareable.findAccessibleById(req.user, fabFileId);
+      const storedTagNames = (storedFile?.tags ?? []).map(tag => tag?.name);
+
+      // Membership is conferred by the lake's `datalake:*` meta-tag, so a body that OMITS one
+      // evicts the file from that lake - gate the removals as well as the additions. `tags`
+      // present at all is a wholesale replace (mongoose drops undefined from $set but writes an
+      // empty array); anything unreadable as an array counts as the empty next set, so a
+      // malformed payload demands manage rights instead of slipping past the check.
+      const submittedTags: unknown = req.body.tags;
+      const nextTagNames =
+        submittedTags === undefined
+          ? storedTagNames
+          : (Array.isArray(submittedTags) ? submittedTags : []).map(tag => (tag as { name?: unknown } | null)?.name);
+
+      const { affectedLakes: changedLakes, clearPrimaryTag } = await dataLakeService.assertCanReplaceDataLakeTags(
+        { userId, isAdmin: !!req.user.isAdmin },
+        {
+          stored: storedTagNames,
+          next: nextTagNames,
+          primaryTag: req.body.primaryTag,
+          storedPrimaryTag: storedFile?.primaryTag,
+        },
+        { db: { dataLakes: dataLakeRepository } }
+      );
+
       try {
-        return await fabFilesService.updateFabFile(
+        const updated = await fabFilesService.updateFabFile(
           req.user,
           {
             id: fabFileId,
@@ -81,8 +105,10 @@ const handler = baseApi()
             sessionId: req.body.sessionId,
             notes: req.body.notes,
             // Pass through null so "unset primary" clears the field; ?? undefined
-            // would coalesce null to undefined and get dropped from the $set.
-            primaryTag: req.body.primaryTag,
+            // would coalesce null to undefined and get dropped from the $set. Forced to null when
+            // this write drops the tag it names, or the stale value lands on the ADD side of the
+            // next request and 400s this file for good.
+            primaryTag: clearPrimaryTag ? null : req.body.primaryTag,
             tags: req.body.tags,
             error: req.body.error,
           },
@@ -97,11 +123,30 @@ const handler = baseApi()
             },
           }
         );
+        return { updatedFabFile: updated, affectedLakes: changedLakes };
       } catch (error) {
         req.logger.error('Error updating fab file:', { error, fileId: fabFileId });
         throw error;
       }
     });
+
+    // After the commit, because the callback is retried on transient errors and a stats hiccup
+    // must not roll back a good write; before logEvent, which is awaited unguarded. Stats are a
+    // cache the batch finalizer and the read-time reconciler also rebuild, so one failing lake
+    // must neither 500 a committed write nor skip the others.
+    for (const lake of affectedLakes) {
+      try {
+        await dataLakeService.recomputeLakeStats(lake.id, lake.datalakeTag, {
+          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+        });
+      } catch (error) {
+        req.logger.error('Error recomputing data lake stats after a file tag change:', {
+          error,
+          fileId: fabFileId,
+          lakeId: lake.id,
+        });
+      }
+    }
 
     await logEvent(
       {
