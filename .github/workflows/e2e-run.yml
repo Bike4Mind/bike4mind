@@ -147,10 +147,12 @@ jobs:
         timeout-minutes: 8
         run: npx playwright install chromium --with-deps
 
-      # A staging deploy in flight rotates E2E_CLEANUP_SECRET and swaps the Lambda,
-      # so running e2e against it 401s the create-test-user setup - which then skips
-      # the ENTIRE suite via Playwright's setup-dependency graph (one red, the rest
-      # "did not run"). /api/ping is not enough: CloudFront answers it green all
+      # A staging deploy in flight swaps the Lambda under the suite, so requests can
+      # 401 or 5xx mid-run. When that hits the create-test-user setup it skips the
+      # ENTIRE suite via Playwright's setup-dependency graph (one red, the rest
+      # "did not run"). E2E_CLEANUP_SECRET itself is stable across deploys (every
+      # tier gets the same value), so the secret is not the hazard - the swap is.
+      # /api/ping is not enough: CloudFront answers it green all
       # through a deploy. So gate on the `staging/deploy` commit status: if the
       # newest commit that has one is still `pending`, a deploy is running - wait it
       # out. dev/staging only (a preview has its own env). Best-effort: warns +
