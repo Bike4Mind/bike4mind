@@ -255,6 +255,25 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
 }
 
 /**
+ * Identifies a data lake for file-membership matching: a file belongs on an exact
+ * `datalakeTag` match OR on a `fileTagPrefix` match the lake's CREATOR can access. The
+ * predicate itself is `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives
+ * here so `IFabFileRepository` can name it without the packages depending on each other.
+ *
+ * Always build this from the lake DOCUMENT, never from request input: `creatorUserId` widens
+ * what the filter selects, so a caller-supplied scope would reach another user's files - and on
+ * the lifecycle paths, destroy them.
+ */
+export interface DataLakeMembershipScope {
+  datalakeTag: string;
+  fileTagPrefix?: string | null;
+  /** The lake's `createdByUserId` - the identity the prefix arm is anchored to. */
+  creatorUserId?: string | null;
+  /** The creator's `user.groups`; absent/empty simply drops the group arm. */
+  creatorGroupIds?: string[] | null;
+}
+
+/**
  * The model interface for the FabFile model.
  *
  * Defines the database methods that are available on the FabFile model.

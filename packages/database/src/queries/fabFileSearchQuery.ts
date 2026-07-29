@@ -132,6 +132,39 @@ export function getMimeTypeFilter(
 }
 
 /**
+ * Base access arms: the file genuinely belongs to / is shared with this user. Used as the
+ * top-level $or arms here AND to scope the dynamic-lake prefix match, including the lifecycle
+ * predicate in ./dataLakeLifecycleScope - a new access arm must reach both or the read path and
+ * the whole-lake writes silently disagree about who is a lake member.
+ */
+export function buildBaseAccessConditions(userId: string, groupIds: string[] = []): object[] {
+  const baseAccess: object[] = [
+    { userId },
+    {
+      users: {
+        $elemMatch: {
+          userId,
+          permissions: { $in: ['read', 'write'] },
+        },
+      },
+    },
+  ];
+
+  if (groupIds.length > 0) {
+    baseAccess.push({
+      groups: {
+        $elemMatch: {
+          groupId: { $in: groupIds },
+          permissions: { $in: ['read', 'write'] },
+        },
+      },
+    });
+  }
+
+  return baseAccess;
+}
+
+/**
  * Build ownership conditions for file access control.
  * Returns an array of $or conditions covering: owned, shared, group-shared, and data-lake access.
  */
@@ -166,32 +199,7 @@ export function buildOwnershipConditions(
     restrictToDataLake?: boolean;
   }
 ): object[] {
-  // Base access: the file genuinely belongs to / is shared with this user. Reused both
-  // as top-level $or arms and to scope the dynamic-lake prefix match.
-  const baseAccess: object[] = [
-    { userId }, // Files owned by user
-    {
-      // Files explicitly shared with user
-      users: {
-        $elemMatch: {
-          userId,
-          permissions: { $in: ['read', 'write'] },
-        },
-      },
-    },
-  ];
-
-  // Add group-level sharing if user has groups (organization sharing)
-  if (options?.userGroups && options.userGroups.length > 0) {
-    baseAccess.push({
-      groups: {
-        $elemMatch: {
-          groupId: { $in: options.userGroups },
-          permissions: { $in: ['read', 'write'] },
-        },
-      },
-    });
-  }
+  const baseAccess = buildBaseAccessConditions(userId, options?.userGroups ?? []);
 
   // In lake-scoped mode, start with NO broad ownership arms - only the lake tag/prefix arms
   // below select files, so a single-lake view can't fall back to "all files the user owns".
