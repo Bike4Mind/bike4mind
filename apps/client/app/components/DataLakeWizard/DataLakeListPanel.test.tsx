@@ -456,4 +456,47 @@ describe('DataLakeListPanel - management affordances gate on canManage', () => {
     expect(screen.queryByTestId('datalake-settings-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-archive-btn-theirs')).toBeNull();
   });
+
+  // The seam between the server's response and the modal's props. Every other prompt test
+  // renders DataLakeSettingsModal directly with a hand-built object, so nothing else would
+  // catch the panel dropping systemPrompt or hard-coding canManage on the way through.
+  it('carries systemPrompt and canManage from the list response into the settings modal', async () => {
+    const user = userEvent.setup();
+    useDataLakes.mockReturnValue({
+      data: [listLake({ id: 'mine', name: 'Mine', canManage: true, systemPrompt: 'Cite the source file.' })],
+      isLoading: false,
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-btn-mine'));
+
+    const textarea = screen.getByTestId('datalake-systemprompt-input').querySelector('textarea')!;
+    expect(textarea).toHaveValue('Cite the source file.');
+  });
+
+  // The server OMITS the key for a non-editor; the modal state is a string. This pins the
+  // absent -> '' mapping, so a lake with no readable prompt cannot render `undefined`.
+  it("seeds an empty field when the server withheld the prompt, without rendering 'undefined'", async () => {
+    const user = userEvent.setup();
+    useDataLakes.mockReturnValue({
+      data: [listLake({ id: 'mine', name: 'Mine', canManage: true })],
+      isLoading: false,
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-btn-mine'));
+
+    const textarea = screen.getByTestId('datalake-systemprompt-input').querySelector('textarea')!;
+    expect(textarea).toHaveValue('');
+  });
 });
