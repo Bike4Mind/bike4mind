@@ -66,6 +66,7 @@ import MetadataChip from './MetaDataChips';
 import {
   buildModelSelectionPatch,
   ChipVariant,
+  computeDefaultMaxTokens,
   getModelPriceTier,
   getModelSpeedFromStats,
   getModelSpeedTooltip,
