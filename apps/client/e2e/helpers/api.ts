@@ -162,6 +162,46 @@ export async function apiGetOtcCode(request: APIRequestContext, email: string): 
   return body.code;
 }
 
+/**
+ * Full passwordless re-login for an existing test account: /api/otc/send to mint a pending token,
+ * read the emailed code back via the non-prod test endpoint, then /api/otc/verify for fresh tokens.
+ * Use when a test needs a genuinely NEW session - e.g. after logout, which revokes every prior
+ * token for the user (tokenVersion bump), so reusing a seeded token would 401. Non-prod only
+ * (same gating as apiGetOtcCode).
+ */
+export async function apiLoginViaOtc(
+  request: APIRequestContext,
+  email: string
+): Promise<{ accessToken: string; refreshToken: string }> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const normalizedEmail = email.toLowerCase().trim();
+
+  const sendResponse = await request.post(`${baseURL}/api/otc/send`, { data: { email: normalizedEmail } });
+  if (!sendResponse.ok()) {
+    throw new Error(`OTC send failed: ${sendResponse.status()} ${sendResponse.statusText()}`);
+  }
+  const { pendingToken } = (await sendResponse.json()) as { pendingToken: string };
+
+  const code = await apiGetOtcCode(request, normalizedEmail);
+
+  const verifyResponse = await request.post(`${baseURL}/api/otc/verify`, {
+    data: { email: normalizedEmail, code, pendingToken },
+  });
+  if (!verifyResponse.ok()) {
+    throw new Error(`OTC verify failed: ${verifyResponse.status()} ${verifyResponse.statusText()}`);
+  }
+  // /api/otc/verify returns 200 without tokens in some envs (MFA-enforced ->
+  // mfaRequired/mfaSetupRequired; registrationRequired -> no tokens). Fail loud and local
+  // here instead of returning undefined tokens that surface later as an opaque auth-seed 401.
+  const body = (await verifyResponse.json()) as { accessToken?: string; refreshToken?: string };
+  if (!body.accessToken || !body.refreshToken) {
+    throw new Error(
+      `OTC verify returned no tokens (mfaRequired/registrationRequired?): keys=${Object.keys(body).join(',')}`
+    );
+  }
+  return { accessToken: body.accessToken, refreshToken: body.refreshToken };
+}
+
 export async function apiCreateFile(
   request: APIRequestContext,
   token: string,
