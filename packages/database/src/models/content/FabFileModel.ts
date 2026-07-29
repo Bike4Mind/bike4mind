@@ -109,6 +109,17 @@ export const FabFileChunk =
 
 export const fabFileChunkRepository = new FabFileChunkRepository(FabFileChunk);
 
+/**
+ * Projection for metadata-only reads. Drops the heavy payload fields (matching
+ * the exclusion used by `executeSearch`) AND the two URL-bearing fields, so a
+ * metadata read can never carry a downloadable link even if a caller later
+ * forwards the document verbatim.
+ */
+const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUrl: 0, fileUrl: 0 } as const;
+
+/** Row cap for unbounded metadata listings. */
+const METADATA_PAGE_CAP = 500;
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -196,22 +207,50 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
-   * Metadata-only fetch for a set of ids - `content` is projected out, so a caller
-   * that only needs to know *what* was attached never loads the file bodies.
+   * Metadata-only fetch for a set of ids. The heavy fields AND the URL-bearing
+   * ones are projected out (see METADATA_ONLY_PROJECTION), so a caller that only
+   * needs to know *what* was attached never loads the file bodies and cannot
+   * accidentally hand out a download URL.
+   *
    * Invalid ObjectIds are dropped rather than throwing a BSONError, since the ids
    * come from a session's `knowledgeIds` and can outlive the file.
+   *
+   * Soft-deleted files ARE returned here, via the plugin's explicit
+   * `includeDeleted` opt-in: an id handed to this method comes from a reference
+   * that outlived the file (e.g. `session.knowledgeIds`), and "this attachment was
+   * deleted at T" is the answer the caller needs - silently dropping the row would
+   * look identical to the file never having existed. Callers should surface
+   * `deletedAt`. This deliberately differs from `findMetadataBySessionId` below,
+   * which lists what a session currently holds; do not "fix" one to match the other.
    */
-  async findMetadataByIds(ids: string[]) {
+  async findMetadataByIds(ids: string[]): Promise<IFabFileDocument[]> {
     const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
     if (validIds.length === 0) return [];
-    const result = await this.fabFileModel.find({ _id: { $in: convertIds(validIds) } }, { content: 0 });
+    const result = await this.fabFileModel
+      .find({ _id: { $in: convertIds(validIds) } }, METADATA_ONLY_PROJECTION)
+      .setOptions({ includeDeleted: true });
     return result.map(d => d.toJSON());
   }
 
-  /** As `findMetadataByIds`, for the files uploaded into one session. */
-  async findMetadataBySessionId(sessionId: string) {
-    const result = await this.fabFileModel.find({ sessionId, deletedAt: null }, { content: 0 }).sort({ createdAt: 1 });
-    return result.map(d => d.toJSON());
+  /**
+   * As `findMetadataByIds`, for the files a session currently holds. Excludes
+   * soft-deleted files - see the note above on why the two differ.
+   *
+   * Bounded at METADATA_PAGE_CAP rows; a session with more uploads than that is
+   * truncated rather than returning an unbounded list. `hasMore` lets the caller
+   * say so instead of silently under-reporting.
+   */
+  async findMetadataBySessionId(
+    sessionId: string,
+    cap = METADATA_PAGE_CAP
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }> {
+    const result = await this.fabFileModel
+      .find({ sessionId, deletedAt: null }, METADATA_ONLY_PROJECTION)
+      .sort({ createdAt: 1, _id: 1 })
+      .limit(cap + 1);
+    const hasMore = result.length > cap;
+    const rows = hasMore ? result.slice(0, cap) : result;
+    return { data: rows.map(d => d.toJSON()), hasMore };
   }
 
   async deleteManyInIds(ids: string[]) {

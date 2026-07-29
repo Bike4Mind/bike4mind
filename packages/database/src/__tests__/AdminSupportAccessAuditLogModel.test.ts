@@ -26,6 +26,7 @@ describe('AdminSupportAccessAuditLog', () => {
       ...baseEvent,
       actorIp: '203.0.113.7',
       actorUserAgent: 'b4m-admin/1.0',
+      actorApiKeyId: 'key-abc',
       details: { page: 1, returned: 10 },
     });
 
@@ -36,6 +37,7 @@ describe('AdminSupportAccessAuditLog', () => {
     expect(found?.sessionId).toBe('sess-1');
     expect(found?.supportCase).toBe('ZD-4821');
     expect(found?.actorIp).toBe('203.0.113.7');
+    expect(found?.actorApiKeyId).toBe('key-abc');
     expect(found?.details).toMatchObject({ page: 1, returned: 10 });
     expect(found?.createdAt).toBeInstanceOf(Date);
   });

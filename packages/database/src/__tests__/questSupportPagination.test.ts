@@ -72,4 +72,24 @@ describe('questRepository.findPageBySessionId', () => {
     expect(page.data).toEqual([]);
     expect(page.hasMore).toBe(false);
   });
+
+  it('pages turns that share a timestamp without repeating or skipping any', async () => {
+    // `timestamp` is required but not unique, and `.skip()` needs a total order -
+    // without the `_id` tiebreaker these four turns can straddle the page boundary
+    // in an arbitrary way, so a turn appears twice or never.
+    const sameMoment = new Date(Date.UTC(2026, 0, 1, 12, 0, 0));
+    for (const n of [0, 1, 2, 3]) {
+      await Quest.create({ sessionId: SESSION, timestamp: sameMoment, type: 'message', prompt: `tied ${n}` });
+    }
+
+    const seen: string[] = [];
+    for (const page of [1, 2]) {
+      const result = await questRepository.findPageBySessionId(SESSION, { page, limit: 2 });
+      seen.push(...result.data.map(q => q.prompt));
+    }
+
+    expect(seen).toHaveLength(4);
+    expect(new Set(seen).size).toBe(4);
+    expect([...seen].sort()).toEqual(['tied 0', 'tied 1', 'tied 2', 'tied 3']);
+  });
 });

@@ -272,6 +272,23 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findAllInIds(ids: string[]): Promise<IFabFileDocument[]>;
 
   /**
+   * Find files by ID with the heavy and URL-bearing fields projected out, for
+   * callers that need to know what a file IS without loading or linking to it.
+   * Includes soft-deleted files, so a still-referenced deleted attachment stays
+   * visible as such.
+   * @param ids - The IDs of the files.
+   */
+  findMetadataByIds(ids: string[]): Promise<IFabFileDocument[]>;
+
+  /**
+   * As `findMetadataByIds`, for the files a session currently holds (excludes
+   * soft-deleted). Capped; `hasMore` reports truncation rather than hiding it.
+   * @param sessionId - The session whose files to list.
+   * @param cap - Maximum rows to return.
+   */
+  findMetadataBySessionId(sessionId: string, cap?: number): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+
+  /**
    * Delete many files in the given IDs.
    * @param ids - The IDs of the files.
    * @returns A promise that resolves to void.

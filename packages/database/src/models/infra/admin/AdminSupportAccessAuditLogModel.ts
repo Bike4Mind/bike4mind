@@ -21,6 +21,7 @@ const AdminSupportAccessAuditLogSchema = new Schema<IAdminSupportAccessAuditLogD
     supportCase: { type: String, required: true },
     actorIp: { type: String },
     actorUserAgent: { type: String },
+    actorApiKeyId: { type: String },
     details: { type: Schema.Types.Mixed },
     expiresAt: { type: Date, required: true },
   },

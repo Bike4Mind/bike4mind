@@ -395,6 +395,11 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * the conversation fields, so bulk payloads like `structuredReplies` and
    * `deepResearchState` stay out of the response. `hasMore` comes from fetching
    * one extra row, matching the pagination contract used by the chat endpoints.
+   *
+   * Sorts on `_id` as a tiebreaker: `timestamp` is required but NOT unique, and
+   * with `.skip()` an ambiguous order lets turns sharing a millisecond repeat
+   * across a page boundary or be skipped entirely - which would also make the
+   * audited page/returned counts an inaccurate record of what was read.
    */
   async findPageBySessionId(
     sessionId: string,
@@ -404,7 +409,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const result = await this.model
       .find({ sessionId, deletedAt: null })
       .select('sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed')
-      .sort({ timestamp: sort })
+      .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
       .limit(limit + 1);
 
