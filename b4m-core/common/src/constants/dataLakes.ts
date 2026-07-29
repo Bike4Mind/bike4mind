@@ -49,6 +49,24 @@ export const tagPrefixesOverlap = (a: string | undefined | null, b: string | und
   return left === right || left.startsWith(right) || right.startsWith(left);
 };
 
+/**
+ * The reason a `fileTagPrefix` is unusable, as user-facing copy, or null when it is fine. Shared
+ * by the wizard steps that can both edit a prefix so their wording cannot drift apart; the server
+ * rejects both cases at create.
+ */
+export const tagPrefixIssue = (
+  prefix: string | undefined | null,
+  overlapping?: { name: string; fileTagPrefix: string } | null
+): string | null => {
+  if (isReservedTagPrefix(prefix)) {
+    return `"${DATALAKE_TAG_PREFIX}" is reserved for lake membership. Pick another prefix, such as legal:`;
+  }
+  if (overlapping) {
+    return `This prefix overlaps the data lake "${overlapping.name}" (${overlapping.fileTagPrefix}). They would share files, so deleting either one would take the other's.`;
+  }
+  return null;
+};
+
 export interface DataLakeConfig {
   id: string;
   /**

@@ -20,7 +20,7 @@ import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStor
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
 import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
-import { isReservedTagPrefix } from '@bike4mind/common';
+import { tagPrefixIssue } from '@bike4mind/common';
 import { useDuplicatePrefixLake, useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 
@@ -37,9 +37,9 @@ export default function ConfigStep() {
   const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const duplicateCheckResults = useDataLakeWizardStore(s => s.duplicateCheckResults);
-  const reservedTagPrefix = isReservedTagPrefix(config.tagPrefix);
   // Append mode inherits the target lake's prefix, which by definition already coexists with it.
   const duplicatePrefixLake = useDuplicatePrefixLake(config.tagPrefix, !!targetLake);
+  const prefixIssue = tagPrefixIssue(config.tagPrefix, duplicatePrefixLake);
   const hashingProgress = useDataLakeWizardStore(s => s.hashingProgress);
 
   const computeHashes = useComputeHashes();
@@ -179,7 +179,7 @@ export default function ConfigStep() {
             mode, or the target lake in append mode), unless the empty-prefix fallback applies.
             Still flags a reserved prefix even when read-only, so a value inherited from the
             taxonomy step shows its reason here rather than only disabling Start Upload. */}
-        <FormControl required={prefixEditable} error={reservedTagPrefix || !!duplicatePrefixLake}>
+        <FormControl required={prefixEditable} error={!!prefixIssue}>
           <FormLabel>Tag Prefix</FormLabel>
           <Input
             data-testid="config-tag-prefix-input"
@@ -196,15 +196,12 @@ export default function ConfigStep() {
             disabled={!prefixEditable}
           />
           <FormHelperText data-testid="datalake-config-tagprefix-help">
-            {reservedTagPrefix
-              ? '"datalake:" is reserved for lake membership. Pick another prefix, such as legal:'
-              : duplicatePrefixLake
-                ? `This prefix overlaps the data lake "${duplicatePrefixLake.name}" (${duplicatePrefixLake.fileTagPrefix}). They would share files, so deleting either one would take the other's. Pick a different prefix.`
-                : prefixEditable
-                  ? 'All tags will be prefixed with this (must end with ":"). No taxonomy prefix was set, so add one here.'
-                  : targetLake
-                    ? 'Inherited from the existing data lake.'
-                    : 'Set on the AI Taxonomy step. Go back there to change it.'}
+            {prefixIssue ??
+              (prefixEditable
+                ? 'All tags will be prefixed with this (must end with ":"). No taxonomy prefix was set, so add one here.'
+                : targetLake
+                  ? 'Inherited from the existing data lake.'
+                  : 'Set on the AI Taxonomy step. Go back there to change it.')}
           </FormHelperText>
         </FormControl>
 

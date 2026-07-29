@@ -63,7 +63,7 @@ export const restoreDeletedDataLake = async (
   const restoredCount = await db.fabFiles.undeleteByDataLakeTag(scope, duplicateIds);
 
   await db.dataLakes.update({ id: dataLakeId, status: 'active' });
-  await recomputeLakeStats(existing, { db, logger });
+  await recomputeLakeStats(existing, { db, logger }, scope);
 
   return { restoredCount, skippedDuplicates };
 };

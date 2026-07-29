@@ -66,7 +66,7 @@ export const archiveDataLake = async (
   if (!updated) {
     throw new NotFoundError('Data lake not found after archive');
   }
-  await recomputeLakeStats(existing, { db, logger });
+  await recomputeLakeStats(existing, { db, logger }, scope);
 
   return updated;
 };

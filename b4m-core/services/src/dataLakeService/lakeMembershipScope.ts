@@ -31,27 +31,18 @@ export const resolveLakeMembershipScope = async (
     creatorUserId: lake.createdByUserId,
   };
 
-  if (!lake.createdByUserId) {
-    logger?.warn(
-      `[dataLakes] lake ${lake.datalakeTag} has no createdByUserId; prefix-tagged members will not be matched`
-    );
+  const degrade = (why: string, err?: unknown) => {
+    logger?.warn(`[dataLakes] ${why} for ${lake.datalakeTag}; group-shared prefix-tagged members will not match`, err);
     return base;
-  }
+  };
+
+  if (!lake.createdByUserId) return degrade('no createdByUserId');
 
   try {
     const creator = await db.users.findById(lake.createdByUserId);
-    if (!creator) {
-      logger?.warn(
-        `[dataLakes] creator of ${lake.datalakeTag} not found; group-shared prefix-tagged members will not be matched`
-      );
-      return base;
-    }
+    if (!creator) return degrade('creator record not found');
     return { ...base, creatorGroupIds: creator.groups ?? [] };
   } catch (err) {
-    logger?.warn(
-      `[dataLakes] could not read the creator of ${lake.datalakeTag}; group-shared prefix-tagged members will not be matched`,
-      err
-    );
-    return base;
+    return degrade('could not read the creator', err);
   }
 };
