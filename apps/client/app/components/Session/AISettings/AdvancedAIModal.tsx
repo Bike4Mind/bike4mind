@@ -86,6 +86,7 @@ import { brand, grayAlpha, green, orange } from '@client/app/utils/themes/colors
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
+import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { isImageModel } from '@client/app/utils/commands';
 import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
@@ -1913,34 +1914,28 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                   display: { xs: 'none', sm: 'flex' },
                   justifyContent: 'flex-end',
                   alignItems: 'center',
-                  gap: 0.5,
+                  gap: '8px',
                   p: 0,
-                  height: '24px',
+                  height: '28px',
                   position: { sm: 'absolute' },
-                  top: { sm: '12px' },
-                  right: { sm: '3px' },
+                  top: { sm: '8px' },
+                  right: { sm: '8px' },
                 }}
               >
-                <ContextHelpButton helpId="features/ai-models" tooltipText="Learn about AI Models" size="sm" />
+                <ContextHelpButton
+                  helpId="features/ai-models"
+                  tooltipText="Learn about AI Models"
+                  size="sm"
+                  sx={HEADER_ICON_BUTTON_SX}
+                />
                 <IconButton
                   variant="plain"
+                  size="sm"
                   data-testid="ai-settings-close-btn"
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: '24px',
-                    height: '24px',
-                    '& .MuiSvgIcon-root': {
-                      fontSize: '1rem',
-                    },
-                    '&:hover': {
-                      backgroundColor: 'transparent',
-                    },
-                  }}
+                  sx={HEADER_ICON_BUTTON_SX}
                   onClick={onClose}
                 >
-                  <CloseIcon />
+                  <CloseIcon sx={{ fontSize: '16px' }} />
                 </IconButton>
               </Box>
 
