@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { Types } from 'mongoose';
 import { HearthLog } from '@bike4mind/hearth';
@@ -13,23 +13,34 @@ describe('Hearth models + MongoHearthStore', () => {
   let mongoServer: MongoMemoryServer;
   const store = new MongoHearthStore();
 
-  beforeAll(async () => {
-    mongoServer = await connectTestDB();
-    // Unique constraints (channel+seq, externalId dedupe) only hold once indexes exist.
-    await Promise.all([
+  /** Unique constraints (channel+seq, externalId dedupe) only hold once indexes exist. */
+  const ensureAllIndexes = () =>
+    Promise.all([
       HearthChannel.ensureIndexes(),
       HearthActor.ensureIndexes(),
       HearthEventDoc.ensureIndexes(),
       HearthCursor.ensureIndexes(),
     ]);
+
+  beforeAll(async () => {
+    mongoServer = await connectTestDB();
+    await ensureAllIndexes();
   }, 30000);
 
   afterAll(async () => {
     if (mongoServer) await disconnectTestDB(mongoServer);
   }, 30000);
 
+  // Re-ensure after every cleanup: cleanupTestDB() calls dropDatabase(), which
+  // drops INDEXES, and mongoose does not rebuild them. So the beforeAll setup held
+  // for exactly the first test and every later one ran unindexed - which meant the
+  // externalId dedupe test passed purely on the findOne fast path and never
+  // reached the insert, leaving the duplicate-key recovery branch in
+  // MongoHearthStore with no coverage at all. Matches
+  // hearthPresenceProjection.test.ts, which had this right.
   beforeEach(async () => {
     await cleanupTestDB();
+    await ensureAllIndexes();
   });
 
   const USER = '6540b58d1f703ade3ea1e82b';
@@ -99,6 +110,49 @@ describe('Hearth models + MongoHearthStore', () => {
     expect(echo.id).toBe(first.id);
     expect(echo.seq).toBe(first.seq);
     expect(await HearthEventDoc.countDocuments({})).toBe(1);
+  });
+
+  /**
+   * The DUPLICATE-KEY RECOVERY branch, which the sequential dedupe test above does
+   * not reach: that one returns on the findOne fast path and never inserts.
+   *
+   * Modelled as the exact interleaving rather than as a real race. A Promise.all
+   * of two appends exercises the catch block only when the scheduler happens to
+   * put both dedupe reads before either insert - so it would pass either way, and
+   * a test that passes for the wrong reason is worse than no test. Here the first
+   * findOne is forced to miss, which IS the losing racer's view of the world: its
+   * dedupe read ran before the winner's insert committed.
+   *
+   * This is also what the beforeEach index fix bought - without the partial unique
+   * index on (channelId, refs.externalId) the second insert simply succeeds and
+   * there is no E11000 to recover from.
+   */
+  it('recovers the winner when a racing insert lands between the dedupe read and the insert', async () => {
+    const { channelId, actorId } = await makeChannelAndActor();
+    const winner = await store.appendEvent(messageInput(channelId, actorId, 'from slack', 'slack-ts-race'));
+
+    const realFindOne = HearthEventDoc.findOne.bind(HearthEventDoc);
+    let seenCalls = 0;
+    const spy = vi.spyOn(HearthEventDoc, 'findOne').mockImplementation(((...args: never[]) => {
+      seenCalls += 1;
+      // Only the dedupe read misses; the recovery read inside the catch must be
+      // real, since finding the winner is the behavior under test.
+      if (seenCalls === 1) return Promise.resolve(null) as never;
+      return realFindOne(...args) as never;
+    }) as never);
+
+    try {
+      const loser = await store.appendEvent(messageInput(channelId, actorId, 'from slack (echo)', 'slack-ts-race'));
+
+      // Idempotent append: the loser gets the winner back rather than an E11000.
+      expect(loser.id).toBe(winner.id);
+      expect(loser.seq).toBe(winner.seq);
+      expect(seenCalls).toBeGreaterThanOrEqual(2);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await HearthEventDoc.countDocuments({ 'refs.externalId': 'slack-ts-race' })).toBe(1);
   });
 
   it('eventsSince returns ordered events after a seq, honoring limit', async () => {
@@ -192,8 +246,6 @@ describe('Hearth models + MongoHearthStore', () => {
     });
 
     it('builds the TTL index in Mongo with its filter intact', async () => {
-      // beforeEach drops the database, so re-create indexes inside the test.
-      await HearthEventDoc.ensureIndexes();
       const live = await HearthEventDoc.collection.indexes();
 
       const ttl = live.find(idx => idx.name === 'hearth_event_presence_ttl');
@@ -213,11 +265,18 @@ describe('Hearth models + MongoHearthStore', () => {
         refs: {},
       });
 
-      // Run the declared filter as a query: what it matches is exactly what the
-      // reaper would delete.
+      // Run the declared filter as a query - but the filter alone is NOT what the
+      // reaper deletes. It also requires createdAt to be a BSON Date, so if a later
+      // change dropped `timestamps` or stored createdAt as a string, retention
+      // would stop silently and a filter-only assertion would still pass. Both
+      // halves are asserted here.
       const [, options] = presenceTtlIndex();
-      const doomed = await HearthEventDoc.find(options?.partialFilterExpression ?? {});
+      const doomed = await HearthEventDoc.find({
+        ...(options?.partialFilterExpression ?? {}),
+        createdAt: { $type: 'date' },
+      });
       expect(doomed.map(d => d._id.toString())).toEqual([presence.id]);
+      expect(doomed[0].createdAt).toBeInstanceOf(Date);
     });
 
     it('eventsSince stays correctly ordered when seq has gaps', async () => {
