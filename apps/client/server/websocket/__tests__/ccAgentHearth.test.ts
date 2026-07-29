@@ -25,7 +25,10 @@ const {
   querySubscriptionMock,
   userModelMock,
   userServiceMock,
+  getSettingByNameMock,
 } = vi.hoisted(() => ({
+  // EnableHearth resolves true by default here; the gate has its own test below.
+  getSettingByNameMock: vi.fn().mockResolvedValue(true),
   activeCodeAgentRepositoryMock: {
     upsertOnRegister: vi.fn(),
     findByInstanceId: vi.fn(),
@@ -53,7 +56,12 @@ const {
   userServiceMock: { updateLogoutTime: vi.fn() },
 }));
 
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getSettingByName: getSettingByNameMock,
+}));
 vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: {},
   activeCodeAgentRepository: activeCodeAgentRepositoryMock,
   ccBridgeDeviceRepository: ccBridgeDeviceRepositoryMock,
   CcBridgeDevice: ccBridgeDeviceModelMock,
@@ -461,5 +469,75 @@ describe('$disconnect sweep dual-write', () => {
       expect.objectContaining({ action: 'tavern_scene_broadcast' })
     );
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Presence report failed'), expect.any(Error));
+  });
+});
+
+/**
+ * The four HTTP hearth routes gate on EnableHearth via requireFeatureEnabled;
+ * this WS path has no middleware chain and so has to read the flag itself. The
+ * gate is not cosmetic: `hearth`'s gear predicate is hasAnyChannelForUser, and
+ * that gear pays 1000 credits with no rewardCheck, so a channel created while
+ * the feature is off buys a permanent reward for routes that all 403.
+ */
+describe('EnableHearth gate', () => {
+  it('writes nothing to Hearth when the flag is off, and does not disturb the bridge', async () => {
+    getSettingByNameMock.mockResolvedValue(false);
+
+    const func = await loadHandler('../ccAgentRegister');
+    const res = await func(makeEvent(REGISTER_BODY), {}, makeLogger());
+
+    expect(res.statusCode).toBe(200);
+    expect(activeCodeAgentRepositoryMock.upsertOnRegister).toHaveBeenCalledTimes(1);
+    // Channel creation specifically - that is the gear predicate.
+    expect(hearthRepositoryMock.ensureChannelByName).not.toHaveBeenCalled();
+    expect(hearthRepositoryMock.ensureActor).not.toHaveBeenCalled();
+    expect(hearthRepositoryMock.store.appendEvent).not.toHaveBeenCalled();
+    expect(hearthRepositoryMock.upsertPresence).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the setting cannot be read', async () => {
+    getSettingByNameMock.mockRejectedValue(new Error('settings unreachable'));
+
+    const func = await loadHandler('../ccAgentRegister');
+    const res = await func(makeEvent(REGISTER_BODY), {}, makeLogger());
+
+    // A missing roster row is recoverable; an unearned credit grant is not.
+    expect(res.statusCode).toBe(200);
+    expect(hearthRepositoryMock.ensureChannelByName).not.toHaveBeenCalled();
+    expect(hearthRepositoryMock.store.appendEvent).not.toHaveBeenCalled();
+  });
+
+  // All four write points, each proved non-trivially: the same invocation that
+  // writes nothing with the flag off must write WITH it on. Without the second
+  // half a body the handler rejects for an unrelated reason would pass silently.
+  it.each([
+    ['../ccAgentRegister', REGISTER_BODY],
+    [
+      '../ccAgentEvent',
+      {
+        action: 'cc_agent_event',
+        accessToken: 'tok',
+        instanceId: INSTANCE,
+        timestamp: '2026-01-01T00:00:00.000Z',
+        event: { type: 'status', status: 'running', text: 'BAIT-status-summary' },
+      },
+    ],
+    ['../ccAgentDisconnect', { action: 'cc_agent_disconnect', accessToken: 'tok', instanceId: INSTANCE }],
+    ['../disconnect', {}],
+  ])('gates %s', async (handler, body) => {
+    activeCodeAgentRepositoryMock.removeByConnectionId.mockResolvedValue([
+      { instanceId: INSTANCE, deviceId: DEVICE, workspaceName: 'bluebike4mind', source: 'claude' as const },
+    ]);
+
+    getSettingByNameMock.mockResolvedValue(false);
+    const func = await loadHandler(handler);
+    await func(makeEvent(body), {}, makeLogger());
+    expect(hearthRepositoryMock.store.appendEvent).not.toHaveBeenCalled();
+    expect(hearthRepositoryMock.upsertPresence).not.toHaveBeenCalled();
+
+    getSettingByNameMock.mockResolvedValue(true);
+    await func(makeEvent(body), {}, makeLogger());
+    expect(hearthRepositoryMock.store.appendEvent).toHaveBeenCalledTimes(1);
+    expect(hearthRepositoryMock.upsertPresence).toHaveBeenCalledTimes(1);
   });
 });
