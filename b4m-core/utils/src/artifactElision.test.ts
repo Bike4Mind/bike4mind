@@ -201,13 +201,27 @@ describe('detectElidedContent', () => {
       expect(result.confidence).toBe('high');
     });
 
-    it('does not scan a script src attribute as a comment', () => {
+    it('does not scan a quoted attribute value as a comment', () => {
+      // The fixture must contain REAL HTML-comment syntax inside the attribute, or the test passes
+      // whether or not attributes are skipped: `//` is never a comment marker to the HTML walker, so
+      // an earlier `src="//cdn..."` fixture proved nothing. Neutering skipHtmlTag makes this fail.
       const body = `<html><body>
-        <script src="//cdn.example.com/rest-of-the-lib.js"></script>
+        <div title="<!-- rest of the sections omitted -->">Legend</div>
+        <script src="//cdn.example.com/lib.js"></script>
         <script>function go(){ document.title='x'; } go();</script>
       </body></html>`;
 
       expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('still flags a real HTML comment sitting right after a tag with attributes', () => {
+      // The other side of the same guard: skipping attributes must not skip past a following comment.
+      const body = `<html><body>
+        <div title="Legend" data-x="1">Legend</div>
+        <!-- rest of the sections omitted -->
+      </body></html>`;
+
+      expect(detectElidedContent(body, 'html').confidence).toBe('high');
     });
 
     it('flags a stub phrase in a CSS block comment', () => {
@@ -337,23 +351,25 @@ describe('detectElidedContent', () => {
       expect(detectElidedContent(body, 'html').elided).toBe(false);
     });
 
-    it('treats a bare //localhost URL as a URL, but //word: as a comment', () => {
-      // `localhost` is the one routine dotless host, so it is admitted by name. Admitting dotless
-      // hosts generally would swallow `//TODO: ...` comments and stop scanning them entirely -
-      // the second half of this test is what pins that line.
-      const url = `<html><body><script>
-//localhost:3000/for-brevity-notes.js
+    it('reads a bare // line inside a script as the JS comment it is', () => {
+      // This replaces a test that described a host-matching regex which no longer exists. Both of its
+      // fixtures also passed only because their paths were hyphenated (`for-brevity-notes.js` does
+      // not match `for brevity`), so neither half proved anything. Inside a <script> body a bare
+      // `//host/path` line IS a JS line comment - reading it as one is correct - and the phrase in it
+      // must still be matched.
+      const stubPhrase = `<html><body><script>
+//cdn.example.com/x.js - rest of the code omitted
         function render() { document.title = 'ok'; }
         render();
       </script></body></html>`;
-      const comment = `<html><body><script>
-//TODO: rest of the code omitted
+      const innocent = `<html><body><script>
+//cdn.example.com/vendor.js
         function render() { document.title = 'ok'; }
         render();
       </script></body></html>`;
 
-      expect(detectElidedContent(url, 'html').elided).toBe(false);
-      expect(detectElidedContent(comment, 'html').elided).toBe(true);
+      expect(detectElidedContent(stubPhrase, 'html').confidence).toBe('high');
+      expect(detectElidedContent(innocent, 'html').elided).toBe(false);
     });
 
     it('does not flag "from the previous" in its ordinary sense', () => {
@@ -366,6 +382,14 @@ describe('detectElidedContent', () => {
       </script></body></html>`;
 
       expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('flags the exact phrase the prompt forbids: "from the previous complete version"', () => {
+      // The prompt's NEVER ABBREVIATE list names this wording, so the detector has to cover it. The
+      // qualifier requirement is what keeps `// Ported from the previous system` out, tested below.
+      const body = '<html><body><!-- markup from the previous complete version --><div></div></body></html>';
+
+      expect(detectElidedContent(body, 'html').confidence).toBe('high');
     });
 
     it('still flags the stub reading of "from the previous"', () => {
@@ -622,6 +646,28 @@ func main() {
       expect(detectElidedContent(body, 'html').elided).toBe(true);
     });
 
+    it('does NOT report a single described body', () => {
+      // Pins the reportable threshold FROM BELOW, which nothing did: setting HOLLOW_BODY_REPORTABLE to
+      // 1 previously left the whole suite green. One hollow body is an ordinary shape - a handler
+      // someone has not filled in yet - and must only corroborate, never fire alone. The last two
+      // commits before this moved exactly this constant, and only its upper edge was pinned.
+      const body = `<html><body><script>
+        function alpha() {
+          // Render every row into the table
+        }
+        function beta() {
+          document.title = 'ok';
+          return 1;
+        }
+        function go() { alpha(); beta(); }
+        go();
+      </script></body></html>`;
+
+      const result = detectElidedContent(body, 'html');
+      expect(result.signals.filter(s => s.kind === 'empty_function_body')).toHaveLength(1);
+      expect(result.elided).toBe(false);
+    });
+
     it('reports two described bodies at LOW confidence, three at HIGH', () => {
       const two = `<html><body><script>
         function init() { // Attach every event listener
@@ -664,6 +710,70 @@ func main() {
       expect(detectElidedContent(body, 'html').elided).toBe(false);
     });
 
+    // These fixtures are NOT drawn from the no-op vocabulary. An earlier version of this file defined
+    // "describes behaviour" as "does not match a short list of no-op phrasings", and every negative
+    // fixture here was taken from that same list - so the suite could not see that every phrasing
+    // MISSING from the list was a false positive on healthy code. All five below flagged before the
+    // check was inverted to require positive evidence of described behaviour.
+    it.each([
+      [
+        'a comment pointing at where the work actually happens',
+        '// Handled by CSS media queries',
+        '// Swallow; the retry loop already reports',
+      ],
+      ['the plainest possible no-op declaration', '// Nothing to do here', '// Nothing to do here'],
+      ['an abstract hook meant for subclasses', '// subclasses override this', '// subclasses override this'],
+      [
+        'comments explaining why nothing happens here',
+        '// silenced in production builds',
+        '// sent by the host page, not here',
+      ],
+      ['bare TODO, which names no behaviour', '// todo', '// fixme'],
+    ])('stays silent on %s', (_label, first, second) => {
+      const body = `<html><body><script>
+        function alpha() { ${first}
+        }
+        function beta() { ${second}
+        }
+        function go() { alpha(); beta(); document.title = 'x'; }
+        go();
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('lets an explicit no-op declaration override a behaviour verb', () => {
+      // Positive evidence is necessary but not sufficient: a comment can name a verb and still be
+      // declaring the absence deliberate.
+      const body = `<html><body><script>
+        function alpha() {
+          // intentionally does not render anything - the host page owns this region
+        }
+        function beta() {
+          // deliberately skips the update; the poller refreshes it instead
+        }
+        function go() { alpha(); beta(); document.title = 'x'; }
+        go();
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('flags the "it would do X" construction even without a listed verb', () => {
+      const body = `<html><body><script>
+        function alpha() {
+          // This function would reconcile the two lists and mark the differences
+        }
+        function beta() {
+          // This would then notify every subscriber about the change
+        }
+        function go() { alpha(); beta(); document.title = 'x'; }
+        go();
+      </script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(true);
+    });
+
     it('does not count a body with no comment at all', () => {
       // A stub explains itself; a bare `{}` is a no-op. Two of them must not warn.
       const body = `<html><body><script>
@@ -699,6 +809,24 @@ func main() {
       expect(result.confidence).toBe('high');
     });
 
+    it('flags a hollow arrow assigned to a property, not just to window', () => {
+      // `el.onclick = () => {}` is the commonest vanilla-JS handler shape in these artifacts, and the
+      // pattern previously special-cased only `window.`, so every one of them was invisible.
+      const body = `<html><body>
+        <button id="a">A</button><button id="b">B</button>
+        <script>
+          document.getElementById('a').onclick = () => {
+            // Render the detail panel for the selected row
+          };
+          document.getElementById('b').onclick = () => {
+            // Export the current selection as CSV
+          };
+        </script>
+      </body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(true);
+    });
+
     it('flags hollow object method shorthand', () => {
       const body = `<html><body><script>
         const api = {
@@ -717,9 +845,10 @@ func main() {
     });
 
     it('counts a function declaration once, not once per matching form', () => {
-      // `function foo() {}` matches both the declaration pattern and the method-shorthand pattern.
-      // Without dedupe these TWO functions would count as FOUR hollow bodies and reach the 3-body
-      // HIGH-confidence threshold; deduped they sit at two, which reports but stays LOW.
+      // `function foo() {}` matches both the declaration pattern and the method-shorthand pattern, so
+      // without dedupe these TWO functions would count as FOUR. Asserted on the signal list rather
+      // than on `elided`, because bare `// todo` names no behaviour and is silent either way - the
+      // count is what this test exists to pin.
       const body = `<html><body><script>
         function a() { // todo
         }
@@ -731,22 +860,51 @@ func main() {
 
       const result = detectElidedContent(body, 'html');
       expect(result.signals.filter(s => s.kind === 'empty_function_body')).toHaveLength(2);
+      expect(result.elided).toBe(false);
+    });
+
+    it('does not double-count when dedupe would push it over the HIGH threshold', () => {
+      // The dedupe assertion above cannot fail loudly on its own, so this pins the consequence: two
+      // DESCRIBED bodies must report LOW, and would report HIGH if each were counted twice.
+      const body = `<html><body><script>
+        function a() { // Render every row into the table
+        }
+        function b() { // Attach the click handlers
+        }
+        function go() { a(); b(); document.title='x'; }
+        go();
+      </script></body></html>`;
+
+      const result = detectElidedContent(body, 'html');
+      expect(result.signals.filter(s => s.kind === 'empty_function_body')).toHaveLength(2);
+      expect(result.elided).toBe(true);
       expect(result.confidence).toBe('low');
     });
 
     it('does not treat control flow or an empty constructor as a hollow body', () => {
+      // Every block here carries a DESCRIBED comment, so without the keyword/constructor exclusions
+      // these would register as hollow bodies. An earlier version of this test used comment-less
+      // blocks, which made it pass whether the exclusions existed or not.
       const body = `<html><body><script>
-        class Thing { constructor() {} }
+        class Thing {
+          constructor() { // Build the thing
+          }
+        }
         function go(items) {
-          if (!items.length) { }
-          for (const i of items) { }
-          try { document.title = 'x'; } catch (e) { }
+          if (!items.length) { // Render the empty state
+          }
+          for (const i of items) { // Draw each row
+          }
+          try { document.title = 'x'; } catch (e) { // Report the failure
+          }
           return new Thing();
         }
         go([]);
       </script></body></html>`;
 
-      expect(detectElidedContent(body, 'html').elided).toBe(false);
+      const result = detectElidedContent(body, 'html');
+      expect(result.signals.filter(s => s.kind === 'empty_function_body')).toHaveLength(0);
+      expect(result.elided).toBe(false);
     });
   });
 
@@ -925,6 +1083,27 @@ describe('large bodies', () => {
     const elapsedMs = Date.now() - startedAt;
 
     expect(result.signals.length).toBeGreaterThan(0);
+    expect(elapsedMs).toBeLessThan(3000);
+  });
+
+  it('stays fast when the body has one comment per line', () => {
+    // A separate axis from the two guards around it, and previously unguarded: line-number resolution
+    // rescanned from index 0 for every comment span, so cost grew with comments x bodySize. Measured
+    // 213ms at 126KB and 5.7s at 720KB before a running newline count replaced it. This shape is not
+    // steered - one trailing comment per line is ordinary LLM output - and it matters beyond the
+    // single-response size cap because artifacts are expanded incrementally under one identifier and
+    // the client fallback scan re-runs on every historical artifact reply at session load.
+    const lines = Array.from(
+      { length: 12000 },
+      (_, i) => `  const value_${i} = ${i}; // assignment number ${i} for the running total`
+    ).join('\n');
+    const body = `<html><body><script>\n${lines}\n  function go() { document.title = String(value_0); }\n  go();\n</script></body></html>`;
+
+    const startedAt = Date.now();
+    const result = detectElidedContent(body, 'html');
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result.elided).toBe(false);
     expect(elapsedMs).toBeLessThan(3000);
   });
 

@@ -16,14 +16,17 @@ import type { ArtifactType } from '@bike4mind/common';
  *  - Undefined references (calls, and inline HTML handlers, into functions that are never
  *    declared) are regex-derived and will misfire on exotic code, so they require
  *    corroboration (>= 2 distinct names) and report low confidence.
- *  - Hollow function bodies - declared, called, and containing nothing but a comment. Three
- *    or more is high confidence; one or two only corroborate, since a deliberate no-op is
- *    legitimate.
+ *  - Hollow function bodies - declared, called, and containing nothing but a comment. Only bodies
+ *    whose comment DESCRIBES missing behaviour count (a deliberate no-op declares itself, and is
+ *    excluded): two report, three or more report high confidence. One only corroborates.
  *
  * ADVISORY ONLY. Callers must never drop, rewrite, or block content on this result - unlike
  * the truncation path, which force-closes a dangling tag. A false positive here is a slightly
  * wrong warning; a false positive that ate a good artifact would be a worse bug than the one
  * this module exists to catch.
+ *
+ * `confidence` is DIAGNOSTIC ONLY - no consumer gates on it, so 'high' and 'low' produce the same
+ * user-visible affordance. Do not read a graduated response into it.
  */
 
 export type ElisionSignal =
@@ -35,7 +38,11 @@ export type ElisionSignal =
 export interface ElisionResult {
   /** Crossed the reporting threshold - show an advisory "may be incomplete" affordance. */
   elided: boolean;
-  /** 'high' for a placeholder comment or 3+ hollow bodies; corroborated references are 'low'. */
+  /**
+   * 'high' for a placeholder comment or 3+ described hollow bodies; everything else 'low'.
+   * DIAGNOSTIC ONLY - no caller gates on this today, so both levels produce the same user-visible
+   * affordance. See the note at the threshold computation.
+   */
   confidence: 'high' | 'low';
   signals: ElisionSignal[];
 }
@@ -57,9 +64,15 @@ const PLACEHOLDER_PATTERNS: readonly RegExp[] = [
   /\[\s*\.\.\.\s*\]/,
   /\bidentical to (?:the )?previous\b/i,
   // Anchored to a stub-shaped subject: bare "from the previous" matches innocent comments like
-  // `// Ported from the previous system`.
+  // `// Ported from the previous system`. The prompt forbids the bare phrase "from the previous
+  // version", so this is a KNOWN, deliberate asymmetry - the qualifier is what keeps the innocent
+  // reading out, and `version` is included below so the prompt's exact wording is still covered.
   /\b(?:same|copied|carried over|unchanged|reused?|taken|lifted|as) (?:\w+\s+){0,3}from the previous\b/i,
   /\b(?:code|logic|markup|styles?|body|rest|remainder|implementation) from the previous\b/i,
+  /\bfrom the previous (?:complete|full|working) (?:version|artifact|response|turn|message)\b/i,
+  // Not in the prompt's forbidden list, kept because they are unambiguous stub markers in a comment.
+  // Flagging a phrase the prompt never warned against is the safe direction of this drift: the model
+  // is not being punished for following instructions, and a reader gets a warning either way.
   /\bprevious (?:complete|working|full)\b/i,
   /\bfor brevity\b/i,
   // "omitted" and "unchanged" are qualified rather than bare: `// optional fields omitted from
@@ -87,6 +100,13 @@ const PLACEHOLDER_PATTERNS: readonly RegExp[] = [
  * Identifiers that resolve without a declaration in the artifact sandbox: JS/DOM globals,
  * the blessed chart.js global, and the React APIs pre-injected into React artifacts (which
  * the artifact prompt explicitly tells the model NOT to import - so they are never declared).
+ *
+ * MUST STAY IN SYNC with what the sandbox actually pre-injects, and with the REACT ARTIFACTS
+ * paragraph of `ARTIFACT_EMISSION_PROMPT` (`@bike4mind/common`, `schemas/settings.ts`) that lists
+ * those globals to the model. This list is HAND-MAINTAINED, not derived from the runtime, so adding a
+ * pre-injected API or a blessed library global there without adding it here makes every artifact that
+ * uses it look like it calls something undefined. Fail-safe in the sense that the reference signals
+ * are low-confidence and need two distinct names - but two new React hooks would be enough.
  */
 const AMBIENT_GLOBALS: ReadonlySet<string> = new Set([
   // Language
@@ -348,9 +368,14 @@ export function detectElidedContent(body: string, type?: ArtifactType): ElisionR
   // describe behaviour they do not implement are reported. QA reproduced the latter twice - a task
   // board rendering empty columns while its counter truthfully read "5 of 5 tasks shown".
   //
-  // Three or more is as unambiguous as a stub marker, so it reports HIGH. Two is reported but stays
-  // LOW: the banner is advisory and the publish gate is acknowledge-to-proceed, so a false positive
-  // costs a mildly wrong warning, while a false negative costs a dead artifact on a shared link.
+  // Three or more is as unambiguous as a stub marker, so it reports HIGH; two reports LOW.
+  //
+  // Be clear about what that does NOT buy: `confidence` is DIAGNOSTIC ONLY. Nothing gates on it -
+  // the banner and the publish gate both read `elided`, and the server verdict reduces to a boolean -
+  // so HIGH and LOW are indistinguishable to a user, and the cost of a false positive at either level
+  // is the full banner plus the publish checkbox. It is persisted for the debug inspector and for
+  // whoever tunes these thresholds next. If a softer treatment for LOW is ever wanted, that is a
+  // deliberate change at the two consumers, not something this value already delivers.
   const hollowIsConclusive = describedHollowCount >= HOLLOW_BODY_HIGH_CONFIDENCE;
   const hollowIsReportable = describedHollowCount >= HOLLOW_BODY_REPORTABLE;
   const confidence = hasPlaceholder || hollowIsConclusive ? 'high' : 'low';
@@ -390,10 +415,13 @@ const HOLLOW_BODY_REPORTABLE = 2;
  * work in - produced zero signals.
  */
 function collectCommentOnlyFunctions(strippedSources: string[], rawSources: string[]): HollowBody[] {
-  // A MAP keyed by name, not a list: the same hollow function matches several patterns below
-  // (`function foo() {}` matches both the declaration form and the method-shorthand form), and
-  // counting it twice would walk an artifact toward the threshold on half the evidence.
-  const hollow = new Map<string, string>();
+  // Keyed by BODY POSITION, not by name. The same hollow function matches several patterns below
+  // (`function foo() {}` matches both the declaration and the method-shorthand form) and counting it
+  // twice would walk an artifact toward the threshold on half the evidence - but every pattern resolves
+  // the same body to the same offset, so position dedupes those while keeping genuinely distinct
+  // functions apart. Keying on the name instead collapsed `a.onclick` and `b.onclick` into one entry,
+  // which is the commonest handler shape there is.
+  const hollow = new Map<string, { name: string; comment: string }>();
   strippedSources.forEach((stripped, index) => {
     const raw = rawSources[index] ?? '';
     for (const pattern of HOLLOW_BODY_PATTERNS) {
@@ -403,16 +431,23 @@ function collectCommentOnlyFunctions(strippedSources: string[], rawSources: stri
         if ((m[2] ?? '').trim() !== '') continue;
         // `if (x) { }` and `catch (e) { }` are shaped exactly like method shorthand.
         if (CALL_LIKE_KEYWORDS.has(m[1]) || NEVER_HOLLOW_NAMES.has(m[1])) continue;
-        // The body is blank in the stripped source BECAUSE its comment was blanked, so the comment
-        // text has to come from the raw source. Safe at the same offsets: the stripper replaces
-        // rather than deletes, making its output position-identical to its input.
+        // The body is blank in the stripped source because SOMETHING there was blanked - usually a
+        // comment, but a lone string or regex literal blanks the same way, so `function a() { /re/ }`
+        // reads as hollow and feeds the regex text to describesMissingBehaviour. Contrived enough to
+        // accept: it needs two such bodies and text that names a behaviour verb.
+        //
+        // The comment text comes from the raw source at the SAME offsets. The stripper replaces rather
+        // than deletes, so its output aligns with its input at every offset inside the input; it can
+        // overshoot by a character or two past the end of an unterminated construct at EOF, which is
+        // beyond any offset used here.
         const bodyStart = m.index + m[0].lastIndexOf('{') + 1;
         const comment = raw.slice(bodyStart, bodyStart + (m[2] ?? '').length);
-        if (!hollow.has(m[1])) hollow.set(m[1], comment);
+        const key = `${index}:${bodyStart}`;
+        if (!hollow.has(key)) hollow.set(key, { name: m[1], comment });
       }
     }
   });
-  return [...hollow].map(([name, comment]) => ({ name, comment }));
+  return [...hollow.values()];
 }
 
 /** A function whose body is nothing but a comment, with that comment's raw text. */
@@ -422,17 +457,30 @@ interface HollowBody {
 }
 
 /**
- * Comment phrasings that DECLARE a body is meant to be empty. A function carrying one of these is a
- * deliberate no-op, not an elision, and must never count toward the hollow thresholds.
+ * Verbs that name WORK a function body would do. Positive evidence that a comment is standing in for
+ * an implementation rather than explaining an intentional absence.
  *
- * Kept short and explicit on purpose. The asymmetry is deliberate: a marker listed here too eagerly
- * hides a real stub (the expensive failure - a dead artifact published to a shared link), while a
- * marker missing from it produces at worst a mildly wrong advisory banner behind an
- * acknowledge-to-proceed gate. When in doubt, leave it out.
+ * The direction of this list matters, and it is the opposite of a no-op whitelist. An earlier version
+ * defined "describes behaviour" as "does not match a short list of no-op phrasings", which meant every
+ * phrasing missing from that list became a false positive - `// Handled by CSS media queries`,
+ * `// Nothing to do here`, `// subclasses override this` all flagged working artifacts. Requiring
+ * positive evidence inverts that: a verb missing from THIS list costs a missed detection, which is the
+ * direction the rest of this module already leans.
+ */
+const BEHAVIOUR_VERB_PATTERN =
+  /\b(?:render|redraw|draw|paint|wire|attach|bind|register|listen|initiali[sz]e|set\s?up|build|construct|create|generate|add|insert|append|remove|delete|clear|reset|update|refresh|recompute|recalculate|compute|calculate|apply|filter|sort|group|search|query|export|import|load|fetch|request|save|persist|store|populate|display|show|hide|toggle|expand|collapse|validate|sanitize|parse|serialize|format|emit|dispatch|publish|animate|scroll|focus|gather|collect|aggregate|sum|count|map|reduce)\b/i;
+
+/** The "it would do X" construction, which describes absent work without naming a verb we listed. */
+const WOULD_DO_PATTERN = /\bwould\s+(?:\w+\s+){0,2}\w+/i;
+
+/**
+ * Comment phrasings that DECLARE a body is meant to be empty. These override the positive evidence
+ * above, so `// intentionally does not render anything` stays silent despite naming a verb.
  */
 const NO_OP_INTENT_PATTERNS: readonly RegExp[] = [
   /\bintentional/i,
   /\bdo(?:es)? nothing\b/i,
+  /\bnothing to do\b/i,
   /\bno-?op\b/i,
   /\bnot implemented\b/i,
   /\bunused\b/i,
@@ -440,21 +488,32 @@ const NO_OP_INTENT_PATTERNS: readonly RegExp[] = [
   /\bdeliberately\b/i,
   /\bby design\b/i,
   /\bon purpose\b/i,
-  /\bleft empty\b/i,
+  /\bleft (?:empty|blank)\b/i,
+  /\bhandled (?:by|in|elsewhere)\b/i,
+  /\b(?:subclass|subclasses|override)\b/i,
+  /\bignore[sd]?\b/i,
+  /\bplaceholder for\b/i,
+  /\bstub\b/i,
 ];
 
 /**
- * Whether a hollow body's comment DESCRIBES the behaviour that is missing, rather than declaring the
- * emptiness deliberate. This is the distinction between the two shapes that are otherwise identical
- * to the scanner, and the reason both of these can be true at once:
+ * Whether a hollow body's comment DESCRIBES the behaviour that is missing, rather than explaining an
+ * intentional absence. This is the only thing separating two shapes that are identical to the scanner:
  *   `// intentionally does nothing - reserved for the print hook`  -> deliberate, stays silent
+ *   `// Handled by CSS media queries`                              -> deliberate, stays silent
  *   `// Wire up the button and render the list`                    -> a stub, reported
- * A body with no comment at all is treated as deliberate: a stub always explains itself.
+ *   `// This function would clear each column`                     -> a stub, reported
+ *
+ * Requires POSITIVE evidence (a behaviour verb, or a "would do X" construction) and the absence of an
+ * explicit no-op declaration. A body with no comment at all is deliberate: a stub explains itself.
+ * Bare `// todo` deliberately does NOT qualify - it names no behaviour, and this file's stance is that
+ * bare TODO is common in legitimate scaffolding.
  */
 function describesMissingBehaviour(comment: string): boolean {
   const text = comment.replace(/[/*]|<!--|-->/g, ' ').trim();
   if (!text) return false;
-  return !NO_OP_INTENT_PATTERNS.some(pattern => pattern.test(text));
+  if (NO_OP_INTENT_PATTERNS.some(pattern => pattern.test(text))) return false;
+  return BEHAVIOUR_VERB_PATTERN.test(text) || WOULD_DO_PATTERN.test(text);
 }
 
 /** Names whose empty body is ordinary rather than a stub. */
@@ -470,8 +529,13 @@ const HOLLOW_BODY_PATTERNS: readonly RegExp[] = [
   /\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*\([^()]*\)\s*\{([^{}]*)\}/g,
   // arrow assigned to a binding: `const handleClick = () => {}`, `let f = async (a) => {}`
   /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{([^{}]*)\}/g,
-  // arrow assigned to an existing or namespaced binding: `window.render = () => {}`
-  /(?:^|[\s;{}])(?:window\.)?([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{([^{}]*)\}/gm,
+  // arrow assigned to an existing, namespaced, or property binding: `window.render = () => {}`,
+  // `btn.onclick = () => {}`, `el.dataset.handler = () => {}`. The optional dotted prefix matters:
+  // `el.onclick = () => {}` is the commonest vanilla-JS handler shape in these artifacts, and
+  // special-casing only `window.` missed every one of them. The NAME captured is the last segment.
+  // Each prefix segment may carry an argument list, so the chain crosses a lookup call:
+  // `document.getElementById('a').onclick = () => {}`.
+  /(?:^|[\s;{}])(?:[A-Za-z_$][\w$]*(?:\s*\([^()]*\))?\s*\.\s*)*([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{([^{}]*)\}/gm,
   // object-literal / class method shorthand: `render() {}`, `async load() {}`
   /(?:^|[\s;{,])(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^()]*\)\s*\{([^{}]*)\}/gm,
 ];
@@ -485,8 +549,18 @@ function findPlaceholderComments(body: string, type?: ArtifactType): ElisionSign
   const found: ElisionSignal[] = [];
   const seenLines = new Set<number>();
 
-  for (const comment of collectComments(body, type)) {
-    const line = indexToLine(body, comment.start);
+  // Sorted by position, then walked with a RUNNING newline count. Computing each line number by
+  // rescanning from index 0 made this O(comments x bodySize) - measured at 5.7s on a 720KB artifact
+  // with one trailing comment per line, which is an ordinary shape rather than a steered one. Sorting
+  // is required because the react/code path appends its HTML sweep after the JS spans.
+  const comments = collectComments(body, type).sort((a, b) => a.start - b.start);
+  let cursor = 0;
+  let line = 1;
+
+  for (const comment of comments) {
+    for (; cursor < comment.start && cursor < body.length; cursor++) {
+      if (body[cursor] === '\n') line++;
+    }
     if (seenLines.has(line)) continue; // one signal per line is enough; keeps the payload small
     for (const pattern of PLACEHOLDER_PATTERNS) {
       if (pattern.test(comment.text)) {
@@ -497,7 +571,7 @@ function findPlaceholderComments(body: string, type?: ArtifactType): ElisionSign
     }
   }
 
-  return found.sort((a, b) => (a as { line: number }).line - (b as { line: number }).line);
+  return found;
 }
 
 /** A comment as located in the original body. `start` indexes the opening delimiter. */
@@ -647,15 +721,6 @@ function collectCssComments(css: string): RawCommentSpan[] {
   return spans;
 }
 
-/** 1-based line number for a byte offset. */
-function indexToLine(source: string, index: number): number {
-  let line = 1;
-  for (let i = 0; i < index && i < source.length; i++) {
-    if (source[i] === '\n') line++;
-  }
-  return line;
-}
-
 // A protocol-relative-URL pattern used to live here, to stop `<script src="//cdn.example.com/x">`
 // being read as a line comment. It is gone because the cause is gone: HTML is now walked
 // tag-aware (see skipHtmlTag), so an attribute value is never scanned for comments in the first
@@ -727,8 +792,11 @@ function extractScriptBodies(html: string): string[] {
  * code-shaped text inside data. Regex literals are recognised by the usual "what preceded it"
  * heuristic - a `/` after an operator, opener, or value-less keyword starts a regex, a `/` after a
  * value is division. Replaces with spaces rather than deleting so nothing is falsely joined across
- * the gap, which also makes the output POSITION-IDENTICAL to the input - `collectInto` spans are
- * therefore valid indices into the original source.
+ * the gap, which also keeps the output ALIGNED with the input at every offset within the input, so
+ * `collectInto` spans are valid indices into the original source. Not exactly length-preserving: an
+ * unterminated construct at EOF can overshoot by a character or two, and the regex character-class
+ * branch substitutes a space for a newline. Neither is reachable at any offset a caller uses - the
+ * overshoot is past the end of the input, and reported line numbers are counted on the original body.
  *
  * Pass `collectInto` to also harvest every comment this pass identifies. That is the ONLY supported
  * way to find comments in JS: the placeholder scan used to re-lex the raw body with a weaker
@@ -1025,5 +1093,6 @@ function collectHandlerCalls(html: string): Array<{ attribute: string; name: str
   return found;
 }
 
-/** Exposed for tests - not part of the runtime contract. */
-export const __testing = { PLACEHOLDER_PATTERNS, AMBIENT_GLOBALS, JS_BEARING_TYPES };
+// No `__testing` export: the tests drive `detectElidedContent` through its real inputs rather than
+// reaching for the pattern tables, and this module is a dedicated subpath entry, so anything exported
+// here is public surface for both consumers.
