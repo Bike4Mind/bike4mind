@@ -1394,11 +1394,10 @@ const AISettingsTab: React.FC<{
             <Stack
               direction="column"
               alignItems="flex-start"
-              gap={1}
+              gap="4px"
               sx={{
                 width: 'auto',
-                // Only when tabs render; the untabbed path never had this margin.
-                mt: { sm: isResearchModeFeatureEnabled ? 3 : 0 },
+                mt: '20px',
               }}
             >
               <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>AI Settings</Typography>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { CssVarsProvider } from '@mui/joy/styles';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, ModelName } from '@bike4mind/common';
@@ -8,6 +8,7 @@ import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 // The real store, not a stub: it must stay reachable from ModelSelection without
 // dragging in AdminPage (the import cycle this module split exists to prevent).
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
+import { getThemeConfig } from '@client/app/utils/themes';
 import ModelSelection, { getModelBackend, SELF_HOSTED_BACKEND } from './ModelSelection';
 
 const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
@@ -86,13 +87,17 @@ vi.mock('./AISettings/MetaDataChips', () => ({
   default: ({ label }: { label: string }) => <span>{label}</span>,
 }));
 
+// The app theme, not Joy's default: ModelSelection reads custom palette tokens
+// (notebooklist.*) that only exist here.
+const appTheme = extendTheme({ ...getThemeConfig() });
+
 const renderSelection = (props: {
   setModel?: (model: ModelName) => void;
   onSelectionComplete?: () => void;
   onSettingsClick?: (model: ModelInfo) => void;
 }) =>
   render(
-    <CssVarsProvider>
+    <CssVarsProvider theme={appTheme}>
       <ModelSelection
         model={textModel.id}
         setModel={props.setModel ?? vi.fn()}

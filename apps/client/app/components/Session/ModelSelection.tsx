@@ -89,7 +89,7 @@ const checkBoxStyle = {
 // Function to get backend logo path
 const getBackendLogo = (backend: string): string | null => {
   const logoMap: Record<string, string> = {
-    'OPEN AI': '/images/logos/llm/llm-logo-openai.png',
+    OpenAI: '/images/logos/llm/llm-logo-openai.png',
     Anthropic: '/images/logos/llm/llm-logo-anthropic.png',
     Meta: '/images/logos/llm/llm-logo-meta.png',
     'Black Forest Labs': '/images/logos/llm/llm-logo-bfl.png',
@@ -139,7 +139,7 @@ const preloadAndCacheImage = (src: string): Promise<string> => {
 // Preload all backend logos
 const preloadBackendLogos = async () => {
   const logoMap: Record<string, string> = {
-    'OPEN AI': '/images/logos/llm/llm-logo-openai.png',
+    OpenAI: '/images/logos/llm/llm-logo-openai.png',
     Anthropic: '/images/logos/llm/llm-logo-anthropic.png',
     Meta: '/images/logos/llm/llm-logo-meta.png',
     'Black Forest Labs': '/images/logos/llm/llm-logo-bfl.png',
@@ -206,7 +206,7 @@ export const getModelBackend = (model: ModelInfo): string => {
 
   // OpenAI models
   if (isOpenAIModel(modelName) || modelDescription?.includes('OpenAI')) {
-    return 'OPEN AI';
+    return 'OpenAI';
   }
 
   // Anthropic models
@@ -617,7 +617,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
   // State for user-toggled accordion backends (manual expand/collapse)
   const [userToggledBackends, setUserToggledBackends] = useState<Set<string>>(
-    new Set(['Favorites', 'OPEN AI', 'Anthropic'])
+    new Set(['Favorites', 'OpenAI', 'Anthropic'])
   );
 
   // Memoize backend logos to prevent unnecessary re-renders and network requests
@@ -729,7 +729,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     // Sort backends by priority (OpenAI, Anthropic, Google, Meta, etc.)
     const backendPriority = [
       SELF_HOSTED_BACKEND,
-      'OPEN AI',
+      'OpenAI',
       'Anthropic',
       'Google',
       'Meta',
@@ -898,7 +898,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   // Group models by backend for display
   const backendPriority = [
     SELF_HOSTED_BACKEND,
-    'OPEN AI',
+    'OpenAI',
     'Anthropic',
     'Google',
     'Meta',
@@ -1025,7 +1025,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                   }}
                 />
               }
-              sx={{
+              sx={theme => ({
                 minWidth: { xs: '32px', sm: '140px' },
                 width: { xs: '32px', sm: 'auto' },
                 height: '32px !important',
@@ -1037,6 +1037,10 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                 justifyContent: 'center',
                 boxShadow: 'none',
                 py: 0,
+                transition: 'background 0.2s',
+                // Matches the sidenav list items. Goes through Joy's own variant var because
+                // its `:hover` rule outranks a plain `&:hover` here; this root is `outlined`.
+                '--variant-outlinedHoverBg': theme.palette.notebooklist.hoverBg,
                 // Zero on mobile: the button is 32px square and the 16px icon does not fit
                 // inside 8px side padding, which knocked it off centre.
                 paddingInline: { xs: 0, sm: '8px' },
@@ -1081,7 +1085,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                 '&:focus-within': {
                   borderColor: 'var(--joy-palette-primary-500)',
                 },
-              }}
+              })}
               slotProps={{
                 listbox: {
                   sx: {
@@ -1132,7 +1136,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                 data-testid="model-selection-manage-models-btn"
                 onClick={handleManageModels}
                 aria-label="Manage models"
-                sx={{
+                sx={theme => ({
                   flexShrink: 0,
                   // Drives min-width/min-height together; a plain `width` loses to Joy's
                   // size-variant min-width (36px at sizeMd).
@@ -1140,7 +1144,12 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                   backgroundColor: 'var(--joy-palette-background-body)',
                   border: '1px solid var(--joy-palette-divider)',
                   borderRadius: '8px',
-                }}
+                  transition: 'background 0.2s',
+                  // Matches the sidenav list items; this root is `plain`, unlike the Select above.
+                  '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+                  '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
+                  '--variant-plainHoverColor': 'inherit',
+                })}
               >
                 <AdminPanelSettingsOutlinedIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
               </IconButton>
@@ -1177,6 +1186,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
           sx={{
             display: 'flex',
             flexDirection: 'column',
+            gap: '8px',
             height: {
               xs: isResearchModeFeatureEnabled ? 'calc(100dvh - 180px)' : 'calc(100dvh - 110px)',
               sm: 'auto',
@@ -1190,31 +1200,55 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               data-testid="favorites-section"
               expanded={expandedBackends.has('Favorites')}
               onChange={() => toggleBackend('Favorites')}
-              sx={{
+              sx={theme => ({
                 backgroundColor: 'background.surface',
                 '& .MuiAccordionSummary-root': {
-                  height: '56px !important',
-                  minHeight: '56px !important',
-                  maxHeight: '56px !important',
+                  height: '48px !important',
+                  minHeight: '48px !important',
+                  maxHeight: '48px !important',
+                  // Frame sits flush with the list; the 12px inset lives on the button so the
+                  // hover fill covers it.
+                  paddingInline: 0,
                 },
-                '&:not(.Mui-expanded):hover': {},
+                '& .MuiAccordionSummary-button': {
+                  paddingInline: '8px',
+                  borderRadius: '6px',
+                  transition: 'background 0.2s',
+                  // Matches the sidenav list items. Must go through Joy's own variant vars:
+                  // its `:not(...):hover` rule ties on specificity and lands later in the
+                  // stylesheet, so a plain `&:hover` here loses.
+                  '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+                  '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
+                  // Sidenav rows keep their text colour on hover; Joy's plain variant darkens it.
+                  '--variant-plainHoverColor': 'inherit',
+                  // Joy's SvgIcon override reads `--Icon-color` rather than the inherited
+                  // `color`, so the chevron only responds through the variable. The section
+                  // logo/star set their own colour and are unaffected.
+                  '--Icon-color': 'var(--joy-palette-text-tertiary)',
+                  '& .MuiSvgIcon-root': {
+                    transition: 'color 0.2s',
+                  },
+                  '&:hover': {
+                    '--Icon-color': 'var(--joy-palette-text-primary)',
+                  },
+                },
                 '&.Mui-expanded': {
                   pb: '16px',
                 },
                 '& .MuiAccordionSummary-indicator': {
                   display: 'none',
                 },
-              }}
+              })}
             >
-              <AccordionSummary sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: '56px' }}>
+              <AccordionSummary sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: '48px' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                   <StarRounded sx={{ fontSize: '18px', color: 'warning.400' }} />
                   <Typography
                     level="h4"
                     sx={{
                       color: 'text.primary',
-                      fontSize: '18px',
-                      fontWeight: 'bold',
+                      fontSize: '16px',
+                      fontWeight: 500,
                     }}
                   >
                     Favorites
@@ -1263,23 +1297,47 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               key={backend}
               expanded={expandedBackends.has(backend)}
               onChange={() => toggleBackend(backend)}
-              sx={{
+              sx={theme => ({
                 backgroundColor: 'background.surface',
                 '& .MuiAccordionSummary-root': {
-                  height: '56px !important',
-                  minHeight: '56px !important',
-                  maxHeight: '56px !important',
+                  height: '48px !important',
+                  minHeight: '48px !important',
+                  maxHeight: '48px !important',
+                  // Frame sits flush with the list; the 12px inset lives on the button so the
+                  // hover fill covers it.
+                  paddingInline: 0,
                 },
-                '&:not(.Mui-expanded):hover': {},
+                '& .MuiAccordionSummary-button': {
+                  paddingInline: '8px',
+                  borderRadius: '6px',
+                  transition: 'background 0.2s',
+                  // Matches the sidenav list items. Must go through Joy's own variant vars:
+                  // its `:not(...):hover` rule ties on specificity and lands later in the
+                  // stylesheet, so a plain `&:hover` here loses.
+                  '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+                  '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
+                  // Sidenav rows keep their text colour on hover; Joy's plain variant darkens it.
+                  '--variant-plainHoverColor': 'inherit',
+                  // Joy's SvgIcon override reads `--Icon-color` rather than the inherited
+                  // `color`, so the chevron only responds through the variable. The section
+                  // logo/star set their own colour and are unaffected.
+                  '--Icon-color': 'var(--joy-palette-text-tertiary)',
+                  '& .MuiSvgIcon-root': {
+                    transition: 'color 0.2s',
+                  },
+                  '&:hover': {
+                    '--Icon-color': 'var(--joy-palette-text-primary)',
+                  },
+                },
                 '&.Mui-expanded': {
                   pb: '16px',
                 },
                 '& .MuiAccordionSummary-indicator': {
                   display: 'none',
                 },
-              }}
+              })}
             >
-              <AccordionSummary sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: '56px' }}>
+              <AccordionSummary sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: '48px' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                   {backendLogos[backend] && (
                     <img
@@ -1298,8 +1356,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                     level="h4"
                     sx={{
                       color: 'text.primary',
-                      fontSize: '18px',
-                      fontWeight: 'bold',
+                      fontSize: '16px',
+                      fontWeight: 500,
                     }}
                   >
                     {backend}
@@ -1325,6 +1383,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                               color: 'text.primary50',
                               fontSize: '14px',
                               fontWeight: '400',
+                              mt: '8px',
                               mb: 2,
                               display: 'flex',
                               alignItems: 'center',
@@ -1371,6 +1430,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                               color: 'text.primary50',
                               fontSize: '14px',
                               fontWeight: '400',
+                              mt: '8px',
                               mb: 2,
                               display: 'flex',
                               alignItems: 'center',
@@ -1417,6 +1477,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                               color: 'text.primary50',
                               fontSize: '14px',
                               fontWeight: '400',
+                              mt: '8px',
                               mb: 2,
                               display: 'flex',
                               alignItems: 'center',
