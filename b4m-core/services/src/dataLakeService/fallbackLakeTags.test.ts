@@ -175,6 +175,22 @@ describe('reconcileDataLakeFallbackTags - retraction', () => {
     expect(names(result)).toEqual(['acme:uncategorized', META]);
   });
 
+  it('re-stamps when the retracted tag was the only thing satisfying a remaining nested prefix', async () => {
+    // Prefixes can nest ('a:' and 'a:b:' both pass validation). The departing lake's
+    // 'a:b:uncategorized' does satisfy 'a:', so judging satisfaction before the retraction
+    // would skip the addition and then remove the tag it counted on, leaving the file in
+    // lake 'a:' with no category at all.
+    const db = makeDb({
+      'datalake:outer': lake({ id: 'outer', fileTagPrefix: 'a:', datalakeTag: 'datalake:outer' }),
+      'datalake:inner': lake({ id: 'inner', fileTagPrefix: 'a:b:', datalakeTag: 'datalake:inner' }),
+    });
+    const result = await reconcileDataLakeFallbackTags([tag('datalake:outer'), tag('a:b:uncategorized')], {
+      db,
+      previousTags: [tag('datalake:outer'), tag('datalake:inner'), tag('a:b:uncategorized')],
+    });
+    expect(names(result)).toEqual(['a:uncategorized', 'datalake:outer']);
+  });
+
   it('keeps a shared prefix stamp when only one of two lakes is dropped', async () => {
     const db = makeDb({
       [META]: lake(),

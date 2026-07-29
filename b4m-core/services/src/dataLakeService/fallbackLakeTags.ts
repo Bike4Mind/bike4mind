@@ -98,12 +98,6 @@ export const createDataLakeFallbackTagger = ({ db }: LakeTagAdapters): DataLakeF
       if (resolved) currentPrefixes.add(resolved.prefix);
     }
 
-    const additions: FileTag[] = [];
-    for (const prefix of currentPrefixes) {
-      if (satisfiesPrefix([...tags, ...additions], prefix)) continue;
-      additions.push({ name: `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`, strength: 1 });
-    }
-
     const retractions = new Set<string>();
     for (const metaTag of departed) {
       const resolved = await resolvePrefix(metaTag);
@@ -113,9 +107,19 @@ export const createDataLakeFallbackTagger = ({ db }: LakeTagAdapters): DataLakeF
       retractions.add(`${resolved.prefix}${UNCATEGORIZED_TAG_SUFFIX}`);
     }
 
-    if (additions.length === 0 && retractions.size === 0) return tags as (T | FileTag)[];
-
+    // Retract BEFORE deciding what to add, so satisfaction is judged on the tags that survive.
+    // Prefixes can nest (`a:` and `a:b:` are both valid), so a departing lake's
+    // `a:b:uncategorized` counts as satisfying a remaining lake's `a:`. Testing satisfaction
+    // first would skip the addition and then retract the very tag it relied on.
     const kept = retractions.size > 0 ? tags.filter(tag => !retractions.has(tag?.name)) : tags;
+
+    const additions: FileTag[] = [];
+    for (const prefix of currentPrefixes) {
+      if (satisfiesPrefix([...kept, ...additions], prefix)) continue;
+      additions.push({ name: `${prefix}${UNCATEGORIZED_TAG_SUFFIX}`, strength: 1 });
+    }
+
+    if (additions.length === 0 && retractions.size === 0) return tags as (T | FileTag)[];
     return [...kept, ...additions];
   };
 };
