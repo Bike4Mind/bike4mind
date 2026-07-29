@@ -1397,7 +1397,8 @@ const AISettingsTab: React.FC<{
               gap="4px"
               sx={{
                 width: 'auto',
-                mt: '20px',
+                // Only clears the tab bar; without tabs the modal padding is already enough.
+                mt: isResearchModeFeatureEnabled ? '20px' : 0,
               }}
             >
               <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>AI Settings</Typography>
