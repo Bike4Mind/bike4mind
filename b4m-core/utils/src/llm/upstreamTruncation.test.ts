@@ -116,7 +116,11 @@ describe('content cut before assembly is declared to the model', () => {
     it('tells the model when it is holding a subset of the chunks', async () => {
       // 40 chunks, top 10 retrieved: non-contiguous AND score-ordered, so the model must not read a
       // row count or a final row off it. This is what let a 19-row slice of 753 rows pass as the file.
-      const content = await runFabFiles({ vectorized: true, embeddingModel: 'text-embedding-ada-002' }, 4000, chunks(40, 100));
+      const content = await runFabFiles(
+        { vectorized: true, embeddingModel: 'text-embedding-ada-002' },
+        4000,
+        chunks(40, 100)
+      );
 
       expect(content).toContain('Data for roster.csv:');
       expect(content).toContain(EXCERPT_MARKER);
@@ -125,7 +129,11 @@ describe('content cut before assembly is declared to the model', () => {
     });
 
     it('says nothing when every chunk is delivered intact', async () => {
-      const content = await runFabFiles({ vectorized: true, embeddingModel: 'text-embedding-ada-002' }, 4000, chunks(4, 100));
+      const content = await runFabFiles(
+        { vectorized: true, embeddingModel: 'text-embedding-ada-002' },
+        4000,
+        chunks(4, 100)
+      );
 
       for (let i = 0; i < 4; i++) expect(content).toContain(`chunk-${i}-`);
       expect(content).not.toContain(EXCERPT_MARKER);
@@ -135,7 +143,11 @@ describe('content cut before assembly is declared to the model', () => {
     it('marks a subset when the budget cut the only chunk, so no chunk was dropped', async () => {
       // One oversized chunk: it is delivered, nothing is dropped, so the delivered-count test alone
       // reads this as the whole file. The cut itself is the only evidence, which is why it is tracked.
-      const content = await runFabFiles({ vectorized: true, embeddingModel: 'text-embedding-ada-002' }, 100, chunks(1, 3000));
+      const content = await runFabFiles(
+        { vectorized: true, embeddingModel: 'text-embedding-ada-002' },
+        100,
+        chunks(1, 3000)
+      );
 
       expect(content).toContain('chunk-0-');
       expect(content).toContain(EXCERPT_MARKER);
@@ -167,6 +179,41 @@ describe('content cut before assembly is declared to the model', () => {
 
       const order = (content.match(/chunk-(\d+)-/g) || []).map(m => Number(m.match(/\d+/)![0]));
       expect(order).toEqual([0, 1, 2, 3, 4, 5]);
+    });
+  });
+
+  describe('a vectorized file whose retrieval finds no chunks', () => {
+    it('falls back to raw content instead of disappearing', async () => {
+      // Chunks are written asynchronously after an upload, so the first request after attaching can
+      // find none. Retrieval then produced NO message at all, and nothing downstream could report it:
+      // assembly declares the attachments it was given, so the file left no trace and the model
+      // answered that it could not access any attachment. Reported from QA against a fresh notebook.
+      const content = await runFabFiles({ vectorized: true, embeddingModel: 'text-embedding-ada-002' }, 1000, []);
+
+      expect(content).toContain('ROW-START');
+      expect(warnings()).toContain('Retrieval returned no chunks');
+    });
+
+    it('still declares the cut when the fallback has to head-slice', async () => {
+      // The fallback must not reintroduce the undeclared-truncation bug the extraction notice fixed.
+      const content = await runFabFiles({ vectorized: true, embeddingModel: 'text-embedding-ada-002' }, 1000, []);
+
+      expect(content).not.toContain('ROW-END');
+      expect(content).toContain(TRUNCATION_NOTICE_MARKER);
+    });
+
+    it('does not fall back when chunks are delivered', async () => {
+      // The fallback reads the whole file off storage, so firing it on a healthy retrieval would
+      // silently undo the point of vectorizing: excerpts, not the entire document.
+      const content = await runFabFiles(
+        { vectorized: true, embeddingModel: 'text-embedding-ada-002' },
+        4000,
+        chunks(4, 100)
+      );
+
+      expect(content).toContain('chunk-0-');
+      expect(content).not.toContain('ROW-START');
+      expect(warnings()).not.toContain('Retrieval returned no chunks');
     });
   });
 

@@ -147,7 +147,10 @@ const excerptNotice = (fileName: string): string =>
   `${EXCERPT_NOTICE_PREFIX}"${fileName}", selected by similarity. They are in file ` +
   `order but are NOT the whole file and NOT contiguous - parts between them were not sent, and content after ` +
   `the last excerpt may exist. Do not describe this as the complete file, and do not infer a total row or ` +
-  `section count, or a final row, from it.]`;
+  // Without this, models that carry a strong "you cannot open attachments" prior open a correct answer
+  // by denying they can see the file, which reads to the user as the failure this whole module prevents.
+  `section count, or a final row, from it. The file IS attached and its content is above - do not tell the ` +
+  `user you cannot access files.]`;
 
 const URL_TRUNCATION_NOTICE =
   '\n\n[Fetched page content truncated to fit the context window. This is NOT the end of the page - later ' +
@@ -1193,6 +1196,13 @@ export async function processFabFilesServer(
       } else if (!supportsVision && isImageAttachment(file.mimeType)) {
         logger.warn(`File ${file.fileName} is an image but model does not support vision. Skipping...`);
       } else {
+        // Retrieval can come back empty for a file that is flagged vectorized - most often right
+        // after an upload, when the chunks have not been written yet. Nothing downstream can report
+        // that: assembly declares attachments it was GIVEN, so a file that produces no message at all
+        // leaves no trace, and the model answers that it cannot see any attachment. The raw path below
+        // reads the same bytes without needing chunks, so it is the fallback rather than an error.
+        let deliveredFromChunks = false;
+
         if (file.vectorized) {
           // Perform cosine search for vectorized content
           sendStatusUpdate('Now doing retrieval augmented search');
@@ -1208,61 +1218,69 @@ export async function processFabFilesServer(
             logger.warn(
               `No user vector found for embedding model ${embeddingModel}, skipping cosine search for file ${file.fileName}`
             );
-            return;
-          }
-
-          // clear error message if the file has been vectorized
-          if (file.error?.startsWith('Knowledge in the workbench with the fileName')) {
-            await db.fabfiles.update({ id: file.id, error: null });
-          }
-
-          const { results: searchResults, totalChunks } = await cosineSearch(file, userVector, { db, logger });
-
-          // Truncate search results to fit within the token budget
-          const maxChars = maxTokens > 0 ? maxTokens * CHARS_PER_TOKEN : MAX_FILE_SIZE;
-          const truncatedResults: Array<{ chunkId: string; content: string; score: number }> = [];
-          let totalChars = 0;
-          let anyChunkCut = false;
-
-          for (const result of searchResults) {
-            const contentLength = result.content?.length ?? 0;
-            if (totalChars + contentLength > maxChars && truncatedResults.length > 0) {
-              break;
+          } else {
+            // clear error message if the file has been vectorized
+            if (file.error?.startsWith('Knowledge in the workbench with the fileName')) {
+              await db.fabfiles.update({ id: file.id, error: null });
             }
-            if (contentLength > maxChars - totalChars) {
-              const content = result.content.substring(0, maxChars - totalChars);
-              truncatedResults.push({ ...result, content });
-              totalChars = maxChars;
-              anyChunkCut = true;
+
+            const { results: searchResults, totalChunks } = await cosineSearch(file, userVector, { db, logger });
+
+            // Truncate search results to fit within the token budget
+            const maxChars = maxTokens > 0 ? maxTokens * CHARS_PER_TOKEN : MAX_FILE_SIZE;
+            const truncatedResults: Array<{ chunkId: string; content: string; score: number }> = [];
+            let totalChars = 0;
+            let anyChunkCut = false;
+
+            for (const result of searchResults) {
+              const contentLength = result.content?.length ?? 0;
+              if (totalChars + contentLength > maxChars && truncatedResults.length > 0) {
+                break;
+              }
+              if (contentLength > maxChars - totalChars) {
+                const content = result.content.substring(0, maxChars - totalChars);
+                truncatedResults.push({ ...result, content });
+                totalChars = maxChars;
+                anyChunkCut = true;
+                logger.warn(
+                  `[processFabFilesServer] Truncated vectorized chunk for "${file.fileName}" to fit token budget (${maxChars}) from ${result.content.length} to ${content.length}`
+                );
+                break;
+              }
+              truncatedResults.push(result);
+              totalChars += contentLength;
+            }
+
+            if (truncatedResults.length > 0) {
+              // A subset either because ranking kept only the top COSINE_SEARCH_TOP_K, or because the
+              // character budget stopped the loop, or because a chunk itself was cut.
+              const deliveredWholeFile = totalChunks === truncatedResults.length && !anyChunkCut;
+              const body = `Data for ${file.fileName}:\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`;
+              userMessages.push({
+                role: 'user',
+                content: deliveredWholeFile ? body : body + excerptNotice(file.fileName),
+              });
+              deliveredFromChunks = true;
+              if (!deliveredWholeFile) {
+                logger.warn(
+                  `[processFabFilesServer] Delivered ${truncatedResults.length}/${totalChunks} chunk(s) of ` +
+                    `"${file.fileName}" as similarity-ranked excerpts; the model is told not to read them as the whole file.`
+                );
+              }
+            } else {
               logger.warn(
-                `[processFabFilesServer] Truncated vectorized chunk for "${file.fileName}" to fit token budget (${maxChars}) from ${result.content.length} to ${content.length}`
+                `[processFabFilesServer] Retrieval returned no chunks for vectorized file "${file.fileName}" ` +
+                  `(${totalChunks} stored); falling back to raw content so the attachment is not lost silently.`
               );
-              break;
             }
-            truncatedResults.push(result);
-            totalChars += contentLength;
           }
+        }
 
-          if (truncatedResults.length > 0) {
-            // A subset either because ranking kept only the top COSINE_SEARCH_TOP_K, or because the
-            // character budget stopped the loop, or because a chunk itself was cut.
-            const deliveredWholeFile = totalChunks === truncatedResults.length && !anyChunkCut;
-            const body = `Data for ${file.fileName}:\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`;
-            userMessages.push({
-              role: 'user',
-              content: deliveredWholeFile ? body : body + excerptNotice(file.fileName),
-            });
-            if (!deliveredWholeFile) {
-              logger.warn(
-                `[processFabFilesServer] Delivered ${truncatedResults.length}/${totalChunks} chunk(s) of ` +
-                  `"${file.fileName}" as similarity-ranked excerpts; the model is told not to read them as the whole file.`
-              );
-            }
-          }
-        } else {
+        if (!deliveredFromChunks) {
           try {
             logger.info(
-              `[processFabFilesServer] File "${file.fileName}" is NOT vectorized — using raw content path (maxTokens=${maxTokens})`
+              `[processFabFilesServer] Reading "${file.fileName}" via the raw content path (maxTokens=${maxTokens}, ` +
+                `vectorized=${!!file.vectorized})`
             );
             let errorMsg = null;
 
@@ -1288,7 +1306,13 @@ export async function processFabFilesServer(
               // so without this the model presents the slice as the complete file and names a mid-file
               // row as the last.
               fabContent = fabContent.substring(0, finalMaxFileSize ?? PREVIEW_CHUNK) + CONTENT_TRUNCATION_NOTICE;
-              errorMsg = `Knowledge in the workbench with the fileName ${file.fileName} is ${originalFileSize} long which exceeds ${finalMaxFileSize}. Vectorize your large file or select a model with higher context window.`;
+              errorMsg =
+                `Knowledge in the workbench with the fileName ${file.fileName} is ${originalFileSize} long which exceeds ${finalMaxFileSize}. ` +
+                // A vectorized file only reaches this path when retrieval found no chunks, so telling
+                // the user to vectorize it is advice they have already followed.
+                (file.vectorized
+                  ? 'Its embeddings are not available yet - retry shortly, or select a model with a higher context window.'
+                  : 'Vectorize your large file or select a model with higher context window.');
               errorMessages.push({
                 role: 'error',
                 content: errorMsg,
