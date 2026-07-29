@@ -49,11 +49,20 @@ export type PopulatedSolveOutputs = {
 
 export type UiSideEffect =
   | {
+      // A BARE scheduling problem populated by a formulate/edit tool. A solve tool's problem +
+      // race rides `populateScheduleRace` (below), NOT this type, so this payload is never a
+      // wrapper — a client bundle that predates the race feature reads it as the bare problem
+      // and stays correct.
       type: 'populateProblem';
-      // Either the bare scheduling problem (a formulate/edit tool) or that problem nested
-      // under `problem` with optional solve outputs (a solve tool). Consumers must handle
-      // both arms and must not assume the payload IS the problem.
-      payload: SchedulingProblemPayload | ({ problem: SchedulingProblemPayload } & PopulatedSolveOutputs);
+      payload: SchedulingProblemPayload;
+    }
+  | {
+      // A solve tool's scheduling problem WRAPPED with its solver-run outputs. Deliberately a
+      // distinct type from populateProblem: routing a wrapper through populateProblem would let
+      // an older client persist the wrapper as the active brief. A client that predates this
+      // type ignores it (its handler has no case) instead of mis-applying it.
+      type: 'populateScheduleRace';
+      payload: { problem: SchedulingProblemPayload } & PopulatedSolveOutputs;
     }
   | {
       // The unified families carry their familyId alongside the family-specific problem
