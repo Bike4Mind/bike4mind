@@ -22,6 +22,7 @@ import { isReservedTagPrefix } from '@bike4mind/common';
 import { memo, useCallback, useState } from 'react';
 import { useDataLakeWizardStore, type TaxonomyTag } from '@client/app/stores/useDataLakeWizardStore';
 import { useInferTaxonomy } from '@client/app/hooks/data/dataLakeWizard';
+import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
 
 // Confidence tier helpers
 
@@ -200,6 +201,7 @@ const TagCard = memo(function TagCard({ tag, prefix, onUpdate, onDelete }: TagCa
 export default function TaxonomyReviewStep() {
   const theme = useTheme();
   const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
+  const targetLake = useDataLakeWizardStore(s => s.targetLake);
   const setTagPrefix = useDataLakeWizardStore(s => s.setTagPrefix);
   const updateTag = useDataLakeWizardStore(s => s.updateTag);
   const deleteTag = useDataLakeWizardStore(s => s.deleteTag);
@@ -216,6 +218,7 @@ export default function TaxonomyReviewStep() {
   // editable home, so the user isn't surprised by a blocked gate two steps later.
   const prefixInvalid = taxonomy.prefix.trim().length < 2;
   const prefixReserved = isReservedTagPrefix(taxonomy.prefix);
+  const duplicatePrefixLake = useDuplicatePrefixLake(taxonomy.prefix, !!targetLake);
 
   // Auto-trigger inference on first mount if not yet attempted
   const [autoTriggered, setAutoTriggered] = useState(false);
@@ -269,7 +272,7 @@ export default function TaxonomyReviewStep() {
           re-namespaces them all. The Config step shows it read-only (create) / locked
           (append) rather than as a second editable copy that could drift out of sync. */}
       <Stack direction="row" gap={2} alignItems="flex-start" flexWrap="wrap">
-        <FormControl error={prefixInvalid || prefixReserved} sx={{ flex: 1, minWidth: 200 }}>
+        <FormControl error={prefixInvalid || prefixReserved || !!duplicatePrefixLake} sx={{ flex: 1, minWidth: 200 }}>
           <FormLabel>Tag Prefix</FormLabel>
           <Input
             size="sm"
@@ -284,11 +287,13 @@ export default function TaxonomyReviewStep() {
             startDecorator={<AutoAwesomeIcon sx={{ fontSize: 16 }} />}
             sx={{ fontFamily: 'monospace' }}
           />
-          {(prefixInvalid || prefixReserved) && (
+          {(prefixInvalid || prefixReserved || duplicatePrefixLake) && (
             <FormHelperText data-testid="taxonomy-tag-prefix-error">
               {prefixReserved
                 ? '"datalake:" is reserved for lake membership. Pick another prefix, such as acme:'
-                : 'A tag prefix is required (at least 2 characters). It is applied to every tag.'}
+                : duplicatePrefixLake
+                  ? `This prefix overlaps the data lake "${duplicatePrefixLake.name}" (${duplicatePrefixLake.fileTagPrefix}). They would share files, so deleting either one would take the other's.`
+                  : 'A tag prefix is required (at least 2 characters). It is applied to every tag.'}
             </FormHelperText>
           )}
         </FormControl>

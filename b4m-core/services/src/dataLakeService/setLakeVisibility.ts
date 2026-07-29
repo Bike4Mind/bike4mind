@@ -1,5 +1,6 @@
 import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { findCollidingPrefixLakes } from './tagPrefixCollision';
 
 /**
  * Private = owner-only (no org, not public); organization = scoped to the actor's own org;
@@ -77,6 +78,20 @@ export const setLakeVisibility = async (
     if (clashes.some(l => l.id !== existing.id)) {
       throw new BadRequestError(
         `A data lake with the slug “${existing.slug}” already exists in the target scope — rename one first.`
+      );
+    }
+
+    // fileTagPrefix has the same problem and is checked at create time, but create only sees the
+    // scope the lake started in. Moving into an org is the other way two lakes end up sharing a
+    // prefix, and then permanently deleting one destroys files only the other holds.
+    const [prefixClash] = await findCollidingPrefixLakes(db, existing.fileTagPrefix, {
+      createdByUserId: existing.createdByUserId,
+      organizationId: targetOrg,
+      excludeLakeId: existing.id,
+    });
+    if (prefixClash) {
+      throw new BadRequestError(
+        `The tag prefix "${existing.fileTagPrefix}" overlaps the data lake "${prefixClash.name}" in the target scope - change one first.`
       );
     }
   }

@@ -23,8 +23,11 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
   useComputeHashes: () => ({ mutate: vi.fn(), isPending: false }),
   useCheckDuplicates: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fileTagPrefix: string } | undefined }));
+
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: lakes.current }),
+  useDuplicatePrefixLake: () => prefixClash.current,
 }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: (selector: (s: { selectedAccount: unknown }) => unknown) =>
@@ -228,6 +231,36 @@ describe('ConfigStep - Tag Prefix single home + empty-prefix fallback', () => {
   beforeEach(() => {
     lakes.current = [];
     selectedAccount.current = { id: 'me', personal: true };
+    prefixClash.current = undefined;
+  });
+
+  it('explains an overlapping prefix, which the server refuses at create', () => {
+    // Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting either
+    // takes the other's. Start Upload is gated on this, so the field has to say why.
+    prefixClash.current = { name: 'Acme Archive', fileTagPrefix: 'acme:' };
+    seedConfig({ tagPrefix: 'acme:' });
+
+    render(
+      <TestWrapper>
+        <ConfigStep />
+      </TestWrapper>
+    );
+
+    const help = screen.getByTestId('datalake-config-tagprefix-help').textContent ?? '';
+    expect(help).toMatch(/overlaps/i);
+    expect(help).toContain('Acme Archive');
+  });
+
+  it('says nothing about overlap when the prefix is free', () => {
+    seedConfig({ tagPrefix: 'acme:' });
+
+    render(
+      <TestWrapper>
+        <ConfigStep />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-config-tagprefix-help').textContent).not.toMatch(/overlaps/i);
   });
 
   afterEach(() => {

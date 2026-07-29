@@ -563,8 +563,9 @@ describe('createDataLake', () => {
 
   it('scopes the meta-tag by org and disambiguates a slug collision deterministically', async () => {
     const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
-    // First slug taken, second free.
-    const find = vi.fn().mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
+    // Call order: the tag-prefix availability check, then the slug probes - first slug taken,
+    // second free. `lake()` uses prefix `lk:`, which cannot collide with this lake's `xy:`.
+    const find = vi.fn().mockResolvedValueOnce([lake()]).mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
     const db = { dataLakes: { create, find } };
     // org comes from the principal (4th arg), never the request body.
     await createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db }, 'orgA');

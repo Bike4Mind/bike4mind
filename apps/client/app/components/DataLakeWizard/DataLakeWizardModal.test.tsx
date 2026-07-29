@@ -30,8 +30,11 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
 }));
 // ConfigStep reads the lake list for its duplicate-name hint; stub it so this test
 // needs no QueryClientProvider.
+const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fileTagPrefix: string } | undefined }));
+
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: [] }),
+  useDuplicatePrefixLake: () => prefixClash.current,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
