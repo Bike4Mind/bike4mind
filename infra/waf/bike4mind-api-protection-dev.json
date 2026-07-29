@@ -199,6 +199,21 @@
                     },
                     {
                       "ByteMatchStatement": {
+                        "SearchString": "/api/settings/update",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
                         "SearchString": "/api/admin/security-dashboard/web-owasp-ingest",
                         "FieldToMatch": {
                           "UriPath": {}
