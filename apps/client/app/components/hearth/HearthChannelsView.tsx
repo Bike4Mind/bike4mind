@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { IHearthEventAction } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
+import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import { useActorColor } from './actorColors';
 import HearthPresencePanel from './HearthPresencePanel';
 
@@ -91,6 +92,13 @@ export default function HearthChannelsView() {
     onSuccess: () => {
       setNewChannelName('');
       queryClient.invalidateQueries({ queryKey: ['hearth', 'channels'] });
+      // The `hearth` gear unlocks on owning >=1 channel, so this request is what
+      // earns it - but useGearsStatus has staleTime: 5 * 60_000, so without this
+      // the reveal the user just paid for is invisible for up to five minutes
+      // (and now that the sidenav row fails CLOSED, so is the row). The helper
+      // no-ops once the gear is already unlocked, so this costs nothing after
+      // the first channel.
+      invalidateGearsStatusWhileLocked(queryClient, ['hearth']);
     },
   });
 

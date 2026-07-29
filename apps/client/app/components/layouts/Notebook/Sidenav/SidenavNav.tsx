@@ -82,6 +82,15 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // must NOT silently remove core navigation app-wide - only a key the server
   // returns as `false` (a known, genuinely-unearned gear) hides its row.
   const gearOpen = (key: GearKey) => gearUnlocks === undefined || !(key in gearUnlocks) || gearUnlocks[key] === true;
+  // Fail CLOSED, for rows that did NOT exist before Gears. The fail-open above
+  // protects navigation users already had; a net-new earned row has nothing to
+  // preserve, and its failure modes run the other way. `/api/gears/status`
+  // omits admin-disabled gears from the response entirely, so under gearOpen
+  // turning a gear OFF in Manage Gears satisfied `!(key in gearUnlocks)` and
+  // pinned the unearned row visible for every flag-enabled user - the opposite
+  // of what the admin asked for. Same on any status error. Only an explicit
+  // `true` reveals these.
+  const gearEarned = (key: GearKey) => gearUnlocks?.[key] === true;
   const helpOpen = useHelpPanel(s => s.open);
 
   const closeOnMobile = () => {
@@ -234,10 +243,12 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
-    // Double-gated like the earned destinations above: the experimental flag says
-    // the feature exists for this user, the gear says they have actually used it
-    // (>=1 channel). Sits beside Tavern/Gears - the shared-log destination.
-    ...(isFeatureEnabled('enableHearth') && gearOpen('hearth')
+    // Double-gated: the experimental flag says the feature exists for this user,
+    // the gear says they have actually used it (>=1 channel). Sits beside
+    // Tavern/Gears - the shared-log destination. Uses gearEarned, not gearOpen:
+    // this row is net-new, so an unknown gear state must hide it rather than
+    // reveal it.
+    ...(isFeatureEnabled('enableHearth') && gearEarned('hearth')
       ? [
           {
             key: 'hearth',

@@ -2,6 +2,7 @@ import { hearthRepository } from '@bike4mind/database';
 import { ApiKeyScope, NotFoundError, UnauthorizedError } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import { requireUser } from '@server/middlewares/requireUser';
 import { toWireHearthPresence } from '@server/utils/hearthWire';
 import { NextApiRequest, NextApiResponse } from 'next';
@@ -21,6 +22,15 @@ const GetPresenceSchema = z.object({
 const PRESENCE_STALE_AFTER_MS = 5 * 60 * 1000;
 
 /**
+ * Matches the catchup read budget. This was the one hearth route with no limit
+ * at all, and it is the most expensive: the roster aggregation sorts on an
+ * $addFields key, so no index can serve it and mongod sorts in memory, over a
+ * collection that grows one permanent row per session. The panel already
+ * refetches at up to 1 Hz on presence traffic.
+ */
+const presenceRateLimit = rateLimit({ limit: 120, windowMs: 60000 });
+
+/**
  * GET the presence roster for a channel: one row per actor, ordered
  * needs-you-first by the repository. Read-only by construction - it advances no
  * cursor and consumes nothing - so read scope is sufficient and there is no
@@ -31,7 +41,7 @@ const handler = baseApi({
 })
   .use(requireFeatureEnabled('EnableHearth'))
   .use(requireUser)
-  .get<NextApiRequest, NextApiResponse>(async (req, res) => {
+  .get<NextApiRequest, NextApiResponse>(presenceRateLimit, async (req, res) => {
     if (!req.user?.id) throw new UnauthorizedError('User required');
 
     const { channelId } = GetPresenceSchema.parse(req.query);
