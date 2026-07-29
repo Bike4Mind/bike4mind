@@ -49,11 +49,11 @@ const InteractiveChaoticLaserBicycleWheel = memo(() => {
 
   return (
     <div
-      className="relative w-[40px] h-[40px] cursor-pointer flex items-center justify-center"
+      className="relative w-[32px] h-[32px] cursor-pointer flex items-center justify-center"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      <svg width="40" height="40" viewBox="0 0 200 200">
+      <svg width="32" height="32" viewBox="0 0 200 200">
         <defs>
           <filter id="glow">
             <feGaussianBlur stdDeviation="3.5" result="coloredBlur" />

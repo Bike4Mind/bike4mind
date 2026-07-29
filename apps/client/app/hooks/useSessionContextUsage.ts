@@ -35,6 +35,11 @@ export interface SessionContextUsage {
    * than catalog-derived, so it stays correct regardless of provider quirks.
    */
   cachingIneffective: boolean;
+  /**
+   * Older turns the last completed turn folded into working memory (context
+   * summary) instead of re-sending verbatim. > 0 means compaction just ran.
+   */
+  compactedTurns: number;
 }
 
 function bandFor(pct: number, overflow: boolean): ContextUsageBand {
@@ -95,6 +100,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
       isApproachingLimit: pct >= CONTEXT_WARN_THRESHOLD,
       overflowDetected,
       cachingIneffective: latest.actualInputTokens >= CACHE_NOTE_MIN_INPUT_TOKENS && latestCacheReadTokens === 0,
+      compactedTurns: latest.verbatimTurnsExcluded ?? 0,
     };
   }, [data?.pages]);
 }

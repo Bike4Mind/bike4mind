@@ -142,4 +142,42 @@ describe('SelfHostWorker', () => {
     expect(fn).toHaveBeenCalledTimes(2);
     worker.stop();
   });
+
+  it('waits for an in-flight scheduled task before stop() resolves', async () => {
+    vi.useFakeTimers();
+    const worker = new SelfHostWorker(mockLogger);
+    let resolveRun: (() => void) | undefined;
+    const fn = vi.fn(() => new Promise<void>(resolve => (resolveRun = resolve)));
+    worker.registerScheduledTask('modelDiscovery', 60_000, fn);
+
+    worker.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    // Abandoning the run mid-flight would leave state no redelivery repairs
+    // (a discovery run's Mongo lease is held until its TTL), so stop() drains it.
+    let stopped = false;
+    const stopping = worker.stop(20_000).then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(false);
+
+    resolveRun?.();
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
+  it('gives up on a scheduled task that outlasts the grace period', async () => {
+    vi.useFakeTimers();
+    const worker = new SelfHostWorker(mockLogger);
+    worker.registerScheduledTask('modelDiscovery', 60_000, () => new Promise<void>(() => {}));
+
+    worker.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const stopping = worker.stop(20_000);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(stopping).resolves.toBeUndefined();
+  });
 });

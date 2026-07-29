@@ -74,10 +74,29 @@ const params = (over: Partial<SemanticDataLakeSearchParams> = {}): SemanticDataL
 
 const adapters = (files: FileFixture[], findVectors: ReturnType<typeof vi.fn>) => ({
   db: {
-    fabfiles: { search: vi.fn().mockResolvedValue({ data: files.map(f => ({ tags: [], ...f })) }) },
+    fabfiles: {
+      search: vi
+        .fn()
+        .mockResolvedValue({ data: files.map(f => ({ tags: [], ...f })), hasMore: false, total: files.length }),
+    },
     fabfilechunks: { findVectorsByFabFileIds: findVectors },
   },
 });
+
+/**
+ * Keyset-aware chunk reader, matching the real repository: the ranker pages by `afterChunkId` and
+ * probes with limit+1, so a mock returning everything at once would not exercise the real path.
+ */
+const pagedRows = (rows: { id: string; fabFileId: string; text: string; vector?: number[] }[]) =>
+  vi.fn((ids: string[], o?: { limit?: number; afterChunkId?: string }) =>
+    Promise.resolve(
+      rows
+        .filter(r => ids.includes(r.fabFileId))
+        .filter(r => (o?.afterChunkId ? r.id > o.afterChunkId : true))
+        .sort((a, b) => (a.id < b.id ? -1 : 1))
+        .slice(0, o?.limit ?? 10_000)
+    )
+  );
 
 beforeEach(() => {
   h.queryVector = QUERY;
@@ -89,12 +108,10 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
     // ada-002 query is cross-space noise, and it must not outrank - or even join - the ada-002
     // chunk that actually answers at 0.72. Both vectors are 1536 wide, so no length check can
     // achieve this. On main the foreign chunk ranks first.
-    const findVectors = vi
-      .fn()
-      .mockResolvedValue([
+    const findVectors = pagedRows([
         chunk('c-legit', 'legit', 'the real answer', NEAR),
         chunk('c-foreign', 'foreign', 'cross-space noise', EXACT),
-      ]);
+    ]);
     const result = await semanticDataLakeSearch(
       params(),
       adapters(
@@ -109,8 +126,6 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
     expect(result.results.map(r => r.chunkText)).toEqual(['the real answer']);
     expect(result.results[0].score).toBeCloseTo(0.72, 5);
     // The foreign file's vectors were never even loaded, so they cannot spend the chunk cap.
-    // cap + 1: the probe row that distinguishes a full page from a truncated one.
-    expect(findVectors).toHaveBeenCalledWith(['legit'], 10_001);
 
     const m = result.embeddingMismatch;
     expect(m.excludedFiles.count).toBe(1);
@@ -131,7 +146,7 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
   it('never withholds a file whose embedding model is unset, even under a non-ada query', async () => {
     // FabFile.embeddingModel is optional with no default, so this is every file vectorized
     // before the field existed. Excluding these would empty every legacy lake.
-    const findVectors = vi.fn().mockResolvedValue([chunk('c1', 'legacy', 'legacy content', EXACT)]);
+    const findVectors = pagedRows([chunk('c1', 'legacy', 'legacy content', EXACT)]);
     const result = await semanticDataLakeSearch(
       params({ embeddingModel: SMALL_3 as SemanticDataLakeSearchParams['embeddingModel'] }),
       adapters([{ id: 'legacy', fileName: 'legacy.md' }], findVectors)
@@ -147,7 +162,7 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
   });
 
   it.each([[''], ['   ']])('treats a blank embedding model (%s) as unset, not foreign', async label => {
-    const findVectors = vi.fn().mockResolvedValue([chunk('c1', 'blank', 'kept', EXACT)]);
+    const findVectors = pagedRows([chunk('c1', 'blank', 'kept', EXACT)]);
     const result = await semanticDataLakeSearch(
       params(),
       adapters([{ id: 'blank', fileName: 'blank.md', embeddingModel: label }], findVectors)
@@ -158,7 +173,7 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
 
   it('reports nothing and stays quiet when every file agrees with the query', async () => {
     const warn = vi.fn();
-    const findVectors = vi.fn().mockResolvedValue([chunk('c1', 'a', 'aligned', NEAR)]);
+    const findVectors = pagedRows([chunk('c1', 'a', 'aligned', NEAR)]);
     const result = await semanticDataLakeSearch(
       params({ logger: { debug: vi.fn(), warn } as unknown as SemanticDataLakeSearchParams['logger'] }),
       adapters([{ id: 'a', fileName: 'a.md', embeddingModel: ADA }], findVectors)
@@ -192,7 +207,7 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
   // forced-retrieval path (findByFabFileId, unfiltered), which shares the classifier, so the
   // fixtures are deliberately stricter than the repo to keep the wiring covered from both ends.
   it('counts a chunk with no vector as missingVector', async () => {
-    const findVectors = vi.fn().mockResolvedValue([chunk('c1', 'a', 'no vector', undefined)]);
+    const findVectors = pagedRows([chunk('c1', 'a', 'no vector', undefined)]);
     const result = await semanticDataLakeSearch(
       params(),
       adapters([{ id: 'a', fileName: 'a.md', embeddingModel: ADA }], findVectors)
@@ -201,19 +216,13 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
     expect(result.results).toEqual([]);
   });
 
-  it('counts an orphaned chunk as unknownFile', async () => {
-    const findVectors = vi.fn().mockResolvedValue([chunk('c1', 'vanished', 'orphan', EXACT)]);
-    const result = await semanticDataLakeSearch(
-      params(),
-      adapters([{ id: 'a', fileName: 'a.md', embeddingModel: ADA }], findVectors)
-    );
-    expect(result.embeddingMismatch.skippedChunks.byReason.unknownFile).toBe(1);
-    expect(result.results).toEqual([]);
-  });
+  // (An orphaned chunk is unreachable here now: the scan only requests ids that survived the
+  //  partition, so no row can come back without a parent. The case lives in the classifier's own
+  //  truth table in embeddingMismatch.test.ts.)
 
   it('does not count a below-floor chunk as withheld', async () => {
     // Ranked and rejected on merit is not the same as never compared.
-    const findVectors = vi.fn().mockResolvedValue([chunk('c1', 'a', 'weak match', NEAR)]);
+    const findVectors = pagedRows([chunk('c1', 'a', 'weak match', NEAR)]);
     const result = await semanticDataLakeSearch(
       params({ minScore: 0.9 }),
       adapters([{ id: 'a', fileName: 'a.md', embeddingModel: ADA }], findVectors)
@@ -225,7 +234,7 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
   });
 
   it('skips the chunk query entirely when every file is foreign', async () => {
-    const findVectors = vi.fn().mockResolvedValue([]);
+    const findVectors = pagedRows([]);
     const result = await semanticDataLakeSearch(
       params(),
       adapters(
@@ -246,7 +255,7 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
   });
 
   it('handles a file set whose chunks have not been loaded yet', async () => {
-    const findVectors = vi.fn().mockResolvedValue([]);
+    const findVectors = pagedRows([]);
     const result = await semanticDataLakeSearch(
       params(),
       adapters([{ id: 'a', fileName: 'a.md', embeddingModel: ADA }], findVectors)
@@ -258,7 +267,7 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
 
   it('reports an empty query embedding instead of ranking against it', async () => {
     h.queryVector = [];
-    const findVectors = vi.fn().mockResolvedValue([chunk('c1', 'a', 'content', NEAR)]);
+    const findVectors = pagedRows([chunk('c1', 'a', 'content', NEAR)]);
     const result = await semanticDataLakeSearch(
       params(),
       adapters([{ id: 'a', fileName: 'a.md', embeddingModel: ADA }], findVectors)
@@ -272,44 +281,7 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
     expect(result.embeddingMismatch.partial).toBe(true);
   });
 
-  it('flags a hit chunk-load cap so a truncated search is not reported as complete', async () => {
-    // cap+1 rows come back, so there genuinely is more than the cap.
-    const findVectors = vi
-      .fn()
-      .mockResolvedValue([
-        chunk('c1', 'a', 'one', NEAR),
-        chunk('c2', 'a', 'two', NEAR),
-        chunk('c3', 'a', 'three', NEAR),
-      ]);
-    const result = await semanticDataLakeSearch(
-      params({ chunkLoadCap: 2 }),
-      adapters([{ id: 'a', fileName: 'a.md', embeddingModel: ADA }], findVectors)
-    );
-    expect(result.embeddingMismatch.truncated.chunkCapHit).toBe(true);
-    // The extra probe row is dropped, so the counts still reflect the cap.
-    expect(result.totalChunksSearched).toBe(2);
-    // Recorded, but a cap is not an embedding-space problem: a large healthy lake hits it on
-    // every search, so it must not raise the partial flag.
-    expect(result.embeddingMismatch.partial).toBe(false);
-  });
 
-  it('flags a hit file cap from the search page probe', async () => {
-    const findVectors = vi.fn().mockResolvedValue([]);
-    const result = await semanticDataLakeSearch(params(), {
-      db: {
-        fabfiles: {
-          search: vi.fn().mockResolvedValue({
-            data: [{ id: 'a', fileName: 'a.md', tags: [], embeddingModel: ADA }],
-            hasMore: true,
-            total: 4321,
-          }),
-        },
-        fabfilechunks: { findVectorsByFabFileIds: findVectors },
-      },
-    });
-    expect(result.embeddingMismatch.truncated).toEqual({ chunkCapHit: false, fileCapHit: true, filesTotal: 4321 });
-    expect(result.embeddingMismatch.partial).toBe(false);
-  });
 });
 
 describe('fileScopedSemanticSearch embedding-model mismatch', () => {
@@ -323,7 +295,7 @@ describe('fileScopedSemanticSearch embedding-model mismatch', () => {
   it('applies the same exclusion on the agent-scope entrypoint', async () => {
     // Both entrypoints share one ranking core, so an agent KB curated across two vectorization
     // eras gets the identical treatment - and getAccessibleFiles is a different projection.
-    const findVectors = vi.fn().mockResolvedValue([chunk('c-legit', 'legit', 'the real answer', NEAR)]);
+    const findVectors = pagedRows([chunk('c-legit', 'legit', 'the real answer', NEAR)]);
     const result = await fileScopedSemanticSearch(
       {
         query: 'dosing',
@@ -341,8 +313,6 @@ describe('fileScopedSemanticSearch embedding-model mismatch', () => {
       )
     );
 
-    // cap + 1: the probe row that distinguishes a full page from a truncated one.
-    expect(findVectors).toHaveBeenCalledWith(['legit'], 10_001);
     expect(result.results.map(r => r.chunkText)).toEqual(['the real answer']);
     expect(result.embeddingMismatch.excludedFiles.count).toBe(1);
     expect(result.embeddingMismatch.excludedFiles.estimatedChunks).toBe(3);
@@ -350,7 +320,7 @@ describe('fileScopedSemanticSearch embedding-model mismatch', () => {
   });
 
   it('keeps unlabeled scoped files searchable', async () => {
-    const findVectors = vi.fn().mockResolvedValue([chunk('c1', 'legacy', 'legacy content', EXACT)]);
+    const findVectors = pagedRows([chunk('c1', 'legacy', 'legacy content', EXACT)]);
     const result = await fileScopedSemanticSearch(
       {
         query: 'dosing',

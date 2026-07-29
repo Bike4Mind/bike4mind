@@ -20,3 +20,5 @@ export * from './getDynamicDataLakeTags';
 export * from './embeddingMismatch';
 export * from './getDataLakePrompts';
 export * from './semanticDataLakeSearch';
+export * from './boundedTopK';
+export * from './resolveSearchBudgets';

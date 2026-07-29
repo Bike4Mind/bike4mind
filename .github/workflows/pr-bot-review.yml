@@ -3,9 +3,14 @@ name: pr-bot-review
 # Auto-reviews this repo's PRs using the bot-review skill (fetched at run time
 # from the private b4m-devtools repo; internal dev tooling is not committed here).
 #
-# Fires on:
-#   - opened (non-draft), ready_for_review, reopened → first auto-review
-#   - labeled with `bot-review` → manual re-review after author fixes
+# Fires ONLY on:
+#   - labeled with `bot-review` → an explicitly requested review
+#
+# Auto-review on open/ready_for_review/reopened was REMOVED deliberately. Reviewing
+# every PR by default was the single largest driver of our Anthropic spend, and most
+# of those reviews were never asked for. Opt-in by label means a review happens when
+# someone wants one. To get a review: add the `bot-review` label. The label is
+# auto-removed afterwards, so adding it again requests a fresh review.
 #
 # Drafts are skipped. PRs with >100 changed files are also skipped (cost guard) —
 # a comment is posted instead asking for human review. On `gh pr view` API
@@ -19,23 +24,23 @@ name: pr-bot-review
 #
 # NOTE: paths-ignore is intentionally omitted. GitHub does not reliably fire
 # `labeled` events when paths-ignore is combined with mixed activity types in
-# the same pull_request trigger. The draft guard and size guard (>100 files)
-# are the primary cost controls; occasional docs-only or changeset PRs getting
-# reviewed is an acceptable trade-off.
+# the same pull_request trigger. The label itself is now the primary cost control;
+# the draft and size guards back it up.
 #
-# Double-review de-dupe (#166): opening/readying a PR already triggers a review,
-# but users also manually add `bot-review` to "request" one, firing two triggers
-# close together, and `auto-changeset.yml` pushes a `.changeset/pr-N.md` commit in
-# between, so the second pass reviews an identical diff plus a changeset. Two guards
-# stop the waste:
-#   1. concurrency `cancel-in-progress: true`: a newer trigger supersedes the
-#      in-flight run (handles the concurrent open+label window).
+# Double-review de-dupe (#166): the original open+label double-fire cannot happen
+# any more, since `opened` no longer triggers this workflow. Both guards are kept
+# because they still earn their place on repeat labelling:
+#   1. concurrency `cancel-in-progress: true`: a rapid re-label supersedes the
+#      in-flight run rather than queueing a second full review behind it.
 #   2. the "substantive-change guard" step below: skips when the only commits since
-#      our last review are the b4m-release-bot changeset (handles a later re-label).
+#      our last review are the b4m-release-bot changeset.
 
 on:
   pull_request:
-    types: [opened, ready_for_review, reopened, labeled]
+    # `labeled` only. Any label fires the workflow, and the job-level `if` below
+    # drops everything that is not `bot-review`, so unrelated labels cost nothing
+    # beyond a few seconds of a skipped job.
+    types: [labeled]
 
 permissions:
   contents: read
@@ -46,11 +51,9 @@ permissions:
 
 concurrency:
   group: pr-bot-review-${{ github.event.pull_request.number }}
-  # A newer trigger for the same PR (e.g. a manual `bot-review` label added seconds
-  # after `opened`/`ready_for_review`) supersedes the in-flight run instead of
-  # serializing behind it, so the common "open + click the label" double-fire yields
-  # ONE review on the newer head. The superseded run is the `opened` run (no label to
-  # remove), so label hygiene is unaffected. (#166)
+  # A newer `bot-review` label on the same PR supersedes the in-flight run rather
+  # than queueing a second full review behind it, so a double-click costs one review
+  # instead of two. The surviving run still removes the label when it finishes. (#166)
   cancel-in-progress: true
 
 jobs:
@@ -64,10 +67,8 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.base.ref != 'prod' &&
       github.event.pull_request.head.ref != 'prod' &&
-      !startsWith(github.event.pull_request.head.ref, 'changeset-release/') && (
-        github.event.action != 'labeled' ||
-        github.event.label.name == 'bot-review'
-      )
+      !startsWith(github.event.pull_request.head.ref, 'changeset-release/') &&
+      github.event.label.name == 'bot-review'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 30
     steps:
@@ -77,16 +78,39 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Size guard — skip oversize PRs
+      - name: Size guard — skip oversize PRs, pick review model
         id: size_check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          FILES=$(gh pr view ${{ github.event.pull_request.number }} \
-            --json changedFiles --jq .changedFiles \
-            --repo ${{ github.repository }} || echo 999999)
+          # One API call for all three numbers. On failure SIZE is empty and the
+          # :- fallbacks below force the oversize path — fail-closed, unchanged.
+          SIZE=$(gh pr view ${{ github.event.pull_request.number }} \
+            --json changedFiles,additions,deletions \
+            --jq '"\(.changedFiles) \(.additions) \(.deletions)"' \
+            --repo ${{ github.repository }} || echo "")
+          read -r FILES ADDS DELS <<< "$SIZE"
           FILES=${FILES:-999999}
+          ADDS=${ADDS:-999999}
+          DELS=${DELS:-0}
+          LINES=$((ADDS + DELS))
           echo "changed_files=$FILES" >> "$GITHUB_OUTPUT"
+
+          # Model tiering (cost control). Small, low-risk diffs review on Sonnet 5;
+          # anything bigger stays on Opus 4.7, because mid-size feature PRs are where
+          # the real bugs live. Sonnet 5 and Opus 4.7 share a tokenizer, so this is a
+          # pure list-price difference ($3/$15 vs $5/$25 per MTok) with no token-count
+          # penalty. Emitted UNCONDITIONALLY and defaulting to Opus, so the review step
+          # can never receive an empty --model — including on the API-failure path above,
+          # where FILES=999999 lands here before the oversize branch skips the review.
+          if [ "$FILES" -le 10 ] && [ "$LINES" -le 300 ]; then
+            MODEL=claude-sonnet-5
+          else
+            MODEL=claude-opus-4-7
+          fi
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "Review model: $MODEL ($FILES files, $LINES lines changed)"
+
           if [ "$FILES" -gt 100 ]; then
             gh pr comment ${{ github.event.pull_request.number }} \
               --repo ${{ github.repository }} \
@@ -227,7 +251,7 @@ jobs:
               this review.
             - Restoring the original branch at the end is unnecessary in CI — skip it.
           claude_args: |
-            --model claude-opus-4-7
+            --model ${{ steps.size_check.outputs.model }}
             --allowedTools Bash(gh:*),Bash(git:*),Read,Grep,Glob,Agent,Task
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead

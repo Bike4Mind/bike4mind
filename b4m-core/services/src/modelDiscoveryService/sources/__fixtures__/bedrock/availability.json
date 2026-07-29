@@ -1,0 +1,16 @@
+{
+  "anthropic.claude-opus-4-5-20251101-v1:0": {
+    "modelId": "anthropic.claude-opus-4-5-20251101-v1:0",
+    "agreementAvailability": { "status": "AVAILABLE" },
+    "authorizationStatus": "AUTHORIZED",
+    "entitlementAvailability": "AVAILABLE",
+    "regionAvailability": "AVAILABLE"
+  },
+  "meta.llama4-scout-17b-instruct-v1:0": {
+    "modelId": "meta.llama4-scout-17b-instruct-v1:0",
+    "agreementAvailability": { "status": "NOT_AVAILABLE", "errorMessage": "Marketplace subscription required" },
+    "authorizationStatus": "NOT_AUTHORIZED",
+    "entitlementAvailability": "NOT_AVAILABLE",
+    "regionAvailability": "AVAILABLE"
+  }
+}

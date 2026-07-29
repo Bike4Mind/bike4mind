@@ -4,6 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { IHearthEventAction } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
+import { useActorColor } from './actorColors';
+import HearthPresencePanel from './HearthPresencePanel';
+
+export { actorColorIndex } from './actorColors';
 
 type WireHearthEvent = IHearthEventAction['event'];
 
@@ -57,6 +61,7 @@ function useChannelTail(channelId: string | null) {
  */
 export default function HearthChannelsView() {
   const queryClient = useQueryClient();
+  const actorColor = useActorColor();
   const { subscribeToAction } = useWebsocket();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [liveEvents, setLiveEvents] = useState<WireHearthEvent[]>([]);
@@ -163,19 +168,38 @@ export default function HearthChannelsView() {
           </Box>
         ) : (
           <>
+            {/* Roster above the stream: "who is blocked on me" is the question
+                asked on arrival; the stream answers "what happened". */}
+            <HearthPresencePanel channelId={selectedId} />
             <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }} data-testid="hearth-event-list">
               {events.map(event => (
                 <Box key={event.id} sx={{ mb: 1 }}>
-                  <Stack direction="row" spacing={1} alignItems="baseline">
-                    <Typography level="title-sm">{event.actorName ?? event.actorId}</Typography>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Box
+                      data-testid="hearth-event-actor-swatch"
+                      sx={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        flexShrink: 0,
+                        backgroundColor: actorColor(event.actorId),
+                      }}
+                    />
+                    <Typography
+                      level="title-sm"
+                      data-testid="hearth-event-actor-name"
+                      sx={{ color: actorColor(event.actorId) }}
+                    >
+                      {event.actorName ?? event.actorId}
+                    </Typography>
                     <Typography level="body-xs" sx={{ opacity: 0.6 }}>
                       #{event.seq} {'\u00B7'} {new Date(event.createdAt).toLocaleTimeString()}
                     </Typography>
-                    {event.kind !== 'message' && (
-                      <Chip size="sm" variant="soft">
-                        {event.kind}
-                      </Chip>
-                    )}
+                    {/* Always rendered, including for 'message': the color must never be
+                        the only thing distinguishing one poster's events from another's. */}
+                    <Chip size="sm" variant="soft" data-testid="hearth-event-kind-chip">
+                      {event.kind}
+                    </Chip>
                   </Stack>
                   <Typography level="body-md" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                     {event.human.text}

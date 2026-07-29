@@ -226,25 +226,7 @@ describe('createEmbeddingMismatchAccumulator', () => {
     expect(report.partial).toBe(false);
   });
 
-  it('records a hit cap without calling the result partial', () => {
-    // Both caps bound every search of a large lake, so treating them as partial would flag
-    // almost every query on a perfectly consistent corpus and bury the mismatch signal.
-    const acc = createEmbeddingMismatchAccumulator([], ADA);
-    acc.truncation({ chunkCapHit: true, filesTotal: 4321 });
-    const report = acc.report();
-    expect(report.truncated).toEqual({ chunkCapHit: true, fileCapHit: false, filesTotal: 4321 });
-    expect(report.partial).toBe(false);
-    expect(describeEmbeddingMismatch(report, ADA)).toBeNull();
-  });
 
-  it('mentions the cap once something was genuinely withheld', () => {
-    const acc = createEmbeddingMismatchAccumulator(
-      [{ id: 'a', embeddingModel: SMALL_3, vectorizedChunkCount: 1 }],
-      ADA
-    );
-    acc.truncation({ chunkCapHit: true });
-    expect(describeEmbeddingMismatch(acc.report(), ADA)).toContain('cap');
-  });
 
   it('does not count a foreign file that chunked but never finished vectorizing', () => {
     // The state the pipeline actually writes: chunk.ts stamps vectorized = chunks.length > 0,

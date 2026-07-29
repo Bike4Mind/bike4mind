@@ -75,8 +75,6 @@ export interface EmbeddingMismatchReport {
    * these are NEVER excluded (see isForeignEmbeddingModel), so their embedding space is unverified.
    */
   unlabeled: { chunks: number; files: number };
-  /** A scope/load cap was hit, so the corpus was not fully considered regardless of model. */
-  truncated: { chunkCapHit: boolean; fileCapHit: boolean; filesTotal: number | null };
   /**
    * The query embedding came back empty, so nothing could be compared at all. Distinguished from
    * a mismatch because otherwise the report reads as a normal search with some exclusions, and
@@ -90,7 +88,8 @@ export interface EmbeddingMismatchReport {
    * Only `excludedFiles`, `modelMismatch` and `dimensionMismatch` raise it. Everything else the
    * report counts is deliberately excluded, because each is either permanent or ordinary and would
    * make the flag fire on a healthy corpus forever:
-   *  - the scope/load caps in `truncated`: every search of a large lake hits them.
+   *  - scan truncation (see SemanticSearchScanAccounting.truncated, which owns that signal):
+   *    every search of a large lake hits a budget.
    *  - `unlabeled`: those chunks WERE searched, and most legacy lakes are entirely unlabeled.
    *  - `missingVector`: a chunk with no vector was never embedded, which is not a mismatch. Some
    *    are permanently unembeddable (oversized past the model's context window - a terminal state,
@@ -114,7 +113,6 @@ export function emptyEmbeddingMismatchReport(): EmbeddingMismatchReport {
       byReason: { unknownFile: 0, modelMismatch: 0, missingVector: 0, dimensionMismatch: 0 },
     },
     unlabeled: { chunks: 0, files: 0 },
-    truncated: { chunkCapHit: false, fileCapHit: false, filesTotal: null },
     queryEmbeddingFailed: false,
     partial: false,
   };
@@ -246,8 +244,6 @@ export interface EmbeddingMismatchAccumulator {
   skip(reason: ChunkSkipReason): void;
   /** Record a chunk that was scored, so unlabeled-but-included volume is visible. */
   scored(parentFile: { embeddingModel?: string | null } | undefined, fileId: string): void;
-  /** Record that a scope/load cap bounded the corpus. */
-  truncation(info: { chunkCapHit?: boolean; fileCapHit?: boolean; filesTotal?: number | null }): void;
   /** Record that the query could not be embedded, so no comparison happened. */
   queryEmbeddingFailed(): void;
   report(): EmbeddingMismatchReport;
@@ -306,12 +302,6 @@ export function createEmbeddingMismatchAccumulator(
       report.queryEmbeddingFailed = true;
       recomputePartial();
     },
-    truncation(info) {
-      if (info.chunkCapHit !== undefined) report.truncated.chunkCapHit = info.chunkCapHit;
-      if (info.fileCapHit !== undefined) report.truncated.fileCapHit = info.fileCapHit;
-      if (info.filesTotal !== undefined) report.truncated.filesTotal = info.filesTotal;
-      recomputePartial();
-    },
     report() {
       return report;
     },
@@ -353,13 +343,6 @@ export function describeEmbeddingMismatch(
       .map(r => `${report.skippedChunks.byReason[r]} ${SKIP_REASON_LABELS[r]}`)
       .join(', ');
     sentences.push(`${report.skippedChunks.total} loaded chunk(s) could not be compared (${reasons}).`);
-  }
-  if (report.truncated.chunkCapHit || report.truncated.fileCapHit) {
-    const what = [report.truncated.fileCapHit ? 'files' : null, report.truncated.chunkCapHit ? 'chunks' : null]
-      .filter(Boolean)
-      .join(' and ');
-    const total = report.truncated.filesTotal !== null ? ` (${report.truncated.filesTotal} files match in total)` : '';
-    sentences.push(`The search also hit its ${what} cap${total}, so the corpus was not fully considered.`);
   }
   if (report.unlabeled.chunks > 0) {
     sentences.push(

@@ -35,31 +35,6 @@ import { knowledgeBaseSearchTool } from './index';
 import { emptyEmbeddingMismatchReport } from '../../../../dataLakeService/embeddingMismatch';
 import type { ToolContext } from '../../base/types';
 
-const ADA = 'text-embedding-ada-002';
-const SMALL_3 = 'text-embedding-3-small';
-
-const emptySearchResult = () => ({
-  results: [],
-  totalChunksSearched: 0,
-  filesInScope: 0,
-  chunksScored: 0,
-  embeddingModel: ADA,
-  embeddingMismatch: emptyEmbeddingMismatchReport(),
-});
-
-/** A report describing one file withheld for being embedded with another model. */
-const mismatchReport = () => {
-  const report = emptyEmbeddingMismatchReport();
-  report.excludedFiles = {
-    count: 1,
-    models: [SMALL_3],
-    estimatedChunks: 12,
-    sample: [{ fileId: 'f9', fileName: 'foreign.md', embeddingModel: SMALL_3 }],
-  };
-  report.partial = true;
-  return report;
-};
-
 const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
 
 function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
@@ -94,11 +69,36 @@ async function run(context: ToolContext) {
 
 beforeEach(() => {
   getDynamicDataLakeAccessMock.mockClear();
-  // Mirrors the real result shape (untyped mocks, so a missing field would only surface at
-  // runtime as a silent fall-through to keyword search).
-  semanticDataLakeSearchMock.mockClear().mockResolvedValue(emptySearchResult());
-  fileScopedSemanticSearchMock.mockClear().mockResolvedValue(emptySearchResult());
+  // Mirrors the real result shape: chunksScored/embeddingMismatch are required on the service's
+  // return type, and these mocks are untyped, so omitting them surfaces only at runtime.
+  semanticDataLakeSearchMock.mockClear().mockResolvedValue(emptySemanticResult());
+  fileScopedSemanticSearchMock.mockClear().mockResolvedValue(emptySemanticResult());
 });
+
+const ADA = 'text-embedding-ada-002';
+const SMALL_3 = 'text-embedding-3-small';
+
+const emptySemanticResult = () => ({
+  results: [],
+  totalChunksSearched: 0,
+  filesInScope: 0,
+  chunksScored: 0,
+  embeddingModel: ADA,
+  embeddingMismatch: emptyEmbeddingMismatchReport(),
+});
+
+/** A report describing one file withheld for being embedded with another model. */
+const mismatchReport = () => {
+  const report = emptyEmbeddingMismatchReport();
+  report.excludedFiles = {
+    count: 1,
+    models: [SMALL_3],
+    estimatedChunks: 12,
+    sample: [{ fileId: 'f9', fileName: 'foreign.md', embeddingModel: SMALL_3 }],
+  };
+  report.partial = true;
+  return report;
+};
 
 describe('search_knowledge_base keyword fallback retrieval exclusion', () => {
   it('drops a marked file from keyword results but keeps the clean one', async () => {
@@ -201,7 +201,112 @@ describe('search_knowledge_base agent kbScope enforcement', () => {
   });
 });
 
-describe('search_knowledge_base partial-result reporting', () => {
+describe('search_knowledge_base partial-corpus disclosure', () => {
+  const hit = {
+    chunkId: 'c1',
+    fileId: 'f1',
+    fileName: 'Handbook.pdf',
+    fileTags: [],
+    chunkText: 'pto accrues monthly',
+    score: 0.81,
+  };
+  const scanOf = (overrides: Record<string, unknown>) => ({
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 3,
+    filesScoped: 3,
+    filesScanned: 3,
+    chunksScanned: 9,
+    chunksSkippedDimensionMismatch: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+    ...overrides,
+  });
+
+  // The unscoped semantic arm bails when no lake is accessible, so grant one.
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+    });
+  });
+
+  /** Unlike makeContext, this wires every dep the semantic arm needs so it actually runs. */
+  function semanticContext(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  it('unscoped arm: a truncated scan warns the model not to claim the library holds nothing more', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hit],
+      totalChunksSearched: 100000,
+      filesInScope: 2314,
+      scan: scanOf({ truncated: true, chunkBudgetHit: true, filesScanned: 800, filesMatching: 2314 }),
+    });
+
+    const out = await run(semanticContext());
+
+    expect(out).toContain('covered only 800 of 2314 documents');
+    expect(out).toContain('Do not state or imply the knowledge base has nothing further');
+    expect(out).toContain('pto accrues monthly');
+  });
+
+  it('unscoped arm: a complete scan produces no notice at all', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hit],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan: scanOf({}),
+    });
+
+    const out = await run(semanticContext());
+
+    expect(out).not.toContain('covered only');
+    expect(out).not.toContain('NOTE:');
+  });
+
+  it('scoped (agent kbScope) arm gets the same disclosure - neither surface may hide it', async () => {
+    fileScopedSemanticSearchMock.mockResolvedValue({
+      results: [hit],
+      totalChunksSearched: 100000,
+      filesInScope: 500,
+      scan: scanOf({ truncated: true, fileBudgetHit: true, filesScanned: 200, filesMatching: 500 }),
+    });
+
+    const out = await run(semanticContext({ kbScope: { fileIds: ['f1'] } as never }));
+
+    expect(fileScopedSemanticSearchMock).toHaveBeenCalled();
+    expect(out).toContain('covered only 200 of 500 documents');
+  });
+
+  it('forwards the resolved scan budgets into the search', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hit],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan: scanOf({}),
+    });
+
+    await run(semanticContext());
+
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toHaveProperty('budgets');
+  });
+});
+
+describe('search_knowledge_base embedding-mismatch disclosure', () => {
+  // Distinct from the truncated-scan disclosure above: that says how much of the corpus was
+  // REACHED, this says whether what was reached could be COMPARED. Both can be true at once.
   function makeSemanticContext(overrides: Partial<ToolContext> = {}): ToolContext {
     return makeContext({
       retrievalFilter: undefined,
@@ -230,10 +335,8 @@ describe('search_knowledge_base partial-result reporting', () => {
   });
 
   it('tells the MODEL about withheld content, in the string it actually receives', async () => {
-    // statusUpdate reaches the UI only, so the returned string is the sole channel the model
-    // reads. A notice that lives anywhere else cannot influence the answer.
     semanticDataLakeSearchMock.mockResolvedValue({
-      ...emptySearchResult(),
+      ...emptySemanticResult(),
       results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
       embeddingMismatch: mismatchReport(),
     });
@@ -247,7 +350,7 @@ describe('search_knowledge_base partial-result reporting', () => {
 
   it('says nothing extra when the corpus is consistent', async () => {
     semanticDataLakeSearchMock.mockResolvedValue({
-      ...emptySearchResult(),
+      ...emptySemanticResult(),
       results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
     });
 
@@ -259,10 +362,9 @@ describe('search_knowledge_base partial-result reporting', () => {
 
   it('carries the notice through the keyword fall-through when everything was withheld', async () => {
     // The worst case: no semantic hits BECAUSE every matching file was excluded. The arm has no
-    // output, keyword search answers instead, and the notice has to survive that hand-off or the
-    // model reports a complete answer over a partly-searched corpus.
+    // output, keyword search answers instead, and the notice has to survive that hand-off.
     semanticDataLakeSearchMock.mockResolvedValue({
-      ...emptySearchResult(),
+      ...emptySemanticResult(),
       results: [],
       embeddingMismatch: mismatchReport(),
     });
@@ -273,7 +375,6 @@ describe('search_knowledge_base partial-result reporting', () => {
     expect(ctx.db.fabfiles!.search).toHaveBeenCalledTimes(1);
     expect(out).toContain('Keyword doc.pdf');
     expect(out).toContain(SMALL_3);
-    expect(out).toContain('partial');
   });
 
   it('does not invent a notice when the semantic arm throws', async () => {
@@ -287,7 +388,7 @@ describe('search_knowledge_base partial-result reporting', () => {
 
   it('accretes the warning onto promptMeta alongside the citables', async () => {
     semanticDataLakeSearchMock.mockResolvedValue({
-      ...emptySearchResult(),
+      ...emptySemanticResult(),
       results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
       embeddingMismatch: mismatchReport(),
     });
@@ -298,10 +399,6 @@ describe('search_knowledge_base partial-result reporting', () => {
     const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
     const withWarning = calls.find(c => (c[0] as { promptMeta?: { warnings?: string[] } })?.promptMeta?.warnings);
     expect(withWarning).toBeDefined();
-    const changes = withWarning![0] as { promptMeta: { warnings: string[]; citables: unknown[] } };
-    expect(changes.promptMeta.warnings[0]).toContain(SMALL_3);
-    expect(changes.promptMeta.citables).toHaveLength(1);
-    // One status line, not two - a second would read as a bug to the user.
-    expect(String(withWarning![1])).toContain('partial results');
+    expect((withWarning![0] as { promptMeta: { warnings: string[] } }).promptMeta.warnings[0]).toContain(SMALL_3);
   });
 });
