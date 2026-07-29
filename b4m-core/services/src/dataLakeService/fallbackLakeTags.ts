@@ -68,6 +68,10 @@ const satisfiesPrefix = (tags: readonly FileTag[], prefix: string): boolean =>
 export const createDataLakeFallbackTagger = ({ db }: LakeTagAdapters): DataLakeFallbackTagger => {
   const lakeCache = new Map<string, Promise<{ prefix: string } | null>>();
 
+  // Caches the PENDING promise, set synchronously before the lookup yields, so concurrent files
+  // in one Promise.all share a single read. A rejection is cached too, on purpose: every file in
+  // the batch then fails the same way instead of some retrying and succeeding, which would leave
+  // the batch half-stamped. Do not "fix" this into a per-call retry.
   const resolvePrefix = (metaTag: string): Promise<{ prefix: string } | null> => {
     const cached = lakeCache.get(metaTag);
     if (cached) return cached;
