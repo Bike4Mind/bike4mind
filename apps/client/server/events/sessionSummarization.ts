@@ -12,7 +12,14 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import { AiEvents, ChatModelName, IMessage, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import {
+  AiEvents,
+  ChatModelName,
+  DATALAKE_TAG_PREFIX,
+  IMessage,
+  KnowledgeType,
+  SupportedFabFileMimeTypes,
+} from '@bike4mind/common';
 import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -184,6 +191,14 @@ export const handler = withEventContext(async (event, logger) => {
     await withTransaction(async () => {
       const fabfile = await fabFileRepository.findOne({ sessionId: session.id });
       if (fabfile) {
+        // Re-summarizing must not change which data lakes this file belongs to. The tags here are
+        // the SESSION's, which never carry a `datalake:` meta-tag, and a whole-array tag write
+        // omitting one reads as leaving that lake - so without carrying the file's existing
+        // meta-tags through, every re-summarization would evict a lake-indexed summary (and fail
+        // outright for a summariser who cannot manage the lake).
+        const lakeTags = (fabfile.tags ?? []).filter(
+          t => typeof t?.name === 'string' && t.name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)
+        );
         await fabFilesService.updateFabFile(
           user,
           {
@@ -193,7 +208,7 @@ export const handler = withEventContext(async (event, logger) => {
             type: fabFileData.type,
             fileContent: fabFileData.fileContent,
             sessionId: fabFileData.sessionId,
-            tags: fabFileData.tags,
+            tags: [...(fabFileData.tags ?? []), ...lakeTags],
           },
           {
             db: {

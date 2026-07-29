@@ -3,20 +3,12 @@ import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common'
 import { BadRequestError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
 import { canManageLake } from '../dataLakeService/authorizeLakeWrite';
-import {
-  addFileToLake,
-  removeFileFromLake,
-  type MembershipActor,
-  type MembershipLake,
-} from '../dataLakeService/lakeMembership';
+import { removeFileFromLake, type MembershipActor, type MembershipLake } from '../dataLakeService/lakeMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 
 interface ReconcileLakeTagsAdapters {
   db: {
-    fabFiles: Pick<
-      IFabFileRepository,
-      'findById' | 'pullTagsByFabFileId' | 'pushTagsByFabFileId' | 'computeDataLakeStats'
-    >;
+    fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats'>;
   };
 }
@@ -44,7 +36,14 @@ const isMetaTag = (name: string): boolean => name.toLowerCase().startsWith(DATAL
  * in either order safely on their own: the caller persists `tagsToPersist` first (membership
  * intact), then calls `commit()`, which pulls or pushes the membership tags atomically. Every
  * gate is evaluated up front, before the caller persists anything - a check that only fired
- * during `commit()` would have already granted or revoked membership via the array write.
+ * during `commit()` would have already granted or revoked membership via the array write. A JOIN
+ * therefore needs no write in `commit()` at all: the array the caller persists already carries the
+ * canonical meta-tag. Only a LEAVE does, because clearing the lake's prefixed content tags cannot
+ * be expressed as an absence in that array.
+ *
+ * These writes are NOT covered by any surrounding transaction (the repository primitives take no
+ * session), so a failure part-way through `commit()` leaves the file's membership half-changed.
+ * Stats are recomputed from source afterwards, so they converge; the tag state does not roll back.
  *
  * A meta-tag that resolves to no lake is refused when the caller is trying to APPLY it, matching
  * the route gate; the same string being dropped is let through as a plain tag removal, since an
@@ -111,9 +110,8 @@ export const reconcileLakeTags = async (
       for (const lake of leaves) {
         await removeFileFromLake(actor, lake, fabFileId, { db });
       }
-      for (const lake of joins) {
-        await addFileToLake(actor, lake, fabFileId, { db });
-      }
+      // Joins need no write here: the caller has already persisted the canonical meta-tag as part
+      // of `tagsToPersist`, and their gate ran above, before that write. They still need stats.
       for (const lake of [...leaves, ...joins]) {
         await recomputeLakeStats(lake.id, lake.datalakeTag, { db });
       }

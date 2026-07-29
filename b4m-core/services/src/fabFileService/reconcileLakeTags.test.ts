@@ -57,8 +57,10 @@ describe('reconcileLakeTags', () => {
     const result = await run(adapters, [], [tag('datalake:lake', 1)]);
     await result.commit();
 
+    // The join is carried by the persisted array itself, so commit() issues no second write -
+    // only the stats recompute the array write cannot do.
     expect(result.tagsToPersist).toEqual([tag('datalake:lake', 1)]);
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
   });
 

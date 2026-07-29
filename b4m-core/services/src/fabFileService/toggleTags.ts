@@ -134,11 +134,16 @@ export const toggleTags = async (userId: string, params: unknown, { db }: FabFil
     const present = storedTagNames(file).filter(name => name.toLocaleLowerCase() === key);
     if (present.length > 0) {
       await db.fabFiles.pullTagsByFabFileId(file.id, present);
+      // The pull's return cannot gate this: timestamps make it report a modification even when
+      // nothing matched, so a concurrent removal of the same tag still decrements here. The
+      // registry is a display counter, and recreating the tag re-counts it.
       tagCounters[tag] = (tagCounters[tag] ?? 0) - 1;
       return;
     }
-    await db.fabFiles.pushTagsByFabFileId(file.id, [tag]);
-    tagCounters[tag] = (tagCounters[tag] ?? 0) + 1;
+    // The push's return IS truthful - a name already present fails its filter and counts 0 - so
+    // gate on it rather than on the pre-write snapshot, which a concurrent add makes stale.
+    const inserted = await db.fabFiles.pushTagsByFabFileId(file.id, [tag]);
+    if (inserted > 0) tagCounters[tag] = (tagCounters[tag] ?? 0) + 1;
   };
 
   // Tags are applied one at a time within a file - they mutate the same document - while files

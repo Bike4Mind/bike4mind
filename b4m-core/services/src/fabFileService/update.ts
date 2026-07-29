@@ -44,7 +44,7 @@ interface UpdateFabFileAdapters {
   db: {
     fabFiles: Pick<
       IFabFileRepository,
-      'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'pushTagsByFabFileId' | 'computeDataLakeStats'
+      'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
     >;
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats'>;
   };
