@@ -38,14 +38,39 @@ export const listFileTags = async (
     }),
   ]);
 
-  // The aggregate groups on the exact stored `tags.name`, so one tag document can match several
-  // buckets differing only in case; sum them instead of letting the last one win. toLowerCase and
-  // not toLocaleLowerCase, whose dotless-i mapping varies by runtime locale.
-  const countsByName = new Map<string, number>();
-  for (const { tag, count } of tagCounts) {
-    const key = tag.toLowerCase();
-    countsByName.set(key, (countsByName.get(key) ?? 0) + count);
+  // Attribute each aggregate bucket to a tag document. An exact name match wins. A bucket that no
+  // document claims exactly is matched case-insensitively, because fabFileService/toggleTags
+  // lowercases what it writes onto files while tagService/create keeps whatever casing the tag
+  // document was created with - without the fallback, an `Invoices` document over `invoices` files
+  // would read zero.
+  //
+  // The fold cannot be unconditional: TagSchema's unique index is { userId, name } with no
+  // collation, so `Invoices` and `invoices` are two legitimate documents, and crediting both with
+  // the combined total would count the same file twice. An unclaimed bucket is therefore only
+  // credited when exactly one document folds to its name; when several do it is unattributable and
+  // dropped, which under-reports rather than inventing files. toLowerCase and not
+  // toLocaleLowerCase, whose dotless-i mapping varies by runtime locale.
+  const exactNames = new Set(fileTags.map(t => t.name));
+  const documentsPerFoldedName = new Map<string, number>();
+  for (const { name } of fileTags) {
+    const key = name.toLowerCase();
+    documentsPerFoldedName.set(key, (documentsPerFoldedName.get(key) ?? 0) + 1);
   }
 
-  return fileTags.map(tag => ({ ...tag, fileCount: countsByName.get(tag.name.toLowerCase()) ?? 0 }));
+  const exactCounts = new Map<string, number>();
+  const unclaimedCounts = new Map<string, number>();
+  for (const { tag, count } of tagCounts) {
+    if (exactNames.has(tag)) {
+      exactCounts.set(tag, count);
+    } else {
+      const key = tag.toLowerCase();
+      unclaimedCounts.set(key, (unclaimedCounts.get(key) ?? 0) + count);
+    }
+  }
+
+  return fileTags.map(tag => {
+    const folded = tag.name.toLowerCase();
+    const unclaimed = documentsPerFoldedName.get(folded) === 1 ? (unclaimedCounts.get(folded) ?? 0) : 0;
+    return { ...tag, fileCount: (exactCounts.get(tag.name) ?? 0) + unclaimed };
+  });
 };

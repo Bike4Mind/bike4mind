@@ -45,7 +45,10 @@ vi.mock('@bike4mind/services', () => ({
 // Import after mocks are registered so the chain capture runs.
 import '@pages/api/files/tags/index';
 
-const USER_TAGS = ['beta-tester', 'some-arbitrary-tag'];
+// `Opti` is the requiredUserTag of the only lake in the DATA_LAKES registry, so getDataLakeTags
+// resolves to a non-empty set here. Without it every assertion below passes vacuously on [].
+const USER_TAGS = ['Opti', 'some-arbitrary-tag'];
+const GRANTED_LAKE_TAG = 'datalake:opti-knowledge';
 
 function invokeGet(user: Record<string, unknown>) {
   const { req, res } = createMocks({ method: 'GET', url: '/api/files/tags' });
@@ -77,8 +80,19 @@ describe('GET /api/files/tags', () => {
     await mockRefs.getHandler!(req, res);
 
     const { dataLakeTags } = mockRefs.listArgs?.[1] as { dataLakeTags: string[] };
+    expect(dataLakeTags).toContain(GRANTED_LAKE_TAG);
     expect(dataLakeTags).not.toContain('some-arbitrary-tag');
-    expect(dataLakeTags.every(tag => tag.startsWith('datalake:'))).toBe(true);
+    expect(dataLakeTags).not.toContain('Opti');
+  });
+
+  // dataLakeTags is an ownership-bypass arm in buildOwnershipConditions, so a caller who holds no
+  // lake-granting tag must widen the count scope by nothing at all.
+  it('grants no lake scope to a caller without the gating tag', async () => {
+    const { req, res } = invokeGet({ id: 'user-1', groups: [], tags: ['some-arbitrary-tag'] });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect((mockRefs.listArgs?.[1] as { dataLakeTags: string[] }).dataLakeTags).toEqual([]);
   });
 
   it('passes both repositories the service needs to recompute counts', async () => {

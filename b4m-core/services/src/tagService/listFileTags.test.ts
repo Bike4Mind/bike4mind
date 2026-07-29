@@ -43,17 +43,57 @@ describe('tagService - listFileTags', () => {
     expect(result[0].fileCount).toBe(2);
   });
 
-  it('sums aggregate buckets that differ only in case', async () => {
+  // toggleTags lowercases what it writes onto files, tagService/create keeps the casing the user
+  // typed, so the common shape is a capitalised document over lowercase file tags.
+  it('matches case-insensitively when no document claims the bucket exactly', async () => {
     (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('Invoices', 0)]);
     (mockFabFileRepo.countFilesByTagForUser as Mock).mockResolvedValueOnce([
       { tag: 'invoices', count: 2 },
-      { tag: 'Invoices', count: 3 },
       { tag: 'INVOICES', count: 1 },
     ]);
 
     const result = await listFileTags(userId, params, adapters);
 
-    expect(result[0].fileCount).toBe(6);
+    expect(result[0].fileCount).toBe(3);
+  });
+
+  // The unique index is { userId, name } with no collation, so these are two real documents.
+  // Folding them together would credit each with the other's files and double-count the surface.
+  it('keeps documents that differ only in case on their own exact counts', async () => {
+    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('Invoices', 0), tag('invoices', 0)]);
+    (mockFabFileRepo.countFilesByTagForUser as Mock).mockResolvedValueOnce([
+      { tag: 'Invoices', count: 3 },
+      { tag: 'invoices', count: 2 },
+    ]);
+
+    const result = await listFileTags(userId, params, adapters);
+
+    expect(result.map(t => t.fileCount)).toEqual([3, 2]);
+  });
+
+  it('drops a bucket it cannot attribute rather than crediting both candidates', async () => {
+    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('Invoices', 0), tag('invoices', 0)]);
+    (mockFabFileRepo.countFilesByTagForUser as Mock).mockResolvedValueOnce([
+      { tag: 'Invoices', count: 3 },
+      { tag: 'invoices', count: 2 },
+      { tag: 'INVOICES', count: 9 },
+    ]);
+
+    const result = await listFileTags(userId, params, adapters);
+
+    expect(result.map(t => t.fileCount)).toEqual([3, 2]);
+  });
+
+  it('adds unclaimed case variants to the single document that folds to them', async () => {
+    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('invoices', 0)]);
+    (mockFabFileRepo.countFilesByTagForUser as Mock).mockResolvedValueOnce([
+      { tag: 'invoices', count: 2 },
+      { tag: 'Invoices', count: 3 },
+    ]);
+
+    const result = await listFileTags(userId, params, adapters);
+
+    expect(result[0].fileCount).toBe(5);
   });
 
   it('reports zero for a tag no live file carries', async () => {

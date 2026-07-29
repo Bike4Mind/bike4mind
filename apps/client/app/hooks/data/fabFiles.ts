@@ -583,6 +583,9 @@ export function useUpdateFabFile(callback?: { onSuccess?: () => void }) {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
       // Invalidate and force refetch system prompt files (they have long staleTime)
       queryClient.invalidateQueries({ queryKey: ['system-prompt-files'], exact: false, refetchType: 'all' });
+      // This route replaces the whole tags array, so any tag surface showing a per-tag file count
+      // is stale afterwards. The bare prefix also covers ['file-tags','counts'].
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       callback?.onSuccess?.();
     },
   });

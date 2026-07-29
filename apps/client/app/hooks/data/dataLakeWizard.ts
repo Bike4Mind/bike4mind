@@ -940,7 +940,9 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       // source discriminator, and a fully-specified key would refresh only one surface.
       queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
       queryClient.invalidateQueries({ queryKey: ['dataLakeArticles'] });
-      queryClient.invalidateQueries({ queryKey: ['file-tags', 'counts'] });
+      // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
+      // so dropping tags here staled the list too, not only the counts endpoint.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to remove file from data lake');
