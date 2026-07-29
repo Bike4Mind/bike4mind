@@ -49,7 +49,13 @@ import { green } from '@client/app/utils/themes/colors';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import DeepResearchConfigModal from './DeepResearchConfigModal';
 import ImageGenerationModelSelectionModal from './ImageGenerationModelSelectionModal';
-import { getToolDisplayName, getToolDescription, isToolAvailableInAgentMode } from '@client/app/utils/toolMapping';
+import {
+  getToolDisplayName,
+  getToolDescription,
+  isToolAvailableInAgentMode,
+  isToolKeyMissing,
+  filterToolsForDisplay,
+} from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useConfig } from '@client/app/hooks/data/settings';
 
@@ -79,10 +85,10 @@ export const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
 type McpServerOption = Pick<IMcpServerDocument, 'id' | 'enabled' | 'tools'> & { name: string };
 
 /**
- * Resolves, for a given tool id, why it's unavailable in the current composer
- * mode (Fast / Agent), or `null` when the tool is allowed. Provided by
- * ToolsSection so each ToolContainer can dim itself + show an explanatory
- * tooltip without prop-drilling the mode state to every row.
+ * Resolves, for a given tool id, why it's unavailable - either a missing API key
+ * or the current composer mode (Fast / Agent) - or `null` when the tool is
+ * allowed. Provided by ToolsSection so each ToolContainer can dim itself + show an
+ * explanatory tooltip without prop-drilling that state to every row.
  */
 type ToolGate = { reason: string } | null;
 const ToolGateContext = createContext<(toolId: B4MLLMTools) => ToolGate>(() => null);
@@ -90,10 +96,10 @@ const ToolGateContext = createContext<(toolId: B4MLLMTools) => ToolGate>(() => n
 interface ToolContainerProps extends PropsWithChildren {
   sx?: BoxProps['sx'];
   /**
-   * When set, this row represents a Smart Tool whose availability depends on the
-   * current mode. If the mode disallows it, the row is dimmed + made
+   * When set, this row represents a Smart Tool that can be gated by a missing API
+   * key or by the current mode. When it is, the row is dimmed + made
    * non-interactive and wrapped in a tooltip explaining why. Omit for non-tool
-   * rows (Thinking, Quest Master, MCP servers, etc.) which are never mode-gated.
+   * rows (Thinking, Quest Master, MCP servers, etc.) which are never gated.
    */
   toolId?: B4MLLMTools;
 }
@@ -137,8 +143,10 @@ const ToolContainer = ({ children, sx, toolId }: ToolContainerProps) => {
     return content;
   }
 
-  // Disallowed in the current mode: dim + disable interaction on the row itself,
-  // but keep the wrapper hoverable so the explanatory tooltip still shows.
+  // Gated: dim + disable interaction on the row itself, but keep the wrapper
+  // hoverable so the explanatory tooltip still shows. This only kills pointer
+  // events - a key-gated toggle is still keyboard-reachable, so handleToggleTool
+  // refuses it there too.
   return (
     <Tooltip title={gate.reason} variant="soft" size="sm" placement="top" arrow>
       <Box
@@ -392,6 +400,13 @@ const ToolsSection = ({
 
   const handleToggleTool = useCallback(
     (tool: B4MLLMTools) => {
+      // A key-gated tool renders as off (filterToolsForDisplay) while its stored
+      // preference is kept, so toggling has to be refused here too. ToolContainer
+      // only kills pointer events; the toggle is a real focusable <button>, so
+      // Enter/Space would otherwise erase that preference with no visible change.
+      if (isToolKeyMissing(tool, toolAvailability)) {
+        return;
+      }
       if (setTools) {
         // Use the provided setTools function
         if (tools.includes(tool)) {
@@ -406,7 +421,7 @@ const ToolsSection = ({
         });
       }
     },
-    [setLLM, setTools, tools]
+    [setLLM, setTools, tools, toolAvailability]
   );
 
   // Agent mode runs the agent executor (fixed toolset, ignoring Smart Tools) when
@@ -490,9 +505,9 @@ const ToolsSection = ({
   const getToolGate = useCallback(
     (toolId: B4MLLMTools): { reason: string } | null => {
       // A missing API key is a hard, mode-independent blocker: without it the
-      // tool silently returns nothing, so surface it first. Only gate once the
-      // availability data has loaded (=== false), never on undefined.
-      if (toolAvailability?.[toolId] === false) {
+      // tool silently returns nothing, so surface it first. isToolKeyMissing only
+      // gates once the availability data has loaded, never on undefined.
+      if (isToolKeyMissing(toolId, toolAvailability)) {
         return { reason: MISSING_KEY_TOOLTIPS[toolId] ?? 'Requires an API key that has not been configured.' };
       }
       if (toolMode === 'fast') {
@@ -562,9 +577,16 @@ const ToolsSection = ({
     );
   }
 
+  // The tools that read as ON in this panel: a key-gated tool keeps its stored
+  // preference but renders off, so both the switches and the tallies below go
+  // through this rather than the raw `tools`. Plain const, not a useMemo - the
+  // early return above means hooks cannot be called from here down.
+  const displayTools = filterToolsForDisplay(tools, toolAvailability);
   // Enabled MCP servers (integrations) count toward the pinned tally like any other
   // tool. Agent-only ones (see AGENT_ONLY_MCP_SERVERS) are labeled per-row rather
-  // than excluded here, so the number reflects everything the user has toggled on.
+  // than excluded here, so the number reflects everything the user has toggled on
+  // and can actually use. MCP servers have no toolAvailability entry, so nothing to
+  // filter for them.
   const enabledMcpServerCount = visibleMcpServers.filter(server => isMcpServerEnabled(server.name)).length;
   // Feature-gated switches that live outside the `tools` array (each has its own LLM
   // state flag) but appear in this panel, so they count like any other tool. Must stay
@@ -574,8 +596,10 @@ const ToolsSection = ({
     (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) +
     (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
   // Fun & Novelty tools count toward their own section's tally, not Individual tools.
-  const funPinnedCount = tools.filter(t => FUN_NOVELTY_TOOLS.includes(t)).length;
-  const individualToolsCount = tools.length - funPinnedCount;
+  // Both lines must read displayTools: splitting them (one raw, one filtered) would
+  // count a filtered-out tool in the Individual total.
+  const funPinnedCount = displayTools.filter(t => FUN_NOVELTY_TOOLS.includes(t)).length;
+  const individualToolsCount = displayTools.length - funPinnedCount;
   const pinnedCount = individualToolsCount + enabledMcpServerCount + specialToolsCount;
 
   // Second line appended to the Smart tools description in Smart mode, only when Agent-mode
@@ -787,7 +811,7 @@ const ToolsSection = ({
               </Box>
               <SquareSlideToggle
                 onChange={() => handleToggleTool('web_search')}
-                checked={tools.includes('web_search')}
+                checked={displayTools.includes('web_search')}
               />
             </ToolContainer>
           </Grid>
@@ -803,7 +827,10 @@ const ToolsSection = ({
                 />
                 <ToolLabel name={getToolDisplayName('web_fetch')} description={getToolDescription('web_fetch')} />
               </Box>
-              <SquareSlideToggle onChange={() => handleToggleTool('web_fetch')} checked={tools.includes('web_fetch')} />
+              <SquareSlideToggle
+                onChange={() => handleToggleTool('web_fetch')}
+                checked={displayTools.includes('web_fetch')}
+              />
             </ToolContainer>
           </Grid>
           {/* Knowledge Base Search */}
@@ -824,7 +851,7 @@ const ToolsSection = ({
                 </Box>
                 <SquareSlideToggle
                   onChange={() => handleToggleTool('search_knowledge_base')}
-                  checked={tools.includes('search_knowledge_base')}
+                  checked={displayTools.includes('search_knowledge_base')}
                 />
               </ToolContainer>
             </Grid>
@@ -847,7 +874,7 @@ const ToolsSection = ({
                 </Box>
                 <SquareSlideToggle
                   onChange={() => handleToggleTool('fmp_financial_data')}
-                  checked={tools.includes('fmp_financial_data')}
+                  checked={displayTools.includes('fmp_financial_data')}
                 />
               </ToolContainer>
             </Grid>
@@ -916,7 +943,7 @@ const ToolsSection = ({
               </Box>
               <SquareSlideToggle
                 onChange={() => handleToggleTool('prompt_enhancement')}
-                checked={tools.includes('prompt_enhancement')}
+                checked={displayTools.includes('prompt_enhancement')}
               />
             </ToolContainer>
           </Grid>
@@ -974,7 +1001,7 @@ const ToolsSection = ({
                   </Tooltip>
                   <SquareSlideToggle
                     onChange={() => handleToggleTool('deep_research')}
-                    checked={tools.includes('deep_research')}
+                    checked={displayTools.includes('deep_research')}
                   />
                 </Box>
               </ToolContainer>
@@ -1034,7 +1061,7 @@ const ToolsSection = ({
                 </Tooltip>
                 <SquareSlideToggle
                   onChange={() => handleToggleTool('image_generation')}
-                  checked={tools.includes('image_generation')}
+                  checked={displayTools.includes('image_generation')}
                   data-testid="tool-toggle-image-generation"
                 />
               </Box>
@@ -1057,7 +1084,7 @@ const ToolsSection = ({
               </Box>
               <SquareSlideToggle
                 onChange={() => handleToggleTool('mermaid_chart')}
-                checked={tools.includes('mermaid_chart')}
+                checked={displayTools.includes('mermaid_chart')}
               />
             </ToolContainer>
           </Grid>
@@ -1078,7 +1105,7 @@ const ToolsSection = ({
               </Box>
               <SquareSlideToggle
                 onChange={() => handleToggleTool('excel_generation')}
-                checked={tools.includes('excel_generation')}
+                checked={displayTools.includes('excel_generation')}
               />
             </ToolContainer>
           </Grid>
@@ -1260,7 +1287,7 @@ const ToolsSection = ({
               </Box>
               <SquareSlideToggle
                 onChange={() => handleToggleTool('current_datetime')}
-                checked={tools.includes('current_datetime')}
+                checked={displayTools.includes('current_datetime')}
               />
             </ToolContainer>
           </Grid>
@@ -1281,7 +1308,7 @@ const ToolsSection = ({
               </Box>
               <SquareSlideToggle
                 onChange={() => handleToggleTool('math_evaluate')}
-                checked={tools.includes('math_evaluate')}
+                checked={displayTools.includes('math_evaluate')}
               />
             </ToolContainer>
           </Grid>
@@ -1302,7 +1329,7 @@ const ToolsSection = ({
               </Box>
               <SquareSlideToggle
                 onChange={() => handleToggleTool('wolfram_alpha')}
-                checked={tools.includes('wolfram_alpha')}
+                checked={displayTools.includes('wolfram_alpha')}
               />
             </ToolContainer>
           </Grid>
@@ -1338,7 +1365,8 @@ const ToolsSection = ({
                 />
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, minWidth: 0 }}>
                   <ToolLabel name={getToolDisplayName('recharts')} description={getToolDescription('recharts')} />
-                  {tools.includes('recharts') && (
+                  {/* Sub-control follows the rendered toggle, not the raw preference. */}
+                  {displayTools.includes('recharts') && (
                     <SwitchSelector
                       options={[
                         { value: 'inline', label: 'Inline' },
@@ -1359,7 +1387,10 @@ const ToolsSection = ({
                     />
                   )}
                 </Box>
-                <SquareSlideToggle onChange={() => handleToggleTool('recharts')} checked={tools.includes('recharts')} />
+                <SquareSlideToggle
+                  onChange={() => handleToggleTool('recharts')}
+                  checked={displayTools.includes('recharts')}
+                />
               </Box>
             </ToolContainer>
           </Grid>
@@ -1439,7 +1470,7 @@ const ToolsSection = ({
                 </Box>
                 <SquareSlideToggle
                   onChange={() => handleToggleTool('chess_engine')}
-                  checked={tools.includes('chess_engine')}
+                  checked={displayTools.includes('chess_engine')}
                 />
               </ToolContainer>
             </Grid>
@@ -1457,7 +1488,7 @@ const ToolsSection = ({
                 </Box>
                 <SquareSlideToggle
                   onChange={() => handleToggleTool('dice_roll')}
-                  checked={tools.includes('dice_roll')}
+                  checked={displayTools.includes('dice_roll')}
                 />
               </ToolContainer>
             </Grid>
@@ -1478,7 +1509,7 @@ const ToolsSection = ({
                 </Box>
                 <SquareSlideToggle
                   onChange={() => handleToggleTool('weather_info')}
-                  checked={tools.includes('weather_info')}
+                  checked={displayTools.includes('weather_info')}
                 />
               </ToolContainer>
             </Grid>
@@ -1499,7 +1530,7 @@ const ToolsSection = ({
                 </Box>
                 <SquareSlideToggle
                   onChange={() => handleToggleTool('wikipedia_on_this_day')}
-                  checked={tools.includes('wikipedia_on_this_day')}
+                  checked={displayTools.includes('wikipedia_on_this_day')}
                 />
               </ToolContainer>
             </Grid>
@@ -1517,7 +1548,7 @@ const ToolsSection = ({
                 </Box>
                 <SquareSlideToggle
                   onChange={() => handleToggleTool('iss_tracker')}
-                  checked={tools.includes('iss_tracker')}
+                  checked={displayTools.includes('iss_tracker')}
                 />
               </ToolContainer>
             </Grid>
@@ -1538,7 +1569,7 @@ const ToolsSection = ({
                 </Box>
                 <SquareSlideToggle
                   onChange={() => handleToggleTool('sunrise_sunset')}
-                  checked={tools.includes('sunrise_sunset')}
+                  checked={displayTools.includes('sunrise_sunset')}
                 />
               </ToolContainer>
             </Grid>
@@ -1556,7 +1587,7 @@ const ToolsSection = ({
                 </Box>
                 <SquareSlideToggle
                   onChange={() => handleToggleTool('moon_phase')}
-                  checked={tools.includes('moon_phase')}
+                  checked={displayTools.includes('moon_phase')}
                 />
               </ToolContainer>
             </Grid>
@@ -1577,7 +1608,7 @@ const ToolsSection = ({
                 </Box>
                 <SquareSlideToggle
                   onChange={() => handleToggleTool('planet_visibility')}
-                  checked={tools.includes('planet_visibility')}
+                  checked={displayTools.includes('planet_visibility')}
                 />
               </ToolContainer>
             </Grid>

@@ -8,6 +8,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   IMessage,
+  isAudioMimeType,
   isImageAttachment,
   isImageServeable,
   ISessionDocument,
@@ -997,6 +998,18 @@ export async function processFabFilesServer(
 
   const processFileInParallel = async (file: IFabFileDocument): Promise<void> => {
     try {
+      // Audio (generated TTS / sound effects) is never LLM input: no model
+      // accepts audio, and the non-image branch below would otherwise try to
+      // read the bytes as text. This is the authoritative attachment guard -
+      // every chat/agent path funnels through here, so a file that slips past
+      // the attach UI still can't reach the model.
+      if (isAudioMimeType(file.mimeType)) {
+        logger.warn(
+          `[processFabFilesServer] Skipping audio file ${file.fileName} — audio is not attachable to an LLM.`
+        );
+        return;
+      }
+
       if (supportsVision && isImageAttachment(file.mimeType)) {
         // Never send a not-yet-clean or blocked uploaded image to the model.
         if (!isImageServeable(file)) {
@@ -1015,7 +1028,12 @@ export async function processFabFilesServer(
 
         switch (modelInfo?.backend) {
           case ModelBackend.OpenAI:
-          case ModelBackend.XAI: {
+          case ModelBackend.XAI:
+          // Moonshot takes OpenAI's base64 `image_url` block verbatim. Grouped
+          // here rather than given its own case because the payload is identical;
+          // without it every Kimi model advertising supportsVision would accept
+          // an attachment, drop it at `default`, and answer as if blind.
+          case ModelBackend.Kimi: {
             // Download image from S3 and send as base64 data URL.
             // Presigned S3 URLs cause timeouts when OpenAI/XAI servers try to fetch them.
             const openaiImageBuffer = await storage.download(file.filePath!);
@@ -1082,6 +1100,42 @@ export async function processFabFilesServer(
                 },
               });
               // Add filename and fabFileId as text context to prevent hallucinated filenames
+              imageContent.push({
+                type: 'text',
+                text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
+              });
+            } else if (modelInfo.id.startsWith('moonshot')) {
+              // Bedrock-served Kimi speaks OpenAI on the Invoke path, so it takes
+              // the base64 `image_url` block rather than the Anthropic `source`
+              // block the branch above builds. Without this it would fall to the
+              // warn below while still advertising supportsVision.
+              const moonshotBuffer = await resizeImageForModel(
+                await storage.download(file.filePath!),
+                undefined,
+                logger
+              );
+              const { mime: moonshotMimeType } = await getFileType(moonshotBuffer, file.fileName, file.mimeType);
+              const moonshotBase64 = moonshotBuffer.toString('base64');
+
+              // Bedrock caps the Invoke body around 3 MB. If even the resized image
+              // still exceeds it, skip with the same friendly re-upload guidance the
+              // Anthropic branch gives rather than letting Bedrock reject the whole
+              // request with a raw ValidationException. Checked post-resize so we only
+              // reject images that are genuinely too large.
+              const MOONSHOT_MAX_BASE64_BYTES = 3_000_000;
+              if (moonshotBase64.length > MOONSHOT_MAX_BASE64_BYTES) {
+                const encodedMB = (moonshotBase64.length / (1024 * 1024)).toFixed(1);
+                const errorMsg = `⚠️ Image "${file.fileName}" (${encodedMB}MB encoded) is too large for ${modelInfo.name}. Max ~3MB. Please delete this file and re-upload a smaller image.`;
+                logger.warn(errorMsg);
+                await sendStatusUpdate(errorMsg);
+                errorMessages.push({ role: 'error', content: errorMsg });
+                return;
+              }
+
+              imageContent.push({
+                type: 'image_url',
+                image_url: { url: `data:${moonshotMimeType};base64,${moonshotBase64}` },
+              });
               imageContent.push({
                 type: 'text',
                 text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
@@ -1533,7 +1587,8 @@ const processMessages = (
     if (tokensPerMessage >= 1) {
       const truncatedMessages = messages.map(message => {
         // Held out of the slice so the cut cannot leave a fragment of it behind, then put back after.
-        const upstream = truncationNotice && typeof message.content === 'string' ? upstreamNoticeIn(message.content) : null;
+        const upstream =
+          truncationNotice && typeof message.content === 'string' ? upstreamNoticeIn(message.content) : null;
         const source = upstream
           ? { ...message, content: (message.content as string).slice(0, -upstream.length) }
           : message;

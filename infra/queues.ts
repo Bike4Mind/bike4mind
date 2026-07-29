@@ -907,7 +907,10 @@ const sreFixQueueSubscription = sreFixQueue.subscribe(
     handler: 'apps/client/server/queueHandlers/sreFix.dispatch',
     runtime: 'nodejs24.x',
     timeout: '2 minutes',
-    memory: '256 MB',
+    // 1024 MB, not 256: at 256 the handler died in INIT (module graph is the full
+    // @bike4mind/database model set + GitHubService + Slack) and never logged a line.
+    // Sized off sreJobQueue, which loads a comparable graph and peaks under 500 MB.
+    memory: '1024 MB',
     vpc: lambdaVpc,
     link: [...allSecrets],
     logging: {

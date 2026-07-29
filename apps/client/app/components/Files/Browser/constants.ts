@@ -10,6 +10,7 @@ export const FILE_TYPE_OPTIONS = [
   { value: 'csv', label: 'CSV' },
   { value: 'markdown', label: 'Markdown' },
   { value: 'code', label: 'Code' },
+  { value: 'audio', label: 'Audio' },
 ] as const;
 
 export type FileTypeValue = Exclude<(typeof FILE_TYPE_OPTIONS)[number]['value'], 'all'>;

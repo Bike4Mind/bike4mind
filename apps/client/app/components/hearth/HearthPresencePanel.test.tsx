@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -126,5 +126,168 @@ describe('HearthPresencePanel', () => {
     await pushWs({ action: 'hearth_event', event: { channelId: 'ch-1', kind: 'message' } });
 
     await waitFor(() => expect(apiGetMock).toHaveBeenCalledTimes(1));
+  });
+  // The four cases below all carry comments in the component asserting they
+  // matter, and none of them were exercised.
+
+  it('a failed load says so, and never claims the channel is empty', async () => {
+    apiGetMock.mockRejectedValue(new Error('boom'));
+    renderPanel();
+
+    expect(await screen.findByTestId('hearth-presence-error')).toBeInTheDocument();
+    // The distinction is the whole point: "nobody is here" is a claim about the
+    // world, and a 500 is not evidence for it. With retry: false and no refetch
+    // on focus, that wrong claim used to be permanent.
+    expect(screen.queryByTestId('hearth-presence-empty')).not.toBeInTheDocument();
+  });
+
+  it('a failed load can be retried, since nothing else will', async () => {
+    apiGetMock.mockRejectedValueOnce(new Error('boom'));
+    renderPanel();
+
+    const retry = await screen.findByTestId('hearth-presence-retry-btn');
+    apiGetMock.mockResolvedValue(respondWith([row('busy', 'running')]));
+    fireEvent.click(retry);
+
+    await screen.findByText('Working');
+    expect(screen.queryByTestId('hearth-presence-error')).not.toBeInTheDocument();
+  });
+
+  it('an unknown state falls back to Working rather than to the top of the roster', async () => {
+    apiGetMock.mockResolvedValue(respondWith([row('mystery', 'ascended')]));
+    renderPanel();
+
+    // Guessing at a state must never escalate: an unrecognized value renders as
+    // the neutral working case, not as a claim on the human's attention.
+    expect(await screen.findByTestId('hearth-presence-state-chip')).toHaveTextContent('Working');
+  });
+
+  it('dims a stale row without dimming the timestamp that explains why', async () => {
+    apiGetMock.mockResolvedValue(
+      respondWith([
+        // staleAfterMs is 300000, so this row is well past it.
+        row('old', 'idle', { lastSeen: new Date(Date.now() - 45 * 60 * 1000).toISOString() }),
+      ])
+    );
+    renderPanel();
+
+    const rowEl = await screen.findByTestId('hearth-presence-row');
+    expect(rowEl).toHaveStyle({ opacity: '0.7' });
+    // Not 0.6: multiplied by the row's dim that gave ~0.36, below AA, on the one
+    // element carrying the staleness information.
+    expect(screen.getByTestId('hearth-presence-last-seen')).toHaveStyle({ opacity: '1' });
+    expect(screen.getByTestId('hearth-presence-last-seen')).toHaveTextContent('45m ago');
+  });
+
+  it('a fresh row leaves the timestamp de-emphasized', async () => {
+    apiGetMock.mockResolvedValue(respondWith([row('busy', 'running')]));
+    renderPanel();
+
+    await screen.findByText('Working');
+    expect(screen.getByTestId('hearth-presence-row')).toHaveStyle({ opacity: '1' });
+    expect(screen.getByTestId('hearth-presence-last-seen')).toHaveStyle({ opacity: '0.6' });
+  });
+
+  it('caps its own height so the roster cannot crowd out the composer', async () => {
+    renderPanel();
+    // Rows are permanent and per-session, so without this the panel grows without
+    // bound and the event stream - the only shrinkable child of the column -
+    // absorbs all of it until the composer is clipped out of the viewport.
+    const panel = await screen.findByTestId('hearth-presence-panel');
+    expect(panel).toHaveStyle({ overflowY: 'auto' });
+    expect(getComputedStyle(panel).maxHeight).toBe('30dvh');
+  });
+  it('announces only the sessions that need a human, not the busy ones', async () => {
+    apiGetMock.mockResolvedValue(
+      respondWith([
+        row('blocked', 'awaiting_permission'),
+        row('asking', 'awaiting_input'),
+        row('busy', 'running'),
+        row('done', 'idle'),
+      ])
+    );
+    renderPanel();
+
+    const announcer = await screen.findByTestId('hearth-presence-announcer');
+    await waitFor(() => expect(announcer).toHaveTextContent('2 sessions need attention'));
+    expect(announcer).toHaveTextContent('blocked needs permission');
+    expect(announcer).toHaveTextContent('asking needs you');
+    // A roster of several sessions each reporting per tool call would otherwise
+    // bury the one actionable line in a stream of "is working".
+    expect(announcer).not.toHaveTextContent('busy');
+    expect(announcer).not.toHaveTextContent('done');
+  });
+
+  it('says nothing when nobody needs attention', async () => {
+    apiGetMock.mockResolvedValue(respondWith([row('busy', 'running')]));
+    renderPanel();
+
+    await screen.findByText('Working');
+    expect(screen.getByTestId('hearth-presence-announcer')).toHaveTextContent('');
+  });
+
+  it('uses singular phrasing for one session', async () => {
+    apiGetMock.mockResolvedValue(respondWith([row('blocked', 'awaiting_permission')]));
+    renderPanel();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('hearth-presence-announcer')).toHaveTextContent('1 session needs attention')
+    );
+  });
+
+  it('exposes the roster as a labelled list with a real heading', async () => {
+    apiGetMock.mockResolvedValue(respondWith([row('busy', 'running'), row('done', 'idle')]));
+    renderPanel();
+
+    // The heading renders in every state including loading, so wait for the rows
+    // before asserting the list - otherwise this races the query.
+    await waitFor(() => expect(screen.getAllByTestId('hearth-presence-row')).toHaveLength(2));
+    // Joy's title-sm maps to <p>, so the panel had no landmark to navigate to.
+    const heading = screen.getByRole('heading', { name: 'Who is here' });
+    const list = screen.getByRole('list');
+    expect(list).toHaveAttribute('aria-labelledby', heading.id);
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  // The timer leak. Arming a refresh on one channel and switching before the
+  // coalesce window closes used to invalidate the OLD key, swallowing one refresh
+  // for the channel just switched to.
+  it('does not let a pending refresh fire against the previous channel', async () => {
+    vi.useFakeTimers();
+    try {
+      apiGetMock.mockResolvedValue(respondWith([row('busy', 'running')]));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+      const view = render(
+        <CssVarsProvider theme={appTheme}>
+          <QueryClientProvider client={queryClient}>
+            <HearthPresencePanel channelId="ch-1" />
+          </QueryClientProvider>
+        </CssVarsProvider>
+      );
+
+      // Two events inside the window: the first refreshes on the leading edge,
+      // the second arms the trailing timer.
+      await pushWs({ action: 'hearth_event', event: { channelId: 'ch-1', kind: 'presence' } });
+      await pushWs({ action: 'hearth_event', event: { channelId: 'ch-1', kind: 'presence' } });
+
+      invalidateSpy.mockClear();
+      view.rerender(
+        <CssVarsProvider theme={appTheme}>
+          <QueryClientProvider client={queryClient}>
+            <HearthPresencePanel channelId="ch-2" />
+          </QueryClientProvider>
+        </CssVarsProvider>
+      );
+      vi.advanceTimersByTime(2000);
+
+      const staleInvalidations = invalidateSpy.mock.calls.filter(
+        ([arg]) =>
+          JSON.stringify((arg as { queryKey: unknown }).queryKey) === JSON.stringify(['hearth', 'presence', 'ch-1'])
+      );
+      expect(staleInvalidations).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -7,7 +7,9 @@ const searchFabFilesSchema = z.object({
   filters: z
     .object({
       tags: z.array(z.string()).optional(),
-      type: z.enum(['text', 'pdf', 'url', 'image', 'excel', 'word', 'json', 'csv', 'markdown', 'code']).optional(),
+      type: z
+        .enum(['text', 'pdf', 'url', 'image', 'excel', 'word', 'json', 'csv', 'markdown', 'code', 'audio'])
+        .optional(),
       shared: z.coerce.boolean().optional(), // Indicates if the user is searching for shared files
       curated: z.coerce.boolean().optional(), // Indicates if the user is searching for curated notebook files
       projectId: z.string().optional(),

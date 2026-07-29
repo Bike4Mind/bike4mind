@@ -25,7 +25,10 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys, getEffectiveApiKey: vi.fn() },
 }));
-vi.mock('@bike4mind/llm-adapters', () => ({
+// See the note in operationsModelService.selfhost.test.ts: buildApiKeyTable is
+// the real one on purpose.
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   getAvailableModels: mockGetAvailableModels,
   getLlmByModel: mockGetLlmByModel,
 }));

@@ -81,6 +81,7 @@ export const SettingKeySchema = z.enum([
   'anthropicDemoKey',
   'geminiDemoKey',
   'xaiApiKey',
+  'moonshotApiKey',
   'voyageApiKey',
   'FirecrawlApiKey',
   'FirecrawlApiUrl',
@@ -1259,6 +1260,13 @@ export const API_SERVICE_GROUPS = {
     icon: 'AutoAwesome',
     settings: [{ key: 'xaiApiKey', order: 1 }],
   },
+  MOONSHOT: {
+    id: 'moonshotAPIService',
+    name: 'Moonshot (Kimi) Service',
+    description: 'Moonshot AI / Kimi API integration settings',
+    icon: 'AutoAwesome',
+    settings: [{ key: 'moonshotApiKey', order: 1 }],
+  },
   ANTHROPIC: {
     id: 'anthropicAPIService',
     name: 'Anthropic Service',
@@ -1619,6 +1627,16 @@ export const settingsMap = {
     isSensitive: true,
     category: 'AI',
     group: API_SERVICE_GROUPS.XAI.id,
+    order: 1,
+  }),
+  moonshotApiKey: makeStringSetting({
+    key: 'moonshotApiKey',
+    name: 'Moonshot (Kimi) API Key',
+    defaultValue: '',
+    description: 'The global API Key for Moonshot AI, which serves the Kimi models.',
+    isSensitive: true,
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MOONSHOT.id,
     order: 1,
   }),
   voyageApiKey: makeStringSetting({
