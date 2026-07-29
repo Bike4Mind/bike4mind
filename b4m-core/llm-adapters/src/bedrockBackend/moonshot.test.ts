@@ -205,3 +205,128 @@ describe('MoonshotBedrockBackend streaming', () => {
     expect('chunkText' in chunk.choices[0] && chunk.choices[0].chunkText).toBe('<think>because</think>answer');
   });
 });
+
+// The shapes below are captured verbatim from live moonshot.kimi-k2-thinking on
+// Bedrock (us-east-2). Bedrock does NOT use reasoning_content or per-frame usage;
+// these pin the real envelope so the fixes cannot silently regress.
+describe('MoonshotBedrockBackend live Bedrock shapes', () => {
+  it('converts the inline <reasoning> envelope to <think> non-streaming', () => {
+    // Live: reasoning is inlined in `content`, not in reasoning_content.
+    const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [{ message: { content: '<reasoning> 5 + 6 = 11 </reasoning>Eleven.' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 46, completion_tokens: 30 },
+    });
+    expect('chunkText' in chunk.choices[0] && chunk.choices[0].chunkText).toBe('<think> 5 + 6 = 11 </think>Eleven.');
+  });
+
+  it('converts each self-contained <reasoning> streaming delta and leaves prose untouched', () => {
+    // Live: every streamed reasoning delta is a balanced <reasoning>...</reasoning>
+    // pair; prose arrives untagged. Per-delta conversion keeps every block closed.
+    const fresh = new MoonshotBedrockBackend();
+    fresh.getPayload(ChatModels.KIMI_K2_THINKING_BEDROCK, messages, {});
+    const frames = [
+      { delta: { content: '<reasoning> The user is asking</reasoning>' } },
+      { delta: { content: '<reasoning>: 5 + 6 = 11</reasoning>' } },
+      { delta: { content: ' Five' } },
+      { delta: { content: ' plus six equals eleven.' }, finish_reason: 'stop' },
+    ];
+    const rendered = frames
+      .map(f => fresh.translateStreamChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, { choices: [f] }))
+      .map(({ chunk }) => ('chunkText' in chunk.choices[0] ? chunk.choices[0].chunkText : ''))
+      .join('');
+    expect(rendered).toBe('<think> The user is asking</think><think>: 5 + 6 = 11</think> Five plus six equals eleven.');
+    // No <reasoning> tag ever leaks to the user, and every <think> is balanced.
+    expect(rendered).not.toContain('<reasoning>');
+    expect(rendered.match(/<think>/g)).toHaveLength(2);
+    expect(rendered.match(/<\/think>/g)).toHaveLength(2);
+  });
+
+  it('reads usage from amazon-bedrock-invocationMetrics on the final streamed frame', () => {
+    // Live: streamed frames carry no `usage`; only the final frame's
+    // invocationMetrics has counts. Without this a streamed turn bills zero.
+    const { chunk } = backend.translateStreamChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [{ delta: { content: '' }, finish_reason: 'tool_calls' }],
+      'amazon-bedrock-invocationMetrics': { inputTokenCount: 96, outputTokenCount: 67 },
+    });
+    expect(chunk.choices[0].usage).toEqual({ input_tokens: 96, output_tokens: 67 });
+  });
+
+  it('streams tool calls as a header + plain argument deltas the base can accumulate', () => {
+    // Live: a header delta (name + id) then separate argument-fragment deltas.
+    // The base accumulates `parameters` from chunkText ONLY when the reason is not
+    // TOOL_USE, so an argument frame must never carry TOOL_USE or it runs as `{}`.
+    const header = backend.translateStreamChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              { function: { name: 'get_weather' }, id: 'functions.get_weather:0', index: 0, type: 'function' },
+            ],
+          },
+        },
+      ],
+    }).chunk.choices[0];
+    expect(header.status).toBe(ChoiceStatus.STREAM);
+    expect(header.statusEndReason).toBeUndefined();
+    expect(header.tool).toEqual({ id: 'functions.get_weather:0', name: 'get_weather' });
+
+    const argFrame = backend.translateStreamChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [{ delta: { tool_calls: [{ function: { arguments: '{"city":' }, index: 0, type: 'function' }] } }],
+    }).chunk.choices[0];
+    expect(argFrame.status).toBe(ChoiceStatus.STREAM);
+    expect(argFrame.statusEndReason).not.toBe(ChoiceEndReason.TOOL_USE);
+    expect(argFrame.chunkText).toBe('{"city":');
+    expect(argFrame.tool).toBeUndefined();
+  });
+
+  it('non-streaming tool calls still emit a TOOL_USE end with full arguments', () => {
+    const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [
+        {
+          message: {
+            content: '<reasoning> use the tool </reasoning>',
+            tool_calls: [
+              {
+                function: { name: 'get_weather', arguments: '{"city": "Paris"}' },
+                id: 'functions.get_weather:0',
+                type: 'function',
+              },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+    });
+    const toolChoice = chunk.choices.find(c => c.statusEndReason === ChoiceEndReason.TOOL_USE);
+    expect(toolChoice?.tool).toEqual({
+      id: 'functions.get_weather:0',
+      name: 'get_weather',
+      parameters: '{"city": "Paris"}',
+    });
+  });
+
+  it('preserves the tool round-trip through getPayload so recursion is not mangled', () => {
+    // getPayload used to drop the content:null assistant turn and remap role:tool
+    // to system, so the model never learned its tool ran and looped.
+    const history: IMessage[] = [{ role: 'user', content: 'weather in Paris?' } as IMessage];
+    backend.pushToolMessages(
+      history,
+      { id: 'functions.get_weather:0', name: 'get_weather', parameters: '{"city":"Paris"}' },
+      '{"temp":"20C"}'
+    );
+    const body = JSON.parse(backend.getPayload(ChatModels.KIMI_K2_THINKING_BEDROCK, history, {}).body);
+
+    const assistantTurn = body.messages.find(
+      (m: { role: string; tool_calls?: unknown }) => m.role === 'assistant' && Array.isArray(m.tool_calls)
+    );
+    expect(assistantTurn).toBeTruthy();
+    expect(assistantTurn.tool_calls[0].function.name).toBe('get_weather');
+
+    const toolResult = body.messages.find((m: { role: string }) => m.role === 'tool');
+    expect(toolResult).toMatchObject({ role: 'tool', tool_call_id: 'functions.get_weather:0', name: 'get_weather' });
+    // and it is NOT remapped to a system message
+    expect(
+      body.messages.some((m: { role: string; tool_call_id?: string }) => m.role === 'system' && m.tool_call_id)
+    ).toBe(false);
+  });
+});

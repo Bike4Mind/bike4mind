@@ -112,13 +112,36 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>
   ): { modelId: string; contentType: string; accept: string; body: string } {
+    // Tool-shaped messages (the assistant turn carrying `tool_calls`, and the
+    // `role: 'tool'` result) must survive intact for the tool round-trip to work on
+    // recursion. The previous mapping dropped the assistant turn (its `content` is
+    // null) and remapped `role: 'tool'` to `'system'`, stripping `tool_call_id`, so
+    // Moonshot saw no record its tool ran and re-issued the same call in a loop.
     const formattedMessages = messages
-      .filter(m => m.content !== null && m.content !== undefined)
-      .map(m => ({
-        role: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'system',
-        content: typeof m.content === 'string' || Array.isArray(m.content) ? m.content : JSON.stringify(m.content),
-      }))
-      .filter(m => (typeof m.content === 'string' ? m.content !== '' : true));
+      .map(raw => {
+        const m = raw as IMessage & { tool_calls?: unknown; tool_call_id?: string; name?: string };
+        if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+          return { role: 'assistant', content: m.content ?? null, tool_calls: m.tool_calls } as Record<string, unknown>;
+        }
+        if (m.role === 'tool') {
+          return {
+            role: 'tool',
+            tool_call_id: m.tool_call_id,
+            name: m.name,
+            content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+          } as Record<string, unknown>;
+        }
+        return {
+          role: m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'system',
+          content: typeof m.content === 'string' || Array.isArray(m.content) ? m.content : JSON.stringify(m.content),
+        } as Record<string, unknown>;
+      })
+      // Drop only genuinely empty plain turns; never a tool-call turn (null content
+      // but `tool_calls` present) or a tool result.
+      .filter(m => {
+        if ('tool_calls' in m || m.role === 'tool') return true;
+        return typeof m.content === 'string' ? m.content !== '' : m.content !== null && m.content !== undefined;
+      });
 
     const body: Record<string, unknown> = {
       messages: formattedMessages,
@@ -189,14 +212,18 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         finish_reason?: string;
       }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number };
+      'amazon-bedrock-invocationMetrics'?: { inputTokenCount?: number; outputTokenCount?: number };
     };
 
-    // Kimi quotes OpenAI's usage names; the normalized chunk wants Anthropic's,
-    // and the base class reads them off choices[0]. Mapping them here is what
-    // makes a Bedrock Kimi turn actually settle against its price row.
+    // Kimi quotes OpenAI's usage names; the normalized chunk wants Anthropic's, and
+    // the base reads them off choices[0]. Streaming carries NO per-frame `usage` --
+    // the only counts ride the final frame's `amazon-bedrock-invocationMetrics`, so
+    // fall back to that or every streamed Bedrock turn settles on a zero-token
+    // provider reading (billing then falls back to the local estimate).
+    const metrics = response['amazon-bedrock-invocationMetrics'];
     const usage = {
-      input_tokens: response.usage?.prompt_tokens ?? 0,
-      output_tokens: response.usage?.completion_tokens ?? 0,
+      input_tokens: response.usage?.prompt_tokens ?? metrics?.inputTokenCount ?? 0,
+      output_tokens: response.usage?.completion_tokens ?? metrics?.outputTokenCount ?? 0,
     };
 
     const choices: ICompletionResponseChunk['choices'] = [];
@@ -211,20 +238,42 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       const toolCalls = Array.isArray(payload.tool_calls) ? payload.tool_calls : [];
       if (toolCalls.length > 0) {
         for (const [toolIndex, call] of toolCalls.entries()) {
-          choices.push({
-            status: ChoiceStatus.END,
-            statusEndReason: ChoiceEndReason.TOOL_USE,
-            // Keyed by the tool's own index so the base's streaming accumulator
-            // can assemble arguments per call when several arrive at once.
-            index: call.index ?? toolIndex,
-            chunkText: call.function?.arguments || '',
-            tool: {
-              id: call.id || '',
-              name: call.function?.name || '',
-              parameters: call.function?.arguments || '',
-            },
-            ...usageForIndex,
-          });
+          const idx = call.index ?? toolIndex;
+          if (opts.streaming) {
+            // Streaming tool calls arrive OpenAI-style: a header delta (name + id)
+            // then separate argument-fragment deltas. base.ts accumulates
+            // `parameters` from chunkText ONLY when the reason is not TOOL_USE, so
+            // emit the header with a `tool` object and each argument fragment as a
+            // PLAIN chunk. Tagging every frame TOOL_USE (the previous behavior) made
+            // the base skip every argument delta and run the tool with empty `{}`.
+            if (call.function?.name || call.id) {
+              choices.push({
+                status: ChoiceStatus.STREAM,
+                index: idx,
+                chunkText: '',
+                tool: { id: call.id || '', name: call.function?.name || '' },
+              });
+            }
+            if (call.function?.arguments) {
+              choices.push({ status: ChoiceStatus.STREAM, index: idx, chunkText: call.function.arguments });
+            }
+          } else {
+            // Non-streaming: the message carries complete tool calls and the base
+            // reads `tool.parameters` directly, so emit the full args as a TOOL_USE
+            // end (one choice per call so several parallel calls can assemble).
+            choices.push({
+              status: ChoiceStatus.END,
+              statusEndReason: ChoiceEndReason.TOOL_USE,
+              index: idx,
+              chunkText: call.function?.arguments || '',
+              tool: {
+                id: call.id || '',
+                name: call.function?.name || '',
+                parameters: call.function?.arguments || '',
+              },
+              ...usageForIndex,
+            });
+          }
         }
         continue;
       }
@@ -232,17 +281,28 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       const reasoning = payload.reasoning_content ?? '';
       const content = payload.content ?? '';
 
+      // Bedrock Kimi does NOT populate `reasoning_content`; it inlines the monologue
+      // in `content` wrapped in <reasoning>...</reasoning> -- a self-contained,
+      // balanced pair per streamed delta. Convert that envelope to the <think>
+      // convention the client renders, or the raw tags show verbatim in the answer.
+      // Per-delta conversion (rather than merging into one block via
+      // isInThinkingBlock) is deliberate: each Bedrock delta is already balanced, and
+      // a reasoning-to-tool turn would otherwise strand an open <think> the base
+      // cannot close once a tool frame appears. `reasoning_content` is still honored
+      // as a fallback spelling for any variant that emits it.
+      const convertTags = (t: string) => t.replace(/<reasoning>/g, '<think>').replace(/<\/reasoning>/g, '</think>');
+
       let chunkText: string;
       if (!opts.streaming) {
-        chunkText = reasoning ? `<think>${reasoning}</think>${content}` : content;
+        chunkText = (reasoning ? `<think>${reasoning}</think>` : '') + convertTags(content);
       } else if (reasoning) {
         chunkText = this.isInThinkingBlock ? reasoning : `<think>${reasoning}`;
         this.isInThinkingBlock = true;
       } else if (this.isInThinkingBlock && content) {
         this.isInThinkingBlock = false;
-        chunkText = `</think>${content}`;
+        chunkText = `</think>${convertTags(content)}`;
       } else {
-        chunkText = content;
+        chunkText = convertTags(content);
       }
 
       choices.push({

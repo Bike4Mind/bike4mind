@@ -1,5 +1,6 @@
 import { ChatModels, type IMessage } from '@bike4mind/common';
 import { describe, expect, it, vi } from 'vitest';
+import { Stream } from 'openai/streaming';
 import { KimiBackend } from './kimiBackend';
 import type { CompletionInfo } from './backend';
 
@@ -186,5 +187,105 @@ describe('KimiBackend reasoning capture', () => {
     // executeTools: false makes the tool turn terminal, so the guard would be
     // reached if it were keyed on text alone.
     await expect(runTurn(backend, ChatModels.KIMI_K2_6, { executeTools: false, tools: [] })).resolves.not.toThrow();
+  });
+});
+
+/**
+ * The STREAMING direct path. Chat streams, so these are the shapes users actually
+ * hit; the non-streaming guards above had no streaming equivalent.
+ */
+
+type StreamChunk = {
+  choices: Array<{ index: number; delta: Record<string, unknown>; finish_reason?: string }>;
+  usage?: Record<string, unknown>;
+};
+
+/** A KimiBackend whose OpenAI client yields the given streamed turns in order. */
+function streamingBackend(turns: StreamChunk[][]) {
+  const backend = new KimiBackend('test-key');
+  let call = 0;
+  const create = vi.fn().mockImplementation(async () => {
+    const chunks = turns[Math.min(call, turns.length - 1)];
+    call += 1;
+    // The backend branches on `response instanceof Stream`, so a bare async
+    // generator would be treated as a non-streaming reply. Wrap it in a real Stream.
+    const iterator = () =>
+      (async function* () {
+        for (const c of chunks) yield c;
+      })();
+    return new Stream(iterator as never, new AbortController());
+  });
+  (backend as unknown as { _api: unknown })._api = { chat: { completions: { create } } };
+  return { backend, create };
+}
+
+async function runStream(backend: KimiBackend, model: string, options = {}) {
+  const frames: Array<{ text: (string | null | undefined)[]; info: CompletionInfo }> = [];
+  await backend.complete(model, userMessages(), { stream: true, ...options }, async (text, info) => {
+    frames.push({ text, info });
+  });
+  return frames;
+}
+
+describe('KimiBackend streaming reasoning', () => {
+  it('closes the <think> block on a reasoning-then-tool turn instead of leaving it open', async () => {
+    // k2.7-code cannot disable thinking, so a reasoning-then-tool turn is the norm.
+    // Reasoning deltas open <think>; the tool arrives with no prose to close it, so
+    // without the post-loop close the tag stayed open and bled into the answer.
+    const toolFn = vi.fn().mockResolvedValue('42');
+    const { backend } = streamingBackend([
+      [
+        { choices: [{ index: 0, delta: { reasoning_content: 'let me search' } }] },
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  { index: 0, id: 't1', type: 'function', function: { name: 'search', arguments: '{"q":"x"}' } },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+      [
+        {
+          choices: [{ index: 0, delta: { content: 'the answer' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 12, completion_tokens: 6 },
+        },
+      ],
+    ]);
+
+    const frames = await runStream(backend, ChatModels.KIMI_K2_7_CODE, {
+      tools: [{ toolSchema: { name: 'search', description: 'search', parameters: { type: 'object' } }, toolFn }],
+    });
+
+    expect(toolFn).toHaveBeenCalledOnce();
+    const joined = frames
+      .flatMap(f => f.text)
+      .filter(Boolean)
+      .join('');
+    // The reasoning block is closed before the tool runs, and the final answer follows.
+    expect(joined).toContain('<think>let me search</think>');
+    expect(joined).toContain('the answer');
+    expect(joined.match(/<think>/g)?.length).toBe(joined.match(/<\/think>/g)?.length);
+  });
+
+  it('throws a diagnosable error when a stream produces no content and no tool', async () => {
+    // The streaming path had no equivalent of the non-streaming length guard, so an
+    // empty stream returned silently with zero callbacks and the chat hung.
+    const { backend } = streamingBackend([
+      [
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: 'length' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        },
+      ],
+    ]);
+
+    await expect(runStream(backend, ChatModels.KIMI_K3)).rejects.toThrow(/output budget was exhausted/);
   });
 });

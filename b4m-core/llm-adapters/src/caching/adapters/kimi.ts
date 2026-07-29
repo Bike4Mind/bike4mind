@@ -38,7 +38,9 @@ export class KimiCachingAdapter implements ICachingAdapter {
       cacheReadTokens: cachedTokens,
       // Moonshot does not bill or report cache writes separately.
       cacheWriteTokens: 0,
-      uncachedTokens: totalInputTokens - cachedTokens,
+      // Clamp like the billing path (splitCachedInput): a feed reporting more
+      // cached than total tokens must not surface a negative uncached count.
+      uncachedTokens: Math.max(0, totalInputTokens - cachedTokens),
       cacheHitRate,
       costSavingsPercent,
       estimatedLatencyReduction,

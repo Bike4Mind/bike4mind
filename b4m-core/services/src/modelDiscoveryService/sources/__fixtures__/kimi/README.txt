@@ -12,10 +12,10 @@ guesses: `kimi-k2-thinking` and `kimi-latest` are NOT served here (they exist in
 models.dev and litellm, but not on this endpoint), and kimi-k3 reports
 supports_thinking_type: "only", confirming it cannot be asked to stop reasoning.
 
-To recapture:
-  bash ~/.claude/skills/strongbox/ingest-secret.sh --var MOONSHOT_API_KEY \
-    --validate-url https://api.moonshot.ai/v1/models --auth bearer \
-    --count-json-path data --save-response /tmp/moonshot-models.json
+To recapture (any machine with a Moonshot key exported as MOONSHOT_API_KEY):
+  curl -s https://api.moonshot.ai/v1/models \
+    -H "Authorization: Bearer $MOONSHOT_API_KEY" > /tmp/moonshot-models.json
+  # then drop the `permission` and `created` fields before committing.
 
 unknown-namespace.json is hand-written, not captured: it pins the fail-closed
 behavior for an id whose modality the namespace does not state.
