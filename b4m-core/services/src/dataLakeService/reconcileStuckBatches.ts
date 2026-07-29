@@ -3,6 +3,7 @@ import type {
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
+  IUserRepository,
 } from '@bike4mind/common';
 import { BATCH_NON_TERMINAL_STATUSES } from '@bike4mind/common';
 import { recomputeLakeStats } from './recomputeLakeStats';
@@ -15,6 +16,7 @@ interface ReconcileStuckBatchesAdapters {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats'>;
     batches: Pick<IDataLakeBatchRepository, 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'computeDataLakeStats'>;
+    users: Pick<IUserRepository, 'findById'>;
   };
   logger?: { info: (msg: string, ...args: unknown[]) => void; warn: (msg: string, ...args: unknown[]) => void };
   /**
@@ -72,7 +74,7 @@ export const reconcileStuckBatches = async (
     try {
       const lake = await db.dataLakes.findById(batch.dataLakeId);
       if (lake) {
-        await recomputeLakeStats(lake.id, lake.datalakeTag, { db });
+        await recomputeLakeStats(lake, { db, logger });
       }
     } catch (error) {
       logger?.warn(`Reconciler stat recompute failed for batch ${batch.id}:`, error);

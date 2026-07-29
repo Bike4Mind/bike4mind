@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import { dataLakeRepository, fabFileRepository, userRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 
@@ -29,6 +29,7 @@ const handler = baseApi()
       {
         db: {
           dataLakes: dataLakeRepository,
+          users: userRepository,
           fabFiles: fabFileRepository,
         },
       }

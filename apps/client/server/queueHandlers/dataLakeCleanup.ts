@@ -3,6 +3,7 @@ import {
   dataLakeBatchRepository,
   fabFileRepository,
   fabFileChunkRepository,
+  userRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
@@ -29,6 +30,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     await dataLakeService.cleanupDeletedDataLake(actor, dataLakeId, {
       db: {
         dataLakes: dataLakeRepository,
+        users: userRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,

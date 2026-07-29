@@ -3,8 +3,10 @@ import type {
   IDataLakeBatchRepository,
   IFabFileRepository,
   IFabFileChunkRepository,
+  IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
+import { resolveLakeMembershipScope } from './lakeMembershipScope';
 import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 
 interface CleanupDeletedDataLakeAdapters {
@@ -13,6 +15,7 @@ interface CleanupDeletedDataLakeAdapters {
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
     fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'hardDeleteByDataLakeTag'>;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
+    users: Pick<IUserRepository, 'findById'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
@@ -55,17 +58,18 @@ export const cleanupDeletedDataLake = async (
     throw new BadRequestError('Data lake must be soft-deleted before cleanup');
   }
 
-  // 1. Delete chunks for every file carrying the lake tag (covers soft-deleted files too).
-  // Chunked so a large lake doesn't fan out unbounded (Lambda timeout/memory); each delete is a
-  // no-op on already-purged data, so a DLQ retry resumes safely.
-  const fileIds = await db.fabFiles.findIdsByDataLakeTag(existing.datalakeTag);
+  // 1. Delete chunks for every member file (covers soft-deleted files too). Chunked so a large
+  // lake doesn't fan out unbounded (Lambda timeout/memory); each delete is a no-op on
+  // already-purged data, so a DLQ retry resumes safely.
+  const scope = await resolveLakeMembershipScope(existing, { db, logger });
+  const fileIds = await db.fabFiles.findIdsByDataLakeTag(scope);
   await inChunks(fileIds, chunkSize, id => db.fabFileChunks.deleteManyByFabFileId(id));
 
   // 2. Best-effort retrieval index removal.
   await bestEffortIndexRemove(retrievalIndex, existing.datalakeTag, logger);
 
   // 3. Hard-delete the files.
-  await db.fabFiles.hardDeleteByDataLakeTag(existing.datalakeTag);
+  await db.fabFiles.hardDeleteByDataLakeTag(scope);
 
   // 4. Delete the lake's batches (chunked, same rationale as the chunk sweep above).
   const batches = await db.batches.find({ dataLakeId });

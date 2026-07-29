@@ -1,6 +1,7 @@
-import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
+import type { IDataLakeRepository, IFabFileRepository, IUserRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { recomputeLakeStats } from './recomputeLakeStats';
+import { resolveLakeMembershipScope } from './lakeMembershipScope';
 import type { UnarchiveResult } from './unarchiveDataLake';
 
 interface RestoreDeletedDataLakeAdapters {
@@ -10,7 +11,9 @@ interface RestoreDeletedDataLakeAdapters {
       IFabFileRepository,
       'findDeletedByDataLakeTag' | 'findByContentHashesInDataLake' | 'undeleteByDataLakeTag' | 'computeDataLakeStats'
     >;
+    users: Pick<IUserRepository, 'findById'>;
   };
+  logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
 
 /**
@@ -22,7 +25,7 @@ interface RestoreDeletedDataLakeAdapters {
 export const restoreDeletedDataLake = async (
   actor: { userId: string; isAdmin: boolean },
   dataLakeId: string,
-  { db }: RestoreDeletedDataLakeAdapters
+  { db, logger }: RestoreDeletedDataLakeAdapters
 ): Promise<UnarchiveResult> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -42,22 +45,25 @@ export const restoreDeletedDataLake = async (
   // Dedup: a LIVE (non-deleted, non-archived) file with the same hash means it was
   // re-uploaded while the lake was deleted - keep the live copy, leave the deleted
   // duplicate discarded (excluded from the un-delete).
-  const deleted = await db.fabFiles.findDeletedByDataLakeTag(existing.datalakeTag);
+  const scope = await resolveLakeMembershipScope(existing, { db, logger });
+  const deleted = await db.fabFiles.findDeletedByDataLakeTag(scope);
   const deletedHashes = deleted.map(f => f.contentHash).filter((h): h is string => !!h);
 
   let skippedDuplicates = 0;
   let duplicateIds: string[] = [];
   if (deletedHashes.length > 0) {
+    // Meta-tag only, matching the unarchive dedup: a non-unique fileTagPrefix must not let a
+    // different lake's live file decide which of this lake's rows stays discarded.
     const live = await db.fabFiles.findByContentHashesInDataLake(deletedHashes, existing.datalakeTag);
     const liveHashes = new Set(live.map(f => f.contentHash));
     duplicateIds = deleted.filter(f => f.contentHash && liveHashes.has(f.contentHash)).map(f => f.id);
     skippedDuplicates = duplicateIds.length;
   }
 
-  const restoredCount = await db.fabFiles.undeleteByDataLakeTag(existing.datalakeTag, duplicateIds);
+  const restoredCount = await db.fabFiles.undeleteByDataLakeTag(scope, duplicateIds);
 
   await db.dataLakes.update({ id: dataLakeId, status: 'active' });
-  await recomputeLakeStats(dataLakeId, existing.datalakeTag, { db });
+  await recomputeLakeStats(existing, { db, logger });
 
   return { restoredCount, skippedDuplicates };
 };

@@ -3,9 +3,11 @@ import type {
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
+  IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { recomputeLakeStats } from './recomputeLakeStats';
+import { resolveLakeMembershipScope } from './lakeMembershipScope';
 import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 
 interface ArchiveDataLakeAdapters {
@@ -13,6 +15,7 @@ interface ArchiveDataLakeAdapters {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'archiveByDataLakeTag' | 'computeDataLakeStats'>;
+    users: Pick<IUserRepository, 'findById'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
@@ -52,8 +55,10 @@ export const archiveDataLake = async (
   // Step 2: transitional state (crash-visible).
   await db.dataLakes.update({ id: dataLakeId, status: 'archiving' });
 
-  // Step 3: soft-hide files + best-effort index removal.
-  await db.fabFiles.archiveByDataLakeTag(existing.datalakeTag);
+  // Step 3: soft-hide files + best-effort index removal. The scope covers prefix-tagged
+  // members too, so a file that never got the meta-tag no longer stays browsable here.
+  const scope = await resolveLakeMembershipScope(existing, { db, logger });
+  await db.fabFiles.archiveByDataLakeTag(scope);
   await bestEffortIndexRemove(retrievalIndex, existing.datalakeTag, logger);
 
   // Step 4: settle to archived and reconcile stats from source (now 0 live files).
@@ -61,7 +66,7 @@ export const archiveDataLake = async (
   if (!updated) {
     throw new NotFoundError('Data lake not found after archive');
   }
-  await recomputeLakeStats(dataLakeId, existing.datalakeTag, { db });
+  await recomputeLakeStats(existing, { db, logger });
 
   return updated;
 };

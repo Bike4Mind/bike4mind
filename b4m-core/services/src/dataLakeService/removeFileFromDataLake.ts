@@ -1,5 +1,5 @@
 import { DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
-import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
+import type { IDataLakeRepository, IFabFileRepository, IUserRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { canManageLake } from './authorizeLakeWrite';
 import { recomputeLakeStats } from './recomputeLakeStats';
@@ -8,7 +8,9 @@ interface RemoveFileFromDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats'>;
     fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
+    users: Pick<IUserRepository, 'findById'>;
   };
+  logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
 
 /**
@@ -57,7 +59,7 @@ export const removeFileFromDataLake = async (
   actor: { userId: string; isAdmin: boolean },
   dataLakeId: string,
   fabFileId: string,
-  { db }: RemoveFileFromDataLakeAdapters
+  { db, logger }: RemoveFileFromDataLakeAdapters
 ): Promise<{ success: true; fileCount: number; totalSizeBytes: number }> => {
   const lake = await db.dataLakes.findById(dataLakeId);
   if (!lake) {
@@ -93,6 +95,6 @@ export const removeFileFromDataLake = async (
     ...prefixedTags.filter(name => !name.startsWith(DATALAKE_TAG_PREFIX)),
   ]);
 
-  const stats = await recomputeLakeStats(dataLakeId, lake.datalakeTag, { db });
+  const stats = await recomputeLakeStats(lake, { db, logger });
   return { success: true, ...stats };
 };

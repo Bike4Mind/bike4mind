@@ -3,8 +3,10 @@ import type {
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
+  IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { resolveLakeMembershipScope } from './lakeMembershipScope';
 import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 
 interface DeleteDataLakeAdapters {
@@ -12,6 +14,7 @@ interface DeleteDataLakeAdapters {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag'>;
+    users: Pick<IUserRepository, 'findById'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
@@ -48,7 +51,8 @@ export const deleteDataLake = async (
 
   await db.dataLakes.update({ id: dataLakeId, status: 'deleting' });
 
-  await db.fabFiles.softDeleteByDataLakeTag(existing.datalakeTag);
+  const scope = await resolveLakeMembershipScope(existing, { db, logger });
+  await db.fabFiles.softDeleteByDataLakeTag(scope);
   await bestEffortIndexRemove(retrievalIndex, existing.datalakeTag, logger);
 
   const updated = await db.dataLakes.update({ id: dataLakeId, status: 'deleted' });

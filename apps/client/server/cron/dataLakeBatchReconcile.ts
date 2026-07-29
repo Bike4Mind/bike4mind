@@ -13,7 +13,13 @@
  * Schedule: daily. Enabled: production + dev.
  */
 
-import { connectDB, dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  connectDB,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  fabFileRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
@@ -33,7 +39,12 @@ export async function handler() {
   const stuck = await dataLakeBatchRepository.findStuck(cutoff, MAX_PER_RUN);
 
   const forced = await dataLakeService.reconcileStuckBatches(stuck, timeoutMs, {
-    db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+    db: {
+      dataLakes: dataLakeRepository,
+      batches: dataLakeBatchRepository,
+      fabFiles: fabFileRepository,
+      users: userRepository,
+    },
     logger,
     metrics: {
       emitForcedTerminal: () => recordReconcilerForcedTerminal().catch(() => {}),
