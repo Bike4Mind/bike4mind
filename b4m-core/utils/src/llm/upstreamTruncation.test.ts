@@ -14,7 +14,7 @@ vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
   fetchAndParseURL: vi.fn(async () => ({ textContent: 'PAGE-START ' + 'y'.repeat(40000) + ' PAGE-END' })),
 }));
 
-import { processFabFilesServer, processUrlsFromPrompt } from './utils';
+import { processFabFilesServer, processUrlsFromPrompt, buildAndSortMessages, getLastBuildDebugInfo } from './utils';
 
 const mockLogger = {
   log: vi.fn(),
@@ -28,6 +28,14 @@ const mockLogger = {
 const TRUNCATION_NOTICE_MARKER = '[Content truncated to fit the context window';
 const EXCERPT_MARKER = 'most relevant excerpts from';
 const URL_NOTICE_MARKER = 'Fetched page content truncated';
+
+const tokenizer = {
+  countTokens: vi.fn(async (t: string) => Math.ceil(t.length / 3.5)),
+  encodeTokens: vi.fn(async (t: string) => Array(Math.ceil(t.length / 3.5)).fill(1)),
+  clearCache: vi.fn(),
+  getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+  warmUpCache: vi.fn(async () => {}),
+};
 
 const warnings = () => (mockLogger.warn.mock.calls as unknown[][]).map(c => String(c[0])).join('\n');
 
@@ -159,6 +167,66 @@ describe('content cut before assembly is declared to the model', () => {
 
       const order = (content.match(/chunk-(\d+)-/g) || []).map(m => Number(m.match(/\d+/)![0]));
       expect(order).toEqual([0, 1, 2, 3, 4, 5]);
+    });
+  });
+
+  describe('an upstream notice survives a later assembly cut', () => {
+    it('keeps the excerpt wording instead of replacing it with the head-slice wording', async () => {
+      // Assembly's cut slices the tail, taking the excerpt notice with it, and used to append the
+      // generic notice in its place - telling the model the content simply stops here, which is the
+      // exact inference the excerpt notice exists to block. Reachable when excerpts alone exceed the
+      // content budget, i.e. a small window with large embeddings.
+      const excerpts = await runFabFiles(
+        { vectorized: true, embeddingModel: 'text-embedding-ada-002' },
+        4000,
+        chunks(40, 400)
+      );
+      expect(excerpts).toContain(EXCERPT_MARKER);
+
+      const assembled = await buildAndSortMessages(
+        [],
+        [{ role: 'user', content: excerpts }],
+        [{ role: 'user', content: 'what does it say' }],
+        1800,
+        {},
+        5,
+        mockLogger as any,
+        tokenizer as any
+      );
+      const body = assembled.map(m => (typeof m.content === 'string' ? m.content : '')).join('\n');
+
+      expect(body).toContain('do not infer a total row');
+      expect(body).not.toContain('This is NOT the end of the file');
+      // And no fragment of the excerpt notice left dangling beside another one.
+      expect(body.split('most relevant excerpts from').length - 1).toBe(1);
+    });
+  });
+
+  describe('telemetry for a budget-driven history cut', () => {
+    it('reports token-budget, not history-limit, when history is cut mid-message', async () => {
+      // The truncation fallback shrinks history in place and returns removedMessages: [], so the
+      // history calls discarded the only evidence and a budget loss was labelled as configured
+      // windowing.
+      await buildAndSortMessages(
+        Array.from({ length: 6 }, (_, i) => ({
+          role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+          content: `history message ${i} ` + 'h'.repeat(3000),
+        })),
+        [],
+        [{ role: 'user', content: 'carry on' }],
+        // 1800 not 2000: at 2000 one history message still fits, so messages get DROPPED and
+        // removedMessages alone would flag the budget loss. Below that nothing fits, the fallback
+        // shrinks all six in place, and the mid-message signal is the only evidence there is.
+        1800,
+        {},
+        5,
+        mockLogger as any,
+        tokenizer as any
+      );
+
+      const debug = getLastBuildDebugInfo();
+      expect(debug?.wasTruncated).toBe(true);
+      expect(debug?.truncationMethod).toBe('token-budget');
     });
   });
 

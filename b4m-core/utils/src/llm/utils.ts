@@ -140,8 +140,10 @@ const MIN_USEFUL_ATTACHED_CONTENT_TOKENS = 200;
  * really does stop partway, whereas excerpts are non-contiguous, so "later content was not sent" would
  * invite exactly the wrong inference about what is missing.
  */
+const EXCERPT_NOTICE_PREFIX = '\n\n[The above are the most relevant excerpts from ';
+
 const excerptNotice = (fileName: string): string =>
-  `\n\n[The above are the most relevant excerpts from "${fileName}", selected by similarity. They are in file ` +
+  `${EXCERPT_NOTICE_PREFIX}"${fileName}", selected by similarity. They are in file ` +
   `order but are NOT the whole file and NOT contiguous - parts between them were not sent, and content after ` +
   `the last excerpt may exist. Do not describe this as the complete file, and do not infer a total row or ` +
   `section count, or a final row, from it.]`;
@@ -149,6 +151,23 @@ const excerptNotice = (fileName: string): string =>
 const URL_TRUNCATION_NOTICE =
   '\n\n[Fetched page content truncated to fit the context window. This is NOT the end of the page - later ' +
   'content was not sent.]';
+
+/**
+ * The notice an upstream stage already attached, if any. Assembly's own cut slices the tail off and
+ * would append the generic head-slice wording in its place - which is FALSE for excerpts: it would
+ * tell the model the content simply stops here, the very inference the excerpt notice exists to block.
+ * Every claim in an upstream notice survives a further cut, so the right move is to put the same one
+ * back rather than overwrite it.
+ *
+ * Matched by prefix because the excerpt notice carries a filename. A file whose own text ends with
+ * this sentence would be misread, but the only consequence is which true-either-way notice is
+ * appended, so an exact-match guard is not worth the code.
+ */
+const upstreamNoticeIn = (text: string): string | null => {
+  if (text.endsWith(URL_TRUNCATION_NOTICE)) return URL_TRUNCATION_NOTICE;
+  const start = text.lastIndexOf(EXCERPT_NOTICE_PREFIX);
+  return start !== -1 && text.endsWith(']') ? text.slice(start) : null;
+};
 
 /**
  * Flat per-image token charge. Exact cost needs decoding the image (Anthropic ~ width*height/750;
@@ -1513,12 +1532,17 @@ const processMessages = (
     // messages instead and let the removal reporting below stand.
     if (tokensPerMessage >= 1) {
       const truncatedMessages = messages.map(message => {
-        const truncated = truncateMessageContent(message, tokensPerMessage);
+        // Held out of the slice so the cut cannot leave a fragment of it behind, then put back after.
+        const upstream = truncationNotice && typeof message.content === 'string' ? upstreamNoticeIn(message.content) : null;
+        const source = upstream
+          ? { ...message, content: (message.content as string).slice(0, -upstream.length) }
+          : message;
+        const truncated = truncateMessageContent(source, tokensPerMessage);
         // Every message reaching this branch gets shortened - it only runs when none of them fit,
         // and the per-message share is at most the budget each one already exceeded. The type check
         // is the real guard: array content truncates by whole blocks and takes no text notice.
         if (!truncationNotice || typeof truncated.content !== 'string') return truncated;
-        return { ...truncated, content: truncated.content + truncationNotice };
+        return { ...truncated, content: truncated.content + (upstream ?? truncationNotice) };
       });
       return {
         messages: truncatedMessages,
@@ -1579,7 +1603,9 @@ export async function buildAndSortMessages(
   tokenizer: ITokenizer,
   options: { verbose: boolean } = { verbose: false }
 ): Promise<IMessage[]> {
-  if (maxInputTokens <= 0) {
+  // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
+  // comparison below.
+  if (!(maxInputTokens > 0)) {
     logger.error(`Invalid maxInputTokens: ${maxInputTokens}. Must be greater than 0.`);
     return [];
   }
@@ -1690,6 +1716,14 @@ export async function buildAndSortMessages(
   // pass - is reported, and so `contentSqueezed` reads the structural signal rather than comparing
   // token totals: the appended notice can leave a squeezed message measuring larger than the original.
   const cutContentMessages = new Set<IMessage>();
+  // History cut mid-message is a budget loss too. Tracked apart from contentSqueezed so it feeds
+  // truncationMethod without firing the attached-content warning, which is about the file only.
+  let historyCutMidMessage = false;
+  const recordHistoryResult = (result: ReturnType<typeof processMessages>): IMessage[] => {
+    allRemovedMessages.push(...result.removedMessages);
+    if (result.truncatedMessages.length > 0) historyCutMidMessage = true;
+    return result.messages;
+  };
   const recordContentResult = (result: ReturnType<typeof processMessages>): IMessage[] => {
     allRemovedMessages.push(...result.removedMessages);
     result.truncatedMessages.forEach(message => cutContentMessages.add(message));
@@ -1728,9 +1762,7 @@ export async function buildAndSortMessages(
     // Unused reserve flows back, so a small attachment costs history nothing.
     const contentTokensUsed = estimateMessagesTokens(processedContentMessages);
 
-    const historyResult = processMessages(historyMessages, tokenBudget - contentTokensUsed);
-    processedPreviousMessages = historyResult.messages;
-    allRemovedMessages.push(...historyResult.removedMessages);
+    processedPreviousMessages = recordHistoryResult(processMessages(historyMessages, tokenBudget - contentTokensUsed));
 
     if (contentSqueezed) {
       // Warned rather than logged because the symptom is a missing answer, not an error: the model
@@ -1752,9 +1784,7 @@ export async function buildAndSortMessages(
         processMessages(nonImageMessages, tokenBudget, { truncationNotice: CONTENT_TRUNCATION_NOTICE })
       );
 
-      const historyResult = processMessages(historyMessages, tokenBudget);
-      processedPreviousMessages = historyResult.messages;
-      allRemovedMessages.push(...historyResult.removedMessages);
+      processedPreviousMessages = recordHistoryResult(processMessages(historyMessages, tokenBudget));
     } else {
       // Both exceed the budget: trim proportionally. See KNOWLEDGE_FILE_TOKEN_ALLOCATION for the split.
       const nonImageTokenBudget = Math.min(tokenBudget * KNOWLEDGE_FILE_TOKEN_ALLOCATION, totalContentTokens);
@@ -1764,9 +1794,7 @@ export async function buildAndSortMessages(
         processMessages(nonImageMessages, nonImageTokenBudget, { truncationNotice: CONTENT_TRUNCATION_NOTICE })
       );
 
-      const historyResult = processMessages(historyMessages, previousMessageTokenBudget);
-      processedPreviousMessages = historyResult.messages;
-      allRemovedMessages.push(...historyResult.removedMessages);
+      processedPreviousMessages = recordHistoryResult(processMessages(historyMessages, previousMessageTokenBudget));
     }
   }
 
@@ -1892,7 +1920,7 @@ export async function buildAndSortMessages(
   // the end left the worst-loss turn reporting the previous call's numbers from a warm container.
   const recordDebugInfo = (finalContentMessages: IMessage[]) => {
     const historyWindowed = previousMessages.length > historyMessages.length;
-    const budgetTruncated = allRemovedMessages.length > 0 || contentSqueezed;
+    const budgetTruncated = allRemovedMessages.length > 0 || contentSqueezed || historyCutMidMessage;
     (buildAndSortMessages as any).lastDebugInfo = {
       messageTruncation: {
         wasTruncated: budgetTruncated,
@@ -1975,8 +2003,7 @@ export async function buildAndSortMessages(
           `Final safety pass also reduced ${before.length} history message(s) to ${reduced.messages.length}: ` +
             `the attached content alone could not absorb the overflow.`
         );
-        processedPreviousMessages = reduced.messages;
-        allRemovedMessages.push(...reduced.removedMessages);
+        processedPreviousMessages = recordHistoryResult(reduced);
       } else {
         // Only system messages and the user prompt remain, and neither is droppable here.
         break;
