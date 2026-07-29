@@ -70,6 +70,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   removeTagByUserId: vi.fn(),
   updateTagsByUserId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
+  pushTagsByFabFileId: vi.fn(),
   findByContentHashes: vi.fn(),
   findByContentHashesInDataLake: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
