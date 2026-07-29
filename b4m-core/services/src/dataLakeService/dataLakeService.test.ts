@@ -16,7 +16,7 @@ import { removeFileFromDataLake } from './removeFileFromDataLake';
 import { setLakeVisibility } from './setLakeVisibility';
 import { updateDataLake } from './updateDataLake';
 import { reconcileStuckBatches, DEFAULT_STUCK_BATCH_TIMEOUT_MS } from './reconcileStuckBatches';
-import { listDataLakes, listArchivedDataLakes, listDeletedDataLakes } from './listDataLakes';
+import { listDataLakes, listAllDataLakes, listArchivedDataLakes, listDeletedDataLakes } from './listDataLakes';
 import { redactLakeForActor } from './redactLakeForActor';
 import { browsePublicDataLakes } from './browsePublicDataLakes';
 
@@ -265,6 +265,24 @@ describe('canManageLake — the single write/manage rule (creator or admin)', ()
   });
 });
 
+describe('canManageLake - fails closed on a blank identity', () => {
+  it('denies an actor with no userId on an owner-less lake, rather than matching blank to blank', () => {
+    // The synthetic fallback document carries createdByUserId: ''. A bare === would have granted
+    // manage (and, since this predicate now gates prompt disclosure, the prompt with it).
+    expect(canManageLake(lake({ createdByUserId: '' }), { userId: '', isAdmin: false })).toBe(false);
+    expect(
+      canManageLake({ createdByUserId: undefined } as unknown as IDataLakeDocument, {
+        userId: undefined as unknown as string,
+        isAdmin: false,
+      })
+    ).toBe(false);
+  });
+
+  it('still grants an admin on an owner-less lake', () => {
+    expect(canManageLake(lake({ createdByUserId: '' }), { userId: '', isAdmin: true })).toBe(true);
+  });
+});
+
 describe('listDataLakes - per-lake canManage flag for the UI', () => {
   it("marks the caller's own lakes manageable and strangers' (public) lakes read-only", async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
@@ -356,6 +374,33 @@ describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () =>
   });
 });
 
+describe('listAllDataLakes - the admin list still gates the prompt on canManage', () => {
+  it('returns the prompt on every DB lake, since an admin manages them all', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', systemPrompt: 'Cite sources.' });
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([theirs]) } };
+
+    const result = await listAllDataLakes({ db });
+
+    // Pins the manage flag AND the disclosure it now gates: flipping this projection to
+    // canManage:false would silently strip prompts from every admin and break the admin editor.
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'theirs')?.systemPrompt).toBe('Cite sources.');
+  });
+
+  it('never carries a prompt on a built-in fallback lake, whatever the registry holds', async () => {
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+
+    const result = await listAllDataLakes({ db });
+    const fallback = result.find(l => l.id === 'opti-knowledge');
+
+    // The registry is JSON.parse'd from env and keeps unknown keys, so an overlay entry could
+    // arrive carrying a systemPrompt. Routing fallbacks through the projection is what stops it.
+    expect(fallback).toBeDefined();
+    expect(fallback?.canManage).toBe(false);
+    expect(fallback && 'systemPrompt' in fallback).toBe(false);
+  });
+});
+
 // The raw-document exits (GET /api/data-lakes/:id, /archived, /deleted) are gated on READ
 // access, which is deliberately wider than manage - so each one must redact before serializing.
 describe('redactLakeForActor - editor-only fields on the raw-document exits', () => {
@@ -383,6 +428,13 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     expect(visible.datalakeTag).toBe('datalake:lake');
   });
 
+  it('reports a whitespace-only prompt as absent for the OWNER too, matching the list projection', () => {
+    // Without this the same lake reads as "has a prompt" on GET /:id and "has none" in the list.
+    const blank = lake({ createdByUserId: 'owner', systemPrompt: '   \n ' });
+    const visible = redactLakeForActor(blank, { userId: 'owner', isAdmin: false });
+    expect('systemPrompt' in visible).toBe(false);
+  });
+
   it('does not mutate the source document (the caller may still hold it for a write path)', () => {
     const l = prompted({ isPublic: true });
     redactLakeForActor(l, { userId: 'stranger', isAdmin: false });
@@ -397,7 +449,9 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     const result = await listArchivedDataLakes(ctx({ userId: 'me', organizationId: 'orgA' }), { db });
 
     expect(result.find(l => l.id === 'mine')?.systemPrompt).toBe('Answer only from this lake.');
-    expect(result.find(l => l.id === 'org')?.systemPrompt).toBeUndefined();
+    // Key absence, not undefined: blanking instead of deleting would pass the weaker assertion.
+    const redactedArchived = result.find(l => l.id === 'org')!;
+    expect('systemPrompt' in redactedArchived).toBe(false);
   });
 
   it('redacts per lake in the deleted management view', async () => {
@@ -406,7 +460,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
 
     const result = await listDeletedDataLakes(ctx({ userId: 'me', organizationId: 'orgA' }), { db });
 
-    expect(result[0]?.systemPrompt).toBeUndefined();
+    expect('systemPrompt' in result[0]!).toBe(false);
   });
 });
 
