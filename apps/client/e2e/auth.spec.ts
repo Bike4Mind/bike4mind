@@ -1,8 +1,34 @@
+import { type APIRequestContext } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
-import { getTestUsers } from './helpers/test-users';
+import { getTestUsers, getTestRunId, getE2ETestId } from './helpers/test-users';
 import { seedAuthOnPage } from './helpers/auth-seed';
-import { apiGetOtcCode } from './helpers/api';
+import { apiCreateTestUser, apiGetOtcCode, apiLoginViaOtc } from './helpers/api';
+
+/**
+ * Mint a dedicated throwaway account for a test that logs out. Logout revokes every token
+ * the user holds (tokenVersion bump), so a test that logs out MUST NOT use a shared spec user -
+ * it would kill that user's session for every parallel spec. The email mirrors the setup
+ * convention (`...-<id>-e2e@test.com`) so global-teardown's cleanup sweep matches and removes it.
+ */
+async function createLogoutUser(request: APIRequestContext, label: string) {
+  const e2eId = getE2ETestId();
+  const idSuffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
+  const email = `auth-${label}-${idSuffix}-e2e@test.com`;
+  const result = await apiCreateTestUser(request, {
+    username: `auth-${label}-${idSuffix}`,
+    email,
+    name: `Auth ${label} ${idSuffix}`,
+    password: `E2eAuth${label}Pass123!`,
+    isAdmin: false,
+  });
+  return {
+    email,
+    userId: (result.user.id || result.user._id) as string,
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken,
+  };
+}
 
 test.describe('Authentication', () => {
   test('authenticated session loads the app', async ({ basePage, page }) => {
@@ -56,8 +82,9 @@ test.describe('Authentication', () => {
     await expect(page).toHaveURL(/.*login.*/);
   });
 
-  test('should logout successfully', async ({ basePage, navigationPage, page }) => {
-    const { user } = getTestUsers();
+  test('should logout successfully', async ({ basePage, navigationPage, page, request }) => {
+    // Dedicated user: logout revokes all of the user's tokens, so we must not log out a shared one.
+    const user = await createLogoutUser(request, 'logout');
     await basePage.clearAllStorage();
     await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
     await page.goto('/');
@@ -69,8 +96,8 @@ test.describe('Authentication', () => {
   });
 
   // Skipped: indexedDB is not cleared after logout. Covered by a manual test; re-enable once the fix lands.
-  test.skip('should clear IndexedDB caches on logout', async ({ basePage, navigationPage, page }) => {
-    const { user } = getTestUsers();
+  test.skip('should clear IndexedDB caches on logout', async ({ basePage, navigationPage, page, request }) => {
+    const user = await createLogoutUser(request, 'cachelogout');
     await basePage.clearAllStorage();
     await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
     await basePage.dismissModals();
@@ -217,9 +244,15 @@ test.describe('Authentication', () => {
     }
   });
 
-  test('should load fresh data after re-login (no stale cache)', async ({ basePage, navigationPage, page }) => {
+  test('should load fresh data after re-login (no stale cache)', async ({
+    basePage,
+    navigationPage,
+    page,
+    request,
+  }) => {
     test.slow();
-    const { user } = getTestUsers();
+    // Dedicated user: logout revokes the seeded token, so we re-login below for a fresh one.
+    const user = await createLogoutUser(request, 'relogin');
     await basePage.clearAllStorage();
     // Seed auth, navigate to populate cache, then logout
     await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
@@ -237,8 +270,10 @@ test.describe('Authentication', () => {
       { timeout: TIMEOUTS.ACTION }
     );
 
-    // Re-seed auth and verify notebooks load from server (not stale cache)
-    await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
+    // Logout revoked the seeded token (all tokens for the user are killed), so re-login for a
+    // fresh session before re-seeding - otherwise /api/identify rejects the dead token with 401.
+    const fresh = await apiLoginViaOtc(request, user.email);
+    await seedAuthOnPage(page, { accessToken: fresh.accessToken, refreshToken: fresh.refreshToken });
     await basePage.dismissModals();
 
     // Navigate to notebooks to trigger the quest-plans fetch
