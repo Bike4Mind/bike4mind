@@ -951,7 +951,6 @@ function ManagerOverview() {
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 2,
         px: 4,
         color: 'text.tertiary',
         textAlign: 'center',
@@ -971,10 +970,10 @@ function ManagerOverview() {
       >
         <StorageIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
       </Box>
-      <Typography level="title-lg" sx={{ color: 'text.primary' }}>
+      <Typography level="title-lg" sx={{ color: 'text.primary', fontSize: '16px', mt: '16px', mb: '12px' }}>
         Select a data lake
       </Typography>
-      <Typography level="body-sm" sx={{ color: 'text.tertiary', maxWidth: 380 }}>
+      <Typography level="body-sm" sx={{ color: 'text.tertiary', fontSize: '13px', maxWidth: 380 }}>
         Pick a lake on the left to see its details
         <br /> and browse its files, or create a new one.
       </Typography>
