@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
-import { act } from '@testing-library/react';
 import { useGetFabFilesBySessionId, useGetFabFilesByQuestId, useUpdateFabFile } from './fabFiles';
 
 // Mock the axios-backed api context - we only care that the GET is (or isn't) fired.
