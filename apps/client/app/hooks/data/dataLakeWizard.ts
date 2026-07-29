@@ -719,6 +719,9 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       if (dataLakeId) queryClient.invalidateQueries({ queryKey: ['dataLakeFiles', dataLakeId] });
       // Refresh the lake list so the cached fileCount reflects the removal.
       queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
+      // The manager's count chips fall back to the unique-per-prefix tag counts for lakes
+      // whose list entry carries no fileCount, so refresh those too or they read stale.
+      queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to remove file from data lake');

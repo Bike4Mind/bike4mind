@@ -178,6 +178,11 @@ export default function DataLakeManagerPanel() {
             lake={activeLake}
             fileCount={lakeCount(activeLake)}
             onOpenSettings={() => setEditingLakeId(activeLake.id)}
+            onArchived={() => {
+              setLakeId(null);
+              setPath([]);
+              setSelectedFile(null);
+            }}
           />
         )
       ) : (
@@ -315,7 +320,19 @@ function ManagerNav({
     return list.filter(l => l.name.toLowerCase().includes(q));
   };
 
+  // Search is scoped to the current level: entering/leaving a lake or drilling a category
+  // clears it, so a query typed to find a lake at root can't silently filter (and hide) that
+  // lake's categories once opened. Wrap every level transition to reset it.
+  const selectLake = (lake: ManagerLake) => {
+    setSearchQuery('');
+    onSelectLake(lake);
+  };
+  const navigate = (next: string[]) => {
+    setSearchQuery('');
+    onNavigate(next);
+  };
   const handleBack = () => {
+    setSearchQuery('');
     if (!activeLake || atLakeRoot) onExitLake();
     else onNavigate(path.slice(0, -1));
   };
@@ -423,9 +440,10 @@ function ManagerNav({
                         return (
                           <ListItem key={lake.id}>
                             <ListItemButton
-                              onClick={() => onSelectLake(lake)}
+                              onClick={() => selectLake(lake)}
                               data-testid={`datalake-manager-lake-${lake.id}`}
-                              sx={treeRowSx(hoverBg)}
+                              // pr aligns the count chip with the section headers' chevrons.
+                              sx={{ ...treeRowSx(hoverBg), pr: '12px' }}
                             >
                               <FolderOutlinedIcon
                                 sx={{
@@ -606,7 +624,7 @@ function ManagerNav({
             {filteredNodes.map(node => (
               <ListItem key={node.segment}>
                 <ListItemButton
-                  onClick={() => onNavigate([...path, node.segment])}
+                  onClick={() => navigate([...path, node.segment])}
                   sx={treeRowSx(hoverBg)}
                   data-testid={`datalake-manager-node-${node.segment}`}
                 >
@@ -629,7 +647,7 @@ function ManagerNav({
             {atLakeRoot && !searchQuery && uncategorizedFiles.length > 0 && (
               <ListItem key={UNCATEGORIZED_KEY}>
                 <ListItemButton
-                  onClick={() => onNavigate([...path, UNCATEGORIZED_KEY])}
+                  onClick={() => navigate([...path, UNCATEGORIZED_KEY])}
                   data-testid="datalake-manager-uncategorized"
                   sx={treeRowSx(hoverBg)}
                 >
@@ -806,10 +824,15 @@ function LakeInfoPanel({
   lake,
   fileCount,
   onOpenSettings,
+  onArchived,
 }: {
   lake: ManagerLake;
   fileCount: number | undefined;
   onOpenSettings: () => void;
+  /** Called after the active lake is archived, so the panel exits to root instead of the
+   *  derived activeLake re-binding to a lake that just left the list (and a later restore
+   *  teleporting back in). */
+  onArchived: () => void;
 }) {
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const archiveLake = useArchiveDataLake();
@@ -869,7 +892,7 @@ function LakeInfoPanel({
                   startDecorator={<ArchiveOutlinedIcon sx={{ fontSize: 16 }} />}
                   data-testid={`datalake-archive-btn-${lake.id}`}
                   loading={archiveLake.isPending}
-                  onClick={() => archiveLake.mutate(lake.id)}
+                  onClick={() => archiveLake.mutate(lake.id, { onSuccess: onArchived })}
                   sx={{ flexShrink: 0, fontSize: '13px' }}
                 >
                   Archive
@@ -908,7 +931,7 @@ function LakeInfoPanel({
           </Typography>
         )}
         <Typography level="body-sm" sx={{ color: 'text.tertiary', mt: 2 }}>
-          Browse the categories and files in the left sidebar — click a file to read it here.
+          Browse the categories and files in the left sidebar - click a file to read it here.
         </Typography>
       </Box>
     </Box>
@@ -934,12 +957,27 @@ function ManagerOverview() {
         textAlign: 'center',
       }}
     >
-      <StorageIcon sx={{ fontSize: 48, opacity: 0.4 }} />
-      <Typography level="title-lg" sx={{ color: 'text.secondary' }}>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 56,
+          height: 56,
+          borderRadius: 'md',
+          backgroundColor: 'background.surface2',
+          border: '1px solid',
+          borderColor: 'divider',
+        }}
+      >
+        <StorageIcon sx={{ fontSize: 24, color: 'text.tertiary' }} />
+      </Box>
+      <Typography level="title-lg" sx={{ color: 'text.primary' }}>
         Select a data lake
       </Typography>
-      <Typography level="body-sm" sx={{ maxWidth: 380 }}>
-        Pick a lake on the left to see its details and browse its files, or create a new one.
+      <Typography level="body-sm" sx={{ color: 'text.tertiary', maxWidth: 380 }}>
+        Pick a lake on the left to see its details
+        <br /> and browse its files, or create a new one.
       </Typography>
     </Box>
   );

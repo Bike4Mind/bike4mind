@@ -1,15 +1,17 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeManagerPanel from './DataLakeManagerPanel';
 
+// Archive resolves synchronously so the onSuccess (exit-to-root) wiring is exercised.
+const archiveMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
-    useArchiveDataLake: mutation,
+    useArchiveDataLake: () => ({ mutate: archiveMutate, isPending: false }),
     useUnarchiveDataLake: mutation,
     useRestoreDeletedDataLake: mutation,
     usePermanentDeleteDataLake: mutation,
@@ -100,6 +102,7 @@ beforeEach(() => {
   isFeatureEnabled.mockReturnValue(true);
   useDataLakes.mockReset();
   useDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
+  archiveMutate.mockClear();
 });
 
 describe('DataLakeManagerPanel - EnableDataLakes gating', () => {
@@ -176,6 +179,48 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     expect(screen.getByTestId('datalake-manager-lake-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
+
+  it('opens the Uncategorized bucket and lists the untagged file', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-uncategorized'));
+
+    // The synthetic bucket is a leaf: f3 (tagged only datalake:mine) must be reachable here.
+    expect(screen.getByTestId('datalake-manager-file-f3')).toHaveTextContent('loose');
+    expect(screen.queryByTestId('datalake-manager-file-f1')).not.toBeInTheDocument();
+  });
+
+  it('clears the search when entering a lake, so a root query cannot filter its categories', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    // Type a lake-name query at root, then open the match.
+    await user.type(screen.getByTestId('datalake-manager-search').querySelector('input')!, 'Mine');
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    // Search reset -> the lake's categories show (a stale 'Mine' query would hide them all).
+    expect(screen.getByTestId('datalake-manager-search').querySelector('input')).toHaveValue('');
+    expect(screen.getByTestId('datalake-manager-node-genre')).toBeInTheDocument();
+  });
+
+  it('falls back to the root overview when the active lake vanishes from the list', () => {
+    // Deriving activeLake from the live list (no effect) means an archived/deleted lake that
+    // leaves the list drops the panel back to root on its own.
+    const { rerender } = renderPanel();
+    fireEvent.click(screen.getByTestId('datalake-manager-lake-mine'));
+    expect(screen.getByTestId('datalake-manager-lakeinfo')).toBeInTheDocument();
+
+    useDataLakes.mockReturnValue({ data: [theirsLake], isLoading: false });
+    rerender(
+      <Wrapper>
+        <DataLakeManagerPanel />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('datalake-manager-lakeinfo')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
+  });
 });
 
 describe('DataLakeManagerPanel - management affordances gate on canManage', () => {
@@ -201,6 +246,20 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.queryByTestId('datalake-addfiles-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-settings-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-archive-btn-theirs')).toBeNull();
+  });
+
+  it('archiving the active lake exits to the root overview (no re-entry on a later restore)', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-archive-btn-mine'));
+
+    // The archive's onSuccess clears the active lake, so even though the mocked list still
+    // contains 'mine', the panel is back at root - a restore later can't teleport back in.
+    expect(archiveMutate).toHaveBeenCalledWith('mine', expect.objectContaining({ onSuccess: expect.any(Function) }));
+    expect(screen.queryByTestId('datalake-manager-lakeinfo')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
 
   it('opens the settings editor for the selected lake', async () => {
