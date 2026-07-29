@@ -144,6 +144,26 @@ describe('ModelSelection apply behavior', () => {
   });
 });
 
+describe('ModelSelection view mode', () => {
+  it('defaults to list view and toggles to grid and back', () => {
+    renderSelection({});
+
+    const toggle = screen.getByTestId('model-view-mode-toggle');
+    const card = () => screen.getByTestId(`model-card-${textModel.id}`);
+
+    expect(card()).toHaveAttribute('data-view-mode', 'list');
+    // The description is dropped in list view.
+    expect(screen.queryByText(textModel.description)).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(card()).toHaveAttribute('data-view-mode', 'grid');
+    expect(screen.getByText(textModel.description)).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(card()).toHaveAttribute('data-view-mode', 'list');
+  });
+});
+
 describe('ModelSelection admin quick link', () => {
   beforeEach(() => {
     admin.isAdmin = false;

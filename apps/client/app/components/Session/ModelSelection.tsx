@@ -26,6 +26,8 @@ import {
 import ClearIcon from '@mui/icons-material/Clear';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
+import GridViewOutlinedIcon from '@mui/icons-material/GridViewOutlined';
+import ViewListOutlinedIcon from '@mui/icons-material/ViewListOutlined';
 import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
@@ -238,7 +240,9 @@ export const getModelBackend = (model: ModelInfo): string => {
   return 'Other';
 };
 
-// Updated ModelOption component for grid layout
+// Layout of the model list: roomy cards in a 2-up grid, or compact single-column rows.
+export type ModelViewMode = 'grid' | 'list';
+
 const ModelOption = React.memo(
   ({
     model,
@@ -253,6 +257,7 @@ const ModelOption = React.memo(
     avgResponseTimeByModel,
     statsLoading,
     mode,
+    viewMode = 'grid',
   }: {
     model: ModelInfo;
     isSelected: boolean;
@@ -266,6 +271,7 @@ const ModelOption = React.memo(
     avgResponseTimeByModel: Record<string, number>;
     statsLoading: boolean;
     mode: 'dark' | 'light';
+    viewMode?: ModelViewMode;
   }) => {
     const priceTierInfo = getModelPriceTier(model);
     const modelSpeed = getModelSpeedFromStats(model.id, avgResponseTimeByModel);
@@ -273,10 +279,207 @@ const ModelOption = React.memo(
     // A disabled model stays in the list so users can see it, but it can't be picked:
     // no click handler, a not-allowed cursor, dimmed, and no hover affordance.
     const isDisabled = !!model.disabled;
+    const isList = viewMode === 'list';
 
-    const card = (
+    // Hovering the name region reveals the full description.
+    const nameBlock = (
+      <Tooltip
+        title={model.description ?? ''}
+        placement="top"
+        variant="soft"
+        sx={{ maxWidth: 320 }}
+        disableHoverListener={!model.description}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: isList ? 'none' : 1, minWidth: '50px' }}>
+          <Typography
+            level="body-md"
+            sx={{
+              textAlign: 'left',
+              color: 'text.primary',
+              fontWeight: '500',
+              minWidth: '70px',
+            }}
+          >
+            {model.name}
+          </Typography>
+          {/* Bedrock-hosted indicator */}
+          {model.backend === ModelBackend.Bedrock && (
+            <img
+              data-testid={`bedrock-badge-${model.id}`}
+              src={BEDROCK_LOGO_SRC}
+              alt="Hosted on AWS Bedrock"
+              width={18}
+              height={18}
+              style={{ flex: 'none', objectFit: 'contain', display: 'block', borderRadius: 4 }}
+            />
+          )}
+          {/* Selected Checkmark - sits right of the model name / Bedrock icon */}
+          {isSelected && (
+            <CheckIcon
+              sx={{
+                fontSize: '16px',
+                flex: 'none',
+                color: green[800],
+                '& path': {
+                  strokeWidth: '2px',
+                  stroke: green[800],
+                },
+              }}
+            />
+          )}
+        </Box>
+      </Tooltip>
+    );
+
+    const favoriteToggle = onToggleFavorite && (
+      <IconButton
+        data-testid={`favorite-toggle-${model.id}`}
+        variant="plain"
+        size="sm"
+        sx={{
+          minWidth: '28px',
+          minHeight: '28px',
+          width: '28px',
+          height: '28px',
+          '&:hover': {
+            backgroundColor: 'transparent',
+          },
+        }}
+        onClick={e => {
+          e.stopPropagation();
+          onToggleFavorite(model.id);
+        }}
+      >
+        {isFavorite ? (
+          <StarRounded sx={{ fontSize: '20px', color: 'primary.solidBg' }} />
+        ) : (
+          <StarBorderRounded sx={{ fontSize: '20px', color: 'neutral.400' }} />
+        )}
+      </IconButton>
+    );
+
+    // Selects the model and opens its detail & settings dialog (all viewports).
+    const viewMoreButton = onSettingsClick && (
+      <Tooltip title="View model details & settings" placement="bottom">
+        <Button
+          data-testid={`model-view-more-${model.id}`}
+          variant="outlined"
+          color="neutral"
+          size="sm"
+          sx={{
+            flex: 'none',
+            fontSize: '12px',
+            fontWeight: 500,
+            px: 1.5,
+            py: 0.25,
+            minHeight: '28px',
+            borderRadius: '6px',
+            color: 'text.primary',
+            whiteSpace: 'nowrap',
+            '&:hover': {
+              backgroundColor: 'primary.softHoverBg',
+              borderColor: 'primary.main',
+            },
+          }}
+          onClick={e => {
+            e.stopPropagation();
+            onSettingsClick(model);
+          }}
+        >
+          View more
+        </Button>
+      </Tooltip>
+    );
+
+    const metadataChips = (
+      <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+        {/* Unavailable Chip — model is disabled for this deployment (e.g. gated upstream) */}
+        {isDisabled && (
+          <MetadataChip
+            label="Unavailable"
+            mode={mode}
+            variant="red"
+            tooltip={model.disabledReason ?? 'This model is currently unavailable'}
+          />
+        )}
+        {/* Latest Model Chip */}
+        {isNewModel(model) && (
+          <MetadataChip
+            label="New"
+            mode={mode}
+            variant="purple"
+            tooltip="This model is released in the last 3 months"
+          />
+        )}
+
+        {/* Popular Model Chip - based on usage data */}
+        {!statsLoading && isPopular && (
+          <MetadataChip
+            label="Popular"
+            mode={mode}
+            variant="blue-filled"
+            tooltip="This is one of the most used models"
+          />
+        )}
+
+        {/* Price Tier */}
+        <MetadataChip
+          label={priceTierInfo.tier}
+          startDecorator={
+            <Box
+              sx={{
+                width: 12,
+                height: 12,
+                borderRadius: '50%',
+                backgroundColor:
+                  priceTierInfo.variant === 'green'
+                    ? green[800]
+                    : priceTierInfo.variant === 'yellow'
+                      ? orange[450]
+                      : 'red',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '10px',
+                fontWeight: 'bold',
+                color: 'common.white',
+                mr: '4px',
+                p: 0.5,
+              }}
+            >
+              $
+            </Box>
+          }
+          tooltip={getPriceTierTooltip(priceTierInfo.tier)}
+          variant={priceTierInfo.variant}
+          isMaximum={false}
+          mode={mode}
+        />
+
+        {/* Speed Chip - based on performance data */}
+        {!statsLoading && modelSpeed && (
+          <MetadataChip
+            label={modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)}
+            mode={mode}
+            variant={getModelSpeedVariant(modelSpeed)}
+            tooltip={getModelSpeedTooltip(modelSpeed)}
+          />
+        )}
+      </Stack>
+    );
+
+    const contextSummary = (
+      <Typography sx={{ fontSize: { xs: '12px' }, color: 'text.primary50', fontWeight: '500' }}>
+        {formatContextWindow(model.contextWindow)} · {formatContextWindow(model.max_tokens)}
+      </Typography>
+    );
+
+    // Tooltips are scoped to the name + description regions rather than the whole card, so
+    // they don't stack on top of the per-chip tooltips in the metadata row.
+    return (
       <Box
         data-testid={`model-card-${model.id}`}
+        data-view-mode={viewMode}
         aria-disabled={isDisabled || undefined}
         data-disabled={isDisabled || undefined}
         onClick={isDisabled ? undefined : () => onSelect(model)}
@@ -286,9 +489,7 @@ const ModelOption = React.memo(
           maxWidth: '100%',
           minWidth: '100%',
           mx: 'auto',
-          alignItems: 'stretch',
           justifyContent: 'space-between',
-          padding: '16px',
           cursor: isDisabled ? 'not-allowed' : 'pointer',
           opacity: isDisabled ? 0.55 : 1,
           transition: 'all 0.2s ease',
@@ -306,267 +507,109 @@ const ModelOption = React.memo(
             : 'var(--joy-palette-aiSettings-modelCard-border)',
           position: 'relative',
           borderWidth: '1px',
-          maxHeight: { xs: 'none', sm: '180px' },
           boxSizing: 'border-box',
           borderRadius: '8px',
-          flexDirection: 'column',
+          ...(isList
+            ? {
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 2,
+                padding: '12px 16px',
+                maxHeight: 'none',
+              }
+            : {
+                flexDirection: 'column',
+                alignItems: 'stretch',
+                padding: '16px',
+                maxHeight: { xs: 'none', sm: '180px' },
+              }),
         }}
       >
-        {/* Model Name and Metadata Chips, Top Side */}
-
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            textAlign: 'left',
-            mb: 1,
-          }}
-        >
-          {/* Model Name — hovering the name region reveals the full description */}
-          <Tooltip
-            title={model.description ?? ''}
-            placement="top"
-            variant="soft"
-            sx={{ maxWidth: 320 }}
-            disableHoverListener={!model.description}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1, minWidth: '50px' }}>
-              <Typography
-                level="body-md"
-                sx={{
-                  textAlign: 'left',
-                  color: 'text.primary',
-                  fontWeight: '500',
-                  minWidth: '70px',
-                }}
-              >
-                {model.name}
-              </Typography>
-              {/* Bedrock-hosted indicator */}
-              {model.backend === ModelBackend.Bedrock && (
-                <img
-                  data-testid={`bedrock-badge-${model.id}`}
-                  src={BEDROCK_LOGO_SRC}
-                  alt="Hosted on AWS Bedrock"
-                  width={18}
-                  height={18}
-                  style={{ flex: 'none', objectFit: 'contain', display: 'block', borderRadius: 4 }}
-                />
-              )}
-              {/* Selected Checkmark - sits right of the model name / Bedrock icon */}
-              {isSelected && (
-                <CheckIcon
-                  sx={{
-                    fontSize: '16px',
-                    flex: 'none',
-                    color: green[800],
-                    '& path': {
-                      strokeWidth: '2px',
-                      stroke: green[800],
-                    },
-                  }}
-                />
-              )}
+        {isList ? (
+          <>
+            {/* Title, then tags + context beneath it; actions pushed to the right. */}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1, minWidth: 0, textAlign: 'left' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>{nameBlock}</Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                {metadataChips}
+                {contextSummary}
+              </Box>
             </Box>
-          </Tooltip>
-
-          {/* Favorite Toggle */}
-          {onToggleFavorite && (
-            <IconButton
-              data-testid={`favorite-toggle-${model.id}`}
-              variant="plain"
-              size="sm"
-              sx={{
-                minWidth: '28px',
-                minHeight: '28px',
-                width: '28px',
-                height: '28px',
-                '&:hover': {
-                  backgroundColor: 'transparent',
-                },
-              }}
-              onClick={e => {
-                e.stopPropagation();
-                onToggleFavorite(model.id);
-              }}
-            >
-              {isFavorite ? (
-                <StarRounded sx={{ fontSize: '20px', color: 'primary.solidBg' }} />
-              ) : (
-                <StarBorderRounded sx={{ fontSize: '20px', color: 'neutral.400' }} />
-              )}
-            </IconButton>
-          )}
-
-          {/* View More — selects the model and opens its detail & settings dialog (all viewports) */}
-          {onSettingsClick && (
-            <Tooltip title="View model details & settings" placement="bottom">
-              <Button
-                data-testid={`model-view-more-${model.id}`}
-                variant="outlined"
-                color="neutral"
-                size="sm"
-                sx={{
-                  flex: 'none',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  px: 1.5,
-                  py: 0.25,
-                  minHeight: '28px',
-                  borderRadius: '6px',
-                  color: 'text.primary',
-                  whiteSpace: 'nowrap',
-                  '&:hover': {
-                    backgroundColor: 'primary.softHoverBg',
-                    borderColor: 'primary.main',
-                  },
-                }}
-                onClick={e => {
-                  e.stopPropagation();
-                  onSettingsClick(model);
-                }}
-              >
-                View more
-              </Button>
-            </Tooltip>
-          )}
-        </Box>
-
-        {/* Model Description, Bottom Side — hovering reveals the full, untruncated text.
-            placement="bottom" so the tooltip opens below the description text instead of
-            upward over the favorite-star / View more row directly above it. */}
-        {model.description && (
-          <Tooltip title={model.description} placement="bottom" variant="soft" sx={{ maxWidth: 320 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+              {favoriteToggle}
+              {viewMoreButton}
+            </Box>
+          </>
+        ) : (
+          <>
+            {/* Model Name and Metadata Chips, Top Side */}
             <Box
               sx={{
                 display: 'flex',
-                alignItems: 'flex-end',
-                gap: '8px',
-                flexDirection: 'row',
-                justifyContent: 'flex-start',
+                alignItems: 'center',
+                gap: 1,
+                textAlign: 'left',
+                mb: 1,
               }}
             >
-              <Typography
-                level="body-xs"
-                sx={{
-                  textAlign: 'left',
-                  whiteSpace: 'normal',
-                  color: 'text.primary50',
-                  fontSize: { xs: '13px', sm: '14px' },
-                  lineHeight: '1.4',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  display: '-webkit-box',
-                  WebkitLineClamp: { xs: 3, sm: 2 },
-                  WebkitBoxOrient: 'vertical',
-                }}
-              >
-                {model.description}
-              </Typography>
-              {/* Tokens Right Side */}
+              {nameBlock}
+              {favoriteToggle}
+              {viewMoreButton}
             </Box>
-          </Tooltip>
-        )}
 
-        <Box
-          sx={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            width: '100%',
-            mt: 2.5,
-            gap: '4px',
-            flexWrap: 'wrap',
-          }}
-        >
-          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-            {/* Unavailable Chip — model is disabled for this deployment (e.g. gated upstream) */}
-            {isDisabled && (
-              <MetadataChip
-                label="Unavailable"
-                mode={mode}
-                variant="red"
-                tooltip={model.disabledReason ?? 'This model is currently unavailable'}
-              />
-            )}
-            {/* Latest Model Chip */}
-            {isNewModel(model) && (
-              <MetadataChip
-                label="New"
-                mode={mode}
-                variant="purple"
-                tooltip="This model is released in the last 3 months"
-              />
-            )}
-
-            {/* Popular Model Chip - based on usage data */}
-            {!statsLoading && isPopular && (
-              <MetadataChip
-                label="Popular"
-                mode={mode}
-                variant="blue-filled"
-                tooltip="This is one of the most used models"
-              />
-            )}
-
-            {/* Price Tier */}
-            <MetadataChip
-              label={priceTierInfo.tier}
-              startDecorator={
+            {/* Model Description, Bottom Side — hovering reveals the full, untruncated text.
+                placement="bottom" so the tooltip opens below the description text instead of
+                upward over the favorite-star / View more row directly above it. */}
+            {model.description && (
+              <Tooltip title={model.description} placement="bottom" variant="soft" sx={{ maxWidth: 320 }}>
                 <Box
                   sx={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: '50%',
-                    backgroundColor:
-                      priceTierInfo.variant === 'green'
-                        ? green[800]
-                        : priceTierInfo.variant === 'yellow'
-                          ? orange[450]
-                          : 'red',
                     display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '10px',
-                    fontWeight: 'bold',
-                    color: 'common.white',
-                    mr: '4px',
-                    p: 0.5,
+                    alignItems: 'flex-end',
+                    gap: '8px',
+                    flexDirection: 'row',
+                    justifyContent: 'flex-start',
                   }}
                 >
-                  $
+                  <Typography
+                    level="body-xs"
+                    sx={{
+                      textAlign: 'left',
+                      whiteSpace: 'normal',
+                      color: 'text.primary50',
+                      fontSize: { xs: '13px', sm: '14px' },
+                      lineHeight: '1.4',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      display: '-webkit-box',
+                      WebkitLineClamp: { xs: 3, sm: 2 },
+                      WebkitBoxOrient: 'vertical',
+                    }}
+                  >
+                    {model.description}
+                  </Typography>
                 </Box>
-              }
-              tooltip={getPriceTierTooltip(priceTierInfo.tier)}
-              variant={priceTierInfo.variant}
-              isMaximum={false}
-              mode={mode}
-            />
-
-            {/* Speed Chip - based on performance data */}
-            {!statsLoading && modelSpeed && (
-              <MetadataChip
-                label={modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)}
-                mode={mode}
-                variant={getModelSpeedVariant(modelSpeed)}
-                tooltip={getModelSpeedTooltip(modelSpeed)}
-              />
+              </Tooltip>
             )}
-          </Stack>
 
-          <Stack sx={{ alignItems: 'flex-end', justifyContent: 'flex-end' }}>
-            <Typography sx={{ fontSize: { xs: '12px' }, color: 'text.primary50', fontWeight: '500' }}>
-              {formatContextWindow(model.contextWindow)} · {formatContextWindow(model.max_tokens)}
-            </Typography>
-          </Stack>
-        </Box>
+            <Box
+              sx={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                width: '100%',
+                mt: 2.5,
+                gap: '4px',
+                flexWrap: 'wrap',
+              }}
+            >
+              {metadataChips}
+              <Stack sx={{ alignItems: 'flex-end', justifyContent: 'flex-end' }}>{contextSummary}</Stack>
+            </Box>
+          </>
+        )}
       </Box>
     );
-
-    // Tooltips are scoped to the name + description regions (above) rather than the
-    // whole card, so they don't stack on top of the per-chip tooltips in the metadata row.
-    return card;
   }
 );
 ModelOption.displayName = 'ModelOption';
@@ -606,6 +649,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
   const { isFavorite, toggleFavorite } = useFavoriteModels();
+  const [viewMode, setViewMode] = useState<ModelViewMode>('list');
 
   // Lift model stats into parent - avoids N redundant query subscriptions and computations in ModelOption
   const { data: modelStats, isLoading: statsLoading } = useModelStats();
@@ -1130,6 +1174,32 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
             </Select>
           )}
 
+          {/* Shows the layout it switches TO, so the icon reads as the action. */}
+          <Tooltip title={viewMode === 'list' ? 'Switch to grid view' : 'Switch to list view'}>
+            <IconButton
+              data-testid="model-view-mode-toggle"
+              aria-label={viewMode === 'list' ? 'Switch to grid view' : 'Switch to list view'}
+              onClick={() => setViewMode(current => (current === 'list' ? 'grid' : 'list'))}
+              sx={theme => ({
+                flexShrink: 0,
+                '--IconButton-size': '32px',
+                backgroundColor: 'var(--joy-palette-background-body)',
+                border: '1px solid var(--joy-palette-divider)',
+                borderRadius: '8px',
+                transition: 'background 0.2s',
+                '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+                '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
+                '--variant-plainHoverColor': 'inherit',
+              })}
+            >
+              {viewMode === 'list' ? (
+                <GridViewOutlinedIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
+              ) : (
+                <ViewListOutlinedIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
+              )}
+            </IconButton>
+          </Tooltip>
+
           {isAdmin && (
             <Tooltip title="Manage models in the LLM Dashboard">
               <IconButton
@@ -1265,7 +1335,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                   <Box
                     sx={{
                       display: 'grid',
-                      gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                      gridTemplateColumns: viewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                       gap: 2,
                     }}
                   >
@@ -1284,6 +1354,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                         avgResponseTimeByModel={avgResponseTimeByModel}
                         statsLoading={statsLoading}
                         mode={mode}
+                        viewMode={viewMode}
                       />
                     ))}
                   </Box>
@@ -1384,6 +1455,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                               fontSize: '14px',
                               fontWeight: '400',
                               mt: '8px',
+                              ml: '8px',
                               mb: 2,
                               display: 'flex',
                               alignItems: 'center',
@@ -1396,7 +1468,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           <Box
                             sx={{
                               display: 'grid',
-                              gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                              gridTemplateColumns: viewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                               gap: 2,
                             }}
                           >
@@ -1415,6 +1487,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 avgResponseTimeByModel={avgResponseTimeByModel}
                                 statsLoading={statsLoading}
                                 mode={mode}
+                                viewMode={viewMode}
                               />
                             ))}
                           </Box>
@@ -1431,6 +1504,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                               fontSize: '14px',
                               fontWeight: '400',
                               mt: '8px',
+                              ml: '8px',
                               mb: 2,
                               display: 'flex',
                               alignItems: 'center',
@@ -1443,7 +1517,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           <Box
                             sx={{
                               display: 'grid',
-                              gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                              gridTemplateColumns: viewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                               gap: 2,
                             }}
                           >
@@ -1462,6 +1536,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 avgResponseTimeByModel={avgResponseTimeByModel}
                                 statsLoading={statsLoading}
                                 mode={mode}
+                                viewMode={viewMode}
                               />
                             ))}
                           </Box>
@@ -1478,6 +1553,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                               fontSize: '14px',
                               fontWeight: '400',
                               mt: '8px',
+                              ml: '8px',
                               mb: 2,
                               display: 'flex',
                               alignItems: 'center',
@@ -1490,7 +1566,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           <Box
                             sx={{
                               display: 'grid',
-                              gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                              gridTemplateColumns: viewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                               gap: 2,
                             }}
                           >
@@ -1509,6 +1585,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 avgResponseTimeByModel={avgResponseTimeByModel}
                                 statsLoading={statsLoading}
                                 mode={mode}
+                                viewMode={viewMode}
                               />
                             ))}
                           </Box>
@@ -1520,7 +1597,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                     <Box
                       sx={{
                         display: 'grid',
-                        gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                        gridTemplateColumns: viewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                         gap: 2,
                       }}
                     >
@@ -1539,6 +1616,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           avgResponseTimeByModel={avgResponseTimeByModel}
                           statsLoading={statsLoading}
                           mode={mode}
+                          viewMode={viewMode}
                         />
                       ))}
                     </Box>
