@@ -92,7 +92,96 @@ export default function Dashboard() {
   );
 }`;
 
+/**
+ * Reported from manual testing against a preview build: an artifact that is structurally complete -
+ * closes `</html>`, every function genuinely implemented, search and render both real - whose DATA
+ * is omitted behind marker comments. It published with no warning at all, because the phrase list
+ * matched the bare `for brevity` and its own padded variant `for the sake of brevity` sitting two
+ * lines away went unmatched.
+ */
+const ELIDED_DATA_BODY = `<!DOCTYPE html>
+<html>
+<head><title>Programming Languages Dashboard (100 Languages)</title>
+<style>.row { padding: 4px; }</style></head>
+<body>
+  <h1>Explore 100 programming languages</h1>
+  <input id="q" />
+  <div id="rows"></div>
+  <script>
+    const LANGS = [
+      { name: 'Python', paradigm: 'multi' },
+      { name: 'JavaScript', paradigm: 'multi' },
+      // ... For the sake of brevity and manageable artifact size, I will include the remaining 84 languages as unique, but concise.
+      // Due to system limits, please respond "CONTINUE" and I will immediately send the remaining entries.
+    ];
+
+    function renderRows(rows) {
+      const host = document.getElementById('rows');
+      host.textContent = '';
+      rows.forEach(row => {
+        const el = document.createElement('div');
+        el.className = 'row';
+        el.textContent = row.name + ' (' + row.paradigm + ')';
+        host.appendChild(el);
+      });
+    }
+
+    function applySearch(term) {
+      return LANGS.filter(l => l.name.toLowerCase().includes(term.toLowerCase()));
+    }
+
+    function init() {
+      renderRows(LANGS);
+      document.getElementById('q').addEventListener('input', e => renderRows(applySearch(e.target.value)));
+    }
+    init();
+  </script>
+</body>
+</html>`;
+
 describe('detectElidedContent', () => {
+  describe('elided data behind a marker comment', () => {
+    it('flags an otherwise-working artifact whose records are omitted', () => {
+      const result = detectElidedContent(ELIDED_DATA_BODY, 'html');
+
+      expect(result.elided).toBe(true);
+      expect(result.confidence).toBe('high');
+    });
+
+    it('catches it on the comment signal alone, with no hollow body or phantom call to lean on', () => {
+      // The point of the specimen: every function is real and every call resolves, so the phrase
+      // list is the only thing standing between this artifact and an ungated publish.
+      const result = detectElidedContent(ELIDED_DATA_BODY, 'html');
+
+      expect(result.signals.every(s => s.kind === 'placeholder_comment')).toBe(true);
+    });
+
+    it.each([
+      ['padded brevity', '// For the sake of brevity, the other entries follow the same shape'],
+      ['brevity, other padding', '// omitting these in the interest of brevity'],
+      ['reader asked to reply', '// Due to system limits, please respond "CONTINUE" and I will send the rest'],
+      ['pointer at a later turn', '// see next response for the remaining rows'],
+      ['first-person promise', '// I will include the remaining 84 languages below'],
+      ['claimed-but-absent count', '// The following 90 languages are all individually defined'],
+    ])('flags %s', (_label, comment) => {
+      const body = `<html><body><script>\n${comment}\nfunction go() { document.title = 'x'; }\ngo();\n</script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').confidence).toBe('high');
+    });
+
+    it.each([
+      ['a prose TODO in the first person', '// I will add validation later, once the schema settles'],
+      ['a remaining-count in its ordinary sense', '// the remaining 3 bytes are padding'],
+      ['pagination that mentions a next response', '// in the next response we get the cursor'],
+      ['waiting on a response', '// wait for the next response before retrying'],
+      ['a hyphenated path segment', '//cdn.example.com/for-brevity-notes.js'],
+    ])('does not flag %s', (_label, comment) => {
+      const body = `<html><body><script>\n${comment}\nfunction go() { document.title = 'x'; }\ngo();\n</script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+  });
+
   describe('the reported failure', () => {
     it('flags the real elided artifact with high confidence', () => {
       const result = detectElidedContent(REAL_ELIDED_BODY, 'html');
