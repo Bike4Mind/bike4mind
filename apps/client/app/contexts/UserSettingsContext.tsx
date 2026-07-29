@@ -108,7 +108,7 @@ const defaultSettings: UserSettings = {
   agentModeDefault: 'off',
   showFunTools: false,
   saveGeneratedAudio: true,
-  showSplashCards: true,
+  showSplashCards: false,
 };
 
 /** Scalar keys shared between IUserPreferences and UserSettings. */
