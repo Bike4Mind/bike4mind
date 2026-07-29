@@ -11,7 +11,14 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import { AiEvents, ChatModelName, IMessage, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import {
+  AiEvents,
+  ChatModelName,
+  IMessage,
+  KnowledgeType,
+  preserveDataLakeMembership,
+  SupportedFabFileMimeTypes,
+} from '@bike4mind/common';
 import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -163,7 +170,10 @@ export const handler = withEventContext(async (event, logger) => {
     type: KnowledgeType.FILE,
     public: false,
     sessionId: session.id,
-    tags: session.tags,
+    // A notebook's own tags must never confer data-lake membership: this runs as a system job
+    // with no actor to authorize against, so a meta-tag arriving from the session would inject the
+    // summary file into a lake that the user-facing write doors would have gated.
+    tags: preserveDataLakeMembership(session.tags, []),
   };
 
   // Always persist the session summary first - this is the primary value.
@@ -192,7 +202,10 @@ export const handler = withEventContext(async (event, logger) => {
             type: fabFileData.type,
             fileContent: fabFileData.fileContent,
             sessionId: fabFileData.sessionId,
-            tags: fabFileData.tags,
+            // Re-summarizing replaces the tags wholesale, so carry the summary file's own lake
+            // meta-tags forward - otherwise every re-summarization silently evicts it from the
+            // lakes a user deliberately added it to.
+            tags: preserveDataLakeMembership(fabFileData.tags, fabfile.tags),
           },
           {
             db: {
