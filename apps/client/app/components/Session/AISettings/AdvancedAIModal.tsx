@@ -1364,9 +1364,19 @@ const AISettingsTab: React.FC<{
         display: 'flex',
         flexDirection: 'column',
         overflowY: 'auto',
-        width: '100%',
+        // Widen past the modal's 24px padding so the scrollbar rides ~4px from the window
+        // edge instead of cutting through the header icons. The content inset comes from
+        // ModelSelection's own pr, not from here.
+        width: { xs: '100%', sm: 'calc(100% + 20px)' },
         height: '100%',
         ...scrollbarStyles,
+        // Start the bar 16px below the header icons (they end 36px from the modal top). A
+        // track margin is the only way to shorten a native scrollbar without moving content.
+        // With tabs, this container already begins below them, so no offset is needed.
+        '&::-webkit-scrollbar-track': {
+          background: 'transparent',
+          marginTop: isResearchModeFeatureEnabled ? 0 : '28px',
+        },
       }}
     >
       <ModelSelection
@@ -1920,6 +1930,9 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                   position: { sm: 'absolute' },
                   top: { sm: '8px' },
                   right: { sm: '8px' },
+                  // Above the sticky model-list header (zIndex 10), which otherwise slides
+                  // over these on scroll.
+                  zIndex: 20,
                 }}
               >
                 <ContextHelpButton
@@ -1960,19 +1973,22 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                       mb: { xs: 2, sm: 0 },
                       p: 0,
                       boxShadow: 'none',
-                      maxHeight: '40px',
-                      height: { sm: '40px' },
+                      maxHeight: '32px',
+                      height: { sm: '32px' },
                       display: 'flex',
                       gap: '4px',
+                      // Tabs inherit `min-block-size: var(--ListItem-minHeight)` (36px at sizeMd),
+                      // which would outgrow the 32px bar.
+                      '--ListItem-minHeight': '32px',
                       '& .MuiTab-root': {
-                        fontSize: { xs: '14px', sm: '16px' },
+                        fontSize: '14px',
                         fontWeight: 400,
                         p: 0,
                         color: 'text.primary50',
                         flex: { xs: '1 1 0%', sm: '0 0 auto' },
                         // Bounds must live here: this descendant selector outranks a Tab's own sx.
                         maxWidth: { xs: 'none', sm: '200px' },
-                        minWidth: { xs: 0, sm: '160px' },
+                        minWidth: { xs: 0, sm: '140px' },
                         textAlign: 'center',
                         '&.Mui-selected': {
                           color: 'text.primary',

@@ -934,7 +934,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
         // sticky row below and pins it to a box that never scrolls. The consumer scrolls.
         overflow: 'visible',
         px: 0,
-        pr: { xs: 0, sm: 1 },
+        pr: { xs: 0, sm: '16px' },
       }}
     >
       {/* Search Input and Filter Dropdown */}
