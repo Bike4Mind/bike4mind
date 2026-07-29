@@ -529,7 +529,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter
-  // (meta-tag OR a fileTagPrefix match the lake's creator can access), shared with the
+  // (meta-tag OR a fileTagPrefix match on a file the lake's creator owns), shared with the
   // single-lake browse so a read and a whole-lake write never disagree about who is a member.
 
   /**
@@ -538,9 +538,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * it must NOT load-all-and-count.
    *
    * The `{ 'tags.name': 1, archivedAt: 1, deletedAt: 1 }` index bounds the meta-tag arm fully.
-   * The prefix arm only gets a range on the leading key (an anchored regex), and none of the
-   * creator-access fields are indexed at all, so a prefix-heavy lake fetches its candidate
-   * documents to evaluate the access conjunct.
+   * The prefix arm only gets a range on the leading key (an anchored regex) and its `userId`
+   * conjunct is not in that index, so a prefix-heavy lake fetches its candidate documents to
+   * check ownership.
    */
   async computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }> {
     const [agg] = await this.fabFileModel.aggregate<{ fileCount: number; totalSizeBytes: number }>([

@@ -31,13 +31,13 @@ interface RemoveFileFromDataLakeAdapters {
  * the file, because fileTagPrefix is user-chosen and neither unique nor reserved: without that
  * conjunct, minting a lake with someone else's prefix would be a licence to strip their tags.
  *
- * That bar is narrower than the whole-lake predicate, which anchors the prefix arm to the lake's
- * CREATOR and admits files shared to them. The asymmetry is deliberate: this endpoint strips tags
- * on behalf of whoever called it, so it answers "may THIS actor edit this file", while archive and
- * delete act on the lake as a whole and ask "is this file in the lake". The visible cost is that an
- * admin, or a lake owner acting on a file shared into their lake by someone else, removes it here
- * only if they own it - while the whole-lake paths would sweep it. Widening this needs the actor's
- * groups plumbed in, and a decision that a destructive single-file write may ride a read share.
+ * The whole-lake predicate requires ownership on its prefix arm too, but anchored to the lake's
+ * CREATOR rather than the actor (buildDataLakeMembershipFilter). Neither rides a read share: both
+ * are destructive, and a file someone else owns is not the lake's to hide or purge. The asymmetry
+ * is only in WHOSE ownership counts - this endpoint strips tags on behalf of its caller, so it asks
+ * "may THIS actor edit this file", while archive and delete act on the lake and ask "is this file
+ * the creator's". So an admin removing one file must own it, while the lake-wide sweep they trigger
+ * takes the creator's files instead.
  *
  * A second lake sharing this prefix - not necessarily the caller's, since nothing makes
  * fileTagPrefix unique - loses the shared prefixed tag too. A lake holding its own meta-tag on

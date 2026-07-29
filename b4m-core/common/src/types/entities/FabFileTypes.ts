@@ -348,7 +348,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
       /**
        * One lake's membership scope, matching the whole-lake writes exactly. Server-supplied
-       * only: it names the creator whose access the prefix arm rides on, so it must never be
+       * only: it names the creator whose OWNED files the prefix arm matches, so it must never be
        * read from request input.
        */
       lakeMembership?: DataLakeMembershipScope;

@@ -16,7 +16,7 @@ interface PrefixCollisionAdapters {
  * Lakes whose `fileTagPrefix` would fight with `rawPrefix` inside the given scope.
  *
  * Scope is same-org OR same-creator, because those are the only lakes whose prefix arms can
- * reach the same files: the arm is ANDed with the lake creator's access, so two unrelated
+ * reach the same files: the arm only matches files the lake's creator OWNS, so two unrelated
  * personal lakes both using `docs:` cannot touch each other's files. Claiming a prefix globally
  * would instead let the first user to take `docs:` block everyone.
  *

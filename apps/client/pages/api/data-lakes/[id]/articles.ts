@@ -55,8 +55,8 @@ const handler = baseApi()
 
     // Lake membership comes from ONE predicate shared with the whole-lake writes, so this
     // browse lists exactly what archiving or permanently deleting the lake would act on.
-    // Passed outside the parsed params because it names the creator whose access the lake's
-    // prefix arm rides on (see SearchFabFilesServerOptions).
+    // Passed outside the parsed params because it names the creator whose OWNED files the lake's
+    // prefix arm matches (see SearchFabFilesServerOptions).
     const lakeMembership = dataLakeService.lakeMembershipScope(dataLake);
 
     // User-provided tags are an additional AND filter, never mixed into lake scoping with OR

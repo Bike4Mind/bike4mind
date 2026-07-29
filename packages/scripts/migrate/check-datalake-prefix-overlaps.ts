@@ -13,8 +13,8 @@ import { Config } from '../utils/config';
  * this to find them before anyone permanently deletes a lake.
  *
  * Scope matches the runtime guard: same creator, or same organization. Two org-less lakes owned by
- * different users are NOT a conflict - the prefix arm is ANDed with the lake creator's access, so
- * neither can reach the other's files.
+ * different users are NOT a conflict - the prefix arm only matches files the lake's creator owns,
+ * so neither can reach the other's files.
  *
  * Reports only; exits 0 even when overlaps exist, since a pre-existing pair is not a reason to
  * block a deploy - it is something to fix or to know about before a teardown.

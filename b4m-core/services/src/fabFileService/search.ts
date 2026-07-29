@@ -55,8 +55,8 @@ const DEFAULT_PAGE_LIMIT = 20;
 
 /**
  * Options the SERVER supplies, deliberately outside `SearchFabFilesParameters`: that type is
- * zod-parsed from request input, and `lakeMembership` names the user whose access the lake's
- * prefix arm rides on. Routing it through the parsed params would let a caller name anyone and
+ * zod-parsed from request input, and `lakeMembership` names the user whose OWNED files the lake's
+ * prefix arm matches. Routing it through the parsed params would let a caller name anyone and
  * read their files; a separate argument keeps it un-forgeable.
  */
 export interface SearchFabFilesServerOptions {

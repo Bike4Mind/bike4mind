@@ -557,6 +557,53 @@ describe('createDataLake', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ status: 'draft' }));
   });
 
+  it('refuses a tag prefix that overlaps a lake in scope, before touching the slug', async () => {
+    // The helper is unit-tested separately; this proves createDataLake actually calls it. Deleting
+    // the guard makes this pass a create through, so the assertion kills the mutant.
+    const create = vi.fn();
+    const find = vi.fn().mockResolvedValue([lake({ id: 'other', name: 'Sibling', fileTagPrefix: 'xy:' })]);
+    await expect(
+      createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
+    ).rejects.toThrow(/overlaps an existing data lake/i);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('names the clashing lake only when the caller created it', async () => {
+    // An org lake gated by a tag the caller lacks is invisible to them everywhere else, so echoing
+    // its name here would confirm it exists.
+    const theirs = lake({ id: 'other', name: 'Project Zephyr', fileTagPrefix: 'xy:', createdByUserId: 'someone-else' });
+    const find = vi.fn().mockResolvedValue([theirs]);
+    await expect(
+      createDataLake(
+        'owner',
+        { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' },
+        { db: { dataLakes: { create: vi.fn(), find } } },
+        'orgA'
+      )
+    ).rejects.toThrow(/overlaps an existing data lake in this organization/i);
+
+    const mine = lake({ id: 'other', name: 'My Other Lake', fileTagPrefix: 'xy:', createdByUserId: 'owner' });
+    await expect(
+      createDataLake(
+        'owner',
+        { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' },
+        { db: { dataLakes: { create: vi.fn(), find: vi.fn().mockResolvedValue([mine]) } } }
+      )
+    ).rejects.toThrow(/"My Other Lake"/);
+  });
+
+  it('allows a prefix that only collides outside the create scope', async () => {
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    // find() answers the scoped query, so an out-of-scope lake simply is not in the result.
+    const find = vi.fn().mockResolvedValue([]);
+    await createDataLake(
+      'owner',
+      { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' },
+      { db: { dataLakes: { create, find } } }
+    );
+    expect(create).toHaveBeenCalled();
+  });
+
   it('scopes the meta-tag by org and disambiguates a slug collision deterministically', async () => {
     const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
     // Call order: the tag-prefix availability check, then the slug probes - first slug taken,
@@ -1009,6 +1056,35 @@ describe('setLakeVisibility — personal ↔ org promotion', () => {
       db,
     } as any);
     expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake1', organizationId: 'orgA' }));
+  });
+
+  /** The move runs the slug query first, then the prefix query; answer them separately. */
+  const makeMoveDb = (prefixClashes: IDataLakeDocument[]) => ({
+    dataLakes: {
+      findById: vi.fn().mockResolvedValue(lake()),
+      find: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(prefixClashes),
+      update: vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => lake(d)),
+    },
+  });
+
+  it('refuses an org move whose tag prefix overlaps a lake already in the target scope', async () => {
+    // Create-time is not enough: this is the other way two lakes end up sharing a prefix, and then
+    // permanently deleting one takes files only the other holds.
+    const db = makeMoveDb([lake({ id: 'other', name: 'Sibling', fileTagPrefix: 'lk:' })]);
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+        db,
+      } as any)
+    ).rejects.toThrow(/overlaps an existing data lake/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'orgA' }));
+  });
+
+  it('allows an org move when nothing in the target scope shares the prefix', async () => {
+    const db = makeMoveDb([lake({ id: 'other', fileTagPrefix: 'other-prefix:' })]);
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+      db,
+    } as any);
+    expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'orgA' }));
   });
 
   it('demotes an org lake back to private by clearing organizationId (null, not undefined)', async () => {
