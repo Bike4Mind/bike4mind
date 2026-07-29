@@ -64,7 +64,17 @@ describe('addFileToLake', () => {
 // in dataLakeService.test.ts. These pin the gates a direct caller (the tag-toggle door) depends
 // on, which no route-level assert protects.
 describe('removeFileFromLake', () => {
-  const fileInLake = { id: 'f1', userId: 'owner', tags: [{ name: 'datalake:lake', strength: 1 }] };
+  // Both membership signals plus a bystander tag, so the prefix-clearing branch is exercised
+  // and over-clearing would show up.
+  const fileInLake = {
+    id: 'f1',
+    userId: 'owner',
+    tags: [
+      { name: 'datalake:lake', strength: 1 },
+      { name: 'lk:invoices', strength: 1 },
+      { name: 'unrelated', strength: 0 },
+    ],
+  };
 
   const makeAdapters = () => ({
     db: {
@@ -80,7 +90,8 @@ describe('removeFileFromLake', () => {
 
     await removeFileFromLake(owner, lake(), 'f1', adapters);
 
-    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
+    // Both signals the read scope ORs, and nothing else.
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
   });
 
   it('refuses a caller who cannot manage the lake', async () => {

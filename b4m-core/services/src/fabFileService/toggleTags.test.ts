@@ -95,6 +95,17 @@ describe('toggleTags - ordinary tags', () => {
     expect(adapters.db.fabFiles.shareable.findAllAccessibleByIds).toHaveBeenCalledTimes(2);
   });
 
+  it('acts once on a tag repeated in the same request', async () => {
+    const adapters = makeAdapters([file('f1')]);
+
+    await run(adapters, { ids: ['f1'], tags: ['foo', 'FOO'] });
+
+    // The second pass would read the same pre-write snapshot, write again, and count the tag
+    // twice for one stored entry.
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledTimes(1);
+    expect(adapters.db.fileTags.incrementFileCountBy).toHaveBeenCalledWith({ name: 'foo', userId: 'owner' }, 1);
+  });
+
   it('refuses the whole call when any requested file is inaccessible', async () => {
     const adapters = makeAdapters([file('f1')]);
 

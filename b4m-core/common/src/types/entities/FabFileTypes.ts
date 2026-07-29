@@ -453,13 +453,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * adds of DIFFERENT tags on the same file don't clobber each other and a re-add is a no-op
    * rather than a duplicate.
    *
-   * Presence is compared case-INSENSITIVELY - a stored `Foo` blocks `foo` and keeps its own
-   * spelling - while a genuinely new name is stored with the caller's casing, never lowercased.
-   * The invariant is at most one tag per case-insensitive name. A filter is not a unique index,
-   * so two SIMULTANEOUS adds of the same name can both pass; `pullTagsByFabFileId` removes both.
+   * Presence is compared by EXACT name, matching the pull half and the read path (which admits
+   * a tag by exact `$in`), and a new name is stored with the caller's casing, never lowercased.
+   * Case-insensitive matching here would be wrong, not merely stricter: a file carrying some
+   * other casing of a lake's meta-tag is not a member of that lake, so the canonical tag has to
+   * be insertable alongside it. Callers that want case-insensitive semantics resolve the stored
+   * spelling from the document first, as the tag-toggle path does. A filter is not a unique
+   * index, so two SIMULTANEOUS adds of one name can both pass; `pullTagsByFabFileId` removes both.
    * @param fabFileId - The ID of the file.
-   * @param tagNames - Tag names to add, deduplicated case-insensitively (first spelling wins).
-   * Empty is a no-op.
+   * @param tagNames - Tag names to add, deduplicated. Empty is a no-op.
    * @param strength - Relevance weight stored on each new tag. Defaults to 0; the data-lake
    * membership meta-tag is written at 1.
    * @returns The number of tags actually inserted. Unlike the pull half this IS meaningful: a

@@ -81,12 +81,27 @@ describe('FabFileRepository.pushTagsByFabFileId', () => {
     expect(await tagsOf(id)).toEqual([...SEED_TAGS, { name: 'brand-new', strength: 0 }]);
   });
 
-  it('treats a differently-cased name as already present and keeps the stored spelling', async () => {
+  it('treats a differently-cased name as a distinct tag, matching the exact-match read path', async () => {
     const id = await seed({ tags: [{ name: 'Foo', strength: 0.2 }] });
 
-    expect(await fabFileRepository.pushTagsByFabFileId(id, ['foo'])).toBe(0);
+    expect(await fabFileRepository.pushTagsByFabFileId(id, ['foo'])).toBe(1);
 
-    expect(await tagsOf(id)).toEqual([{ name: 'Foo', strength: 0.2 }]);
+    expect(await tagsOf(id)).toEqual([
+      { name: 'Foo', strength: 0.2 },
+      { name: 'foo', strength: 0 },
+    ]);
+  });
+
+  // The case that makes exact matching load-bearing rather than merely simpler. A lake's read
+  // arm matches its meta-tag by exact $in, so a file carrying another casing of that tag is NOT
+  // a member; blocking the canonical tag on a case-insensitive collision would make joining the
+  // lake a silent no-op.
+  it('can stamp a canonical lake meta-tag onto a file carrying another casing of it', async () => {
+    const id = await seed({ tags: [{ name: 'DataLake:Org:MyLake', strength: 1 }] });
+
+    expect(await fabFileRepository.pushTagsByFabFileId(id, ['datalake:org:mylake'], 1)).toBe(1);
+
+    expect((await tagsOf(id)).map(t => t.name)).toEqual(['DataLake:Org:MyLake', 'datalake:org:mylake']);
   });
 
   // The write path must never lowercase: the toggle door used to, which silently recased a
@@ -99,17 +114,17 @@ describe('FabFileRepository.pushTagsByFabFileId', () => {
     expect((await tagsOf(id)).map(t => t.name)).toEqual(['MixedCase']);
   });
 
-  it('inserts once when one call carries two case variants of the same name', async () => {
+  it('inserts once when one call repeats the same name', async () => {
     const id = await seed({ tags: [] });
 
-    expect(await fabFileRepository.pushTagsByFabFileId(id, ['dup', 'DUP'])).toBe(1);
+    expect(await fabFileRepository.pushTagsByFabFileId(id, ['dup', 'dup'])).toBe(1);
 
     expect((await tagsOf(id)).map(t => t.name)).toEqual(['dup']);
   });
 
-  // Unescaped, the presence guard would read `a.b` as "any three characters" and treat the
-  // stored `axb` as a match, silently skipping a real insert.
-  it('escapes regex metacharacters in the presence guard', async () => {
+  // The guard is a plain equality test, never a pattern: a stored `axb` must not be read as a
+  // match for `a.b` and silently skip a real insert.
+  it('matches names literally rather than as a pattern', async () => {
     const id = await seed({ tags: [{ name: 'axb', strength: 0.1 }] });
 
     expect(await fabFileRepository.pushTagsByFabFileId(id, ['a.b'])).toBe(1);

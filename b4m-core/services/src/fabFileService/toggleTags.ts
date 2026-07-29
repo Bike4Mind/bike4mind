@@ -53,7 +53,18 @@ const isDataLakeTag = (tag: string): boolean => tag.toLowerCase().startsWith(DAT
  * Every write is idempotent, so retrying the same call converges rather than double-applying.
  */
 export const toggleTags = async (userId: string, params: unknown, { db }: FabFileToggleTagsAdapters) => {
-  const { ids, tags } = fabFileToggleTagsSchema.parse(params);
+  const { ids, tags: requestedTags } = fabFileToggleTagsSchema.parse(params);
+
+  // Toggling one tag twice in a request is meaningless, and acting on it twice is harmful: the
+  // second pass reads the same pre-write snapshot, so it repeats the write and double-counts the
+  // registry. Case-insensitively, because that is how a tag is matched below.
+  const seen = new Set<string>();
+  const tags = requestedTags.filter(tag => {
+    const key = tag.toLocaleLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
   // Get user for permission checks
   const user = await db.users.findById(userId);
