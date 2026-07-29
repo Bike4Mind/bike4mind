@@ -351,9 +351,13 @@ export function PublishShareModal({
           toast.warning('Published, but enabling comments failed - you can toggle them below.');
         });
       }
-      // Only ever PATCHed when ON. The server default is already false, so a failed
-      // call here leaves the artifact non-indexable - the safe direction.
-      if (discoverableOn) {
+      // Only ever PATCHed when ON, and only when the artifact actually published as
+      // open-public. Staging the toggle ON and then picking Private (or adding a gate)
+      // hides the switch but leaves the flag set - persisting it there would arm a
+      // silent opt-in that fires later, the moment someone widens the artifact back to
+      // public. The server default is already false, so a failed call here leaves the
+      // artifact non-indexable: the safe direction.
+      if (discoverableOn && visibility === 'public' && gateKind === 'none') {
         await updatePublishedDiscoverable(r.publicId, true).catch(() => {
           toast.warning('Published, but the search-listing setting failed - you can toggle it below.');
         });
@@ -432,6 +436,10 @@ export function PublishShareModal({
 
   const onPick = (next: PublishVisibility) => {
     if (busy) return;
+    // Leaving public retires a staged search-listing choice rather than parking it on a
+    // hidden control. Re-picking Public starts from off, so listing is always a choice
+    // made against the exposure the artifact actually has.
+    if (next !== 'public') setDiscoverableOn(false);
     if (phase === 'shared') void changeVisibilityLive(next);
     else setVisibility(next);
   };
@@ -501,6 +509,9 @@ export function PublishShareModal({
 
   const onPickGate = (next: GateKind) => {
     if (busy) return;
+    // Same reasoning as onPick: adding a gate hides the listing switch, so retire the
+    // staged choice instead of leaving it set behind a control the user can't see.
+    if (next !== 'none') setDiscoverableOn(false);
     setGateKind(next);
     setGateTouched(true);
   };

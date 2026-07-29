@@ -1835,6 +1835,32 @@ describe('GET /api/publish/serve - search-engine discoverability is opt-in', () 
     expect(data).toContain('og:title');
   });
 
+  it('does NOT index the isolated usercontent origin, even when opted in', async () => {
+    // The /uc origin serves the bare bundle with no wrapper, branding, or canonical
+    // link. Opting in must make exactly one URL indexable: the canonical /p page.
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('does NOT index the embed render, even when opted in', async () => {
+    // An embed is meant to be framed inside someone else's page, not to stand alone
+    // as a search result competing with the canonical page.
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { embed: true });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
   it('the ?format=raw plain-text surface is noindexed unless opted in', async () => {
     mockArtifactFindOne.mockReturnValue(bundle());
     mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));

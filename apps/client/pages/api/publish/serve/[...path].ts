@@ -266,12 +266,20 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // the noindex it was blocked from seeing. Allowing the crawl and serving noindex is
   // the combination that actually keeps a page out of the index; disallow-without-
   // noindex is the misconfiguration that has burned several LLM share features.
-  // `!isShare` is load-bearing, not redundant with isOpenPublic: a /a/<token> link can
-  // resolve to an artifact that is ALSO open-public and opted in, and an unlisted
-  // capability URL must stay out of the index no matter what the owner chose for the
-  // canonical /p page. Possession of the token is the grant; a search result would
-  // hand that grant to everyone.
-  const searchIndexable = !isShare && isOpenPublic && artifact.discoverable === true;
+  // Opting in makes exactly ONE url indexable: the canonical `/p/...` page. The three
+  // exclusions below are each load-bearing, not redundant with isOpenPublic:
+  //  - isShare:    a /a/<token> link can resolve to an artifact that is ALSO open-public
+  //                and opted in. Possession of the token is the grant; a search result
+  //                would hand that grant to everyone.
+  //  - isIsolated: the `{publicId}.usercontent...` origin serves the BARE bundle with no
+  //                wrapper, branding, or canonical link. Indexing it would compete with
+  //                the real page and land visitors on an implementation-detail host.
+  //  - embed=1:    the embed render is meant to be framed inside someone else's page,
+  //                not to stand alone as a search result.
+  // Read `embed` off the query directly: the `isEmbed` binding is computed further down,
+  // after several response branches that must already carry the right header.
+  const searchIndexable =
+    !isShare && !isIsolated && req.query.embed !== '1' && isOpenPublic && artifact.discoverable === true;
   if (!searchIndexable) {
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
   }

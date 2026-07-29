@@ -498,6 +498,33 @@ describe('PublishShareModal — search-engine listing is opt-in', () => {
     });
   });
 
+  it('drops a staged listing choice when the user switches away from Public', () => {
+    // Otherwise the flag is parked on a hidden control and silently arms itself the
+    // next time someone widens the artifact back to public.
+    renderModal();
+    fireEvent.click(screen.getByTestId('publish-share-discoverable-toggle'));
+    expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByTestId('publish-share-visibility-private'));
+    expect(screen.queryByTestId('publish-share-discoverable-toggle')).toBeNull();
+
+    // Back to Public: starts from OFF, not from the stale staged choice.
+    fireEvent.click(screen.getByTestId('publish-share-visibility-public'));
+    expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('drops a staged listing choice when the user adds a gate', () => {
+    renderModal();
+    fireEvent.click(screen.getByTestId('publish-share-discoverable-toggle'));
+    // Click the underlying input: Joy puts the testid on the Radio root, which does not
+    // forward a click to the control.
+    fireEvent.click(radio('passphrase')!);
+    expect(screen.queryByTestId('publish-share-discoverable-toggle')).toBeNull();
+
+    fireEvent.click(radio('none')!);
+    expect((screen.getByTestId('publish-share-discoverable-toggle') as HTMLInputElement).checked).toBe(false);
+  });
+
   it('does not PATCH discoverable while still staging a fresh publish', () => {
     apiPatch.mockClear();
     renderModal();
