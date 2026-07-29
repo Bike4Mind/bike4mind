@@ -98,8 +98,8 @@ const handler = baseApi().post(
           ...(data.contentHash && { contentHash: data.contentHash }),
           ...(data.batchId && { batchId: data.batchId }),
           ...(data.relativePath && { relativePath: data.relativePath }),
-          // Keyed on the reconciled list, not `data.tags`: a lake-bound upload that sent no tags
-          // still has a fallback to persist.
+          // Keyed on the reconciled list, not `data.tags`: reconciling can add a tag the client
+          // never sent, and gating the spread on the request's own array would drop it.
           ...(tags.length > 0 && { tags }),
         },
         req.ability!
