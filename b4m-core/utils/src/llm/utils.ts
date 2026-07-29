@@ -130,6 +130,27 @@ const CONTENT_TRUNCATION_NOTICE =
 const MIN_USEFUL_ATTACHED_CONTENT_TOKENS = 200;
 
 /**
+ * Content is cut in three places, and only the assembly cut is this file's own budget arithmetic.
+ * Extraction head-slices a file that exceeds its per-file budget, and vectorized retrieval hands back
+ * the top-scoring chunks rather than the document. Both used to arrive at assembly looking complete,
+ * so nothing marked them and the model described a fragment as the whole file - the same silent
+ * retrieval failure this module exists to prevent, one stage earlier.
+ *
+ * Separate wordings because the shapes differ and saying the wrong one is its own defect: a head slice
+ * really does stop partway, whereas excerpts are non-contiguous, so "later content was not sent" would
+ * invite exactly the wrong inference about what is missing.
+ */
+const excerptNotice = (fileName: string): string =>
+  `\n\n[The above are the most relevant excerpts from "${fileName}", selected by similarity. They are in file ` +
+  `order but are NOT the whole file and NOT contiguous - parts between them were not sent, and content after ` +
+  `the last excerpt may exist. Do not describe this as the complete file, and do not infer a total row or ` +
+  `section count, or a final row, from it.]`;
+
+const URL_TRUNCATION_NOTICE =
+  '\n\n[Fetched page content truncated to fit the context window. This is NOT the end of the page - later ' +
+  'content was not sent.]';
+
+/**
  * Flat per-image token charge. Exact cost needs decoding the image (Anthropic ~ width*height/750;
  * OpenAI varies by detail level, low=85), so both the estimator and the real counter assume ~1600
  * ("normal"). They must use the same figure or converting an overage between the two units skews.
@@ -765,9 +786,18 @@ export async function processUrlsFromPrompt(
         urlContentCache.set(url, textContent);
       }
 
+      const urlContentTruncated = textContent.length > maxContentBuffer!;
+      if (urlContentTruncated) {
+        logger.warn(
+          `[processUrlsFromPrompt] Truncated fetched content for ${sanitizeUrlForLogging(url)} from ` +
+            `${textContent.length} to ${maxContentBuffer} chars to fit the context window.`
+        );
+      }
       const message: IMessage = {
         role: 'user',
-        content: `For context: ${textContent.substring(0, maxContentBuffer!)}`,
+        content:
+          `For context: ${textContent.substring(0, maxContentBuffer!)}` +
+          (urlContentTruncated ? URL_TRUNCATION_NOTICE : ''),
       };
       processedUrls.push(url);
       return message;
@@ -819,17 +849,28 @@ async function cosineSearch(
     };
     logger: Logger;
   }
-): Promise<Array<{ chunkId: string; content: string; score: number }>> {
+): Promise<{ results: Array<{ chunkId: string; content: string; score: number }>; totalChunks: number }> {
   const chunks = await db.fabfilechunks.findByFabFileId(file.id);
 
   const searchResults = chunks
-    .map((chunk: any) => {
+    .map((chunk: any, position: number) => {
       const score = computeCosineSimilarity(userPromptVector, chunk.vector!);
-      return { chunkId: chunk.id, content: chunk.text, score };
+      return { chunkId: chunk.id, content: chunk.text, score, position };
     })
     .filter((result: any) => result !== null);
 
-  return searchResults.sort((a: any, b: any) => b.score - a.score).slice(0, COSINE_SEARCH_TOP_K);
+  // Similarity decides WHICH chunks; document order decides how they are PRESENTED. Returning them in
+  // score order handed the model a scrambled file - even when every chunk was delivered - which is one
+  // of the ways it ends up naming a mid-file row as the last. `position` is the repository's order,
+  // which is ascending _id, i.e. the order the chunks were written.
+  //
+  // totalChunks lets the caller tell the model when it is holding a subset. Without it the top-K slice
+  // is indistinguishable from "this is the whole file".
+  const selected = [...searchResults].sort((a: any, b: any) => b.score - a.score).slice(0, COSINE_SEARCH_TOP_K);
+  return {
+    results: selected.sort((a, b) => a.position - b.position).map(({ position, ...rest }) => rest),
+    totalChunks: searchResults.length,
+  };
 }
 
 /**
@@ -1102,12 +1143,13 @@ export async function processFabFilesServer(
             await db.fabfiles.update({ id: file.id, error: null });
           }
 
-          const searchResults = await cosineSearch(file, userVector, { db, logger });
+          const { results: searchResults, totalChunks } = await cosineSearch(file, userVector, { db, logger });
 
           // Truncate search results to fit within the token budget
           const maxChars = maxTokens > 0 ? maxTokens * CHARS_PER_TOKEN : MAX_FILE_SIZE;
           const truncatedResults: Array<{ chunkId: string; content: string; score: number }> = [];
           let totalChars = 0;
+          let anyChunkCut = false;
 
           for (const result of searchResults) {
             const contentLength = result.content?.length ?? 0;
@@ -1118,6 +1160,7 @@ export async function processFabFilesServer(
               const content = result.content.substring(0, maxChars - totalChars);
               truncatedResults.push({ ...result, content });
               totalChars = maxChars;
+              anyChunkCut = true;
               logger.warn(
                 `[processFabFilesServer] Truncated vectorized chunk for "${file.fileName}" to fit token budget (${maxChars}) from ${result.content.length} to ${content.length}`
               );
@@ -1128,10 +1171,20 @@ export async function processFabFilesServer(
           }
 
           if (truncatedResults.length > 0) {
+            // A subset either because ranking kept only the top COSINE_SEARCH_TOP_K, or because the
+            // character budget stopped the loop, or because a chunk itself was cut.
+            const deliveredWholeFile = totalChunks === truncatedResults.length && !anyChunkCut;
+            const body = `Data for ${file.fileName}:\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`;
             userMessages.push({
               role: 'user',
-              content: `Data for ${file.fileName}:\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`,
+              content: deliveredWholeFile ? body : body + excerptNotice(file.fileName),
             });
+            if (!deliveredWholeFile) {
+              logger.warn(
+                `[processFabFilesServer] Delivered ${truncatedResults.length}/${totalChunks} chunk(s) of ` +
+                  `"${file.fileName}" as similarity-ranked excerpts; the model is told not to read them as the whole file.`
+              );
+            }
           }
         } else {
           try {
@@ -1158,7 +1211,10 @@ export async function processFabFilesServer(
             if (fabContent.length > finalMaxFileSize) {
               await sendStatusUpdate('File is too large, truncating...');
               const originalFileSize = fabContent.length;
-              fabContent = fabContent.substring(0, finalMaxFileSize ?? PREVIEW_CHUNK);
+              // In band, at the site that knows: assembly cannot tell a head-sliced file from a whole one,
+              // so without this the model presents the slice as the complete file and names a mid-file
+              // row as the last.
+              fabContent = fabContent.substring(0, finalMaxFileSize ?? PREVIEW_CHUNK) + CONTENT_TRUNCATION_NOTICE;
               errorMsg = `Knowledge in the workbench with the fileName ${file.fileName} is ${originalFileSize} long which exceeds ${finalMaxFileSize}. Vectorize your large file or select a model with higher context window.`;
               errorMessages.push({
                 role: 'error',
