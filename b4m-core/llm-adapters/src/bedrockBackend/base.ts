@@ -59,7 +59,7 @@ function isAbortError(err: unknown): boolean {
 
 export abstract class BaseBedrockBackend implements ICompletionBackend {
   private _options: BedrockOptions;
-  private _bedrockRuntime: BedrockRuntimeClient;
+  protected _bedrockRuntime: BedrockRuntimeClient;
   private _usEast1Models: string[] = [];
   public currentModel: string = '';
 
@@ -86,6 +86,29 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
   protected getRegionForModel(model: string): string {
     return this._usEast1Models.includes(model) ? 'us-east-1' : 'us-east-2';
+  }
+
+  /**
+   * Sends a non-streaming completion request. Subclasses whose Bedrock model doesn't support
+   * the raw Invoke API's response format (e.g. DeepSeek, which reports no usage on Invoke and
+   * must use Converse instead) override this - and invokeModelStream - to call a different
+   * Bedrock command while reusing the tool-loop/pruning/accumulation logic in complete() below.
+   */
+  protected async invokeModel(
+    input: { modelId: string; contentType: string; accept: string; body: string },
+    abortSignal?: AbortSignal
+  ): Promise<{ body?: Uint8Array }> {
+    const command = new InvokeModelCommand(input);
+    return this._bedrockRuntime.send(command, { abortSignal });
+  }
+
+  /** @see invokeModel */
+  protected async invokeModelStream(
+    input: { modelId: string; contentType: string; accept: string; body: string },
+    abortSignal?: AbortSignal
+  ): Promise<{ body?: AsyncIterable<{ chunk?: { bytes?: Uint8Array } }> }> {
+    const command = new InvokeModelWithResponseStreamCommand(input);
+    return this._bedrockRuntime.send(command, { abortSignal });
   }
 
   protected updateClientForModel(model: string): void {
@@ -293,12 +316,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
       );
 
       if (options.stream) {
-        const command = new InvokeModelWithResponseStreamCommand(input);
         let response;
         try {
-          response = await this._bedrockRuntime.send(command, {
-            abortSignal: options.abortSignal,
-          });
+          response = await this.invokeModelStream(input, options.abortSignal);
         } catch (err: unknown) {
           this.handleBedrockError(err);
         }
@@ -491,12 +511,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           return; // Exit after handling tools
         }
       } else {
-        const command = new InvokeModelCommand(input);
         let response;
         try {
-          response = await this._bedrockRuntime.send(command, {
-            abortSignal: options.abortSignal,
-          });
+          response = await this.invokeModel(input, options.abortSignal);
         } catch (err: unknown) {
           this.handleBedrockError(err);
         }
