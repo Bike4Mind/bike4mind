@@ -10,7 +10,6 @@ import {
   AccordionSummary,
   Select,
   Option,
-  Button,
   CircularProgress,
   IconButton,
   Tooltip,
@@ -28,6 +27,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
 import GridViewOutlinedIcon from '@mui/icons-material/GridViewOutlined';
 import ViewListOutlinedIcon from '@mui/icons-material/ViewListOutlined';
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
@@ -341,8 +341,15 @@ const ModelOption = React.memo(
           minHeight: '28px',
           width: '28px',
           height: '28px',
+          // Joy's SvgIcon resolves its colour from `--Icon-color`; the filled star opts out
+          // by declaring its own.
+          '--Icon-color': 'var(--joy-palette-text-tertiary)',
+          '& .MuiSvgIcon-root': {
+            transition: 'color 0.2s',
+          },
           '&:hover': {
             backgroundColor: 'transparent',
+            '--Icon-color': 'var(--joy-palette-text-primary)',
           },
         }}
         onClick={e => {
@@ -353,7 +360,7 @@ const ModelOption = React.memo(
         {isFavorite ? (
           <StarRounded sx={{ fontSize: '20px', color: 'primary.solidBg' }} />
         ) : (
-          <StarBorderRounded sx={{ fontSize: '20px', color: 'neutral.400' }} />
+          <StarBorderRounded sx={{ fontSize: '20px' }} />
         )}
       </IconButton>
     );
@@ -361,24 +368,24 @@ const ModelOption = React.memo(
     // Selects the model and opens its detail & settings dialog (all viewports).
     const viewMoreButton = onSettingsClick && (
       <Tooltip title="View model details & settings" placement="bottom">
-        <Button
+        <IconButton
           data-testid={`model-view-more-${model.id}`}
-          variant="outlined"
-          color="neutral"
+          aria-label="View model details and settings"
+          variant="plain"
           size="sm"
           sx={{
             flex: 'none',
-            fontSize: '12px',
-            fontWeight: 500,
-            px: 1.5,
-            py: 0.25,
+            minWidth: '28px',
             minHeight: '28px',
-            borderRadius: '6px',
-            color: 'text.primary',
-            whiteSpace: 'nowrap',
+            width: '28px',
+            height: '28px',
+            '--Icon-color': 'var(--joy-palette-text-tertiary)',
+            '& .MuiSvgIcon-root': {
+              transition: 'color 0.2s',
+            },
             '&:hover': {
-              backgroundColor: 'primary.softHoverBg',
-              borderColor: 'primary.main',
+              backgroundColor: 'transparent',
+              '--Icon-color': 'var(--joy-palette-text-primary)',
             },
           }}
           onClick={e => {
@@ -386,8 +393,8 @@ const ModelOption = React.memo(
             onSettingsClick(model);
           }}
         >
-          View more
-        </Button>
+          <SettingsOutlinedIcon sx={{ fontSize: '20px' }} />
+        </IconButton>
       </Tooltip>
     );
 
@@ -1279,6 +1286,12 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                   // Frame sits flush with the list; the 12px inset lives on the button so the
                   // hover fill covers it.
                   paddingInline: 0,
+                },
+                // Favorites only: breathing room above the cards once open. Lives on the root,
+                // not the button - the root's height is pinned, so a margin there would shrink
+                // the button instead of spacing the section.
+                '& .MuiAccordionSummary-root.Mui-expanded': {
+                  marginBottom: '8px',
                 },
                 '& .MuiAccordionSummary-button': {
                   paddingInline: '8px',
