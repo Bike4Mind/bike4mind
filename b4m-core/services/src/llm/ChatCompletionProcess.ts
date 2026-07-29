@@ -3776,6 +3776,9 @@ export class ChatCompletionProcess {
               feature: 'chat',
               provider: currentModel.backend,
               model: currentModel.id,
+              // 'web' covers all callers of ChatCompletionProcess today (matches
+              // the paired ledger writes below); no API-key auth on this path.
+              source: 'web',
               // inputTokens/outputTokens are ALWAYS the local estimate and the
               // provider* fields ALWAYS the provider counts, so drift and invoice
               // reconciliation stay comparable across rows; settledBasis says
