@@ -30,6 +30,11 @@ import ViewListOutlinedIcon from '@mui/icons-material/ViewListOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import SpeedIcon from '@mui/icons-material/Speed';
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
+import ConstructionIcon from '@mui/icons-material/Construction';
+// Named for tools, but this is the thinking glyph: ToolsSection renders it on the Thinking
+// row and ToolIndicators uses it as tool-indicator-thinking.
+import SupportsToolsIcon from '@client/app/components/svgs/SupportsToolsIcon';
 import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
@@ -444,7 +449,7 @@ const ModelOption = React.memo(
               label={`${priceTierInfo.tier} cost`}
               mode={mode}
               tooltip={getPriceTierTooltip(priceTierInfo.tier)}
-              icon={<AttachMoneyIcon sx={{ fontSize: '20px', color: metricIconColor(priceTierInfo.variant) }} />}
+              icon={<AttachMoneyIcon sx={{ fontSize: '18px', color: metricIconColor(priceTierInfo.variant) }} />}
             />
 
             {!statsLoading && modelSpeed && (
@@ -452,7 +457,38 @@ const ModelOption = React.memo(
                 label={`${modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)} speed`}
                 mode={mode}
                 tooltip={getModelSpeedTooltip(modelSpeed)}
-                icon={<SpeedIcon sx={{ fontSize: '20px', color: metricIconColor(getModelSpeedVariant(modelSpeed)) }} />}
+                icon={<SpeedIcon sx={{ fontSize: '18px', color: metricIconColor(getModelSpeedVariant(modelSpeed)) }} />}
+              />
+            )}
+
+            {/* Capabilities are present-or-absent, so they stay neutral: no colour to imply
+                a scale that doesn't exist. Absence of the chip is the "no" state. */}
+            {model.supportsVision && (
+              <MetadataChip
+                label="Vision"
+                mode={mode}
+                tooltip="Able to understand images"
+                icon={<VisibilityOutlinedIcon sx={{ fontSize: '18px', color: 'text.tertiary' }} />}
+              />
+            )}
+
+            {model.can_think && (
+              <MetadataChip
+                label="Thinking"
+                mode={mode}
+                tooltip="Reasons step-by-step before responding"
+                // 20px where the others are 18: this glyph carries far more detail than the
+                // MUI icons, so it needs the extra couple of px to stay legible.
+                icon={<SupportsToolsIcon width={20} height={20} fill="var(--joy-palette-text-tertiary)" />}
+              />
+            )}
+
+            {model.supportsTools && (
+              <MetadataChip
+                label="Tools"
+                mode={mode}
+                tooltip="Able to use a growing list of tools"
+                icon={<ConstructionIcon sx={{ fontSize: '18px', color: 'text.tertiary' }} />}
               />
             )}
           </>
