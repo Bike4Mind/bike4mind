@@ -1,12 +1,12 @@
 // POST /api/organizations/:id/groups
 // Create a new group for the given organization
 
-import { Permission, isKnownGroupType } from '@bike4mind/common';
+import { isKnownGroupType } from '@bike4mind/common';
 import { Group } from '@bike4mind/database/social';
 import { Organization } from '@bike4mind/database/infra';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import z from 'zod';
 
 const ApiOrganizationsGroupsCreateRequestSchema = z.object({
@@ -21,7 +21,17 @@ const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const organizationId = req.query.id;
     const organization = organizationId && (await Organization.findById(organizationId));
-    if (!organization || !req.ability!.can(Permission.update, organization)) throw new Error('Unauthorized');
+    if (!organization) throw new ForbiddenError("Not authorized to manage this organization's groups");
+    // Same predicate as the membership/rename routes (assertCanManageOrgGroups): billing owner,
+    // an appointed org admin, or a platform admin. NOT the org manager - a manager is deliberately
+    // out of the group-management predicate, so gating on CASL Permission.update (which includes
+    // managerId) was the wrong gate. Throw ForbiddenError, not a bare Error: the error handler maps
+    // only HTTPError subclasses, so a bare throw becomes a 500 and pages on-call for a routine 403.
+    const isOwner = organization.userId === req.user?.id;
+    const isOrgAdmin = (organization.adminUserIds ?? []).includes(req.user?.id ?? '');
+    if (!isOwner && !isOrgAdmin && !req.user?.isAdmin) {
+      throw new ForbiddenError("Not authorized to manage this organization's groups");
+    }
 
     const { name, description, type } = ApiOrganizationsGroupsCreateRequestSchema.parse(req.body ?? {});
     if (!isKnownGroupType(type)) {

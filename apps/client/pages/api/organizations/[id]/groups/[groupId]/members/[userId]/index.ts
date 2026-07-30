@@ -5,6 +5,7 @@ import { organizationRepository } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
 import { userRepository } from '@bike4mind/database/auth';
 import { organizationService } from '@bike4mind/services';
+import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 
 /**
  * DELETE /api/organizations/[id]/groups/[groupId]/members/[userId] - unassign a user from a group.
@@ -23,6 +24,18 @@ const handler = baseApi().delete(
       req.user!,
       { organizationId, groupId, userId },
       { db: { organizations: organizationRepository, groups: groupRepository, users: userRepository } }
+    );
+
+    // "Who removed user X from the group" - best-effort, never fails the write.
+    await logAuditEvent(
+      {
+        userId: req.user!.id,
+        action: AdminOrgAuditEvents.ORG_GROUP_MEMBER_UNASSIGNED,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'] || 'unknown',
+        metadata: { organizationId, groupId, targetUserId: userId },
+      },
+      req.logger
     );
 
     res.status(200).json({ success: true });

@@ -5,6 +5,7 @@ import { organizationRepository } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
 import { userRepository } from '@bike4mind/database/auth';
 import { organizationService } from '@bike4mind/services';
+import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { z } from 'zod';
 
 /**
@@ -24,7 +25,10 @@ const handler = baseApi().post(
     try {
       ({ userId } = bodySchema.parse(req.body));
     } catch (error) {
-      if (error instanceof z.ZodError) throw new BadRequestError('A userId is required');
+      if (error instanceof z.ZodError) {
+        // Preserve path + message (matches group-types.ts) rather than collapsing to one string.
+        throw new BadRequestError(error.issues.map(e => `${e.path.join('.') || 'value'}: ${e.message}`).join('; '));
+      }
       throw error;
     }
 
@@ -32,6 +36,18 @@ const handler = baseApi().post(
       req.user!,
       { organizationId, groupId, userId },
       { db: { organizations: organizationRepository, groups: groupRepository, users: userRepository } }
+    );
+
+    // "Who put user X in the confidential group" - best-effort, never fails the write.
+    await logAuditEvent(
+      {
+        userId: req.user!.id,
+        action: AdminOrgAuditEvents.ORG_GROUP_MEMBER_ASSIGNED,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'] || 'unknown',
+        metadata: { organizationId, groupId, targetUserId: userId },
+      },
+      req.logger
     );
 
     res.status(200).json({ success: true });

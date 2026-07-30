@@ -246,8 +246,8 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     super(model);
   }
 
-  /** Remove the given group ids from every user that has them (revoke/delete of a group). */
-  async pullGroups(groupIds: string[]): Promise<void> {
+  /** Remove the given group ids from EVERY user that has them (group-type revoke/delete). */
+  async removeGroupsFromAllUsers(groupIds: string[]): Promise<void> {
     if (groupIds.length === 0) return;
     await this.model.updateMany({ groups: { $in: groupIds } }, { $pull: { groups: { $in: groupIds } } });
   }
@@ -260,6 +260,26 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   /** Remove one group id from one user. */
   async removeGroupFromUser(userId: string, groupId: string): Promise<void> {
     await this.model.updateOne({ _id: userId }, { $pull: { groups: groupId } });
+  }
+
+  /** Remove several group ids from one user (idempotent $pull). No-op on an empty list. */
+  async removeGroupsFromUser(userId: string, groupIds: string[]): Promise<void> {
+    if (groupIds.length === 0) return;
+    await this.model.updateOne({ _id: userId }, { $pull: { groups: { $in: groupIds } } });
+  }
+
+  /** Count members per group id in one aggregation (keyed by group id; absent = zero). */
+  async countUsersByGroupIds(groupIds: string[]): Promise<Record<string, number>> {
+    if (groupIds.length === 0) return {};
+    const rows = await this.model.aggregate<{ _id: string; count: number }>([
+      { $match: { groups: { $in: groupIds } } },
+      { $unwind: '$groups' },
+      { $match: { groups: { $in: groupIds } } },
+      { $group: { _id: '$groups', count: { $sum: 1 } } },
+    ]);
+    const counts: Record<string, number> = {};
+    for (const row of rows) counts[row._id] = row.count;
+    return counts;
   }
 
   async findAllByEmailsOrUsernames(emails: string[], usernames: string[]) {
@@ -859,6 +879,11 @@ UserSchema.index(
 // Explicit name MUST match migration 20260620000000's createIndex name, otherwise autoIndex
 // (mongo.ts) and the migrator create the same key pattern under two names -> IndexKeySpecsConflict.
 UserSchema.index({ 'authProviders.strategy': 1, 'authProviders.id': 1 }, { name: 'authProviders_strategy_id' });
+// Serves the group-membership reads added by org-groups #1172: the per-group memberCount on
+// GET /organizations/:id/groups and the $pull in removeGroupsFromAllUsers on group-type revoke.
+// Without it both scan the full users collection. Explicit name so the migration and autoIndex
+// (mongo.ts) agree - see the authProviders_strategy_id note above.
+UserSchema.index({ groups: 1 }, { name: 'user_groups' });
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });

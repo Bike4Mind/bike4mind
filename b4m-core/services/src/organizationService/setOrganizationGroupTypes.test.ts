@@ -22,7 +22,7 @@ describe('setOrganizationGroupTypes', () => {
         create: vi.fn(),
         softDeleteByIds: vi.fn(),
       },
-      users: { pullGroups: vi.fn() },
+      users: { removeGroupsFromAllUsers: vi.fn() },
     };
     logger = { info: vi.fn() };
   });
@@ -80,7 +80,7 @@ describe('setOrganizationGroupTypes', () => {
     const result = await run(['sales']); // research removed
 
     expect(db.groups.softDeleteByIds).toHaveBeenCalledWith(['g-research']);
-    expect(db.users.pullGroups).toHaveBeenCalledWith(['g-research']);
+    expect(db.users.removeGroupsFromAllUsers).toHaveBeenCalledWith(['g-research']);
     expect(db.groups.create).not.toHaveBeenCalled();
     expect(result.removed).toEqual(['research']);
     expect(result.revokedGroupIds).toEqual(['g-research']);
@@ -94,8 +94,21 @@ describe('setOrganizationGroupTypes', () => {
     await run(['sales']); // no change
 
     expect(db.groups.softDeleteByIds).not.toHaveBeenCalled();
-    expect(db.users.pullGroups).not.toHaveBeenCalled();
+    expect(db.users.removeGroupsFromAllUsers).not.toHaveBeenCalled();
     expect(db.groups.create).not.toHaveBeenCalled();
+  });
+
+  it('re-provisions a missing group for an already-allowed type (repairability)', async () => {
+    // Org already allows 'sales' but has no live instance (e.g. a prior revoke soft-deleted it).
+    // Re-issuing the same PUT must re-provision it - iterating `added` (empty here) would not.
+    db.organizations.findById.mockResolvedValue(org({ allowedGroupTypes: ['sales'] }));
+    db.groups.findByOrganization.mockResolvedValue([]);
+
+    const result = await run(['sales']);
+
+    expect(db.groups.create).toHaveBeenCalledTimes(1);
+    expect(db.groups.create).toHaveBeenCalledWith(expect.objectContaining({ type: 'sales' }));
+    expect(result.added).toEqual([]);
   });
 
   it('dedupes and trims requested keys', async () => {

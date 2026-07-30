@@ -21,33 +21,38 @@ export interface GroupTypeDefinition {
   description: string;
   /** Scalar-conflict resolution for multi-group users. Lower wins. */
   priority: number;
-  /** Capability keys this type confers (e.g. `crm:read`). Unioned across a user's groups. Unused for now. */
-  capabilities: string[];
+  /**
+   * Capability keys this type confers (e.g. `crm:read`). Unioned across a user's groups.
+   * Optional/reserved: no consumer reads it yet (see the note above), so it is not part of the
+   * contract - a type that omits it is valid.
+   */
+  capabilities?: string[];
 }
 
+// `key` stays a plain `string` (not a closed literal union): it is a persisted value read back
+// from Mongo, and a type alias cannot be augmented by a private overlay without forcing
+// overlay-specific keys into this public repo. No `as const` here - the `readonly
+// GroupTypeDefinition[]` annotation already widens `key` to `string`, so `as const` bought nothing.
 export const GROUP_TYPE_CATALOG: readonly GroupTypeDefinition[] = [
   {
     key: 'sales',
     label: 'Sales',
     description: 'Sales team members.',
     priority: 10,
-    capabilities: [],
   },
   {
     key: 'research',
     label: 'Research',
     description: 'Research team members.',
     priority: 20,
-    capabilities: [],
   },
   {
     key: 'customer',
     label: 'Customer',
     description: 'Customer-facing members.',
     priority: 30,
-    capabilities: [],
   },
-] as const;
+];
 
 /** The set of valid group-type keys - the single source the grant route and UI validate against. */
 export const KNOWN_GROUP_TYPE_KEYS: readonly string[] = GROUP_TYPE_CATALOG.map(t => t.key);

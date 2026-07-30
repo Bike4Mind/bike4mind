@@ -36,6 +36,14 @@ Implementation **B** (`buildOwnershipConditions` in
 `packages/database/src/queries/fabFileSearchQuery.ts`) is the single chokepoint for four of
 the five consumers.
 
+> **Not an exhaustive inventory of group-matching sites.** "Three implementations" describes
+> where these five consumers land, not every place `groups[]` is matched. Two more exist:
+> the **db-core** copy of the CASL ability (`packages/database/src/utils/ability.ts`), a
+> parallel of implementation A that the quest/Slack processors and the image/video generators
+> compile via `accessibleBy` (it carried the same dotted-arm defect - see below); and
+> `ShareableDocumentRepository` (`SharableDocumentModel.ts`), which already uses `$elemMatch`
+> correctly. Both are accounted for; the framing above just should not be read as the full list.
+
 ## Verification results
 
 Each implementation is now locked with unit tests asserting **grant for the right member,
@@ -69,14 +77,28 @@ the pattern implementations B and C already use. Groups are dormant (empty colle
 this is a forward-only correctness fix with no migration or behavior change for existing
 data.
 
+The **db-core copy** of the ability (`packages/database/src/utils/ability.ts`) carried the
+identical dotted arm and was fixed the same way. It matters more than the client copy for
+this defect: the quest/Slack processors and the image/video generators use it via
+`accessibleBy`, i.e. the compiled Mongo query - the exact path where a cross-element match
+bites. Locked with the same cross-group negative in
+`packages/database/src/utils/ability.test.ts` (`group-shared document access`).
+
 ### Known sibling to evaluate separately
 
-The **explicit-user** arm directly above the group arm in `ability.ts`
+The **explicit-user** arm directly above the group arm in `ability.ts` (both copies)
 (`{ 'users.userId': user.id, 'users.permissions': permission }`) has the same dotted,
 non-`$elemMatch` shape. It is live production behavior for user-to-user sharing (not dormant),
-so it was left untouched here; in practice a doc lists a given `userId` once, so the
-cross-entry match does not trigger. Worth a separate, deliberately-scoped look rather than
-folding a live-behavior change into this dormant-path pass.
+so it was left untouched here.
+
+**The earlier "a doc lists a given `userId` once, so the cross-entry match does not trigger"
+rationale is wrong** and is retracted: the bug does not need a duplicate `userId`. It needs
+the caller's id in one `users[]` entry and the requested permission in *any other* entry -
+the normal case for a doc shared with two people at different levels. Example: alice's entry
+grants only `share`, bob's entry grants `read`; alice's `read` check matches her id on her
+entry and `read` on bob's, so alice is over-granted `read`. Deferring it is defensible on
+**blast-radius** grounds (a live change, out of scope for this dormant-path pass), not on the
+mistaken "listed once" reasoning. Tracked as its own P1-severity issue.
 
 ## Sign-off
 
@@ -85,5 +107,7 @@ folding a live-behavior change into this dormant-path pass.
 - [x] `ChatCompletionFeatures.ts` - verified via implementation B.
 - [x] `knowledgeBaseRetrieve` (Path A in-memory + Path B search) - verified via C and B.
 - [x] `knowledgeBaseSearch` (semantic + keyword) - verified via implementation B.
-- [x] No crash on non-empty input; no over-broad grant (CASL over-match fixed).
+- [x] No crash on non-empty input; the **group** arm no longer over-grants (dotted -> `$elemMatch`
+      in BOTH ability copies). The **explicit-user** arm's cross-element over-grant is a separate,
+      live P1 deferred on blast-radius grounds (see "Known sibling").
 - [x] Documented as a repeatable checklist (this file + the tests above).

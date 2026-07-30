@@ -1,4 +1,10 @@
-import { IGroupRepository, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
+import {
+  IGroupDocument,
+  IGroupRepository,
+  IOrganizationRepository,
+  IUserDocument,
+  IUserRepository,
+} from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 
 interface GroupMembershipAdapters {
@@ -8,6 +14,22 @@ interface GroupMembershipAdapters {
     users: Pick<IUserRepository, 'addGroupToUser' | 'removeGroupFromUser'>;
   };
 }
+
+interface RenameGroupAdapters {
+  db: {
+    organizations: Pick<IOrganizationRepository, 'findById'>;
+    groups: Pick<IGroupRepository, 'findById' | 'update'>;
+  };
+}
+
+// The org+group resolution/authorization that every group action shares. groups.update is only
+// needed by rename, so it lives on that action's adapter, not this shared subset.
+type AuthorizeAdapters = {
+  db: {
+    organizations: Pick<IOrganizationRepository, 'findById'>;
+    groups: Pick<IGroupRepository, 'findById'>;
+  };
+};
 
 interface GroupMembershipParams {
   organizationId: string;
@@ -24,7 +46,12 @@ type OrgLike = { userId: string; adminUserIds?: string[]; users: Array<{ userId:
 const assertCanManageOrgGroups = (actingUser: IUserDocument, organization: OrgLike): void => {
   const isPlatformAdmin = actingUser.isAdmin === true;
   const isBillingOwner = organization.userId === actingUser.id;
-  const isOrgAdmin = (organization.adminUserIds ?? []).includes(actingUser.id);
+  // An appointed org admin must ALSO still be a current member. Defence in depth: if a purge of
+  // adminUserIds on removal ever misses (or a row predates that fix), this stops a removed admin
+  // from retaining group-management authority. The billing owner is checked separately above.
+  const isOrgAdmin =
+    (organization.adminUserIds ?? []).includes(actingUser.id) &&
+    organization.users.some(member => member.userId === actingUser.id);
   if (!isPlatformAdmin && !isBillingOwner && !isOrgAdmin) {
     throw new ForbiddenError("Not authorized to manage this organization's groups");
   }
@@ -42,8 +69,8 @@ const assertCanManageOrgGroups = (actingUser: IUserDocument, organization: OrgLi
  */
 async function authorizeAndValidate(
   actingUser: IUserDocument,
-  { organizationId, groupId, userId }: GroupMembershipParams,
-  adapters: GroupMembershipAdapters,
+  { organizationId, groupId, userId }: { organizationId: string; groupId: string; userId?: string },
+  adapters: AuthorizeAdapters,
   requireMembership: boolean
 ): Promise<void> {
   const organization = await adapters.db.organizations.findById(organizationId);
@@ -53,10 +80,14 @@ async function authorizeAndValidate(
   const group = await adapters.db.groups.findById(groupId);
   if (!group) throw new NotFoundError('Group not found');
   if (group.organizationId !== organizationId) {
-    throw new BadRequestError('Group does not belong to this organization'); // invariant (1)
+    // invariant (1). Same error as a missing group (not a 400): a distinct "belongs to another
+    // org" response is an existence oracle that lets a caller confirm a group id lives in a tenant
+    // they can't see. Mirrors revokeAccess's "return same error to avoid info leakage".
+    throw new NotFoundError('Group not found');
   }
   if (requireMembership && !organization.users.some(member => member.userId === userId)) {
-    throw new BadRequestError('User is not a member of this organization'); // invariant (2)
+    // invariant (2). BadRequest is fine here - no cross-tenant existence is revealed.
+    throw new BadRequestError('User is not a member of this organization');
   }
 }
 
@@ -78,4 +109,18 @@ export async function removeUserFromGroup(
 ): Promise<void> {
   await authorizeAndValidate(actingUser, params, adapters, false);
   await adapters.db.users.removeGroupFromUser(params.userId, params.groupId);
+}
+
+/**
+ * Rename a group instance. Same authorization + "group belongs to this org" invariant as the
+ * membership writes (requireMembership: false - a rename has no target member), so the predicate
+ * and the invariant live in ONE tested place rather than being re-implemented inline in the route.
+ */
+export async function renameGroup(
+  actingUser: IUserDocument,
+  { organizationId, groupId, name }: { organizationId: string; groupId: string; name: string },
+  adapters: RenameGroupAdapters
+): Promise<IGroupDocument | null> {
+  await authorizeAndValidate(actingUser, { organizationId, groupId }, adapters, false);
+  return adapters.db.groups.update({ id: groupId, name });
 }

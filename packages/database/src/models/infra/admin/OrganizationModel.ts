@@ -49,6 +49,10 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     allowedGroupTypes: { type: [String], default: [] },
     // Org admins appointed by the billing owner / platform admin (not a Permission verb, not on users[]).
     adminUserIds: { type: [String], default: [] },
+    // `users[]` (the shareable ACL, from IShareableDocument) is AUTHORITATIVE for org membership -
+    // every membership check reads it. `userDetails[]` below is a per-member credit side-table
+    // (usedCredits / lastCreditUsedAt), NOT a membership list; keep the two in sync but never treat
+    // userDetails as the source of truth for "is X a member" (org-groups #1173).
     userDetails: [
       {
         id: {

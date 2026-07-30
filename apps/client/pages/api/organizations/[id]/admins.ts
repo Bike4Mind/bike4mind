@@ -6,6 +6,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { organizationRepository } from '@bike4mind/database/infra';
+import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { z } from 'zod';
 
 const bodySchema = z.object({ adminUserIds: z.array(z.string().min(1)).max(50) });
@@ -19,7 +20,10 @@ const handler = baseApi().put(
     try {
       ({ adminUserIds } = bodySchema.parse(req.body));
     } catch (error) {
-      if (error instanceof z.ZodError) throw new BadRequestError('adminUserIds must be an array of user ids');
+      if (error instanceof z.ZodError) {
+        // Preserve path + message (matches group-types.ts) rather than collapsing to one string.
+        throw new BadRequestError(error.issues.map(e => `${e.path.join('.') || 'value'}: ${e.message}`).join('; '));
+      }
       throw error;
     }
     adminUserIds = [...new Set(adminUserIds)];
@@ -40,6 +44,21 @@ const handler = baseApi().put(
     }
 
     const updated = await organizationRepository.update({ id: organizationId, adminUserIds });
+
+    // "Who appointed the person who can reach confidential groups" - the same legal question the
+    // group-type grant audit answers, one link up the chain. Best-effort (logAuditEvent swallows
+    // its own errors), so it never fails the already-committed change.
+    await logAuditEvent(
+      {
+        userId: req.user!.id,
+        action: AdminOrgAuditEvents.ORG_ADMINS_UPDATED,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'] || 'unknown',
+        metadata: { organizationId, adminUserIds },
+      },
+      req.logger
+    );
+
     return res.status(200).json({ adminUserIds: updated?.adminUserIds ?? adminUserIds });
   })
 );

@@ -593,12 +593,26 @@ export interface IUserDocument extends IUser, IMongoDocument {}
 export interface IUserRepository extends IBaseRepository<IUserDocument>, ICreditHolderMethods {
   findByUsernameOrEmail: (username: string, email: string) => Promise<IUserDocument | null>;
   findByEmail: (email: string) => Promise<IUserDocument | null>;
-  /** Remove the given group ids from every user's `groups[]` (used when a group is revoked/deleted). */
-  pullGroups: (groupIds: string[]) => Promise<void>;
+  /**
+   * Remove the given group ids from EVERY user's `groups[]` (org-wide blast radius; used when a
+   * group type is revoked and its instances are soft-deleted). Named for the scope so a caller
+   * cannot mistake it for a single-user operation.
+   */
+  removeGroupsFromAllUsers: (groupIds: string[]) => Promise<void>;
   /** Add a single group id to one user's `groups[]` (idempotent; used when assigning a member). */
   addGroupToUser: (userId: string, groupId: string) => Promise<void>;
   /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */
   removeGroupFromUser: (userId: string, groupId: string) => Promise<void>;
+  /**
+   * Remove several group ids from ONE user's `groups[]` (idempotent $pull). Used when a member
+   * leaves or is removed from an org, to strip that org's group ids from just that member.
+   */
+  removeGroupsFromUser: (userId: string, groupIds: string[]) => Promise<void>;
+  /**
+   * Count members per group id in a single aggregation (keyed by group id, absent = zero). Used
+   * for the group-list member counts - one pass instead of an N+1 of per-group counts.
+   */
+  countUsersByGroupIds: (groupIds: string[]) => Promise<Record<string, number>>;
   findByEmailVerificationToken: (token: string) => Promise<IUserDocument | null>;
   findByPendingEmailToken: (token: string) => Promise<IUserDocument | null>;
   findByIdWithPassword: (id: string) => Promise<IUserDocument | null>;

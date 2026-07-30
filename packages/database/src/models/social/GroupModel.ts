@@ -30,6 +30,14 @@ export const GroupSchema = new mongoose.Schema<IGroupDocument>(
 
 GroupSchema.plugin(softDeletePlugin);
 
+// One LIVE group per (organization, type) - the epic's "one group per type per org in v1"
+// invariant. The partial filter scopes uniqueness to live rows so revoke (soft-delete) then
+// re-grant of the same type still works. Also serves findByOrganization (organizationId prefix).
+GroupSchema.index(
+  { organizationId: 1, type: 1 },
+  { unique: true, partialFilterExpression: { deletedAt: null }, name: 'group_org_type_live' }
+);
+
 export const Group: mongoose.Model<IGroupDocument> =
   mongoose.models.Group ?? mongoose.model<IGroupDocument>('Group', GroupSchema);
 
@@ -40,10 +48,17 @@ export class GroupRepository extends BaseRepository<IGroupDocument> implements I
     return groups.map(group => group.toObject());
   }
 
-  /** Soft-delete (the plugin turns deleteMany into a `deletedAt` set, not a hard delete). */
+  /**
+   * Soft-delete by writing `deletedAt` directly via a Mongoose `updateMany`.
+   * NOT the plugin's `deleteMany` static: that routes through the raw driver
+   * (`this.collection.updateMany`), which Mongoose 8's transactionAsyncLocalStorage
+   * does NOT inject a session into - so a soft-delete inside `withTransaction` would
+   * escape the transaction and, on a transient-error retry, silently skip the member
+   * purge. A real Mongoose query joins the session automatically (see BaseModel notes).
+   */
   async softDeleteByIds(groupIds: string[]): Promise<void> {
     if (groupIds.length === 0) return;
-    await this.model.deleteMany({ _id: { $in: groupIds } });
+    await this.model.updateMany({ _id: { $in: groupIds }, deletedAt: null }, { $set: { deletedAt: new Date() } });
   }
 }
 

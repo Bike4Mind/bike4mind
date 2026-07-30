@@ -62,10 +62,12 @@ describe('GroupModel', () => {
   // so a `required` description would reject every group created without one (a 500 on the
   // real provisioning path). Description is optional and defaults to ''.
   it('allows an omitted/empty description (defaults to "")', async () => {
+    // Distinct (org, type) per create: the group_org_type_live unique index allows only one live
+    // group per (organizationId, type).
     const omitted = await Group.create({ name: 'NoDesc', type: 'sales', organizationId: 'org-1' });
     expect((await Group.findById(omitted.id))?.description).toBe('');
 
-    const empty = await Group.create({ name: 'EmptyDesc', description: '', type: 'sales', organizationId: 'org-1' });
+    const empty = await Group.create({ name: 'EmptyDesc', description: '', type: 'research', organizationId: 'org-1' });
     expect((await Group.findById(empty.id))?.description).toBe('');
   });
 });
@@ -82,6 +84,20 @@ describe('GroupRepository', () => {
     const org1Groups = await groupRepository.findByOrganization('org-1');
     expect(org1Groups.map(g => g.type).sort()).toEqual(['research']);
     expect(org1Groups.every(g => typeof g.id === 'string')).toBe(true);
+  });
+
+  it('enforces one LIVE group per (organizationId, type), but allows revoke-then-regrant', async () => {
+    await Group.create({ name: 'Sales', type: 'sales', organizationId: 'org-live' });
+
+    // a second LIVE group of the same (org, type) is rejected by group_org_type_live
+    await expect(Group.create({ name: 'Sales 2', type: 'sales', organizationId: 'org-live' })).rejects.toThrow(
+      /duplicate key/i
+    );
+
+    // ...but soft-deleting the first frees the partial-unique slot, so re-granting succeeds
+    const [live] = await groupRepository.findByOrganization('org-live');
+    await groupRepository.softDeleteByIds([live.id]);
+    await expect(Group.create({ name: 'Sales 3', type: 'sales', organizationId: 'org-live' })).resolves.toBeTruthy();
   });
 
   it('softDeleteByIds is a soft delete (row survives with deletedAt set) and is a no-op on []', async () => {

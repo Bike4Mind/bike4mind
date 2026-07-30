@@ -11,7 +11,7 @@ interface SetGroupTypesAdapters {
   db: {
     organizations: Pick<IOrganizationRepository, 'findById' | 'update'>;
     groups: Pick<IGroupRepository, 'findByOrganization' | 'create' | 'softDeleteByIds'>;
-    users: Pick<IUserRepository, 'pullGroups'>;
+    users: Pick<IUserRepository, 'removeGroupsFromAllUsers'>;
   };
   logger?: { info: (message: string) => void };
 }
@@ -61,8 +61,11 @@ export async function setOrganizationGroupTypes(
   const liveGroups = await db.groups.findByOrganization(organizationId);
   const typesWithInstance = new Set(liveGroups.map(group => group.type));
 
-  // Provision a group instance for each newly-allowed type that lacks one (idempotent).
-  for (const type of added) {
+  // Provision a group instance for every allowed type that lacks one (idempotent). Iterate
+  // `requested`, not `added`: iterating only newly-added types leaves no way to repair an org
+  // that holds a type with no live group (e.g. a prior revoke that soft-deleted the instance but
+  // whose member purge was lost). Re-issuing the same PUT now re-provisions the missing group.
+  for (const type of requested) {
     if (typesWithInstance.has(type)) continue;
     const def = getGroupType(type)!; // safe: requested keys were validated against the catalog above
     await db.groups.create({ name: def.label, description: def.description, type, organizationId });
@@ -72,7 +75,7 @@ export async function setOrganizationGroupTypes(
   const revokedGroupIds = liveGroups.filter(group => removed.includes(group.type)).map(group => group.id);
   if (revokedGroupIds.length > 0) {
     await db.groups.softDeleteByIds(revokedGroupIds);
-    await db.users.pullGroups(revokedGroupIds);
+    await db.users.removeGroupsFromAllUsers(revokedGroupIds);
   }
 
   await db.organizations.update({ id: organizationId, allowedGroupTypes: requested });

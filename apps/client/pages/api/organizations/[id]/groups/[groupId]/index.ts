@@ -3,9 +3,10 @@
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError } from '@server/utils/errors';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { groupRepository } from '@bike4mind/database/social';
+import { organizationService } from '@bike4mind/services';
 import { z } from 'zod';
 
 const bodySchema = z.object({ name: z.string().trim().min(1).max(120) });
@@ -20,27 +21,20 @@ const handler = baseApi().patch(
     try {
       ({ name } = bodySchema.parse(req.body));
     } catch (error) {
-      if (error instanceof z.ZodError) throw new BadRequestError('A non-empty name is required');
+      if (error instanceof z.ZodError) {
+        // Preserve path + message (matches group-types.ts) rather than collapsing to one string.
+        throw new BadRequestError(error.issues.map(e => `${e.path.join('.') || 'value'}: ${e.message}`).join('; '));
+      }
       throw error;
     }
 
-    const organization = await organizationRepository.findById(organizationId);
-    if (!organization) throw new NotFoundError('Organization not found');
-
-    const isOwner = organization.userId === req.user?.id;
-    const isOrgAdmin = (organization.adminUserIds ?? []).includes(req.user?.id ?? '');
-    if (!isOwner && !isOrgAdmin && !req.user?.isAdmin) {
-      throw new ForbiddenError('Not authorized to manage this organization’s groups');
-    }
-
-    const group = await groupRepository.findById(groupId);
-    if (!group) throw new NotFoundError('Group not found');
-    // Invariant: the group must belong to the org in the path (no cross-tenant rename).
-    if (group.organizationId !== organizationId) {
-      throw new BadRequestError('Group does not belong to this organization');
-    }
-
-    const updated = await groupRepository.update({ id: groupId, name });
+    // Authorization + the "group belongs to this org" invariant live in the service (shared with
+    // the membership writes and covered by its tests), so this route only extracts and delegates.
+    const updated = await organizationService.renameGroup(
+      req.user!,
+      { organizationId, groupId, name },
+      { db: { organizations: organizationRepository, groups: groupRepository } }
+    );
     return res.status(200).json({ group: updated });
   })
 );
