@@ -268,18 +268,18 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     await this.model.updateOne({ _id: userId }, { $pull: { groups: { $in: groupIds } } });
   }
 
-  /** Count members per group id in one aggregation (keyed by group id; absent = zero). */
-  async countUsersByGroupIds(groupIds: string[]): Promise<Record<string, number>> {
+  /** Member ids per group id in one aggregation (keyed by group id; absent = no members). */
+  async findUserIdsByGroupIds(groupIds: string[]): Promise<Record<string, string[]>> {
     if (groupIds.length === 0) return {};
-    const rows = await this.model.aggregate<{ _id: string; count: number }>([
+    const rows = await this.model.aggregate<{ _id: string; userIds: string[] }>([
       { $match: { groups: { $in: groupIds } } },
       { $unwind: '$groups' },
       { $match: { groups: { $in: groupIds } } },
-      { $group: { _id: '$groups', count: { $sum: 1 } } },
+      { $group: { _id: '$groups', userIds: { $push: { $toString: '$_id' } } } },
     ]);
-    const counts: Record<string, number> = {};
-    for (const row of rows) counts[row._id] = row.count;
-    return counts;
+    const membersByGroup: Record<string, string[]> = {};
+    for (const row of rows) membersByGroup[row._id] = row.userIds;
+    return membersByGroup;
   }
 
   async findAllByEmailsOrUsernames(emails: string[], usernames: string[]) {

@@ -609,10 +609,11 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    */
   removeGroupsFromUser: (userId: string, groupIds: string[]) => Promise<void>;
   /**
-   * Count members per group id in a single aggregation (keyed by group id, absent = zero). Used
-   * for the group-list member counts - one pass instead of an N+1 of per-group counts.
+   * Member ids per group id in a single aggregation (keyed by group id, absent = no members).
+   * Used by the group-list route - one pass instead of an N+1 of per-group reads. The management
+   * UI needs the ids (to render + unassign members), and memberCount is derived from them.
    */
-  countUsersByGroupIds: (groupIds: string[]) => Promise<Record<string, number>>;
+  findUserIdsByGroupIds: (groupIds: string[]) => Promise<Record<string, string[]>>;
   findByEmailVerificationToken: (token: string) => Promise<IUserDocument | null>;
   findByPendingEmailToken: (token: string) => Promise<IUserDocument | null>;
   findByIdWithPassword: (id: string) => Promise<IUserDocument | null>;

@@ -1,6 +1,7 @@
 import { IOrganizationDocument, Permission, WithId } from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
+import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
 import OrganizationUsageSection from '@client/app/components/organizations/OrganizationUsageSection';
@@ -33,6 +34,7 @@ import CreditCardOutlinedIcon from '@mui/icons-material/CreditCardOutlined';
 import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import GroupOutlinedIcon from '@mui/icons-material/GroupOutlined';
+import GroupWorkOutlinedIcon from '@mui/icons-material/GroupWorkOutlined';
 import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
 import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined';
 import GitHubIcon from '@mui/icons-material/GitHub';
@@ -45,6 +47,7 @@ import { useTranslation } from 'react-i18next';
 enum OrganizationTabs {
   Overview = 'overview',
   Members = 'members',
+  Groups = 'groups',
   Usage = 'usage',
   Billing = 'billing',
   Integrations = 'integrations',
@@ -92,6 +95,21 @@ const OrganizationPage: FC = () => {
     return organization.managerId === currentUser.id;
   }, [currentUser, organization]);
 
+  // Who may manage group instances + membership. Mirrors the group routes' authz: billing owner,
+  // an appointed org admin (adminUserIds), or a platform admin. Personal orgs never have groups.
+  const canManageGroups = useMemo(() => {
+    if (!currentUser || !organization || organization.personal) return false;
+    if (currentUser.isAdmin) return true;
+    if (currentUser.id === organization.userId) return true;
+    return (organization.adminUserIds ?? []).includes(currentUser.id);
+  }, [currentUser, organization]);
+
+  // Only the billing owner or a platform admin may appoint org admins (admins route authz).
+  const canSetAdmins = useMemo(() => {
+    if (!currentUser || !organization) return false;
+    return currentUser.isAdmin || currentUser.id === organization.userId;
+  }, [currentUser, organization]);
+
   // Redirect non-admin users if they try to access restricted tabs
   useEffect(() => {
     const managePinnedTab =
@@ -104,8 +122,10 @@ const OrganizationPage: FC = () => {
       setSelectedTab(OrganizationTabs.Overview);
     } else if (!canViewUsage && selectedTab === OrganizationTabs.Usage) {
       setSelectedTab(OrganizationTabs.Overview);
+    } else if (!canManageGroups && selectedTab === OrganizationTabs.Groups) {
+      setSelectedTab(OrganizationTabs.Overview);
     }
-  }, [canManageOrg, canViewUsage, selectedTab]);
+  }, [canManageOrg, canViewUsage, canManageGroups, selectedTab]);
 
   useDocumentTitle(organization?.name, ' | Organization');
 
@@ -181,6 +201,12 @@ const OrganizationPage: FC = () => {
               <GroupOutlinedIcon sx={{ fontSize: 16 }} />
               Members
             </Tab>
+            {canManageGroups && (
+              <Tab value={OrganizationTabs.Groups} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <GroupWorkOutlinedIcon sx={{ fontSize: 16 }} />
+                Groups
+              </Tab>
+            )}
             {canViewUsage && (
               <Tab value={OrganizationTabs.Usage} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <InsightsOutlinedIcon sx={{ fontSize: 16 }} />
@@ -223,6 +249,14 @@ const OrganizationPage: FC = () => {
               </Typography>
               {currentUser && <OrganizationMembers organization={organization} userPermissions={userPermissions} />}
             </TabPanel>
+            {canManageGroups && (
+              <TabPanel value={OrganizationTabs.Groups}>
+                <Typography level="title-lg" startDecorator={<GroupWorkOutlinedIcon />} sx={{ mb: 3 }}>
+                  Groups
+                </Typography>
+                <OrganizationGroups organization={organization} canSetAdmins={canSetAdmins} />
+              </TabPanel>
+            )}
             {canViewUsage && (
               <TabPanel value={OrganizationTabs.Usage}>
                 <Typography level="title-lg" startDecorator={<InsightsOutlinedIcon />} sx={{ mb: 3 }}>
