@@ -950,6 +950,29 @@ export function hasCompleteOpeningTag(tail: string): boolean {
  * scan is the fallback for replies generated before that shipped and for backends that
  * persist no promptMeta. Advisory only - the caller must still render the artifact as-is.
  */
+/**
+ * `detectElidedContent` behind a catch, for symmetry with the server call sites, which are all
+ * wrapped. The detector is advisory, so a throw must never cost the user something real - and the
+ * render path is the dangerous one, since a throw inside a render memo would unmount the reply
+ * container over a warning that was never load-bearing. Fails OPEN: no warning beats no reply.
+ *
+ * Lives CLIENT-side rather than next to the detector in `@bike4mind/utils` on purpose: it reports
+ * through `console.warn`, which is this file's convention for a degraded path but wrong on the Lambda,
+ * where the server call sites wrap their own calls with `logger.warn` instead. Shared code would have
+ * to pick one. `publishApi` imports it from here for that reason.
+ */
+export function detectElidedSafe(content: string, type?: ArtifactType): boolean {
+  try {
+    return detectElidedContent(content, type).elided;
+  } catch (error) {
+    // Logged rather than swallowed silently: the server call sites log their failures, and a detector
+    // that starts throwing in the browser would otherwise look exactly like a detector that finds
+    // nothing. Matches the console.warn convention used elsewhere in this file for degraded paths.
+    console.warn('Elision detection failed; treating artifact as complete:', error);
+    return false;
+  }
+}
+
 export function shouldWarnElidedArtifact(input: {
   completed: boolean;
   isTruncatedArtifact: boolean;
@@ -958,7 +981,7 @@ export function shouldWarnElidedArtifact(input: {
 }): boolean {
   if (!input.completed || input.isTruncatedArtifact) return false;
   if (input.suspectedElision) return true;
-  return input.artifacts.some(a => detectElidedContent(a.content, a.type).elided);
+  return input.artifacts.some(a => detectElidedSafe(a.content, a.type));
 }
 
 /**
@@ -983,7 +1006,7 @@ export function elidedReplyWarning(
 ): boolean {
   if (promptMeta?.suspectedElision) return true;
   if (!markdown) return false;
-  return detectElidedContent(markdown).elided;
+  return detectElidedSafe(markdown);
 }
 
 // Re-export validation functions from the core utils package
