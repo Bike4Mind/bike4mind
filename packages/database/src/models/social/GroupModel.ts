@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
-import { IGroupDocument } from '@bike4mind/common';
+import { IGroupDocument, IGroupRepository } from '@bike4mind/common';
+import BaseRepository from '@bike4mind/db-core';
 import { softDeletePlugin } from '../../utils/mongo';
 
 export const GroupSchema = new mongoose.Schema<IGroupDocument>(
@@ -29,4 +30,21 @@ GroupSchema.plugin(softDeletePlugin);
 
 export const Group: mongoose.Model<IGroupDocument> =
   mongoose.models.Group ?? mongoose.model<IGroupDocument>('Group', GroupSchema);
+
+export class GroupRepository extends BaseRepository<IGroupDocument> implements IGroupRepository {
+  /** Live instances (the soft-delete plugin's find hook excludes `deletedAt` rows). */
+  async findByOrganization(organizationId: string): Promise<IGroupDocument[]> {
+    const groups = await this.model.find({ organizationId });
+    return groups.map(group => group.toObject());
+  }
+
+  /** Soft-delete (the plugin turns deleteMany into a `deletedAt` set, not a hard delete). */
+  async softDeleteByIds(groupIds: string[]): Promise<void> {
+    if (groupIds.length === 0) return;
+    await this.model.deleteMany({ _id: { $in: groupIds } });
+  }
+}
+
+export const groupRepository = new GroupRepository(Group);
+
 export default Group;

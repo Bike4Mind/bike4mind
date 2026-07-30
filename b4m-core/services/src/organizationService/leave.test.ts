@@ -59,9 +59,9 @@ describe('organizationService - leave', () => {
         users: {
           update: vi.fn().mockResolvedValue(undefined),
         },
-        // No org groups by default, so the group purge is a no-op unless a test sets ids.
+        // No org groups by default, so the group purge is a no-op unless a test sets some.
         groups: {
-          findIdsByOrganization: vi.fn().mockResolvedValue([]),
+          findByOrganization: vi.fn().mockResolvedValue([]),
         },
       },
     };
@@ -222,11 +222,11 @@ describe('organizationService - leave', () => {
       organizationId: 'org1',
       groups: ['g-org1-a', 'g-org1-b', 'g-other'],
     } as IUserDocument;
-    mockAdapters.db.groups.findIdsByOrganization.mockResolvedValue(['g-org1-a', 'g-org1-b']);
+    mockAdapters.db.groups.findByOrganization.mockResolvedValue([{ id: 'g-org1-a' }, { id: 'g-org1-b' }]);
 
     await leave(member, { id: 'org1' }, mockAdapters);
 
-    expect(mockAdapters.db.groups.findIdsByOrganization).toHaveBeenCalledWith('org1');
+    expect(mockAdapters.db.groups.findByOrganization).toHaveBeenCalledWith('org1');
     expect(mockAdapters.db.users.update).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user1', groups: ['g-other'], organizationId: null })
     );
@@ -235,7 +235,7 @@ describe('organizationService - leave', () => {
 
   it('purges org groups even when the left org is not the user’s selected org', async () => {
     const member = { ...mockMemberUser, organizationId: 'other-org', groups: ['g-org1-a', 'keep'] } as IUserDocument;
-    mockAdapters.db.groups.findIdsByOrganization.mockResolvedValue(['g-org1-a']);
+    mockAdapters.db.groups.findByOrganization.mockResolvedValue([{ id: 'g-org1-a' }]);
 
     await leave(member, { id: 'org1' }, mockAdapters);
 

@@ -1,9 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ensureAdmin } from '@server/utils/errors';
-import { organizationRepository } from '@bike4mind/database';
-import { Group } from '@bike4mind/database/social';
-import { User } from '@bike4mind/database/auth';
+import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
+import { groupRepository } from '@bike4mind/database/social';
 import { organizationService } from '@bike4mind/services';
 import { z } from 'zod';
 
@@ -13,8 +12,11 @@ import { z } from 'zod';
  * each newly-allowed type, and on revocation soft-deletes the instance and purges its id from
  * every member. All validation + the revoke purge live in `setOrganizationGroupTypes` (tested).
  *
- * DRAFT TODOs (tracked on the PR): wrap the writes in a transaction with session propagation to
- * the model-direct group/user writes, and emit a formal admin audit event for the grant/revoke.
+ * Wrapped in withTransaction: provisioning, soft-deletes, the member purge, and the org write
+ * all commit together (or roll back together) - the repositories join the session automatically
+ * via transactionAsyncLocalStorage.
+ *
+ * TODO (tracked on the PR): emit a formal admin audit event for the grant/revoke.
  */
 const bodySchema = z.object({
   allowedGroupTypes: z.array(z.string()).max(20),
@@ -36,31 +38,14 @@ const handler = baseApi().put(
       throw error;
     }
 
-    const result = await organizationService.setOrganizationGroupTypes(
-      { organizationId, allowedGroupTypes: body.allowedGroupTypes },
-      {
-        db: {
-          organizations: organizationRepository,
-          groups: {
-            findByOrganization: async orgId => {
-              const groups = await Group.find({ organizationId: orgId }).select('_id type').lean();
-              return groups.map(group => ({ id: group._id.toString(), type: group.type as string }));
-            },
-            create: data => Group.create(data),
-            softDeleteByIds: async groupIds => {
-              await Group.deleteMany({ _id: { $in: groupIds } });
-            },
-          },
-          users: {
-            // $pull each revoked group id from every user that has it. Not a $set-style repo op,
-            // so it goes through the model directly.
-            pullGroupsFromAll: async groupIds => {
-              await User.updateMany({ groups: { $in: groupIds } }, { $pull: { groups: { $in: groupIds } } });
-            },
-          },
-        },
-        logger: req.logger,
-      }
+    const result = await withTransaction(() =>
+      organizationService.setOrganizationGroupTypes(
+        { organizationId, allowedGroupTypes: body.allowedGroupTypes },
+        {
+          db: { organizations: organizationRepository, groups: groupRepository, users: userRepository },
+          logger: req.logger,
+        }
+      )
     );
 
     res.status(200).json(result);

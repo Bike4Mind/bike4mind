@@ -246,6 +246,12 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     super(model);
   }
 
+  /** Remove the given group ids from every user that has them (revoke/delete of a group). */
+  async pullGroups(groupIds: string[]): Promise<void> {
+    if (groupIds.length === 0) return;
+    await this.model.updateMany({ groups: { $in: groupIds } }, { $pull: { groups: { $in: groupIds } } });
+  }
+
   async findAllByEmailsOrUsernames(emails: string[], usernames: string[]) {
     const result = await this.model.find({
       $or: [{ email: { $in: emails } }, { username: { $in: usernames } }],

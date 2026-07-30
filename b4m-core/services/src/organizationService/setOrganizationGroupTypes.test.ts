@@ -22,7 +22,7 @@ describe('setOrganizationGroupTypes', () => {
         create: vi.fn(),
         softDeleteByIds: vi.fn(),
       },
-      users: { pullGroupsFromAll: vi.fn() },
+      users: { pullGroups: vi.fn() },
     };
     logger = { info: vi.fn() };
   });
@@ -80,7 +80,7 @@ describe('setOrganizationGroupTypes', () => {
     const result = await run(['sales']); // research removed
 
     expect(db.groups.softDeleteByIds).toHaveBeenCalledWith(['g-research']);
-    expect(db.users.pullGroupsFromAll).toHaveBeenCalledWith(['g-research']);
+    expect(db.users.pullGroups).toHaveBeenCalledWith(['g-research']);
     expect(db.groups.create).not.toHaveBeenCalled();
     expect(result.removed).toEqual(['research']);
     expect(result.revokedGroupIds).toEqual(['g-research']);
@@ -94,7 +94,7 @@ describe('setOrganizationGroupTypes', () => {
     await run(['sales']); // no change
 
     expect(db.groups.softDeleteByIds).not.toHaveBeenCalled();
-    expect(db.users.pullGroupsFromAll).not.toHaveBeenCalled();
+    expect(db.users.pullGroups).not.toHaveBeenCalled();
     expect(db.groups.create).not.toHaveBeenCalled();
   });
 

@@ -1,27 +1,17 @@
-import { IOrganizationRepository, unknownGroupTypeKeys, getGroupType } from '@bike4mind/common';
+import {
+  IGroupRepository,
+  IOrganizationRepository,
+  IUserRepository,
+  unknownGroupTypeKeys,
+  getGroupType,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-
-/** A live group instance, minimally typed for the diff logic. */
-export interface GroupInstanceRef {
-  id: string;
-  type: string;
-}
 
 interface SetGroupTypesAdapters {
   db: {
     organizations: Pick<IOrganizationRepository, 'findById' | 'update'>;
-    groups: {
-      /** Live (non-soft-deleted) group instances for the org. */
-      findByOrganization: (organizationId: string) => Promise<GroupInstanceRef[]>;
-      /** Provision a group instance for a newly-allowed type. */
-      create: (data: { name: string; description: string; type: string; organizationId: string }) => Promise<unknown>;
-      /** Soft-delete the given group instances. */
-      softDeleteByIds: (groupIds: string[]) => Promise<void>;
-    };
-    users: {
-      /** Remove the given group ids from every user's `groups[]` (the revoke purge). */
-      pullGroupsFromAll: (groupIds: string[]) => Promise<void>;
-    };
+    groups: Pick<IGroupRepository, 'findByOrganization' | 'create' | 'softDeleteByIds'>;
+    users: Pick<IUserRepository, 'pullGroups'>;
   };
   logger?: { info: (message: string) => void };
 }
@@ -82,7 +72,7 @@ export async function setOrganizationGroupTypes(
   const revokedGroupIds = liveGroups.filter(group => removed.includes(group.type)).map(group => group.id);
   if (revokedGroupIds.length > 0) {
     await db.groups.softDeleteByIds(revokedGroupIds);
-    await db.users.pullGroupsFromAll(revokedGroupIds);
+    await db.users.pullGroups(revokedGroupIds);
   }
 
   await db.organizations.update({ id: organizationId, allowedGroupTypes: requested });

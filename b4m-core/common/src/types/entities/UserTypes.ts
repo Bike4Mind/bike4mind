@@ -593,6 +593,8 @@ export interface IUserDocument extends IUser, IMongoDocument {}
 export interface IUserRepository extends IBaseRepository<IUserDocument>, ICreditHolderMethods {
   findByUsernameOrEmail: (username: string, email: string) => Promise<IUserDocument | null>;
   findByEmail: (email: string) => Promise<IUserDocument | null>;
+  /** Remove the given group ids from every user's `groups[]` (used when a group is revoked/deleted). */
+  pullGroups: (groupIds: string[]) => Promise<void>;
   findByEmailVerificationToken: (token: string) => Promise<IUserDocument | null>;
   findByPendingEmailToken: (token: string) => Promise<IUserDocument | null>;
   findByIdWithPassword: (id: string) => Promise<IUserDocument | null>;

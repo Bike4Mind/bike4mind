@@ -1,6 +1,6 @@
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
-import { IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
+import { IGroupRepository, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 const organizationLeaveSchema = z.object({
@@ -13,12 +13,7 @@ interface OrganizationLeaveAdapters {
   db: {
     organizations: IOrganizationRepository;
     users: Pick<IUserRepository, 'update'>;
-    /**
-     * Live (non-soft-deleted) group ids owned by an org. There is no groupRepository, so the
-     * callsite supplies this via the Group model. Kept as an adapter so the purge logic stays
-     * in the service and unit-testable.
-     */
-    groups: { findIdsByOrganization: (organizationId: string) => Promise<string[]> };
+    groups: Pick<IGroupRepository, 'findByOrganization'>;
   };
 }
 
@@ -51,7 +46,8 @@ export const leave = async (
   // anything shared with that org's groups (the same class of bug as the data-lake membership
   // leak). Independent of the selected-org clear below: a user can be in an org's group without
   // that org being their currently-selected one.
-  const orgGroupIds = new Set(await adapters.db.groups.findIdsByOrganization(id));
+  const orgGroups = await adapters.db.groups.findByOrganization(id);
+  const orgGroupIds = new Set(orgGroups.map(group => group.id));
   const remainingGroups = (user.groups ?? []).filter(groupId => !orgGroupIds.has(groupId));
   const groupsChanged = remainingGroups.length !== (user.groups?.length ?? 0);
 

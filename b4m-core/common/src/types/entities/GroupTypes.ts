@@ -1,4 +1,5 @@
 import { IMongoDocument } from '.';
+import { IBaseRepository } from './BaseTypes';
 
 export interface IGroup {
   name: string;
@@ -21,3 +22,10 @@ export interface IGroup {
 // While a Group is manageable by users, it will be in the context of
 // the organization, and the Group documents don't extend from IShareableDocument.
 export interface IGroupDocument extends IGroup, IMongoDocument {}
+
+export interface IGroupRepository extends IBaseRepository<IGroupDocument> {
+  /** Live (non-soft-deleted) group instances owned by an organization. */
+  findByOrganization(organizationId: string): Promise<IGroupDocument[]>;
+  /** Soft-delete the given group instances (used when a group type is revoked). */
+  softDeleteByIds(groupIds: string[]): Promise<void>;
+}

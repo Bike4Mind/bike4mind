@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { Group } from './GroupModel';
+import { Group, groupRepository } from './GroupModel';
 
 /**
  * Regression guard for the group-scoped invite auth path: `authorizeByInviteType`
@@ -56,5 +56,32 @@ describe('GroupModel', () => {
         typeof Group.create
       >[0])
     ).rejects.toThrow();
+  });
+});
+
+describe('GroupRepository', () => {
+  it('findByOrganization returns live groups for the org, excluding other orgs and soft-deleted', async () => {
+    const a = await Group.create({ name: 'A', description: 'd', type: 'sales', organizationId: 'org-1' });
+    await Group.create({ name: 'B', description: 'd', type: 'research', organizationId: 'org-1' });
+    await Group.create({ name: 'C', description: 'd', type: 'sales', organizationId: 'org-2' });
+
+    // soft-delete one of org-1's groups; it must drop out of findByOrganization
+    await groupRepository.softDeleteByIds([a.id]);
+
+    const org1Groups = await groupRepository.findByOrganization('org-1');
+    expect(org1Groups.map(g => g.type).sort()).toEqual(['research']);
+    expect(org1Groups.every(g => typeof g.id === 'string')).toBe(true);
+  });
+
+  it('softDeleteByIds is a soft delete (row survives with deletedAt set) and is a no-op on []', async () => {
+    const g = await Group.create({ name: 'G', description: 'd', type: 'customer', organizationId: 'org-3' });
+
+    await groupRepository.softDeleteByIds([]); // no-op, must not throw
+    await groupRepository.softDeleteByIds([g.id]);
+
+    expect(await groupRepository.findByOrganization('org-3')).toEqual([]);
+    // the document still exists (soft, not hard delete) - visible when bypassing the find hook
+    const raw = await mongoose.connection.collection('groups').findOne({ _id: g._id });
+    expect(raw?.deletedAt).toBeInstanceOf(Date);
   });
 });
