@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { B4mApiClient, mapApiError, type RawFile, type RawNotebook } from './b4mApiClient.js';
+import { B4mApiClient, mapApiError, type RawNotebook } from './b4mApiClient.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
 export interface ToolMeta {
@@ -189,26 +189,35 @@ export async function getFile(client: B4mApiClient, args: { fileId: string }) {
 
 /**
  * Outcome of a sound-effects generation, in the two shapes the route can yield:
- * a persisted FabFile (resolved to metadata + a signed download URL, like
- * {@link getFile}) when the caller keeps generated audio, or the raw bytes when
- * it does not - so a caller who opted out of persistence still receives what it
+ * a persisted FabFile (id + name + a working signed download URL) when the caller
+ * keeps generated audio, or the raw bytes when it does not - so a caller who opted
+ * out of persistence, or whose save produced no usable URL, still receives what it
  * was billed for.
  */
 export type SoundEffectOutcome =
-  | { saved: true; provider: string; contentType: string; byteLength: number; file: RawFile }
+  | {
+      saved: true;
+      provider: string;
+      contentType: string;
+      byteLength: number;
+      file: { id: string; fileName?: string; fileUrl: string };
+    }
   | { saved: false; provider: string; contentType: string; byteLength: number; audioBase64: string };
 
 export async function generateSoundEffect(
   client: B4mApiClient,
   args: { text: string; provider: string; durationSeconds?: number; promptInfluence?: number; format?: string }
 ): Promise<SoundEffectOutcome> {
-  const { audio, contentType, saved, fabFileId } = await client.generateSoundEffect(args);
+  const { audio, contentType, saved, fabFileId, fileName, fileUrl } = await client.generateSoundEffect(args);
   const base = { provider: args.provider, contentType, byteLength: audio.length };
 
-  // Prefer the persisted-file reference (signed URL) over inlining bytes, mirroring
-  // get_file; the route already uploaded it, so we only resolve the download URL.
-  if (saved && fabFileId) {
-    return { ...base, saved: true, file: await client.getFile(fabFileId) };
+  // Prefer the persisted-file reference over inlining bytes (mirrors get_file). The
+  // route forwards the signed URL it minted at upload, so we use it directly rather
+  // than re-resolving via getFile, which fails closed on the just-created file until
+  // the async moderation scan runs. If persistence yielded no usable URL, fall back
+  // to inlining the bytes the caller was already billed for, so audio is never lost.
+  if (saved && fabFileId && fileUrl) {
+    return { ...base, saved: true, file: { id: fabFileId, fileName, fileUrl } };
   }
   return { ...base, saved: false, audioBase64: audio.toString('base64') };
 }

@@ -127,7 +127,13 @@ describe('B4mApiClient', () => {
   it('generates a sound effect, requesting bytes and reading the persisted-file headers', async () => {
     mockAxiosPost.mockResolvedValue({
       data: Buffer.from('audio-bytes'),
-      headers: { 'content-type': 'audio/mpeg', 'x-b4m-audio-saved': 'true', 'x-b4m-audio-fab-file-id': 'fab1' },
+      headers: {
+        'content-type': 'audio/mpeg',
+        'x-b4m-audio-saved': 'true',
+        'x-b4m-audio-fab-file-id': 'fab1',
+        'x-b4m-audio-file-name': 'sound-effect-thunderclap.mp3',
+        'x-b4m-audio-file-url': 'https://signed.example/audio.mp3',
+      },
     });
 
     const result = await client.generateSoundEffect({
@@ -149,12 +155,37 @@ describe('B4mApiClient', () => {
       },
       { responseType: 'arraybuffer' }
     );
+    // The signed URL comes straight off the header, not a re-fetch, so the CLI never
+    // hits the moderation race that GET /api/files/:id would on a just-created file.
     expect(result).toEqual({
       audio: Buffer.from('audio-bytes'),
       contentType: 'audio/mpeg',
       saved: true,
       fabFileId: 'fab1',
+      fileName: 'sound-effect-thunderclap.mp3',
+      fileUrl: 'https://signed.example/audio.mp3',
     });
+  });
+
+  it('drops the persisted-file headers when the save header is not "true"', async () => {
+    // A duplicated header arrives as an array; only the scalar string form is kept,
+    // and none of the file headers are read at all unless the save actually succeeded.
+    mockAxiosPost.mockResolvedValue({
+      data: Buffer.from('audio-bytes'),
+      headers: {
+        'content-type': 'audio/mpeg',
+        'x-b4m-audio-saved': 'false',
+        'x-b4m-audio-fab-file-id': ['fab1', 'fab2'],
+        'x-b4m-audio-file-url': 'https://signed.example/audio.mp3',
+      },
+    });
+
+    const result = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'wind' });
+
+    expect(result.saved).toBe(false);
+    expect(result.fabFileId).toBeUndefined();
+    expect(result.fileName).toBeUndefined();
+    expect(result.fileUrl).toBeUndefined();
   });
 
   it('omits optional sound-effect fields and reports not-saved when no fab-file header is set', async () => {
@@ -180,6 +211,16 @@ describe('B4mApiClient', () => {
 
     await expect(client.generateSoundEffect({ provider: 'elevenlabs', text: 'x' })).rejects.toMatchObject({
       response: { data: { error: 'Sound generation failed' } },
+    });
+  });
+
+  it('decodes an already-stringified error body (non-Node adapter shape)', async () => {
+    mockAxiosPost.mockRejectedValue(
+      axiosError(503, { data: JSON.stringify({ error: 'No elevenlabs API key configured' }) })
+    );
+
+    await expect(client.generateSoundEffect({ provider: 'elevenlabs', text: 'x' })).rejects.toMatchObject({
+      response: { data: { error: 'No elevenlabs API key configured' } },
     });
   });
 

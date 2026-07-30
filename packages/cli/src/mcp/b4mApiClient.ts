@@ -75,14 +75,19 @@ export interface SoundEffectArgs {
 
 /**
  * Raw result of a sound-effects generation. The route answers with binary audio
- * plus side-channel headers reporting whether it also persisted a browsable copy:
- * `fabFileId` is set only when `saved` is true (see persistGeneratedAudio).
+ * plus side-channel headers reporting whether it also persisted a browsable copy.
+ * `fabFileId`, `fileName`, and `fileUrl` are set only when `saved` is true (see
+ * persistGeneratedAudio). `fileUrl` is the signed download URL the route minted at
+ * upload; callers must use it as-is rather than re-resolving via GET /api/files/:id,
+ * which fails closed until the async moderation scan completes.
  */
 export interface GeneratedSound {
   audio: Buffer;
   contentType: string;
   saved: boolean;
   fabFileId?: string;
+  fileName?: string;
+  fileUrl?: string;
 }
 
 export interface RawProject {
@@ -209,7 +214,7 @@ export class B4mApiClient {
    */
   async generateSoundEffect(args: SoundEffectArgs): Promise<GeneratedSound> {
     try {
-      const response = await this.client.getAxiosInstance().post(
+      const response = await this.client.getAxiosInstance().post<ArrayBuffer>(
         '/api/ai/sound-effects',
         {
           provider: args.provider,
@@ -221,13 +226,16 @@ export class B4mApiClient {
         { responseType: 'arraybuffer' }
       );
 
+      // Node duplicates a repeated header into an array; keep only the scalar string form.
+      const headerString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
       const saved = String(response.headers['x-b4m-audio-saved'] ?? '') === 'true';
-      const fabFileId = response.headers['x-b4m-audio-fab-file-id'];
       return {
         audio: Buffer.from(response.data),
         contentType: String(response.headers['content-type'] ?? 'application/octet-stream'),
         saved,
-        fabFileId: saved && typeof fabFileId === 'string' ? fabFileId : undefined,
+        fabFileId: saved ? headerString(response.headers['x-b4m-audio-fab-file-id']) : undefined,
+        fileName: saved ? headerString(response.headers['x-b4m-audio-file-name']) : undefined,
+        fileUrl: saved ? headerString(response.headers['x-b4m-audio-file-url']) : undefined,
       };
     } catch (error) {
       throw decodeArrayBufferErrorBody(error);
@@ -330,6 +338,16 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
 function decodeArrayBufferErrorBody(error: unknown): unknown {
   if (!isAxiosError(error) || !error.response) return error;
   const { data } = error.response;
+  // A non-Node axios adapter may hand back an already-decoded string body; parse it
+  // directly so the server message survives without going through the byte path.
+  if (typeof data === 'string') {
+    try {
+      error.response.data = JSON.parse(data);
+    } catch {
+      // Non-JSON string body; leave it for mapApiError's fallback.
+    }
+    return error;
+  }
   const bytes = Buffer.isBuffer(data)
     ? data
     : data instanceof ArrayBuffer

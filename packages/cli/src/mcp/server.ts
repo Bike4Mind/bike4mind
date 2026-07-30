@@ -12,7 +12,7 @@ export interface BuildServerOptions {
 }
 
 /**
- * Build a fully-configured Bike4Mind MCP server: the 7 tools plus the four
+ * Build a fully-configured Bike4Mind MCP server: the tools plus the four
  * resource templates (`b4m://notebook/{id}`, `b4m://file/{id}`,
  * `b4m://project/{id}`, `b4m://artifact/{id}`), backed by a {@link B4mApiClient}
  * bound to the given endpoint and credentials. Tool listing never touches the
