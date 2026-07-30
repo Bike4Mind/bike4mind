@@ -104,7 +104,7 @@ const nextConfig = {
     // component and it spawns a solver-race web worker via new Worker(new URL(...)),
     // both of which must run through the Next.js loaders for the bundler to emit the
     // worker chunk.
-    '@bike4mind/interactive-meetings',
+    '@bike4mind/premium-interactive-meetings',
   ],
 
   serverExternalPackages: [
