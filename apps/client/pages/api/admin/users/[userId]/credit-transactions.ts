@@ -1,5 +1,5 @@
 import { creditTransactionRepository, userRepository } from '@bike4mind/database';
-import { CreditHolderType } from '@bike4mind/common';
+import { CreditHolderType, type CreditTransactionType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ForbiddenError } from '@server/utils/errors';
@@ -11,16 +11,23 @@ import { z } from 'zod';
 // user's "did my payment go through?" claim. Usage rows stay excluded: they
 // have their own analytics views and would drown the ledger.
 const ADJUSTMENT_TYPES = ['generic_add', 'generic_deduct'] as const;
-const LEDGER_TYPES = [...ADJUSTMENT_TYPES, 'purchase', 'subscription'] as const;
+// `satisfies` pins every literal to the canonical union, so a union rename fails
+// here with a clear error instead of at the repository call site.
+const LEDGER_TYPES = [
+  ...ADJUSTMENT_TYPES,
+  'purchase',
+  'subscription',
+] as const satisfies readonly CreditTransactionType[];
 
 const QuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(365).optional().default(90),
-  // Comma-separated opt-in list; absent keeps the adjustments-only default.
+  // Comma-separated opt-in list; absent OR whitespace-only keeps the
+  // adjustments-only default (so `?types=` and `?types=%20` behave alike).
   // Trimmed so a hand-typed "purchase, subscription" validates.
   types: z
     .string()
     .optional()
-    .transform(v => (v ? v.split(',').map(s => s.trim()) : [...ADJUSTMENT_TYPES]))
+    .transform(v => (v?.trim() ? v.split(',').map(s => s.trim()) : [...ADJUSTMENT_TYPES]))
     .pipe(z.array(z.enum(LEDGER_TYPES)).min(1)),
 });
 
@@ -58,6 +65,10 @@ const handler = baseApi().get(
     const transactions = await creditTransactionRepository.findByOwnerWithFilters(userId, CreditHolderType.User, {
       days,
       transactionTypes: types,
+      // Defensive cap: today's allowlisted types are low-frequency, but this
+      // view has no pagination, so bound the query in case a high-volume type
+      // ever joins LEDGER_TYPES.
+      limit: 500,
     });
 
     // Resolve each distinct actor once for display.

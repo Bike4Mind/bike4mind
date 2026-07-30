@@ -72,6 +72,7 @@ describe('GET /api/admin/users/[userId]/credit-transactions', () => {
     expect(ownerType).toBe('User');
     expect(options.days).toBe(30);
     expect(options.transactionTypes).toEqual(['generic_add', 'generic_deduct']);
+    expect(options.limit).toBe(500);
   });
 
   it('maps rows and resolves the actor name from metadata.actorId', async () => {
@@ -114,6 +115,12 @@ describe('GET /api/admin/users/[userId]/credit-transactions', () => {
     const { promise } = run({ user: ADMIN, types: 'purchase,subscription' });
     await promise;
     expect(mockFindByOwner.mock.calls[0][2].transactionTypes).toEqual(['purchase', 'subscription']);
+  });
+
+  it('treats a whitespace-only types param like an absent one', async () => {
+    const { promise } = run({ user: ADMIN, types: ' ' });
+    await promise;
+    expect(mockFindByOwner.mock.calls[0][2].transactionTypes).toEqual(['generic_add', 'generic_deduct']);
   });
 
   it('rejects transaction types outside the ledger allowlist', async () => {
