@@ -20,6 +20,29 @@ export interface ICampaignLink {
   url: string;
 }
 
+/**
+ * A community or site where the team could organically post about this product —
+ * a subreddit, forum, Discord, newsletter, and so on.
+ *
+ * Distinct from `socialLinks`, which are accounts we own. These are places we do NOT
+ * own and would be a guest in. Also distinct from the Reddit listener's watched-subreddit
+ * list, which drives an ingest cron: nothing here is fetched, polled or published to. It
+ * is reference material for a human deciding where to post.
+ */
+export interface IPostingChannel {
+  /** Human label, e.g. 'r/selfhosted' or 'Hacker News'. */
+  label: string;
+  url: string;
+  /** Optional grouping hint, e.g. 'reddit', 'discord', 'forum'. Free-form by design. */
+  platform?: string;
+  /**
+   * Where the community's self-promotion rules go — "1 in 10 posts", "mods approve links
+   * manually", "flair required". The most useful field here: without it the list records
+   * where we *could* post but not whether we'd be welcome.
+   */
+  notes?: string;
+}
+
 export interface IOverwatchProductDoc {
   _id: string;
   /** Unique slug identifier: 'vibeswire', 'bike4mind', etc. */
@@ -34,6 +57,8 @@ export interface IOverwatchProductDoc {
   customEvents: ICustomEvent[];
   /** Tracked campaign URLs - shown in Traffic tab regardless of GA4 data */
   campaignLinks: ICampaignLink[];
+  /** Communities where the team could organically post about this product. Reference only. */
+  postingChannels: IPostingChannel[];
   /** Org-scoped for future multi-tenant */
   organizationId?: string;
   status: 'active' | 'inactive';
@@ -70,6 +95,16 @@ const CampaignLinkSchema = new Schema<ICampaignLink>(
   { _id: false }
 );
 
+const PostingChannelSchema = new Schema<IPostingChannel>(
+  {
+    label: { type: String, required: true },
+    url: { type: String, required: true },
+    platform: { type: String },
+    notes: { type: String },
+  },
+  { _id: false }
+);
+
 const OverwatchProductSchema = new Schema<IOverwatchProductDoc>(
   {
     productId: { type: String, required: true, unique: true },
@@ -78,6 +113,9 @@ const OverwatchProductSchema = new Schema<IOverwatchProductDoc>(
     socialLinks: { type: [SocialLinkSchema], default: [] },
     customEvents: { type: [CustomEventSchema], default: [] },
     campaignLinks: { type: [CampaignLinkSchema], default: [] },
+    // default [] so every existing product reads back as an empty list rather than
+    // undefined — no migration needed, and callers can iterate unconditionally.
+    postingChannels: { type: [PostingChannelSchema], default: [] },
     organizationId: { type: String },
     status: {
       type: String,
@@ -114,8 +152,20 @@ export const overwatchProductRepository = {
     return OverwatchProduct.findOne({ productId }).lean();
   },
 
+  /**
+   * `postingChannels` is optional on the write path even though it is required on the
+   * document, because the schema defaults it to `[]` so reads always have it.
+   *
+   * Deliberate: adding it as a required member of this parameter would break every
+   * existing caller at compile time — the exact drift that left two overlay routes
+   * uncompilable when core made an adapter field required. Omitting it also leaves any
+   * stored value untouched, since `$set` never sees the key, so a caller that doesn't
+   * know about this field cannot wipe it.
+   */
   async upsertProduct(
-    data: Omit<IOverwatchProductDoc, '_id' | 'createdAt' | 'updatedAt'>
+    data: Omit<IOverwatchProductDoc, '_id' | 'createdAt' | 'updatedAt' | 'postingChannels'> & {
+      postingChannels?: IPostingChannel[];
+    }
   ): Promise<IOverwatchProductDoc> {
     const result = await OverwatchProduct.findOneAndUpdate(
       { productId: data.productId },
