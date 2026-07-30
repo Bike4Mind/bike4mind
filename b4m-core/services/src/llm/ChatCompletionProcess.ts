@@ -4064,16 +4064,18 @@ export class ChatCompletionProcess {
         // they don't affect quest.reply/replies. Fire-and-forget to avoid blocking response.
         const postSavePromises = postSaveFeatures
           .map(feature =>
-            this.features.get(feature)?.onComplete({
-              quest,
-              session,
-              messages,
-              questMaster,
-              model,
-              historyCount,
-              oldestIncludedQuestId,
-              verbatimExcludedCount,
-            })
+            this.features
+              .get(feature)
+              ?.onComplete({
+                quest,
+                session,
+                messages,
+                questMaster,
+                model,
+                historyCount,
+                oldestIncludedQuestId,
+                verbatimExcludedCount,
+              })
           )
           .filter(p => p);
 
