@@ -138,9 +138,16 @@ export function useGenerateAudio() {
           );
 
           const data = response.data;
+          // Play from a blob: URL, not a data: URL: the app CSP allows
+          // `media-src blob:` but not `data:`, so a data: source renders in the
+          // <audio> element but is blocked from actually playing. Mirrors the
+          // sound-effects path, and objectUrlRef handles revocation.
+          const bytes = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
+          const url = URL.createObjectURL(new Blob([bytes], { type: data.contentType }));
+          objectUrlRef.current = url;
           setResult({
-            url: `data:${data.contentType};base64,${data.audio}`,
-            isObjectUrl: false,
+            url,
+            isObjectUrl: true,
             saved: data.saved === true,
             fabFileId: data.fabFileId,
             contentType: data.contentType,

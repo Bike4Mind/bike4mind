@@ -34,7 +34,9 @@ const GenerateAudioModal: React.FC<{ open: boolean; onClose: () => void }> = ({ 
   const estimatedCredits = useMemo(() => {
     if (mode === 'sound-effects')
       return estimateSoundCreditCost('elevenlabs', { durationSeconds: durationSeconds ?? undefined });
-    return estimateTtsCreditCost(ttsProvider, undefined, text.length);
+    // OpenAI defaults to tts-1 server-side; naming it keeps the estimate off the
+    // conservative highest-rate fallback (which would ~2x the shown cost).
+    return estimateTtsCreditCost(ttsProvider, ttsProvider === 'openai' ? 'tts-1' : undefined, text.length);
   }, [mode, ttsProvider, durationSeconds, text.length]);
 
   const handleClose = () => {
