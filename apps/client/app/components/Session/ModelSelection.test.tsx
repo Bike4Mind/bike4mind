@@ -164,6 +164,22 @@ describe('ModelSelection view mode', () => {
   });
 });
 
+describe('ModelSelection context summary', () => {
+  it('shows the context window for text models only, with an explanatory tooltip', async () => {
+    renderSelection({});
+
+    // Both fixtures declare contextWindow: 128000, so exactly one "128K" proves the image
+    // model's placeholder value is suppressed rather than both being rendered.
+    expect(screen.getAllByText('128K')).toHaveLength(1);
+    expect(screen.getByTestId(`model-card-${textModel.id}`)).toHaveTextContent('128K');
+    expect(screen.getByTestId(`model-card-${imageModel.id}`)).not.toHaveTextContent('128K');
+
+    // The number is unlabelled, so the tooltip is the only thing that explains it.
+    fireEvent.mouseOver(screen.getByText('128K'));
+    expect(await screen.findByText('128,000 token context window')).toBeInTheDocument();
+  });
+});
+
 describe('ModelSelection admin quick link', () => {
   beforeEach(() => {
     admin.isAdmin = false;

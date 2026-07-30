@@ -496,10 +496,17 @@ const ModelOption = React.memo(
       </Stack>
     );
 
-    const contextSummary = (
-      <Typography sx={{ fontSize: { xs: '12px' }, color: 'text.primary50', fontWeight: '500' }}>
-        {formatContextWindow(model.contextWindow)} · {formatContextWindow(model.max_tokens)}
-      </Typography>
+    // Text models only: image and video entries carry placeholder context values (FLUX is
+    // 10000/10000), so the number would be noise. max_tokens is deliberately not shown - the
+    // catalog value is the model's ceiling, not the user's configured limit, so it can
+    // disagree with what the model will actually emit. It lives in the settings dialog next
+    // to the control that sets it.
+    const contextSummary = model.type === 'text' && (
+      <Tooltip title={`${formatNumber(model.contextWindow)} token context window`} placement="top">
+        <Typography sx={{ fontSize: { xs: '12px' }, color: 'text.primary50', fontWeight: '500' }}>
+          {formatContextWindow(model.contextWindow)}
+        </Typography>
+      </Tooltip>
     );
 
     // Tooltips are scoped to the name + description regions rather than the whole card, so
