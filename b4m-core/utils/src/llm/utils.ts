@@ -1256,18 +1256,27 @@ export async function processFabFilesServer(
           }
 
           if (truncatedResults.length > 0) {
-            // A subset either because ranking kept only the top COSINE_SEARCH_TOP_K, or because the
-            // character budget stopped the loop, or because a chunk itself was cut.
-            const deliveredWholeFile = totalChunks === truncatedResults.length && !anyChunkCut;
+            // Results arrive in file order, so every chunk with none cut is the whole file and needs
+            // no notice. Every chunk WITH a cut is still contiguous, and the excerpt wording ("parts
+            // between them were not sent") would misdescribe it - that is a head slice reached by
+            // another route, so it takes the truncation wording. The loop only ever cuts a chunk when
+            // the first one alone exceeds the budget (any later overflow breaks instead), so today
+            // that means a single-chunk file; the condition is written on the invariant rather than
+            // on the chunk count so it stays correct if the loop learns to cut a tail.
+            const deliveredEveryChunk = totalChunks === truncatedResults.length;
+            let notice = '';
+            if (!deliveredEveryChunk) notice = excerptNotice(file.fileName);
+            else if (anyChunkCut) notice = CONTENT_TRUNCATION_NOTICE;
+
             const body = `Data for ${file.fileName}:\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`;
-            userMessages.push({
-              role: 'user',
-              content: deliveredWholeFile ? body : body + excerptNotice(file.fileName),
-            });
-            if (!deliveredWholeFile) {
+            userMessages.push({ role: 'user', content: body + notice });
+
+            if (notice) {
               logger.warn(
-                `[processFabFilesServer] Delivered ${truncatedResults.length}/${totalChunks} chunk(s) of ` +
-                  `"${file.fileName}" as similarity-ranked excerpts; the model is told not to read them as the whole file.`
+                `[processFabFilesServer] Delivered ${truncatedResults.length}/${totalChunks} chunk(s) of "${file.fileName}"` +
+                  (deliveredEveryChunk
+                    ? ', with the last cut to fit the character budget.'
+                    : ' as similarity-ranked excerpts; the model is told not to read them as the whole file.')
               );
             }
           }
@@ -1823,10 +1832,12 @@ export async function buildAndSortMessages(
     // between everything and nothing. Over-reserving here is harmless because history is sized from
     // what content actually consumed, not from this figure.
     const attachedContentTokens = estimateMessagesTokens(nonImageMessages);
-    const contentBudget =
-      tokenBudget <= 0
-        ? 0
-        : Math.max(Math.floor(tokenBudget * MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION), tokenBudget - totalPreviousTokens);
+    // Negated like the guards at the two layers above, so NaN lands in the zero branch here too. A
+    // NaN cannot currently reach this line, but the two idioms sitting side by side invited someone
+    // to loosen the ones that are load-bearing.
+    const contentBudget = !(tokenBudget > 0)
+      ? 0
+      : Math.max(Math.floor(tokenBudget * MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION), tokenBudget - totalPreviousTokens);
 
     // Content first: history's budget depends on what content actually used.
     processedContentMessages = recordContentResult(
@@ -1891,14 +1902,14 @@ export async function buildAndSortMessages(
 
   /**
    * Replaces attachments that arrived too small to be recognised as file content, and declares any
-   * dropped whole, with one message saying so. Runs after each stage that can shrink content: the
-   * allocation above, and again after the final safety pass, which can drop an attachment the
-   * allocation had delivered - without this second call that file reaches the model with no note at
-   * all and it denies the file exists, the exact failure this backstop exists to prevent.
+   * dropped whole, with one message saying so. Runs after the allocation below, the only stage that
+   * currently shrinks content. The final safety pass can also drop an attachment the allocation had
+   * delivered, and does not re-run this - so on that path the file reaches the model undeclared. That
+   * gap is tracked in #1164 along with the rest of the safety pass rework.
    *
-   * Idempotent: its own note is excluded by identity, so a second call re-judges only real attachments
-   * and replaces the note rather than stacking another. Keeps the note in the payload it measures, so
-   * the ~100 tokens it costs are counted, not added behind the safety pass's back.
+   * Idempotent by design, so a second call is safe to add there: its own note is excluded by identity,
+   * so it re-judges only real attachments and replaces the note rather than stacking another. It keeps
+   * the note in the payload it measures, so the ~100 tokens it costs are counted, not hidden.
    */
   const declareUndeliveredAttachments = (contentMessages: IMessage[]): IMessage[] => {
     if (attachmentsWithContent.length === 0) return contentMessages;

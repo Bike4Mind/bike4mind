@@ -140,9 +140,10 @@ describe('content cut before assembly is declared to the model', () => {
       expect(warnings()).not.toContain('similarity-ranked excerpts');
     });
 
-    it('marks a subset when the budget cut the only chunk, so no chunk was dropped', async () => {
+    it('marks a cut when the budget cut the only chunk, so no chunk was dropped', async () => {
       // One oversized chunk: it is delivered, nothing is dropped, so the delivered-count test alone
       // reads this as the whole file. The cut itself is the only evidence, which is why it is tracked.
+      // The content stays contiguous, so this takes the truncation wording, not the excerpt wording.
       const content = await runFabFiles(
         { vectorized: true, embeddingModel: 'text-embedding-ada-002' },
         100,
@@ -150,7 +151,24 @@ describe('content cut before assembly is declared to the model', () => {
       );
 
       expect(content).toContain('chunk-0-');
+      expect(content).toContain(TRUNCATION_NOTICE_MARKER);
+      expect(content).not.toContain(EXCERPT_MARKER);
+    });
+
+    it('still calls a genuine subset excerpts when a later chunk is dropped whole', async () => {
+      // The budget stops the loop before the fourth chunk, so parts really are missing between what
+      // arrived and what did not. This is the case the excerpt wording is for, and it is what keeps
+      // the truncation wording above from swallowing it.
+      const content = await runFabFiles(
+        { vectorized: true, embeddingModel: 'text-embedding-ada-002' },
+        100,
+        chunks(4, 100)
+      );
+
+      expect(content).toContain('chunk-2-');
+      expect(content).not.toContain('chunk-3-');
       expect(content).toContain(EXCERPT_MARKER);
+      expect(content).not.toContain(TRUNCATION_NOTICE_MARKER);
     });
   });
 
