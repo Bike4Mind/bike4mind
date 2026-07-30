@@ -6,7 +6,13 @@ import {
   isSupportedEmbeddingModel,
   SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { createTokenizer, getProviderFromModel, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
+import {
+  createTokenizer,
+  getProviderFromModel,
+  getSettingsByNames,
+  resolveEmbeddingConfig,
+  type ITokenizer,
+} from '@bike4mind/utils';
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
@@ -85,10 +91,10 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
     { logger: context.logger }
   );
   const provider = getProviderFromModel(embeddingModel);
-  if (provider === 'openai' && !apiKeyTable?.openai) return null;
-  if (provider === 'voyageai' && !apiKeyTable?.voyageai) return null;
-  // Ollama base URL lives in apiKeyTable.ollama (self-host); without it, fall back to keyword.
-  if (provider === 'ollama' && !apiKeyTable?.ollama) return null;
+  // A missing credential means the semantic arm cannot run, so fall back to keyword search.
+  // Keyless providers (Bedrock, authenticating through the AWS credential chain) report
+  // nothing missing and proceed.
+  if (resolveEmbeddingConfig(provider, apiKeyTable).missing) return null;
 
   const budgets = await resolveSearchBudgets({ adminSettings }, context.logger);
 

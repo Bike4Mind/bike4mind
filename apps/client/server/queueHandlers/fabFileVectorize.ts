@@ -13,7 +13,7 @@ import {
 import { NotFoundError } from '@server/utils/errors';
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
-import { ChunkSchema, EmbeddingFactory } from '@bike4mind/fab-pipeline';
+import { ChunkSchema, EmbeddingFactory, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { apiKeyService, embeddingCacheService } from '@bike4mind/services';
 import { finalizeBatchIfComplete, isBatchComplete } from '@server/queueHandlers/dataLakeBatchProgress';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
@@ -111,23 +111,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     const requiredProvider = getProviderFromModel(embeddingModel);
 
-    // Only pass the API key for the provider that will be used
-    const embeddingConfig: {
-      openaiApiKey?: string | null;
-      voyageApiKey?: string | null;
-      ollamaBaseUrl?: string | null;
-    } = {};
-
-    if (requiredProvider === 'openai') {
-      embeddingConfig.openaiApiKey = apiKeyTable?.openai;
-    } else if (requiredProvider === 'voyageai') {
-      embeddingConfig.voyageApiKey = apiKeyTable?.voyageai;
-    } else if (requiredProvider === 'ollama') {
-      // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
-      embeddingConfig.ollamaBaseUrl = apiKeyTable?.ollama;
-    }
-
-    // Bedrock doesn't need API keys as it uses AWS credentials
+    // Only pass the credential the chosen provider needs. A missing one is not fatal here:
+    // the factory surfaces it when an embed call is made, which is where the batch's
+    // failure counters can record it. Bedrock needs none and authenticates via AWS.
+    const { config: embeddingConfig } = resolveEmbeddingConfig(requiredProvider, apiKeyTable);
 
     const embeddingService = new EmbeddingFactory(embeddingConfig);
 

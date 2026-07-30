@@ -7,7 +7,13 @@ import {
   SupportedEmbeddingModel,
   isSupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { computeCosineSimilarity, EmbeddingFactory, getProviderFromModel, getSettingsByNames } from '@bike4mind/utils';
+import {
+  computeCosineSimilarity,
+  EmbeddingFactory,
+  getProviderFromModel,
+  getSettingsByNames,
+  resolveEmbeddingConfig,
+} from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 
@@ -145,25 +151,13 @@ export async function getRelevantMementos(
 
   // STEP 3: Setup embedding service
   const requiredProvider = getProviderFromModel(embeddingModel);
-  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null; ollamaBaseUrl?: string | null } =
-    {};
-
-  if (requiredProvider === 'openai') {
-    if (!apiKeyTable?.openai) {
-      throw new Error('OpenAI API key is required for memento retrieval but not found.');
-    }
-    embeddingConfig.openaiApiKey = apiKeyTable.openai;
-  } else if (requiredProvider === 'voyageai') {
-    if (!apiKeyTable?.voyageai) {
-      throw new Error('VoyageAI API key is required for memento retrieval but not found.');
-    }
-    embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
-  } else if (requiredProvider === 'ollama') {
-    // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
-    if (!apiKeyTable?.ollama) {
-      throw new Error('Ollama base URL is required for memento retrieval but not found.');
-    }
-    embeddingConfig.ollamaBaseUrl = apiKeyTable.ollama;
+  const { config: embeddingConfig, missing } = resolveEmbeddingConfig(requiredProvider, apiKeyTable);
+  if (missing) {
+    throw new Error(
+      missing === 'ollama'
+        ? 'Ollama base URL is required for memento retrieval but not found.'
+        : `${missing === 'openai' ? 'OpenAI' : 'VoyageAI'} API key is required for memento retrieval but not found.`
+    );
   }
 
   const embeddingFactory = new EmbeddingFactory(embeddingConfig);
