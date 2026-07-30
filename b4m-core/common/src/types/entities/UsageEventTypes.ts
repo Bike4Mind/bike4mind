@@ -188,11 +188,21 @@ export interface IOwnerUsageSummary {
 export type NamedOwnerSpendMember = IOwnerSpendMember & { userName?: string };
 
 /**
- * Wire shape of GET /api/admin/org-usage: an owner usage summary with member
- * ids resolved to names, plus the echo of the query that produced it.
+ * Owners the usage dashboard serves. Agent-held credit pools have no dashboard,
+ * so the wire contract narrows to the two owners a human can view.
  */
-export interface IOrgUsageDashboardResponse {
-  organizationId: string;
+export type UsageOwnerType = CreditHolderType.User | CreditHolderType.Organization;
+
+/**
+ * Wire shape of GET /api/usage: one owner's usage summary with member ids
+ * resolved to names, plus the echo of the query that produced it. The shape is
+ * identical for User and Organization owners. A User owner's `byMember` collapses
+ * to a single self-row (the summary groups on userId unconditionally), which is
+ * not meaningful, so the client renders the by-member cut only for Organizations.
+ */
+export interface IUsageDashboardResponse {
+  ownerId: string;
+  ownerType: UsageOwnerType;
   /** Trailing window the summary covers. */
   days: number;
   overTime: IOwnerSpendDay[];
@@ -203,7 +213,7 @@ export interface IOrgUsageDashboardResponse {
   byApiKey: NamedApiKeyUsage[];
   /**
    * Spend grouped by originating surface (from the ledger, the only source
-   * carrying `source`; credits only, no COGS). Sums to the org's ledger AI
+   * carrying `source`; credits only, no COGS). Sums to the owner's ledger AI
    * spend, which can drift from `totals` - that comes from UsageEvent.
    */
   bySource: ISourceUsage[];
