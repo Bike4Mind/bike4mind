@@ -221,6 +221,20 @@ describe('useDataLakeWizardStore - deriveTagPrefixFromName', () => {
 
     expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('mine:');
   });
+
+  it('keeps a typed prefix that inference then echoes back verbatim', () => {
+    // The case the guard above actually exists for, and not an exotic one: both the auto-run
+    // and Re-analyze thread the user's prefix to the model as existingPrefix, so having the
+    // suggestion come back identical is the EXPECTED outcome, not a coincidence. Distinct from
+    // the case above, where the suggestion differs and the not-ours branch already covers it.
+    setName('Untick AI Lake');
+    useDataLakeWizardStore.getState().setTagPrefix('uai:');
+    inferPrefix('uai:');
+
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('uai:');
+  });
 });
 
 describe('useDataLakeWizardStore - optional step opt-ins', () => {

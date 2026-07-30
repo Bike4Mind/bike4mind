@@ -413,14 +413,13 @@ function applyFileExclusions(node: FolderTreeNode, patterns: string[], ancestorE
 }
 
 /**
- * Toggles exclusion on a folder by path. Returns a new tree (immutable update). Patterns are
- * required so the files under the toggled folder can be re-evaluated against them.
+ * Toggles exclusion on a folder by path. Returns a new tree (immutable update).
+ *
+ * `patterns` is required rather than defaulted: applyFileExclusions re-evaluates the WHOLE
+ * tree, so an empty list would silently re-include every pattern-excluded file anywhere in it,
+ * not merely skip re-evaluating the toggled subtree. Pass the active excludedPatterns.
  */
-export function toggleFolderExclusion(
-  root: FolderTreeNode,
-  targetPath: string,
-  patterns: string[] = []
-): FolderTreeNode {
+export function toggleFolderExclusion(root: FolderTreeNode, targetPath: string, patterns: string[]): FolderTreeNode {
   function toggle(node: FolderTreeNode): FolderTreeNode {
     if (node.path === targetPath) {
       const manuallyExcluded = !node.excluded;
