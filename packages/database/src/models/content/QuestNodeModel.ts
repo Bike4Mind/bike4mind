@@ -286,8 +286,11 @@ class QuestNodeRepository extends BaseRepository<IQuestNodeDocument> implements 
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
     // The status filter is the lock: Mongo applies it and the $set in one
     // atomic operation, so of two concurrent claims exactly one matches.
+    // `deletedAt: null` is explicit because softDeletePlugin only hooks
+    // find/findOne - a findOneAndUpdate would otherwise happily claim a
+    // soft-deleted node.
     return this.questNodeModel.findOneAndUpdate(
-      { _id: convertId(id), status: { $in: RUNNABLE_NODE_STATUS_VALUES } },
+      { _id: convertId(id), status: { $in: RUNNABLE_NODE_STATUS_VALUES }, deletedAt: null },
       { $set: { status: 'in_progress', startedAt: new Date() } },
       { new: true }
     );

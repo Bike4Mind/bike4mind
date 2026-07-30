@@ -44,6 +44,8 @@ export const QuestNodeRunWireSchema = z.object({
   executionId: z.string(),
   status: z.enum(AGENT_EXECUTION_STATUSES),
   answer: z.string().nullable(),
+  /** True when `answer` is a prefix. Never truncate silently - the reader has to be able to tell. */
+  answerTruncated: z.boolean(),
   totalIterations: z.number().nullable(),
   totalCreditsUsed: z.number().nullable(),
   errorMessage: z.string().nullable(),

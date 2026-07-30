@@ -154,6 +154,18 @@ export default function QuestGraphView() {
                   variant={node.id === selectedNodeId ? 'solid' : 'outlined'}
                   color={node.id === selectedNodeId ? 'primary' : 'neutral'}
                   onClick={() => setSelectedNodeId(node.id)}
+                  // A Sheet is a div: without these the row is unreachable by
+                  // keyboard, and selecting a node is the only way to read its
+                  // result.
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={node.id === selectedNodeId}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setSelectedNodeId(node.id);
+                    }
+                  }}
                   data-testid="questmaster-v5-node-row"
                   sx={{ ml: node.depth * 3, p: 1.5, borderRadius: 'sm', cursor: 'pointer' }}
                 >
@@ -190,7 +202,10 @@ export default function QuestGraphView() {
               {!nodes.length && <Typography level="body-sm">No nodes yet. Add the first one below.</Typography>}
             </Stack>
 
-            <AddNodeForm graphId={selectedGraphId} nodes={nodes} onError={setError} />
+            {/* Keyed by graph: without it React keeps this subtree mounted
+                across a graph switch, and the draft's selected `dependsOn`
+                chips would still hold node ids from the previous graph. */}
+            <AddNodeForm key={selectedGraphId} graphId={selectedGraphId} nodes={nodes} onError={setError} />
 
             {selectedNode && <NodeResultPanel node={selectedNode} />}
           </Box>
@@ -336,6 +351,11 @@ function NodeResultPanel({ node }: { node: QuestNode }) {
           data-testid="questmaster-v5-answer"
         >
           <Typography level="body-sm">{node.run.answer}</Typography>
+          {node.run.answerTruncated && (
+            <Typography level="body-xs" sx={{ mt: 1 }} data-testid="questmaster-v5-answer-truncated">
+              Answer truncated for display. Open the run in the notebook for the full reply.
+            </Typography>
+          )}
         </Box>
       )}
 

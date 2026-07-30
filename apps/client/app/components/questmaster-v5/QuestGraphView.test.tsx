@@ -114,6 +114,7 @@ describe('QuestGraphView', () => {
           executionId: 'exec-1',
           status: 'completed',
           answer: 'The logs show 42 errors.',
+          answerTruncated: false,
           totalIterations: 3,
           totalCreditsUsed: 12.5,
           errorMessage: null,
@@ -128,6 +129,39 @@ describe('QuestGraphView', () => {
     expect(screen.getByTestId('questmaster-v5-node-status-chip')).toHaveTextContent('completed');
   });
 
+  it('says so when the displayed answer is a prefix', () => {
+    nodes = [
+      makeNode({
+        id: 'n1',
+        status: 'completed',
+        run: {
+          executionId: 'exec-1',
+          status: 'completed',
+          answer: 'a very long answer',
+          answerTruncated: true,
+          totalIterations: 1,
+          totalCreditsUsed: 1,
+          errorMessage: null,
+        },
+      }),
+    ];
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+
+    expect(screen.getByTestId('questmaster-v5-answer-truncated')).toBeInTheDocument();
+  });
+
+  it('selects a node from the keyboard', () => {
+    nodes = [makeNode({ id: 'n1', status: 'completed' })];
+    renderView();
+    selectGraph();
+
+    fireEvent.keyDown(screen.getByTestId('questmaster-v5-node-row'), { key: 'Enter' });
+
+    expect(screen.getByTestId('questmaster-v5-result-panel')).toBeInTheDocument();
+  });
+
   it('surfaces a failed run error message', () => {
     nodes = [
       makeNode({
@@ -137,6 +171,7 @@ describe('QuestGraphView', () => {
           executionId: 'exec-1',
           status: 'failed',
           answer: null,
+          answerTruncated: false,
           totalIterations: null,
           totalCreditsUsed: null,
           errorMessage: 'model refused',

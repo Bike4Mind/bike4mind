@@ -4,6 +4,7 @@ import { BadRequestError, InternalServerError } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { Resource } from 'sst';
+import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 
 const lambdaClient = new LambdaClient({});
 
@@ -67,13 +68,34 @@ export async function runQuestNode(args: {
     throw new BadRequestError('Quest graph has no session; cannot run nodes');
   }
 
-  const claimed = await questNodeRepository.claimForRun(node.id);
-  if (!claimed) {
-    throw new BadRequestError(`Node cannot be run from status '${node.status}'`);
+  // The same per-user concurrency cap the WebSocket dispatcher enforces. A node
+  // run creates a top-level AgentExecution exactly like an agent-mode run does,
+  // so without this a user with the flag on could hold far more agents in
+  // flight through v5 than the cap allows. Sweep first, or executions orphaned
+  // by a dead Lambda would count against them (unconditional here rather than
+  // memoized as in `agentExecute`: a dispatch is rare and about to cost real
+  // credits, so one extra updateMany is noise).
+  await agentExecutionRepository.cleanupStaleActive(userId, STALE_ACTIVE_MS);
+  const activeCount = await agentExecutionRepository.countActiveByUserId(userId);
+  if (activeCount >= MAX_CONCURRENT_EXECUTIONS_PER_USER) {
+    throw new BadRequestError(
+      `${MAX_CONCURRENT_EXECUTIONS_PER_USER} agents already running. Wait for one to finish before starting another.`
+    );
   }
 
-  const query = buildNodeQuery(node);
+  const claimed = await questNodeRepository.claimForRun(node.id);
+  if (!claimed) {
+    // Deliberately does not quote `node.status`: that value was read before the
+    // claim, so on a lost race it would name the status the node no longer has.
+    throw new BadRequestError('Node is already running, or has completed and cannot be re-run');
+  }
+
+  // Everything below reads from `claimed`, not the caller's pre-claim snapshot,
+  // so a concurrent edit between the read and the claim can't dispatch a stale
+  // prompt or a stale toolset.
+  const query = buildNodeQuery(claimed);
   let questId: string | undefined;
+  let executionId: string | undefined;
 
   try {
     // Author the chat-history Quest before the execution so the execution's
@@ -108,7 +130,7 @@ export async function runQuestNode(args: {
       childExecutionIds: [],
     });
 
-    const executionId = execution.id;
+    executionId = execution.id;
     await Quest.updateOne({ _id: quest.id }, { $set: { agentExecutionId: executionId } });
     // Written before the invoke so a node can never have a live run the graph
     // cannot see.
@@ -131,7 +153,7 @@ export async function runQuestNode(args: {
             // a v5 node a bounded unit of work rather than a full-toolbelt run.
             // Empty means "no restriction", matching the executor's own
             // `pickEffectiveEnabledTools` semantics.
-            ...(node.enabledTools.length ? { enabledTools: node.enabledTools } : {}),
+            ...(claimed.enabledTools.length ? { enabledTools: claimed.enabledTools } : {}),
           })
         ),
       })
@@ -143,8 +165,23 @@ export async function runQuestNode(args: {
     logger.error('[questmaster-v5] node dispatch failed - rolling the node back to failed', {
       nodeId: node.id,
       questId,
+      executionId,
       error: err instanceof Error ? err.message : String(err),
     });
+    // Close out the execution. Left `pending` it would sit in the ACTIVE set,
+    // consuming one of the user's concurrency slots until the 20-minute stale
+    // sweep reaps it - so a couple of failed dispatches would lock them out of
+    // agent mode entirely.
+    if (executionId) {
+      await agentExecutionRepository
+        .markFailed(executionId, { message: 'QuestMaster v5 dispatch failed before the executor started' })
+        .catch(markErr => {
+          logger.warn('[questmaster-v5] failed to close out the execution after a failed dispatch', {
+            executionId,
+            error: markErr instanceof Error ? markErr.message : String(markErr),
+          });
+        });
+    }
     // Drop the dispatch-time Quest, or the session keeps a `pending` bubble
     // holding the node's prompt with no reply and no run behind it.
     if (questId) {
