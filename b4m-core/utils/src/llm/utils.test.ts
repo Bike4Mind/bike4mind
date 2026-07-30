@@ -1514,6 +1514,33 @@ describe('Context Management Tests', () => {
         expect(meta.excludedOlderQuestCount).toBe(1);
       });
 
+      it('counts replayed tool calls, whose serialized parameters can dwarf the text reply', async () => {
+        // A small prompt whose replayable tool call carries a large parameters payload. Ignoring
+        // it would let the turn look cheap and blow the real budget once Priority 2 expands it.
+        const heavyToolItem = (n: number) =>
+          makeItem(n, {
+            prompt: `prompt ${n}`,
+            structuredReplies: undefined,
+            promptMeta: {
+              functionCalls: [
+                { id: `toolu_${n}`, name: 'web_search', parameters: { blob: 'y'.repeat(4000) }, returnValue: 'ok' },
+              ],
+            },
+          });
+
+        const items = [makeItem(3), heavyToolItem(2), heavyToolItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        // Budget fits one heavy turn (~1150 tokens of parameters) but not two.
+        const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          verbatimTokenBudget: 1500,
+        });
+
+        expect(count).toBe(1);
+        expect(meta.excludedOlderQuestCount).toBe(1);
+      });
+
       it('always keeps the most recent turn even if it alone exceeds the budget', async () => {
         const items = [makeBigItem(3), makeBigItem(2), makeBigItem(1)];
         const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };

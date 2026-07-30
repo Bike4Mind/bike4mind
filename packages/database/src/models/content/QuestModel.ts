@@ -214,8 +214,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         executionTime: { type: Number, required: false },
         success: { type: Boolean, required: false },
         error: { type: String, required: false },
-        // Provider tool-call id. Losing this is what kept the tool-pairing replay path in
-        // @bike4mind/utils unreachable, since its entry test is a check for a recorded id.
+        // Provider tool-call id, required to pair a replayed tool_use with its tool_result.
+        // Dropping it is what kept the replay path in @bike4mind/utils unreachable.
         id: { type: String, required: false },
       },
     ],
