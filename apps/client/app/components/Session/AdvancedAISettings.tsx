@@ -22,6 +22,7 @@ import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import ToolsButton from './AISettings/ToolsButton';
 import { ICONED_MCP_SERVERS } from '../common/ToolIndicators';
 import AgentsButton from './AISettings/AgentsButton';
+import StaleModelPrompt from './AISettings/StaleModelPrompt';
 import BriefcaseButton from './AISettings/BriefcaseButton';
 import ResearchModeIndicator from './AISettings/ResearchModeIndicator';
 import { ImageTemplateControls } from './ImageTemplates/ImageTemplateControls';
@@ -317,6 +318,9 @@ const AISettings: FC<AISettingsProps> = ({
       />
 
       {isPromptBuilderEnabled && <PromptBuilderModal />}
+
+      {/* Offers an upgrade when the session resumed on a superseded pin (#951) */}
+      <StaleModelPrompt sessionId={currentSessionId} pinnedModel={currentSession?.lastUsedModel} />
     </>
   );
 };
