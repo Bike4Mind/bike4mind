@@ -168,6 +168,9 @@ export const AudioGenerationSettings: React.FC<{ mode?: AudioGenMode }> = ({ mod
 
   const sfxControls = (
     <>
+      <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+        Powered by ElevenLabs.
+      </Typography>
       <FormControl size="sm">
         <FormLabel>Duration: {durationSeconds == null ? 'Auto' : `${durationSeconds.toFixed(1)}s`}</FormLabel>
         <Slider
