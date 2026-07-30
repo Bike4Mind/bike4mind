@@ -12,6 +12,7 @@ import { listOwn } from './listOwn';
 import { listPendingUsers } from './listPendingUsers';
 import { revokeAccess } from './revokeAccess';
 import { leave } from './leave';
+import { setOrganizationGroupTypes } from './setOrganizationGroupTypes';
 
 export {
   search,
@@ -29,6 +30,7 @@ export {
   listPendingUsers,
   revokeAccess,
   leave,
+  setOrganizationGroupTypes,
 };
 
 export type { SearchParameters };
