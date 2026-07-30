@@ -1,4 +1,4 @@
-import type { BrowsePublicDataLakesResult, DataLakeConfig } from '@bike4mind/common';
+import type { BrowsePublicDataLakesResult, DataLakeConfig, ManageableDataLakeConfig } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -20,13 +20,16 @@ export function activeOrgId(): string | undefined {
 }
 
 /**
- * Fetches all data lakes accessible to the current user.
+ * Fetches all data lakes accessible to the current user. Manage-gated shape: the server attaches
+ * the editor-only fields (systemPrompt) per lake, and only where `canManage` holds - so a lake the
+ * caller can merely read arrives without them. Keep this in sync with the twin inline type on
+ * `useDataLakes` (hooks/data/dataLakeWizard.ts), which reads the same endpoint.
  */
 export function useGetDataLakes() {
   return useQuery({
     queryKey: DATA_LAKES_KEY,
     queryFn: async () => {
-      const response = await api.get<{ data: DataLakeConfig[] }>('/api/data-lakes');
+      const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
       return response.data.data;
     },
   });
