@@ -94,6 +94,25 @@ describe('GET /api/v1/openapi.json', () => {
     expect(spec.servers[0].url).toBe('https://api.example.test');
   });
 
+  it('falls back to the committed spec for a malformed Host (no JSON injection)', () => {
+    const { res, getStatus, getBody } = makeRes();
+    // A Host carrying a JSON-breaking char must not be spliced into the spec;
+    // the charset allowlist rejects it, so the body stays valid and the served
+    // contract falls back to the committed placeholder URL instead of 5xx.
+    handler(makeReq('GET', { host: 'a"b', 'x-forwarded-proto': 'https' }), res);
+    expect(getStatus()).toBe(200);
+    const spec = JSON.parse(getBody()) as { openapi?: string; servers: Array<{ url: string }> };
+    expect(spec.openapi).toBe('3.1.0');
+    expect(spec.servers[0].url).not.toContain('a"b');
+  });
+
+  it('accepts an underscore in the Host (non-RFC but JSON-safe) and rewrites the origin', () => {
+    const { res, getBody } = makeRes();
+    handler(makeReq('GET', { host: 'my_host.local:3000', 'x-forwarded-proto': 'http' }), res);
+    const spec = JSON.parse(getBody()) as { servers: Array<{ url: string }> };
+    expect(spec.servers[0].url).toBe('http://my_host.local:3000');
+  });
+
   it('serves the committed spec unchanged when no Host header is present', () => {
     const { res, getBody } = makeRes();
     handler(makeReq('GET'), res);

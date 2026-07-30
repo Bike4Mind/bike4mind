@@ -17,6 +17,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
+import { revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
@@ -123,9 +124,11 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
                     </td>
                     <td>{key.scopes.join(', ')}</td>
                     <td>
-                      <Chip variant="soft" color={chip.color} data-testid={`admin-api-key-status-${key.id}`}>
-                        {chip.label}
-                      </Chip>
+                      <Tooltip title={revocationTooltip(key) ?? ''}>
+                        <Chip variant="soft" color={chip.color} data-testid={`admin-api-key-status-${key.id}`}>
+                          {chip.label}
+                        </Chip>
+                      </Tooltip>
                     </td>
                     <td data-testid={`admin-api-key-usage-${key.id}`}>
                       <Typography level="body-xs">

@@ -11,6 +11,7 @@ import type { DataLakeBrowseSource } from '@client/app/hooks/data/fabFiles';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
 import { readDroppedItems } from '@client/app/utils/dropReader';
+import { DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { toast } from 'sonner';
 import type { IFabFileDocument } from '@bike4mind/common';
 
@@ -71,7 +72,7 @@ const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []
 export default function DataLakeExplorer({
   articleId,
   source = 'opti',
-  rootLabel = 'Data Lake',
+  rootLabel = DATA_LAKES,
   onManage,
   onCreateLake,
   chatSlot,

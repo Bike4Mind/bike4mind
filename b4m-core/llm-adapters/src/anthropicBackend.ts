@@ -34,6 +34,7 @@ import { ensureToolPairingIntegrity, stripAllToolBlocks } from './toolPairingUti
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
 import { buildThinkingParams, type ThinkingConfig } from './thinkingParams';
+import { DispatchModel } from './dispatchModel';
 import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
 
 type ExtendedMessageCreateParams = MessageCreateParamsBase &
@@ -83,6 +84,12 @@ export class AnthropicBackend implements ICompletionBackend {
   // Anthropic can attribute abuse to an individual user and scope enforcement
   // to them rather than the whole shared platform key. See `toProviderEndUserId`.
   private readonly _endUserId?: string;
+  /** Catalog view of the model being completed; see DispatchModel. */
+  private readonly _dispatch = new DispatchModel();
+
+  setDispatchModel(info: ModelInfo): void {
+    this._dispatch.set(info);
+  }
 
   constructor(apiKey: string, logger?: Logger, endUserId?: string) {
     // Increase maxRetries from default (2) to 5 for better rate limit handling.
@@ -206,7 +213,8 @@ export class AnthropicBackend implements ICompletionBackend {
     return blocks.length > 0 ? blocks : undefined;
   }
 
-  async getModelInfo(): Promise<ModelInfo[]> {
+  /** Static model table; the sync twin exists so request shaping can read it. */
+  private getModelInfoList(): ModelInfo[] {
     return [
       {
         id: ChatModels.CLAUDE_3_OPUS,
@@ -558,7 +566,7 @@ export class AnthropicBackend implements ICompletionBackend {
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-05-28',
         description:
-          "Anthropic's latest flagship model. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities over 4.7.",
+          "Anthropic's previous flagship model. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities over 4.7.",
         isSlowModel: true,
       },
       {
@@ -587,10 +595,71 @@ export class AnthropicBackend implements ICompletionBackend {
         // GA as of 2026-07-01 ("Claude Fable 5 is once again available"). Previously gated
         // behind Fable/Mythos access this deployment's key lacked; access has since
         // been granted, so the model is now selectable. Its safety classifiers can return
-        // stop_reason: 'refusal' on benign requests - those are routed to Opus 4.8 via the
+        // stop_reason: 'refusal' on benign requests - those are routed to Opus 5 via the
         // existing fallback machinery (see REFUSAL_FALLBACK_MODELS + the refusal throw below).
       },
+      {
+        id: ChatModels.CLAUDE_5_OPUS,
+        type: 'text',
+        name: 'Claude 5 Opus',
+        backend: ModelBackend.Anthropic,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          1_000_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 }, // $5 / 1M Input tokens, $25 / 1M Output tokens
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 1, // premium tier - ranked below the Sonnet 5 default (opt-in via picker)
+        supportsTools: true,
+        releaseDate: '2026-07-24',
+        description:
+          "Anthropic's latest flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
+        isSlowModel: true,
+      },
     ];
+  }
+
+  async getModelInfo(): Promise<ModelInfo[]> {
+    return this.getModelInfoList();
+  }
+
+  /**
+   * The record this request is shaped from: the adapter table first, then the
+   * catalog for a model the table never listed. Table-first is what keeps every
+   * currently-dispatched id on exactly today's behavior.
+   */
+  private modelRecordFor(model: string): ModelInfo | undefined {
+    return this.getModelInfoList().find(m => m.id === model) ?? this._dispatch.for(model);
+  }
+
+  /** True when only the catalog knows this model - the adapter table does not list it. */
+  private isCatalogOnly(model: string): boolean {
+    return !this.getModelInfoList().some(m => m.id === model) && this._dispatch.for(model) !== undefined;
+  }
+
+  /**
+   * The adaptive-thinking surface has no sampling knobs at all: Opus 4.7+,
+   * Sonnet 5 and Fable 5 reject temperature, top_p and top_k outright.
+   * NO_TEMPERATURE_MODELS lists the ids this build ships; for a model only the
+   * catalog knows, `thinkingStyle: 'adaptive'` is the same statement in record
+   * form (the two agree on every model in the table today).
+   */
+  private omitsSamplingParams(model: string): boolean {
+    if (NO_TEMPERATURE_MODELS.has(model)) return true;
+    return this.isCatalogOnly(model) && this._dispatch.for(model)?.thinkingStyle === 'adaptive';
+  }
+
+  /** claude-3-7 rejects top_k while still taking temperature and top_p. */
+  private omitsTopK(model: string): boolean {
+    if (model.includes('claude-3-7') || this.omitsSamplingParams(model)) return true;
+    // A model only the catalog knows carries no top_k gate (supportsTopP is the
+    // sampling group, Phase 5), so drop the optional knob rather than 400.
+    return this.isCatalogOnly(model);
   }
 
   // Request a chat-based completion from the LLM.  The response is delivered
@@ -800,9 +869,9 @@ export class AnthropicBackend implements ICompletionBackend {
         content: m.content as unknown as MessageParam['content'],
       })),
       // Claude 4.7 Opus does not accept temperature at all
-      ...(NO_TEMPERATURE_MODELS.has(model) ? {} : { temperature: options.temperature }),
+      ...(this.omitsSamplingParams(model) ? {} : { temperature: options.temperature }),
       // top_p and temperature together is not supported for claude-4-5-sonnet and claude-opus-4-1, use temp only
-      ...(TEMPERATURE_ONLY_MODELS.includes(model as ChatModels) || NO_TEMPERATURE_MODELS.has(model)
+      ...(TEMPERATURE_ONLY_MODELS.includes(model as ChatModels) || this.omitsSamplingParams(model)
         ? {}
         : { top_p: options.topP }),
       stop_sequences: options.stop_sequences,
@@ -810,8 +879,7 @@ export class AnthropicBackend implements ICompletionBackend {
       // Cast: SDK's `system` accepts both string and array-of-blocks; TS narrows
       // to one or the other depending on input type, so widen here.
       system: system as ExtendedMessageCreateParams['system'],
-      // claude-3-7 and the no-sampling-param models (Opus 4.7+, Fable 5) reject top_k - return 400
-      ...(model.includes('claude-3-7') || NO_TEMPERATURE_MODELS.has(model) ? {} : { top_k: options.topK }),
+      ...(this.omitsTopK(model) ? {} : { top_k: options.topK }),
       ...(options.tools?.length ? { tools: this.formatTools(options.tools) } : {}),
       // Attribute the request to the end user (opaque, non-PII) so Anthropic can
       // scope abuse enforcement to them instead of the shared platform key.
@@ -867,9 +935,10 @@ export class AnthropicBackend implements ICompletionBackend {
       ? { 'anthropic-beta': 'prompt-caching-2024-07-31' }
       : undefined;
 
-    // Add thinking parameters for models that support it
-    const modelInfo = await this.getModelInfo();
-    const currentModelInfo = modelInfo.find(m => m.id === model);
+    // Add thinking parameters for models that support it. A catalog-only model
+    // brings its own record, so a new Claude gets the right thinking shape
+    // (buildThinkingParams reads thinkingStyle) instead of none at all.
+    const currentModelInfo = this.modelRecordFor(model);
 
     if (currentModelInfo?.can_think) {
       // questMaster / thinking are Anthropic-specific extras layered onto the generic

@@ -33,7 +33,8 @@ interface ScheduledTaskRegistration {
   name: string;
   intervalMs: number;
   fn: () => Promise<void>;
-  inFlight?: boolean;
+  /** The current run, kept (not a boolean) so shutdown can await it. */
+  inFlight?: Promise<void>;
 }
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -83,7 +84,7 @@ export class SelfHostWorker {
     this.running = true;
     this.pollers = this.queues.map(q => this.runPoller(q));
     for (const t of this.scheduled) {
-      this.timers.push(setInterval(() => void this.runScheduledTask(t), t.intervalMs));
+      this.timers.push(setInterval(() => this.startScheduledTask(t), t.intervalMs));
     }
     this.logger.info(
       `[selfHostWorker] started: ${this.queues.length} queue(s), ${this.scheduled.length} scheduled task(s)`
@@ -92,36 +93,44 @@ export class SelfHostWorker {
 
   /**
    * Stop polling and disarm scheduled tasks. Sets running=false immediately, then waits up to
-   * `graceMs` for each poller to finish its current iteration (in-flight message handling) so
-   * shutdown doesn't cut a handler mid-run. A busy handler past the grace is abandoned by the
-   * caller's process.exit; the message stays in-flight and is redelivered.
+   * `graceMs` for each poller to finish its current iteration (in-flight message handling) and
+   * for any scheduled task still running, so shutdown doesn't cut work mid-run. A scheduled task
+   * is drained as well as a poller because abandoning one leaves state behind that no redelivery
+   * repairs (e.g. a discovery run's Mongo lease, held until its TTL). Anything still busy past
+   * the grace is abandoned by the caller's process.exit.
    */
   async stop(graceMs = 0): Promise<void> {
     this.running = false;
     for (const timer of this.timers) clearInterval(timer);
     this.timers.length = 0;
-    if (graceMs > 0 && this.pollers.length > 0) {
-      await Promise.race([Promise.allSettled(this.pollers), sleep(graceMs)]);
+    const inFlightTasks = this.scheduled.map(t => t.inFlight).filter((p): p is Promise<void> => p !== undefined);
+    const pending = [...this.pollers, ...inFlightTasks];
+    if (graceMs > 0 && pending.length > 0) {
+      await Promise.race([Promise.allSettled(pending), sleep(graceMs)]);
     }
     this.pollers = [];
   }
 
-  private async runScheduledTask(task: ScheduledTaskRegistration): Promise<void> {
+  /** Start a tick's run and record it, so stop() can wait for it. */
+  private startScheduledTask(task: ScheduledTaskRegistration): void {
     // Non-reentrant: setInterval fires on a fixed cadence regardless of run duration, so a run
     // that outlasts its interval would otherwise overlap the next tick and double-enqueue work.
     if (task.inFlight) {
       this.logger.warn(`[selfHostWorker] scheduled task "${task.name}" still running; skipping this tick`);
       return;
     }
-    task.inFlight = true;
+    task.inFlight = this.runScheduledTask(task).finally(() => {
+      task.inFlight = undefined;
+    });
+  }
+
+  private async runScheduledTask(task: ScheduledTaskRegistration): Promise<void> {
     try {
       await task.fn();
     } catch (err) {
       this.logger.error(`[selfHostWorker] scheduled task "${task.name}" failed`, {
         error: err instanceof Error ? err.message : String(err),
       });
-    } finally {
-      task.inFlight = false;
     }
   }
 

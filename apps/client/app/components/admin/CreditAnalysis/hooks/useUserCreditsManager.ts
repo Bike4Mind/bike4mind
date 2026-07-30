@@ -50,13 +50,15 @@ export function useUserCreditsManager(onRefresh?: () => void) {
 
   const users = (allUsers.data?.users ?? []) as any[];
 
-  const handleCreditAdjustment = async (userId: string, currentCredits: number, adjustment: number) => {
+  const handleCreditAdjustment = async (userId: string, currentCredits: number, adjustment: number, note?: string) => {
     const newCredits = Math.max(0, currentCredits + adjustment);
     try {
       await updateUserCreditsMutation.mutateAsync({
         userId,
         credits: newCredits,
-        note: `${adjustment > 0 ? '+' : ''}${adjustment} credits`,
+        // The admin's typed "Reason for adjustment" - persisted on the audit
+        // record. Server supplies a default description when this is empty.
+        note: note?.trim() || undefined,
       });
       setNotification({
         open: true,

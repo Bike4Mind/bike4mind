@@ -41,6 +41,14 @@ export interface SessionsContextProps {
 
   currentSession: ISessionDocument | null;
   setCurrentSession: Dispatch<SetStateAction<ISessionDocument | null>>;
+  /**
+   * Updates currentSession WITHOUT the knowledgeIds auto-persist that
+   * `setCurrentSession` performs. For callers that have already written to the
+   * server themselves - going through `setCurrentSession` instead would fire a
+   * second, redundant PUT that carries none of the first one's options
+   * (`propagateToProjects`, notably), silently undoing them.
+   */
+  setCurrentSessionRaw: Dispatch<SetStateAction<ISessionDocument | null>>;
 
   addMessageToSession: (message: IChatHistoryItem) => Promise<void>;
 
@@ -288,8 +296,7 @@ export const useSystemPromptFiles = () => {
   };
 };
 
-export const useSessionAgents = (sessionId?: string) => {
-};
+export const useSessionAgents = (sessionId?: string) => {};
 
 export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
   const { currentUser } = useUser.getState();
@@ -309,6 +316,8 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
     useShallow(s => ({ setLLM: s.setLLM, tools: s.tools, isQuestMasterEnabled: s.isQuestMasterEnabled }))
   );
   const previousSessionIdRef = useRef<string | null>(null);
+  // Generation counter for workbench hydration; see the fetchFiles effect below.
+  const hydrationSeqRef = useRef(0);
 
   const { data: paginatedFabFiles } = useGetFabFiles();
   const fabFiles = useMemo(() => paginatedFabFiles?.pages?.map(page => page.data).flat(), [paginatedFabFiles?.pages]);
@@ -427,15 +436,20 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
       const filesToFetch = knowledgeIds.filter(id => !localFiles.some(file => file.id === id));
 
-      if (filesToFetch.length < 1) {
-        return localFiles;
+      let fetchedFilesResults: IFabFileDocument[] = [];
+      if (filesToFetch.length > 0) {
+        fetchedFilesResults = await getFabFilesFromServerByIds(filesToFetch);
+        setFilesMetaDataVersion(prevVersion => prevVersion + 1);
       }
 
-      const fetchedFilesResults = await getFabFilesFromServerByIds(filesToFetch);
-
-      setFilesMetaDataVersion(prevVersion => prevVersion + 1);
-
-      return [...localFiles, ...fetchedFilesResults].map(file => ({ ...file, enabled: true }));
+      // Return in knowledgeIds order. Concatenating local-then-fetched reordered the
+      // workbench, and knowledgeIds is rewritten from workbench order on the next write,
+      // so the shuffle got persisted. Ids that resolve to nothing are dropped.
+      const byId = new Map([...localFiles, ...fetchedFilesResults].map(file => [file.id, file]));
+      return knowledgeIds
+        .map(id => byId.get(id))
+        .filter((file): file is IFabFileDocument => file !== undefined)
+        .map(file => ({ ...file, enabled: true }));
     },
     [fabFiles]
   );
@@ -447,9 +461,12 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
         id: sessionId,
         knowledgeIds: knowledgeIds,
       });
-    } catch {
-      // Don't throw - this is a background operation
-      // Silent failure to avoid console noise
+    } catch (error) {
+      // Don't throw - callers treat this as a background operation. But it must not be
+      // silent: a dropped knowledgeIds write is invisible in the UI and looks exactly
+      // like the file was never attached. Callers that can surface it should use
+      // useNotebookContextFiles instead, which rolls back and tells the user.
+      console.error('Failed to persist session knowledgeIds', error);
     }
   }, []);
 
@@ -564,9 +581,19 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
   // Usage in useEffect for initial fetch
   useEffect(() => {
+    // Every run claims a generation. A fetch that resolves after a newer run started is
+    // carrying an older knowledgeIds set, and writing it would drop whatever the newer
+    // one added - which the next knowledgeIds write then persists, turning a stale
+    // render into real data loss. The same guard covers a session switch mid-fetch.
+    const seq = ++hydrationSeqRef.current;
+
     if (currentSession?.knowledgeIds?.length && currentSessionId) {
+      const sessionId = currentSessionId;
       fetchFiles(currentSession.knowledgeIds)
-        .then(fetched => setWorkBenchFiles(currentSessionId, fetched))
+        .then(fetched => {
+          if (seq !== hydrationSeqRef.current) return;
+          setWorkBenchFiles(sessionId, fetched);
+        })
         .catch(console.error);
     } else if (currentSessionId) {
       setWorkBenchFiles(currentSessionId, []);
@@ -645,6 +672,7 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
       changeSession,
       currentSession,
       setCurrentSession: setCurrentSessionWithPersistence, // Use enhanced version
+      setCurrentSessionRaw: setCurrentSession,
       addMessageToSession,
       currentSessionId,
       setCurrentSessionId,

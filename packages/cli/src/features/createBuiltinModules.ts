@@ -2,6 +2,7 @@ import type { ICliFeatureModule } from './ICliFeatureModule.js';
 import type { CliConfig } from '../storage/types.js';
 import type { ApiClient } from '../auth/ApiClient.js';
 import { TavernModule } from './tavern/index.js';
+import { HearthModule } from './hearth/index.js';
 import { useCliStore } from '../store/index.js';
 
 /**
@@ -22,6 +23,9 @@ export function createBuiltinModules(config: CliConfig, apiClient: ApiClient): I
         () => useCliStore.getState().tavernActivityLog
       )
     );
+  }
+  if (config.features?.hearth) {
+    modules.push(new HearthModule(apiClient));
   }
   return modules;
 }

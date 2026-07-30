@@ -5,8 +5,6 @@
   "type": "module",
   "scripts": {
     "clean": "rm -fr node_modules packages/{common,server}/node_modules apps/client/node_modules {,apps/client/}{.next,.open-next} tsconfig.tsbuildinfo .sst/dist b4m-core/node_modules b4m-core/*/dist b4m-core/*/node_modules b4m-core/mcp/servers/*/node_modules .turbo b4m-core/*/.turbo apps/*/.turbo packages/*/.turbo",
-    "bootstrap:premium": "bash scripts/bootstrap-premium.sh",
-    "premium:pin": "node scripts/premium-pin.mjs",
     "daily-insights:generate": "pnpm --filter scripts daily-insights:generate",
     "db:create-user": "pnpm --filter scripts db:create-user",
     "db:seed-users": "pnpm --filter client db:seed-users",
@@ -66,8 +64,8 @@
     "@bike4mind/infra": "workspace:*",
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.30.0",
-    "@commitlint/cli": "^20.5.0",
-    "@commitlint/config-conventional": "^20.5.0",
+    "@commitlint/cli": "^21.2.1",
+    "@commitlint/config-conventional": "^21.2.0",
     "@eslint/eslintrc": "^3.3.6",
     "@eslint/js": "^9.39.2",
     "@next/eslint-plugin-next": "^16.2.10",
@@ -133,8 +131,13 @@
       "uuid@<11.1.1": "^11.1.1",
       "shell-quote@<1.9.0": "^1.9.0",
       "brace-expansion@>=2.0.0 <2.1.2": "^2.1.2",
+      "brace-expansion@<1.1.16": "^1.1.16",
       "protobufjs@>=7.5.0 <7.6.5": "^7.6.5",
-      "body-parser@>=2.0.0 <2.3.0": "^2.3.0"
+      "body-parser@>=2.0.0 <2.3.0": "^2.3.0",
+      "body-parser@<1.20.6": "^1.20.6",
+      "fast-uri@>=3.0.0 <3.1.4": "^3.1.4",
+      "sharp@<0.35.0": "^0.35.3",
+      "@hono/node-server@<2.0.5": "^2.0.5"
     },
     "ignoredBuiltDependencies": [
       "aws-sdk",

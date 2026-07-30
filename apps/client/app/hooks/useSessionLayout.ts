@@ -11,17 +11,11 @@ import {
   type PythonArtifact,
   QuestMasterData,
   type IFabFileDocument,
+  type AttachScope,
 } from '@bike4mind/common';
 
 export type DefaultLayoutType =
-  | 'horizontal'
-  | 'vertical'
-  | 'pip'
-  | 'noAI'
-  | 'hide'
-  | 'floatingChat'
-  | 'dockRight'
-  | 'dockBottom';
+  'horizontal' | 'vertical' | 'pip' | 'noAI' | 'hide' | 'floatingChat' | 'dockRight' | 'dockBottom';
 
 export interface CodeArtifactData {
   title: string;
@@ -55,6 +49,19 @@ export interface PendingMessageFile {
   // 'scanning'/'blocked' cover an uploaded image pending/failing the async content-moderation
   // scan before it's safe to serve (see fabFile.moderationStatus + isImageServeable).
   status: 'uploading' | 'complete' | 'error' | 'scanning' | 'blocked';
+  /**
+   * How long this attachment lives, frozen when the upload STARTED. Deliberately not
+   * re-read later: the attach-scope control governs the next attachment, and re-scoping
+   * a file mid-flight would make the outcome depend on invisible network timing.
+   */
+  scope: AttachScope;
+  /**
+   * The notebook this upload was made against, frozen for the same reason. The
+   * moderation websocket can land after a session switch, and this store is not
+   * session-keyed, so promoting against the CURRENT session would file the image under
+   * whichever notebook the user happens to be looking at.
+   */
+  uploadSessionId: string | null;
 }
 
 interface SessionLayoutControlState {
@@ -171,8 +178,7 @@ export const addArtifactToRecent = (artifact: ArtifactData): ArtifactData[] => {
 
 export const setSessionLayout = (
   newStateOrUpdater:
-    | Partial<SessionLayoutControlState>
-    | ((prev: SessionLayoutControlState) => Partial<SessionLayoutControlState>)
+    Partial<SessionLayoutControlState> | ((prev: SessionLayoutControlState) => Partial<SessionLayoutControlState>)
 ) => {
   const currentState = useSessionLayout.getState();
 

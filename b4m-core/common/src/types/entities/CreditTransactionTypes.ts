@@ -441,6 +441,13 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
   queryLedgerPage(ownerId: string, ownerType: CreditHolderType, options: ILedgerQueryOptions): Promise<ILedgerPage>;
 
   /**
+   * One page of admin credit adjustments across ALL users, newest first, with a
+   * total count. Cross-owner (not scoped to one holder): the generic_add /
+   * generic_deduct rows written by `adminUpdateUser` (reason `admin_adjustment`).
+   */
+  queryAdminAdjustmentsPage(options: { days?: number; limit: number; skip: number }): Promise<ILedgerPage>;
+
+  /**
    * An owner's API-token spend over the trailing N days (default 30) grouped by
    * apiKeyId, from completion_api_usage ledger rows. Owner-scoped over the
    * {ownerId, ownerType, createdAt} index; biggest spender first.

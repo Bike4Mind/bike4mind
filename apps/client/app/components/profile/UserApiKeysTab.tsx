@@ -50,6 +50,7 @@ import WarningIcon from '@mui/icons-material/Warning';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { IUserApiKeyDocument, ApiKeyScope } from '@bike4mind/common';
 import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
+import { revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import { useState } from 'react';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import dayjs from 'dayjs';
@@ -1862,9 +1863,11 @@ export default function UserApiKeysTab() {
                         </Box>
                       </td>
                       <td>
-                        <Chip variant="soft" color={getStatusColor(key)}>
-                          {getStatusText(key)}
-                        </Chip>
+                        <Tooltip title={revocationTooltip(key) ?? ''} data-testid={`api-key-status-${key.id}`}>
+                          <Chip variant="soft" color={getStatusColor(key)}>
+                            {getStatusText(key)}
+                          </Chip>
+                        </Tooltip>
                       </td>
                       <td>
                         <Typography level="body-xs">{dayjs(key.createdAt).format('MMM D, YYYY')}</Typography>

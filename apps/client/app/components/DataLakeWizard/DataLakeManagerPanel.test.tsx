@@ -62,6 +62,10 @@ vi.mock('./DataLakeSettingsModal', () => ({
   DataLakeSettingsModal: ({ lake }: { lake: { name: string } | null }) =>
     lake ? <div data-testid="mock-settings">{lake.name}</div> : null,
 }));
+// The public catalog has its own suite; here we only assert the manager routes to it.
+vi.mock('./DataLakeDiscoverPanel', () => ({
+  default: () => <div data-testid="mock-discover" />,
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -134,6 +138,20 @@ describe('DataLakeManagerPanel - root view', () => {
     expect(screen.getByTestId('datalake-deleted-section')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-create-btn')).toBeInTheDocument();
+  });
+
+  it('opens the public Discover catalog from the footer and returns to it via the store tab', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByTestId('datalake-manager-discover-btn'));
+    expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-overview')).not.toBeInTheDocument();
+    // Opening one of your own lakes leaves the catalog...
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    expect(screen.queryByTestId('mock-discover')).not.toBeInTheDocument();
+    // ...so backing out lands on the overview, not back in Discover.
+    await user.click(screen.getByTestId('datalake-manager-back'));
+    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
 
   it('collapses the Data Lakes accordion, hiding the lake rows', async () => {

@@ -49,7 +49,7 @@ export class DexieStore extends Dexie {
     super('Bike4Mind');
     // DID YOU BUMP THE VERSION NUMBER?
     // JUST GO AHEAD AND BUMP THE VERSION NUMBER
-    this.version(20).stores({
+    this.version(21).stores({
       users: '_id, &id',
       sessionmodels: '_id, &id, userId, lastUpdated',
       toolmodels: '_id, &id, userId',
@@ -63,6 +63,12 @@ export class DexieStore extends Dexie {
       questmasterplans: '_id, &id, notebookId',
       artifacts: '_id, &id, userId, type, status, sessionId, projectId',
       artifact_versions: '_id, &id, artifactId, version, createdBy',
+
+      // premium-bob async run docs; the reading screen live-queries this by _id via
+      // useCollectionQuery('bob_runs', {_id}). Must stay in sync with the bob_runs entry in
+      // dataSubscribeRequest.ts (the WS subscribe allow-list). Without it Dexie throws
+      // "Table bob_runs does not exist" when the Bob reading screen mounts.
+      bob_runs: '_id, &id, userId',
 
       adminsettings: '_id, &id, &name',
     });

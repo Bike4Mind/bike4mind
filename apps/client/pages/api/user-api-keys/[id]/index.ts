@@ -1,5 +1,6 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import { gateEmbedBrandingWrite } from '@server/entitlements/embedKeyEntitlement';
@@ -15,9 +16,9 @@ interface UpdateEmbedKeyRequest {
   branding?: IEmbedBranding;
 }
 
-// Not admin-gated: this is ownership-scoped self-service (same posture as the
-// profile API-keys tab). `updateEmbedKey` resolves the key via
-// `findByUserIdAndId`, so a caller can only ever configure their own keys.
+// Not admin-gated at the route: `updateEmbedKey` resolves the key by ownership -
+// the minter, or an admin of the org the key is billed to (mirroring the
+// org-admin-aware LIST route). A caller who is neither gets a not-found.
 const handler = baseApi().patch(
   asyncHandler<{}, unknown, UpdateEmbedKeyRequest, { id: string }>(async (req, res) => {
     const userId = req.user?.id;
@@ -42,27 +43,39 @@ const handler = baseApi().patch(
 
     // Branding format screen (hex color, https logo, caps); the service
     // re-validates with the same shared schema. The whitelabel write gate then
-    // blocks only an unentitled hideBranding *elevation* (read side is the
-    // authoritative enforcement); pass the stored value so an unentitled member
-    // editing an unrelated branding field cannot clobber white-label the org
-    // already earned.
+    // blocks only an unentitled hideBranding *elevation* against the key OWNER's
+    // plan (same rule as the authoritative read gate); pass the stored value so
+    // an unentitled member editing an unrelated branding field cannot clobber
+    // white-label the org already earned.
     const brandingCheck = validateEmbedBranding(branding);
     if (!brandingCheck.ok) {
       throw new BadRequestError(brandingCheck.error);
     }
-    // The stored value only matters for an incoming hideBranding elevation; skip
-    // the extra read on the common color/logo/name-only edit (the gate is a no-op
-    // there anyway, and updateEmbedKey re-fetches the doc regardless).
+    // The stored value + owner only matter for an incoming hideBranding
+    // elevation; skip the extra read on the common color/logo/name-only edit
+    // (the gate is a no-op there anyway, and updateEmbedKey re-fetches the doc).
     let gatedBranding = brandingCheck.value;
     if (brandingCheck.value?.hideBranding === true) {
-      const existing = await userApiKeyRepository.findByUserIdAndId(userId, keyId);
-      gatedBranding = await gateEmbedBrandingWrite(req, brandingCheck.value, existing?.branding?.hideBranding === true);
+      // Resolve the elevation against the key's billing owner, not the caller.
+      // Same minter-then-org-admin resolution as updateEmbedKey, so an org admin
+      // editing a teammate's org key gates against the org's owner (matching the
+      // ownerHasWhitelabel flag the LIST route computes). A key the caller neither
+      // minted nor administers stays unresolved and fails closed to stripped;
+      // updateEmbedKey then throws not-found regardless.
+      let existing = await userApiKeyRepository.findByUserIdAndId(userId, keyId);
+      if (!existing) {
+        const administeredOrgIds = await organizationRepository.findIdsAdministeredBy(userId);
+        existing = await userApiKeyRepository.findByOrganizationIdsAndId(administeredOrgIds, keyId);
+      }
+      gatedBranding = existing
+        ? await gateEmbedBrandingWrite(existing, brandingCheck.value, existing.branding?.hideBranding === true)
+        : { ...brandingCheck.value, hideBranding: false };
     }
 
     const updated = await userApiKeyService.updateEmbedKey(
       userId,
       { keyId, agentId, allowedOrigins: embedOrigins, branding: gatedBranding },
-      { db: { userApiKeys: userApiKeyRepository } }
+      { db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository } }
     );
 
     await logEvent(

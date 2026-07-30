@@ -98,11 +98,14 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
+  // Bulk deactivation has no human actor, so it stamps revokedAt without revokedBy.
+  // Scoped to keys actually transitioning: re-running must not reset an existing
+  // timestamp, and keys disabled before this field existed must not get a fabricated one.
   async deactivateAllByUserId(userId: string) {
     await this.model.updateMany(
-      { userId },
+      { userId, status: { $ne: ApiKeyStatus.DISABLED } },
       {
-        $set: { status: ApiKeyStatus.DISABLED },
+        $set: { status: ApiKeyStatus.DISABLED, revokedAt: new Date() },
       }
     );
   }
@@ -126,6 +129,19 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
 
   findByOrganizationId(organizationId: string) {
     return this.model.find({ organizationId }).sort({ createdAt: -1 }).exec();
+  }
+
+  // Positive org-admin scope for the write paths: the key with this id, but only
+  // if it is org-billed to one of the caller's administered orgs. The org-set and
+  // billingOwnerType filters ARE the authorization predicate, so it fails closed
+  // by construction - an empty set short-circuits without a query, and a personal
+  // (User-billed) or out-of-set key never matches. Hydrated doc, matching
+  // findByUserIdAndId so update() behaves identically on either resolution path.
+  findByOrganizationIdsAndId(organizationIds: string[], id: string) {
+    if (organizationIds.length === 0) return Promise.resolve(null);
+    return this.model
+      .findOne({ _id: id, organizationId: { $in: organizationIds }, billingOwnerType: CreditHolderType.Organization })
+      .exec();
   }
 
   findByAgentId(agentId: string) {
@@ -161,6 +177,11 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     status: { type: String, enum: Object.values(ApiKeyStatus), default: ApiKeyStatus.ACTIVE },
     expiresAt: { type: Date },
     lastUsedAt: { type: Date },
+    // Revocation audit trail. Every path that flips status to DISABLED must stamp
+    // revokedAt, or a revoked key renders with no "when" - see IUserApiKey.
+    revokedAt: { type: Date },
+    revokedBy: { type: String },
+    revokedReason: { type: String },
     rateLimit: {
       requestsPerMinute: { type: Number, required: true, default: 60 },
       requestsPerDay: { type: Number, required: true, default: 1000 },

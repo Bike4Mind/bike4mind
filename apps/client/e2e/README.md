@@ -47,7 +47,7 @@ Steps:
    ```
 3. Type the 6-digit code → **Verify Code** → you're in.
 
-`$E2E_CLEANUP_SECRET` is one shared value, the same on every preview — see
+`$E2E_CLEANUP_SECRET` is one shared value, the same on every preview and stable across redeploys — see
 [Environment Variables](#environment-variables) for what it is and how to get it.
 
 Notes: codes expire in 10 min and are single-use (use **Resend code** + re-fetch if needed);
@@ -88,8 +88,8 @@ Copy `.env.e2e.example` to `.env.e2e` and fill in the values:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `API_URL` | Yes | Base URL of the app (default: `http://localhost:3000`) |
-| `E2E_TEST_ID` | No | Optional prefix for test user isolation (e.g., `alice`). Use when multiple testers run on shared preview builds. |
-| `E2E_CLEANUP_SECRET` | Yes* | Shared secret for the `/api/test/*` endpoints (create-user, cleanup, otc-code). **Same value on every preview** — auto-provisioned from the `E2E_CLEANUP_SECRET` GitHub Actions secret on each deploy. Required when running without SST context (staging/preview); falls back to the SST Resource if unset. Get the value from the team secret store, or read it per-stage: `./for-env bike4mind-previews npx sst secret list --stage pr<N> \| grep E2E_CLEANUP_SECRET`. Never commit the literal value. |
+| `E2E_TEST_ID` | No* | Prefix for test user isolation (e.g., `alice`). **Required in practice on any shared stage:** when empty, cleanup runs unscoped and hard-deletes every ephemeral `-e2e@test.com` user on the target stage, including the live users of anyone else's in-flight run. CI does not depend on this variable — `e2e-run.yml` always appends a per-run `gh<run_id>` scope. |
+| `E2E_CLEANUP_SECRET` | Yes* | Shared secret for the `/api/test/*` endpoints (create-user, cleanup, otc-code). **Same value on every stage** (previews, staging, production) — each deploy writes the deployer's `E2E_CLEANUP_SECRET` GitHub secret into that stage's SST secret, so it does not change between deploys. Required when running without SST context (staging/preview); falls back to the SST Resource if unset. Get the value from the team secret store, or read it per-stage: `./for-env bike4mind-previews npx sst secret list --stage pr<N> \| grep E2E_CLEANUP_SECRET`. Never commit the literal value. |
 | `PW_WORKERS` | No | Number of parallel workers (default: 1) |
 
 ## Project Structure
@@ -172,6 +172,17 @@ a live page and navigates to `/` to bootstrap the authenticated app. An agent
 by a password/OTC UI round-trip.
 
 Before setup runs, `global-setup.ts` calls `/api/test/cleanup` to remove stale test users from prior runs. After all tests, `global-teardown.ts` does the same.
+
+Both calls are **scoped to this run's `E2E_TEST_ID`**, so a run can only ever delete its own
+users. Every CI workflow supplies a non-empty id (`e2e-run.yml` derives `gh<run_id>`;
+`e2e-ai-latency.yml` derives one per matrix cell), because an unscoped sweep deletes every
+ephemeral e2e user on the stage and will kill a concurrent suite mid-test — its users vanish,
+the app 401s, and the tests fail with unrelated-looking timeouts.
+
+Because a per-run scope never matches a previous run's leftovers, `global-setup` also passes
+`staleMinutes` to sweep users orphaned by runs that died before their own teardown. The endpoint
+floors that window (see `server/utils/e2eCleanupScope.ts`), so it can only reach runs that are
+long finished — never one still in flight.
 
 ### Completing an OTC login/registration in a test (no mailbox needed)
 
@@ -350,7 +361,7 @@ Preview deploys are created on demand by maintainers via the internal deployer (
 3. Results are posted as a **comment on the PR** with pass/fail counts
 4. The **HTML report** is uploaded as a build artifact (`playwright-report-pr<N>-label`)
 
-In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is **not** a GitHub secret — it lives only in SST: each `pr{n}` preview self-provisions a fresh random value at deploy time, and every Playwright step runs inside `pnpm sst shell`, so the test client reads `Resource.E2E_CLEANUP_SECRET.value` (the same value the cleanup/create-user API validates against). See issue #251.
+In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is one stable value that every deploy writes into that stage's SST secret, so `pr{n}` previews, staging, and production all share it. Every Playwright step runs inside `pnpm sst shell`, so the test client reads `Resource.E2E_CLEANUP_SECRET.value` — the same value the cleanup/create-user API validates against. Previews used to self-provision a fresh random per deploy; that was dropped because it made manual QA against a preview a chore and let a redeploy invalidate the secret mid-run.
 
 ## Debugging
 

@@ -107,7 +107,7 @@ export function shouldTriggerFallback(error: Error): boolean {
     'is not available',
     // Claude Fable 5 GA safety-classifier refusal: the Anthropic backend surfaces a
     // stop_reason: 'refusal' as a thrown error for REFUSAL_FALLBACK_MODELS so blocked
-    // requests continue on Opus 4.8 via the claude-fable-5 fallback chain below.
+    // requests continue on Opus 5 via the claude-fable-5 fallback chain below.
     'safety classifier refusal',
   ];
 
@@ -173,6 +173,112 @@ export function validateFallbackModel(
 }
 
 /**
+ * Fallback preferences per model: where traffic goes when this model fails.
+ *
+ * Module-level and exported because it is a hardcoded model-id surface the
+ * nightly stale-reference report audits (llm-adapters/staleReferences.ts) -
+ * a chain pointing at a retired model is an outage waiting for an incident.
+ */
+export const FALLBACK_PREFERENCES: Record<string, string[]> = {
+  // Gemini models fallback to Claude or GPT
+  'gemini-2.5-pro-preview-05-06': ['claude-sonnet-4-6', 'gpt-4o', 'claude-opus-4-6'],
+  'gemini-2.5-flash-preview-05-20': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
+  'gemini-1.5-pro': ['claude-sonnet-4-6', 'gpt-4o', 'claude-opus-4-6'],
+  'gemini-1.5-flash': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
+
+  // Top tier (Fable 5 / Opus 4.7-5) degrades within the Opus tier before dropping to Sonnet.
+  // Fable 5 leads with Opus 5: same price as 4.8, near-Fable capability, and its safety
+  // classifiers intervene far less often - so a Fable refusal is most likely to succeed there.
+  'claude-fable-5': [
+    'claude-opus-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'gpt-5',
+  ],
+  'claude-opus-5': [
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'gpt-5',
+  ],
+  'claude-opus-4-8': ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+  'claude-opus-4-7': ['claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+
+  // Bedrock-hosted Claude leads its chain with the Anthropic-direct twin (same model,
+  // other provider path) so a sustained Bedrock outage (503/500/529) degrades to the
+  // direct API before dropping tier or crossing providers. Bedrock<->direct twin IDs
+  // per models.ts. Targets are direct-Anthropic / OpenAI, never Bedrock: Bedrock has no
+  // entry in the apiKeyTable (IAM-auth, not a key), so findAutomaticFallback's key gate
+  // always skips a Bedrock target - a Bedrock model is reachable as the primary, not as
+  // an automatic fallback destination.
+  'global.anthropic.claude-opus-4-8': [
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-5',
+    'gpt-5',
+  ],
+  'global.anthropic.claude-opus-4-7': ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'gpt-5'],
+  'global.anthropic.claude-opus-4-6-v1': ['claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+  'global.anthropic.claude-opus-4-5-20251101-v1:0': [
+    'claude-opus-4-5-20251101',
+    'claude-sonnet-4-6',
+    'claude-sonnet-4-5-20250929',
+    'gpt-5',
+  ],
+  'global.anthropic.claude-sonnet-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+  'global.anthropic.claude-sonnet-4-6': ['claude-sonnet-4-6', 'claude-sonnet-5', 'gpt-5'],
+  'us.anthropic.claude-sonnet-4-5-20250929-v1:0': [
+    'claude-sonnet-4-5-20250929',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'gpt-5',
+  ],
+  'us.anthropic.claude-haiku-4-5-20251001-v1:0': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
+
+  // Claude 4.5/4.6 models fallback hierarchy
+  'claude-opus-4-5-20251101': ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5', 'claude-haiku-4-5-20251001'],
+  'claude-opus-4-6': [
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'claude-sonnet-4-5-20250929',
+    'gpt-5',
+    'claude-haiku-4-5-20251001',
+  ],
+  'claude-sonnet-5': ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5'],
+  'claude-sonnet-4-6': ['claude-sonnet-5', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101', 'gpt-5'],
+  'claude-sonnet-4-5-20250929': ['claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'gpt-5'],
+
+  // Deprecated Claude models fallback to modern versions
+  'claude-3-5-haiku-20241022': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
+  'us.anthropic.claude-3-5-haiku-20241022-v1:0': ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'gpt-4o-mini'],
+  'claude-3-5-sonnet-20241022': ['claude-sonnet-4-6', 'gpt-4o', 'claude-haiku-4-5-20251001'],
+  'claude-3-7-sonnet-20250219': ['claude-sonnet-4-6', 'gpt-4o', 'claude-haiku-4-5-20251001'],
+  'claude-3-opus-20240229': ['claude-opus-4-6', 'claude-sonnet-4-6', 'gpt-4o'],
+  'claude-3-haiku-20240307': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
+  'us.anthropic.claude-3-5-sonnet-20241022-v2:0': ['global.anthropic.claude-sonnet-4-6', 'gpt-4o'],
+  'us.anthropic.claude-3-7-sonnet-20250219-v1:0': ['global.anthropic.claude-sonnet-4-6', 'gpt-4o'],
+
+  // GPT models fallback to Claude
+  'gpt-4o': ['claude-sonnet-4-6', 'claude-opus-4-6', 'gpt-5.5'],
+  'gpt-4o-mini': ['claude-haiku-4-5-20251001', 'gpt-5.4-mini'],
+};
+
+/** Modern, reliable models: where a model with no chain of its own goes. */
+export const DEFAULT_FALLBACK_CHAIN: string[] = [
+  'claude-sonnet-5',
+  'claude-sonnet-4-6',
+  'claude-sonnet-4-5-20250929',
+  'gpt-5',
+  'claude-haiku-4-5-20251001',
+];
+
+/**
  * Find a suitable automatic fallback model based on the original model
  */
 function findAutomaticFallback(
@@ -187,104 +293,13 @@ function findAutomaticFallback(
 
   const hasValidKey = (m: ModelInfo) => !!apiKeyTable[m.backend] && apiKeyTable[m.backend] !== 'expired';
 
-  // Define fallback preferences for different model types
-  const fallbackPreferences: Record<string, string[]> = {
-    // Gemini models fallback to Claude or GPT
-    'gemini-2.5-pro-preview-05-06': ['claude-sonnet-4-6', 'gpt-4o', 'claude-opus-4-6'],
-    'gemini-2.5-flash-preview-05-20': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-    'gemini-1.5-pro': ['claude-sonnet-4-6', 'gpt-4o', 'claude-opus-4-6'],
-    'gemini-1.5-flash': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-
-    // Top tier (Fable 5 / Opus 4.7-4.8) degrades within the Opus tier before dropping to Sonnet
-    'claude-fable-5': [
-      'claude-opus-4-8',
-      'claude-opus-4-7',
-      'claude-opus-4-6',
-      'claude-sonnet-5',
-      'claude-sonnet-4-6',
-      'gpt-5',
-    ],
-    'claude-opus-4-8': ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
-    'claude-opus-4-7': ['claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
-
-    // Bedrock-hosted Claude leads its chain with the Anthropic-direct twin (same model,
-    // other provider path) so a sustained Bedrock outage (503/500/529) degrades to the
-    // direct API before dropping tier or crossing providers. Bedrock<->direct twin IDs
-    // per models.ts. Targets are direct-Anthropic / OpenAI, never Bedrock: Bedrock has no
-    // entry in the apiKeyTable (IAM-auth, not a key), so findAutomaticFallback's key gate
-    // always skips a Bedrock target - a Bedrock model is reachable as the primary, not as
-    // an automatic fallback destination.
-    'global.anthropic.claude-opus-4-8': [
-      'claude-opus-4-8',
-      'claude-opus-4-7',
-      'claude-opus-4-6',
-      'claude-sonnet-5',
-      'gpt-5',
-    ],
-    'global.anthropic.claude-opus-4-7': ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'gpt-5'],
-    'global.anthropic.claude-opus-4-6-v1': ['claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
-    'global.anthropic.claude-opus-4-5-20251101-v1:0': [
-      'claude-opus-4-5-20251101',
-      'claude-sonnet-4-6',
-      'claude-sonnet-4-5-20250929',
-      'gpt-5',
-    ],
-    'global.anthropic.claude-sonnet-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
-    'global.anthropic.claude-sonnet-4-6': ['claude-sonnet-4-6', 'claude-sonnet-5', 'gpt-5'],
-    'us.anthropic.claude-sonnet-4-5-20250929-v1:0': [
-      'claude-sonnet-4-5-20250929',
-      'claude-sonnet-5',
-      'claude-sonnet-4-6',
-      'gpt-5',
-    ],
-    'us.anthropic.claude-haiku-4-5-20251001-v1:0': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-
-    // Claude 4.5/4.6 models fallback hierarchy
-    'claude-opus-4-5-20251101': [
-      'claude-sonnet-4-6',
-      'claude-sonnet-4-5-20250929',
-      'gpt-5',
-      'claude-haiku-4-5-20251001',
-    ],
-    'claude-opus-4-6': [
-      'claude-sonnet-5',
-      'claude-sonnet-4-6',
-      'claude-sonnet-4-5-20250929',
-      'gpt-5',
-      'claude-haiku-4-5-20251001',
-    ],
-    'claude-sonnet-5': ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5'],
-    'claude-sonnet-4-6': ['claude-sonnet-5', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101', 'gpt-5'],
-    'claude-sonnet-4-5-20250929': ['claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'gpt-5'],
-
-    // Deprecated Claude models fallback to modern versions
-    'claude-3-5-haiku-20241022': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-    'us.anthropic.claude-3-5-haiku-20241022-v1:0': ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'gpt-4o-mini'],
-    'claude-3-5-sonnet-20241022': ['claude-sonnet-4-6', 'gpt-4o', 'claude-haiku-4-5-20251001'],
-    'claude-3-7-sonnet-20250219': ['claude-sonnet-4-6', 'gpt-4o', 'claude-haiku-4-5-20251001'],
-    'claude-3-opus-20240229': ['claude-opus-4-6', 'claude-sonnet-4-6', 'gpt-4o'],
-    'claude-3-haiku-20240307': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-    'us.anthropic.claude-3-5-sonnet-20241022-v2:0': ['global.anthropic.claude-sonnet-4-6', 'gpt-4o'],
-    'us.anthropic.claude-3-7-sonnet-20250219-v1:0': ['global.anthropic.claude-sonnet-4-6', 'gpt-4o'],
-
-    // GPT models fallback to Claude
-    'gpt-4o': ['claude-sonnet-4-6', 'claude-opus-4-6', 'gpt-5.5'],
-    'gpt-4o-mini': ['claude-haiku-4-5-20251001', 'gpt-5.4-mini'],
-  };
-
-  // Get preference list for this model
-  const preferences = fallbackPreferences[originalModel.id] || [];
+  // Get preference list for this model. Copied because the table is shared and
+  // the generic tail below is pushed onto this list.
+  const preferences = [...(FALLBACK_PREFERENCES[originalModel.id] ?? [])];
 
   // Add generic fallbacks if no specific preferences
   if (preferences.length === 0) {
-    // Default to modern, reliable models
-    preferences.push(
-      'claude-sonnet-5',
-      'claude-sonnet-4-6',
-      'claude-sonnet-4-5-20250929',
-      'gpt-5',
-      'claude-haiku-4-5-20251001'
-    );
+    preferences.push(...DEFAULT_FALLBACK_CHAIN);
   }
 
   // Provider-wide-outage guarantee (used on the final allowed hop): prefer a candidate on a

@@ -28,6 +28,51 @@ export function isPlaceholderValue(value: string | undefined | null): boolean {
 }
 
 /**
+ * Distinctive dummy tokens that mark an API-key value as a placeholder rather than a real
+ * credential. Matched only as a whole hyphen-delimited segment (see PLACEHOLDER_API_KEY_REGEX).
+ * Keep this set tight and every token LONG: what keeps a real key from matching is entropy, not
+ * structure (see isPlaceholderApiKey), so a short token such as `key` or `test` is genuinely
+ * unsafe here. isPlaceholderValue.test.ts enforces a >= 5-character floor on each token's shortest
+ * possible match, which is why this is exported - do not add a token below the floor.
+ */
+export const PLACEHOLDER_API_KEY_TOKENS = [
+  'dummy',
+  'placeholder',
+  'change-?me',
+  'replace-?me',
+  'your-?(api-?)?key',
+  'not-a-real',
+  'example',
+];
+
+const PLACEHOLDER_API_KEY_REGEX = new RegExp(`(^|-)(${PLACEHOLDER_API_KEY_TOKENS.join('|')})(-|$)`);
+
+/**
+ * Is this API-key value a placeholder/dummy rather than a real credential? Superset of
+ * isPlaceholderValue (so empty/null/SST sentinels are caught too) plus a small set of distinctive
+ * dummy tokens matched only as whole hyphen-delimited segments. Underscores are normalized to
+ * hyphens first so REPLACE_ME / YOUR_API_KEY are caught, and a whitespace-only value counts as a
+ * placeholder. When a value isn't a recognized placeholder it returns false and the caller surfaces
+ * the real error.
+ *
+ * The safety argument is ENTROPY, not structure. Legacy `sk-` keys are a contiguous base62 body,
+ * but modern `sk-proj-`/`sk-svcacct-` keys are base64url and legitimately carry `-` and `_`, which
+ * the `_` -> `-` normalization below splits into segments - so "a delimiter can't appear in a real
+ * key body" is NOT why this is safe. Real keys pass only because a random body is astronomically
+ * unlikely to contain a whole delimited segment equal to one of the tokens, a margin that depends
+ * on those tokens staying long (see PLACEHOLDER_API_KEY_TOKENS). A false positive is worse than the
+ * 401 this guards against: on the hosted path, where no local embedder backstops it, it silently
+ * drops search_knowledge_base for that one user via computeToolAvailability
+ * (apps/client/pages/api/settings/serverConfig.ts) with no error and no log.
+ */
+export function isPlaceholderApiKey(value: string | undefined | null): boolean {
+  if (isPlaceholderValue(value)) return true;
+  const normalized = (value ?? '').trim().toLowerCase().replace(/_/g, '-');
+  if (!normalized) return true;
+  return PLACEHOLDER_API_KEY_REGEX.test(normalized);
+}
+
+/**
  * Category of system secret.
  * - auth: Authentication secrets (JWT_SECRET)
  * - mail: Email configuration secrets

@@ -45,6 +45,17 @@ export class DataLakePage extends BasePage {
     // The two hidden inputs are the folder input (first) and the plain multi-file input (last).
     return this.wizardSourceStep.locator('input[type="file"]').last();
   }
+  /** Lake name: set on the source step in create mode (absent in append mode). */
+  get sourceNameInput(): Locator {
+    return this.page.getByTestId('source-name-input').locator('input');
+  }
+  /** Opt-in checkboxes for the two skippable steps; only rendered once files are selected. */
+  get previewToggle(): Locator {
+    return this.page.getByTestId('source-toggle-preview').locator('input');
+  }
+  get taxonomyToggle(): Locator {
+    return this.page.getByTestId('source-toggle-taxonomy').locator('input');
+  }
 
   // ── Settings modal ──────────────────────────────────────────────────────
   get settingsModal(): Locator {
@@ -122,6 +133,20 @@ export class DataLakePage extends BasePage {
     await this.selectFilesInput.setInputFiles(files);
   }
 
+  /** Name the lake on the source step. Required before Next enables in create mode. */
+  async fillLakeName(name: string) {
+    await this.fillMuiInput(this.sourceNameInput, name);
+  }
+
+  /**
+   * Opt into the AI Taxonomy step, which is off by default. The toggle only renders once
+   * files are selected, so call this after selectFiles().
+   */
+  async enableTaxonomyStep() {
+    await expect(this.taxonomyToggle).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await this.taxonomyToggle.check();
+  }
+
   async wizardNext() {
     await expect(this.wizardNextBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
     await this.wizardNextBtn.click();
@@ -131,14 +156,18 @@ export class DataLakePage extends BasePage {
   get configStep(): Locator {
     return this.page.getByTestId('wizard-config-step');
   }
+  get previewStep(): Locator {
+    return this.page.getByTestId('wizard-preview-step');
+  }
   get taxonomyStep(): Locator {
     return this.page.getByTestId('wizard-taxonomy-step');
   }
   get uploadStep(): Locator {
     return this.page.getByTestId('wizard-upload-step');
   }
-  get configNameInput(): Locator {
-    return this.page.getByTestId('config-name-input').locator('input');
+  /** Read-only echo of the name set on the source step. */
+  get configSummaryName(): Locator {
+    return this.page.getByTestId('config-summary-name');
   }
   /** Config-step inputs have no testids; locate them by placeholder within the config step. */
   get configTagPrefixInput(): Locator {
@@ -155,9 +184,10 @@ export class DataLakePage extends BasePage {
   }
 
   /**
-   * Click Next until the Config step is reached. Handles the Taxonomy step, whose Next stays
-   * disabled until AI analysis completes (waited for with the AI_RESPONSE budget), and the
-   * Preview step (auto-skipped for flat file selections).
+   * Click Next until the Config step is reached. Preview and AI Taxonomy are opt-in, so the
+   * default create path is a single click from source; the loop still handles the opted-in
+   * steps, including Taxonomy's Next staying disabled until analysis completes (AI_RESPONSE
+   * budget). In create mode the lake name must already be set - Next is gated on it.
    */
   async advanceToConfig() {
     for (let i = 0; i < 6; i++) {
@@ -175,9 +205,10 @@ export class DataLakePage extends BasePage {
   }
 
   /**
-   * Click Next until the Taxonomy step is reached and its analysis has finished. The Preview
-   * step (auto-skipped for flat file selections) is clicked through if it appears. We check
-   * visibility BEFORE clicking so we stop ON taxonomy rather than advancing past it to Config.
+   * Click Next until the Taxonomy step is reached and its analysis has finished. Requires
+   * enableTaxonomyStep() first - the step is opt-in and absent from the flow otherwise. Any
+   * opted-in Preview step is clicked through. We check visibility BEFORE clicking so we stop
+   * ON taxonomy rather than advancing past it to Config.
    */
   async advanceToTaxonomy() {
     for (let i = 0; i < 4; i++) {
@@ -276,6 +307,11 @@ export class DataLakePage extends BasePage {
   /** Inner radio <input> of the "Organization" visibility option (for enabled/disabled checks). */
   get orgVisibilityRadioInput(): Locator {
     return this.settingsModal.getByTestId('datalake-settings-visibility-org').locator('input');
+  }
+
+  /** Inner radio <input> of the "Public" visibility option - disabled while the lake is gated. */
+  get publicVisibilityRadioInput(): Locator {
+    return this.settingsModal.getByTestId('datalake-settings-visibility-public').locator('input');
   }
 
   async saveSettings() {

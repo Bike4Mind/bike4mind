@@ -35,7 +35,7 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import GearIcon from '@mui/icons-material/Settings';
 import TagIcon from '@mui/icons-material/Style';
 import SendIcon from '@mui/icons-material/Send';
-import StorageIcon from '@mui/icons-material/Storage';
+import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import {
   Badge,
   Box,
@@ -548,7 +548,7 @@ const SessionSidenavItem: FC<{
                   data-testid="sidenav-item-menuitem-send-datalake"
                   disabled={sendToDataLake.isPending}
                 >
-                  <StorageIcon /> Send to Data Lake
+                  <DataLakeIcon /> Send to {DATA_LAKE}
                 </MenuItem>
               )}
               {canUpdate && (
@@ -892,7 +892,7 @@ const SessionSidenavItem: FC<{
                     data-testid="sidenav-item-menuitem-send-datalake"
                     disabled={sendToDataLake.isPending}
                   >
-                    <StorageIcon /> Send to Data Lake
+                    <DataLakeIcon /> Send to {DATA_LAKE}
                   </MenuItem>
                 )}
                 {canUpdate && (

@@ -172,3 +172,106 @@ describe('search_knowledge_base agent kbScope enforcement', () => {
     expect(opts.includeShared).toBe(true);
   });
 });
+
+describe('search_knowledge_base partial-corpus disclosure', () => {
+  const hit = {
+    chunkId: 'c1',
+    fileId: 'f1',
+    fileName: 'Handbook.pdf',
+    fileTags: [],
+    chunkText: 'pto accrues monthly',
+    score: 0.81,
+  };
+  const scanOf = (overrides: Record<string, unknown>) => ({
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 3,
+    filesScoped: 3,
+    filesScanned: 3,
+    chunksScanned: 9,
+    chunksSkippedDimensionMismatch: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+    ...overrides,
+  });
+
+  // The unscoped semantic arm bails when no lake is accessible, so grant one.
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+    });
+  });
+
+  /** Unlike makeContext, this wires every dep the semantic arm needs so it actually runs. */
+  function semanticContext(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  it('unscoped arm: a truncated scan warns the model not to claim the library holds nothing more', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hit],
+      totalChunksSearched: 100000,
+      filesInScope: 2314,
+      scan: scanOf({ truncated: true, chunkBudgetHit: true, filesScanned: 800, filesMatching: 2314 }),
+    });
+
+    const out = await run(semanticContext());
+
+    expect(out).toContain('covered only 800 of 2314 documents');
+    expect(out).toContain('Do not state or imply the knowledge base has nothing further');
+    expect(out).toContain('pto accrues monthly');
+  });
+
+  it('unscoped arm: a complete scan produces no notice at all', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hit],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan: scanOf({}),
+    });
+
+    const out = await run(semanticContext());
+
+    expect(out).not.toContain('covered only');
+    expect(out).not.toContain('NOTE:');
+  });
+
+  it('scoped (agent kbScope) arm gets the same disclosure - neither surface may hide it', async () => {
+    fileScopedSemanticSearchMock.mockResolvedValue({
+      results: [hit],
+      totalChunksSearched: 100000,
+      filesInScope: 500,
+      scan: scanOf({ truncated: true, fileBudgetHit: true, filesScanned: 200, filesMatching: 500 }),
+    });
+
+    const out = await run(semanticContext({ kbScope: { fileIds: ['f1'] } as never }));
+
+    expect(fileScopedSemanticSearchMock).toHaveBeenCalled();
+    expect(out).toContain('covered only 200 of 500 documents');
+  });
+
+  it('forwards the resolved scan budgets into the search', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hit],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan: scanOf({}),
+    });
+
+    await run(semanticContext());
+
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toHaveProperty('budgets');
+  });
+});

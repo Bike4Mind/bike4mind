@@ -22,6 +22,14 @@ export interface ICcBridgeDeviceDoc {
   platform?: string;
   /** Bridge version that last connected from this device. */
   bridgeVersion?: string;
+  /**
+   * Optional per-device override of the Hearth channel this device's sessions
+   * report presence into. Unset means the shared default channel
+   * (DEFAULT_HEARTH_CHANNEL_NAME), which is what keeps one roster whole.
+   * Validated as owned by the user at write time - a stale id must never
+   * redirect presence into a channel the user no longer owns.
+   */
+  hearthChannelId?: string;
   /** Populated from the pairing token; source of truth for audit. */
   pairedAt: Date;
   lastSeenAt?: Date;
@@ -40,6 +48,7 @@ const CcBridgeDeviceSchema = new Schema<ICcBridgeDeviceDoc>(
     apiKeyId: { type: String, required: true },
     platform: { type: String },
     bridgeVersion: { type: String },
+    hearthChannelId: { type: String },
     pairedAt: { type: Date, required: true },
     lastSeenAt: { type: Date },
     revokedAt: { type: Date },
@@ -72,6 +81,10 @@ export const ccBridgeDeviceRepository = {
     return CcBridgeDevice.findOne({ apiKeyId }).lean();
   },
 
+  async findById(deviceId: string): Promise<ICcBridgeDeviceDoc | null> {
+    return CcBridgeDevice.findById(deviceId).lean();
+  },
+
   async listForUser(userId: string): Promise<ICcBridgeDeviceDoc[]> {
     return CcBridgeDevice.find({ userId }).sort({ pairedAt: -1 }).lean();
   },
@@ -100,8 +113,17 @@ export const ccBridgeDeviceRepository = {
 
     if (device.apiKeyId) {
       const keyUpdate = await UserApiKey.updateOne(
-        { _id: device.apiKeyId, userId },
-        { $set: { status: ApiKeyStatus.DISABLED } }
+        // Scoped to a real transition so a replayed revoke keeps the original
+        // audit stamp, matching revokeUserApiKey and deactivateAllByUserId.
+        { _id: device.apiKeyId, userId, status: { $ne: ApiKeyStatus.DISABLED } },
+        {
+          $set: {
+            status: ApiKeyStatus.DISABLED,
+            revokedAt: new Date(),
+            revokedBy: userId,
+            revokedReason: 'Bridge device revoked',
+          },
+        }
       );
       if (keyUpdate.modifiedCount > 0) {
         // Log each successful disable so a partial-replay revoke (key

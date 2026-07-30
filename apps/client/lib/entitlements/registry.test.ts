@@ -11,6 +11,9 @@ import {
   signupCreditsForEmail,
   KNOWN_ENTITLEMENT_KEYS,
   unknownEntitlementKeys,
+  BYPASS_EXEMPT_ENTITLEMENTS,
+  isBypassExemptEntitlement,
+  EMBED_WHITELABEL_ENTITLEMENT_KEY,
 } from './registry';
 
 // Behavior tests are table-driven over the real registry rows (no product
@@ -349,5 +352,31 @@ describe('KNOWN_ENTITLEMENT_KEYS / unknownEntitlementKeys', () => {
   it('treats a known key as known regardless of case/whitespace', () => {
     const known = KNOWN_ENTITLEMENT_KEYS[0];
     expect(unknownEntitlementKeys([` ${known.toUpperCase()} `])).toEqual([]);
+  });
+});
+
+describe('BYPASS_EXEMPT_ENTITLEMENTS / isBypassExemptEntitlement', () => {
+  it('reports the embed white-label key as bypass-exempt', () => {
+    expect(isBypassExemptEntitlement(EMBED_WHITELABEL_ENTITLEMENT_KEY)).toBe(true);
+  });
+
+  it('normalizes the input before testing membership (case/whitespace insensitive)', () => {
+    expect(isBypassExemptEntitlement(` ${EMBED_WHITELABEL_ENTITLEMENT_KEY.toUpperCase()} `)).toBe(true);
+  });
+
+  it('reports a non-exempt known key as not bypass-exempt', () => {
+    const nonExempt = KNOWN_ENTITLEMENT_KEYS.find(k => k !== EMBED_WHITELABEL_ENTITLEMENT_KEY);
+    if (!nonExempt) throw new Error('fixture assumption: registry has a non-exempt key besides embed white-label');
+    expect(isBypassExemptEntitlement(nonExempt)).toBe(false);
+  });
+
+  it('has exactly one member - a new exemption is a deliberate test change, not a silent add', () => {
+    expect(BYPASS_EXEMPT_ENTITLEMENTS.size).toBe(1);
+  });
+
+  it('every exempt key is a real known entitlement (guards a typo that would never match)', () => {
+    for (const key of BYPASS_EXEMPT_ENTITLEMENTS) {
+      expect(KNOWN_ENTITLEMENT_KEYS).toContain(key);
+    }
   });
 });

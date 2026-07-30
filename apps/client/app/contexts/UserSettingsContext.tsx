@@ -19,6 +19,7 @@ import { useSettingsFromServer } from '../hooks/data/settings';
 
 export type ExperimentalFeature =
   | 'enableQuestMaster'
+  | 'enableQuestMasterV5'
   | 'enableMementos'
   | 'enableMementosV2'
   | 'enableArtifacts'
@@ -31,6 +32,7 @@ export type ExperimentalFeature =
   | 'enableBmPi'
   | 'enableLattice'
   | 'enableBriefcase'
+  | 'enableHearth'
   // Layer-1 gate for the Agent-mode composer toggle.
   // Hides the entire feature surface until parity ships. Default false for everyone.
   | 'agentMode';
@@ -52,6 +54,8 @@ export interface UserSettings {
   /** Layer-2 Agent-mode preference. Default `'off'` per `IUserPreferences`. */
   agentModeDefault: 'off' | 'auto' | 'on';
   showFunTools: boolean;
+  /** Whether generated TTS / sound-effect audio is saved as a browsable FabFile. Default: true. */
+  saveGeneratedAudio: boolean;
 }
 
 interface UserSettingsContextProps {
@@ -81,6 +85,7 @@ const defaultSettings: UserSettings = {
   scrollbarWidth: 10,
   experimentalFeatures: {
     enableQuestMaster: false,
+    enableQuestMasterV5: false,
     enableMementos: false,
     enableMementosV2: false,
     enableArtifacts: false,
@@ -92,6 +97,7 @@ const defaultSettings: UserSettings = {
     enableResearchEngine: false,
     enableBmPi: false,
     enableLattice: false,
+    enableHearth: false,
     enableBriefcase: false,
     agentMode: false,
   },
@@ -100,6 +106,7 @@ const defaultSettings: UserSettings = {
   toolsCatalogCollapsed: false,
   agentModeDefault: 'off',
   showFunTools: false,
+  saveGeneratedAudio: true,
 };
 
 /** Scalar keys shared between IUserPreferences and UserSettings. */
@@ -115,6 +122,7 @@ const SCALAR_PREF_KEYS = [
   'toolsCatalogCollapsed',
   'agentModeDefault',
   'showFunTools',
+  'saveGeneratedAudio',
 ] as const;
 
 /** Apply server preferences on top of defaults. Non-null server values win. */

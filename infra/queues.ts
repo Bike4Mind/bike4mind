@@ -907,7 +907,10 @@ const sreFixQueueSubscription = sreFixQueue.subscribe(
     handler: 'apps/client/server/queueHandlers/sreFix.dispatch',
     runtime: 'nodejs24.x',
     timeout: '2 minutes',
-    memory: '256 MB',
+    // 1024 MB, not 256: at 256 the handler died in INIT (module graph is the full
+    // @bike4mind/database model set + GitHubService + Slack) and never logged a line.
+    // Sized off sreJobQueue, which loads a comparable graph and peaks under 500 MB.
+    memory: '1024 MB',
     vpc: lambdaVpc,
     link: [...allSecrets],
     logging: {
@@ -1174,6 +1177,58 @@ const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subs
   ],
 });
 
+// Bob Panel Run Queue (@bike4mind/premium-bob, issue #33 step B)
+// POST /api/premium-bob/bob-run creates the bob_runs doc + enqueues here, then returns
+// 202 {runId}; this worker runs the ~60s five-persona panel and finalizes the doc. The
+// handler lives in the overlay and is re-exported into the stable premium-generated path
+// via b4mContributions.serverHandlerStubs (same pattern as optihashiRunCompletion above).
+// Bob is a paid premium AI feature whose messages carry user prompts and panel outputs, so it
+// matches the optihashi/agent-continuation sensitivity tier: KMS-at-rest on both queues, and an
+// extended DLQ retention so a stuck panel run is still debuggable beyond SQS's 4-day default
+// (e.g. a weekend + on-call handoff).
+const bobRunQueueDLQ = new sst.aws.Queue('bobRunQueueDLQ', {
+  transform: {
+    queue: {
+      kmsMasterKeyId: 'alias/aws/sqs',
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const bobRunQueue = new sst.aws.Queue('bobRunQueue', {
+  // ≥ the worker timeout below (+ buffer) so an in-flight run isn't redelivered mid-panel.
+  visibilityTimeout: '6 minutes',
+  dlq: {
+    queue: bobRunQueueDLQ.arn,
+    retry: 2,
+  },
+  transform: {
+    queue: {
+      kmsMasterKeyId: 'alias/aws/sqs',
+    },
+  },
+});
+const bobRunQueueSubscription = bobRunQueue.subscribe(
+  {
+    handler: 'apps/client/server/premium-generated/bobRunWorker.dispatch',
+    runtime: 'nodejs24.x',
+    // The panel (5 parallel persona reads + merge + publish) targets ≤ ~5 min end to end.
+    timeout: '5 minutes',
+    memory: '1024 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    // Progress/finalize is written to the bob_runs doc; ManageConnections lets the worker
+    // push live status over the reading-screen websocket subscription (issue #33 step D).
+    permissions: [{ actions: ['execute-api:ManageConnections'], resources: ['*'] }],
+  },
+  SINGLE_RECORD_BATCH
+);
+
 export {
   // Queues
   fabFileChunkQueue,
@@ -1199,6 +1254,7 @@ export {
   secopsTriageQueue,
   agentContinuationQueue,
   optihashiRunCompletionQueue,
+  bobRunQueue,
   // DLQs
   fabFileChunkQueueDLQ,
   fabFileVectorizeQueueDLQ,
@@ -1226,6 +1282,7 @@ export {
   overwatchAnalyticsQueueDLQ,
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
+  bobRunQueueDLQ,
   // Subscriptions
   fabFileChunkQueueSubscription,
   fabFileVectorizeQueueSubscription,
@@ -1250,4 +1307,5 @@ export {
   secopsTriageQueueSubscription,
   overwatchAnalyticsQueueSubscription,
   optihashiRunCompletionQueueSubscription,
+  bobRunQueueSubscription,
 };

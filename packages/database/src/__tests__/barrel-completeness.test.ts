@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const MODELS_DIR = path.resolve(__dirname, '../models');
-const DOMAIN_DIRS = ['auth', 'content', 'social', 'billing', 'ai', 'infra'];
+const DOMAIN_DIRS = ['auth', 'content', 'social', 'billing', 'ai', 'infra', 'hearth'];
 
 function getModelFilesInDomain(dir: string): string[] {
   const files: string[] = [];

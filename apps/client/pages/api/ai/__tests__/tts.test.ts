@@ -16,6 +16,7 @@ const { mocks, InsufficientTtsCreditsError, TtsProviderNotConfiguredError, Unpro
         deductTtsCredits: vi.fn(),
         synthesize: vi.fn(),
         exceedsTtsResponseLimit: vi.fn(),
+        persistGeneratedAudio: vi.fn(),
       },
     };
   }
@@ -52,10 +53,19 @@ vi.mock('@server/utils/ttsResponseLimit', () => ({
   exceedsTtsResponseLimit: (...a: unknown[]) => mocks.exceedsTtsResponseLimit(...a),
   TTS_RESPONSE_TOO_LARGE_MESSAGE: 'too large',
 }));
+// Mock the persistence helper so this route test doesn't pull in the real
+// FabFile/services/database stack (which references @bike4mind/common exports
+// not provided by the partial mock above).
+vi.mock('@server/utils/persistGeneratedAudio', () => ({
+  persistGeneratedAudio: (...a: unknown[]) => mocks.persistGeneratedAudio(...a),
+}));
 
 import handler from '../tts';
 
-const run = (body: Record<string, unknown>, user: { id?: string } | undefined = { id: 'u1' }) => {
+const run = (
+  body: Record<string, unknown>,
+  user: { id?: string; preferences?: { saveGeneratedAudio?: boolean } } | undefined = { id: 'u1' }
+) => {
   const { req, res } = createMocks({ method: 'POST', body });
   (req as Record<string, unknown>).user = user;
   (req as Record<string, unknown>).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -80,6 +90,12 @@ beforeEach(() => {
   mocks.assertTtsCreditsAvailable.mockResolvedValue(undefined);
   mocks.deductTtsCredits.mockResolvedValue(undefined);
   mocks.exceedsTtsResponseLimit.mockReturnValue(false);
+  mocks.persistGeneratedAudio.mockResolvedValue({
+    saved: true,
+    fabFileId: 'fab-1',
+    fileName: 'speech-1.mp3',
+    fileUrl: 'https://s3/get',
+  });
   okSynthesis();
 });
 
@@ -146,10 +162,43 @@ describe('POST /api/ai/tts', () => {
     expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
   });
 
+  it('forwards languageCode to the provider as the language option', async () => {
+    const { promise } = run({ text: '2', provider: 'elevenlabs', languageCode: 'en' });
+    await promise;
+    expect(mocks.synthesize).toHaveBeenCalledWith('2', expect.objectContaining({ language: 'en' }));
+  });
+
+  it('passes language as undefined when languageCode is omitted (preserves default behavior)', async () => {
+    const { promise } = run({ text: 'hi' });
+    await promise;
+    expect(mocks.synthesize).toHaveBeenCalledWith('hi', expect.objectContaining({ language: undefined }));
+  });
+
   it('does not bill a caller without a resolved user id', async () => {
     const { promise } = run({ text: 'hi' }, {});
     await promise.catch(() => undefined);
     expect(mocks.assertTtsCreditsAvailable).not.toHaveBeenCalled();
     expect(mocks.deductTtsCredits).not.toHaveBeenCalled();
+  });
+
+  it('persists the audio by default and surfaces the saved reference in the base64 body', async () => {
+    const { res, promise } = run({ text: 'hello', encoding: 'base64' });
+    await promise;
+    expect(mocks.persistGeneratedAudio).toHaveBeenCalledTimes(1);
+    expect(mocks.persistGeneratedAudio).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', source: 'tts' }));
+    expect(res._getJSONData()).toMatchObject({ saved: true, fabFileId: 'fab-1', fileUrl: 'https://s3/get' });
+  });
+
+  it('skips persistence for a throwaway preview (preview: true)', async () => {
+    const { res, promise } = run({ text: 'hi', preview: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.persistGeneratedAudio).not.toHaveBeenCalled();
+  });
+
+  it('skips persistence when the user opted out (saveGeneratedAudio: false)', async () => {
+    const { promise } = run({ text: 'hi' }, { id: 'u1', preferences: { saveGeneratedAudio: false } });
+    await promise;
+    expect(mocks.persistGeneratedAudio).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import axios, { AxiosResponse } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
+import { uploadFileToUrl } from './uploadFileToUrl';
 
 export const updateUserToServer = async (userId: string, userData: Partial<IUser>) => {
   const { data } = await api.put(`/api/users/${userId}/update`, userData);
@@ -181,11 +182,9 @@ export function useUploadProfilePhoto() {
 
       const { url, fileId } = data;
 
-      await axios.put(url, file, {
-        headers: {
-          'Content-Type': file.type,
-        },
-      });
+      // The shared helper handles both shapes the server can hand back: an S3 presign (hosted,
+      // raw axios) and the same-origin app-file upload proxy (self-host, authed api).
+      await uploadFileToUrl(url, file, file.type);
 
       return fileId;
     },

@@ -20,7 +20,14 @@
  * pre-PR 401 disclosed nothing), so the shell shows a constant title and the real title
  * only appears once the authenticated `?raw=1` srcdoc renders. The login URL is built
  * from `location.*` at runtime. No server interpolation -> no injection surface.
+ *
+ * Carries `noindex` unconditionally: this shell is only ever returned for a GATED
+ * artifact, so it is by definition not search-discoverable. It holds no artifact data,
+ * so an indexed copy would leak nothing - but a gated artifact's URL still has no
+ * business in a search index. Mirrors the header the serve route already sets.
  */
+import { HASH_BRIDGE_JS } from './fragmentNav';
+
 export function renderBundleLoaderShell(): string {
   // Bootstrap script: no server-interpolated values. The localStorage key mirrors
   // ACCESS_TOKEN_STORAGE_KEY in app/hooks/useAccessToken.ts.
@@ -80,6 +87,8 @@ export function renderBundleLoaderShell(): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
 <title>${sharedTitle}</title>
 <style>
   html,body{margin:0;padding:0;height:100%}
@@ -95,6 +104,7 @@ export function renderBundleLoaderShell(): string {
 <div id="b4m-msg"></div>
 <noscript><div style="max-width:540px;margin:18vh auto 0;padding:0 1.25rem;text-align:center;font-family:system-ui,sans-serif">This is a private item. <a href="/login">Sign in</a> to view it.</div></noscript>
 <script>${bootstrap}</script>
+<script>${HASH_BRIDGE_JS}</script>
 </body>
 </html>`;
 }

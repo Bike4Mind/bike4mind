@@ -5,7 +5,6 @@ import { toast } from 'sonner';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
-import WaterOutlinedIcon from '@mui/icons-material/WaterOutlined';
 import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
@@ -34,11 +33,13 @@ import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
 import FunctionsOutlinedIcon from '@mui/icons-material/FunctionsOutlined';
 import CalculateOutlinedIcon from '@mui/icons-material/CalculateOutlined';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
+import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import { api } from '@client/app/contexts/ApiContext';
 import { useGearsStatus, type GearKey, type GearStatus } from '@client/app/hooks/useGearsStatus';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
+import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 
 /**
  * Gears - the earned-nav progression page.
@@ -52,9 +53,10 @@ import { useFileBrowser } from '@client/app/components/Files/Browser';
 const GEAR_ICONS: Partial<Record<GearKey, React.ReactNode>> = {
   projects: <HubOutlinedIcon />,
   agents: <SmartToyOutlinedIcon />,
-  datalakes: <WaterOutlinedIcon />,
+  datalakes: <DataLakeIcon />,
   files: <FolderSharedIcon />,
   published: <PublicOutlinedIcon />,
+  hearth: <LocalFireDepartmentOutlinedIcon />,
   image: <ImageOutlinedIcon />,
   models: <SwapHorizOutlinedIcon />,
   react: <CodeOutlinedIcon />,
@@ -97,6 +99,7 @@ const GearsPage = () => {
   const gearVisible = (key: GearKey) => {
     if (key === 'agents') return isFeatureEnabled('enableAgents');
     if (key === 'datalakes') return isAdminFeatureEnabled('EnableDataLakes');
+    if (key === 'hearth') return isFeatureEnabled('enableHearth');
     return true;
   };
   const gears = (data?.gears ?? []).filter(g => gearVisible(g.key));

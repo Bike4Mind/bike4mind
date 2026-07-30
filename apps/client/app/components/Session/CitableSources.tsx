@@ -8,6 +8,7 @@ import {
   WarningAmberRounded as TruncatedIcon,
 } from '@mui/icons-material';
 import { CitableSource, CitableSourceType } from '@bike4mind/common';
+import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useNavigate } from '@tanstack/react-router';
 import { useCitationInteraction } from './CitationInteractionContext';
 
@@ -62,7 +63,7 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
   let faviconUrl: string | null = null;
   if (isInternal) {
     // Show a friendly label for internal deep-links instead of the raw path
-    hostname = 'Data Lake';
+    hostname = DATA_LAKE;
   } else {
     try {
       if (source.url) {

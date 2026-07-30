@@ -94,8 +94,14 @@ export function mapBackendToProvider(backend: ModelBackend | string): ModelTelem
     case ModelBackend.Ollama:
     case 'ollama':
       return 'ollama';
+    case ModelBackend.Kimi:
+    case 'kimi':
+      return 'moonshot';
     default:
-      // Default to anthropic for unknown backends
+      // Default to anthropic for unknown backends. This is a reporting hazard, not
+      // a safe fallback: a backend missing a case above is silently counted as
+      // Anthropic traffic, so any dashboard filtered on provider = 'anthropic'
+      // absorbs it. Add the case when adding a backend.
       return 'anthropic';
   }
 }

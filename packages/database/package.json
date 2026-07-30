@@ -37,6 +37,10 @@
     "./infra": {
       "types": "./dist/models/infra/index.d.mts",
       "default": "./dist/models/infra/index.mjs"
+    },
+    "./hearth": {
+      "types": "./dist/models/hearth/index.d.mts",
+      "default": "./dist/models/hearth/index.mjs"
     }
   },
   "scripts": {
@@ -50,11 +54,13 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
-    "generate:model-price-seed": "tsx src/seeds/regenerateModelPriceSeed.ts"
+    "generate:model-price-seed": "tsx src/seeds/regenerateModelPriceSeed.ts",
+    "generate:model-catalog-seed": "tsx src/seeds/regenerateModelCatalogSeed.ts"
   },
   "dependencies": {
     "@bike4mind/common": "workspace:*",
     "@bike4mind/db-core": "workspace:*",
+    "@bike4mind/hearth": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@casl/ability": "^6.8.1",

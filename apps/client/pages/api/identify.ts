@@ -1,8 +1,8 @@
 import { requireUser } from '@server/middlewares/requireUser';
 import { baseApi } from '@server/middlewares/baseApi';
 import { secretRotationRepository } from '@bike4mind/database/infra';
-import { dayjs } from '@bike4mind/common';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 
 const handler = baseApi()
   .use(requireUser)
@@ -20,10 +20,8 @@ const handler = baseApi()
     } else {
       const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
       let previousSecret = undefined;
-      // Accept the previous key only when JWT_SECRET was rotated within the last 24 hours.
-      // Mirrors auth.ts / refreshToken.ts; the prior isBefore(now + 1 day) was true for any
-      // past rotation, leaving the retired secret valid indefinitely on this path.
-      if (dayjs(secretRotation?.rotatedAt).isAfter(dayjs().subtract(1, 'day'))) {
+      // Accept the previous key only within the shared rotation grace window.
+      if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {
         previousSecret = secretRotation?.previousKey;
       }
       const decoded = authTokenGenerator.verifyToken(accessToken, previousSecret);

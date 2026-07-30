@@ -3,19 +3,21 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
+import * as z from 'zod';
+
+const forceResetBodySchema = z.object({
+  userId: z.string().min(1),
+});
 
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {
     const adminUser = req.user;
-    const { userId } = req.body as { userId?: string };
 
-    if (!adminUser) {
-      return res.status(401).json({ error: 'User not found' });
+    if (!adminUser?.isAdmin) {
+      return res.status(403).json({ error: 'Forbidden' });
     }
 
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
-    }
+    const { userId } = forceResetBodySchema.parse(req.body);
 
     try {
       const result = await mfaService.forceResetMFA({ targetUserId: userId, adminUser }, userRepository);

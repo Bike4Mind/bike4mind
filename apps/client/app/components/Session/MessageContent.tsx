@@ -35,7 +35,8 @@ import BugReportModal from '@client/app/components/BugReportModal';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
-import { Save as SaveIcon, Add as AddIcon, Storage as StorageIcon } from '@mui/icons-material';
+import { Save as SaveIcon, Add as AddIcon } from '@mui/icons-material';
+import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { usePromptMetaInspector } from '@client/app/components/Session/PromptMetaInspector';
@@ -678,9 +679,7 @@ const MessageContent: React.FC<ContentProps> = memo(
             in agentExecutor.ts). Lazy-loads the iteration trace from the
             AgentExecution doc and replays it inline under the reply. */}
         {messageData.agentExecutionId && sessionId ? (
-          <Box sx={{ mt: 0.5 }}>
-            <ReasoningDisclosure agentExecutionId={messageData.agentExecutionId} sessionId={sessionId} />
-          </Box>
+          <ReasoningDisclosure agentExecutionId={messageData.agentExecutionId} sessionId={sessionId} />
         ) : null}
         {messageData.oob &&
           (() => {
@@ -889,9 +888,9 @@ const MessageContent: React.FC<ContentProps> = memo(
                           data-testid="message-send-to-datalake"
                         >
                           <ListItemDecorator>
-                            <StorageIcon />
+                            <DataLakeIcon />
                           </ListItemDecorator>
-                          Send to Data Lake
+                          Send to {DATA_LAKE}
                         </MenuItem>
                       )}
                       {hasShareableReply && (
@@ -1048,9 +1047,9 @@ const MessageContent: React.FC<ContentProps> = memo(
                           data-testid="message-send-to-datalake"
                         >
                           <ListItemDecorator>
-                            <StorageIcon />
+                            <DataLakeIcon />
                           </ListItemDecorator>
-                          Send to Data Lake
+                          Send to {DATA_LAKE}
                         </MenuItem>
                       )}
                       {hasShareableReply && (

@@ -17,7 +17,6 @@ import {
 } from '@mui/joy';
 import { useSetLakeVisibility, useUpdateDataLake } from '@client/app/hooks/data/dataLakes';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
-import { toast } from 'sonner';
 
 export interface EditableLake {
   id: string;
@@ -29,13 +28,23 @@ export interface EditableLake {
   organizationId: string;
   /** Public opt-in. With organizationId, derives the tri-state Visibility control. */
   isPublic: boolean;
+  /**
+   * Per-lake system prompt. '' both when unset AND when the caller may not read it (the server
+   * sends it only to a lake's editors), so the field renders off `canManage`, never off this.
+   */
+  systemPrompt: string;
+  /**
+   * Whether the caller may manage this lake - server-computed, see DataLakeConfig.canManage.
+   * Gates the editor-only System prompt field.
+   */
+  canManage: boolean;
 }
 
 /**
- * Edit a lake's metadata (rename, description, access gate). Wires the previously
- * unused useUpdateDataLake hook. Gates can be set or changed but not cleared here -
- * the backend rejects empty values (a deliberate PHI-boundary non-affordance), so we
- * only send a gate field when it's non-empty.
+ * Edit a lake's metadata (rename, description, access gate). Gate fields are always sent,
+ * including when blank: the backend reads '' as "remove this gate", so a lake gated by
+ * mistake can be returned to ungated. Ungated is NOT world-readable - the lake falls back
+ * to its Visibility (private/organization/public), per Private-by-default on the server.
  */
 export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | null; onClose: () => void }) {
   const updateLake = useUpdateDataLake();
@@ -67,6 +76,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [description, setDescription] = useState('');
   const [requiredUserTag, setRequiredUserTag] = useState('');
   const [requiredEntitlement, setRequiredEntitlement] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('');
 
   // Seed the form once per opened lake, keyed on id (NOT the object): `lake` is now derived
   // from the live list, so it changes identity on every refetch - keying on id keeps a
@@ -77,6 +87,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setDescription(lake.description);
       setRequiredUserTag(lake.requiredUserTag);
       setRequiredEntitlement(lake.requiredEntitlement);
+      setSystemPrompt(lake.systemPrompt);
     }
     // Intentional id-keying: seed once per lake, not on every live-object refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,9 +101,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
     setConfirmPublicOpen(false);
   }, [lake?.id]);
 
-  // A gate can be set or changed but not cleared (the backend rejects empty values). If the
-  // user blanks a previously-set gate, the Save silently keeps the old value - surface that
-  // instead of only showing the generic "Data lake updated" success.
+  // Blanking a previously-set gate un-gates the lake. Call it out on the way out: what the
+  // lake becomes reachable by afterwards is its Visibility, which is not what "removed the
+  // gate" reads like on its own.
   const clearingUserTag = !!lake?.requiredUserTag && !requiredUserTag.trim();
   const clearingEntitlement = !!lake?.requiredEntitlement && !requiredEntitlement.trim();
 
@@ -100,34 +111,20 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
     if (!lake) return;
     const trimmedName = name.trim();
     if (!trimmedName) return;
-    const clearing = clearingUserTag || clearingEntitlement;
-    if (clearing) {
-      const kept =
-        clearingUserTag && clearingEntitlement
-          ? 'tag and entitlement were'
-          : clearingUserTag
-            ? 'tag was'
-            : 'entitlement was';
-      toast.warning(`Access gates can be changed but not cleared here — the existing ${kept} kept.`);
-    }
-    // If blanking a gate is the ONLY change, the update is a no-op the backend ignores - skip it so
-    // we don't also fire a misleading "Data lake updated" success alongside the warning above.
-    const hasOtherChange =
-      trimmedName !== lake.name ||
-      description.trim() !== lake.description ||
-      (!!requiredUserTag.trim() && requiredUserTag.trim() !== lake.requiredUserTag) ||
-      (!!requiredEntitlement.trim() && requiredEntitlement.trim() !== lake.requiredEntitlement);
-    if (clearing && !hasOtherChange) {
-      onClose();
-      return;
-    }
     updateLake.mutate(
       {
         id: lake.id,
         name: trimmedName,
         description: description.trim(),
-        ...(requiredUserTag.trim() ? { requiredUserTag: requiredUserTag.trim() } : {}),
-        ...(requiredEntitlement.trim() ? { requiredEntitlement: requiredEntitlement.trim() } : {}),
+        // Sent even when blank - '' is the backend's "remove this gate" sentinel.
+        requiredUserTag: requiredUserTag.trim(),
+        requiredEntitlement: requiredEntitlement.trim(),
+        // Only when the field was actually shown. Defense in depth for a state that should be
+        // unreachable: the gear button is gated on canManage too, and updateDataLake rejects a
+        // non-manager's whole request with a 400 rather than applying part of it - so this branch
+        // guards a path no user can currently take. Blank from an EDITOR is a deliberate clear,
+        // and '' is what unsets it.
+        ...(lake.canManage ? { systemPrompt: systemPrompt.trim() } : {}),
       },
       { onSuccess: onClose }
     );
@@ -157,6 +154,29 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   data-testid="datalake-settings-description"
                 />
               </FormControl>
+              {/* Editor-only: the wording steers every answer drawn from this lake, but a user
+                  who can merely read the lake must never see it - so this renders off the
+                  server-computed manage flag, and the server withholds the text from everyone
+                  else regardless of what the client does with it. */}
+              {lake?.canManage && (
+                <FormControl>
+                  <FormLabel>System prompt</FormLabel>
+                  <Textarea
+                    minRows={3}
+                    maxRows={10}
+                    value={systemPrompt}
+                    onChange={e => setSystemPrompt(e.target.value)}
+                    placeholder="e.g. Answer only from this lake's documents, and always cite the source file."
+                    data-testid="datalake-systemprompt-input"
+                  />
+                  <FormHelperText data-testid="datalake-systemprompt-help">
+                    {`Extra instructions applied to your chats, and to your organization's chats, while this lake is accessible - not only when the lake is used. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+                      // Count what SAVE will persist (trimmed), not the raw field contents.
+                      systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
+                    }`}
+                  </FormHelperText>
+                </FormControl>
+              )}
               <FormControl>
                 <FormLabel>Visibility</FormLabel>
                 <RadioGroup
@@ -194,7 +214,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   {visibility === 'public'
                     ? 'Public — readable by everyone across the app. Only you can manage or add files.'
                     : hasGate
-                      ? 'This lake has an access gate, so it can’t be made public. Choose Private or Organization.'
+                      ? 'This lake has an access gate, so it can’t be made public. Clear the gate below and save, then reopen settings to publish.'
                       : visibility === 'organization'
                         ? `Shared with everyone in ${lakeOrgName ?? 'your organization'}.`
                         : canShareToOrg
@@ -204,7 +224,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                             : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
                 </FormHelperText>
               </FormControl>
-              <FormControl error={clearingUserTag}>
+              <FormControl>
                 <FormLabel>Access tag</FormLabel>
                 <Input
                   value={requiredUserTag}
@@ -212,13 +232,13 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   placeholder="e.g. Opti"
                   data-testid="datalake-settings-usertag"
                 />
-                <FormHelperText>
+                <FormHelperText data-testid="datalake-settings-usertag-help">
                   {clearingUserTag
-                    ? 'A gate can’t be cleared here — saving keeps the current tag. Change it instead, or contact an admin to remove it.'
-                    : 'Users must hold this tag to access the lake. Can be set or changed, not cleared.'}
+                    ? `Saving removes the “${lake?.requiredUserTag}” gate. Access then follows Visibility above.`
+                    : 'Users must hold this tag to access the lake. Leave blank for no tag gate.'}
                 </FormHelperText>
               </FormControl>
-              <FormControl error={clearingEntitlement}>
+              <FormControl>
                 <FormLabel>Required entitlement</FormLabel>
                 <Input
                   value={requiredEntitlement}
@@ -226,10 +246,10 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   placeholder="e.g. product:pro"
                   data-testid="datalake-settings-entitlement"
                 />
-                <FormHelperText>
+                <FormHelperText data-testid="datalake-settings-entitlement-help">
                   {clearingEntitlement
-                    ? 'A gate can’t be cleared here — saving keeps the current entitlement. Change it instead, or contact an admin to remove it.'
-                    : 'Namespaced key (e.g. "product:pro"). Can be set or changed, not cleared.'}
+                    ? `Saving removes the “${lake?.requiredEntitlement}” gate. Access then follows Visibility above.`
+                    : 'Namespaced key (e.g. "product:pro"). Leave blank for no entitlement gate.'}
                 </FormHelperText>
               </FormControl>
             </Stack>

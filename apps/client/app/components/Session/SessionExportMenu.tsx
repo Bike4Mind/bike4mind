@@ -20,8 +20,8 @@ import {
   GridOn as ExcelIcon,
   Article as WordIcon,
   Html as HtmlIcon,
-  Storage as StorageIcon,
 } from '@mui/icons-material';
+import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import {
@@ -271,9 +271,9 @@ const SessionExportMenu: React.FC<SessionExportMenuProps> = ({
 
             <MenuItem data-testid="session-send-to-datalake" onClick={handleSendToDataLake}>
               <ListItemDecorator>
-                <StorageIcon fontSize="small" />
+                <DataLakeIcon fontSize="small" />
               </ListItemDecorator>
-              Send to Data Lake
+              Send to {DATA_LAKE}
             </MenuItem>
           </>
         )}

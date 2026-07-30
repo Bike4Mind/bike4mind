@@ -14,6 +14,35 @@ interface AddVersionRequest {
   description: string;
 }
 
+/**
+ * Models an admin may select for agent-ops generation. Curated (not the whole catalog), so it
+ * stays a hand-maintained list -- but it MUST stay in sync with the `LLM_MODELS` picker in
+ * AgentOpsTab.tsx, or the UI offers a choice this endpoint then rejects with a 400. A test in
+ * __tests__/agent-ops-settings.test.ts pins the two lists together, because they had already
+ * drifted: the picker offered claude-opus-5 as its recommended default while this list omitted
+ * it, so choosing it 400'd.
+ *
+ * Deprecated IDs must NOT appear here -- selecting one is a new write, and there is no reason to
+ * let an admin newly pin a retired model. Existing documents pinned to one keep working via
+ * resolveDeprecatedModelId, and AgentOpsLlmModel retains the value for Mongoose validation.
+ */
+export const AGENT_OPS_VALID_MODELS: string[] = [
+  'claude-opus-5',
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-opus-4-6',
+  'claude-sonnet-5',
+  'claude-sonnet-4-6',
+  'claude-opus-4-20250514',
+  'claude-sonnet-4-5-20250929',
+  'claude-haiku-4-5-20251001',
+  'o3-2025-04-16',
+  'gpt-4.1-2025-04-14',
+  'grok-4.5',
+  'gpt-4o',
+  'gpt-4o-mini',
+];
+
 const handler = baseApi()
   .get(async (req, res) => {
     if (!req.user!.isAdmin) {
@@ -48,22 +77,7 @@ const handler = baseApi()
     const { generationLlmModel, rateLimitSeconds, isEnabled } = req.body;
 
     if (generationLlmModel) {
-      const validModels = [
-        'claude-opus-4-8',
-        'claude-opus-4-7',
-        'claude-opus-4-6',
-        'claude-sonnet-5',
-        'claude-sonnet-4-6',
-        'claude-opus-4-20250514',
-        'claude-sonnet-4-5-20250929',
-        'claude-haiku-4-5-20251001',
-        'o3-2025-04-16',
-        'gpt-4.1-2025-04-14',
-        'grok-3',
-        'gpt-4o',
-        'gpt-4o-mini',
-      ];
-      if (!validModels.includes(generationLlmModel)) {
+      if (!AGENT_OPS_VALID_MODELS.includes(generationLlmModel)) {
         throw new BadRequestError('Invalid LLM model specified');
       }
     }

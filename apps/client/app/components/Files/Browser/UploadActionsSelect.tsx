@@ -5,8 +5,8 @@ import {
   InsertLink as InsertLinkIcon,
   AutoFixHigh as AutoFixHighIcon,
   KeyboardArrowDown as KeyboardArrowDownIcon,
-  Storage as StorageIcon,
 } from '@mui/icons-material';
+import { DataLakeIcon, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 
 interface UploadActionsSelectProps {
   onUploadFiles?: (files: File[]) => void;
@@ -218,8 +218,8 @@ export const UploadActionsSelect: React.FC<UploadActionsSelectProps> = ({
           // Opens the Data Lakes management panel (list + create + add files + lifecycle),
           // not the create wizard directly. Creation lives behind the panel's Create button.
           <Option value="datalake">
-            <StorageIcon sx={{ fontSize: '18px', color: theme => `${theme.palette.text.primary}80` }} />
-            Data Lakes
+            <DataLakeIcon sx={{ fontSize: '18px', color: theme => `${theme.palette.text.primary}80` }} />
+            {DATA_LAKES}
           </Option>
         )}
       </Select>

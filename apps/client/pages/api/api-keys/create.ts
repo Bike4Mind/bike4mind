@@ -5,9 +5,10 @@ import { apiKeyRepository } from '@bike4mind/database';
 import { ApiKeyEvents } from '@bike4mind/common';
 
 const handler = baseApi().post(async (req, res) => {
-  const userId = req.user?.id;
+  const userId = req.user!.id;
+  const body = apiKeyService.createApiKeySchema.parse(req.body);
 
-  const newApiKey = await apiKeyService.createApiKey(userId, req.body as any, {
+  const newApiKey = await apiKeyService.createApiKey(userId, body, {
     db: {
       apiKeys: apiKeyRepository,
     },

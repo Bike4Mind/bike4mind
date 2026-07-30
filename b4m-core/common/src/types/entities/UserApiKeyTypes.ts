@@ -24,6 +24,12 @@ export enum ApiKeyScope {
    *  bound to (`agentId`). Like CC_BRIDGE, a leaked embed key has a narrow blast
    *  radius: it can talk to one agent from allow-listed origins, nothing else. */
   EMBED_CHAT = 'embed:chat',
+  /** Read a Hearth channel list and replay its events. Read-only: it cannot
+   *  advance an actor cursor, because consuming events out from under a
+   *  legitimate agent reader is a denial of context, not a read. */
+  HEARTH_READ = 'hearth:read',
+  /** Append Hearth events, create channels, and advance actor cursors. */
+  HEARTH_WRITE = 'hearth:write',
 }
 
 export enum ApiKeyStatus {
@@ -110,6 +116,21 @@ export interface IUserApiKey {
   status: ApiKeyStatus;
   expiresAt?: Date; // Optional expiration
   lastUsedAt?: Date;
+  /**
+   * Revocation audit trail, all set together the first time a key is revoked and
+   * never overwritten afterwards. `updatedAt` is not a substitute - any write to
+   * the document bumps it.
+   */
+  revokedAt?: Date;
+  /**
+   * Acting user who revoked the key. Absent for system-initiated revocations
+   * (rollbacks, bulk deactivation) that have no human actor. Distinct from
+   * `userId` (the minter) when an org admin revokes a key billed to an org they
+   * administer but did not mint.
+   */
+  revokedBy?: string;
+  /** Why the key was revoked, when the caller supplied a reason. */
+  revokedReason?: string;
   rateLimit: IUserApiKeyRateLimit;
   usage: IUserApiKeyUsage;
   metadata: IUserApiKeyMetadata;
@@ -122,7 +143,9 @@ export interface IUserApiKey {
    * `userId`. `Organization` = the key's AI usage debits `organizationId`'s
    * shared credit pool instead of the minting user; the minter stays in `userId`
    * for attribution + management. Invariant: `Organization` iff `organizationId`
-   * is set. Only `User` and `Organization` are valid here (never `Agent`).
+   * is set. Only `User` and `Organization` are valid here (never `Agent`). An
+   * `embed:chat` key must be `Organization`-billed - enforced at mint and at
+   * serve/session (assertEmbedCredential).
    */
   billingOwnerType?: ApiKeyBillingOwnerType;
   /** Organization whose credit pool this key bills. Set iff billingOwnerType is Organization. */
@@ -139,6 +162,14 @@ export interface IUserApiKey {
    * `spendCap !== undefined`, never a truthy check.
    */
   spendCap?: number;
+  /**
+   * Whether this embed key's billing OWNER holds the white-label entitlement.
+   * Computed server-side on GET /api/user-api-keys only (never persisted) so the
+   * Configure UI can gate the hide-branding toggle on the owner's plan rather
+   * than the viewer's - matching the owner-scoped serve/write rule. Boolean only:
+   * the owner's tags or the reason are never sent to the client.
+   */
+  ownerHasWhitelabel?: boolean;
 }
 
 /**
@@ -172,6 +203,14 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   countActiveByProductId: (productId: string) => Promise<number>;
   /** All keys billed to an organization's credit pool (any status), newest first. */
   findByOrganizationId: (organizationId: string) => Promise<IUserApiKeyDocument[]>;
+  /**
+   * The key with this id iff it is org-billed to one of the given orgs (any
+   * status); null for an empty set (fail-closed, no query). Positive org-admin
+   * scope for the configure/rotate/revoke write paths - mirrors how the LIST
+   * route surfaces org keys, so an org admin can act on any key billed to an org
+   * they administer, not just keys they minted.
+   */
+  findByOrganizationIdsAndId: (organizationIds: string[], id: string) => Promise<IUserApiKeyDocument | null>;
   /** Active keys bound to an agent (embed keys), newest first; uses the sparse
    *  { agentId, status } index. */
   findByAgentId: (agentId: string) => Promise<IUserApiKeyDocument[]>;

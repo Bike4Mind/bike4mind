@@ -1,4 +1,4 @@
-import { IFabFileRepository, IProjectRepository } from '@bike4mind/common';
+import { IFabFileRepository, IProjectRepository, type DataLakeMembershipScope } from '@bike4mind/common';
 import { z } from 'zod';
 import { generateSignedUrl, GetFabFileAdapter } from './get';
 
@@ -7,7 +7,9 @@ const searchFabFilesSchema = z.object({
   filters: z
     .object({
       tags: z.array(z.string()).optional(),
-      type: z.enum(['text', 'pdf', 'url', 'image', 'excel', 'word', 'json', 'csv', 'markdown', 'code']).optional(),
+      type: z
+        .enum(['text', 'pdf', 'url', 'image', 'excel', 'word', 'json', 'csv', 'markdown', 'code', 'audio'])
+        .optional(),
       shared: z.coerce.boolean().optional(), // Indicates if the user is searching for shared files
       curated: z.coerce.boolean().optional(), // Indicates if the user is searching for curated notebook files
       projectId: z.string().optional(),
@@ -51,10 +53,21 @@ type SearchFabFilesAdapters = GetFabFileAdapter & {
 
 const DEFAULT_PAGE_LIMIT = 20;
 
+/**
+ * Options the SERVER supplies, deliberately outside `SearchFabFilesParameters`: that type is
+ * zod-parsed from request input, and `lakeMembership` names the user whose OWNED files the lake's
+ * prefix arm matches. Routing it through the parsed params would let a caller name anyone and
+ * read their files; a separate argument keeps it un-forgeable.
+ */
+export interface SearchFabFilesServerOptions {
+  lakeMembership?: DataLakeMembershipScope;
+}
+
 export const search = async (
   userId: string,
   params: SearchFabFilesParameters,
-  { db, storage }: SearchFabFilesAdapters
+  { db, storage }: SearchFabFilesAdapters,
+  serverOptions?: SearchFabFilesServerOptions
 ) => {
   const { search = '', filters, pagination, order, options } = searchFabFilesSchema.parse(params);
   const { tags = [], type, shared, curated } = filters || {};
@@ -103,6 +116,7 @@ export const search = async (
       scopedTagPrefixes,
       restrictToDataLake,
       excludeContent,
+      lakeMembership: serverOptions?.lakeMembership,
     }
   );
 

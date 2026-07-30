@@ -6,6 +6,72 @@
  */
 export const DATALAKE_TAG_PREFIX = 'datalake:';
 
+/**
+ * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
+ * (non-empty, ends with ':'), else null. An empty prefix would match every tag, so it is
+ * rejected rather than honored.
+ *
+ * Shared by `buildOwnershipConditions`' prefix arms and the single-file removal write, which
+ * is what keeps a removal clearing the same prefixed tags the lake read scope matches. Other
+ * prefix readers (the tag-count aggregates) still build their own regexes, so this is a
+ * guarantee about those two, not about every prefix match in the codebase.
+ */
+export const normalizeTagPrefix = (prefix: string | undefined | null): string | null => {
+  const trimmed = typeof prefix === 'string' ? prefix.trim() : '';
+  return trimmed.length > 0 && trimmed.endsWith(':') ? trimmed : null;
+};
+
+/**
+ * True when a would-be `fileTagPrefix` sits inside the `datalake:` namespace, which holds every
+ * lake's membership meta-tag. Such a prefix would make one lake's content prefix match other
+ * lakes' membership tags. Shared by the create schema and the wizard's client-side gate so the
+ * form blocks it instead of failing at submit.
+ */
+export const isReservedTagPrefix = (prefix: string | undefined | null): boolean =>
+  typeof prefix === 'string' && prefix.trim().startsWith(DATALAKE_TAG_PREFIX);
+
+/**
+ * True when two `fileTagPrefix` values would match each other's tags, so two lakes carrying them
+ * cannot safely coexist in one scope: they would share their prefix-tagged files, and permanently
+ * deleting either would take files the other holds.
+ *
+ * BIDIRECTIONAL, because a `docs:` lake matches a `docs:legal:foo` tag - so `docs:` and
+ * `docs:legal:` conflict whichever way round they are declared. Unusable prefixes (empty, or
+ * missing the trailing colon) never overlap: no query arm is built from them.
+ *
+ * Case-SENSITIVE, matching the membership predicate it guards: that builds an unflagged
+ * `new RegExp('^' + prefix)`, so a `Docs:` lake and a `docs:` lake genuinely cannot reach each
+ * other's tags and refusing the pair would be a false alarm. Comparing case-insensitively here
+ * would make the guard a different rule from the thing it protects.
+ *
+ * Shared by the create/visibility guards, the teardown warning, and the wizard's form-level
+ * mirror, so all of them agree on what counts as a conflict.
+ */
+export const tagPrefixesOverlap = (a: string | undefined | null, b: string | undefined | null): boolean => {
+  const left = normalizeTagPrefix(a);
+  const right = normalizeTagPrefix(b);
+  if (!left || !right) return false;
+  return left === right || left.startsWith(right) || right.startsWith(left);
+};
+
+/**
+ * The reason a `fileTagPrefix` is unusable, as user-facing copy, or null when it is fine. Shared
+ * by the wizard steps that can both edit a prefix so their wording cannot drift apart; the server
+ * rejects both cases at create.
+ */
+export const tagPrefixIssue = (
+  prefix: string | undefined | null,
+  overlapping?: { name: string; fileTagPrefix: string } | null
+): string | null => {
+  if (isReservedTagPrefix(prefix)) {
+    return `"${DATALAKE_TAG_PREFIX}" is reserved for lake membership. Pick another prefix, such as legal:`;
+  }
+  if (overlapping) {
+    return `This prefix overlaps the data lake "${overlapping.name}" (${overlapping.fileTagPrefix}). They would share files, so deleting either one would take the other's.`;
+  }
+  return null;
+};
+
 export interface DataLakeConfig {
   id: string;
   /**
@@ -44,6 +110,59 @@ export interface DataLakeConfig {
    * this. Absent on projections that don't resolve an actor (e.g. tag-only lookups).
    */
   canManage?: boolean;
+}
+
+/**
+ * DataLakeConfig plus the fields only a lake's EDITORS may read. Returned exclusively by the
+ * actor-aware list projections (listDataLakes / listAllDataLakes), which populate the extra
+ * fields per lake and only when `canManage` holds for the requesting caller.
+ *
+ * This is a separate type on purpose: DataLakeConfig is the shared shape the access filters and
+ * the tag/registry projections all operate on, and several of those have no actor to gate on.
+ * `toDataLakeConfig` is therefore structurally unable to carry an editor-only field - the
+ * invariant that keeps the prompt text out of every actor-less projection (see
+ * getAccessibleDataLakePrompts, which reads it off the raw documents for the same reason).
+ */
+export interface ManageableDataLakeConfig extends DataLakeConfig {
+  /**
+   * Per-lake system prompt (see IDataLake.systemPrompt). EDITOR-ONLY: a user who can merely
+   * read the lake must never receive the wording, only its effect on answers. Present only
+   * when the caller can manage this lake; `undefined` otherwise (never an empty-string stand-in,
+   * so "not yours to see" and "set to blank" stay distinguishable).
+   */
+  systemPrompt?: string;
+}
+
+/**
+ * A public data lake as it appears in the discover/browse surface: the lightweight card
+ * projection returned by the `/api/data-lakes/public` browse endpoint. Distinct from
+ * DataLakeConfig - it drops the access/gate internals (a browseable lake is gate-less by
+ * construction) and adds the human-facing preview metadata the catalog renders: owner
+ * display, file count, and total size. `ownerDisplayName` is deliberately name-or-username
+ * only (never the owner's email) so browsing a public lake can't leak a cross-org address.
+ */
+export interface PublicDataLakeSummary {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string;
+  fileTagPrefix: string;
+  /** name || username of the lake's creator; undefined if the owner could not be resolved. */
+  ownerDisplayName?: string;
+  /** Cached file count (0 when the lake has no files yet). */
+  fileCount: number;
+  /** Cached total size in bytes (0 when empty). */
+  totalSizeBytes: number;
+  /** True when the browsing caller created this lake (rendered as an "Owned by you" hint). */
+  isOwn: boolean;
+  /** True when the caller may manage the lake (admin or owner) - gates management affordances. */
+  canManage: boolean;
+}
+
+/** One page of public-lake browse results plus the unpaged total for "showing X of Y". */
+export interface BrowsePublicDataLakesResult {
+  data: PublicDataLakeSummary[];
+  total: number;
 }
 
 /**
@@ -157,7 +276,15 @@ export function toDataLakeConfig(dl: {
  * (matched against the caller's resolved `entitlementKeys`). A lake declaring an
  * entitlement but no tag is therefore NOT public (it is gated by the key).
  *
- * Data lakes without any requirement are accessible to all authenticated users.
+ * A requirement-less HARDCODED lake is accessible to all authenticated users - the registry
+ * is curated, owner-less config. This does NOT hold for DB lakes: a requirement-less one is
+ * owner-only unless org-scoped or public (Private-by-default, see canAccessLake). This
+ * predicate has no ownership rule, so callers passing `dynamicDataLakes` MUST pre-filter them
+ * through findAccessible / findActiveByUserTagsAndEntitlements, which enforce it datastore-side.
+ * Having no ownership rule also means this drops a lake the caller CREATED whose own gate they
+ * do not hold, so a caller that needs those must restore them AFTER filtering, from the
+ * persisted `createdByUserId` - see the owner exemption in getDynamicDataLakeAccess.
+ *
  * When dynamicDataLakes is provided (fetched from DB), those take precedence over
  * hardcoded DATA_LAKES entries with the same id. `entitlementKeys` is optional - callers
  * that don't resolve entitlements (tag-only surfaces) omit it and get tag-only matching.

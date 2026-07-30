@@ -1,21 +1,19 @@
-import { Warning as WarningIcon, Delete } from '@mui/icons-material';
+import { Warning as WarningIcon, Delete, PushPinOutlined as PushPinOutlinedIcon } from '@mui/icons-material';
 import { red } from '@client/app/utils/themes/colors';
-import { Badge, Box, CircularProgress, Divider, IconButton, Tooltip, Typography } from '@mui/joy';
+import { Badge, Box, Chip, CircularProgress, Divider, IconButton, Tooltip, Typography } from '@mui/joy';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
-import { IFabFileDocument, MimeType } from '@bike4mind/common';
+import { IFabFileDocument, MimeType, isImageAttachment, isImageServeable } from '@bike4mind/common';
 import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
 import {
   useSessions,
   useSystemPromptFiles,
   useWorkBenchActions,
   useWorkBenchFiles,
-  useWorkBenchStore,
 } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useUpdateSession } from '@client/app/hooks/data/sessions';
+import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useChunkFile } from '@client/app/hooks/data/fabFiles';
@@ -146,12 +144,11 @@ interface FilesSectionProps {
 }
 
 const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchChange }) => {
-  const { t } = useTranslation();
-  const { currentSessionId, currentSession, setCurrentSession } = useSessions();
+  const { currentSessionId, currentSession } = useSessions();
   const workBenchFiles = useWorkBenchFiles(currentSessionId || undefined);
   const { setWorkBenchFiles } = useWorkBenchActions();
   const { systemFiles, globalSystemFileIds, userSystemFileIds } = useSystemPromptFiles();
-  const updateSession = useUpdateSession();
+  const { addToNotebookContext, removeFromNotebookContext, isPending } = useNotebookContextFiles();
   const [loadingChip, setLoadingChip] = useState<{ [id: string]: boolean }>({});
   const [reprocessingFiles, setReprocessingFiles] = useState<{ [id: string]: boolean }>({});
   const isAnyFileReprocessing = Object.values(reprocessingFiles).some(Boolean);
@@ -257,11 +254,11 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
     (file: IFabFileDocument) => {
       let supported = true;
       if (modelInfo?.type === 'text') {
-        if (!modelInfo?.supportsVision && file.mimeType.startsWith('image/')) {
+        if (!modelInfo?.supportsVision && isImageAttachment(file.mimeType)) {
           supported = false;
         }
       } else if (modelInfo?.type === 'image') {
-        if (file.mimeType.startsWith('image/')) {
+        if (isImageAttachment(file.mimeType)) {
           if (!modelInfo?.supportsImageVariation) {
             supported = false;
           }
@@ -274,37 +271,41 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
     [modelInfo]
   );
 
-  // Remove a FabFile
+  // Remove from notebook context. This does NOT delete the file - it reappears under
+  // "Attached to a message" if it was ever sent - so the affordance says "remove from
+  // notebook", not "delete".
   const handleRemove = useCallback(
     (id: string) => {
-      // Use functional updater to always read fresh state from Zustand
-      setWorkBenchFiles(currentSessionId ?? '', prevFiles => prevFiles.filter(file => file.id !== id));
-
-      if (currentSessionId && currentSession) {
-        // Get fresh files from Zustand after update
-        const freshFiles = useWorkBenchStore.getState().getWorkBenchFiles(currentSessionId);
-        const knowledgeIds = freshFiles.map(file => file.id);
-
-        setLoadingChip(prev => ({ ...prev, [id]: true }));
-        updateSession
-          .mutateAsync({ ...currentSession, knowledgeIds })
-          .then(() => {
-            // After the DB update succeeds, re-sync knowledgeIds from Zustand so
-            // out-of-order API responses can't resurrect deleted files during rapid
-            // multi-file deletions.
-            const currentKnowledgeIds = useWorkBenchStore
-              .getState()
-              .getWorkBenchFiles(currentSessionId)
-              .map(f => f.id);
-            setCurrentSession(prev => (prev ? { ...prev, knowledgeIds: currentKnowledgeIds } : null));
-            toast.success(`Removed ${t('file')}`);
-          })
-          .finally(() => {
-            setLoadingChip(prev => ({ ...prev, [id]: false }));
-          });
-      }
+      setLoadingChip(prev => ({ ...prev, [id]: true }));
+      void removeFromNotebookContext(currentSessionId, id)
+        .then(written => {
+          if (written) toast.success('Removed from notebook context');
+        })
+        .catch(() => {})
+        .finally(() => setLoadingChip(prev => ({ ...prev, [id]: false })));
     },
-    [currentSessionId, currentSession, updateSession, t, setWorkBenchFiles, setCurrentSession]
+    [currentSessionId, removeFromNotebookContext]
+  );
+
+  const handlePromote = useCallback(
+    (file: IFabFileDocument) => {
+      // An unscanned or blocked image must not acquire a knowledgeIds entry: that entry
+      // follows the file into clones, exports and the project fan-out. Documents resolve
+      // to 'clean' immediately, so this only ever holds back an image mid-scan.
+      if (isImageAttachment(file.mimeType) && !isImageServeable(file)) {
+        toast.error('That image is still being scanned - try again in a moment');
+        return;
+      }
+      // An explicit user gesture, so project propagation keeps its default.
+      void addToNotebookContext(currentSessionId, file)
+        .then(written => {
+          if (written) toast.success(`"${file.fileName}" is now available to this whole notebook`);
+        })
+        .catch(() => {
+          // Already rolled back and surfaced by the hook.
+        });
+    },
+    [currentSessionId, addToNotebookContext]
   );
 
   const handleClick = useCallback(
@@ -364,7 +365,10 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
   };
 
   const allFiles = [...workBenchFiles, ...systemFiles];
-  const totalFileCount = allFiles.length;
+  // messageFiles counts toward the gate below: a notebook whose only files are
+  // message-scoped would otherwise render nothing, which is exactly the notebook whose
+  // files need promoting.
+  const totalFileCount = allFiles.length + messageFiles.length;
   // Check if any files have embedding mismatches
   const hasEmbeddingMismatches = useMemo(() => {
     return [...workBenchFiles, ...systemFiles].some(file => hasEmbeddingMismatch(file));
@@ -604,6 +608,71 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
               </Tooltip>
             );
           })}
+        </Box>
+      )}
+
+      {messageFiles.length > 0 && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }} data-testid="files-section-message-files-group">
+          <Divider />
+          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+            Attached to a message
+          </Typography>
+          {messageFiles.map((file: IFabFileDocument) => (
+            <Tooltip
+              key={file.id}
+              title={`${file.fileName} - only sent with the message it was attached to`}
+              placement="top"
+              arrow
+            >
+              <FileItemContainer>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}>
+                  {getIconForMimeType(file.mimeType, file)}
+                  <Typography level="body-sm" noWrap data-testid="session-file-list">
+                    {file.fileName}
+                  </Typography>
+                  <Chip
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    data-testid={`files-section-message-scope-chip-${file.id}`}
+                  >
+                    One message
+                  </Chip>
+                </Box>
+                {(file.userId === currentUser?.id || isOwnNotebook) && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>
+                    <Tooltip
+                      title={
+                        isImageAttachment(file.mimeType)
+                          ? 'Use in this notebook - images are re-sent with every message and cost tokens each turn'
+                          : 'Use in this notebook'
+                      }
+                      placement="top"
+                      arrow
+                    >
+                      <IconButton
+                        size="sm"
+                        variant="plain"
+                        color="neutral"
+                        disabled={isPending(file.id)}
+                        data-testid={`files-section-promote-btn-${file.id}`}
+                        onClick={e => {
+                          e.stopPropagation();
+                          handlePromote(file);
+                        }}
+                      >
+                        {isPending(file.id) ? (
+                          <CircularProgress size="sm" sx={{ width: 20, height: 20 }} />
+                        ) : (
+                          <PushPinOutlinedIcon sx={{ fontSize: '1rem' }} />
+                        )}
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                )}
+              </FileItemContainer>
+            </Tooltip>
+          ))}
         </Box>
       )}
     </Box>

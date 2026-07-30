@@ -1,12 +1,22 @@
-import type { IModelPrice, IModelPriceRepository } from '@bike4mind/common';
+import { DISCOVERY_PRICE_NOTE_PREFIX, type IModelPrice, type IModelPriceRepository } from '@bike4mind/common';
 import seedFile from './modelPrices.seed.json';
 import type { ModelPriceSeedEntry } from './generateModelPriceSeed';
 
 const FAR_FUTURE = new Date('9999-01-01T00:00:00Z');
 
-/** Note marking rows this seeder wrote. Rows with any other note are operator
- * reprices and are never superseded by seeding. */
+/** Note marking rows this seeder wrote. Mirrored as SEED_PRICE_NOTE in
+ * b4m-core/services modelDiscoveryService/pricePlan.ts, which cannot import
+ * this package; the two must stay in sync. */
 export const SEED_NOTE = 'adapter-seed';
+
+/** Which tier owns the newest row, which is what decides whether a seed may
+ * supersede it. Anything unrecognized (a missing note included) is an operator
+ * row: seeding may only overwrite provenance it can positively identify. */
+function provenanceOf(row: IModelPrice): 'seed' | 'automation' | 'operator' {
+  if (row.note === SEED_NOTE) return 'seed';
+  if (row.note?.startsWith(DISCOVERY_PRICE_NOTE_PREFIX)) return 'automation';
+  return 'operator';
+}
 
 export interface ModelPriceSeedFile {
   /** Generation timestamp, stamped by the regeneration script. Doubles as the
@@ -44,14 +54,20 @@ function normalizePricing(pricing: ModelPriceSeedEntry['pricing'] | IModelPrice[
 
 /**
  * Seed the price catalog from the checked-in, PR-reviewed seed file.
- * Per entry, against the newest existing row for (modelId, unit):
  *
- * - no row            -> append at the seed version's effectiveFrom
- * - operator row      -> skip (operator reprices always win over seeding)
- * - adapter-seed row at/after this seed version -> skip (already current)
- * - adapter-seed row older with DIFFERENT pricing -> append (this is how a
- *   corrected adapter literal reaches an existing deployment on next boot)
- * - adapter-seed row older with the same pricing  -> skip
+ * Three provenance tiers, operator > discovery > adapter-seed. Per entry,
+ * against the newest existing row for (modelId, unit):
+ *
+ * - no row                                       -> append at the seed version's effectiveFrom
+ * - operator row                                 -> skip, always (an operator reprice is immune)
+ * - adapter-seed or discovery:* row at/after this seed version -> skip (already current)
+ * - adapter-seed or discovery:* row older with DIFFERENT pricing -> append
+ * - either, older, with the same pricing         -> skip
+ *
+ * A seed superseding an OLDER `discovery:*` row is the point: without it one
+ * bad automated price would freeze seed corrections for that model forever,
+ * fixable only by hand. Discovery gets stickiness against itself, never
+ * against a newer human-reviewed seed.
  *
  * effectiveFrom defaults to the seed file's generatedAt (deterministic:
  * concurrent Lambda cold starts write the same triple and the unique index
@@ -74,11 +90,11 @@ export async function seedModelPrices(
   for (const entry of seed.entries) {
     const current = newest.get(`${entry.modelId}|${entry.unit}`);
     if (current) {
-      const isSeedRow = current.note === SEED_NOTE;
+      const provenance = provenanceOf(current);
       const alreadyCurrent = current.effectiveFrom.getTime() >= effectiveFrom.getTime();
       const samePrice = normalizePricing(current.pricing) === normalizePricing(entry.pricing);
       const sameVersion = current.effectiveFrom.getTime() === effectiveFrom.getTime();
-      if (isSeedRow && sameVersion && !samePrice) {
+      if (provenance === 'seed' && sameVersion && !samePrice) {
         // Entries were edited without bumping generatedAt: the change cannot
         // be versioned (equal effectiveFrom collides on the unique index), so
         // deployments keep billing from the stale row. Be loud about it.
@@ -89,7 +105,7 @@ export async function seedModelPrices(
             'regenerate the seed instead of editing entries: pnpm --filter @bike4mind/database generate:model-price-seed'
         );
       }
-      if (!isSeedRow || alreadyCurrent || samePrice) {
+      if (provenance === 'operator' || alreadyCurrent || samePrice) {
         skipped += 1;
         continue;
       }

@@ -9,11 +9,16 @@ import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
+import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
+import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
 import { canAccessTavern } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
+import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
+import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
+import { useEntitlements } from '@client/app/hooks/data/entitlements';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useOptiAccess } from '@client/app/hooks/data/opti';
@@ -62,6 +67,15 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // (open core) have no such route, so the entry must hide or it dead-ends.
   const tavernRouteExists = premiumRoutes.some(route => route.path.startsWith('/tavern'));
   const isTavernEnabled = tavernRouteExists && canAccessTavern(currentUser);
+  // Bob (premium overlay) is a codegen-mounted `/bob` route contributed as a
+  // premium nav item. Surface it in the main sidebar only when the overlay contributes it
+  // AND the user's entitlements make it visible - reusing filterVisiblePremiumNavItems so the
+  // gate matches ProfileMenu's source (STRICT: no admin/developer bypass) and open-core builds
+  // (no overlay -> empty premiumNavItems) hide the row instead of dead-ending on a missing route.
+  const { data: entitlements } = useEntitlements();
+  const isBobEnabled = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags).some(
+    item => item.path === '/bob'
+  );
   // Gears (earned nav): feature rows appear once the user has USED the feature -
   // the permanent rail is New Chat / Gears / Help. Unlocks are derived server-side
   // (has >=1 project, agent, lake, file, publication). While the status loads we
@@ -74,6 +88,15 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // must NOT silently remove core navigation app-wide - only a key the server
   // returns as `false` (a known, genuinely-unearned gear) hides its row.
   const gearOpen = (key: GearKey) => gearUnlocks === undefined || !(key in gearUnlocks) || gearUnlocks[key] === true;
+  // Fail CLOSED, for rows that did NOT exist before Gears. The fail-open above
+  // protects navigation users already had; a net-new earned row has nothing to
+  // preserve, and its failure modes run the other way. `/api/gears/status`
+  // omits admin-disabled gears from the response entirely, so under gearOpen
+  // turning a gear OFF in Manage Gears satisfied `!(key in gearUnlocks)` and
+  // pinned the unearned row visible for every flag-enabled user - the opposite
+  // of what the admin asked for. Same on any status error. Only an explicit
+  // `true` reveals these.
+  const gearEarned = (key: GearKey) => gearUnlocks?.[key] === true;
   const helpOpen = useHelpPanel(s => s.open);
 
   const closeOnMobile = () => {
@@ -142,6 +165,24 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
+    ...(isBobEnabled
+      ? [
+          {
+            key: 'bob',
+            label: 'Bob',
+            icon: iconSlot(<Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname.startsWith('/bob'),
+            onClick: () => {
+              closeOnMobile();
+              // `/bob` is a codegen-mounted premium route (no core route file), so it is not in
+              // Tanstack's statically-typed route union - same `as never` cast as /tavern below.
+              navigate({ to: '/bob' } as never);
+            },
+          },
+        ]
+      : []),
+    // No Data Lakes sidebar destination: the /data-lakes page was retired for the in-chat
+    // Data Lake mode (header toggle + manager modal) - see datalake-in-chat-mode design.
     ...(gearOpen('files')
       ? [
           {
@@ -204,6 +245,25 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
+    // Double-gated: the experimental flag says the feature exists for this user,
+    // the gear says they have actually used it (>=1 channel). Sits beside
+    // Tavern/Gears - the shared-log destination. Uses gearEarned, not gearOpen:
+    // this row is net-new, so an unknown gear state must hide it rather than
+    // reveal it.
+    ...(isFeatureEnabled('enableHearth') && gearEarned('hearth')
+      ? [
+          {
+            key: 'hearth',
+            label: t('sidenav.hearth', 'Hearth'),
+            icon: iconSlot(<LocalFireDepartmentOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname.startsWith('/hearth'),
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/hearth' });
+            },
+          },
+        ]
+      : []),
     ...(isTavernEnabled
       ? [
           {
@@ -246,9 +306,10 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   ];
 
   // Pinned vs scroll split for the unified-scroll sidebar: the first two items stay
-  // pinned at the top. items[0] is always New Chat; items[1] is OptiHashi when Opti is
-  // enabled, otherwise Files Manager (the conditional Opti entry shifts the rest into
-  // the scroll slice). The split is purely positional, so it holds either way.
+  // pinned at the top. items[0] is always New Chat; items[1] is whichever conditional
+  // entry comes first for this user - OptiHashi, Bob, or the earned Files Manager -
+  // since each is elided when absent. The split is purely positional, so it holds
+  // regardless of which entries are present.
   const shownItems = section === 'pinned' ? items.slice(0, 2) : section === 'scroll' ? items.slice(2) : items;
 
   return (

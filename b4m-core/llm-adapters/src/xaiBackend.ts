@@ -84,7 +84,7 @@ export class XAIBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         description:
-          "xAI's most capable reasoning model. Excels at complex problem-solving, coding, math, and multimodal understanding with 256K context window.",
+          "xAI's Grok 4 reasoning model. Strong at complex problem-solving, coding, math, and multimodal understanding with a 256K context window. Grok 4.5 is newer, cheaper, and has a larger context window.",
       },
       {
         id: ChatModels.GROK_3,
@@ -103,7 +103,11 @@ export class XAIBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         description:
-          "xAI's flagship Grok 3 model that excels at enterprise use cases like data extraction, coding, and text summarization. Possesses deep domain knowledge in finance, healthcare, law, and science.",
+          "xAI's legacy Grok 3 model. Superseded by Grok 4.5, which is cheaper and adds reasoning, vision, and a 500K context window. No longer recommended.",
+        // Superseded by Grok 4.5 on every axis including price. Grok 3 still resolves upstream,
+        // so this date is what removes it from the picker; resolveDeprecatedModelId upgrades
+        // sessions already pinned to it.
+        deprecationDate: '2026-07-25',
       },
       {
         id: ChatModels.GROK_3_FAST,
@@ -200,8 +204,7 @@ export class XAIBackend implements ICompletionBackend {
         supportsVision: false,
         supportsTools: true,
         supportsImageVariation: false,
-        description:
-          "xAI's legacy Grok 2 model with 131K context window. Consider using Grok 3 for better performance.",
+        description: "xAI's legacy Grok 2 model with a 131K context window. Superseded by Grok 4.5.",
         deprecationDate: '2025-09-15',
       },
       {
@@ -221,7 +224,7 @@ export class XAIBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         deprecationDate: '2025-09-15', // Deprecated - same as Grok 3 Fast and Grok 2 Vision
-        description: "xAI's legacy beta text model. No longer recommended - use Grok 3 instead.",
+        description: "xAI's legacy beta text model. No longer recommended - use Grok 4.5 instead.",
       },
       {
         id: ChatModels.GROK_VISION_BETA,
@@ -241,7 +244,7 @@ export class XAIBackend implements ICompletionBackend {
         supportsImageVariation: false,
         deprecationDate: '2025-09-15', // Deprecated - same as Grok 3 Fast and Grok 2 Vision
         description:
-          "xAI's legacy beta multimodal model with vision capabilities. Use Grok 2 Vision for better performance.",
+          "xAI's legacy beta multimodal model with vision capabilities. Use Grok 4.5 instead, which also supports vision.",
       },
       // XAI Image Models
       {

@@ -34,10 +34,9 @@ are subject to their respective licenses and copyright notices.
    NOTICE: These assets are NOT tracked in this repository and do not ship in
    the public open-core snapshot, because the CraftPix Limited License prohibits
    source-file redistribution. They are hydrated at postinstall from the private
-   b4m-tavern premium overlay (pinned in premium-overlay.lock.json) via
-   apps/client/scripts/copy-tavern-assets.mjs, which no-ops for open-core forks
-   without overlay access. Users who wish to use these assets must obtain their
-   own license from CraftPix.net.
+   b4m-tavern premium overlay via apps/client/scripts/copy-tavern-assets.mjs,
+   which no-ops for open-core forks without overlay access. Users who wish to
+   use these assets must obtain their own license from CraftPix.net.
 
 ================================================================================
 

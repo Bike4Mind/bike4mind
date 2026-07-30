@@ -1,4 +1,4 @@
-import { IFabFileDocument, InviteType, KnowledgeType } from '@bike4mind/common';
+import { IFabFileDocument, InviteType, isAudioMimeType, KnowledgeType } from '@bike4mind/common';
 import { useSessions, useWorkBenchFiles, useWorkBenchStore } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -31,7 +31,7 @@ import TagForm from '../../Tag/Form';
 import { useFileBrowserInstance } from './instanceContext';
 import FileBrowserActions from './Actions';
 import FileBrowserFilter from './Filter';
-import FileBrowserList from './List';
+import FileBrowserList, { type FileBrowserListProps } from './List';
 import ResearchEngineModal from '../../ResarchEngine/Modal';
 import FileBrowserViewActions, { ViewMode } from './ViewActions';
 import TagSidebar from './TagSidebar';
@@ -110,7 +110,7 @@ const FileBrowserContent = () => {
   const {
     data,
     isLoading: isLoadingAllFiles,
-    isFetching,
+    isPlaceholderData,
   } = usePaginatedSearchFabFiles({
     ...filter,
     order: { by: sortField, direction: sortDirection },
@@ -131,7 +131,7 @@ const FileBrowserContent = () => {
 
   const availableOptions = fileTags?.filter(tag => !filter.filters?.tags?.includes(tag.name)) || [];
 
-  const hasFilters = filter.search || filter.filters?.tags?.length || filter.filters?.type;
+  const hasFilters = Boolean(filter.search || filter.filters?.tags?.length || filter.filters?.type);
 
   const allFiles = data?.data || [];
   const totalFiles = data?.total || 0;
@@ -222,7 +222,25 @@ const FileBrowserContent = () => {
 
     const { setWorkBenchFiles } = useWorkBenchStore.getState();
 
-    const applicableFiles = selectedFiles.filter(f => !workBenchFiles.some(w => w.id === f.id));
+    const requestedFiles = selectedFiles.filter(f => !workBenchFiles.some(w => w.id === f.id));
+
+    // Audio (generated TTS / sound effects) can be browsed and replayed but is
+    // never attachable to a chat: no model accepts audio input. Filter it out of
+    // the workbench add with a toast. (The backend chokepoint in
+    // processFileInParallel is the authoritative guard; this is UX-level.)
+    const audioFiles = requestedFiles.filter(f => isAudioMimeType(f.mimeType));
+    const applicableFiles = requestedFiles.filter(f => !isAudioMimeType(f.mimeType));
+    if (audioFiles.length) {
+      toast.error(
+        audioFiles.length === 1
+          ? `"${audioFiles[0].fileName}" is audio and can't be added to a chat.`
+          : `${audioFiles.length} audio files can't be added to a chat.`
+      );
+    }
+    if (applicableFiles.length === 0) {
+      setSelectedIds(new Set<string>());
+      return;
+    }
 
     // Check if any images are too large for current model (legacy files only)
     const currentModelInfo = modelInfo?.find(m => m.id === model);
@@ -390,6 +408,12 @@ const FileBrowserContent = () => {
 
   const isLoading = isLoadingAllFiles;
 
+  // Must stay in sync with `isChangingPage` in Browser/List.tsx so the bottom-bar Prev/Next and
+  // the list-view Prev/Next disable on the same signal. keepPreviousData leaves isLoading false
+  // mid-page-change, and isFetching would also trip on the background WebSocket-driven
+  // ['fabFiles'] refetches below, which leave the visible page current.
+  const isChangingPage = isLoading || isPlaceholderData;
+
   // Add handler for tag sidebar actions
   const handleTagSidebarClick = (tagName: string) => {
     const currentTags = filter.filters?.tags || [];
@@ -426,6 +450,20 @@ const FileBrowserContent = () => {
       },
     });
   };
+
+  // The tag-filter row belongs to the filtered view only, and List renders it only when all four
+  // props are supplied - so gate the props, not the list's render site (see the note at the list).
+  const tagFilterProps: Pick<
+    FileBrowserListProps,
+    'availableTagOptions' | 'selectedTags' | 'onTagsChange' | 'onClearAll'
+  > = hasFilters
+    ? {
+        availableTagOptions: availableOptions,
+        selectedTags: filter.filters?.tags || [],
+        onTagsChange: tags => handleFilterChange({ ...filter, filters: { ...(filter.filters || {}), tags } }),
+        onClearAll: handleClearAllTags,
+      }
+    : {};
 
   const handleAddTagToFiles = async (tagId: string, fileIds: string[]) => {
     try {
@@ -691,39 +729,21 @@ const FileBrowserContent = () => {
             />
           )}
 
-          {viewAction.viewMode !== 'tags' && viewAction.viewMode !== 'home' && !hasFilters && (
-            <>
-              <Stack sx={{ display: 'flex', flexDirection: 'column', height: '100%', mb: 2 }}>
-                <FileBrowserList
-                  files={allFiles}
-                  fileTags={fileTags}
-                  viewType={viewAction.viewMode as 'list' | 'grid'}
-                  emptyDescription="You have no files"
-                  sortField={sortField}
-                  sortDirection={sortDirection}
-                  onSortChange={handleSortChange}
-                  isLoading={isLoading}
-                  isFetching={isFetching}
-                  fileFilterType={
-                    filter.filters?.shared === true ? 'shared' : filter.filters?.curated === true ? 'curated' : 'all'
-                  }
-                  onFileFilterChange={handleFileFilterChange}
-                  onOpenTagManager={() => setIsTagSidebarOpen(!isTagSidebarOpen)}
-                  currentPage={currentPage}
-                  totalPages={totalPages}
-                  onPageChange={setCurrentPage}
-                />
-              </Stack>
-            </>
-          )}
-
-          {viewAction.viewMode !== 'tags' && viewAction.viewMode !== 'home' && hasFilters && (
+          {/* Filtered and unfiltered share ONE list render site. React reconciles children by
+              position, so hosting the list in two sibling branches switched on hasFilters made the
+              first committed search keystroke unmount the whole subtree and mount a fresh one -
+              wiping per-row local state, including an open inline rename (Item.tsx `editMode`).
+              keepPreviousData in usePaginatedSearchFabFiles preserves the rows' data, not the
+              components holding that state, so the single render site is what keeps rename alive.
+              Anything added here must stay position-stable across the hasFilters flip: gate props
+              and siblings on it, never which branch renders the list. */}
+          {viewAction.viewMode !== 'tags' && viewAction.viewMode !== 'home' && (
             <Stack
               direction="column"
               gap={{ xs: '16px', md: '20px' }}
               sx={{ flex: 1, minHeight: 0, height: '100%', mb: 2 }}
             >
-              {navigatedFromTags && (
+              {hasFilters && navigatedFromTags && (
                 <Chip
                   data-testid="back-to-tags-chip"
                   variant="soft"
@@ -759,24 +779,13 @@ const FileBrowserContent = () => {
                   sortDirection={sortDirection}
                   onSortChange={handleSortChange}
                   isLoading={isLoading}
-                  isFetching={isFetching}
+                  isPlaceholderData={isPlaceholderData}
                   fileFilterType={
                     filter.filters?.shared === true ? 'shared' : filter.filters?.curated === true ? 'curated' : 'all'
                   }
                   onFileFilterChange={handleFileFilterChange}
                   onOpenTagManager={() => setIsTagSidebarOpen(!isTagSidebarOpen)}
-                  availableTagOptions={availableOptions}
-                  selectedTags={filter.filters?.tags || []}
-                  onTagsChange={t => {
-                    handleFilterChange({
-                      ...filter,
-                      filters: {
-                        ...(filter.filters || {}),
-                        tags: t,
-                      },
-                    });
-                  }}
-                  onClearAll={handleClearAllTags}
+                  {...tagFilterProps}
                   currentPage={currentPage}
                   totalPages={totalPages}
                   onPageChange={setCurrentPage}
@@ -841,7 +850,7 @@ const FileBrowserContent = () => {
             currentPage={currentPage}
             totalPages={totalPages}
             onPageChange={viewAction.viewMode === 'home' ? undefined : setCurrentPage}
-            isLoadingPage={isFetching}
+            isLoadingPage={isChangingPage}
           />
         </Box>
 

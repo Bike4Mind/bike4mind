@@ -355,11 +355,40 @@ describe('buildFabFileSearchQuery', () => {
         expect(conditions[0]).toEqual({ userId: 'user1' });
       });
 
+      // Regression guard for a dropped hand-off: buildFabFileSearchQuery forwards its options to
+      // buildOwnershipConditions by naming each one, so omitting lakeMembership there left the
+      // single-lake browse with no arm at all and threw on every request. The route-level test
+      // could not see it - it mocks the search service - so this drives the real builder with
+      // exactly the option set that route sends.
+      it('forwards lakeMembership, the only lake arm the single-lake browse sends', () => {
+        const result = buildFabFileSearchQuery(
+          makeParams({
+            options: {
+              // The single-lake browse's exact option set: includeShared is what reaches the
+              // ownership branch at all, and lakeMembership is its only lake arm.
+              includeShared: true,
+              restrictToDataLake: true,
+              lakeMembership: { datalakeTag: 'datalake:org1:acme', fileTagPrefix: 'acme:', creatorUserId: 'creator-1' },
+            },
+          })
+        );
+
+        const ownership = (result.filter.$and as { $or: Record<string, unknown>[] }[]).find(
+          c => Array.isArray(c.$or) && c.$or.some(arm => JSON.stringify(arm).includes('datalake:org1:acme'))
+        );
+        expect(ownership).toBeDefined();
+        const membership = ownership!.$or[0] as { $or: Record<string, unknown>[] };
+        expect(membership.$or[0]).toEqual({ 'tags.name': 'datalake:org1:acme' });
+        expect(JSON.stringify(membership.$or[1])).toContain('creator-1');
+        // The viewer's own id must not be an arm of the lake predicate.
+        expect(JSON.stringify(membership)).not.toContain('user123');
+      });
+
       it('throws (not an empty $or) when restrictToDataLake is set with no tags/prefixes', () => {
         // Dropping the broad arms with no lake arm would build `{ $or: [] }`, which MongoDB
         // rejects at query time. Fail fast with a descriptive error instead.
         expect(() => buildOwnershipConditions('user1', { restrictToDataLake: true })).toThrow(
-          /requires at least one of dataLakeTags or scopedTagPrefixes/
+          /requires lakeMembership, dataLakeTags or scopedTagPrefixes/
         );
         // An empty-string prefix doesn't count (validPrefixes filters it), so still throws.
         expect(() =>
@@ -413,6 +442,58 @@ describe('buildFabFileSearchQuery', () => {
       );
       expect(result.sort).toEqual({ fileName: 1 });
       expect(result.collation).toEqual({ locale: 'en' });
+    });
+  });
+
+  // ── 11b. stableSort tiebreaker (opt-in) ───────────────────────────
+  describe('stableSort tiebreaker', () => {
+    it('is off by default, so existing callers keep their exact sort', () => {
+      const result = buildFabFileSearchQuery(makeParams({ order: { by: 'fileName', direction: 'asc' } }));
+      expect(result.sort).toEqual({ fileName: 1 });
+    });
+
+    it('adds an _id tiebreaker to a fileName sort when requested', () => {
+      // fileName is not unique (duplicate uploads are normal), so a caller paging past page 1
+      // needs a total order or a file can fall between pages.
+      const result = buildFabFileSearchQuery(
+        makeParams({ order: { by: 'fileName', direction: 'asc' }, options: { stableSort: true } })
+      );
+      expect(result.sort).toEqual({ fileName: 1, _id: 1 });
+    });
+
+    it('matches the tiebreaker direction to the primary key', () => {
+      const result = buildFabFileSearchQuery(
+        makeParams({ order: { by: 'fileName', direction: 'desc' }, options: { stableSort: true } })
+      );
+      expect(result.sort).toEqual({ fileName: -1, _id: -1 });
+    });
+
+    it('applies to the DocumentDB fileNameLower branch too', () => {
+      const result = buildFabFileSearchQuery(
+        makeParams({
+          order: { by: 'fileName', direction: 'asc' },
+          useDocumentDB: true,
+          options: { stableSort: true },
+        })
+      );
+      expect(result.sort).toEqual({ fileNameLower: 1, _id: 1 });
+    });
+
+    it('leaves a createdAt sort alone even when requested', () => {
+      // Deliberate: createdAt IS indexed, and appending _id turns the file browser's indexed
+      // scan into a full-collection blocking sort. Only the already-unindexed fileName sorts
+      // can afford the tiebreaker.
+      const result = buildFabFileSearchQuery(
+        makeParams({ order: { by: 'createdAt', direction: 'desc' }, options: { stableSort: true } })
+      );
+      expect(result.sort).toEqual({ createdAt: -1 });
+    });
+
+    it('leaves a fileSize sort alone even when requested', () => {
+      const result = buildFabFileSearchQuery(
+        makeParams({ order: { by: 'fileSize', direction: 'asc' }, options: { stableSort: true } })
+      );
+      expect(result.sort).toEqual({ fileSize: 1 });
     });
   });
 

@@ -60,6 +60,7 @@ import {
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
+import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
 import type { EditableLake } from './DataLakeSettingsModal';
 import type { IFabFileDocument } from '@bike4mind/common';
@@ -85,14 +86,18 @@ const prefixSegments = (fileTagPrefix: string) => fileTagPrefix.replace(/:+$/, '
 export default function DataLakeManagerPanel() {
   const { data: dataLakes, isLoading } = useDataLakes();
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
+  // Store-driven so openManager('discover') deep-links land on the public catalog; the
+  // sidebar footer's Discover button flips it the same way.
+  const managerTab = useDataLakeWizardStore(s => s.managerTab);
+  const openManager = useDataLakeWizardStore(s => s.openManager);
   const { isFeatureEnabled } = useAdminSettingsCache();
 
-  // The lakes list endpoint doesn't compute per-lake file counts; fall back to the unique
-  // per-prefix counts behind the in-chat tree so both surfaces show the same numbers.
+  // The lakes list projection carries no per-lake file counts; use the unique per-prefix
+  // counts behind the in-chat tree so both surfaces show the same numbers.
   const { data: tagCountsData } = useGetDataLakeTagCounts('datalakes');
   const lakeCount = useCallback(
     (lake: ManagerLake): number | undefined =>
-      lake.fileCount ?? tagCountsData?.uniqueArticleCounts?.byPrefix?.[normalizePrefix(lake.fileTagPrefix)],
+      tagCountsData?.uniqueArticleCounts?.byPrefix?.[normalizePrefix(lake.fileTagPrefix)],
     [tagCountsData]
   );
 
@@ -120,6 +125,10 @@ export default function DataLakeManagerPanel() {
           requiredEntitlement: l.requiredEntitlement ?? '',
           organizationId: l.organizationId ?? '',
           isPublic: l.isPublic ?? false,
+          // '' both when unset and when the server withheld it (non-editors never receive
+          // the text); the modal renders the field off canManage, never off this value.
+          systemPrompt: l.systemPrompt ?? '',
+          canManage: !!l.canManage,
         }
       : null;
   }, [dataLakes, editingLakeId]);
@@ -130,6 +139,9 @@ export default function DataLakeManagerPanel() {
     // instead of a single redundant folder named like the lake.
     setPath(prefixSegments(lake.fileTagPrefix));
     setSelectedFile(null);
+    // Opening one of YOUR lakes leaves the public catalog, so backing out of the lake
+    // lands on the overview, not back in Discover.
+    if (managerTab !== 'mine') openManager('mine');
   };
 
   // Shared choke point for every manager entry point: with the feature off the lakes
@@ -164,6 +176,7 @@ export default function DataLakeManagerPanel() {
         }}
         onSelectFile={setSelectedFile}
         onCreateLake={openWizard}
+        onDiscover={() => openManager('discover')}
       />
       {activeLake ? (
         selectedFile ? (
@@ -185,6 +198,11 @@ export default function DataLakeManagerPanel() {
             }}
           />
         )
+      ) : managerTab === 'discover' ? (
+        // Public-lake catalog (store deep-link openManager('discover') or the footer button).
+        <Box sx={{ flex: 1, minWidth: 0, overflow: 'auto', px: 1 }}>
+          <DataLakeDiscoverPanel />
+        </Box>
       ) : (
         <ManagerOverview />
       )}
@@ -210,6 +228,8 @@ interface ManagerNavProps {
   onExitLake: () => void;
   onSelectFile: (file: IFabFileDocument) => void;
   onCreateLake: () => void;
+  /** Opens the public-lake Discover catalog in the right pane. */
+  onDiscover: () => void;
 }
 
 function ManagerNav({
@@ -224,6 +244,7 @@ function ManagerNav({
   onExitLake,
   onSelectFile,
   onCreateLake,
+  onDiscover,
 }: ManagerNavProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
@@ -673,6 +694,15 @@ function ManagerNav({
 
       {/* Sticky bottom bar, same chrome as the in-chat tree footer. */}
       <Box sx={{ display: 'flex', gap: '8px', p: '12px', borderTop: '1px solid', borderColor }}>
+        <Button
+          variant="outlined"
+          color="neutral"
+          onClick={onDiscover}
+          data-testid="datalake-manager-discover-btn"
+          sx={FOOTER_BTN_SX}
+        >
+          Discover
+        </Button>
         <Button
           variant="solid"
           color="primary"

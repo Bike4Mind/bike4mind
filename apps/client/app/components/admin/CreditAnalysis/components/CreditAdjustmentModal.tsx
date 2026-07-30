@@ -10,15 +10,22 @@ import {
   Button,
   ButtonGroup,
   Textarea,
+  Divider,
+  Stack,
+  Box,
+  Chip,
+  CircularProgress,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
+import { useQueryClient } from '@tanstack/react-query';
+import { useUserCreditAdjustments, userCreditAdjustmentsKey } from '../hooks/useUserCreditAdjustments';
 
 interface CreditAdjustmentModalProps {
   open: boolean;
   onClose: () => void;
   selectedUser: any;
-  onCreditAdjustment: (userId: string, currentCredits: number, adjustment: number) => Promise<void>;
+  onCreditAdjustment: (userId: string, currentCredits: number, adjustment: number, note?: string) => Promise<void>;
 }
 
 export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
@@ -29,6 +36,9 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
 }) => {
   const [creditAmount, setCreditAmount] = useState(100);
   const [creditNote, setCreditNote] = useState('');
+  const queryClient = useQueryClient();
+
+  const { data: adjustments, isLoading: adjustmentsLoading } = useUserCreditAdjustments(selectedUser?.id, open);
 
   const handleClose = () => {
     setCreditAmount(100);
@@ -39,7 +49,13 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
   const handleCreditAdjustment = async (isAdd: boolean) => {
     if (selectedUser && creditAmount > 0) {
       const adjustment = isAdd ? creditAmount : -creditAmount;
-      await onCreditAdjustment(selectedUser.id, selectedUser.currentCredits || 0, adjustment);
+      await onCreditAdjustment(
+        selectedUser.id,
+        selectedUser.currentCredits || 0,
+        adjustment,
+        creditNote.trim() || undefined
+      );
+      queryClient.invalidateQueries({ queryKey: userCreditAdjustmentsKey(selectedUser.id) });
       handleClose();
     }
   };
@@ -109,6 +125,59 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
                 Remove Credits
               </Button>
             </ButtonGroup>
+
+            <Divider sx={{ my: 2 }} />
+
+            <Typography level="title-sm" mb={1}>
+              Recent adjustments
+            </Typography>
+            {adjustmentsLoading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                <CircularProgress size="sm" />
+              </Box>
+            ) : !adjustments || adjustments.length === 0 ? (
+              <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+                No manual adjustments recorded for this user.
+              </Typography>
+            ) : (
+              <Stack
+                spacing={1}
+                data-testid="credit-adjustment-history"
+                sx={{ maxHeight: 220, overflowY: 'auto', pr: 0.5 }}
+              >
+                {adjustments.map(adj => (
+                  <Box
+                    key={adj.id}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      justifyContent: 'space-between',
+                      gap: 1,
+                      p: 1,
+                      borderRadius: 'sm',
+                      bgcolor: 'background.level1',
+                    }}
+                  >
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography level="body-sm" sx={{ wordBreak: 'break-word' }}>
+                        {adj.description || 'Admin credit adjustment'}
+                      </Typography>
+                      <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                        {new Date(adj.createdAt).toLocaleString()}
+                        {adj.actorName ? ` • by ${adj.actorName}` : ''}
+                        {typeof adj.resultingBalance === 'number'
+                          ? ` • balance ${adj.resultingBalance.toLocaleString()}`
+                          : ''}
+                      </Typography>
+                    </Box>
+                    <Chip size="sm" variant="soft" color={adj.credits >= 0 ? 'success' : 'danger'}>
+                      {adj.credits >= 0 ? '+' : ''}
+                      {adj.credits.toLocaleString()}
+                    </Chip>
+                  </Box>
+                ))}
+              </Stack>
+            )}
           </>
         )}
       </ModalDialog>

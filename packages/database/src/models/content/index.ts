@@ -17,6 +17,7 @@ export * from './PublishedArtifactModel';
 export * from './PublishedArtifactReportModel';
 export * from './PublishedArtifactViewAuditModel';
 export * from './QuestExternalLinkModel';
+export * from './QuestNodeModel';
 export * from './QuestMasterPlanModel';
 export * from './QuestModel';
 export * from './ReportModel';

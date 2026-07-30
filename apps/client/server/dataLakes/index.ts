@@ -1,15 +1,22 @@
 /**
- * Data Lakes server module - shared lake-scope resolution for the browse surfaces.
+ * Data Lakes server module - shared lake-scope resolution for the BROWSE surfaces
+ * (articles, tag-counts, and the rlm-answer access gate). Content is scoped by the lakes a
+ * caller can access - files tagged with a lake's `datalakeTag` / `fileTagPrefix` - and access
+ * is defined per-lake (`requiredUserTag`/`requiredEntitlement`), not per-product.
  *
- * The consolidated `/api/data-lakes/*` browse endpoints (articles, tag-counts,
- * semantic-search, rlm-answer) all serve content scoped by the lakes a caller
- * can access - files tagged with a lake's `datalakeTag` / `fileTagPrefix`.
- * Access is defined per-lake (`requiredUserTag`/`requiredEntitlement` on the
- * lake config), not per-product. This module owns the one thing every browse
- * surface must share: resolving WHICH lakes a user can see.
+ * The RETRIEVAL surface (semantic-search) resolves scope separately, through
+ * ./resolveRetrievalLakeScope, so it shares the core resolver with the chat
+ * search_knowledge_base tool. Browse is the WIDER of the two; two known differences, both in
+ * that direction:
+ *  - admin: browse returns `listAllDataLakes` - every lake of every tenant - while retrieval
+ *    gives an admin the static registry plus only the lakes they reach unprivileged.
+ *  - draft lakes: browse includes `draft`, retrieval is `active`-only.
+ * So a caller can browse a lake that semantic search will not reach; never the reverse.
+ * (An owner's own gated lake used to be a third difference - the retrieval resolver now
+ * restores it, so both surfaces agree.)
  */
 import { DATA_LAKES, getAccessibleDataLakes, hasDeveloperUserTag, isImageServeable } from '@bike4mind/common';
-import type { DataLakeConfig, AccessContext, IFabFileDocument } from '@bike4mind/common';
+import type { DataLakeConfig, IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -18,8 +25,9 @@ import {
   projectRepository,
   userRepository,
 } from '@bike4mind/database';
-import { getRequestEntitlements, type EntitlementRequest } from '@server/entitlements';
+import type { EntitlementRequest } from '@server/entitlements';
 import { getFilesStorage } from '@server/utils/storage';
+import { toAccessContext } from './toAccessContext';
 
 /**
  * Resolve the data lakes a user can browse: their dynamic (DB) lakes - already
@@ -30,28 +38,30 @@ import { getFilesStorage } from '@server/utils/storage';
  * the service already authorized them (including owner access), and re-applying the
  * tag/entitlement filter would hide an owner's OWN lake whose `requiredUserTag` they
  * happen not to carry. Static lakes (no owner concept) still go through that filter.
+ * The retrieval resolver does run that filter and compensates with its own owner re-check
+ * (see getDynamicDataLakeAccess) - so if the two are ever unified, ownership must survive.
  */
-export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<DataLakeConfig[]> {
-  const user = req.user!;
-  const ctx: AccessContext = {
-    userId: user.id,
-    isAdmin: !!user.isAdmin,
-    userTags: user.tags ?? [],
-    organizationId: user.organizationId ?? undefined,
-  };
+export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<ManageableDataLakeConfig[]> {
+  // toAccessContext, not a local literal: it is the one place this shape is built, and it is
+  // what resolves entitlementKeys. Building it inline here silently dropped them, so
+  // findAccessible saw no entitlement arm and browse lost a lake gated by requiredEntitlement
+  // alone - which retrieval kept. Memoized per request, and skipped entirely for admins.
+  // Costs a developer-tagged non-admin one subscription read they previously skipped: the old
+  // inline form resolved keys lazily and that branch short-circuits on the developer tag. Worth
+  // it to stop the two halves of the merge disagreeing about what the caller holds.
+  const ctx = await toAccessContext(req);
 
   const dynamic = ctx.isAdmin
     ? await dataLakeService.listAllDataLakes({ db: { dataLakes: dataLakeRepository } })
     : await dataLakeService.listDataLakes(ctx, { db: { dataLakes: dataLakeRepository } });
 
   // Admin/developer see every static lake; everyone else is scoped by the any-of
-  // requiredUserTag/requiredEntitlement filter (resolved entitlement keys included so
-  // tag-less domain grants match). Entitlements are resolved lazily - only when
-  // we actually need the non-privileged static filter.
+  // requiredUserTag/requiredEntitlement filter, reusing the keys toAccessContext already
+  // resolved so the static filter and the DB filter above cannot disagree about them.
   const staticLakes =
-    ctx.isAdmin || hasDeveloperUserTag(user.tags)
+    ctx.isAdmin || hasDeveloperUserTag(ctx.userTags)
       ? DATA_LAKES
-      : getAccessibleDataLakes(ctx.userTags, undefined, await getRequestEntitlements(req));
+      : getAccessibleDataLakes(ctx.userTags, undefined, ctx.entitlementKeys);
 
   const dynamicIds = new Set(dynamic.map(d => d.id));
   return [...dynamic, ...staticLakes.filter(s => !dynamicIds.has(s.id))];

@@ -30,8 +30,8 @@ import { pickBy } from 'lodash';
 import pLimit from 'p-limit';
 import ability from '../auth/ability';
 import { secretRotationRepository } from '@bike4mind/database/infra';
-import { dayjs } from '@bike4mind/common';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { Resource } from 'sst';
 
@@ -55,8 +55,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
   let previousSecret = undefined;
-  // If JWT_SECRET was just recently renewed within 24 hours, allow the user to continue using the old key
-  if (dayjs(secretRotation?.rotatedAt).isBefore(dayjs().add(1, 'day'))) {
+  // Accept the previous key only within the shared rotation grace window.
+  if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {
     previousSecret = secretRotation?.previousKey;
   }
   const decoded = authTokenGenerator.verifyToken(accessToken!, previousSecret) as jwt.JwtPayload;
@@ -107,6 +107,13 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       [Subscription.collection.collectionName]: accessibleBy(userAbility).ofType(Subscription),
       [Artifact.collection.collectionName]: accessibleBy(userAbility).ofType(Artifact),
       [ArtifactVersion.collection.collectionName]: accessibleBy(userAbility).ofType(ArtifactVersion),
+      // [DELETION-FOOTPRINT] premium-bob run doc: the reading screen live-subscribes to its
+      // bob_runs doc by _id (issue #33). Owner-scoped so a user only sees their own runs. Literal
+      // string because the model lives in the overlay (not importable here); `userId` is a String
+      // field, so match the stringified id. This ownership rule (own runs only) MUST stay in sync
+      // with the GET /api/premium-bob/runs/:id polling route's read check (assertCanReadRun) so the
+      // poll can't leak what the socket wouldn't. Removed when Bob is extracted.
+      ['bob_runs']: { userId: user._id.toString() },
     }[collectionName];
   }
 

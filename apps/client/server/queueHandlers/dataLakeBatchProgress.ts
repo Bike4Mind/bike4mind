@@ -28,7 +28,7 @@ export async function finalizeBatchIfComplete(
   try {
     const lake = await dataLakeRepository.findById(batch.dataLakeId);
     if (lake) {
-      await dataLakeService.recomputeLakeStats(lake.id, lake.datalakeTag, {
+      await dataLakeService.recomputeLakeStats(lake, {
         db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
       });
     }

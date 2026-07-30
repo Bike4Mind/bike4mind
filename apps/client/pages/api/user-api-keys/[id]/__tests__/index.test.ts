@@ -38,20 +38,34 @@ const updateEmbedKey = vi.hoisted(() =>
   }))
 );
 vi.mock('@bike4mind/services', () => ({ userApiKeyService: { updateEmbedKey } }));
-// The route reads the stored key (for the branding echo-vs-elevation decision)
-// via findByUserIdAndId; default to no stored key (stored hideBranding false).
-const userApiKeyRepository = vi.hoisted(() => ({ findByUserIdAndId: vi.fn().mockResolvedValue(null) }));
+// The route reads the stored key via findByUserIdAndId - both for the branding
+// echo-vs-elevation decision and (post-#891) for the owner ref the gate resolves.
+// Default to no stored key.
+const userApiKeyRepository = vi.hoisted(() => ({
+  findByUserIdAndId: vi.fn().mockResolvedValue(null),
+  // The branding-owner read falls back to the org-admin resolver on a minter miss,
+  // mirroring updateEmbedKey; default to no org-admin match.
+  findByOrganizationIdsAndId: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
 const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
 
-// The real gateEmbedBrandingWrite runs; only its entitlement seam is stubbed,
-// so these tests exercise the actual strip logic through the route. The database
-// barrel is stubbed because the gate's module also exports the owner resolver.
-const requestHasEntitlement = vi.hoisted(() => vi.fn().mockResolvedValue(false));
-vi.mock('@server/entitlements', () => ({ requestHasEntitlement }));
-vi.mock('@bike4mind/database', () => ({ organizationRepository: {}, userRepository: {} }));
+// The real gateEmbedBrandingWrite AND embedKeyOwnerHasEntitlement run; only the
+// leaf entitlement source (getUserEntitlements) and the owner-doc lookups are
+// stubbed, so these tests exercise the actual OWNER-scoped strip logic through
+// the route - a caller's isAdmin no longer bypasses, only the resolved owner's
+// plan counts (#891).
+const getUserEntitlements = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+vi.mock('@server/entitlements', () => ({ getUserEntitlements }));
+const userRepository = vi.hoisted(() => ({ findById: vi.fn() }));
+const organizationRepository = vi.hoisted(() => ({
+  findById: vi.fn(),
+  findIdsAdministeredBy: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('@bike4mind/database', () => ({ organizationRepository, userRepository }));
 
+import { CreditHolderType } from '@bike4mind/common';
 import '@pages/api/user-api-keys/[id]/index';
 
 function patch(id: string | undefined, body: unknown) {
@@ -137,18 +151,32 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
     expect(updateEmbedKey).not.toHaveBeenCalled();
   });
 
-  describe('whitelabel write gate (epic #41 Phase D)', () => {
+  // Post-#891 the write gate is OWNER-scoped: it authorizes the hideBranding
+  // elevation against the key's billing owner (same rule as the serve/read gate)
+  // rather than the acting caller, so an admin/developer can no longer persist a
+  // hideBranding the read side would strip.
+  describe('whitelabel write gate - owner-scoped (#891)', () => {
+    const OWNER = 'owner-1';
     beforeEach(() => {
-      requestHasEntitlement.mockReset();
-      requestHasEntitlement.mockResolvedValue(false);
+      getUserEntitlements.mockReset();
+      getUserEntitlements.mockResolvedValue([]); // owner not entitled by default
+      userRepository.findById.mockReset();
+      userRepository.findById.mockResolvedValue({ id: OWNER });
+      organizationRepository.findById.mockReset();
+      organizationRepository.findIdsAdministeredBy.mockReset();
+      organizationRepository.findIdsAdministeredBy.mockResolvedValue([]);
       userApiKeyRepository.findByUserIdAndId.mockReset();
-      userApiKeyRepository.findByUserIdAndId.mockResolvedValue(null); // no stored hideBranding
+      userApiKeyRepository.findByOrganizationIdsAndId.mockReset();
+      userApiKeyRepository.findByOrganizationIdsAndId.mockResolvedValue(null);
+      // Personal key owned by OWNER, no stored hideBranding.
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue({ userId: OWNER, branding: undefined });
     });
 
-    it('strips hideBranding:true for an unentitled caller, keeping other fields', async () => {
+    it('strips hideBranding:true when the key OWNER is unentitled, keeping other fields', async () => {
       const { req, res } = patch('key-1', { branding: { displayName: 'Acme', hideBranding: true } });
       await mockRefs.patchHandler!(req, res);
       expect(res._getStatusCode()).toBe(200);
+      expect(getUserEntitlements).toHaveBeenCalled();
       expect(updateEmbedKey).toHaveBeenCalledWith(
         'u1',
         expect.objectContaining({ branding: { displayName: 'Acme', hideBranding: false } }),
@@ -156,8 +184,22 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
       );
     });
 
-    it('preserves hideBranding:true for an entitled caller', async () => {
-      requestHasEntitlement.mockResolvedValue(true);
+    // The core #891 regression: an admin CALLER no longer bypasses the gate. Only
+    // the resolved owner's plan decides, so an admin configuring a key for an
+    // unentitled owner cannot persist a hideBranding:true the read side strips.
+    it('strips hideBranding:true even when the CALLER is a Super Admin, if the owner is unentitled', async () => {
+      const { req, res } = patch('key-1', { branding: { hideBranding: true } });
+      (req as any).user = { id: 'u1', isAdmin: true };
+      await mockRefs.patchHandler!(req, res);
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { hideBranding: false } }),
+        expect.anything()
+      );
+    });
+
+    it('preserves hideBranding:true when the key OWNER is entitled', async () => {
+      getUserEntitlements.mockResolvedValue(['embed:whitelabel']);
       const { req, res } = patch('key-1', { branding: { hideBranding: true } });
       await mockRefs.patchHandler!(req, res);
       expect(updateEmbedKey).toHaveBeenCalledWith(
@@ -167,10 +209,49 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
       );
     });
 
-    it('strips hideBranding when the entitlement lookup rejects (fail closed)', async () => {
-      requestHasEntitlement.mockRejectedValue(new Error('lookup down'));
+    // An org-billed key's entitlement is the org billing owner's, never the
+    // minter's - a minter entitled personally cannot white-label an unentitled org.
+    it('resolves the ORG billing owner (not the minter) for an org-billed key', async () => {
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue({
+        userId: 'minter',
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
+        branding: undefined,
+      });
+      organizationRepository.findById.mockResolvedValue({ userId: 'org-owner' });
+      userRepository.findById.mockImplementation(async (id: string) => ({ id }));
+      getUserEntitlements.mockImplementation(async (owner: any) =>
+        owner?.id === 'minter' ? ['embed:whitelabel'] : []
+      );
       const { req, res } = patch('key-1', { branding: { hideBranding: true } });
       await mockRefs.patchHandler!(req, res);
+      expect(organizationRepository.findById).toHaveBeenCalledWith('org-1');
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { hideBranding: false } }),
+        expect.anything()
+      );
+    });
+
+    it('strips hideBranding when owner resolution rejects (fail closed)', async () => {
+      userRepository.findById.mockRejectedValue(new Error('lookup down'));
+      const { req, res } = patch('key-1', { branding: { hideBranding: true } });
+      await mockRefs.patchHandler!(req, res);
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { hideBranding: false } }),
+        expect.anything()
+      );
+    });
+
+    it('strips hideBranding when the caller neither minted nor administers the key (fail closed)', async () => {
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue(null);
+      // Org-admin fallback also misses (caller administers nothing).
+      const { req, res } = patch('key-1', { branding: { hideBranding: true } });
+      await mockRefs.patchHandler!(req, res);
+      // Both reads miss, so there is no owner to resolve and the elevation is stripped.
+      expect(userApiKeyRepository.findByOrganizationIdsAndId).toHaveBeenCalled();
+      expect(getUserEntitlements).not.toHaveBeenCalled();
       expect(updateEmbedKey).toHaveBeenCalledWith(
         'u1',
         expect.objectContaining({ branding: { hideBranding: false } }),
@@ -181,7 +262,8 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
     it('forwards an omitted branding as undefined (stored hideBranding never cleared)', async () => {
       const { req, res } = patch('key-1', { agentId: 'agent-2' });
       await mockRefs.patchHandler!(req, res);
-      expect(requestHasEntitlement).not.toHaveBeenCalled();
+      expect(userApiKeyRepository.findByUserIdAndId).not.toHaveBeenCalled();
+      expect(getUserEntitlements).not.toHaveBeenCalled();
       expect(updateEmbedKey).toHaveBeenCalledWith(
         'u1',
         expect.objectContaining({ branding: undefined }),
@@ -189,10 +271,11 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
       );
     });
 
-    it('never consults the entitlement for branding without a hideBranding elevation', async () => {
+    it('never resolves the owner for branding without a hideBranding elevation', async () => {
       const { req, res } = patch('key-1', { branding: { primaryColor: '#336699' } });
       await mockRefs.patchHandler!(req, res);
-      expect(requestHasEntitlement).not.toHaveBeenCalled();
+      expect(userApiKeyRepository.findByUserIdAndId).not.toHaveBeenCalled();
+      expect(getUserEntitlements).not.toHaveBeenCalled();
       expect(updateEmbedKey).toHaveBeenCalledWith(
         'u1',
         expect.objectContaining({ branding: { primaryColor: '#336699' } }),
@@ -200,13 +283,11 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
       );
     });
 
-    // Onoya's regression (issue #572 comment): a stored hideBranding:true must
-    // survive an unrelated branding edit by an unentitled member - the client
-    // echoes the stored flag, and the gate must treat that echo as not-an-
+    // A stored hideBranding:true must survive an unrelated branding edit - the
+    // client echoes the stored flag, and the gate treats that echo as not-an-
     // elevation rather than clobbering white-label the org already earned.
-    it('preserves a stored hideBranding:true when an unentitled caller edits an unrelated branding field', async () => {
-      userApiKeyRepository.findByUserIdAndId.mockResolvedValue({ branding: { hideBranding: true } });
-      requestHasEntitlement.mockResolvedValue(false);
+    it('preserves a stored hideBranding:true when an unentitled owner edits an unrelated branding field (echo)', async () => {
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue({ userId: OWNER, branding: { hideBranding: true } });
       const { req, res } = patch('key-1', { branding: { primaryColor: '#0a7f3f', hideBranding: true } });
       await mockRefs.patchHandler!(req, res);
       expect(updateEmbedKey).toHaveBeenCalledWith(
@@ -214,12 +295,12 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
         expect.objectContaining({ branding: { primaryColor: '#0a7f3f', hideBranding: true } }),
         expect.anything()
       );
-      // An echo is not an elevation, so the entitlement lookup is not even needed.
-      expect(requestHasEntitlement).not.toHaveBeenCalled();
+      // An echo is not an elevation, so owner resolution is not even needed.
+      expect(getUserEntitlements).not.toHaveBeenCalled();
     });
 
-    it('still strips a genuine elevation (stored not true) by an unentitled caller', async () => {
-      userApiKeyRepository.findByUserIdAndId.mockResolvedValue({ branding: { hideBranding: false } });
+    it('still strips a genuine elevation (stored not true) for an unentitled owner', async () => {
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue({ userId: OWNER, branding: { hideBranding: false } });
       const { req, res } = patch('key-1', { branding: { hideBranding: true } });
       await mockRefs.patchHandler!(req, res);
       expect(updateEmbedKey).toHaveBeenCalledWith(
@@ -228,5 +309,48 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
         expect.anything()
       );
     });
+
+    // #909: an org admin (not the minter) editing a teammate's org key resolves
+    // the elevation via the org-admin fallback read. If that read is NOT widened,
+    // the minter miss leaves `existing` null and the elevation is stripped - so
+    // asserting it is PRESERVED (for an entitled org owner) is the mutation lens.
+    it('preserves hideBranding for an org admin editing a teammate org key whose org owner is entitled', async () => {
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue(null); // caller did not mint it
+      organizationRepository.findIdsAdministeredBy.mockResolvedValue(['org-1']);
+      userApiKeyRepository.findByOrganizationIdsAndId.mockResolvedValue({
+        userId: 'minter',
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
+        branding: undefined,
+      });
+      organizationRepository.findById.mockResolvedValue({ userId: 'org-owner' });
+      userRepository.findById.mockImplementation(async (id: string) => ({ id }));
+      getUserEntitlements.mockImplementation(async (owner: any) =>
+        owner?.id === 'org-owner' ? ['embed:whitelabel'] : []
+      );
+      const { req, res } = patch('key-1', { branding: { hideBranding: true } });
+      (req as any).user = { id: 'admin-user', isAdmin: false };
+      await mockRefs.patchHandler!(req, res);
+      expect(userApiKeyRepository.findByOrganizationIdsAndId).toHaveBeenCalledWith(['org-1'], 'key-1');
+      expect(organizationRepository.findById).toHaveBeenCalledWith('org-1');
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'admin-user',
+        expect.objectContaining({ branding: { hideBranding: true } }),
+        expect.anything()
+      );
+    });
+  });
+
+  // The route must thread the organizations adapter into the service so the
+  // service's own org-admin resolution has its dependency (F3). A missing adapter
+  // would TypeError the service on a minter miss.
+  it('threads the organizations adapter into updateEmbedKey', async () => {
+    const { req, res } = patch('key-1', { agentId: 'agent-2' });
+    await mockRefs.patchHandler!(req, res);
+    expect(updateEmbedKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ organizations: organizationRepository }) })
+    );
   });
 });

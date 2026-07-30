@@ -233,6 +233,7 @@ export interface CliConfig {
   /** Opt-in feature module toggles; arbitrary keys are plugin configKeys */
   features?: {
     tavern?: boolean; // Enable Tavern agent integration (default: false)
+    hearth?: boolean; // Enable Hearth shared event log integration (default: false)
   } & Record<string, boolean | undefined>;
   tools: {
     enabled: string[];

@@ -4,10 +4,12 @@ import {
   useRotateUserApiKey,
   useRevokeUserApiKey,
   useUpdateEmbedKey,
+  useBillingOrganizations,
   UpdateEmbedKeyRequest,
 } from '@client/app/hooks/data/userApiKeys';
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -41,21 +43,27 @@ import {
   ApiKeyScope,
   EMBED_ORIGINS_MAX,
   IEmbedBranding,
+  IOrganizationDocument,
   IUserApiKeyDocument,
   parseEmbedOrigin,
+  WithId,
 } from '@bike4mind/common';
 import { coerceToOrigin } from '@client/app/components/common/EmbedAllowlistEditor';
+import { useUser } from '@client/app/contexts/UserContext';
 import {
   isModellessAgent,
   ModellessAgentAlert,
   MODELLESS_AGENT_WARNING,
 } from '@client/app/components/common/ModellessAgentWarning';
-import { useEntitlementGate } from '@client/app/hooks/useEntitlementGate';
-import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
+import { useEntitlements } from '@client/app/hooks/data/entitlements';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY, normalizeTag } from '@client/lib/entitlements/registry';
 import { useGetAgents } from '@client/app/hooks/data/agents';
+import { useGetOrganization, useSearchOrganizations } from '@client/app/hooks/data/organizations';
+import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
-import { useMemo, useState } from 'react';
+import { revocationTooltip } from '@client/app/utils/apiKeyRevocation';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -149,8 +157,8 @@ interface EmbedKeyFormState {
 /**
  * Trim branding to undefined when every field is blank, so we never persist an
  * empty object. `hideBranding` is preserved verbatim: the toggle only renders
- * for whitelabel-entitled viewers, so for everyone else it rides through from
- * the stored key untouched - a full-replace save must not silently drop it.
+ * for keys whose owner holds white-label, so for everyone else it rides through
+ * from the stored key untouched - a full-replace save must not silently drop it.
  */
 function normalizeBranding(branding: IEmbedBranding): IEmbedBranding | undefined {
   const displayName = branding.displayName?.trim() || undefined;
@@ -173,17 +181,19 @@ const sameBranding = (a?: IEmbedBranding, b?: IEmbedBranding) =>
 function EmbedKeyFormFields({
   form,
   onChange,
+  ownerHasWhitelabel,
 }: {
   form: EmbedKeyFormState;
   onChange: (form: EmbedKeyFormState) => void;
+  /**
+   * Whether the key's billing OWNER holds white-label - the same owner-scoped,
+   * no-bypass rule the serve and write paths enforce, so the toggle is only
+   * offered when a save would actually take effect. Resolved by the caller
+   * (Configure: the key's server-computed flag; Create: the prospective owner).
+   */
+  ownerHasWhitelabel: boolean;
 }) {
   const { data: agents, isLoading: agentsLoading } = useGetAgents();
-  // Viewer-scoped and UX-only: it decides whether to OFFER the toggle, while the
-  // serve route enforces on the key owner's plan and the write route strips an
-  // unentitled elevation. `pending` renders like `denied` (no spinner flash in
-  // an already-open modal). Known asymmetry: this gate bypasses for developers,
-  // the server gates do not - a dev's toggle save is stripped server-side.
-  const whitelabelGate = useEntitlementGate(EMBED_WHITELABEL_ENTITLEMENT_KEY);
 
   // Advisory only. An agent the viewer cannot see (or beyond the list's first
   // page) shows no warning - same degradation as the Select itself; the embed
@@ -252,7 +262,7 @@ function EmbedKeyFormFields({
               />
             </FormControl>
           </Stack>
-          {whitelabelGate.state === 'satisfied' ? (
+          {ownerHasWhitelabel ? (
             <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
               <Box>
                 <FormLabel>Hide Bike4Mind branding</FormLabel>
@@ -280,6 +290,136 @@ function EmbedKeyFormFields({
 
 const emptyForm = (): EmbedKeyFormState => ({ agentId: '', allowedOrigins: [], branding: {} });
 
+const orgOwnerHint = 'The organization that owns and is billed for this key.';
+
+/**
+ * Platform-admin branch of the org picker: a server-searched Autocomplete over
+ * EVERY organization. It must NOT reuse SingleOrganizationSelector / the
+ * useSearchUserOrganizations hook - those inject `filters.userId`, so even an
+ * admin would only see the orgs they own or belong to. useSearchOrganizations
+ * sends no userId, and /api/organizations returns all tenants for an admin, so
+ * an admin can bill any org (which the create route's isAdmin bypass allows).
+ * The picked org is remembered so it stays selected while the search term
+ * changes, and cleared when the parent resets `value` after a successful mint.
+ */
+function AdminOrgPicker({ value, onChange }: { value?: string; onChange: (organizationId?: string) => void }) {
+  const { debouncedValue: search, setValue: setSearch } = useDebounceValue('', 400);
+  const { data, isLoading } = useSearchOrganizations({ page: 1, limit: 20, search });
+  const [picked, setPicked] = useState<WithId<IOrganizationDocument> | null>(null);
+  // Resolve the label for a value that isn't in the current search page and wasn't
+  // picked here (e.g. a role flip re-mounts this picker with a pre-set org), so the
+  // Autocomplete never looks empty while the parent still holds that organizationId.
+  const { data: fetchedSelected } = useGetOrganization(value && !picked ? value : null);
+
+  useEffect(() => {
+    if (!value) setPicked(null);
+  }, [value]);
+
+  const options = data?.data ?? [];
+  const selected = value ? (picked ?? options.find(org => org.id === value) ?? fetchedSelected ?? null) : null;
+  // Keep the selected org present even when the current search filters it out.
+  const mergedOptions = selected && !options.some(org => org.id === selected.id) ? [selected, ...options] : options;
+
+  return (
+    <FormControl required>
+      <FormLabel>Organization</FormLabel>
+      <Autocomplete
+        placeholder="Search organizations"
+        loading={isLoading}
+        options={mergedOptions}
+        value={selected}
+        onChange={(_, org) => {
+          setPicked(org);
+          onChange(org?.id ?? undefined);
+        }}
+        onInputChange={(_, input, reason) => {
+          // On select, MUI pushes the chosen label back through onInputChange
+          // (reason 'reset'); don't treat that as a new search - it just triggers a
+          // redundant refetch and narrows the next-open list to the one org.
+          if (reason !== 'reset') setSearch(input ?? '');
+        }}
+        isOptionEqualToValue={(option, v) => option.id === v.id}
+        getOptionLabel={option => option.name}
+        data-testid="embed-key-org-admin-select"
+      />
+      <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
+        {orgOwnerHint}
+      </Typography>
+    </FormControl>
+  );
+}
+
+/**
+ * Non-admin branch: pick from the orgs the caller owns or manages
+ * (billing-organizations == findIdsAdministeredBy), which is exactly what the
+ * create route authorizes for a non-admin, so a selectable org can never 403 at
+ * submit. A caller who administers none is told they cannot mint.
+ */
+function MemberOrgPicker({ value, onChange }: { value?: string; onChange: (organizationId?: string) => void }) {
+  const { data: billingOrgs, isLoading } = useBillingOrganizations();
+
+  if (!isLoading && (billingOrgs?.length ?? 0) === 0) {
+    return (
+      <FormControl required>
+        <FormLabel>Organization</FormLabel>
+        <Alert color="warning" startDecorator={<WarningIcon />} data-testid="embed-key-org-empty">
+          <Typography level="body-sm">
+            You do not administer any organization. Embed keys must be organization-owned, so ask an org owner or a
+            platform admin to mint one.
+          </Typography>
+        </Alert>
+      </FormControl>
+    );
+  }
+
+  return (
+    <FormControl required>
+      <FormLabel>Organization</FormLabel>
+      <Select
+        value={value ?? null}
+        onChange={(_, v) => onChange((v as string) ?? undefined)}
+        placeholder={isLoading ? 'Loading organizations...' : 'Select the owning organization'}
+        disabled={isLoading}
+        data-testid="embed-key-org-select"
+      >
+        {billingOrgs?.map(org => (
+          <Option key={org.id} value={org.id}>
+            {org.name}
+          </Option>
+        ))}
+      </Select>
+      <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
+        {orgOwnerHint}
+      </Typography>
+    </FormControl>
+  );
+}
+
+/**
+ * Required owning-organization picker for minting an embed key. Embed keys must
+ * be org-owned - assertEmbedCredential rejects a user-owned key - so unlike the
+ * optional "bill usage to" selector on personal keys, this has no personal
+ * fallback and creation is blocked until an org is chosen. Split by role so each
+ * branch mounts only its own data hook: a platform admin searches all orgs (see
+ * AdminOrgPicker), everyone else picks from the orgs they administer. Lives
+ * outside the shared EmbedKeyFormState because ownership is fixed at creation
+ * and Configure must not expose it.
+ */
+function EmbedKeyOrganizationField({
+  value,
+  onChange,
+}: {
+  value?: string;
+  onChange: (organizationId?: string) => void;
+}) {
+  const { currentUser } = useUser();
+  return currentUser?.isAdmin ? (
+    <AdminOrgPicker value={value} onChange={onChange} />
+  ) : (
+    <MemberOrgPicker value={value} onChange={onChange} />
+  );
+}
+
 function NewEmbedKeyModal({
   open,
   onClose,
@@ -290,20 +430,44 @@ function NewEmbedKeyModal({
   onSuccess: (key: string) => void;
 }) {
   const [name, setName] = useState('');
+  const [organizationId, setOrganizationId] = useState<string | undefined>(undefined);
   const [form, setForm] = useState<EmbedKeyFormState>(emptyForm());
+
+  const resetForm = () => {
+    setName('');
+    setOrganizationId(undefined);
+    setForm(emptyForm());
+  };
+
+  // The modal is parent-controlled via `open`, so it hides rather than unmounts;
+  // reset on every close (cancel/backdrop) or a filled-then-cancelled form would
+  // reappear pre-populated on reopen.
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
+  // The hide-branding toggle is UX-only. The minted key is org-owned, so its
+  // authoritative owner is the chosen organization, not the minter - but the
+  // server resolves the org's plan and strips an unentitled hideBranding on write
+  // regardless. We gate the toggle we OFFER on the current user's own held
+  // entitlements (no admin/developer bypass) as an up-front approximation; a
+  // wrong guess is only cosmetic since the write path is the real enforcement.
+  const { data: entitlements } = useEntitlements();
+  const ownerHasWhitelabel = (entitlements ?? []).includes(normalizeTag(EMBED_WHITELABEL_ENTITLEMENT_KEY));
 
   const createMutation = useCreateUserApiKey({
     onSuccess: result => {
       onSuccess(result.key);
       onClose();
-      setName('');
-      setForm(emptyForm());
+      resetForm();
     },
   });
 
   const handleSubmit = () =>
     createMutation.mutate({
       name,
+      organizationId,
       scopes: [ApiKeyScope.EMBED_CHAT],
       agentId: form.agentId,
       allowedOrigins: form.allowedOrigins,
@@ -311,7 +475,7 @@ function NewEmbedKeyModal({
     });
 
   return (
-    <Modal open={open} onClose={onClose}>
+    <Modal open={open} onClose={handleClose}>
       <ModalDialog size="lg" sx={{ width: '600px', maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto' }}>
         <Typography level="h4">Create Embed Key</Typography>
         <Typography level="body-sm" sx={{ color: 'text.tertiary', mt: 0.5, mb: 2 }}>
@@ -330,16 +494,18 @@ function NewEmbedKeyModal({
             />
           </FormControl>
 
-          <EmbedKeyFormFields form={form} onChange={setForm} />
+          <EmbedKeyOrganizationField value={organizationId} onChange={setOrganizationId} />
+
+          <EmbedKeyFormFields form={form} onChange={setForm} ownerHasWhitelabel={ownerHasWhitelabel} />
 
           <Stack direction="row" spacing={2} justifyContent="flex-end">
-            <Button variant="outlined" onClick={onClose}>
+            <Button variant="outlined" onClick={handleClose}>
               Cancel
             </Button>
             <Button
               onClick={handleSubmit}
               loading={createMutation.isPending}
-              disabled={!name.trim() || !form.agentId}
+              disabled={!name.trim() || !form.agentId || !organizationId}
               data-testid="embed-key-create-btn"
             >
               Create Embed Key
@@ -400,7 +566,11 @@ function ConfigureEmbedKeyModal({ embedKey, onClose }: { embedKey: IUserApiKeyDo
         </Typography>
 
         <Stack spacing={2.5}>
-          <EmbedKeyFormFields form={form} onChange={setForm} />
+          <EmbedKeyFormFields
+            form={form}
+            onChange={setForm}
+            ownerHasWhitelabel={embedKey.ownerHasWhitelabel ?? false}
+          />
 
           <Stack direction="row" spacing={2} justifyContent="flex-end">
             <Button variant="outlined" onClick={onClose}>
@@ -602,9 +772,11 @@ export default function EmbedKeysTab() {
                       )}
                     </td>
                     <td>
-                      <Chip variant="soft" color={disabled ? 'danger' : 'success'}>
-                        {disabled ? 'Revoked' : 'Active'}
-                      </Chip>
+                      <Tooltip title={revocationTooltip(key) ?? ''} data-testid={`embed-key-status-${key.id}`}>
+                        <Chip variant="soft" color={disabled ? 'danger' : 'success'}>
+                          {disabled ? 'Revoked' : 'Active'}
+                        </Chip>
+                      </Tooltip>
                     </td>
                     <td>
                       <Typography level="body-xs">{dayjs(key.createdAt).format('MMM D, YYYY')}</Typography>

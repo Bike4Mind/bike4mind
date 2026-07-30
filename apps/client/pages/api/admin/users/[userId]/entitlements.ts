@@ -11,6 +11,7 @@ import {
   TAG_GRANTS,
   allKnownEntitlementKeys,
   grantTagForEntitlement,
+  isBypassExemptEntitlement,
   normalizeTag,
 } from '@client/lib/entitlements/registry';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
@@ -39,7 +40,12 @@ interface EntitlementRow {
  * `getUserEntitlements` (which returns only the held key set for gating),
  * this walks EVERY known product key and records every contributing source
  * -tag / domain / subscription / admin bypass / developer-tag bypass - so an
- * admin can see and revoke a phantom grant instead of guessing at it.
+ * admin can see and revoke a phantom grant instead of guessing at it. The two
+ * bypass sources are suppressed for bypass-exempt keys (see
+ * `isBypassExemptEntitlement`), whose enforcement honors neither bypass, so the
+ * report matches the gate for them. Note this reports on the VIEWED user; a
+ * feature gated on a different principal (e.g. an org-billed embed key resolves
+ * the org billing owner) matches only when that principal is the viewed user.
  */
 const handler = baseApi().get(
   asyncHandler(async (req, res) => {
@@ -97,11 +103,17 @@ const handler = baseApi().get(
         }
       }
 
-      if (user.isAdmin) {
-        sources.push({ type: 'admin-bypass', detail: 'Super Admin' });
-      }
-      if (isDeveloper) {
-        sources.push({ type: 'developer-bypass', detail: 'Developer tag' });
+      // Bypass-exempt keys (e.g. embed white-label) are enforced against the
+      // owner's literal grant and honor NEITHER bypass - reporting a bypass
+      // source for them would claim access the gate won't confer. Suppress both
+      // so held/sources match `getUserEntitlements` (the enforcement resolver).
+      if (!isBypassExemptEntitlement(key)) {
+        if (user.isAdmin) {
+          sources.push({ type: 'admin-bypass', detail: 'Super Admin' });
+        }
+        if (isDeveloper) {
+          sources.push({ type: 'developer-bypass', detail: 'Developer tag' });
+        }
       }
 
       return {

@@ -28,6 +28,18 @@ export interface RateLimitContext {
   method: string;
 }
 
+export interface RateLimitOptions {
+  /**
+   * Whether this request should consume the per-DAY quota. Defaults to true.
+   * Set false for cheap idempotent reads (async job-status polls, content
+   * fetches) so they don't burn the daily budget that meters actual generation
+   * submissions. The per-MINUTE burst limit still applies regardless, so a
+   * runaway poll loop is still throttled. The caller (middleware) owns the
+   * policy of which requests qualify; this function only honors the flag.
+   */
+  meterDailyLimit?: boolean;
+}
+
 /**
  * Single source of truth for the rate-limit cache key format. Both the
  * enforcer (checkApiKeyRateLimit) and the reset (resetApiKeyRateLimit) must
@@ -60,6 +72,10 @@ export async function resetApiKeyRateLimit(keyId: string): Promise<void> {
 export interface RateLimitUsage {
   minute: number;
   day: number;
+  /** Epoch seconds when the current minute window ends; undefined when no window is open (count 0). */
+  minuteResetAt?: number;
+  /** Epoch seconds when the current day window ends; undefined when no window is open (count 0). */
+  dayResetAt?: number;
 }
 
 /**
@@ -75,15 +91,30 @@ export async function getApiKeyRateLimitUsage(keyId: string): Promise<RateLimitU
     cacheRepository.findByKey(minuteKey),
     cacheRepository.findByKey(dayKey),
   ]);
-  return { minute: readCounterValue(minuteDoc), day: readCounterValue(dayDoc) };
+  const minute = readCounter(minuteDoc);
+  const day = readCounter(dayDoc);
+  return {
+    minute: minute.count,
+    day: day.count,
+    minuteResetAt: minute.resetAt,
+    dayResetAt: day.resetAt,
+  };
 }
 
-function readCounterValue(doc: { result?: unknown; expiresAt?: Date } | null): number {
+/**
+ * Read a counter doc's live count and window-end (epoch seconds). A missing,
+ * expired-but-uncleaned, or malformed doc reads as count 0 with no reset - the
+ * window is effectively closed, so there is nothing to reset.
+ */
+function readCounter(doc: { result?: unknown; expiresAt?: Date } | null): { count: number; resetAt?: number } {
   if (!doc || (doc.expiresAt && doc.expiresAt.getTime() <= Date.now())) {
-    return 0;
+    return { count: 0 };
   }
   const count = (doc.result as { count?: unknown } | undefined)?.count;
-  return typeof count === 'number' ? count : 0;
+  if (typeof count !== 'number') {
+    return { count: 0 };
+  }
+  return { count, resetAt: doc.expiresAt ? Math.floor(doc.expiresAt.getTime() / 1000) : undefined };
 }
 
 /**
@@ -125,14 +156,17 @@ async function decrementCounter(key: string): Promise<number> {
  * @param keyId - The API key ID to check
  * @param rateLimit - The rate limit configuration from the API key
  * @param context - Optional context for analytics logging (userId, endpoint, method)
+ * @param options - Enforcement options (e.g. exempt cheap reads from the day quota)
  * @returns RateLimitResult with allowed status, headers, and error if exceeded
  */
 export async function checkApiKeyRateLimit(
   keyId: string,
   rateLimit: { requestsPerMinute: number; requestsPerDay: number },
-  context?: RateLimitContext
+  context?: RateLimitContext,
+  options: RateLimitOptions = {}
 ): Promise<RateLimitResult> {
   const { requestsPerMinute, requestsPerDay } = rateLimit;
+  const { meterDailyLimit = true } = options;
 
   try {
     const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
@@ -160,6 +194,27 @@ export async function checkApiKeyRateLimit(
           requestsPerDay,
           0, // Day counter untouched on a minute-limit rejection
           Date.now() + DAY_IN_MS // Nominal; the day header is informational here
+        ),
+      };
+    }
+
+    // Step 1b: Cheap reads (status polls, content fetches) are exempt from the
+    // day quota. Don't touch the day counter - report its current value from a
+    // non-incrementing read so the day headers stay honest.
+    if (!meterDailyLimit) {
+      const dayDoc = await cacheRepository.findByKey(dayKey);
+      const dayCount = (dayDoc?.result as { count?: number } | undefined)?.count ?? 0;
+      const dayResetAt = dayDoc?.expiresAt ? dayDoc.expiresAt.getTime() : Date.now() + DAY_IN_MS;
+
+      return {
+        allowed: true,
+        headers: buildHeaders(
+          requestsPerMinute,
+          minuteResult.count,
+          minuteResetAt,
+          requestsPerDay,
+          dayCount,
+          dayResetAt
         ),
       };
     }

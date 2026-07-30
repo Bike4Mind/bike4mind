@@ -18,6 +18,7 @@ export interface IAgentOpsSettings {
 
   // Generation settings
   generationLlmModel:
+    | 'claude-opus-5'
     | 'claude-opus-4-8'
     | 'claude-opus-4-7'
     | 'claude-opus-4-6'
@@ -28,10 +29,11 @@ export interface IAgentOpsSettings {
     | 'claude-haiku-4-5-20251001'
     | 'o3-2025-04-16'
     | 'gpt-4.1-2025-04-14'
-    | 'grok-3'
+    | 'grok-4.5'
     | 'gpt-4o'
     | 'gpt-4o-mini'
     // Deprecated - kept for backward compat with existing DB documents
+    | 'grok-3'
     | 'claude-sonnet-4-20250514'
     | 'gpt-4-turbo'
     | 'claude-3-7-sonnet-20250219'

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { useShallow } from 'zustand/react/shallow';
@@ -15,6 +15,7 @@ import {
   IChatHistoryItemDocument,
   ISessionDocument,
   ModelName,
+  requiresImageInput,
 } from '@bike4mind/common';
 import type { IAgent } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -47,7 +48,7 @@ import {
 } from '@client/app/hooks/useAgentMentions';
 import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
-import { classifyQueryComplexity, routeQuery } from '@bike4mind/common';
+import { classifyQueryComplexity, isImageAttachment, routeQuery } from '@bike4mind/common';
 import { pickOrchestrationAgent } from '@client/app/utils/agentOrchestration';
 import { evaluateShortCircuits, hasExplicitAgentLiteral } from '@client/app/utils/intentClassifierShortCircuits';
 import { useIntentClassifier } from '@client/app/hooks/useIntentClassifier';
@@ -261,7 +262,15 @@ export function useSendMessage({
   // `execution_started` event during the `/new -> /notebooks/$id` swap.
   const agentExecution = useAgentExecutionDispatch();
 
-  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [submitting, setSubmittingState] = useState<boolean>(false);
+  // Ref-based mutex: React state updates are batched, so two rapid calls can
+  // both read `submitting === false` from their closure. The ref flips
+  // synchronously, making the guard at the top of handleSendClick airtight.
+  const submittingRef = useRef(false);
+  const setSubmitting = useCallback((value: boolean) => {
+    submittingRef.current = value;
+    setSubmittingState(value);
+  }, []);
   const [stoppingMessage, setStoppingMessage] = useState<boolean>(false);
   const [pendingAutoSubmitGoal, setPendingAutoSubmitGoal] = useState<string | null>(null);
   const [enableQuestMasterOnSubmit, setEnableQuestMasterOnSubmit] = useState(false);
@@ -319,7 +328,11 @@ export function useSendMessage({
     newPrompt?: string,
     options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
   ): Promise<IChatHistoryItemDocument | undefined> => {
-    if (submitting) return;
+    if (submittingRef.current) return;
+
+    // Lock out concurrent sends immediately so a second click/Enter during
+    // validation or the host-create await cannot slip through the guard above.
+    setSubmitting(true);
 
     // For editor-driven sends (newPrompt === undefined) serialize the composer to
     // markdown so inline formatting (Ctrl+B / Ctrl+I) round-trips into the rendered
@@ -346,6 +359,7 @@ export function useSendMessage({
     if (errorMessage) {
       console.error(errorMessage);
       toast.error(errorMessage);
+      setSubmitting(false);
       return;
     }
 
@@ -361,17 +375,16 @@ export function useSendMessage({
       const hostCreateSession = useSessionRouter.getState().hostCreateSession;
       if (hostCreateSession) {
         await hostCreateSession(prompt);
+        setSubmitting(false);
         return;
       }
     }
 
-    // Set before the Data Lake create block below so a rapid second Enter (e.g. double
-    // Enter-key) can't race the awaited session create and fire a second creation.
-    setSubmitting(true);
-
     // Data Lake mode with no session yet: create the grounded session up front so the FIRST
     // message is retrieval-grounded. Creation (cache seeding, adoption, /new -> notebook URL
     // swap) lives in useCreateDataLakeSession, shared with the explorer's file-click path.
+    // (The submit lock at the top of this function keeps a rapid second Enter from racing
+    // the awaited create into a second creation.)
     let dataLakeCreated: ISessionDocument | null = null;
     if (!currentSession && useDataLakeMode.getState().enabled) {
       try {
@@ -631,13 +644,33 @@ export function useSendMessage({
       return;
     }
 
-    // Warn if images are attached but model doesn't support vision
+    // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
+    // models: for image models "vision" is irrelevant - image-input capability is handled by
+    // the image-model block below. Without the type gate this fired for every image model
+    // (none set supportsVision), wrongly telling a Kontext user - a model that REQUIRES an
+    // image - that their image "will not be visible".
     const hasImageFiles =
-      pendingMessageFiles.some(pf => pf.fabFile.mimeType?.startsWith('image/')) ||
-      workBenchFiles.some(f => f.mimeType?.startsWith('image/'));
-    if (hasImageFiles && currentModelInfo && !currentModelInfo.supportsVision) {
+      pendingMessageFiles.some(pf => isImageAttachment(pf.fabFile.mimeType)) ||
+      workBenchFiles.some(f => isImageAttachment(f.mimeType));
+    if (hasImageFiles && currentModelInfo?.type === 'text' && !currentModelInfo.supportsVision) {
       toast.warning(
         `${currentModelInfo.name || model} does not support image input. Your images will not be visible to the model.`
+      );
+    }
+
+    // Image-gen: a text-to-image-only model ('none' - no variation support and not a
+    // required-input model like Kontext/Fill) can't use an attached image. The server
+    // drops it and generates from the prompt alone, so warn rather than let it silently
+    // vanish. Uses hasImageFiles (workbench AND inline paperclip attachments) since both
+    // now feed generation. (Vision above is the text-model case; this is the image-model case.)
+    if (
+      hasImageFiles &&
+      currentModelInfo?.type === 'image' &&
+      !currentModelInfo.supportsImageVariation &&
+      !requiresImageInput(currentModelInfo.id)
+    ) {
+      toast.info(
+        `${currentModelInfo.name || model} can't transform an attached image - generating from your prompt only.`
       );
     }
 

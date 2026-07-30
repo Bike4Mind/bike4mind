@@ -47,6 +47,10 @@ export class ElevenLabsVoiceService extends AIVoiceService {
     if (options.model) {
       body.model_id = options.model;
     }
+    // Pins the output language on v2.5+/v3 models; older models ignore it.
+    if (options.language) {
+      body.language_code = options.language;
+    }
     if (options.stability !== undefined || options.similarityBoost !== undefined) {
       // Send only the field the caller actually set. Omitting the other lets
       // ElevenLabs apply that voice's own default (~0.75) instead of forcing it
