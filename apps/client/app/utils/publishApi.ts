@@ -9,7 +9,7 @@ import type {
   UploadUrlResponse,
 } from '@bike4mind/common';
 import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX } from '@bike4mind/common';
-import { detectElidedContent } from '@bike4mind/utils/artifactElision';
+import { detectElidedSafe } from '@client/app/utils/artifactParser';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
 
 /** Summary row for the published-artifacts management list. */
@@ -448,7 +448,7 @@ export function buildArtifactPublishWiring(input: {
     // A /p/ link is the point of no return: it can be handed to a client before anyone
     // notices the artifact's buttons are inert. Computed here rather than in the dialog so
     // every publish surface that routes through this wiring inherits the check.
-    ...(detectElidedContent(input.content, input.type).elided ? { incompleteWarning: ELISION_PUBLISH_BODY } : {}),
+    ...(detectElidedSafe(input.content, input.type) ? { incompleteWarning: ELISION_PUBLISH_BODY } : {}),
   };
 }
 
