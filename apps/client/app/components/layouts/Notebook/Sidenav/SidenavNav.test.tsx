@@ -25,6 +25,10 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => undefined }));
 vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => false }));
+// SidenavNav gates the Bob row on entitlements via useEntitlements (react-query useQuery).
+// This suite renders SidenavNav without a QueryClientProvider, so stub the hook like the
+// others rather than mount a client - the Bob gate is not what these Hearth tests exercise.
+vi.mock('@client/app/hooks/data/entitlements', () => ({ useEntitlements: () => ({ data: [] }) }));
 vi.mock('@client/app/components/Files/Browser', () => ({
   useFileBrowser: () => ({ open: false, setOpen: vi.fn() }),
 }));
