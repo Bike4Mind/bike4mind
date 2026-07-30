@@ -15,6 +15,13 @@ import { respond } from '@server/utils/respond';
 import { Request } from 'express';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
+import { Group } from '@bike4mind/database/social';
+
+/** Live group ids owned by an org - feeds the leave() purge (there is no groupRepository). */
+const findGroupIdsByOrganization = async (organizationId: string): Promise<string[]> => {
+  const groups = await Group.find({ organizationId }).select('_id').lean();
+  return groups.map(group => group._id.toString());
+};
 
 const handler = baseApi()
   .get(async (req, res) => {
@@ -72,7 +79,13 @@ const handler = baseApi()
       organizationService.leave(
         req.user,
         { ...(req.query as any) },
-        { db: { organizations: organizationRepository, users: userRepository } }
+        {
+          db: {
+            organizations: organizationRepository,
+            users: userRepository,
+            groups: { findIdsByOrganization: findGroupIdsByOrganization },
+          },
+        }
       )
     );
 

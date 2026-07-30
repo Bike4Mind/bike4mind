@@ -26,19 +26,35 @@ afterEach(async () => {
 
 describe('GroupModel', () => {
   it('persists organizationId so group-scoped invite auth can resolve the parent org', async () => {
-    const created = await Group.create({ name: 'Eng', description: 'engineering', organizationId: 'org-1' });
+    const created = await Group.create({
+      name: 'Eng',
+      description: 'engineering',
+      type: 'sales',
+      organizationId: 'org-1',
+    });
 
     // read straight from Mongo, not the in-memory doc, to prove it was actually stored
     const reloaded = await Group.findById(created.id);
     expect(reloaded?.organizationId).toBe('org-1');
     expect(reloaded?.toJSON().organizationId).toBe('org-1');
+    expect(reloaded?.type).toBe('sales');
   });
 
   it('requires organizationId', async () => {
     // intentionally omit the now-required organizationId to prove the schema rejects it;
     // cast through unknown because the typed create() would flag the missing field at compile time
     await expect(
-      Group.create({ name: 'Eng', description: 'engineering' } as unknown as Parameters<typeof Group.create>[0])
+      Group.create({ name: 'Eng', description: 'engineering', type: 'sales' } as unknown as Parameters<
+        typeof Group.create
+      >[0])
+    ).rejects.toThrow();
+  });
+
+  it('requires type', async () => {
+    await expect(
+      Group.create({ name: 'Eng', description: 'engineering', organizationId: 'org-1' } as unknown as Parameters<
+        typeof Group.create
+      >[0])
     ).rejects.toThrow();
   });
 });

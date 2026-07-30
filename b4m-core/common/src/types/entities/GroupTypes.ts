@@ -4,6 +4,12 @@ export interface IGroup {
   name: string;
   description: string;
 
+  /**
+   * The GroupType key this instance is an instance of (see GROUP_TYPE_CATALOG). Required -
+   * groups are provisioned as a side effect of granting a type to an org, never untyped.
+   */
+  type: string;
+
   // Which organization this group belongs to:
   organizationId: string;
 

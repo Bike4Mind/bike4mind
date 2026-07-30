@@ -9,7 +9,6 @@ export interface IOrganizationObject extends HydratedDocument<IOrganizationDocum
 
 interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
   isNew: boolean;
-  pushUserPermission: (organizationId: string, userId: string, permission: Permission[]) => Promise<unknown>;
   update: (organization: IOrganizationDocument) => Promise<unknown>;
   findShareAccessById: (userId: string, id: string) => Promise<IOrganizationDocument | null>;
 }
@@ -46,6 +45,10 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       required: false,
       default: null,
     },
+    // Group-type keys this org may have (platform-admin writes only). Default empty = fail-closed.
+    allowedGroupTypes: { type: [String], default: [] },
+    // Org admins appointed by the billing owner / platform admin (not a Permission verb, not on users[]).
+    adminUserIds: { type: [String], default: [] },
     userDetails: [
       {
         id: {
@@ -122,9 +125,6 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
         result.users.find((u: IUserShare) => u.userId && u.permissions.includes(Permission.share));
 
         return result;
-      },
-      pushUserPermission: function (organizationId: string, userId: string, permission: Permission[]) {
-        return this.updateOne({ _id: organizationId }, { $push: { userDetails: { userId, permission } } });
       },
       update: function (organization: IOrganizationDocument) {
         return this.updateOne({ _id: organization.id }, { $set: organization });

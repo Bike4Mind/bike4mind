@@ -6,6 +6,9 @@ export const GroupSchema = new mongoose.Schema<IGroupDocument>(
   {
     name: { type: String, required: true },
     description: { type: String, required: true },
+    // GroupType key (GROUP_TYPE_CATALOG). Required - groups are provisioned via a type grant,
+    // never untyped. Safe as required: the prod Group collection is empty (org-groups #1172 audit).
+    type: { type: String, required: true },
     // Owning organization. The create route already passes this and IGroup types it,
     // but it was missing from the schema, so strict mode silently dropped it on write -
     // which left group.organizationId undefined and broke group-scoped invite auth.

@@ -13,6 +13,12 @@ interface OrganizationLeaveAdapters {
   db: {
     organizations: IOrganizationRepository;
     users: Pick<IUserRepository, 'update'>;
+    /**
+     * Live (non-soft-deleted) group ids owned by an org. There is no groupRepository, so the
+     * callsite supplies this via the Group model. Kept as an adapter so the purge logic stays
+     * in the service and unit-testable.
+     */
+    groups: { findIdsByOrganization: (organizationId: string) => Promise<string[]> };
   };
 }
 
@@ -40,19 +46,31 @@ export const leave = async (
 
   await adapters.db.organizations.update(organization);
 
-  // If the org they just left was their currently-selected org, clear it. Otherwise
-  // org-scoped access (data-lake AccessContext, team-wide prompts) would still be
-  // inferred from a stale organizationId - the inverse of the join-side invariant
-  // set in acceptOrganization/addMember.
-  //
-  // Persist the target value BEFORE mutating the caller-supplied `user` in memory.
-  // `withTransaction` retries this callback on a transient error against the SAME
-  // `user` object (leave never re-fetches it, unlike addMember/acceptInvite). If we
-  // mutated memory first, the retry's `user.organizationId === id` guard would be
-  // false and the user write would be silently skipped, leaving a stale selected org.
-  if (user.organizationId === id) {
-    await adapters.db.users.update({ ...user, organizationId: null } as IUserDocument);
-    user.organizationId = null;
+  // Purge every group id belonging to this org from the departing user. `user.groups[]` carries
+  // no org qualifier, so leaving an org must strip its group ids or the user keeps access to
+  // anything shared with that org's groups (the same class of bug as the data-lake membership
+  // leak). Independent of the selected-org clear below: a user can be in an org's group without
+  // that org being their currently-selected one.
+  const orgGroupIds = new Set(await adapters.db.groups.findIdsByOrganization(id));
+  const remainingGroups = (user.groups ?? []).filter(groupId => !orgGroupIds.has(groupId));
+  const groupsChanged = remainingGroups.length !== (user.groups?.length ?? 0);
+
+  // If the org they just left was their currently-selected org, clear it. Otherwise org-scoped
+  // access (data-lake AccessContext, team-wide prompts) would still be inferred from a stale
+  // organizationId - the inverse of the join-side invariant set in acceptOrganization/addMember.
+  const shouldClearOrg = user.organizationId === id;
+
+  // Persist the target values BEFORE mutating the caller-supplied `user` in memory.
+  // `withTransaction` retries this callback on a transient error against the SAME `user` object
+  // (leave never re-fetches it), and the purge is recomputed identically each attempt - so a
+  // retry is idempotent. Mutating memory first would flip the guards below to a no-op on retry.
+  if (shouldClearOrg || groupsChanged) {
+    const patch: Partial<IUserDocument> = { id: user.id };
+    if (shouldClearOrg) patch.organizationId = null;
+    if (groupsChanged) patch.groups = remainingGroups;
+    await adapters.db.users.update(patch);
+    if (shouldClearOrg) user.organizationId = null;
+    if (groupsChanged) user.groups = remainingGroups;
   }
 
   return organization;
