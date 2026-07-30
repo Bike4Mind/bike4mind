@@ -1982,7 +1982,7 @@ export class ChatCompletionProcess {
                   'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
                   '',
                   ...cacheInfo.recentGeneratedImages!.map(
-                    img => `- ${img.key}${img.prompt ? ` — from: "${img.prompt}"` : ''}`
+                    img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
                   ),
                   '',
                   'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
@@ -4094,18 +4094,16 @@ export class ChatCompletionProcess {
         // they don't affect quest.reply/replies. Fire-and-forget to avoid blocking response.
         const postSavePromises = postSaveFeatures
           .map(feature =>
-            this.features
-              .get(feature)
-              ?.onComplete({
-                quest,
-                session,
-                messages,
-                questMaster,
-                model,
-                historyCount,
-                oldestIncludedQuestId,
-                verbatimExcludedCount,
-              })
+            this.features.get(feature)?.onComplete({
+              quest,
+              session,
+              messages,
+              questMaster,
+              model,
+              historyCount,
+              oldestIncludedQuestId,
+              verbatimExcludedCount,
+            })
           )
           .filter(p => p);
 

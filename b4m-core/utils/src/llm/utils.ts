@@ -136,11 +136,27 @@ const MIN_USEFUL_ATTACHED_CONTENT_TOKENS = 200;
  */
 const EXCERPT_NOTICE_PREFIX = '\n\n[The above are the most relevant excerpts from ';
 
-const excerptNotice = (fileName: string): string =>
-  `${EXCERPT_NOTICE_PREFIX}"${fileName}", selected by similarity. They are in file ` +
+const EXCERPT_NOTICE_TAIL =
+  `, selected by similarity. They are in file ` +
   `order but are NOT the whole file and NOT contiguous - parts between them were not sent, and content after ` +
   `the last excerpt may exist. Do not describe this as the complete file, and do not infer a total row or ` +
   `section count, or a final row, from it.]`;
+
+/**
+ * Filenames are user-controlled and get interpolated into the app's own bracketed directive, so a
+ * crafted name could close the bracket and append instructions to the one signal that stops the model
+ * claiming it holds a complete file. Brackets, quotes and newlines go, and the length is bounded so
+ * the assembled notice stays within the span upstreamNoticeIn will recognise.
+ */
+const MAX_NOTICE_FILENAME_CHARS = 100;
+const sanitizeNoticeFileName = (fileName: string): string =>
+  fileName
+    .replace(/[[\]"\r\n]/g, ' ')
+    .trim()
+    .slice(0, MAX_NOTICE_FILENAME_CHARS);
+
+const excerptNotice = (fileName: string): string =>
+  `${EXCERPT_NOTICE_PREFIX}"${sanitizeNoticeFileName(fileName)}"${EXCERPT_NOTICE_TAIL}`;
 
 const URL_TRUNCATION_NOTICE =
   '\n\n[Fetched page content truncated to fit the context window. This is NOT the end of the page - later ' +
@@ -163,12 +179,30 @@ const URL_TRUNCATION_NOTICE =
  * and a fragment long enough to read as a notice needs more than that. Holding it out makes the
  * invariant structural instead of a consequence of that 0.9.
  */
-const upstreamNoticeIn = (text: string): string | null => {
+const externalNoticeIn = (text: string): string | null => {
   if (text.endsWith(URL_TRUNCATION_NOTICE)) return URL_TRUNCATION_NOTICE;
-  if (text.endsWith(CONTENT_TRUNCATION_NOTICE)) return CONTENT_TRUNCATION_NOTICE;
+  if (!text.endsWith(EXCERPT_NOTICE_TAIL)) return null;
   const start = text.lastIndexOf(EXCERPT_NOTICE_PREFIX);
-  return start !== -1 && text.endsWith(']') ? text.slice(start) : null;
+  if (start === -1) return null;
+  const span = text.slice(start);
+  // Bounded to prefix + a quoted, length-capped filename + the constant tail. A longer span means the
+  // prefix matched inside the content itself - a pasted transcript of a previous answer, or a crafted
+  // file - and holding that out of the cut would exempt most of the payload from truncation.
+  const maxSpan = EXCERPT_NOTICE_PREFIX.length + MAX_NOTICE_FILENAME_CHARS + 2 + EXCERPT_NOTICE_TAIL.length;
+  return span.length <= maxSpan ? span : null;
 };
+
+const upstreamNoticeIn = (text: string): string | null =>
+  text.endsWith(CONTENT_TRUNCATION_NOTICE) ? CONTENT_TRUNCATION_NOTICE : externalNoticeIn(text);
+
+/**
+ * Messages built from a URL in the prompt rather than from an attached file. They reach assembly in
+ * the same block as file content, so without this they get counted as attachments and the undelivered
+ * note tells the model a file could not be included when no file was lost - or when none was attached
+ * at all. Keyed by identity for the same reason cutContentMessages is: content cannot spoof it, and
+ * the caller spreads these objects through without cloning them.
+ */
+const urlDerivedMessages = new WeakSet<IMessage>();
 
 /**
  * Flat per-image token charge. Exact cost needs decoding the image (Anthropic ~ width*height/750;
@@ -217,10 +251,10 @@ const messageContentText = (message: IMessage): string =>
     : ((message.content as string) ?? '');
 
 /**
- * Must charge images the same flat rate as calculateTotalTokenLength. The safety pass divides a real
- * token count by this estimate to convert an overage between the two units, so an estimator that
- * counted base64 as text made that ratio collapse on any image-carrying turn and the first round
- * then asked content to give up everything when a small trim would have done.
+ * Must charge images the same flat rate as calculateTotalTokenLength, so the two measures stay
+ * comparable: stringifying base64 as text here would make an image-carrying turn read as millions of
+ * tokens against a real count that charges a flat rate. Nothing at present divides one by the other -
+ * the rework in #1164 reintroduces that conversion, and depends on this rate matching.
  */
 const estimateMessageTokens = (message: IMessage): number => {
   const imageCount = Array.isArray(message.content) ? message.content.filter(isImageBlock).length : 0;
@@ -831,6 +865,7 @@ export async function processUrlsFromPrompt(
           `For context: ${textContent.substring(0, maxContentBuffer!)}` +
           (urlContentTruncated ? URL_TRUNCATION_NOTICE : ''),
       };
+      urlDerivedMessages.add(message);
       processedUrls.push(url);
       return message;
     } catch (error) {
@@ -1884,20 +1919,32 @@ export async function buildAndSortMessages(
   }
 
   // A sliver of a file is worse than none: the model does not recognise it as file content and answers
-  // as though nothing was attached. Judged per attachment rather than on the total, so two files each
-  // cut to an unusable fragment are both caught - summing them hides exactly that case.
+  // as though nothing was attached. Judged per message rather than on the total, so two attachments
+  // each cut to an unusable fragment are both caught - summing them hides exactly that case.
+  //
+  // Per message is not yet per file: processFabFilesServer combines all plain files into a single
+  // message, so three CSVs sharing one message are judged, counted and reported as one. Vectorized
+  // and URL content each get their own message and so are judged separately. Real per-file accounting
+  // needs block-level bookkeeping through extraction and is tracked separately.
   const fileTokens = (message: IMessage): number => {
     const text = messageContentText(message);
-    // The appended notice is not the file's content and would push a sliver over the threshold.
-    return estimateTokenLength(
+    // No notice is the file's own content, and either kind pushes a sliver over the threshold - the
+    // excerpt notice weighs ~101 estimate tokens by itself, half the usability floor. Ours is matched
+    // by identity so a file whose text happens to end with that sentence cannot spoof a cut; an
+    // upstream notice is structurally ours already, so recognising it by text is enough.
+    const notice =
       cutContentMessages.has(message) && text.endsWith(CONTENT_TRUNCATION_NOTICE)
-        ? text.slice(0, -CONTENT_TRUNCATION_NOTICE.length)
-        : text
-    );
+        ? CONTENT_TRUNCATION_NOTICE
+        : externalNoticeIn(text);
+    return estimateTokenLength(notice ? text.slice(0, -notice.length) : text);
   };
   // Attachments that carried no extractable text are excluded - losing nothing is not a loss, and
-  // counting it would report a truncation on a completely healthy turn.
-  const attachmentsWithContent = nonImageMessages.filter(message => fileTokens(message) > 0);
+  // counting it would report a truncation on a completely healthy turn. URL-derived content is
+  // excluded on the same grounds: it rides in this block but is not an attachment, and counting it
+  // made the note claim a file was lost on turns where the file arrived whole, or where the prompt
+  // carried only a link and no file existed at all.
+  const isAttachment = (message: IMessage): boolean => !urlDerivedMessages.has(message) && fileTokens(message) > 0;
+  const attachmentsWithContent = nonImageMessages.filter(isAttachment);
   let undeliveredNote: IMessage | null = null;
 
   /**
@@ -1914,10 +1961,11 @@ export async function buildAndSortMessages(
   const declareUndeliveredAttachments = (contentMessages: IMessage[]): IMessage[] => {
     if (attachmentsWithContent.length === 0) return contentMessages;
 
-    // Counted on the same footing as attachmentsWithContent: an attachment carrying no extractable
-    // text is absent from both sides. Counting it as delivered let it stand in for a sibling that was
-    // dropped, and the drop then went undeclared.
-    const delivered = contentMessages.filter(message => message !== undeliveredNote && fileTokens(message) > 0);
+    // Counted on the same footing as attachmentsWithContent - same isAttachment predicate on both
+    // sides. An attachment carrying no extractable text, or a URL-derived message, is absent from
+    // both: counting either as delivered let it stand in for a sibling that was dropped, and the drop
+    // then went undeclared.
+    const delivered = contentMessages.filter(message => message !== undeliveredNote && isAttachment(message));
     const isUnusableSliver = (message: IMessage): boolean =>
       cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS;
     const usable = delivered.filter(message => !isUnusableSliver(message));
@@ -2024,16 +2072,27 @@ export async function buildAndSortMessages(
     logger.warn(
       `⚠️ Final message token count (${finalTokenCount}) exceeds maxInputTokens (${maxInputTokens}). Truncating messages.`
     );
-    // If we still exceed limits, remove some processed content messages as last resort
+    // If we still exceed limits, remove some processed content messages as last resort.
+    //
+    // The notice is threaded and the result recorded for the same reason: this pass can now actually
+    // cut. Before the reservation cap above, protected messages were reserved unconditionally, so the
+    // selection was never empty, the truncation fallback never fired from here, and an overflow went
+    // to the caller's hard throw instead. With the cap it shrinks - and without these two arguments it
+    // would head-slice a file with nothing appended (the fallback's hold-out for an existing upstream
+    // notice is gated on truncationNotice), then drop the cut from telemetry, so the turn that lost
+    // the most content would report wasTruncated: false. A silent truncated file presented as complete
+    // is the failure this module exists to prevent.
     const excessTokens = finalTokenCount - maxInputTokens;
-    const reducedContentMessagesResult = processMessages(
-      processedContentMessages,
-      Math.max(
-        0,
-        (await calculateTotalTokenLength(processedContentMessages, { estimateOnly: false, tokenizer })) - excessTokens
+    const reducedContentMessages = recordContentResult(
+      processMessages(
+        processedContentMessages,
+        Math.max(
+          0,
+          (await calculateTotalTokenLength(processedContentMessages, { estimateOnly: false, tokenizer })) - excessTokens
+        ),
+        { truncationNotice: CONTENT_TRUNCATION_NOTICE }
       )
     );
-    const reducedContentMessages = reducedContentMessagesResult.messages;
 
     let truncatedMessages: IMessage[];
     if (historyEndsWithToolUse && promptHasToolResult) {
