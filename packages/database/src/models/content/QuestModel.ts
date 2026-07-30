@@ -5,14 +5,126 @@ import BaseRepository from '@bike4mind/db-core';
 
 export interface IChatHistoryItemModel extends Model<IChatHistoryItemDocument> {}
 
+// PromptMetaSchema must cover every path in PromptMetaZodSchema (@bike4mind/common), minus a
+// short deliberate exclusion list. Mongoose runs strict, so an undeclared subpath is dropped in
+// silence on both save() and the findOneAndUpdate + $set path production actually uses.
+// PromptMetaSchema.parity.test.ts fails CI on any new drift; add the declaration there and here
+// in one commit, or add the path to that test's INTENTIONALLY_NOT_PERSISTED with a reason.
+//
+// Each of these is its own Schema, not an inline object, so the parent can set
+// `default: undefined` and keep an unwritten field ABSENT. An inline nested object containing an
+// array materializes on every document, and clients test these for presence.
+const subSchema = (definition: Record<string, unknown>) => new Schema(definition, { _id: false });
+
+const MessageTruncationSchema = subSchema({
+  wasTruncated: { type: Boolean, required: false },
+  originalMessageCount: { type: Number, required: false },
+  truncatedMessageCount: { type: Number, required: false },
+  truncationMethod: { type: String, enum: ['priority', 'token-budget', 'history-limit'], required: false },
+  removedMessages: {
+    type: [{ role: { type: String }, tokens: { type: Number }, priority: { type: Number } }],
+    required: false,
+    default: undefined,
+  },
+});
+
+// `content` is deliberately absent - see the exclusion note on the context path below.
+const SystemPromptSourceSchema = subSchema({
+  fileId: { type: String, required: false },
+  fileName: { type: String, required: false },
+  source: { type: String, enum: ['admin', 'user', 'project', 'session', 'hardcoded'], required: false },
+  priority: { type: Number, required: false },
+  enabled: { type: Boolean, required: false },
+});
+
+const ArtifactSchema = subSchema({
+  // No enum: writers emit internal artifact types and can fall back to a raw MIME string.
+  // Kept in sync with PromptMetaArtifactSchema, which is deliberately open for the same reason.
+  type: { type: String, required: false },
+  content: { type: String, required: false },
+  metadata: { type: mongoose.Schema.Types.Mixed, required: false },
+  timestamp: { type: Date, required: false },
+});
+
+const ToolHealthSchema = subSchema({
+  toolName: { type: String, required: false },
+  available: { type: Boolean, required: false },
+  failureCount: { type: Number, required: false },
+  lastError: { type: String, required: false },
+  lastChecked: { type: Date, required: false },
+  lastExecutionTime: { type: Number, required: false },
+  successRate: { type: Number, required: false },
+});
+
+const ExecutionTrackingSchema = subSchema({
+  steps: {
+    type: [
+      subSchema({
+        name: { type: String, required: false },
+        status: { type: String, enum: ['pending', 'running', 'completed', 'failed'], required: false },
+        startTime: { type: Date, required: false },
+        endTime: { type: Date, required: false },
+        result: { type: String, required: false },
+        error: { type: String, required: false },
+      }),
+    ],
+    required: false,
+    default: undefined,
+  },
+  currentStep: { type: String, required: false },
+  completedSteps: { type: [String], required: false, default: undefined },
+  failedSteps: { type: [String], required: false, default: undefined },
+});
+
+const HumanReviewSchema = subSchema({
+  required: { type: Boolean, required: false },
+  approved: { type: Boolean, required: false },
+  comments: { type: String, required: false },
+  modifications: { type: String, required: false },
+  reviewedBy: { type: String, required: false },
+  reviewedAt: { type: Date, required: false },
+});
+
 export const PromptMetaSchema = new Schema<PromptMeta>(
   {
     model: {
       name: { type: String, required: false },
+      type: { type: String, enum: ['text', 'image', 'video'], required: false },
+      backend: { type: String, required: false },
+      contextWindow: { type: Number, required: false },
+      maxTokens: { type: Number, required: false },
+      canStream: { type: Boolean, required: false },
+      canThink: { type: Boolean, required: false },
+      supportsVision: { type: Boolean, required: false },
+      supportsTools: { type: Boolean, required: false },
+      supportsImageVariation: { type: Boolean, required: false },
+      supportsSafetyTolerance: { type: Boolean, required: false },
+      trainingCutoff: { type: String, required: false },
       parameters: {
         temperature: { type: Number, required: false },
         topP: { type: Number, required: false },
         maxTokens: { type: Number, required: false },
+        presencePenalty: { type: Number, required: false },
+        frequencyPenalty: { type: Number, required: false },
+        // Mixed rather than Map: the Zod type is Record<string, number>, and a Map would surface
+        // to callers as a Map instance.
+        logitBias: { type: mongoose.Schema.Types.Mixed, required: false },
+        stream: { type: Boolean, required: false },
+        // Image and video generation parameters.
+        n: { type: Number, required: false },
+        quality: { type: String, required: false },
+        style: { type: String, required: false },
+        size: { type: String, required: false },
+        width: { type: Number, required: false },
+        height: { type: Number, required: false },
+        aspect_ratio: { type: String, required: false },
+        safety_tolerance: { type: Number, required: false },
+        prompt_upsampling: { type: Boolean, required: false },
+        seed: { type: Number, required: false },
+        output_format: { type: String, required: false },
+        response_format: { type: String, required: false },
+        seconds: { type: Number, required: false },
+        model: { type: String, required: false },
       },
     },
     tokenUsage: {
@@ -32,6 +144,15 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       creditsUsed: { type: Number, required: false },
       settledBasis: { type: String, enum: ['provider', 'local'], required: false },
     },
+    // Stays a nested path literal rather than a sub-Schema. Both strip identically under strict,
+    // so converting buys nothing, and ChatCompletionProcess assigns through
+    // `quest.promptMeta!.context!.x = ...`, which depends on the path being auto-created.
+    //
+    // NOT declared here, and must not be: systemPrompt, userPrompt, conversationContext,
+    // extraContextMessages, and systemPromptSources[].content. Those carry prompt and
+    // conversation CONTENT, and the quest document is serialized to the client on many read
+    // paths, so persisting them leaks a server-owned prompt. See the note at the
+    // extraContextMessages write site in ChatCompletionProcess.
     context: {
       attachedFiles: [
         {
@@ -47,7 +168,18 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       messageHistoryLength: { type: Number, required: false },
       requestedHistoryCount: { type: Number, required: false },
       totalMessageCount: { type: Number, required: false },
+      mementoCount: { type: Number, required: false },
       mementoIds: [{ type: String, required: false }],
+      systemPromptSources: { type: [SystemPromptSourceSchema], required: false, default: undefined },
+      dedupedSystemPrompts: { type: [String], required: false, default: undefined },
+      totalSystemPromptCount: { type: Number, required: false },
+      duplicateSystemPromptCount: { type: Number, required: false },
+      sessionFileIds: { type: [String], required: false, default: undefined },
+      messageFileIds: { type: [String], required: false, default: undefined },
+      globalSystemFileIds: { type: [String], required: false, default: undefined },
+      userSystemFileIds: { type: [String], required: false, default: undefined },
+      projectSystemFileIds: { type: [String], required: false, default: undefined },
+      messageTruncation: { type: MessageTruncationSchema, required: false, default: undefined },
       tokensBySource: {
         systemPrompts: { type: Number, required: false },
         conversationHistory: { type: Number, required: false },
@@ -79,6 +211,12 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         parameters: { type: mongoose.Schema.Types.Mixed, required: false },
         returnValue: { type: String, required: false },
         creditsUsed: { type: Number, required: false },
+        executionTime: { type: Number, required: false },
+        success: { type: Boolean, required: false },
+        error: { type: String, required: false },
+        // Provider tool-call id. Losing this is what kept the tool-pairing replay path in
+        // @bike4mind/utils unreachable, since its entry test is a check for a recorded id.
+        id: { type: String, required: false },
       },
     ],
     performance: {
@@ -86,6 +224,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       contextRetrievalTime: { type: Number, required: false },
       modelInferenceTime: { type: Number, required: false },
       firstTokenTime: { type: Number, required: false },
+      // Posted back by the client after it renders the first token (quests/[id]/client-timing).
+      clientFirstTokenTime: { type: Number, required: false },
       streamingPerformance: {
         chunkCount: { type: Number, required: false },
         totalStreamTime: { type: Number, required: false },
@@ -99,6 +239,10 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     session: {
       id: { type: String, required: true },
       userId: { type: String, required: true },
+      organizationId: { type: String, required: false },
+      projectId: { type: String, required: false },
+      agentId: { type: String, required: false },
+      agentName: { type: String, required: false },
     },
     prompt: { type: String, required: false },
     questId: { type: String, required: false },
@@ -107,6 +251,13 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     generatedImageReferences: [{ type: String, required: false }],
     promptErrors: [{ type: String, required: false }],
     warnings: [{ type: String, required: false }],
+    // ISO 8601 string, not a Date - the Zod field is z.string().
+    generatedAt: { type: String, required: false },
+    finishReason: { type: String, required: false },
+    artifacts: { type: [ArtifactSchema], required: false, default: undefined },
+    toolHealth: { type: [ToolHealthSchema], required: false, default: undefined },
+    executionTracking: { type: ExecutionTrackingSchema, required: false, default: undefined },
+    humanReview: { type: HumanReviewSchema, required: false, default: undefined },
     statusLog: [{ status: { type: String, required: true }, timestamp: { type: Date, required: true } }],
     // Citable sources referenced in AI responses (from web_search, deep_research, RAG, MCP)
     citables: [
