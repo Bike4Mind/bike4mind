@@ -139,7 +139,7 @@ const handler = baseApi()
     // must neither 500 a committed write nor skip the others.
     for (const lake of affectedLakes) {
       try {
-        await dataLakeService.recomputeLakeStats(lake.id, lake.datalakeTag, {
+        await dataLakeService.recomputeLakeStats(lake, {
           db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
         });
       } catch (error) {
@@ -248,7 +248,7 @@ const handler = baseApi()
         try {
           const lake = await dataLakeRepository.findByDatalakeTag(tag);
           if (lake) {
-            await dataLakeService.recomputeLakeStats(lake.id, lake.datalakeTag, {
+            await dataLakeService.recomputeLakeStats(lake, {
               db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
             });
           }

@@ -12,6 +12,13 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
   useComputeHashes: () => ({ mutate: vi.fn(), isPending: false }),
   useCheckDuplicates: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+// ConfigStep reads the collision hook; the name/duplicate-name hint moved to the source step,
+// so this is the only lake-hook it still needs.
+const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fileTagPrefix: string } | undefined }));
+
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  useDuplicatePrefixLake: () => prefixClash.current,
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -52,6 +59,39 @@ afterEach(() => {
  */
 describe('ConfigStep - Tag Prefix single editable home', () => {
   const prefixInput = () => screen.getByTestId('config-tag-prefix-input').querySelector('input') as HTMLInputElement;
+
+  beforeEach(() => {
+    prefixClash.current = undefined;
+  });
+
+  it('explains an overlapping prefix, which the server refuses at create', () => {
+    // Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting either
+    // takes the other's. Start Upload is gated on this, so the field has to say why.
+    prefixClash.current = { name: 'Acme Archive', fileTagPrefix: 'acme:' };
+    seedConfig({ tagPrefix: 'acme:' });
+
+    render(
+      <TestWrapper>
+        <ConfigStep />
+      </TestWrapper>
+    );
+
+    const help = screen.getByTestId('datalake-config-tagprefix-help').textContent ?? '';
+    expect(help).toMatch(/overlaps/i);
+    expect(help).toContain('Acme Archive');
+  });
+
+  it('says nothing about overlap when the prefix is free', () => {
+    seedConfig({ tagPrefix: 'acme:' });
+
+    render(
+      <TestWrapper>
+        <ConfigStep />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-config-tagprefix-help').textContent).not.toMatch(/overlaps/i);
+  });
 
   it('shows the prefix read-only when the taxonomy step is in the flow and owns it', () => {
     seedConfig({ tagPrefix: 'acme:', taxonomyStep: true });

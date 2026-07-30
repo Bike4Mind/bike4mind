@@ -113,8 +113,13 @@ export const assertCanWriteDataLakeTags = async (
   }
 };
 
-/** One lake whose membership changed, so its cached stats have to be recomputed. */
-export type AffectedDataLake = Pick<IDataLakeDocument, 'id' | 'datalakeTag'>;
+/**
+ * One lake whose membership changed, so its cached stats have to be recomputed. Carries the
+ * prefix and creator as well as the tag because `recomputeLakeStats` derives the two-signal
+ * membership scope from the lake itself - a narrower shape would silently recompute on the
+ * meta-tag arm alone and write a different count than the lifecycle paths.
+ */
+export type AffectedDataLake = Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>;
 
 /**
  * A wholesale tag replacement, as names. A named object rather than two positional arrays because
@@ -141,12 +146,18 @@ export interface DataLakeTagReplacement {
  * terms, and reports the lakes on both sides so the caller can recompute their stats.
  *
  * Only the `datalake:*` meta-tag is gated, NOT a tag matching a lake's `fileTagPrefix` - even
- * though `buildOwnershipConditions` admits a file to a lake's browse on either signal, so
- * stripping a prefixed tag here IS an ungated eviction from that browse. The prefix cannot be
- * gated: it is user-chosen, non-unique across lakes and reserved only against the `datalake:`
- * namespace, so an ordinary tag like `acme:notes` collides with any stranger's lake configured
- * with `acme:`, and minting such a lake would freeze half the app's tag edits behind a 400. The
- * meta-tag is globally unique and reserved, so its presence is a trustworthy membership claim.
+ * though `buildDataLakeMembershipFilter` admits a file to a lake on either signal, so stripping a
+ * prefixed tag here IS an ungated eviction. That gap costs more than it used to: the prefix arm
+ * now also feeds `computeDataLakeStats` and the whole-lake lifecycle writes, so for a file the
+ * lake's creator owns, a prefix strip skews the persisted `fileCount` as well as the browse.
+ *
+ * It still cannot be gated, for the reason it never could: the prefix is user-chosen, non-unique
+ * across lakes and reserved only against the `datalake:` namespace, so an ordinary tag like
+ * `acme:notes` collides with any stranger's lake configured with `acme:`, and minting such a lake
+ * would freeze half the app's tag edits behind a 400. The meta-tag is globally unique and
+ * reserved, so its presence is a trustworthy membership claim and the prefix's is not. Closing
+ * this needs prefix uniqueness first - `tagPrefixesOverlap` and the overlap-detection script are
+ * the groundwork for that.
  *
  * Only the DIFF is authorized, so re-submitting a meta-tag the file already carries needs no
  * manage rights - the client renames a file by echoing its whole stored tag array back.
@@ -194,7 +205,7 @@ export const assertCanReplaceDataLakeTags = async (
   // Added first, so an add-only request still fails with the long-standing add-denied message.
   for (const name of dedupeByKey(added)) {
     const lake = await assertManageableByTag(name.toLowerCase(), actor, db, ADD_DENIED);
-    affected.set(lake.id, { id: lake.id, datalakeTag: lake.datalakeTag });
+    affected.set(lake.id, lake);
   }
   for (const name of removed) {
     const tagKey = name.toLowerCase();
@@ -209,7 +220,7 @@ export const assertCanReplaceDataLakeTags = async (
     if (!canManageLake(lake, actor)) {
       throw new BadRequestError(REMOVE_DENIED);
     }
-    affected.set(lake.id, { id: lake.id, datalakeTag: lake.datalakeTag });
+    affected.set(lake.id, lake);
   }
 
   // A primaryTag naming a tag the file no longer carries is a wrong label, so an authorized

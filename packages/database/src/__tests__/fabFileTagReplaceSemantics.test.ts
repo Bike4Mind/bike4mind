@@ -64,6 +64,9 @@ describe('FabFile tag-replace semantics the lake removal gate depends on', () =>
     await seed();
     await seed({ fileName: 'other.txt', tags: [{ name: 'DataLake:Org:MyLake', strength: 1 }] });
 
-    expect(await fabFileRepository.computeDataLakeStats(LAKE_TAG)).toEqual({ fileCount: 1, totalSizeBytes: 100 });
+    // Meta-tag-only scope: no prefix, so the two-signal filter falls back to the exact meta-tag
+    // arm - which is the arm this case is about.
+    const scope = { datalakeTag: LAKE_TAG, fileTagPrefix: undefined, creatorUserId: userId };
+    expect(await fabFileRepository.computeDataLakeStats(scope)).toEqual({ fileCount: 1, totalSizeBytes: 100 });
   });
 });

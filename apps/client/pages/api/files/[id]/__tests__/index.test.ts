@@ -171,8 +171,8 @@ describe('PUT /api/files/[id] - data-lake membership authorization', () => {
   it('recomputes stats for EVERY affected lake, after the update commits', async () => {
     h.assertCanReplaceDataLakeTags.mockResolvedValue({
       affectedLakes: [
-        { id: 'lakeA', datalakeTag: 'datalake:a' },
-        { id: 'lakeB', datalakeTag: 'datalake:b' },
+        { id: 'lakeA', datalakeTag: 'datalake:a', fileTagPrefix: 'a:', createdByUserId: 'owner' },
+        { id: 'lakeB', datalakeTag: 'datalake:b', fileTagPrefix: 'b:', createdByUserId: 'owner' },
       ],
       clearPrimaryTag: false,
     });
@@ -181,8 +181,16 @@ describe('PUT /api/files/[id] - data-lake membership authorization', () => {
     await call(makeReq({ tags: [{ name: 'datalake:b', strength: 1 }] }), res);
 
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(2);
-    expect(h.recomputeLakeStats).toHaveBeenCalledWith('lakeA', 'datalake:a', expect.anything());
-    expect(h.recomputeLakeStats).toHaveBeenCalledWith('lakeB', 'datalake:b', expect.anything());
+    // Passes the lake DOCUMENT, not (id, tag): recomputeLakeStats derives the two-signal
+    // membership scope from it, so a narrower shape would recompute on the meta-tag alone.
+    expect(h.recomputeLakeStats).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lakeA', datalakeTag: 'datalake:a', fileTagPrefix: 'a:' }),
+      expect.anything()
+    );
+    expect(h.recomputeLakeStats).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lakeB', datalakeTag: 'datalake:b', fileTagPrefix: 'b:' }),
+      expect.anything()
+    );
     expect(h.updateFabFile.mock.invocationCallOrder[0]).toBeLessThan(h.recomputeLakeStats.mock.invocationCallOrder[0]);
     // Not merely "after updateFabFile" - after the transaction COMMITTED, so a stats failure
     // cannot roll the write back and the retried callback cannot recompute repeatedly.
@@ -201,8 +209,8 @@ describe('PUT /api/files/[id] - data-lake membership authorization', () => {
   it('still returns the updated file when a stats recompute throws', async () => {
     h.assertCanReplaceDataLakeTags.mockResolvedValue({
       affectedLakes: [
-        { id: 'lakeA', datalakeTag: 'datalake:a' },
-        { id: 'lakeB', datalakeTag: 'datalake:b' },
+        { id: 'lakeA', datalakeTag: 'datalake:a', fileTagPrefix: 'a:', createdByUserId: 'owner' },
+        { id: 'lakeB', datalakeTag: 'datalake:b', fileTagPrefix: 'b:', createdByUserId: 'owner' },
       ],
       clearPrimaryTag: false,
     });
@@ -229,7 +237,7 @@ describe('PUT /api/files/[id] - data-lake membership authorization', () => {
     const { res } = makeRes();
 
     await expect(call(makeReq({ tags: [] }), res)).rejects.toThrow(/analytics down/);
-    expect(h.recomputeLakeStats).toHaveBeenCalledWith('lakeA', 'datalake:a', expect.anything());
+    expect(h.recomputeLakeStats).toHaveBeenCalledWith(expect.objectContaining({ id: 'lakeA' }), expect.anything());
   });
 
   // 'abcdefghijkl' is 12 bytes, so ObjectId.isValid ACCEPTS it; only the round-trip clause
@@ -262,7 +270,12 @@ describe('DELETE /api/files/[id] - a delete is a lake membership change too', ()
     h.committed.value = false;
     h.findById.mockResolvedValue({ id: FILE_ID, userId: USER.id, tags: [{ name: 'datalake:a' }, { name: 'notes' }] });
     h.deleteFabFile.mockResolvedValue({ action: 'deleted', fabFile: { id: FILE_ID, userId: USER.id } });
-    h.findByDatalakeTag.mockResolvedValue({ id: 'lakeA', datalakeTag: 'datalake:a' });
+    h.findByDatalakeTag.mockResolvedValue({
+      id: 'lakeA',
+      datalakeTag: 'datalake:a',
+      fileTagPrefix: 'a:',
+      createdByUserId: USER.id,
+    });
     h.recomputeLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 });
     h.logEvent.mockResolvedValue(undefined);
   });
@@ -275,7 +288,7 @@ describe('DELETE /api/files/[id] - a delete is a lake membership change too', ()
     await call(makeDelReq(), res);
 
     expect(h.findByDatalakeTag).toHaveBeenCalledWith('datalake:a');
-    expect(h.recomputeLakeStats).toHaveBeenCalledWith('lakeA', 'datalake:a', expect.anything());
+    expect(h.recomputeLakeStats).toHaveBeenCalledWith(expect.objectContaining({ id: 'lakeA' }), expect.anything());
   });
 
   it('does not recompute for a file that was in no lake', async () => {

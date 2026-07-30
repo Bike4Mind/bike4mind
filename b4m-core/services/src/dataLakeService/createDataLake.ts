@@ -1,6 +1,7 @@
 import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { CreateDataLakeRequestInput, DATA_LAKES, normalizeEntitlementKey } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
+import { collidesWithRegistryPrefix, findCollidingPrefixLakes } from './tagPrefixCollision';
 import type { z } from 'zod';
 
 type CreateDataLakeParams = z.infer<typeof CreateDataLakeRequestInput>;
@@ -51,6 +52,42 @@ async function disambiguateSlug(
   );
 }
 
+/**
+ * Refuses a `fileTagPrefix` that another lake in scope already matches.
+ *
+ * Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting one would
+ * destroy files that only the other holds - the prefix arm has no uniqueness constraint to stop
+ * it. Rejecting rather than auto-suffixing like the slug: `acme:-1` is not a meaningful prefix,
+ * and silently rewriting it would change every tag the taxonomy step just showed the user.
+ *
+ * Read-then-write, so two concurrent creates in one scope can both pass. Left as-is: the correct
+ * key is conditional (org arm OR creator arm) and overlap-aware, which no single unique index
+ * expresses, and a case-insensitive one would need a collation and would fail to build on rows
+ * that already collide.
+ */
+async function assertPrefixAvailable(
+  db: CreateDataLakeAdapters['db'],
+  userId: string,
+  rawPrefix: string,
+  organizationId?: string
+): Promise<void> {
+  if (collidesWithRegistryPrefix(rawPrefix)) {
+    throw new BadRequestError(
+      `Tag prefix "${rawPrefix}" is reserved by a built-in knowledge base - choose a different prefix.`
+    );
+  }
+  const [clash] = await findCollidingPrefixLakes(db, rawPrefix, { createdByUserId: userId, organizationId });
+  if (clash) {
+    // The clash is named only when the caller created it. An org lake gated by a tag or
+    // entitlement the caller lacks is invisible to them everywhere else, and echoing its name
+    // here would turn this into a guess-confirm oracle for lakes they cannot read.
+    const naming = clash.createdByUserId === userId ? ` ("${clash.name}")` : ' in this organization';
+    throw new BadRequestError(
+      `Tag prefix "${rawPrefix}" overlaps an existing data lake${naming} - choose a different prefix.`
+    );
+  }
+}
+
 export const createDataLake = async (
   userId: string,
   parameters: CreateDataLakeParams,
@@ -61,6 +98,9 @@ export const createDataLake = async (
   organizationId?: string
 ): Promise<IDataLakeDocument> => {
   const params = secureParameters(parameters, CreateDataLakeRequestInput);
+
+  // Before the slug work: a rejected prefix should fail fast rather than after resolving a slug.
+  await assertPrefixAvailable(db, userId, params.fileTagPrefix, organizationId);
 
   const slug = await disambiguateSlug(db, params.slug, organizationId);
   const datalakeTag = buildDatalakeTag(slug, organizationId);

@@ -12,6 +12,7 @@ import {
   normalizeTagPrefix,
   preserveDataLakeMembership,
   toDataLakeConfig,
+  tagPrefixesOverlap,
 } from './dataLakes';
 
 // A dynamic (DB-registered) lake config builder. Passing dynamicDataLakes bypasses the
@@ -303,5 +304,36 @@ describe('preserveDataLakeMembership', () => {
 
   it('recognizes a registry tag whatever its case, since env-supplied entries are unnormalized', () => {
     expect(isRegistryDatalakeTag(DATA_LAKES[0].datalakeTag.toUpperCase())).toBe(true);
+  });
+});
+
+describe('tagPrefixesOverlap', () => {
+  it.each([
+    ['identical prefixes', 'acme:', 'acme:'],
+    ['padded values', '  acme:  ', 'acme:'],
+    ['a nested prefix', 'docs:legal:', 'docs:'],
+    ['a nested prefix the other way round', 'docs:', 'docs:legal:'],
+  ])('reports %s as overlapping', (_label, a, b) => {
+    expect(tagPrefixesOverlap(a, b)).toBe(true);
+  });
+
+  it.each([
+    ['unrelated prefixes', 'globex:', 'acme:'],
+    ['a shared word that is not a prefix boundary', 'acme-docs:', 'acme:x:'],
+    // The predicate builds an unflagged ^regex, so these two cannot reach each other's tags.
+    ['prefixes differing only in case', 'ACME:', 'acme:'],
+  ])('reports %s as safe', (_label, a, b) => {
+    expect(tagPrefixesOverlap(a, b)).toBe(false);
+  });
+
+  it.each([
+    ['empty', '', 'acme:'],
+    ['whitespace only', '   ', 'acme:'],
+    ['missing the trailing colon', 'acme', 'acme:'],
+    ['null', null, 'acme:'],
+    ['undefined', undefined, 'acme:'],
+  ])('never overlaps when one side is %s, since no query arm is built from it', (_label, a, b) => {
+    expect(tagPrefixesOverlap(a, b)).toBe(false);
+    expect(tagPrefixesOverlap(b, a)).toBe(false);
   });
 });
