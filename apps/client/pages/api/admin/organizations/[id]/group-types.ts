@@ -4,6 +4,7 @@ import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
 import { organizationService } from '@bike4mind/services';
+import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { z } from 'zod';
 
 /**
@@ -14,9 +15,7 @@ import { z } from 'zod';
  *
  * Wrapped in withTransaction: provisioning, soft-deletes, the member purge, and the org write
  * all commit together (or roll back together) - the repositories join the session automatically
- * via transactionAsyncLocalStorage.
- *
- * TODO (tracked on the PR): emit a formal admin audit event for the grant/revoke.
+ * via transactionAsyncLocalStorage. Grant/revoke is audit-logged after the transaction commits.
  */
 const bodySchema = z.object({
   allowedGroupTypes: z.array(z.string()).max(20),
@@ -46,6 +45,20 @@ const handler = baseApi().put(
           logger: req.logger,
         }
       )
+    );
+
+    // Audit AFTER commit: "who changed which org's group types" is a question legal will ask
+    // once a type reaches confidential data. Best-effort - a logging failure must not fail the
+    // already-committed change.
+    await logAuditEvent(
+      {
+        userId: req.user!.id,
+        action: AdminOrgAuditEvents.ORG_GROUP_TYPES_UPDATED,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'] || 'unknown',
+        metadata: { organizationId, ...result },
+      },
+      req.logger
     );
 
     res.status(200).json(result);
