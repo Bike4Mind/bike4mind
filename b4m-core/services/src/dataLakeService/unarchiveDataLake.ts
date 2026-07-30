@@ -1,6 +1,7 @@
 import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { recomputeLakeStats } from './recomputeLakeStats';
+import { lakeMembershipScope } from './lakeMembershipScope';
 
 export interface UnarchiveResult {
   restoredCount: number;
@@ -46,13 +47,20 @@ export const unarchiveDataLake = async (
 
   await db.dataLakes.update({ id: dataLakeId, status: 'restoring' });
 
+  const scope = lakeMembershipScope(existing);
+
   // Dedup pass: a LIVE (non-archived, non-deleted) file with the same hash means the
   // file was re-uploaded while archived - the live copy wins.
-  const archived = await db.fabFiles.findArchivedByDataLakeTag(existing.datalakeTag);
+  const archived = await db.fabFiles.findArchivedByDataLakeTag(scope);
   const archivedHashes = archived.map(f => f.contentHash).filter((h): h is string => !!h);
 
   let skippedDuplicates = 0;
   if (archivedHashes.length > 0) {
+    // Meta-tag only, NOT the membership scope: the loser of this comparison is hard-deleted
+    // below, and fileTagPrefix is not unique, so a prefix match could nominate a live file
+    // belonging to a DIFFERENT lake as the winner and destroy this lake's archived member.
+    // Any re-upload worth deduping carries the meta-tag, so the narrow probe loses nothing;
+    // at worst a prefix-only re-upload leaves a duplicate, which beats deleting the wrong file.
     const live = await db.fabFiles.findByContentHashesInDataLake(archivedHashes, existing.datalakeTag);
     const liveHashes = new Set(live.map(f => f.contentHash));
     const duplicateIds = archived.filter(f => f.contentHash && liveHashes.has(f.contentHash)).map(f => f.id);
@@ -63,10 +71,10 @@ export const unarchiveDataLake = async (
   }
 
   // Restore the remaining archived files (the non-duplicates).
-  const restoredCount = await db.fabFiles.unarchiveByDataLakeTag(existing.datalakeTag);
+  const restoredCount = await db.fabFiles.unarchiveByDataLakeTag(scope);
 
   await db.dataLakes.update({ id: dataLakeId, status: 'active' });
-  await recomputeLakeStats(dataLakeId, existing.datalakeTag, { db });
+  await recomputeLakeStats(existing, { db });
 
   return { restoredCount, skippedDuplicates };
 };

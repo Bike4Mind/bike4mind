@@ -72,7 +72,7 @@ export const reconcileStuckBatches = async (
     try {
       const lake = await db.dataLakes.findById(batch.dataLakeId);
       if (lake) {
-        await recomputeLakeStats(lake.id, lake.datalakeTag, { db });
+        await recomputeLakeStats(lake, { db });
       }
     } catch (error) {
       logger?.warn(`Reconciler stat recompute failed for batch ${batch.id}:`, error);

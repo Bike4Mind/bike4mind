@@ -220,4 +220,58 @@ describe('HearthChannelsView', () => {
       expect(screen.getAllByText('posted!')).toHaveLength(1);
     });
   });
+  // The `hearth` gear unlocks on owning >= 1 channel, so THIS request is what
+  // earns the reveal - but useGearsStatus caches for 5 minutes, so without an
+  // explicit invalidation the sidenav row the user just earned stays hidden for
+  // up to that long. Now that the row fails closed, hidden is the default.
+  it('invalidates the gears status after creating a channel, so the reveal is not stale', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // The helper only invalidates while the gear is still LOCKED, so the cache
+    // has to hold that state or the call correctly no-ops and proves nothing.
+    queryClient.setQueryData(['gears', 'status'], { gears: [{ key: 'hearth', unlocked: false }] });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <QueryClientProvider client={queryClient}>
+          <HearthChannelsView />
+        </QueryClientProvider>
+      </CssVarsProvider>
+    );
+
+    apiPostMock.mockResolvedValueOnce({ data: { channel: { id: 'ch-2', name: 'ops2' } } });
+    // Joy Input renders the testid on a wrapper; the native input is inside it.
+    const nameInput = (await screen.findByTestId('hearth-new-channel-input')).querySelector('input');
+    fireEvent.change(nameInput!, { target: { value: 'ops2' } });
+    fireEvent.click(screen.getByTestId('hearth-create-channel-btn'));
+
+    await waitFor(() => expect(apiPostMock).toHaveBeenCalledWith('/api/hearth/channels', { name: 'ops2' }));
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ['gears', 'status'] }))
+    );
+  });
+
+  it('does not invalidate the gears status once the gear is already unlocked', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(['gears', 'status'], { gears: [{ key: 'hearth', unlocked: true }] });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <QueryClientProvider client={queryClient}>
+          <HearthChannelsView />
+        </QueryClientProvider>
+      </CssVarsProvider>
+    );
+
+    apiPostMock.mockResolvedValueOnce({ data: { channel: { id: 'ch-2', name: 'ops2' } } });
+    // Joy Input renders the testid on a wrapper; the native input is inside it.
+    const nameInput = (await screen.findByTestId('hearth-new-channel-input')).querySelector('input');
+    fireEvent.change(nameInput!, { target: { value: 'ops2' } });
+    fireEvent.click(screen.getByTestId('hearth-create-channel-btn'));
+
+    await waitFor(() => expect(apiPostMock).toHaveBeenCalledWith('/api/hearth/channels', { name: 'ops2' }));
+    // Every subsequent channel would otherwise re-fetch the whole gears catalog.
+    expect(invalidateSpy).not.toHaveBeenCalledWith(expect.objectContaining({ queryKey: ['gears', 'status'] }));
+  });
 });

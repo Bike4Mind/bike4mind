@@ -139,7 +139,10 @@ async function main(opts: Options): Promise<number> {
   console.log(`Public help articles to ingest: ${publicEntries.length}`);
 
   // --- Idempotency: clear the existing help lake so this run is a clean mirror ---
-  const existingIds = await fabFileRepository.findIdsByDataLakeTag(DATALAKE_TAG);
+  // Meta-tag only. This script writes both signals on every article (see below), so the narrow
+  // scope already covers everything it created, and it deletes outright - widening it to the
+  // prefix arm would let the mirror reach a file some other lake put a `help:` tag on.
+  const existingIds = await fabFileRepository.findIdsByDataLakeTag({ datalakeTag: DATALAKE_TAG });
   if (existingIds.length > 0) {
     console.log(`Removing ${existingIds.length} existing help fabfile(s) + their chunks…`);
     if (!opts.dryRun) {

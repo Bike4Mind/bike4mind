@@ -1,7 +1,7 @@
-import { getDataLakeTags } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
+import { buildTagCountScope } from '@server/utils/tagCountScope';
 import { fabFileRepository } from '@bike4mind/database';
 
 const handler = baseApi().get(
@@ -11,10 +11,8 @@ const handler = baseApi().get(
     }
 
     const [tagCounts, namespaceCounts] = await Promise.all([
-      fabFileRepository.countFilesByTagForUser(req.user.id, {
-        userGroups: req.user.groups ?? [],
-        dataLakeTags: getDataLakeTags(req.user.tags ?? []),
-      }),
+      // Shared with the tag list in ./index.ts; the two must count the same files.
+      fabFileRepository.countFilesByTagForUser(req.user.id, buildTagCountScope(req.user)),
       fabFileRepository.countUniqueFilesByNamespaceForUser(req.user.id),
     ]);
 

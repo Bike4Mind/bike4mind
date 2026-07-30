@@ -48,9 +48,10 @@ function isTrustedForInjection(
  * whose `datalakeTag` shadows a registry tag; retrieval-specific, since it guards the tag-based
  * file lookup and prompts never use the tag.)
  *
- * Prompt text is read off the raw lake documents ON PURPOSE: `DataLakeConfig` is the
- * client-facing projection returned by the list endpoints, so putting `systemPrompt` there
- * would leak the text to every lake user (it is editor-only). Keep it out of that type.
+ * Prompt text is read off the raw lake documents ON PURPOSE: `DataLakeConfig` is the shared
+ * actor-less projection, so putting `systemPrompt` there would leak the text to every lake user
+ * (it is editor-only). Keep it out of that type - the editor UI reads it from the manage-gated
+ * superset `ManageableDataLakeConfig` instead, which only the actor-aware list projections build.
  *
  * Fail-safe: a lake read failure yields no prompts rather than failing the turn.
  */

@@ -70,6 +70,7 @@ export const updateUserSchema = z.object({
       // listed here.
       agentModeDefault: z.enum(['off', 'auto', 'on']).optional(),
       showFunTools: z.boolean().optional(),
+      saveGeneratedAudio: z.boolean().optional(),
     })
     .nullable()
     .optional(),

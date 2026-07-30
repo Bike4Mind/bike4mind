@@ -191,12 +191,7 @@ export const createAppFileOnServerWithUpload = async (
     formData
   );
 
-  const { url: presignedUrl, fileId } = response.data;
-  await axios.put(presignedUrl, fileToUpload, {
-    headers: {
-      'Content-Type': fileToUpload.type,
-    },
-  });
+  const { url: uploadUrl, fileId } = response.data;
 
   try {
     // Check if already aborted before starting upload
@@ -204,12 +199,10 @@ export const createAppFileOnServerWithUpload = async (
       throw new DOMException('Upload cancelled', 'AbortError');
     }
 
-    await axios.put(presignedUrl, file, {
-      headers: {
-        'Content-Type': file.type,
-      },
-      signal: abortSignal,
-    });
+    // Shared helper routes the self-host proxy path through the authed `api` client and the
+    // hosted S3 presign through raw axios, so this call-site can't drift from the others.
+    // Upload the (possibly resized) `fileToUpload`, which is what formData's fileSize describes.
+    await uploadFileToUrl(uploadUrl, fileToUpload, fileToUpload.type, { signal: abortSignal });
 
     return fileId;
   } catch (err) {

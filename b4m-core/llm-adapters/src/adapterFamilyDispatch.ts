@@ -8,9 +8,11 @@ import AnthropicBedrockBackend from './bedrockBackend/anthropic';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
 import LlamaBedrockBackend from './bedrockBackend/llama';
+import MoonshotBedrockBackend from './bedrockBackend/moonshot';
 import TitanBedrockBackend from './bedrockBackend/titan';
 import { BFLBackend } from './bflBackend';
 import { GeminiBackend } from './geminiBackend';
+import { KimiBackend } from './kimiBackend';
 import { LocalImageBackend } from './localImageBackend';
 import { OllamaBackend } from './ollamaBackend';
 import { OpenAIBackend } from './openaiBackend';
@@ -89,6 +91,10 @@ export function backendForAdapterFamily(
       const key = keyOrThrow(apiKeyTable.xai, 'xAI');
       return key ? new XAIBackend(key) : null;
     }
+    case 'kimi': {
+      const key = keyOrThrow(apiKeyTable.kimi, 'Moonshot');
+      return key ? new KimiBackend(key, logger) : null;
+    }
     case 'bfl': {
       // Matches the legacy switch and resolveListingKey: no key falls back to
       // the demo key rather than to null.
@@ -105,6 +111,8 @@ export function backendForAdapterFamily(
       return new LlamaBedrockBackend();
     case 'bedrock-deepseek':
       return new DeepSeekBedrockBackend();
+    case 'bedrock-moonshot':
+      return new MoonshotBedrockBackend();
     case 'bedrock-jurassic':
       return new JurassicTwoBedrockBackend();
     case 'bedrock-titan':

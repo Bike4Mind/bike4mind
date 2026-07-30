@@ -70,6 +70,7 @@ class SyncModelDescriptions {
     [ModelBackend.Ollama]: 'ollamaBackend.ts',
     [ModelBackend.BFL]: 'bflBackend.ts',
     [ModelBackend.XAI]: 'xaiBackend.ts',
+    [ModelBackend.Kimi]: 'kimiBackend.ts',
     [ModelBackend.AWS]: 'awsBackend.ts',
     [ModelBackend.LocalImage]: 'localImageBackend.ts',
   } as const;

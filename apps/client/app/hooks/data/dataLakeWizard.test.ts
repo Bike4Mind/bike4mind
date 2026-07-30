@@ -289,6 +289,8 @@ describe('useBatchUpload onError', () => {
           isDuplicate: false,
         },
       ],
+      // The step must be in the flow for its tags to apply (#824).
+      optionalSteps: { preview: false, taxonomy: true },
       taxonomy: {
         prefix: 'test:',
         suggestedName: 'Acme',
@@ -507,6 +509,79 @@ describe('useBatchUpload rollback (#816)', () => {
 });
 
 /**
+ * The taxonomy step is opt-in (#824) and its reviewed tags survive being toggled back off,
+ * so the upload has to decide by the step's presence in the flow rather than by whether the
+ * store happens to hold tags - otherwise running the step, going back and unchecking it still
+ * tagged every uploaded file.
+ */
+describe('useBatchUpload applies taxonomy tags only while the step is in the flow', () => {
+  const seedWithTaxonomy = (taxonomyEnabled: boolean) => {
+    seedWizard({ names: ['legal/a.txt'] });
+    useDataLakeWizardStore.setState({
+      optionalSteps: { preview: false, taxonomy: taxonomyEnabled },
+      taxonomy: {
+        prefix: 'test:',
+        suggestedName: 'Test Lake',
+        tags: [
+          {
+            suffix: 'type:contract',
+            originalName: 'test:type:contract',
+            strength: 0.95,
+            source: 'ai',
+            matchingFolders: ['legal'],
+            deleted: false,
+          },
+        ],
+        fileAssignments: [],
+        attempted: true,
+        analyzing: false,
+      },
+    });
+  };
+
+  const runUpload = async () => {
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    return (postCall('/api/data-lakes/batches')?.[1] as { appliedTags: { name: string }[] }).appliedTags.map(
+      t => t.name
+    );
+  };
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    apiPut.mockReset().mockResolvedValue({ data: { success: true } });
+    apiDelete.mockReset().mockResolvedValue({ data: { success: true } });
+    uploadFileToUrlMock.mockReset().mockResolvedValue(undefined);
+    toastMock.success.mockClear();
+    installApiPostRouter();
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('applies the reviewed categories when the step is enabled', async () => {
+    seedWithTaxonomy(true);
+
+    expect(await runUpload()).toContain('test:type:contract');
+  });
+
+  it('applies folder tags only once the step is toggled back off', async () => {
+    // The exact sequence: run the taxonomy step, go back, uncheck it, finish the wizard.
+    seedWithTaxonomy(false);
+
+    const applied = await runUpload();
+    expect(applied).not.toContain('test:type:contract');
+    expect(applied).toEqual(['test:legal']);
+  });
+
+  it('ignores a stale taxonomy in append mode, where the step is never offered', async () => {
+    seedWithTaxonomy(true);
+    useDataLakeWizardStore.setState({ targetLake: { id: 'existing', slug: 'existing-slug' } as never });
+
+    expect(await runUpload()).not.toContain('test:type:contract');
+  });
+});
+
+/**
  * The infer-taxonomy endpoint validates only suggestedPrefix + categories-is-an-array and
  * otherwise returns the model's raw JSON. Since the taxonomy now feeds the upload path -
  * which runs after the lake record exists - a malformed payload reaching tagsForFile would
@@ -712,6 +787,9 @@ describe('useRemoveFileFromDataLake cache invalidation', () => {
     // a fully-specified key would refresh only one of the two surfaces.
     expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
     expect(keys).toContain(JSON.stringify(['dataLakeArticles']));
-    expect(keys).toContain(JSON.stringify(['file-tags', 'counts']));
+    // The bare file-tags prefix, not ['file-tags','counts']: the tag list itself now carries a
+    // fileCount derived from the files holding each tag, and invalidating only the longer key
+    // leaves that list stale. Prefix matching covers the counts endpoint too.
+    expect(keys).toContain(JSON.stringify(['file-tags']));
   });
 });

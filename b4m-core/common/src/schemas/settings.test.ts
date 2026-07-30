@@ -162,7 +162,14 @@ describe('public settings projection (M2.5 security boundary)', () => {
 
     it('does not expose any known secret-bearing API key settings', () => {
       const keys = publicSafeSettingKeys();
-      for (const secret of ['openaiDemoKey', 'anthropicDemoKey', 'xaiApiKey', 'geminiDemoKey', 'voyageApiKey']) {
+      for (const secret of [
+        'openaiDemoKey',
+        'anthropicDemoKey',
+        'xaiApiKey',
+        'moonshotApiKey',
+        'geminiDemoKey',
+        'voyageApiKey',
+      ]) {
         expect(keys).not.toContain(secret);
       }
     });

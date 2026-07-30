@@ -18,6 +18,7 @@
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
     "migrate": "tsx migrate/index.ts",
     "datalake:check-slug-dupes": "tsx migrate/check-datalake-slug-dupes.ts",
+    "datalake:check-prefix-overlaps": "tsx migrate/check-datalake-prefix-overlaps.ts",
     "db:create-user": "tsx createUser.ts",
     "db:list-users": "tsx listUsers.ts",
     "db:setup-email-user": "tsx setupTestEmailUser.ts",

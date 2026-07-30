@@ -21,26 +21,55 @@ export interface IPendingAction {
  * extracts it, persists it on the quest, and the client dispatches it.
  * Discriminated union - add new variants here as needed.
  */
+
+/** A job-shop scheduling problem - the bare payload a formulate/edit tool populates. */
+export type SchedulingProblemPayload = {
+  name: string;
+  description?: string;
+  jobs: Array<{
+    id: number;
+    name: string;
+    operations: Array<{ jobId: number; machineId: number; duration: number }>;
+  }>;
+  machines: Array<{ id: number; name: string }>;
+};
+
+/**
+ * Optional solver-run outputs a solve tool can carry alongside a populated problem so the
+ * client can surface the run without re-solving. `results`/`result` are opaque here (the
+ * full set and/or a single winner; their shape is validated by the tool that emits them),
+ * `errors` are per-solver failure messages, and `solvedAt` is an ISO solve timestamp.
+ */
+export type PopulatedSolveOutputs = {
+  results?: unknown[];
+  result?: unknown;
+  errors?: string[];
+  solvedAt?: string;
+};
+
 export type UiSideEffect =
   | {
+      // A BARE scheduling problem populated by a formulate/edit tool. A solve tool's problem +
+      // race rides `populateScheduleRace` (below), NOT this type, so this payload is never a
+      // wrapper — a client bundle that predates the race feature reads it as the bare problem
+      // and stays correct.
       type: 'populateProblem';
-      payload: {
-        name: string;
-        description?: string;
-        jobs: Array<{
-          id: number;
-          name: string;
-          operations: Array<{ jobId: number; machineId: number; duration: number }>;
-        }>;
-        machines: Array<{ id: number; name: string }>;
-      };
+      payload: SchedulingProblemPayload;
     }
   | {
-      // The eight unified families (routing/packing/assignment/...) carry their familyId
-      // alongside the family-specific problem shape. Emitted by optihashi_formulate;
-      // `problem` is validated server-side by FAMILY_PROBLEM_SCHEMAS before serialization.
+      // A solve tool's scheduling problem WRAPPED with its solver-run outputs. Deliberately a
+      // distinct type from populateProblem: routing a wrapper through populateProblem would let
+      // an older client persist the wrapper as the active brief. A client that predates this
+      // type ignores it (its handler has no case) instead of mis-applying it.
+      type: 'populateScheduleRace';
+      payload: { problem: SchedulingProblemPayload } & PopulatedSolveOutputs;
+    }
+  | {
+      // The unified families carry their familyId alongside the family-specific problem
+      // shape, optionally wrapped with solve outputs. `problem` is validated server-side
+      // before serialization.
       type: 'populateFamilyProblem';
-      payload: { familyId: string; problem: unknown };
+      payload: { familyId: string; problem: unknown } & PopulatedSolveOutputs;
     };
 
 export type SessionProps = {

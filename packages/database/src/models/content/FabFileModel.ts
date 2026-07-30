@@ -1,4 +1,5 @@
 import {
+  DataLakeMembershipScope,
   IFabFileChunkDocument,
   IFabFileChunkRepository,
   IFabFileDocument,
@@ -12,6 +13,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
+import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
 
 /**
  * Trim, then drop prefixes that cannot be anchored into a meaningful regex. A blank entry
@@ -59,9 +61,10 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
    * keyset cursor - no rows skipped or duplicated across pages regardless of the query plan.
    * That is what lets a caller walk a corpus larger than memory and still get a reproducible
    * result; the previous unsorted `.limit(cap)` returned an arbitrary slice instead.
-   * At normal selectivity the { fabFileId: 1, _id: 1 } index serves this as a non-blocking
-   * SORT_MERGE across the $in. When the id list covers most of the collection the planner may
-   * prefer an _id range scan instead; the `limit` keeps that bounded either way.
+   * Up to a couple hundred file ids the { fabFileId: 1, _id: 1 } index serves this as a
+   * non-blocking SORT_MERGE across the $in. Past the planner's $in-explosion limit it cannot build
+   * that plan and falls back to an _id range scan with a filter - a cap on the number of ids, not
+   * on how much of the collection they cover; the `limit` keeps that bounded either way.
    */
   async findVectorsByFabFileIds(fabFileIds: string[], options: { limit?: number; afterChunkId?: string } = {}) {
     if (fabFileIds.length === 0) return [];
@@ -127,12 +130,14 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
   }
 );
 
-FabFileChunkSchema.index({ _id: 1, fabFileId: 1 });
-FabFileChunkSchema.index({ fabFileId: 1 });
 // Equality on the prefix + sort on `_id` lets the planner SORT_MERGE the per-file index scans
 // instead of collecting and sorting them, which is what keeps findVectorsByFabFileIds' keyset
-// paging non-blocking. `{ fabFileId: 1 }` above is now a redundant prefix of this index and is
-// droppable once this one is confirmed in use; kept for now so no query loses its index mid-deploy.
+// paging non-blocking. Deliberately the only declaration: this compound's leftmost prefix already
+// serves the bare `fabFileId` reads (findByFabFileId, deleteManyByFabFileId, countTerminalChunks),
+// and a `{ _id: 1, fabFileId: 1 }` buys nothing over `_id_` since `vector` is in neither index, so
+// both plans fetch anyway. Environments deployed before this still hold those two as orphans until
+// a drop migration removes them; nothing recreates them, because autoIndex only builds what is
+// declared here. fabFileChunkIndexes.test.ts pins the set.
 FabFileChunkSchema.index({ fabFileId: 1, _id: 1 });
 
 export const FabFileChunk =
@@ -156,7 +161,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
+      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[];
@@ -172,6 +177,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
       restrictToDataLake?: boolean;
+      /** Server-supplied only - see buildOwnershipConditions.lakeMembership. */
+      lakeMembership?: DataLakeMembershipScope;
       skipOwnership?: boolean;
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];
@@ -547,73 +554,83 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
-  // Data lake lifecycle (scoped by the lake's datalake: meta-tag)
+  // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter
+  // (meta-tag OR a fileTagPrefix match on a file the lake's creator owns), shared with the
+  // single-lake browse so a read and a whole-lake write never disagree about who is a member.
 
   /**
-   * Authoritative lake stats from source records via an indexed aggregate - counts
-   * only live files (not archived, not deleted). Runs at batch completion AND on the
-   * reconcile read path, so it must NOT load-all-and-count.
+   * Authoritative lake stats from source records via an aggregate - counts only live files
+   * (not archived, not deleted). Runs at batch completion AND on the reconcile read path, so
+   * it must NOT load-all-and-count.
+   *
+   * The `{ 'tags.name': 1, archivedAt: 1, deletedAt: 1 }` index bounds the meta-tag arm fully.
+   * The prefix arm only gets a range on the leading key (an anchored regex) and its `userId`
+   * conjunct is not in that index, so a prefix-heavy lake fetches its candidate documents to
+   * check ownership.
    */
-  async computeDataLakeStats(datalakeTag: string): Promise<{ fileCount: number; totalSizeBytes: number }> {
+  async computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }> {
     const [agg] = await this.fabFileModel.aggregate<{ fileCount: number; totalSizeBytes: number }>([
-      { $match: { 'tags.name': datalakeTag, deletedAt: null, archivedAt: null } },
+      { $match: { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null } },
       { $group: { _id: null, fileCount: { $sum: 1 }, totalSizeBytes: { $sum: { $ifNull: ['$fileSize', 0] } } } },
       { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1 } },
     ]);
     return agg ?? { fileCount: 0, totalSizeBytes: 0 };
   }
 
-  async archiveByDataLakeTag(datalakeTag: string): Promise<number> {
+  async archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
     const result = await this.fabFileModel.updateMany(
-      { 'tags.name': datalakeTag, deletedAt: null, archivedAt: null },
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null },
       { $set: { archivedAt: new Date() } }
     );
     return result.modifiedCount;
   }
 
-  async unarchiveByDataLakeTag(datalakeTag: string): Promise<number> {
+  async unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
     const result = await this.fabFileModel.updateMany(
-      { 'tags.name': datalakeTag, deletedAt: null, archivedAt: { $ne: null } },
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: { $ne: null } },
       { $set: { archivedAt: null } }
     );
     return result.modifiedCount;
   }
 
-  async findArchivedByDataLakeTag(datalakeTag: string): Promise<IFabFileDocument[]> {
+  async findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({
-      'tags.name': datalakeTag,
+      ...buildDataLakeMembershipFilter(scope),
       deletedAt: null,
       archivedAt: { $ne: null },
     });
     return result.map(d => d.toJSON());
   }
 
-  async findDeletedByDataLakeTag(datalakeTag: string): Promise<IFabFileDocument[]> {
+  async findDeletedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel
-      .find({ 'tags.name': datalakeTag, deletedAt: { $ne: null } })
+      .find({ ...buildDataLakeMembershipFilter(scope), deletedAt: { $ne: null } })
       .setOptions({ includeDeleted: true });
     return result.map(d => d.toJSON());
   }
 
-  async undeleteByDataLakeTag(datalakeTag: string, excludeIds: string[] = []): Promise<number> {
-    const filter: Record<string, unknown> = { 'tags.name': datalakeTag, deletedAt: { $ne: null } };
+  async undeleteByDataLakeTag(scope: DataLakeMembershipScope, excludeIds: string[] = []): Promise<number> {
+    const filter: Record<string, unknown> = {
+      ...buildDataLakeMembershipFilter(scope),
+      deletedAt: { $ne: null },
+    };
     if (excludeIds.length > 0) filter._id = { $nin: excludeIds };
     const result = await this.fabFileModel.updateMany(filter, { $set: { deletedAt: null } });
     return result.modifiedCount;
   }
 
-  async softDeleteByDataLakeTag(datalakeTag: string): Promise<string[]> {
-    const docs = await this.fabFileModel.find({ 'tags.name': datalakeTag, deletedAt: null }, { _id: 1 });
+  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
+    const docs = await this.fabFileModel.find({ ...buildDataLakeMembershipFilter(scope), deletedAt: null }, { _id: 1 });
     const ids = docs.map(d => d._id.toString());
     if (ids.length === 0) return [];
     await this.fabFileModel.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: new Date() } });
     return ids;
   }
 
-  async hardDeleteByDataLakeTag(datalakeTag: string): Promise<string[]> {
-    // Include soft-deleted files: phase-2 sweep must purge everything carrying the tag.
+  async hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
+    // Include soft-deleted files: the phase-2 sweep must purge every member.
     const docs = await this.fabFileModel
-      .find({ 'tags.name': datalakeTag }, { _id: 1 })
+      .find(buildDataLakeMembershipFilter(scope), { _id: 1 })
       .setOptions({ includeDeleted: true });
     const ids = docs.map(d => d._id.toString());
     if (ids.length === 0) return [];
@@ -622,9 +639,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return ids;
   }
 
-  async findIdsByDataLakeTag(datalakeTag: string): Promise<string[]> {
+  async findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
     const docs = await this.fabFileModel
-      .find({ 'tags.name': datalakeTag }, { _id: 1 })
+      .find(buildDataLakeMembershipFilter(scope), { _id: 1 })
       .setOptions({ includeDeleted: true });
     return docs.map(d => d._id.toString());
   }

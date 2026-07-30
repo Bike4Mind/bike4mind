@@ -100,8 +100,10 @@ export const createDataLakeFallbackTagger = ({ db }: LakeTagAdapters): DataLakeF
     const departed = previousMetaTags.filter(tag => !currentMetaTags.includes(tag));
     if (currentMetaTags.length === 0 && departed.length === 0) return tags as (T | FileTag)[];
 
-    // Deduped by prefix, not by lake: nothing makes `fileTagPrefix` unique, so two lakes can
-    // share one and a single tag covers the file for both.
+    // Deduped by prefix, not by lake: two lakes can still share a `fileTagPrefix`, so one tag can
+    // cover the file for both. Create-time collision checks now reject an overlapping prefix
+    // within an org or creator (see `tagPrefixCollision`), which leaves legacy rows and
+    // cross-scope pairs - narrow enough to be defensive, not narrow enough to assume away.
     const currentPrefixes = new Set<string>();
     for (const metaTag of currentMetaTags) {
       const resolved = await resolvePrefix(metaTag);
