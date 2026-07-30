@@ -11,6 +11,7 @@ import {
   toWireHearthEvent,
   toPresenceProjection,
   HearthActorParamSchema,
+  HearthSessionParamSchema,
   resolveRequestActor,
   assertHearthWriteScope,
 } from '@server/utils/hearthWire';
@@ -54,6 +55,7 @@ const PostEventSchema = z
       .optional(),
     refs: hearthEventRefsSchema.prefault({}),
     actor: HearthActorParamSchema,
+    session: HearthSessionParamSchema,
   })
   // Exactly one addressing mode. Accepting both would leave the precedence
   // ambiguous, and accepting neither has no sensible target.
@@ -90,7 +92,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.HEARTH_WRITE, ApiKeyScope
     const channel = await resolveTargetChannel(req.user.id, body);
     if (!channel) throw new NotFoundError('Channel not found');
 
-    const actor = await resolveRequestActor(req.user, body.actor);
+    const actor = await resolveRequestActor(req.user, body.actor, body.session);
 
     const event = await hearthLog.append({
       channelId: channel._id.toString(),
