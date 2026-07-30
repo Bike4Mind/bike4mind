@@ -6,8 +6,16 @@ export class ChatPage extends BasePage {
   readonly chatInput = this.page.getByTestId('lexical-chat-input-container');
   readonly sendButton = this.page.getByTestId('send-message-btn');
   readonly aiResponse = this.page.getByTestId('ai-response');
-  readonly creditsUsed = this.page.getByTestId('credits-used');
   readonly aiResponseRoot = this.page.getByTestId('ai-response-root-container');
+
+  /**
+   * One wrapper per AI message (MessageContent's root, `message-<id>`), holding both the reply
+   * container and the footer that carries the credits chip. The `has` filter is what makes the
+   * prefix match precise: `message-actions-menu-btn` and friends also start with `message-`.
+   */
+  private readonly aiMessage = this.page
+    .locator('[data-testid^="message-"]')
+    .filter({ has: this.page.getByTestId('ai-response-root-container') });
 
   /**
    * Text of the newest mounted reply, or '' when none is mounted.
@@ -178,21 +186,21 @@ export class ChatPage extends BasePage {
   }
 
   /**
-   * Returns the numeric credit count for the newest AI response chip, or null if not shown.
+   * Returns the numeric credit count for the newest AI reply's chip, or null if it never renders.
    *
-   * The per-message credits chip only renders once the server populates
-   * `messageData.creditsUsed`, which lags behind streaming visually completing. Reading
-   * `.last()` too early therefore returns the PREVIOUS message's already-rendered chip -
-   * a stale value that repeats across runs/models. `minCount` (the chip count captured
-   * before sending) is required so we wait for a brand-new chip to appear before reading it -
-   * a zero-arg call would silently reintroduce the stale-read bug this method exists to fix.
+   * Scoped to the newest message wrapper, NOT read off a global chip count. The chip renders in
+   * MessageContent's footer once the server populates `messageData.creditsUsed`, which lags
+   * behind streaming visually completing - so a bare `creditsUsed.last()` can return the PREVIOUS
+   * message's already-rendered chip, a stale value that repeats across runs/models. The old guard
+   * ("wait for one more chip than before sending") cannot work here: the chat list is virtualized,
+   * so the mounted chip count saturates and a later turn never exceeds the pre-send count, leaving
+   * a real measurement unread. Scoping to `aiMessage.last()` fixes both - it resolves to THIS
+   * message's chip or to nothing, with no dependence on how many chips are mounted.
    */
-  async getCreditsUsed(minCount: number): Promise<number | null> {
+  async getCreditsUsed(): Promise<number | null> {
     try {
-      // Wait for a new credits chip (beyond those present before sending) to render.
-      await expect.poll(() => this.creditsUsed.count(), { timeout: 15_000 }).toBeGreaterThan(minCount);
-      const chip = this.creditsUsed.last();
-      await chip.waitFor({ state: 'visible', timeout: 10_000 });
+      const chip = this.aiMessage.last().getByTestId('credits-used');
+      await chip.waitFor({ state: 'visible', timeout: 15_000 });
       const text = await chip.innerText();
       const match = text.match(/\d+/);
       return match ? parseInt(match[0]) : null;
@@ -210,13 +218,10 @@ export class ChatPage extends BasePage {
     text: string,
     timeout: number = TIMEOUTS.AI_RESPONSE
   ): Promise<{ responseText: string; durationSecs: number; credits: number | null }> {
-    // Capture how many credits chips exist before sending so getCreditsUsed can wait for
-    // THIS message's chip to render, rather than reading a stale prior-message value.
-    const creditsBefore = await this.creditsUsed.count();
     const startMs = Date.now();
     const responseText = await this.sendMessageAndWaitForResponse(text, timeout);
     const durationSecs = (Date.now() - startMs) / 1000;
-    const credits = await this.getCreditsUsed(creditsBefore);
+    const credits = await this.getCreditsUsed();
     return { responseText, durationSecs, credits };
   }
 
