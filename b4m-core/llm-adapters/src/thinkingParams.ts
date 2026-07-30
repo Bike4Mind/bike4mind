@@ -10,6 +10,48 @@ export type ThinkingConfig =
   | { thinking: { type: 'enabled'; budget_tokens: number }; output_config?: never }
   | { thinking: { type: 'adaptive' }; output_config: { effort: 'high' | 'medium' | 'low' } };
 
+/**
+ * max_tokens floor for adaptive reasoning models (Claude 4.7+/Opus 5). These
+ * models self-manage extended thinking *within* max_tokens, which is a ceiling
+ * (they stop at end_turn), not a target - so a larger floor costs nothing on
+ * short replies but keeps reasoning from consuming the whole budget and leaving
+ * no room for the visible answer. Both paths that size an adaptive model's output
+ * budget read it from here: buildThinkingParams (thinking explicitly enabled) and
+ * resolveOutputMaxTokens (the default when a caller names no budget).
+ */
+export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
+
+/**
+ * Resolves the output budget to send as max_tokens.
+ *
+ * The distinction that matters: `requested` being undefined means the caller
+ * expressed no preference, which is the only case we are free to size for the
+ * model. An explicit number is a deliberate choice and is never raised - raising
+ * it would silently exceed the budget the caller asked for, and it also feeds the
+ * credit pre-reservation and shrinks the usable input window, so a "harmless"
+ * bump is neither harmless nor invisible. Explicit values are still clamped down
+ * to the model's own cap, since over-requesting 400s the whole turn.
+ *
+ * Adaptive reasoning models default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR because
+ * they spend extended-thinking tokens inside max_tokens: a small default can be
+ * consumed entirely by reasoning, leaving an empty visible reply.
+ */
+export function resolveOutputMaxTokens({
+  requested,
+  fallback,
+  thinkingStyle,
+  modelMaxOutputTokens,
+}: {
+  requested: number | undefined;
+  /** Default for models that do not reason inside the output budget. */
+  fallback: number;
+  thinkingStyle: ModelInfo['thinkingStyle'];
+  modelMaxOutputTokens: number;
+}): number {
+  const preferred = requested ?? (thinkingStyle === 'adaptive' ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
+  return Math.min(preferred, modelMaxOutputTokens);
+}
+
 export interface ThinkingResult {
   /** The thinking parameter object to spread into the API request body */
   thinkingConfig: ThinkingConfig;
@@ -48,8 +90,7 @@ export function buildThinkingParams(
     // ~10-11K-token HTML artifact plus high-effort thinking could exceed the
     // shared budget and get truncated mid-tag; 64K leaves ample room
     // for both while staying well under these models' 128K output capability.
-    const adaptiveFloor = 64_000;
-    const maxTokens = Math.max(currentMaxTokens, adaptiveFloor);
+    const maxTokens = Math.max(currentMaxTokens, ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
 
     return {
       thinkingConfig: {

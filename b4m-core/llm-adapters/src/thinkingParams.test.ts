@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildThinkingParams } from './thinkingParams';
+import { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, buildThinkingParams, resolveOutputMaxTokens } from './thinkingParams';
 import { ChatModels, ModelBackend, type ModelInfo } from '@bike4mind/common';
 
 const baseModelInfo: ModelInfo = {
@@ -83,6 +83,56 @@ describe('buildThinkingParams', () => {
     it('returns temperature "delete" for NO_TEMPERATURE_MODELS', () => {
       const result = buildThinkingParams(ChatModels.CLAUDE_4_7_OPUS, adaptiveModel, 16000, 4096);
       expect(result.temperature).toBe('delete');
+    });
+  });
+});
+
+describe('resolveOutputMaxTokens', () => {
+  const resolve = (requested: number | undefined, modelInfo: ModelInfo) =>
+    resolveOutputMaxTokens({
+      requested,
+      fallback: 4096,
+      thinkingStyle: modelInfo.thinkingStyle,
+      modelMaxOutputTokens: modelInfo.max_tokens,
+    });
+
+  describe('an explicit caller budget is never raised', () => {
+    // The bug this guards: flooring adaptive models unconditionally silently
+    // multiplied a caller's stated budget, which also inflates the credit
+    // pre-reservation and shrinks the usable input window.
+    it('honors a budget below the adaptive floor on an adaptive model', () => {
+      expect(resolve(16_000, adaptiveModel)).toBe(16_000);
+    });
+
+    it('honors a tiny budget on an adaptive model', () => {
+      expect(resolve(50, adaptiveModel)).toBe(50);
+    });
+
+    it('honors a budget on a legacy model', () => {
+      expect(resolve(16_000, legacyModel)).toBe(16_000);
+    });
+  });
+
+  describe('absence is sized for the model', () => {
+    it('defaults an adaptive model to the shared floor', () => {
+      expect(resolve(undefined, adaptiveModel)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    it('defaults a legacy model to the caller-supplied fallback', () => {
+      expect(resolve(undefined, legacyModel)).toBe(4096);
+    });
+  });
+
+  describe('clamps to the model output cap', () => {
+    it('clamps an over-large explicit budget', () => {
+      expect(resolve(500_000, legacyModel)).toBe(128_000);
+    });
+
+    // Over-requesting 400s the whole turn, so the adaptive default must yield to a
+    // model whose own cap is smaller than the floor.
+    it('clamps the adaptive default on a model capped below the floor', () => {
+      const smallCap: ModelInfo = { ...adaptiveModel, max_tokens: 8192 };
+      expect(resolve(undefined, smallCap)).toBe(8192);
     });
   });
 });

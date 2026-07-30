@@ -45,6 +45,7 @@ import {
   runPartnerRuleBackfill,
   type OrganizationOption,
 } from '@client/app/utils/partnerSignupRuleAPICalls';
+import { getErrorMessage } from '@client/app/utils/error';
 
 // Options for the entitlements picker; spread to a mutable array for Joy Autocomplete.
 const ENTITLEMENT_OPTIONS = [...KNOWN_ENTITLEMENT_KEYS];
@@ -134,7 +135,7 @@ export default function PartnerSignupRulesTab() {
       toast.success(editing ? `Updated rule for ${rule.domain}` : `Created signup rule for ${rule.domain}`);
     },
     onError: (error: unknown) => {
-      setFormError(extractApiError(error));
+      setFormError(getErrorMessage(error));
     },
   });
 
@@ -144,7 +145,7 @@ export default function PartnerSignupRulesTab() {
       invalidate();
       toast.success(`${rule.domain} ${rule.enabled ? 'enabled' : 'disabled'}`);
     },
-    onError: (error: unknown) => toast.error(extractApiError(error)),
+    onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
   const deleteMutation = useMutation({
@@ -154,7 +155,7 @@ export default function PartnerSignupRulesTab() {
       setDeleteTarget(null);
       toast.success(`Deleted signup rule for ${rule.domain}`);
     },
-    onError: (error: unknown) => toast.error(extractApiError(error)),
+    onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
   // Org picker: debounced name search, only queried while the modal is open. The Autocomplete
@@ -184,7 +185,7 @@ export default function PartnerSignupRulesTab() {
           (result.failed ? `, ${result.failed} failed` : '')
       );
     },
-    onError: (error: unknown) => toast.error(extractApiError(error)),
+    onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
   const openCreate = () => {
@@ -672,15 +673,4 @@ export default function PartnerSignupRulesTab() {
       </Modal>
     </Box>
   );
-}
-
-/** Pull a human message out of an axios-style error, falling back to a generic string. */
-function extractApiError(error: unknown): string {
-  if (error && typeof error === 'object' && 'response' in error) {
-    const response = (error as { response?: { data?: { message?: string; error?: string } } }).response;
-    const message = response?.data?.message ?? response?.data?.error;
-    if (message) return message;
-  }
-  if (error instanceof Error) return error.message;
-  return 'Something went wrong. Please try again.';
 }

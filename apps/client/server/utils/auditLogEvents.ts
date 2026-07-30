@@ -57,4 +57,13 @@ export enum AdminOrgAuditEvents {
   ORG_SEATS_CHANGED = 'ORG_SEATS_CHANGED',
   ORG_CONVERT_INITIATED = 'ORG_CONVERT_INITIATED',
   ORG_REVOKED = 'ORG_REVOKED',
+  // Group-type grant/revoke (org-groups #1172). One event carries the diff (added/removed types
+  // + soft-deleted group ids) so "who granted access to a type that can reach confidential data"
+  // is answerable from the audit trail.
+  ORG_GROUP_TYPES_UPDATED = 'ORG_GROUP_TYPES_UPDATED',
+  // The rest of the org-groups privileged mutations (org-groups #1172). Same rationale: "who put
+  // user X in the confidential group" and "who appointed the admin who did it" must be answerable.
+  ORG_ADMINS_UPDATED = 'ORG_ADMINS_UPDATED',
+  ORG_GROUP_MEMBER_ASSIGNED = 'ORG_GROUP_MEMBER_ASSIGNED',
+  ORG_GROUP_MEMBER_UNASSIGNED = 'ORG_GROUP_MEMBER_UNASSIGNED',
 }

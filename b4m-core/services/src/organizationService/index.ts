@@ -13,6 +13,8 @@ import { listOwn } from './listOwn';
 import { listPendingUsers } from './listPendingUsers';
 import { revokeAccess } from './revokeAccess';
 import { leave } from './leave';
+import { setOrganizationGroupTypes } from './setOrganizationGroupTypes';
+import { assignUserToGroup, removeUserFromGroup, renameGroup, assertCanManageOrgGroups } from './groupMembership';
 
 export {
   search,
@@ -31,6 +33,11 @@ export {
   listPendingUsers,
   revokeAccess,
   leave,
+  setOrganizationGroupTypes,
+  assignUserToGroup,
+  assertCanManageOrgGroups,
+  removeUserFromGroup,
+  renameGroup,
 };
 
 export type { SearchParameters };
