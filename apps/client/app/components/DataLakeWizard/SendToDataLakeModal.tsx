@@ -79,6 +79,8 @@ export default function SendToDataLakeModal() {
       });
       queryClient.invalidateQueries({ queryKey: ['dataLakeFiles', lake.id] });
       queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
+      // The tag write above lands on the file, so every per-tag file count is now stale.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       toast.success(`Saved ${sourceLabel} to “${lake.name}”. It'll be searchable once processing finishes.`);
       setSelectedId(null);
       closeStore();

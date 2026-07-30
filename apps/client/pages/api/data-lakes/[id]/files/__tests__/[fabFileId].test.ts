@@ -29,7 +29,11 @@ vi.mock('@bike4mind/services', () => ({
     removeFileFromDataLake: h.removeFileFromDataLake,
   },
 }));
-vi.mock('@bike4mind/database', () => ({ dataLakeRepository: {}, fabFileRepository: {} }));
+vi.mock('@bike4mind/database', () => ({
+  dataLakeRepository: {},
+  fabFileRepository: {},
+  userRepository: {},
+}));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../[fabFileId]';

@@ -1,6 +1,8 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { organizationRepository } from '@bike4mind/database/infra';
+import { partnerSignupRuleRepository } from '@bike4mind/database';
+import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
 import { organizationService } from '@bike4mind/services';
 import { toSafeOrganization } from '@bike4mind/common';
 import { Request } from 'express';
@@ -68,6 +70,12 @@ const handler = baseApi()
         },
       }
     );
+
+    // Clear the dangling reference from any partner signup rule that pointed at this org, so
+    // no future signup resolves to a deleted org. The rule survives (its entitlements/credits
+    // still apply); only the org association is dropped. Cache invalidation makes it immediate.
+    await partnerSignupRuleRepository.updateMany({ organizationId: id }, { organizationId: null });
+    invalidatePartnerRuleCache();
 
     return res.json({ id });
   });

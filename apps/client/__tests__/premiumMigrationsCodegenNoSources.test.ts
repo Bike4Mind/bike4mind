@@ -34,7 +34,14 @@ let root: string;
 
 function runCodegen(): { ok: boolean; output: string } {
   try {
-    return { ok: true, output: execFileSync('node', [join(root, 'apps/client/scripts/generate-premium-glue.mjs')], { cwd: root, encoding: 'utf8', stdio: 'pipe' }) };
+    return {
+      ok: true,
+      output: execFileSync('node', [join(root, 'apps/client/scripts/generate-premium-glue.mjs')], {
+        cwd: root,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      }),
+    };
   } catch (e) {
     const err = e as { stdout?: string; stderr?: string };
     return { ok: false, output: `${err.stdout ?? ''}${err.stderr ?? ''}` };

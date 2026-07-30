@@ -138,6 +138,7 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `search_knowledge_base` | Semantic search across your notebooks | `notebooks:read` |
 | `list_files` | Search your files | `files:read` |
 | `get_file` | File metadata plus a signed download URL | `files:read` |
+| `generate_sound_effect` | Generate a sound effect from a text description | `ai:generate` |
 
 It also exposes four resource templates, each with a working `list` and `read` that return `application/json`:
 

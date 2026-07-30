@@ -24,6 +24,8 @@ import { BadRequestError } from '@server/utils/errors';
 type ResolvedRule = {
   entitlements: EntitlementKey[];
   signupCredits: number;
+  /** Org a verified signup on this domain is auto-added to, or null. */
+  organizationId: string | null;
 };
 
 /** How long a loaded rule set is trusted before a refresh (ms). */
@@ -47,6 +49,7 @@ async function loadRules(): Promise<Map<string, ResolvedRule>> {
     map.set(domain, {
       entitlements: rule.entitlements.map(normalizeTag).filter(Boolean),
       signupCredits: rule.signupCredits ?? 0,
+      organizationId: rule.organizationId ?? null,
     });
   }
   cache = { rules: map, loadedAt: Date.now() };
@@ -138,12 +141,18 @@ export async function partnerEntitlementsForEmail(
 export async function partnerSignupGrantForEmail(
   email: string | null | undefined,
   emailVerified: boolean | null | undefined
-): Promise<{ matched: boolean; entitlements: Set<EntitlementKey>; signupCredits: number }> {
+): Promise<{
+  matched: boolean;
+  entitlements: Set<EntitlementKey>;
+  signupCredits: number;
+  organizationId: string | null;
+}> {
   const rule = await ruleForEmail(email, emailVerified);
-  if (!rule) return { matched: false, entitlements: new Set(), signupCredits: 0 };
+  if (!rule) return { matched: false, entitlements: new Set(), signupCredits: 0, organizationId: null };
   return {
     matched: true,
     entitlements: new Set(rule.entitlements),
     signupCredits: rule.signupCredits,
+    organizationId: rule.organizationId,
   };
 }

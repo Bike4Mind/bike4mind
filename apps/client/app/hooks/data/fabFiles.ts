@@ -141,6 +141,10 @@ export function useCreateFabFileWithUpload(options?: {
       });
 
       queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
+      // A created file can carry tags, and per-tag counts are derived from the files holding each
+      // tag. This hook has no callers today; the invalidation is here so wiring it up later cannot
+      // silently reintroduce the stale-count bug the other write paths were fixed for.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       options?.onSuccess?.(newFabFile);
       return newFabFile;
     } catch (err) {
@@ -583,6 +587,9 @@ export function useUpdateFabFile(callback?: { onSuccess?: () => void }) {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
       // Invalidate and force refetch system prompt files (they have long staleTime)
       queryClient.invalidateQueries({ queryKey: ['system-prompt-files'], exact: false, refetchType: 'all' });
+      // This route replaces the whole tags array, so any tag surface showing a per-tag file count
+      // is stale afterwards. The bare prefix also covers ['file-tags','counts'].
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       callback?.onSuccess?.();
     },
   });
