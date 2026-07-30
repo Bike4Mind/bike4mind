@@ -67,6 +67,29 @@ describe('PendingOtcToken.tryReserveSlot — atomic cooldown enforcement', () =>
     expect(blocked).toHaveLength(4);
   });
 
+  it('concurrent reclaims of a stale record: exactly one wins inside the new cooldown window', async () => {
+    // Reclaim-branch counterpart of the create-branch race above. Seed a record
+    // older than the cooldown so every racer tries to reclaim it. Unlike the
+    // cooldownMs = 0 race below, the winner count here IS deterministic: a racer
+    // that read the seed loses the CAS to the winner, and a racer that read the
+    // winner's fresh createdAt is inside the window and blocked. This is the
+    // suite's anti-spam guard for the reclaim path: a non-atomic reclaim would
+    // let several concurrent requests each send an OTC email within the cooldown.
+    await PendingOtcTokenModel.create({
+      email: EMAIL,
+      nonce: 'seed-nonce',
+      createdAt: new Date(Date.now() - COOLDOWN_MS - 1000),
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => pendingOtcTokenRepository.tryReserveSlot(EMAIL, COOLDOWN_MS))
+    );
+
+    expect(results.filter(r => r.allowed)).toHaveLength(1);
+    expect(results.filter(r => !r.allowed)).toHaveLength(4);
+    expect(await PendingOtcTokenModel.countDocuments({ email: EMAIL })).toBe(1);
+  });
+
   it('confirmReservation after a successful reserve persists the real nonce', async () => {
     const reservation = await pendingOtcTokenRepository.tryReserveSlot(EMAIL, COOLDOWN_MS);
     expect(reservation.allowed).toBe(true);
@@ -130,12 +153,15 @@ describe('PendingOtcToken.tryReserveSlot — atomic cooldown enforcement', () =>
       //
       // What the CAS does guarantee, under any scheduling:
       //   - at least one racer wins
-      //   - winners supersede each other: strictly increasing, DISTINCT reservedAt values.
-      //     The pre-fix bare `createdAt < now` filter let every racer win off the same
-      //     stale snapshot (any prior write is always "in the past" relative to a later
-      //     `now`), which shows up here as duplicate reservedAt values.
+      //   - winners supersede each other: strictly increasing, DISTINCT reservedAt values
+      //     (duplicates would mean two same-millisecond wins, the old non-atomic
+      //     check-then-act shape described in the file header)
       //   - the record is updated in place, never duplicated
       //   - only the LAST winner holds a confirmable reservation; superseded winners fail
+      //
+      // A non-atomic reclaim regression is NOT reliably observable at cooldown 0 (a
+      // stale-snapshot win looks like a legitimate resend); the deterministic guard for
+      // that is the stale-record reclaim race test in the outer describe.
       const winners = results.filter((r): r is { allowed: true; reservedAt: Date } => r.allowed);
       expect(winners.length).toBeGreaterThanOrEqual(1);
 
