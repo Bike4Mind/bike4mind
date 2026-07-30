@@ -30,6 +30,48 @@ export const normalizeTagPrefix = (prefix: string | undefined | null): string | 
 export const isReservedTagPrefix = (prefix: string | undefined | null): boolean =>
   typeof prefix === 'string' && prefix.trim().startsWith(DATALAKE_TAG_PREFIX);
 
+/**
+ * True when two `fileTagPrefix` values would match each other's tags, so two lakes carrying them
+ * cannot safely coexist in one scope: they would share their prefix-tagged files, and permanently
+ * deleting either would take files the other holds.
+ *
+ * BIDIRECTIONAL, because a `docs:` lake matches a `docs:legal:foo` tag - so `docs:` and
+ * `docs:legal:` conflict whichever way round they are declared. Unusable prefixes (empty, or
+ * missing the trailing colon) never overlap: no query arm is built from them.
+ *
+ * Case-SENSITIVE, matching the membership predicate it guards: that builds an unflagged
+ * `new RegExp('^' + prefix)`, so a `Docs:` lake and a `docs:` lake genuinely cannot reach each
+ * other's tags and refusing the pair would be a false alarm. Comparing case-insensitively here
+ * would make the guard a different rule from the thing it protects.
+ *
+ * Shared by the create/visibility guards, the teardown warning, and the wizard's form-level
+ * mirror, so all of them agree on what counts as a conflict.
+ */
+export const tagPrefixesOverlap = (a: string | undefined | null, b: string | undefined | null): boolean => {
+  const left = normalizeTagPrefix(a);
+  const right = normalizeTagPrefix(b);
+  if (!left || !right) return false;
+  return left === right || left.startsWith(right) || right.startsWith(left);
+};
+
+/**
+ * The reason a `fileTagPrefix` is unusable, as user-facing copy, or null when it is fine. Shared
+ * by the wizard steps that can both edit a prefix so their wording cannot drift apart; the server
+ * rejects both cases at create.
+ */
+export const tagPrefixIssue = (
+  prefix: string | undefined | null,
+  overlapping?: { name: string; fileTagPrefix: string } | null
+): string | null => {
+  if (isReservedTagPrefix(prefix)) {
+    return `"${DATALAKE_TAG_PREFIX}" is reserved for lake membership. Pick another prefix, such as legal:`;
+  }
+  if (overlapping) {
+    return `This prefix overlaps the data lake "${overlapping.name}" (${overlapping.fileTagPrefix}). They would share files, so deleting either one would take the other's.`;
+  }
+  return null;
+};
+
 export interface DataLakeConfig {
   id: string;
   /**

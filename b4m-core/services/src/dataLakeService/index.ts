@@ -3,6 +3,8 @@ export * from './utils';
 export * from './ports';
 export * from './assertLakeAccess';
 export * from './authorizeLakeWrite';
+export * from './lakeMembershipScope';
+export * from './tagPrefixCollision';
 export * from './createDataLake';
 export * from './updateDataLake';
 export * from './setLakeVisibility';
