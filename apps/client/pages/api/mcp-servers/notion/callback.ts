@@ -1,3 +1,4 @@
+import type { NextApiResponse } from 'next';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
 import {
@@ -16,7 +17,7 @@ const OAUTH_TIMEOUT = 30000;
 const NOTION_API_TIMEOUT = 10000;
 
 /** Redirect to the integrations page with a specific error message shown as a toast. */
-function redirectWithError(res: any, message: string) {
+function redirectWithError(res: NextApiResponse, message: string) {
   res.setHeader('Set-Cookie', [
     `notion_error=${encodeURIComponent(message)}; Path=/; Max-Age=60; SameSite=Lax; Secure`,
   ]);
@@ -209,7 +210,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       auditLogger.failure('token_exchange_timeout');
       return redirectWithError(
         res,
-        'Notion connection timed out while exchanging credentials. Notion may be slow — please try again.'
+        'Notion connection timed out while exchanging credentials. Notion may be slow -- please try again.'
       );
     }
     throw fetchError;
