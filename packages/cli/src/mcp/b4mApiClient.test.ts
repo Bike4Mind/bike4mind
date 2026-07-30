@@ -3,10 +3,12 @@ import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 
 
 const mockGet = vi.fn();
 const mockPost = vi.fn();
+const mockAxiosPost = vi.fn();
 vi.mock('../auth/ApiClient', () => ({
   ApiClient: class {
     get = mockGet;
     post = mockPost;
+    getAxiosInstance = () => ({ post: mockAxiosPost });
   },
 }));
 
@@ -120,6 +122,106 @@ describe('B4mApiClient', () => {
     mockGet.mockResolvedValue({ id: 'f1' });
     await client.getFile('f1');
     expect(mockGet).toHaveBeenCalledWith('/api/files/f1');
+  });
+
+  it('generates a sound effect, requesting bytes and reading the persisted-file headers', async () => {
+    mockAxiosPost.mockResolvedValue({
+      data: Buffer.from('audio-bytes'),
+      headers: {
+        'content-type': 'audio/mpeg',
+        'x-b4m-audio-saved': 'true',
+        'x-b4m-audio-fab-file-id': 'fab1',
+        'x-b4m-audio-file-name': 'sound-effect-thunderclap.mp3',
+        'x-b4m-audio-file-url': 'https://signed.example/audio.mp3',
+      },
+    });
+
+    const result = await client.generateSoundEffect({
+      provider: 'elevenlabs',
+      text: 'thunderclap',
+      durationSeconds: 3,
+      promptInfluence: 0.5,
+      format: 'mp3_44100_128',
+    });
+
+    expect(mockAxiosPost).toHaveBeenCalledWith(
+      '/api/ai/sound-effects',
+      {
+        provider: 'elevenlabs',
+        text: 'thunderclap',
+        durationSeconds: 3,
+        promptInfluence: 0.5,
+        format: 'mp3_44100_128',
+      },
+      { responseType: 'arraybuffer' }
+    );
+    // The signed URL comes straight off the header, not a re-fetch, so the CLI never
+    // hits the moderation race that GET /api/files/:id would on a just-created file.
+    expect(result).toEqual({
+      audio: Buffer.from('audio-bytes'),
+      contentType: 'audio/mpeg',
+      saved: true,
+      fabFileId: 'fab1',
+      fileName: 'sound-effect-thunderclap.mp3',
+      fileUrl: 'https://signed.example/audio.mp3',
+    });
+  });
+
+  it('drops the persisted-file headers when the save header is not "true"', async () => {
+    // A duplicated header arrives as an array; only the scalar string form is kept,
+    // and none of the file headers are read at all unless the save actually succeeded.
+    mockAxiosPost.mockResolvedValue({
+      data: Buffer.from('audio-bytes'),
+      headers: {
+        'content-type': 'audio/mpeg',
+        'x-b4m-audio-saved': 'false',
+        'x-b4m-audio-fab-file-id': ['fab1', 'fab2'],
+        'x-b4m-audio-file-url': 'https://signed.example/audio.mp3',
+      },
+    });
+
+    const result = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'wind' });
+
+    expect(result.saved).toBe(false);
+    expect(result.fabFileId).toBeUndefined();
+    expect(result.fileName).toBeUndefined();
+    expect(result.fileUrl).toBeUndefined();
+  });
+
+  it('omits optional sound-effect fields and reports not-saved when no fab-file header is set', async () => {
+    mockAxiosPost.mockResolvedValue({
+      data: Buffer.from('bytes'),
+      headers: { 'content-type': 'audio/mpeg' },
+    });
+
+    const result = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'wind' });
+
+    expect(mockAxiosPost).toHaveBeenCalledWith(
+      '/api/ai/sound-effects',
+      { provider: 'elevenlabs', text: 'wind' },
+      { responseType: 'arraybuffer' }
+    );
+    expect(result.saved).toBe(false);
+    expect(result.fabFileId).toBeUndefined();
+  });
+
+  it('decodes an arraybuffer error body so mapApiError can read the server message', async () => {
+    const bodyBytes = Buffer.from(JSON.stringify({ error: 'Sound generation failed' }));
+    mockAxiosPost.mockRejectedValue(axiosError(502, { data: bodyBytes }));
+
+    await expect(client.generateSoundEffect({ provider: 'elevenlabs', text: 'x' })).rejects.toMatchObject({
+      response: { data: { error: 'Sound generation failed' } },
+    });
+  });
+
+  it('decodes an already-stringified error body (non-Node adapter shape)', async () => {
+    mockAxiosPost.mockRejectedValue(
+      axiosError(503, { data: JSON.stringify({ error: 'No elevenlabs API key configured' }) })
+    );
+
+    await expect(client.generateSoundEffect({ provider: 'elevenlabs', text: 'x' })).rejects.toMatchObject({
+      response: { data: { error: 'No elevenlabs API key configured' } },
+    });
   });
 
   it('lists projects with nested pagination and normalizes the envelope', async () => {
