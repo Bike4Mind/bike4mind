@@ -28,6 +28,8 @@ import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettin
 import GridViewOutlinedIcon from '@mui/icons-material/GridViewOutlined';
 import ViewListOutlinedIcon from '@mui/icons-material/ViewListOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import SpeedIcon from '@mui/icons-material/Speed';
+import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
 import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
@@ -43,11 +45,11 @@ import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import {
+  ChipVariant,
   getModelPriceTier,
   isOpenAIModel,
   getModelSpeedVariant,
   getModelSpeedTooltip,
-  getTopUsedModelsFromStats,
   getModelSpeedFromStats,
   getPriceTierTooltip,
   isNewModel,
@@ -55,7 +57,7 @@ import {
 import MetadataChip from './AISettings/MetaDataChips';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { isImageModel } from '@client/app/utils/commands';
-import { green, greenAlpha, orange } from '@client/app/utils/themes/colors';
+import { green, greenAlpha, orange, red } from '@client/app/utils/themes/colors';
 import { useFavoriteModels } from '@client/app/hooks/useFavoriteModels';
 
 // List of model IDs to exclude from the dropdown
@@ -243,6 +245,12 @@ export const getModelBackend = (model: ModelInfo): string => {
 // Layout of the model list: roomy cards in a 2-up grid, or compact single-column rows.
 export type ModelViewMode = 'grid' | 'list';
 
+// Cost and speed render as icon-only chips in a neutral frame, so the glyph says which
+// dimension and its colour says the value. Reuses the existing tier/speed variants as the
+// scale rather than a second set of thresholds.
+const metricIconColor = (variant: ChipVariant): string =>
+  variant === 'green' ? green[800] : variant === 'yellow' ? orange[450] : red[400];
+
 const ModelOption = React.memo(
   ({
     model,
@@ -253,7 +261,6 @@ const ModelOption = React.memo(
     onSettingsClick,
     isFavorite = false,
     onToggleFavorite,
-    topUsedModelIds,
     avgResponseTimeByModel,
     statsLoading,
     mode,
@@ -267,7 +274,6 @@ const ModelOption = React.memo(
     onSettingsClick?: (model: ModelInfo) => void;
     isFavorite?: boolean;
     onToggleFavorite?: (modelId: string) => void;
-    topUsedModelIds: string[];
     avgResponseTimeByModel: Record<string, number>;
     statsLoading: boolean;
     mode: 'dark' | 'light';
@@ -275,7 +281,6 @@ const ModelOption = React.memo(
   }) => {
     const priceTierInfo = getModelPriceTier(model);
     const modelSpeed = getModelSpeedFromStats(model.id, avgResponseTimeByModel);
-    const isPopular = topUsedModelIds.includes(model.id);
     // A disabled model stays in the list so users can see it, but it can't be picked:
     // no click handler, a not-allowed cursor, dimmed, and no hover affordance.
     const isDisabled = !!model.disabled;
@@ -406,78 +411,51 @@ const ModelOption = React.memo(
     );
 
     const metadataChips = (
-      <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-        {/* Unavailable Chip — model is disabled for this deployment (e.g. gated upstream) */}
-        {isDisabled && (
+      <Stack
+        direction="row"
+        spacing={1}
+        useFlexGap
+        flexWrap="wrap"
+        alignItems="center"
+        // Levels the text chips with the 32px icon chips. Set from the row rather than in
+        // getChipStyles, which is shared with the model-details dialog.
+        sx={{ '& .MuiChip-root': { height: '32px' } }}
+      >
+        {isDisabled ? (
+          // A disabled model can't be picked, so cost and speed are noise: say why and stop.
           <MetadataChip
             label="Unavailable"
             mode={mode}
             variant="red"
             tooltip={model.disabledReason ?? 'This model is currently unavailable'}
           />
-        )}
-        {/* Latest Model Chip */}
-        {isNewModel(model) && (
-          <MetadataChip
-            label="New"
-            mode={mode}
-            variant="purple"
-            tooltip="This model is released in the last 3 months"
-          />
-        )}
+        ) : (
+          <>
+            {isNewModel(model) && (
+              <MetadataChip
+                label="New"
+                mode={mode}
+                variant="purple"
+                tooltip="This model is released in the last 3 months"
+              />
+            )}
 
-        {/* Popular Model Chip - based on usage data */}
-        {!statsLoading && isPopular && (
-          <MetadataChip
-            label="Popular"
-            mode={mode}
-            variant="blue-filled"
-            tooltip="This is one of the most used models"
-          />
-        )}
+            <MetadataChip
+              label={`${priceTierInfo.tier} cost`}
+              mode={mode}
+              tooltip={getPriceTierTooltip(priceTierInfo.tier)}
+              icon={<AttachMoneyIcon sx={{ fontSize: '20px', color: metricIconColor(priceTierInfo.variant) }} />}
+            />
 
-        {/* Price Tier */}
-        <MetadataChip
-          label={priceTierInfo.tier}
-          startDecorator={
-            <Box
-              sx={{
-                width: 12,
-                height: 12,
-                borderRadius: '50%',
-                backgroundColor:
-                  priceTierInfo.variant === 'green'
-                    ? green[800]
-                    : priceTierInfo.variant === 'yellow'
-                      ? orange[450]
-                      : 'red',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '10px',
-                fontWeight: 'bold',
-                color: 'common.white',
-                mr: '4px',
-                p: 0.5,
-              }}
-            >
-              $
-            </Box>
-          }
-          tooltip={getPriceTierTooltip(priceTierInfo.tier)}
-          variant={priceTierInfo.variant}
-          isMaximum={false}
-          mode={mode}
-        />
-
-        {/* Speed Chip - based on performance data */}
-        {!statsLoading && modelSpeed && (
-          <MetadataChip
-            label={modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)}
-            mode={mode}
-            variant={getModelSpeedVariant(modelSpeed)}
-            tooltip={getModelSpeedTooltip(modelSpeed)}
-          />
+            {!statsLoading && modelSpeed && (
+              <MetadataChip
+                label={`${modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)} speed`}
+                mode={mode}
+                tooltip={getModelSpeedTooltip(modelSpeed)}
+                icon={<SpeedIcon sx={{ fontSize: '20px', color: metricIconColor(getModelSpeedVariant(modelSpeed)) }} />}
+              />
+            )}
+          </>
         )}
       </Stack>
     );
@@ -667,10 +645,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
   // Lift model stats into parent - avoids N redundant query subscriptions and computations in ModelOption
   const { data: modelStats, isLoading: statsLoading } = useModelStats();
-  const topUsedModelIds = useMemo(
-    () => getTopUsedModelsFromStats(modelStats?.popularity ?? {}, 3),
-    [modelStats?.popularity]
-  );
   const avgResponseTimeByModel = modelStats?.avgResponseTime ?? emptyRecord;
 
   // State for user-toggled accordion backends (manual expand/collapse)
@@ -1370,7 +1344,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                         onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                         isFavorite={true}
                         onToggleFavorite={toggleFavorite}
-                        topUsedModelIds={topUsedModelIds}
                         avgResponseTimeByModel={avgResponseTimeByModel}
                         statsLoading={statsLoading}
                         mode={mode}
@@ -1503,7 +1476,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
-                                topUsedModelIds={topUsedModelIds}
                                 avgResponseTimeByModel={avgResponseTimeByModel}
                                 statsLoading={statsLoading}
                                 mode={mode}
@@ -1552,7 +1524,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
-                                topUsedModelIds={topUsedModelIds}
                                 avgResponseTimeByModel={avgResponseTimeByModel}
                                 statsLoading={statsLoading}
                                 mode={mode}
@@ -1601,7 +1572,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
-                                topUsedModelIds={topUsedModelIds}
                                 avgResponseTimeByModel={avgResponseTimeByModel}
                                 statsLoading={statsLoading}
                                 mode={mode}
@@ -1632,7 +1602,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                           isFavorite={isFavorite(modelInfo.id)}
                           onToggleFavorite={toggleFavorite}
-                          topUsedModelIds={topUsedModelIds}
                           avgResponseTimeByModel={avgResponseTimeByModel}
                           statsLoading={statsLoading}
                           mode={mode}
