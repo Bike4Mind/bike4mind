@@ -250,6 +250,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
+  async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
+    const result = await this.fabFileModel.find({ batchId, deletedAt: null });
+    return result.map(d => d.toJSON());
+  }
+
   async countByUserIdAndTag(userId: string, tag: string): Promise<number> {
     const result = await this.fabFileModel.countDocuments({
       userId,

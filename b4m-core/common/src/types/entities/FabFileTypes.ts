@@ -299,6 +299,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findAllByIds(ids: string[]): Promise<IFabFileDocument[]>;
 
+  /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
+  findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
+
   /**
    * Search for files.
    * @param userId - The ID of the user.

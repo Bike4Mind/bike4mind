@@ -1,8 +1,86 @@
-import type { TaxonomyResult } from '@client/app/stores/useDataLakeWizardStore';
+import type {
+  InferTaxonomyResponse,
+  TaxonomyFileAssignment,
+  TaxonomyTag,
+  TaxonomyTagSet,
+} from '../types/entities/DataLakeTypes';
 
 export interface AppliedTag {
   name: string;
   strength: number;
+}
+
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+
+const clampStrength = (value: unknown, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : fallback;
+
+/**
+ * The editable suffix is the tag name with its inferred prefix stripped, so the prefix is
+ * never stored per-tag (it lives once in the caller's tagPrefix). A name that does not carry
+ * the inferred prefix keeps its whole text as the suffix.
+ */
+const deriveSuffix = (fullName: string, sourcePrefix: string): string => {
+  const trimmed = fullName.trim();
+  if (!sourcePrefix) return trimmed;
+  const p = sourcePrefix.endsWith(':') ? sourcePrefix : `${sourcePrefix}:`;
+  return trimmed.toLowerCase().startsWith(p.toLowerCase()) ? trimmed.slice(p.length) : trimmed;
+};
+
+/**
+ * Split each inferred category into its stable full name (originalName, the join key for
+ * per-file assignments) and its editable suffix. Drops entries the model returned without a
+ * usable tag name, or that reduce to an empty suffix (the tag was nothing but the prefix).
+ * The single boundary where raw inference JSON becomes trusted `TaxonomyTag[]` - called by
+ * both the wizard (historically) and the post-upload background job, so a malformed
+ * model response can never propagate past here.
+ */
+export function sanitizeCategories(
+  categories: InferTaxonomyResponse['categories'],
+  sourcePrefix: string
+): TaxonomyTag[] {
+  if (!Array.isArray(categories)) return [];
+  // originalName is the join key for update/delete/merge, so it must be unique: a model that
+  // repeats a tagName would otherwise make one card's edit hit both.
+  const seen = new Set<string>();
+  return categories
+    .filter(cat => cat && isNonEmptyString(cat.tagName))
+    .map(cat => {
+      const originalName = cat.tagName.trim();
+      return {
+        suffix: deriveSuffix(originalName, sourcePrefix),
+        originalName,
+        strength: clampStrength(cat.confidence, 0.7),
+        source: 'ai' as const,
+        matchingFolders: Array.isArray(cat.matchingFolders) ? cat.matchingFolders.filter(isNonEmptyString) : [],
+        deleted: false,
+      };
+    })
+    .filter(t => {
+      if (t.suffix.length === 0) return false;
+      const key = t.originalName.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+export function sanitizeFileAssignments(
+  assignments: InferTaxonomyResponse['fileAssignments']
+): TaxonomyFileAssignment[] {
+  if (!Array.isArray(assignments)) return [];
+  return assignments
+    .filter(entry => entry && isNonEmptyString(entry.relativePath))
+    .map(entry => ({
+      // Trim on write to match how categories are stored: tagsForFile matches assignments by
+      // strict path equality, so a padded path would otherwise miss its per-file suggestions.
+      relativePath: entry.relativePath.trim(),
+      suggestedTags: Array.isArray(entry.suggestedTags)
+        ? entry.suggestedTags
+            .filter(tag => tag && isNonEmptyString(tag.name))
+            .map(tag => ({ name: tag.name.trim(), strength: clampStrength(tag.strength, 0.7) }))
+        : [],
+    }));
 }
 
 /**
@@ -58,14 +136,16 @@ export function folderMatches(fileFolderSegments: string[], matchingFolder: stri
 }
 
 /**
- * Tags to apply to one file at upload time: the folder tag (always, so folder structure
- * stays queryable and every nested file gets at least one tag) plus the reviewed taxonomy
- * categories covering it. This is what makes the Taxonomy step's edits/deletes real -
- * deleted categories are dropped, and each category's applied name is `prefix + suffix`, so
- * the shared prefix (also the folder tag's) guarantees one namespace per lake. Per-file
- * assignments are matched via each tag's originalName (the inference join key).
+ * Tags to apply to one file: the folder tag (always, so folder structure stays queryable
+ * and every nested file gets at least one tag) plus the reviewed taxonomy categories
+ * covering it. Deleted categories are dropped, and each category's applied name is
+ * `prefix + suffix`, so the shared prefix (also the folder tag's) guarantees one namespace
+ * per lake. Per-file assignments are matched via each tag's originalName (the inference join
+ * key). An empty `taxonomy` (no categories reviewed/accepted) falls back to the folder tag
+ * alone - this is both the original create path (no AI step) and any lake where AI tagging
+ * was never opted into.
  */
-export function tagsForFile(relativePath: string, taxonomy: TaxonomyResult, tagPrefix: string): AppliedTag[] {
+export function tagsForFile(relativePath: string, taxonomy: TaxonomyTagSet, tagPrefix: string): AppliedTag[] {
   const folderTags = folderTagForFile(relativePath, tagPrefix);
   const active = taxonomy.tags.filter(t => !t.deleted);
   if (active.length === 0) return folderTags;
@@ -85,7 +165,7 @@ export function tagsForFile(relativePath: string, taxonomy: TaxonomyResult, tagP
   const assignment = taxonomy.fileAssignments.find(a => a.relativePath === relativePath);
   for (const suggested of assignment?.suggestedTags ?? []) {
     const tag = byOriginalName.get(suggested.name.toLowerCase());
-    if (!tag) continue; // deleted by the user, or a tag the model never declared as a category
+    if (!tag) continue; // deleted by the reviewer, or a tag the model never declared as a category
     add(`${prefix}${tag.suffix}`, suggested.strength);
   }
 
@@ -103,10 +183,10 @@ export function tagsForFile(relativePath: string, taxonomy: TaxonomyResult, tagP
   return [...taxonomyTags, ...folderTags.filter(t => !seen.has(t.name))];
 }
 
-/** Union of every tag the batch will apply, for the batch record's appliedTags summary. */
+/** Union of every tag a set of files will carry, for the batch record's appliedTags summary. */
 export function appliedTagsForBatch(
   files: { relativePath: string }[],
-  taxonomy: TaxonomyResult,
+  taxonomy: TaxonomyTagSet,
   tagPrefix: string
 ): AppliedTag[] {
   const strongest = new Map<string, number>();

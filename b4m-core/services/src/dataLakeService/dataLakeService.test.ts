@@ -769,10 +769,12 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
 
   const late = DEFAULT_STUCK_BATCH_TIMEOUT_MS + 10_000;
 
-  it('emits the forced-terminal metric and the stuck gauge when a batch is forced', async () => {
+  it('emits the forced-terminal metric (passed the full post-transition batch) and the stuck gauge', async () => {
     const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
     await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
-    expect(metrics.emitForcedTerminal).toHaveBeenCalledWith('b1', 'lake1');
+    // The full batch, not just its ids: app callers use this to also backstop the taxonomy
+    // enqueue, which needs wantsTaxonomy/dataLakeId/userId off the doc.
+    expect(metrics.emitForcedTerminal).toHaveBeenCalledWith(batch({ status: 'completed_with_errors' }));
     expect(metrics.emitStuckGauge).toHaveBeenCalledWith(1);
   });
 

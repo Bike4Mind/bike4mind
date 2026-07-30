@@ -22,6 +22,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useCleanupDataLake: mutation,
     useGetArchivedDataLakes: () => ({ data: undefined }),
     useGetDeletedDataLakes: () => ({ data: undefined }),
+    useActiveDataLakeBatches: () => ({ data: [] as unknown[] }),
     useBrowsePublicDataLakes: () => ({
       data: { pages: [{ data: [], total: 0 }] },
       isLoading: false,

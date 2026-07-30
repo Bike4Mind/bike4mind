@@ -541,6 +541,93 @@ describe('DataLakeBatchRepository.findStuck — global cross-user stale scan', (
   });
 });
 
+describe('DataLakeBatchRepository.setTaxonomyStatusIfActive — guarded taxonomy-phase transition', () => {
+  setupMongoTest();
+
+  const activeBatch = () =>
+    dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', taxonomyStatus: 'queued' } as never);
+
+  it('moves a matching phase forward and persists extra fields', async () => {
+    const batch = await activeBatch();
+    const started = new Date('2024-01-01T00:00:00Z');
+    const moved = await dataLakeBatchRepository.setTaxonomyStatusIfActive(batch.id, ['queued'], 'analyzing', {
+      taxonomyStartedAt: started,
+    });
+    expect(moved?.taxonomyStatus).toBe('analyzing');
+    expect(moved?.taxonomyStartedAt).toEqual(started);
+  });
+
+  it('is a no-op when the current phase is not in `from`, so a redelivered message cannot double-process', async () => {
+    const batch = await activeBatch();
+    await dataLakeBatchRepository.setTaxonomyStatusIfActive(batch.id, ['queued'], 'analyzing');
+
+    // A second, redelivered "queued -> analyzing" claim must lose the guard.
+    const lost = await dataLakeBatchRepository.setTaxonomyStatusIfActive(batch.id, ['queued'], 'analyzing');
+    expect(lost).toBeNull();
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.taxonomyStatus).toBe('analyzing');
+  });
+
+  it('persists taxonomySuggestions on the ready transition', async () => {
+    const batch = await activeBatch();
+    await dataLakeBatchRepository.setTaxonomyStatusIfActive(batch.id, ['queued'], 'analyzing');
+    const ready = await dataLakeBatchRepository.setTaxonomyStatusIfActive(batch.id, ['analyzing'], 'ready', {
+      taxonomySuggestions: { tags: [], fileAssignments: [] },
+    });
+    expect(ready?.taxonomyStatus).toBe('ready');
+    expect(ready?.taxonomySuggestions).toEqual({ tags: [], fileAssignments: [] });
+  });
+});
+
+describe('DataLakeBatchRepository.findStuckTaxonomy — global cross-user stale scan', () => {
+  setupMongoTest();
+
+  const CUTOFF = new Date('2021-01-01T00:00:00Z');
+
+  const seedBatch = async (taxonomyStatus: string, updatedAt?: Date) => {
+    const b = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', taxonomyStatus } as never);
+    if (updatedAt) {
+      await mongoose.models.DataLakeBatch.updateOne({ _id: b.id }, { $set: { updatedAt } }, { timestamps: false });
+    }
+    return b;
+  };
+
+  it('returns only stale non-terminal taxonomy phases (excludes fresh, ready, applied, and none)', async () => {
+    const stale = await seedBatch('analyzing', new Date('2020-01-01T00:00:00Z'));
+    await seedBatch('analyzing'); // fresh -> excluded
+    await seedBatch('ready', new Date('2020-01-01T00:00:00Z')); // stale but terminal-ish -> excluded
+    await seedBatch('none', new Date('2020-01-01T00:00:00Z')); // never opted in -> excluded
+    const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
+    expect(stuck.map(b => b.id)).toEqual([stale.id]);
+  });
+});
+
+describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId — list-surface query', () => {
+  setupMongoTest();
+
+  const seed = (taxonomyStatus: string, userId = 'u1') =>
+    dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId, taxonomyStatus } as never);
+
+  it('includes queued/analyzing/ready/failed but not none or applied', async () => {
+    const queued = await seed('queued');
+    const analyzing = await seed('analyzing');
+    const ready = await seed('ready');
+    const failed = await seed('failed');
+    await seed('none');
+    await seed('applied');
+
+    const attention = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
+    expect(attention.map(b => b.id).sort()).toEqual([queued.id, analyzing.id, ready.id, failed.id].sort());
+  });
+
+  it('scopes to the requesting user only', async () => {
+    await seed('ready', 'u1');
+    await seed('ready', 'u2');
+    const attention = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
+    expect(attention).toHaveLength(1);
+  });
+});
+
 describe('DataLakeRepository — systemPrompt round-trip (#843)', () => {
   setupMongoTest();
 

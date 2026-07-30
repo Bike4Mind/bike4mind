@@ -186,6 +186,25 @@ export interface IDataLakeBatchFile {
   error?: string;
 }
 
+/**
+ * Background AI-tagging phase for a batch, orthogonal to `BatchStatus`. `BatchStatus` already
+ * means "ingest (upload/chunk/vectorize) is done" and terminal-vs-not there is load-bearing for
+ * the reconciler/list/UI; layering post-ingest AI analysis onto it would make an already-
+ * "completed" batch look reopened. `'none'` covers both "never opted in" and append-mode
+ * batches (which never offer the opt-in at all).
+ */
+export type TaxonomyStatus = 'none' | 'queued' | 'analyzing' | 'ready' | 'applying' | 'applied' | 'failed';
+
+/** Non-terminal taxonomy phases - the ones the stuck-job reconciler may force to 'failed'. */
+export const TAXONOMY_NON_TERMINAL_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'applying'];
+
+/**
+ * Every phase the Data Lakes list needs to show a badge for: still running, OR finished and
+ * awaiting the user (ready to review / failed and dismissible). Excludes 'none' (never opted
+ * in) and 'applied' (already resolved, nothing left to surface).
+ */
+export const TAXONOMY_ATTENTION_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'ready', 'failed'];
+
 export interface IDataLakeBatch {
   dataLakeId: string;
   userId: string;
@@ -218,6 +237,23 @@ export interface IDataLakeBatch {
 
   /** Set only when a terminal status was reached by something other than normal completion (e.g. 'reconciler'). */
   completionReason?: BatchCompletionReason;
+
+  /** Opted into background AI tag suggestion at batch-create time. Never true in append mode. */
+  wantsTaxonomy?: boolean;
+  /** Background AI-tagging phase; see `TaxonomyStatus`. */
+  taxonomyStatus?: TaxonomyStatus;
+  /** When the current 'queued'/'analyzing'/'applying' phase started - the stuck-job reconciler's cutoff clock. */
+  taxonomyStartedAt?: Date;
+  /**
+   * The AI's suggested categories/assignments, once `taxonomyStatus` is 'ready' - already
+   * sanitized (see sanitizeCategories/sanitizeFileAssignments in utils/dataLakeTaxonomy.ts)
+   * against the batch's already-fixed tag prefix, so the review panel and the apply
+   * endpoint both read one trusted shape. No `suggestedPrefix`/`suggestedName` here: by the
+   * time analysis runs (post-upload), the lake's name and prefix are already set.
+   */
+  taxonomySuggestions?: TaxonomyTagSet;
+  /** Human-readable failure reason, set alongside `taxonomyStatus: 'failed'`. */
+  taxonomyError?: string;
 }
 
 export interface IDataLakeBatchDocument extends IDataLakeBatch, IMongoDocument {}
@@ -267,6 +303,31 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     batchId: string,
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
   ): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Guarded taxonomy-phase transition: set `taxonomyStatus` only if it is still one of `from`,
+   * so a redelivered queue message or a race between the reconciler and a live worker can only
+   * let one caller win. `extra` carries fields that travel with the transition (e.g.
+   * `taxonomyStartedAt` on `-> queued`, `taxonomySuggestions`/`taxonomyError` on the terminal ones).
+   */
+  setTaxonomyStatusIfActive(
+    batchId: string,
+    from: TaxonomyStatus[],
+    to: TaxonomyStatus,
+    extra?: Partial<Pick<IDataLakeBatch, 'taxonomyStartedAt' | 'taxonomySuggestions' | 'taxonomyError'>>
+  ): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Global cross-user scan for the taxonomy stuck-job reconciler: batches whose `taxonomyStatus`
+   * is still non-terminal and whose `taxonomyStartedAt` is older than `cutoff`, oldest-first.
+   * Mirrors `findStuck`'s shape, served by the `{ taxonomyStatus: 1, updatedAt: 1 }` index.
+   */
+  findStuckTaxonomy(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
+  /**
+   * Batches whose `taxonomyStatus` is in `TAXONOMY_ATTENTION_STATUSES` - running or awaiting
+   * review/dismissal. Deliberately independent of `status` (ingest phase): the common case is
+   * an already-'completed' batch whose taxonomy phase is still 'analyzing', which
+   * findActiveByUserId's status-based filter would miss entirely.
+   */
+  findTaxonomyAttentionByUserId(userId: string): Promise<IDataLakeBatchDocument[]>;
 }
 
 // ── AI Taxonomy Inference ───────────────────────────────────────────────────
@@ -291,6 +352,36 @@ export interface InferTaxonomyResponse {
   suggestedPrefix: string;
   suggestedName: string;
   categories: TaxonomyCategory[];
+  fileAssignments: TaxonomyFileAssignment[];
+}
+
+// ── Taxonomy Tag Application ─────────────────────────────────────────────────
+// Shared between the client wizard (formerly the taxonomy review step; now unused there) and
+// the server-side post-upload apply path, so both compute applied tags with one
+// implementation (see utils/dataLakeTaxonomy.ts in this package).
+
+export interface TaxonomyTag {
+  /** The editable part of the tag AFTER the shared prefix, e.g. "type:contract". */
+  suffix: string;
+  /** The full name inference assigned (incl. its original prefix) - the stable join key across edits. */
+  originalName: string;
+  /** Confidence/relevance score 0.0-1.0 */
+  strength: number;
+  /** How this tag was inferred */
+  source: 'folder' | 'ai';
+  /** Folder paths this tag covers; drives which files get it */
+  matchingFolders: string[];
+  /** Whether this tag has been soft-deleted/rejected by the reviewer */
+  deleted: boolean;
+}
+
+/**
+ * The portable subset of reviewed-taxonomy state `tagsForFile`/`appliedTagsForBatch` need to
+ * compute applied tags. A caller with extra UI-only state (e.g. the old wizard's
+ * `attempted`/`analyzing` flags) can pass a superset - only `tags`/`fileAssignments` are read.
+ */
+export interface TaxonomyTagSet {
+  tags: TaxonomyTag[];
   fileAssignments: TaxonomyFileAssignment[];
 }
 

@@ -33,6 +33,8 @@ import {
   questExportQueue,
   dataLakeCleanupQueue,
   dataLakeCleanupQueueDLQ,
+  dataLakeTaxonomyQueue,
+  dataLakeTaxonomyQueueDLQ,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -116,6 +118,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'optihashi-run-completion': optihashiRunCompletionQueueDLQ.url,
     'bob-run': bobRunQueueDLQ.url,
     'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
+    'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
   },
 });
 
@@ -162,6 +165,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     optihashiRunCompletionQueue: optihashiRunCompletionQueue.url,
     bobRunQueue: bobRunQueue.url,
     dataLakeCleanupQueue: dataLakeCleanupQueue.url,
+    dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
   },
 });
 

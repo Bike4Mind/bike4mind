@@ -12,8 +12,15 @@ import type {
   BatchCounterField,
   AccessContext,
   DataLakeStatus,
+  TaxonomyStatus,
+  IDataLakeBatch,
 } from '@bike4mind/common';
-import { BATCH_NON_TERMINAL_STATUSES, normalizeEntitlementKey } from '@bike4mind/common';
+import {
+  BATCH_NON_TERMINAL_STATUSES,
+  TAXONOMY_NON_TERMINAL_STATUSES,
+  TAXONOMY_ATTENTION_STATUSES,
+  normalizeEntitlementKey,
+} from '@bike4mind/common';
 
 const DATA_LAKE_STATUSES: DataLakeStatus[] = [
   'draft',
@@ -396,6 +403,17 @@ const DataLakeBatchSchema = new mongoose.Schema(
     completedAt: { type: Date },
     // Set only on a non-normal terminal transition (e.g. 'reconciler'); absent on normal completion.
     completionReason: { type: String, enum: ['reconciler'] },
+    // Background AI-tagging phase - orthogonal to `status` (see TaxonomyStatus's doc
+    // comment for why it isn't layered onto the ingest status instead).
+    wantsTaxonomy: { type: Boolean, default: false },
+    taxonomyStatus: {
+      type: String,
+      enum: ['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed'],
+      default: 'none',
+    },
+    taxonomyStartedAt: { type: Date },
+    taxonomySuggestions: { type: Object },
+    taxonomyError: { type: String },
   },
   {
     timestamps: true,
@@ -409,6 +427,8 @@ DataLakeBatchSchema.index({ userId: 1, status: 1 });
 DataLakeBatchSchema.index({ dataLakeId: 1, status: 1 });
 // Read-time reconciler scan: non-terminal batches ordered by staleness.
 DataLakeBatchSchema.index({ status: 1, updatedAt: 1 });
+// Same shape, for the taxonomy stuck-job reconciler.
+DataLakeBatchSchema.index({ taxonomyStatus: 1, updatedAt: 1 });
 
 const DataLakeBatchModel =
   (mongoose.models['DataLakeBatch'] as unknown as mongoose.Model<IDataLakeBatchDocument>) ||
@@ -518,6 +538,43 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       { new: true }
     );
     return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  /**
+   * Guarded taxonomy-phase transition, mirroring markTerminalIfActive/setStatusIfActive: only
+   * succeeds if `taxonomyStatus` is still one of `from`, so a redelivered queue message or a
+   * race with the stuck-job reconciler can only let one caller win.
+   */
+  async setTaxonomyStatusIfActive(
+    batchId: string,
+    from: TaxonomyStatus[],
+    to: TaxonomyStatus,
+    extra?: Partial<Pick<IDataLakeBatch, 'taxonomyStartedAt' | 'taxonomySuggestions' | 'taxonomyError'>>
+  ): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      { _id: batchId, taxonomyStatus: { $in: from } },
+      { $set: { taxonomyStatus: to, ...extra } },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  async findStuckTaxonomy(cutoff: Date, limit = 500): Promise<IDataLakeBatchDocument[]> {
+    // taxonomyStatus equality prefix + updatedAt range -> served by the
+    // { taxonomyStatus:1, updatedAt:1 } index, mirroring findStuck.
+    const results = await this.batchModel
+      .find({ taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES }, updatedAt: { $lt: cutoff } })
+      .sort({ updatedAt: 1 })
+      .limit(limit);
+    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+  }
+
+  async findTaxonomyAttentionByUserId(userId: string): Promise<IDataLakeBatchDocument[]> {
+    const results = await this.batchModel.find({
+      userId,
+      taxonomyStatus: { $in: TAXONOMY_ATTENTION_STATUSES },
+    });
+    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
   }
 }
 

@@ -67,6 +67,7 @@ export * from './utils/sessionTitle';
 export * from './utils/skillSafety';
 export * from './utils/isImageServeable';
 export * from './utils/attachmentScope';
+export * from './utils/dataLakeTaxonomy';
 export * from './navigation';
 export * from './sample';
 export * from './rateLimitHeaders';

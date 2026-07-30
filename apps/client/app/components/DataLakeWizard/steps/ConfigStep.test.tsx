@@ -18,12 +18,12 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const seedConfig = (over: { tagPrefix?: string; name?: string; taxonomyStep?: boolean; targetLake?: unknown }) =>
+const seedConfig = (over: { tagPrefix?: string; name?: string; targetLake?: unknown }) =>
   useDataLakeWizardStore.setState({
     step: 'config',
     targetLake: (over.targetLake ?? null) as never,
     allFiles: [],
-    optionalSteps: { preview: false, taxonomy: over.taxonomyStep ?? false },
+    optionalSteps: { preview: false, taxonomy: false },
     config: {
       name: over.name ?? 'My Lake',
       description: '',
@@ -46,26 +46,16 @@ afterEach(() => {
 });
 
 /**
- * The Tag Prefix has exactly one editable home, and which step that is depends on whether the
- * user opted into the taxonomy step (#824) - that step embeds the prefix in every tag it
- * renders (#829), so it owns the field whenever it is in the flow.
+ * The Tag Prefix's only editable home is here (the taxonomy step, its former competing
+ * owner, was removed - AI tag suggestion now runs post-upload and never touches the prefix).
+ * Append mode is the only case that still locks it, to the target lake's own prefix.
  */
 describe('ConfigStep - Tag Prefix single editable home', () => {
   const prefixInput = () => screen.getByTestId('config-tag-prefix-input').querySelector('input') as HTMLInputElement;
 
-  it('shows the prefix read-only when the taxonomy step is in the flow and owns it', () => {
-    seedConfig({ tagPrefix: 'acme:', taxonomyStep: true });
-
-    renderStep();
-
-    expect(prefixInput().disabled).toBe(true);
-    expect(prefixInput().value).toBe('acme:');
-    expect(screen.getByText(/Set on the AI Taxonomy step/i)).toBeInTheDocument();
-  });
-
-  it('is editable here when the taxonomy step was skipped, so no step is left owning it', () => {
+  it('is editable in create mode', () => {
     // Without this the user meets Start Upload's tagPrefix>=2 gate with no field to fix it.
-    seedConfig({ tagPrefix: 'my-lake:', taxonomyStep: false });
+    seedConfig({ tagPrefix: 'my-lake:' });
 
     renderStep();
 
@@ -73,23 +63,10 @@ describe('ConfigStep - Tag Prefix single editable home', () => {
     expect(screen.getByText(/Derived from the name/i)).toBeInTheDocument();
   });
 
-  it('flags a reserved prefix even though the field is read-only here', () => {
-    // The prefix arrives from the taxonomy step, so the field is disabled - but the server
-    // rejects the datalake: namespace outright and Start Upload is gated on it. Without a
-    // message here the button is disabled with no visible reason. taxonomyStep is what makes
-    // the field read-only now, so the case has to be seeded with the step in the flow.
-    seedConfig({ tagPrefix: 'datalake:', taxonomyStep: true });
-
-    renderStep();
-
-    expect(screen.getByTestId('datalake-config-tagprefix-help').textContent).toMatch(/reserved/i);
-    expect(screen.queryByText(/Set on the AI Taxonomy step/i)).not.toBeInTheDocument();
-  });
-
-  it('flags a reserved prefix while editable here too, where the derive could produce one', () => {
+  it('flags a reserved prefix, where the derive could produce one', () => {
     // A lake named "Datalake" derives exactly this prefix, so the editable path needs the
     // same message - see the guard in deriveTagPrefixFromName.
-    seedConfig({ tagPrefix: 'datalake:', taxonomyStep: false });
+    seedConfig({ tagPrefix: 'datalake:' });
 
     renderStep();
 
@@ -100,7 +77,6 @@ describe('ConfigStep - Tag Prefix single editable home', () => {
   it('locks the prefix to the target lake in append mode (taxonomy is never offered there)', () => {
     seedConfig({
       tagPrefix: 'niche:',
-      taxonomyStep: false,
       targetLake: { id: 'l1', name: 'Niche', slug: 'niche', fileTagPrefix: 'niche:' },
     });
 

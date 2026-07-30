@@ -382,6 +382,14 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Function"
     }
+    "dataLakeTaxonomyQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "dataLakeTaxonomyQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "deepAgentWakeQueue": {
       "type": "sst.aws.Queue"
       "url": string

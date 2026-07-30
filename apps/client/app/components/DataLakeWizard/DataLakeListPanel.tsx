@@ -36,6 +36,8 @@ import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import RestoreIcon from '@mui/icons-material/Restore';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
 import {
   useArchiveDataLake,
@@ -47,9 +49,12 @@ import {
   useSetLakeVisibility,
   useGetArchivedDataLakes,
   useGetDeletedDataLakes,
+  useActiveDataLakeBatches,
 } from '@client/app/hooks/data/dataLakes';
+import type { IDataLakeBatchDocument } from '@bike4mind/common';
 import { useDataLakeWizardStore, type ManagerTab } from '@client/app/stores/useDataLakeWizardStore';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
+import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeViewer from './DataLakeViewer';
@@ -58,6 +63,8 @@ import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 
 export default function DataLakeListPanel() {
   const { data: dataLakes, isLoading } = useDataLakes();
+  const { data: activeBatches } = useActiveDataLakeBatches();
+  const [reviewingBatch, setReviewingBatch] = useState<IDataLakeBatchDocument | null>(null);
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   // Follow the store's target tab so a deep-link (openManager('discover')) always lands on the
@@ -180,97 +187,151 @@ export default function DataLakeListPanel() {
               </Box>
             ) : (
               <Stack gap={1}>
-                {dataLakes.map(lake => (
-                  <Card
-                    key={lake.id}
-                    variant="outlined"
-                    data-testid={`datalake-card-${lake.id}`}
-                    sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: 'primary.300' } }}
-                    onClick={() =>
-                      setViewingLake({
-                        id: lake.id,
-                        name: lake.name,
-                        tagPrefix: lake.fileTagPrefix,
-                        canManage: !!lake.canManage,
-                      })
-                    }
-                  >
-                    <Stack direction="row" alignItems="center" gap={1.5}>
-                      <DataLakeIcon sx={{ fontSize: 20, color: 'primary.400' }} />
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography level="title-sm" noWrap>
-                          {lake.name}
-                        </Typography>
-                        <Stack direction="row" gap={0.5} sx={{ mt: 0.25 }}>
-                          <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '10px' }}>
-                            {lake.fileTagPrefix}
-                          </Chip>
-                          {lake.requiredUserTag && (
-                            <Chip size="sm" variant="soft" color="primary" sx={{ fontSize: '10px' }}>
-                              {lake.requiredUserTag}
+                {dataLakes.map(lake => {
+                  // At most one batch per lake is ever in the "needs attention" set at a time
+                  // in practice (taxonomyStatus only starts moving once ingest is terminal).
+                  const batch = activeBatches?.find(b => b.dataLakeId === lake.id);
+                  return (
+                    <Card
+                      key={lake.id}
+                      variant="outlined"
+                      data-testid={`datalake-card-${lake.id}`}
+                      sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: 'primary.300' } }}
+                      onClick={() =>
+                        setViewingLake({
+                          id: lake.id,
+                          name: lake.name,
+                          tagPrefix: lake.fileTagPrefix,
+                          canManage: !!lake.canManage,
+                        })
+                      }
+                    >
+                      <Stack direction="row" alignItems="center" gap={1.5}>
+                        <DataLakeIcon sx={{ fontSize: 20, color: 'primary.400' }} />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography level="title-sm" noWrap>
+                            {lake.name}
+                          </Typography>
+                          <Stack direction="row" gap={0.5} sx={{ mt: 0.25 }}>
+                            <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '10px' }}>
+                              {lake.fileTagPrefix}
                             </Chip>
-                          )}
-                        </Stack>
-                      </Box>
-                      {/* Add files / Settings / Archive are owner-or-admin only (the backend
+                            {lake.requiredUserTag && (
+                              <Chip size="sm" variant="soft" color="primary" sx={{ fontSize: '10px' }}>
+                                {lake.requiredUserTag}
+                              </Chip>
+                            )}
+                            {/* Background AI-tag suggestion progress - an independent
+                              clock from ingest, so this can appear well after the lake's
+                              files are already fully uploaded/searchable. */}
+                            {(batch?.taxonomyStatus === 'queued' || batch?.taxonomyStatus === 'analyzing') && (
+                              <Tooltip title="Usually ready in under a minute" size="sm">
+                                <Chip
+                                  size="sm"
+                                  variant="soft"
+                                  color="primary"
+                                  startDecorator={<AutoAwesomeIcon sx={{ fontSize: 12 }} />}
+                                  sx={{ fontSize: '10px' }}
+                                  data-testid={`datalake-taxonomy-progress-${lake.id}`}
+                                >
+                                  AI tagging&hellip;
+                                </Chip>
+                              </Tooltip>
+                            )}
+                            {batch?.taxonomyStatus === 'ready' && (
+                              <Chip
+                                size="sm"
+                                variant="solid"
+                                color="success"
+                                startDecorator={<AutoAwesomeIcon sx={{ fontSize: 12 }} />}
+                                sx={{ fontSize: '10px', cursor: 'pointer' }}
+                                data-testid={`datalake-taxonomy-review-${lake.id}`}
+                                onClick={e => {
+                                  stop(e);
+                                  setReviewingBatch(batch);
+                                }}
+                              >
+                                Review AI tags
+                              </Chip>
+                            )}
+                            {batch?.taxonomyStatus === 'failed' && (
+                              <Chip
+                                size="sm"
+                                variant="soft"
+                                color="warning"
+                                startDecorator={<ErrorOutlineIcon sx={{ fontSize: 12 }} />}
+                                sx={{ fontSize: '10px', cursor: 'pointer' }}
+                                data-testid={`datalake-taxonomy-failed-${lake.id}`}
+                                onClick={e => {
+                                  stop(e);
+                                  setReviewingBatch(batch);
+                                }}
+                              >
+                                AI tagging failed
+                              </Chip>
+                            )}
+                          </Stack>
+                        </Box>
+                        {/* Add files / Settings / Archive are owner-or-admin only (the backend
                       enforces the same rule). The list surfaces other users' read-only public
                       lakes, so render these only when the caller may manage this lake. */}
-                      {lake.canManage && (
-                        <>
-                          <Tooltip title="Add files" size="sm">
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="primary"
-                              data-testid={`datalake-addfiles-btn-${lake.id}`}
-                              onClick={e => {
-                                stop(e);
-                                openWizardForLake({
-                                  id: lake.id,
-                                  slug: lake.slug,
-                                  name: lake.name,
-                                  fileTagPrefix: lake.fileTagPrefix,
-                                  requiredUserTag: lake.requiredUserTag,
-                                  requiredEntitlement: lake.requiredEntitlement,
-                                });
-                              }}
-                            >
-                              <AddIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Settings" size="sm">
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="neutral"
-                              data-testid={`datalake-settings-btn-${lake.id}`}
-                              onClick={e => {
-                                stop(e);
-                                setEditingLakeId(lake.id);
-                              }}
-                            >
-                              <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Archive" size="sm">
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="warning"
-                              data-testid={`datalake-archive-btn-${lake.id}`}
-                              onClick={e => {
-                                stop(e);
-                                archiveLake.mutate(lake.id);
-                              }}
-                            >
-                              <ArchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Tooltip>
-                        </>
-                      )}
-                    </Stack>
-                  </Card>
-                ))}
+                        {lake.canManage && (
+                          <>
+                            <Tooltip title="Add files" size="sm">
+                              <IconButton
+                                size="sm"
+                                variant="plain"
+                                color="primary"
+                                data-testid={`datalake-addfiles-btn-${lake.id}`}
+                                onClick={e => {
+                                  stop(e);
+                                  openWizardForLake({
+                                    id: lake.id,
+                                    slug: lake.slug,
+                                    name: lake.name,
+                                    fileTagPrefix: lake.fileTagPrefix,
+                                    requiredUserTag: lake.requiredUserTag,
+                                    requiredEntitlement: lake.requiredEntitlement,
+                                  });
+                                }}
+                              >
+                                <AddIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Settings" size="sm">
+                              <IconButton
+                                size="sm"
+                                variant="plain"
+                                color="neutral"
+                                data-testid={`datalake-settings-btn-${lake.id}`}
+                                onClick={e => {
+                                  stop(e);
+                                  setEditingLakeId(lake.id);
+                                }}
+                              >
+                                <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Archive" size="sm">
+                              <IconButton
+                                size="sm"
+                                variant="plain"
+                                color="warning"
+                                data-testid={`datalake-archive-btn-${lake.id}`}
+                                onClick={e => {
+                                  stop(e);
+                                  archiveLake.mutate(lake.id);
+                                }}
+                              >
+                                <ArchiveOutlinedIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Tooltip>
+                          </>
+                        )}
+                      </Stack>
+                    </Card>
+                  );
+                })}
               </Stack>
             )}
 
@@ -405,6 +466,15 @@ export default function DataLakeListPanel() {
           </DialogActions>
         </ModalDialog>
       </Modal>
+
+      {/* Review/apply the background AI tag suggestions for a batch */}
+      {reviewingBatch && (
+        <TaxonomyReviewPanel
+          batch={reviewingBatch}
+          prefix={dataLakes?.find(l => l.id === reviewingBatch.dataLakeId)?.fileTagPrefix ?? ''}
+          onClose={() => setReviewingBatch(null)}
+        />
+      )}
     </>
   );
 }
