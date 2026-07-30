@@ -15,7 +15,7 @@ vi.mock('@server/utils/publicSettingsArtifact', () => ({
 }));
 
 import handler from '../fetch';
-import { settingsMap } from '@bike4mind/common';
+import { SENSITIVE_SETTING_MASK, settingsMap } from '@bike4mind/common';
 
 const runHandler = async () => {
   const json = vi.fn((x: unknown) => x);
@@ -43,5 +43,42 @@ describe('settings/fetch defaultEmbeddingModel server-resolved default', () => {
     const entry = result.filter(s => s.settingName === 'defaultEmbeddingModel');
     expect(entry).toHaveLength(1);
     expect(entry[0].settingValue).toBe('text-embedding-3-large');
+  });
+});
+
+describe('settings/fetch sensitive value redaction', () => {
+  beforeEach(() => {
+    stored = [];
+    vi.clearAllMocks();
+  });
+
+  const sensitiveKeys = (Object.values(settingsMap) as Array<{ key: string; isSensitive?: boolean }>)
+    .filter(s => s.isSensitive === true)
+    .map(s => s.key);
+
+  it('never returns a stored value for any isSensitive setting', async () => {
+    expect(sensitiveKeys.length).toBeGreaterThan(0);
+    stored = sensitiveKeys.map(key => ({ settingName: key, settingValue: `sk-live-${key}-tail` }));
+
+    const result = await runHandler();
+    const serialized = JSON.stringify(result);
+
+    for (const key of sensitiveKeys) {
+      const entry = result.find(s => s.settingName === key);
+      expect(entry?.settingValue).toBe(`${SENSITIVE_SETTING_MASK}tail`);
+      expect(serialized).not.toContain(`sk-live-${key}-tail`);
+    }
+  });
+
+  it('still returns non-sensitive values in full', async () => {
+    stored = [{ settingName: 'enforceMFA', settingValue: 'true' }];
+    const result = await runHandler();
+    expect(result.find(s => s.settingName === 'enforceMFA')?.settingValue).toBe('true');
+  });
+
+  it('reports an unconfigured sensitive setting as empty, not as a mask', async () => {
+    stored = [{ settingName: 'anthropicDemoKey', settingValue: '' }];
+    const result = await runHandler();
+    expect(result.find(s => s.settingName === 'anthropicDemoKey')?.settingValue).toBe('');
   });
 });

@@ -50,6 +50,16 @@ setup('create and authenticate admin user', async ({ page, request }) => {
   // Enable the Agents feature globally (admin-only setting)
   await apiUpdateAdminSetting(request, adminToken, 'EnableAgents', true);
 
+  // Seed one throwaway sensitive setting so the admin-settings masking spec always has a
+  // configured secret to assert against. Without it every `isSensitive` setting can be unset
+  // on a fresh preview DB, and those assertions pass vacuously or skip silently. PotionQuestApiKey
+  // is chosen because nothing in the codebase reads it, so overwriting it changes no behaviour -
+  // and unlike every other sensitive key it cannot be restored once masked. Same shared-env guard
+  // as allowOpenRegistration below: never write a credential-shaped value on a real environment.
+  if (!isSharedRealEnv(process.env.API_URL || 'http://localhost:3000')) {
+    await apiUpdateAdminSetting(request, adminToken, 'PotionQuestApiKey', 'e2e-throwaway-not-a-real-key-0000');
+  }
+
   // Enable open registration so the signup spec can run - "Sign up" and /register are gated on
   // this and off by default in preview, so a signup failure would cascade (the `admin` project
   // depends on `unauthenticated`, i.e. auth + signup) and skip admin entirely.
