@@ -106,13 +106,6 @@ const KNOWLEDGE_FILE_TOKEN_ALLOCATION = 0.7;
 const MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION = 0.35;
 
 /**
- * Rounds the final safety pass may spend shrinking the payload. It has to re-measure between rounds
- * (see the pass for why one shot overshoots), and each round costs a real tokenizer call, so this
- * bounds the work. Converges in one or two rounds in practice.
- */
-const MAX_SAFETY_SHRINK_ROUNDS = 5;
-
-/**
  * Appended to attached-file content that had to be cut to fit. Without it a CSV sliced mid-row reads
  * as a complete file: the model treats the last surviving row as the final row and answers about it
  * confidently, which is indistinguishable from a correct answer unless you already hold the file.
@@ -2044,98 +2037,16 @@ export async function buildAndSortMessages(
     logger.warn(
       `⚠️ Final message token count (${finalTokenCount}) exceeds maxInputTokens (${maxInputTokens}). Truncating messages.`
     );
-    // Shrink content first, then history, recomputing the real count each round until it fits. Three
-    // things stopped this pass from doing its job. processMessages ignored its own budget (content
-    // messages are all role 'user' and there are usually only 1-3 of them, so every one counted as
-    // "recent" and the oversized set came back untouched). It only ever touched content, yet the
-    // overflow usually lives in history, which holds the majority of the budget. And it never
-    // re-measured, while processMessages selects on the character estimate and this budget is in real
-    // tokenizer units - so a single pass overshoots on anything that tokenizes denser than ~3.5
-    // chars/token (code, CSV, CJK). Each of those left the excess to reach the caller's hard throw,
-    // making the backstop the cause of the failure it exists to prevent.
-    let reducedContentMessages = processedContentMessages;
-    let currentTokenCount = finalTokenCount;
-    // Rebuilt up to twice per round so the real-token count is measured against the actual payload.
-    // Cheap at five rounds, but it is the place to extend if another source ever has to give up
-    // tokens here - images are the obvious candidate, since they are assembled in without ever
-    // being charged against the budget.
-    const assemble = (content: IMessage[]) =>
-      historyEndsWithToolUse && promptHasToolResult
-        ? [...systemMessages, ...processedPreviousMessages, ...userPrompt, ...imageMessages, ...content]
-        : [...systemMessages, ...processedPreviousMessages, ...imageMessages, ...content, ...userPrompt];
-
-    // Content is asked to give first, but a round that frees nothing has to move on to history rather
-    // than retrying forever: processMessages is judging against the character estimate, so content
-    // that is oversized in real tokens can still look like it fits and come back untouched.
-    let contentExhausted = reducedContentMessages.length === 0;
-    for (let round = 0; round < MAX_SAFETY_SHRINK_ROUNDS && currentTokenCount > maxInputTokens; round++) {
-      // processMessages budgets in estimate tokens while the overage was measured by the real
-      // tokenizer, so convert before spending it and keep each round's arithmetic in one unit.
-      // Convergence is guaranteed by the loop and the no-progress check, not by this scaling.
-      const estimatedTotal = estimateMessagesTokens(assemble(reducedContentMessages));
-      const realPerEstimate = estimatedTotal > 0 ? currentTokenCount / estimatedTotal : 1;
-      const excessInEstimateTokens = Math.ceil((currentTokenCount - maxInputTokens) / realPerEstimate);
-
-      if (!contentExhausted) {
-        // The undelivered note is held out of the shrink so its identity survives for the re-check
-        // after the loop; it stays in the payload above, so its cost is still measured.
-        const before = reducedContentMessages.filter(message => message !== undeliveredNote);
-        const budgetBasis = estimateMessagesTokens(before);
-        // Reported through the same recorder as the primary allocation. These are messages this pass
-        // dropped or cut on top of whatever the allocation already lost, and cannot be double-counted:
-        // a round only ever sees the content that survived to here.
-        const reduced = recordContentResult(
-          processMessages(before, Math.max(0, budgetBasis - excessInEstimateTokens), {
-            truncationNotice: CONTENT_TRUNCATION_NOTICE,
-          })
-        );
-        reducedContentMessages = undeliveredNote ? [...reduced, undeliveredNote] : reduced;
-        if (reduced.length < before.length) {
-          logger.warn(
-            `Final safety pass dropped ${before.length - reduced.length} of ${before.length} ` +
-              `attached content message(s) to fit the context window.`
-          );
-        }
-      } else if (processedPreviousMessages.length > 0) {
-        const before = processedPreviousMessages;
-        const beforeTokens = estimateMessagesTokens(before);
-        const reduced = processMessages(before, Math.max(0, beforeTokens - excessInEstimateTokens));
-        // Compared in tokens, not message count: the truncation fallback shrinks messages in place, so
-        // a count test discards a real reduction and sends the still-oversized payload to the caller's
-        // hard throw. Only a round that frees nothing at all means history cannot give any more.
-        if (estimateMessagesTokens(reduced.messages) >= beforeTokens) break;
-        logger.warn(
-          `Final safety pass also reduced ${before.length} history message(s) to ${reduced.messages.length}: ` +
-            `the attached content alone could not absorb the overflow.`
-        );
-        processedPreviousMessages = recordHistoryResult(reduced);
-      } else {
-        // Only system messages and the user prompt remain, and neither is droppable here.
-        break;
-      }
-
-      const afterTokenCount = await calculateTotalTokenLength(assemble(reducedContentMessages), {
-        estimateOnly: false,
-        tokenizer,
-      });
-      if (afterTokenCount >= currentTokenCount && !contentExhausted) contentExhausted = true;
-      currentTokenCount = afterTokenCount;
-    }
-
-    // Anything the pass dropped here still has to be declared, or a file the allocation delivered
-    // disappears silently and the model denies it was ever attached.
-    reducedContentMessages = declareUndeliveredAttachments(reducedContentMessages);
-
-    if (currentTokenCount > maxInputTokens) {
-      // Deliberately does not name a cause: this is reached from three different exits (the round cap,
-      // history unable to shrink, nothing droppable left) and only the last is about system + prompt
-      // size. The composition is logged instead so the actual one is identifiable.
-      logger.warn(
-        `Final safety pass could not bring the payload under maxInputTokens (${currentTokenCount} > ${maxInputTokens}). ` +
-          `Remaining: ${systemMessages.length} system, ${processedPreviousMessages.length} history, ` +
-          `${reducedContentMessages.length} content, ${imageMessages.length} image message(s) plus the user prompt.`
-      );
-    }
+    // If we still exceed limits, remove some processed content messages as last resort
+    const excessTokens = finalTokenCount - maxInputTokens;
+    const reducedContentMessagesResult = processMessages(
+      processedContentMessages,
+      Math.max(
+        0,
+        (await calculateTotalTokenLength(processedContentMessages, { estimateOnly: false, tokenizer })) - excessTokens
+      )
+    );
+    const reducedContentMessages = reducedContentMessagesResult.messages;
 
     let truncatedMessages: IMessage[];
     if (historyEndsWithToolUse && promptHasToolResult) {
