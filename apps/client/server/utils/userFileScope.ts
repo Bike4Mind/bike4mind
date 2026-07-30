@@ -7,8 +7,14 @@ import { getDataLakeTags } from '@bike4mind/common';
  * GET /api/files/search (the list those counts are read against). Passing different scopes makes
  * a badge disagree with the list beside it, which is exactly the class of bug deriving the counts
  * was meant to end - and the list is the one the others are compared to, so drift there breaks the
- * headline claim rather than just badge-versus-tree. Building the scope in one place means a
- * future edit cannot drift one caller without the others.
+ * headline claim rather than just badge-versus-tree.
+ *
+ * This returns the WHO, not the whether: the count aggregates widen on the mere presence of a
+ * scope object, but the list path widens only when `includeShared` is also true
+ * (buildFabFileSearchQuery reaches buildOwnershipConditions on that flag alone). So a list caller
+ * has to pass `includeShared: true` alongside this; passing this by itself yields an owner-only
+ * list beside widened badges. One shared helper removes the drift in the tag/group/lake values,
+ * not in that flag.
  *
  * `dataLakeTags` reaches an ownership-bypass arm in buildOwnershipConditions, so it must stay the
  * registry-derived set for lakes this user can reach - never the user's raw tags.

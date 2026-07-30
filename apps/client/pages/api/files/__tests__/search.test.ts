@@ -158,15 +158,31 @@ describe('GET /api/files/search', () => {
 
   // The shared and curated views carry their own ownership predicate in buildFabFileSearchQuery,
   // and it is checked before the includeShared arm - widening them would be wrong and pointless.
+  //
+  // The 'false' and '0' cases are not hypothetical pedantry: the service coerces these fields with
+  // z.coerce.boolean(), i.e. Boolean(input), so every one of these strings selects the shared-only
+  // branch downstream. The route has to read them the same way or it emits a default-view scope
+  // for a request answered from a different branch.
   it.each([
     ['shared', { filters: { shared: 'true' } }],
     ['curated', { filters: { curated: 'true' } }],
+    ['shared, spelled false', { filters: { shared: 'false' } }],
+    ['curated, spelled 0', { filters: { curated: '0' } }],
+    ['shared, sent as an array', { filters: { shared: ['true'] } }],
   ])('injects no scope for the %s view', async (_name, query) => {
     const { req, res } = invokeGet(query);
 
     await mockRefs.getHandler!(req, res);
 
     expect(scopeArg()).toBeUndefined();
+  });
+
+  it('still scopes the default view when neither flag is present at all', async () => {
+    const { req, res } = invokeGet({ filters: { type: 'pdf' } });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(scopeArg()?.includeShared).toBe(true);
   });
 
   it('rejects a caller without read permission before touching the service', async () => {

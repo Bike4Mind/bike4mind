@@ -107,6 +107,11 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     expect(serverOptions).not.toHaveProperty('scopedTagPrefixes');
     expect(serverOptions).not.toHaveProperty('dataLakeTags');
     expect(serverOptions.restrictToDataLake).toBe(true);
+    // buildFabFileSearchQuery reaches buildOwnershipConditions ONLY when includeShared is true;
+    // without it the query falls through to a bare { userId } and restrictToDataLake goes inert,
+    // turning this single-lake browse into every file the viewer owns.
+    expect(serverOptions.includeShared).toBe(true);
+    expect(serverOptions.userGroups).toEqual(['viewer-group']);
   });
 
   it('browses a built-in registry lake by its OPEN prefix arm, not the ownership predicate', async () => {

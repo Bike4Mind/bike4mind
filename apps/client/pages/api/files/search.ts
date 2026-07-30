@@ -22,8 +22,13 @@ const handler = baseApi().get(
 
     const parsed = qs.parse(req.query as Record<string, any>);
     const filters = (parsed.filters || {}) as Record<string, unknown>;
-    const isSharedView = filters.shared === 'true' || filters.shared === true;
-    const isCuratedView = filters.curated === 'true' || filters.curated === true;
+    // Bare Boolean() on purpose: the service parses these same two fields with
+    // z.coerce.boolean(), which is Boolean(input) - so the string 'false' is TRUE there. Testing
+    // for 'true' here instead would make the route and the query disagree about which view this
+    // is, and the route would emit the default-view scope for a request the query then answers
+    // from the shared-only branch.
+    const isSharedView = Boolean(filters.shared);
+    const isCuratedView = Boolean(filters.curated);
 
     // Include shared/data-lake files in the default view so total count reflects all files the
     // user can access, not just owned files. The shared and curated views carry their own

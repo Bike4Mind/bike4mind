@@ -353,10 +353,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         $match: {
           $and: [ownershipFilter, sessionFilter],
           deletedAt: null,
-          // Belt-and-braces: the caller only ever passes prefixes of non-archived lakes
-          // (listDataLakes filters on status), so nothing archived reaches here today. Keeping
-          // the conjunct makes "archived files never count" a property of the aggregate rather
-          // than of whoever calls it.
+          // Load-bearing, not just symmetry with the list: archiving a lake stamps archivedAt on
+          // its prefix-tagged files, and a file caught by a COLLIDING sibling prefix belongs to a
+          // lake that is still active (see archiveDataLake). Its prefix therefore does reach this
+          // aggregate, so without the conjunct that lake's tag tree counts files its own browse
+          // hides.
           archivedAt: null,
           tags: { $elemMatch: { name: { $regex: prefixRegex } } },
         },
@@ -400,7 +401,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         { tags: { $elemMatch: { name: 'curated-notebook' } } },
       ],
     };
-    // archivedAt: null for the same reason as countDataLakeTagsByPrefix above.
+    // archivedAt: null for the same reason as countDataLakeTagsByPrefix above - a colliding
+    // sibling lake's files are archived while that lake itself stays active.
     const baseMatch = { $and: [ownershipFilter, sessionFilter], deletedAt: null, archivedAt: null };
 
     // One indexed countDocuments per prefix (few lakes), plus one for the combined total.
