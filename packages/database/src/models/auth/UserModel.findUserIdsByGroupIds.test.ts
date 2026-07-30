@@ -59,4 +59,18 @@ describe('UserModel.findUserIdsByGroupIds', () => {
 
     expect(await userRepository.findUserIdsByGroupIds([])).toEqual({});
   });
+
+  // #1222/#1224: a duplicate entry in user.groups for the same id (e.g. a pre-fix double-accept
+  // via the legacy group-invite path) must not double-count that member. $addToSet in the
+  // aggregation's $group stage is what makes this hold regardless of write-side dedup - insert the
+  // duplicate directly (bypassing the schema-level $addToSet writers) to prove the READ side, not
+  // just the write side, is what prevents the double-count.
+  it('does not double-count a member whose user.groups array holds a duplicate group id', async () => {
+    const u1 = await makeUser(['group-a']);
+    await User.updateOne({ _id: u1.id }, { $set: { groups: ['group-a', 'group-a'] } });
+
+    const result = await userRepository.findUserIdsByGroupIds(['group-a']);
+
+    expect(result['group-a']).toEqual([u1.id]);
+  });
 });

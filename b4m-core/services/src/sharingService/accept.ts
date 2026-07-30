@@ -1,5 +1,6 @@
 import {
   IFabFileRepository,
+  IGroupDocument,
   IInvite,
   IInviteRepository,
   InviteType,
@@ -10,7 +11,13 @@ import {
   IUserDocument,
   Permission,
 } from '@bike4mind/common';
-import { ForbiddenError, NotFoundError, secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
+import {
+  BadRequestError,
+  ForbiddenError,
+  NotFoundError,
+  secureParameters,
+  UnprocessableEntityError,
+} from '@bike4mind/utils';
 import { z } from 'zod';
 
 const acceptInviteSchema = z.object({
@@ -25,6 +32,10 @@ interface AcceptInviteAdapters {
     sessions: ISessionRepository;
     projects: IProjectRepository;
     fabFiles: IFabFileRepository;
+    // Same shape authorizeByInviteType.ts already uses to resolve a group's parent org.
+    groups: {
+      findById: (id: string) => Promise<IGroupDocument | null>;
+    };
     organization: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
       update: (data: IOrganizationDocument) => Promise<unknown>;
@@ -79,11 +90,34 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   const update = { userId, permissions: inviteWithPermissions.permissions };
 
   switch (invite.type) {
-    case InviteType.Group:
+    case InviteType.Group: {
+      const group = await db.groups.findById(invite.documentId);
+      if (!group) throw new NotFoundError('Group not found');
+
+      const organization = await db.organization.findById(group.organizationId);
+      if (!organization) throw new NotFoundError('Organization not found');
+
+      // Write-path invariant (organizationService/groupMembership.ts): every group-membership
+      // write must confirm the target user is a member of the group's owning organization.
+      // This case previously had NO check at all - anyone holding (or guessing) an invite id
+      // could attach themselves to a group and inherit whatever it gates, since user.groups is
+      // read by CASL sharing, both data-lake paths, and KB retrieve/search (#1224). Matching
+      // invariant (2)'s error, not a distinct message: a different error for "wrong org" vs.
+      // "not a member" would leak which is true for a caller probing invite ids.
+      const isMember = organization.users.some(member => member.userId === userId);
+      if (!isMember) {
+        throw new BadRequestError('User is not a member of this organization');
+      }
+
+      // $addToSet semantics: a user can hold the same invite link twice (e.g. two browser tabs),
+      // and a duplicate id would double-count them in memberCount and duplicate list rendering.
       user.groups ||= [];
-      user.groups.push(invite.documentId);
+      if (!user.groups.includes(group.id)) {
+        user.groups.push(group.id);
+      }
       await db.users.update(user);
       break;
+    }
     case InviteType.Session: {
       const session = await db.sessions.findById(invite.documentId);
       if (!session) throw new NotFoundError('Session not found');

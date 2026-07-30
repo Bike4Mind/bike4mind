@@ -71,6 +71,32 @@ export class GroupRepository extends BaseRepository<IGroupDocument> implements I
     if (groupIds.length === 0) return;
     await this.model.updateMany({ _id: { $in: groupIds }, deletedAt: null }, { $set: { deletedAt: new Date() } });
   }
+
+  /**
+   * Provision a group, treating a concurrent create for the same (organizationId, type) as
+   * success (org-groups #1222). The caller (setOrganizationGroupTypes) checks "does a live
+   * instance exist" and calls this only when it does not - but two overlapping grant PUTs can
+   * both pass that check before either writes, so the second `create` collides with the
+   * `group_org_type_live` unique index. E11000 is not a TransientTransactionError (withTransaction
+   * will not retry it) and carries no HTTP status (errorHandler falls through to a 500 that pages
+   * on-call), so the fix lives HERE at the repo boundary rather than teaching the service about
+   * Mongo error codes: catch the collision and hand back the row the other request created.
+   */
+  async createIfMissing(data: Pick<IGroupDocument, 'name' | 'description' | 'type' | 'organizationId'>) {
+    try {
+      return await this.create(data);
+    } catch (error) {
+      if ((error as { code?: number })?.code !== 11000) throw error;
+
+      // Lost the race - the winner's row must exist (that's what E11000 means). If it somehow
+      // doesn't (e.g. a concurrent revoke soft-deleted it in the instant between our create
+      // attempt and this read), surface that as the original duplicate-key error rather than a
+      // confusing "group not found" - the caller is expecting a group back, not a null.
+      const existing = await this.findOne({ organizationId: data.organizationId, type: data.type, deletedAt: null });
+      if (existing) return existing;
+      throw error;
+    }
+  }
 }
 
 export const groupRepository = new GroupRepository(Group);

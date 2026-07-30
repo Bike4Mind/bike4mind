@@ -10,7 +10,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 interface SetGroupTypesAdapters {
   db: {
     organizations: Pick<IOrganizationRepository, 'findById' | 'update'>;
-    groups: Pick<IGroupRepository, 'findByOrganization' | 'create' | 'softDeleteByIds'>;
+    groups: Pick<IGroupRepository, 'findByOrganization' | 'createIfMissing' | 'softDeleteByIds'>;
     users: Pick<IUserRepository, 'removeGroupsFromAllUsers'>;
   };
   logger?: { info: (message: string) => void };
@@ -65,10 +65,13 @@ export async function setOrganizationGroupTypes(
   // `requested`, not `added`: iterating only newly-added types leaves no way to repair an org
   // that holds a type with no live group (e.g. a prior revoke that soft-deleted the instance but
   // whose member purge was lost). Re-issuing the same PUT now re-provisions the missing group.
+  // createIfMissing (not create): two overlapping grant PUTs can both reach this loop with the
+  // same missing type - the loser would otherwise hit the group_org_type_live unique index and
+  // 500 (org-groups #1222). createIfMissing treats that collision as success.
   for (const type of requested) {
     if (typesWithInstance.has(type)) continue;
     const def = getGroupType(type)!; // safe: requested keys were validated against the catalog above
-    await db.groups.create({ name: def.label, description: def.description, type, organizationId });
+    await db.groups.createIfMissing({ name: def.label, description: def.description, type, organizationId });
   }
 
   // Revoke: soft-delete the instances of removed types, then purge their ids from all members.

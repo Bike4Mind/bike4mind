@@ -14,8 +14,10 @@ interface PurgeOrgMembershipAdapters {
  *   - compute `adminUserIds` with the member removed and RETURN it.
  *
  * Neither `user.groups[]` nor `adminUserIds` carries an org qualifier, so a member who keeps them
- * after removal retains both group-shared data access and org-admin authority
- * (`assertCanManageOrgGroups` only checks `adminUserIds`).
+ * after removal retains both group-shared data access and org-admin authority. (`assertCanManageOrgGroups`
+ * also requires current org membership, not just `adminUserIds` - but that check reads
+ * `organization.users`, which THIS purge doesn't touch, so it is not a substitute for pruning
+ * `adminUserIds` here.)
  *
  * Returns the pruned `adminUserIds` rather than mutating in place and returning void: the caller
  * MUST assign it onto the org doc it persists, so a future caller cannot silently get the unsafe

@@ -10,6 +10,7 @@ import {
   fabFileRepository,
   userRepository,
   Project,
+  Group,
   fileTagRepository,
   withTransaction,
 } from '@bike4mind/database';
@@ -98,6 +99,7 @@ const handler = baseApi().post(async (req, res) => {
           sessions: sessionRepository,
           projects: projectRepository,
           fabFiles: fabFileRepository,
+          groups: Group,
           organization: Organization,
           users: userRepository,
         },
