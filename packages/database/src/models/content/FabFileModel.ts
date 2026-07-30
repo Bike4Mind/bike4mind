@@ -1,4 +1,5 @@
 import {
+  DataLakeMembershipScope,
   IFabFileChunkDocument,
   IFabFileChunkRepository,
   IFabFileDocument,
@@ -12,6 +13,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
+import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
 
 interface IFabFileChunkModel extends Model<IFabFileChunkDocument> {}
 
@@ -161,6 +163,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
       restrictToDataLake?: boolean;
+      /** Server-supplied only - see buildOwnershipConditions.lakeMembership. */
+      lakeMembership?: DataLakeMembershipScope;
       skipOwnership?: boolean;
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];
@@ -527,73 +531,83 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
-  // Data lake lifecycle (scoped by the lake's datalake: meta-tag)
+  // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter
+  // (meta-tag OR a fileTagPrefix match on a file the lake's creator owns), shared with the
+  // single-lake browse so a read and a whole-lake write never disagree about who is a member.
 
   /**
-   * Authoritative lake stats from source records via an indexed aggregate - counts
-   * only live files (not archived, not deleted). Runs at batch completion AND on the
-   * reconcile read path, so it must NOT load-all-and-count.
+   * Authoritative lake stats from source records via an aggregate - counts only live files
+   * (not archived, not deleted). Runs at batch completion AND on the reconcile read path, so
+   * it must NOT load-all-and-count.
+   *
+   * The `{ 'tags.name': 1, archivedAt: 1, deletedAt: 1 }` index bounds the meta-tag arm fully.
+   * The prefix arm only gets a range on the leading key (an anchored regex) and its `userId`
+   * conjunct is not in that index, so a prefix-heavy lake fetches its candidate documents to
+   * check ownership.
    */
-  async computeDataLakeStats(datalakeTag: string): Promise<{ fileCount: number; totalSizeBytes: number }> {
+  async computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }> {
     const [agg] = await this.fabFileModel.aggregate<{ fileCount: number; totalSizeBytes: number }>([
-      { $match: { 'tags.name': datalakeTag, deletedAt: null, archivedAt: null } },
+      { $match: { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null } },
       { $group: { _id: null, fileCount: { $sum: 1 }, totalSizeBytes: { $sum: { $ifNull: ['$fileSize', 0] } } } },
       { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1 } },
     ]);
     return agg ?? { fileCount: 0, totalSizeBytes: 0 };
   }
 
-  async archiveByDataLakeTag(datalakeTag: string): Promise<number> {
+  async archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
     const result = await this.fabFileModel.updateMany(
-      { 'tags.name': datalakeTag, deletedAt: null, archivedAt: null },
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null },
       { $set: { archivedAt: new Date() } }
     );
     return result.modifiedCount;
   }
 
-  async unarchiveByDataLakeTag(datalakeTag: string): Promise<number> {
+  async unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
     const result = await this.fabFileModel.updateMany(
-      { 'tags.name': datalakeTag, deletedAt: null, archivedAt: { $ne: null } },
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: { $ne: null } },
       { $set: { archivedAt: null } }
     );
     return result.modifiedCount;
   }
 
-  async findArchivedByDataLakeTag(datalakeTag: string): Promise<IFabFileDocument[]> {
+  async findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({
-      'tags.name': datalakeTag,
+      ...buildDataLakeMembershipFilter(scope),
       deletedAt: null,
       archivedAt: { $ne: null },
     });
     return result.map(d => d.toJSON());
   }
 
-  async findDeletedByDataLakeTag(datalakeTag: string): Promise<IFabFileDocument[]> {
+  async findDeletedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel
-      .find({ 'tags.name': datalakeTag, deletedAt: { $ne: null } })
+      .find({ ...buildDataLakeMembershipFilter(scope), deletedAt: { $ne: null } })
       .setOptions({ includeDeleted: true });
     return result.map(d => d.toJSON());
   }
 
-  async undeleteByDataLakeTag(datalakeTag: string, excludeIds: string[] = []): Promise<number> {
-    const filter: Record<string, unknown> = { 'tags.name': datalakeTag, deletedAt: { $ne: null } };
+  async undeleteByDataLakeTag(scope: DataLakeMembershipScope, excludeIds: string[] = []): Promise<number> {
+    const filter: Record<string, unknown> = {
+      ...buildDataLakeMembershipFilter(scope),
+      deletedAt: { $ne: null },
+    };
     if (excludeIds.length > 0) filter._id = { $nin: excludeIds };
     const result = await this.fabFileModel.updateMany(filter, { $set: { deletedAt: null } });
     return result.modifiedCount;
   }
 
-  async softDeleteByDataLakeTag(datalakeTag: string): Promise<string[]> {
-    const docs = await this.fabFileModel.find({ 'tags.name': datalakeTag, deletedAt: null }, { _id: 1 });
+  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
+    const docs = await this.fabFileModel.find({ ...buildDataLakeMembershipFilter(scope), deletedAt: null }, { _id: 1 });
     const ids = docs.map(d => d._id.toString());
     if (ids.length === 0) return [];
     await this.fabFileModel.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: new Date() } });
     return ids;
   }
 
-  async hardDeleteByDataLakeTag(datalakeTag: string): Promise<string[]> {
-    // Include soft-deleted files: phase-2 sweep must purge everything carrying the tag.
+  async hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
+    // Include soft-deleted files: the phase-2 sweep must purge every member.
     const docs = await this.fabFileModel
-      .find({ 'tags.name': datalakeTag }, { _id: 1 })
+      .find(buildDataLakeMembershipFilter(scope), { _id: 1 })
       .setOptions({ includeDeleted: true });
     const ids = docs.map(d => d._id.toString());
     if (ids.length === 0) return [];
@@ -602,9 +616,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return ids;
   }
 
-  async findIdsByDataLakeTag(datalakeTag: string): Promise<string[]> {
+  async findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
     const docs = await this.fabFileModel
-      .find({ 'tags.name': datalakeTag }, { _id: 1 })
+      .find(buildDataLakeMembershipFilter(scope), { _id: 1 })
       .setOptions({ includeDeleted: true });
     return docs.map(d => d._id.toString());
   }

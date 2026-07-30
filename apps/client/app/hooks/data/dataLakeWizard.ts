@@ -4,6 +4,7 @@ import type {
   InferTaxonomyRequestInputType,
   IMessageDataToClient,
   IFabFileDocument,
+  ManageableDataLakeConfig,
   TaxonomyFileAssignment,
 } from '@bike4mind/common';
 import { isSupportedFabFileMimeType } from '@bike4mind/common';
@@ -14,6 +15,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   useDataLakeWizardStore,
+  isTaxonomyStepActive,
+  EMPTY_TAXONOMY,
   type TaxonomyTag,
   type UploadProgress,
   type UploadErrorKind,
@@ -192,6 +195,11 @@ export function useInferTaxonomy() {
       const tags = sanitizeCategories(data.categories, data.suggestedPrefix || '');
       // An empty response (no API key configured) must not blank a prefix the user already
       // has: config.tagPrefix keeps its old value regardless.
+      // Pairs with setTaxonomy's own existing-value-wins rule, which guards the opposite input:
+      // this one keeps an EMPTY suggestion from blanking a stored prefix, setTaxonomy keeps a
+      // NON-EMPTY one from overwriting a prefix the source step already derived. They overlap
+      // only while taxonomy.prefix and config.tagPrefix agree, which every writer enforces -
+      // so this stays as the boundary-level guard rather than leaning on that invariant.
       const prefix = data.suggestedPrefix || previous.prefix;
 
       setTaxonomy({
@@ -461,7 +469,10 @@ export function useBatchUpload() {
 
       // Read from store at mutation time to avoid stale closure
       // (same pattern as useComputeHashes)
-      const { config, allFiles, targetLake, taxonomy } = useDataLakeWizardStore.getState();
+      const { config, allFiles, targetLake, taxonomy, optionalSteps } = useDataLakeWizardStore.getState();
+      // A taxonomy the user toggled back off must not still tag the upload. Its tags stay in
+      // the store so re-enabling the step restores them, so the flow decides, not the tags.
+      const appliedTaxonomy = isTaxonomyStepActive({ optionalSteps, targetLake }) ? taxonomy : EMPTY_TAXONOMY;
       let included = allFiles.filter(f => !f.excluded);
       if (included.length === 0) throw new Error('No files to upload');
 
@@ -544,7 +555,7 @@ export function useBatchUpload() {
         // Per-file tags: each file's source folder plus the taxonomy categories the
         // user reviewed (append mode has no taxonomy step, so it stays folder-only).
         // The lake meta-tag is added server-side.
-        const appliedTags = appliedTagsForBatch(included, taxonomy, tagPrefix);
+        const appliedTags = appliedTagsForBatch(included, appliedTaxonomy, tagPrefix);
 
         // Step 2: Create batch record
         const batchRes = await api.post<{ id: string }>('/api/data-lakes/batches', {
@@ -593,7 +604,7 @@ export function useBatchUpload() {
                 ...(f.contentHash && { contentHash: f.contentHash }),
                 // Each file's source folder plus the reviewed taxonomy categories covering
                 // it (append mode has an empty taxonomy, so this stays folder-only).
-                tags: tagsForFile(f.relativePath, taxonomy, tagPrefix),
+                tags: tagsForFile(f.relativePath, appliedTaxonomy, tagPrefix),
               })),
               dataLakeSlug: slug,
               // Correlate every uploaded file to its batch so the pipeline
@@ -867,25 +878,11 @@ export function useDataLakes(enabled = true) {
     enabled,
     retry: false,
     queryFn: async () => {
-      const response = await api.get<{
-        data: Array<{
-          id: string;
-          name: string;
-          slug: string;
-          description?: string;
-          fileTagPrefix: string;
-          requiredUserTag?: string;
-          requiredEntitlement?: string;
-          organizationId?: string;
-          isPublic?: boolean;
-          datalakeTag: string;
-          fileCount?: number;
-          createdAt: string;
-          // Server-computed (admin or creator). Management affordances gate on this: the
-          // list includes other users' read-only public lakes. See DataLakeConfig.canManage.
-          canManage?: boolean;
-        }>;
-      }>('/api/data-lakes');
+      // The server's own shape, not a hand-maintained twin: `canManage` and the editor-only
+      // `systemPrompt` are attached per lake by listDataLakes, and the latter only when the
+      // caller may manage that lake. The former inline type also declared `createdAt` and
+      // `fileCount`, neither of which this projection returns.
+      const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
       return response.data.data;
     },
     refetchOnWindowFocus: false,
@@ -940,7 +937,9 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       // source discriminator, and a fully-specified key would refresh only one surface.
       queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
       queryClient.invalidateQueries({ queryKey: ['dataLakeArticles'] });
-      queryClient.invalidateQueries({ queryKey: ['file-tags', 'counts'] });
+      // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
+      // so dropping tags here staled the list too, not only the counts endpoint.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to remove file from data lake');

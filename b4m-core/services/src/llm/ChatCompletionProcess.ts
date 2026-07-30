@@ -3390,7 +3390,7 @@ export class ChatCompletionProcess {
                     return true;
                   })
                   .map(artifact => ({
-                    type: artifact.type as 'text' | 'image' | 'file' | 'data',
+                    type: artifact.type,
                     content: artifact.content,
                     metadata: {},
                     timestamp: new Date(),
@@ -3891,7 +3891,7 @@ export class ChatCompletionProcess {
             // thinking models the backend raises it to an internal floor (see
             // buildThinkingParams), so the effective API ceiling can be higher than
             // this number - hence "requested" rather than the actual ceiling.
-            `⚠️ [Truncation] Response hit max_tokens ceiling (model=${currentModel.id}, outputTokens=${outputTokens}, requestedMaxTokens=${safeMaxTokens}). Output may be truncated mid-artifact (#9259).`
+            `⚠️ [Truncation] Response hit max_tokens ceiling (model=${currentModel.id}, outputTokens=${outputTokens}, requestedMaxTokens=${safeMaxTokens}). Output may be truncated mid-artifact.`
           );
           if (quest.promptMeta) {
             quest.promptMeta.warnings = [

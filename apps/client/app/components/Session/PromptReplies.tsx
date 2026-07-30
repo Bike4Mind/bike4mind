@@ -1391,9 +1391,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       } else {
         // Opening tag truncated mid-attribute - nothing renderable. Log the dropped
         // length so mid-attribute truncations are observable if they occur in prod.
-        console.warn(
-          `[Artifacts] Dropping truncated artifact with incomplete opening tag (${tail.length} chars) (#9259)`
-        );
+        console.warn(`[Artifacts] Dropping truncated artifact with incomplete opening tag (${tail.length} chars)`);
         preprocessedContent =
           artifactIndex === -1 ? preprocessedContent : preprocessedContent.substring(0, artifactIndex).trim();
       }

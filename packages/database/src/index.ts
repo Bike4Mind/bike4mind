@@ -12,6 +12,7 @@ export * from './seeds/seedModelCatalog';
 export * from './seeds/generateModelCatalogSeed';
 export * from './seeds/modelIdAliases';
 export * from './queries/fabFileSearchQuery';
+export * from './queries/dataLakeLifecycleScope';
 export * from './queries/collectionSearchQuery';
 export * from '@bike4mind/db-core';
 // Shadows db-core's connectDB (explicit exports beat star re-exports): every
