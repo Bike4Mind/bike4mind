@@ -64,6 +64,7 @@ import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { isImageModel } from '@client/app/utils/commands';
 import { green, greenAlpha, orange, red } from '@client/app/utils/themes/colors';
 import { useFavoriteModels } from '@client/app/hooks/useFavoriteModels';
+import { useIsMobile } from '@client/app/hooks/useIsMobile';
 
 // List of model IDs to exclude from the dropdown
 // Add any model IDs you want to hide here
@@ -759,6 +760,11 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   const hasScrolledRef = useRef(false);
   const { isFavorite, toggleFavorite } = useFavoriteModels();
   const [viewMode, setViewMode] = useState<ModelViewMode>('list');
+  // Below `sm` the grid is already one column, so the two layouts differ only by the
+  // description and the row/column flow - not enough to justify a control. Grid wins there.
+  // The user's own choice is left untouched in state so it returns when the viewport widens.
+  const isMobile = useIsMobile();
+  const effectiveViewMode: ModelViewMode = isMobile ? 'grid' : viewMode;
 
   // Lift model stats into parent - avoids N redundant query subscriptions and computations in ModelOption
   const { data: modelStats, isLoading: statsLoading } = useModelStats();
@@ -1279,13 +1285,15 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
             </Select>
           )}
 
-          {/* Shows the layout it switches TO, so the icon reads as the action. */}
+          {/* Shows the layout it switches TO, so the icon reads as the action. Hidden below
+              `sm`, where the layout is pinned to grid and the control would be a no-op. */}
           <Tooltip title={viewMode === 'list' ? 'Switch to grid view' : 'Switch to list view'}>
             <IconButton
               data-testid="model-view-mode-toggle"
               aria-label={viewMode === 'list' ? 'Switch to grid view' : 'Switch to list view'}
               onClick={() => setViewMode(current => (current === 'list' ? 'grid' : 'list'))}
               sx={theme => ({
+                display: { xs: 'none', sm: 'inline-flex' },
                 flexShrink: 0,
                 '--IconButton-size': '32px',
                 backgroundColor: 'var(--joy-palette-background-body)',
@@ -1454,7 +1462,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                   <Box
                     sx={{
                       display: 'grid',
-                      gridTemplateColumns: viewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                      gridTemplateColumns: effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                       gap: 2,
                     }}
                   >
@@ -1472,7 +1480,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                         avgResponseTimeByModel={avgResponseTimeByModel}
                         statsLoading={statsLoading}
                         mode={mode}
-                        viewMode={viewMode}
+                        viewMode={effectiveViewMode}
                       />
                     ))}
                   </Box>
@@ -1594,7 +1602,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           <Box
                             sx={{
                               display: 'grid',
-                              gridTemplateColumns: viewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                              gridTemplateColumns:
+                                effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                               gap: 2,
                             }}
                           >
@@ -1612,7 +1621,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 avgResponseTimeByModel={avgResponseTimeByModel}
                                 statsLoading={statsLoading}
                                 mode={mode}
-                                viewMode={viewMode}
+                                viewMode={effectiveViewMode}
                               />
                             ))}
                           </Box>
@@ -1642,7 +1651,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           <Box
                             sx={{
                               display: 'grid',
-                              gridTemplateColumns: viewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                              gridTemplateColumns:
+                                effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                               gap: 2,
                             }}
                           >
@@ -1660,7 +1670,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 avgResponseTimeByModel={avgResponseTimeByModel}
                                 statsLoading={statsLoading}
                                 mode={mode}
-                                viewMode={viewMode}
+                                viewMode={effectiveViewMode}
                               />
                             ))}
                           </Box>
@@ -1690,7 +1700,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           <Box
                             sx={{
                               display: 'grid',
-                              gridTemplateColumns: viewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                              gridTemplateColumns:
+                                effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                               gap: 2,
                             }}
                           >
@@ -1708,7 +1719,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 avgResponseTimeByModel={avgResponseTimeByModel}
                                 statsLoading={statsLoading}
                                 mode={mode}
-                                viewMode={viewMode}
+                                viewMode={effectiveViewMode}
                               />
                             ))}
                           </Box>
@@ -1720,7 +1731,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                     <Box
                       sx={{
                         display: 'grid',
-                        gridTemplateColumns: viewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                        gridTemplateColumns: effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                         gap: 2,
                       }}
                     >
@@ -1738,7 +1749,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           avgResponseTimeByModel={avgResponseTimeByModel}
                           statsLoading={statsLoading}
                           mode={mode}
-                          viewMode={viewMode}
+                          viewMode={effectiveViewMode}
                         />
                       ))}
                     </Box>
