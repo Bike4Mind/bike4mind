@@ -64,9 +64,12 @@ vi.mock('./DataLakeTree', () => ({
       <button data-testid="mock-select-file" onClick={() => onSelectFile({ id: 'file-123', fileName: 'x.pdf' })}>
         select
       </button>
-      <button data-testid="mock-close" onClick={onClose}>
-        close
-      </button>
+      {/* Mirror the real header: the close X renders only when an onClose is supplied. */}
+      {onClose && (
+        <button data-testid="mock-close" onClick={onClose}>
+          close
+        </button>
+      )}
     </div>
   ),
 }));
@@ -136,6 +139,11 @@ describe('DataLakeExplorer chat-first surface', () => {
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-close'));
     expect(setModeSpy).toHaveBeenCalledWith(false);
+  });
+
+  it('showModeClose={false} hides the close X (nav-managed hosts keep only the info icon)', () => {
+    renderExplorer({ showModeClose: false });
+    expect(screen.queryByTestId('mock-close')).toBeNull();
   });
 
   it('no session + no createSessionForFile (overlay): file click guides via toast, writes nothing', () => {

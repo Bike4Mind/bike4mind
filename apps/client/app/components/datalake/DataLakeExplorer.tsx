@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Typography } from '@mui/joy';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import DataLakeTree from './DataLakeTree';
+import { DataLakeNavProvider } from './dataLakeNavContext';
 import { useGetDataLakeArticles, useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import type { DataLakeBrowseSource } from '@client/app/hooks/data/fabFiles';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
@@ -55,6 +56,13 @@ interface DataLakeExplorerProps {
    * proceed into the normal open-in-viewer flow. Omitted (overlay) -> a guidance toast instead.
    */
   createSessionForFile?: () => Promise<string>;
+  /**
+   * Whether the tree header shows the close (X) that turns Data Lake mode off. Default true.
+   * Hosts where the surface is entered/left by navigation rather than a per-session toggle
+   * (e.g. a dedicated Data Lake page/mission) pass false, so the info icon stands alone -
+   * turning the shared mode off there wouldn't even hide the tree.
+   */
+  showModeClose?: boolean;
 }
 
 /** True only for drags carrying real files (not text/image-from-page drags). */
@@ -69,6 +77,7 @@ export default function DataLakeExplorer({
   chatSlot,
   chatEmbedded = false,
   createSessionForFile,
+  showModeClose = true,
 }: DataLakeExplorerProps) {
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
 
@@ -166,7 +175,7 @@ export default function DataLakeExplorer({
 
   // Phase 1: Lightweight counts for the tree (server-side aggregation, ~50 entries)
   const { data: tagCountsData, isLoading: tagCountsLoading, isError: tagCountsError } = useGetDataLakeTagCounts(source);
-  const tree = buildTagTree(tagCountsData?.tagCounts ?? []);
+  const tree = useMemo(() => buildTagTree(tagCountsData?.tagCounts ?? []), [tagCountsData]);
 
   // Derive the current leaf tag from breadcrumb + tree state
   const currentNodes = getNodesAtPath(tree, breadcrumb);
@@ -213,6 +222,26 @@ export default function DataLakeExplorer({
       void openFileInViewer(file);
     },
     [openFileInViewer]
+  );
+
+  // Richest second-level branches (top 6), exposed to a host idle pane in the chatSlot via
+  // context so its quick-dive chips can drive the tree. Aligned with THIS tree, so the dives
+  // always match what the sidebar shows regardless of `source`.
+  const nav = useMemo(
+    () => ({
+      navigate: handleNavigate,
+      quickDives: tree
+        .flatMap(prefix =>
+          prefix.children.map(child => ({
+            path: [prefix.segment, child.segment],
+            segment: child.segment,
+            count: child.fileCount,
+          }))
+        )
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 6),
+    }),
+    [tree, handleNavigate]
   );
 
   return (
@@ -274,10 +303,10 @@ export default function DataLakeExplorer({
           title={rootLabel}
           onManage={onManage}
           onCreateLake={onCreateLake}
-          onClose={() => setDataLakeMode(false)}
+          onClose={showModeClose ? () => setDataLakeMode(false) : undefined}
         />
         <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
-          {chatSlot}
+          <DataLakeNavProvider value={nav}>{chatSlot}</DataLakeNavProvider>
         </Box>
       </Box>
 
