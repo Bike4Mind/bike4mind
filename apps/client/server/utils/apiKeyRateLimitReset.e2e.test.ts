@@ -38,9 +38,12 @@ describe('resetApiKeyRateLimit (end-to-end, real cache repo + Mongo)', () => {
     // fixed wall-clock window can't roll over mid-test. On a starved CI runner the three
     // sequential awaits below could otherwise span >60s, expiring the window and letting the
     // "blocked" call through - a false red in the runner, not the code. All calls must see one
-    // window; time is only advanced deliberately to test the roll-over-after-reset path.
+    // window. The frozen instant must be in the real-clock FUTURE: the cache collection has a
+    // TTL index on expiresAt, and mongod's sweeper runs on its own real clock (not the faked
+    // Date), so a past instant would make the window doc immediately TTL-eligible and delete it
+    // mid-test - the same starved-runner flake, reintroduced via TTL.
     vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
     try {
       // Drive the enforcer to the minute ceiling: 2 allowed, 3rd rejected.
       expect((await checkApiKeyRateLimit(keyId, rateLimit)).allowed).toBe(true);
