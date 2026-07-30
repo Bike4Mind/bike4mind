@@ -77,9 +77,11 @@ const PLACEHOLDER_PATTERNS: readonly RegExp[] = [
   // Adjacency-anchored `for brevity` matched the bare form and nothing else, so an interpolated
   // variant ("for the sake of brevity", "in the interest of brevity") walked straight past it while
   // its own sibling `TRUNCATED ... FOR BREVITY` matched - one phrasing of the same marker detected
-  // and the other not. The filler window is bounded, and whitespace after the preposition is still
-  // required, so a hyphenated path segment like `for-brevity-notes.js` stays unmatched.
-  /\b(?:for|in) (?:\w+\s+){0,4}brevity\b/i,
+  // and the other not. The connectives are ENUMERATED rather than a free filler window: a
+  // `(?:\w+\s+){0,4}` window also swallowed `// penalize the score for excessive brevity in the
+  // answer`, where brevity is the subject matter rather than an excuse for omitting code.
+  // Whitespace after the preposition is still required, so `for-brevity-notes.js` stays unmatched.
+  /\b(?:for|in) (?:the (?:sake|interests?|purposes?) of |reasons of )?brevity\b/i,
   // "omitted" and "unchanged" are qualified rather than bare: `// optional fields omitted from
   // the payload` and `// props unchanged, skip re-render` are ordinary comments in working
   // code, and a single match here returns HIGH confidence. Only the stub readings are matched.
@@ -100,16 +102,42 @@ const PLACEHOLDER_PATTERNS: readonly RegExp[] = [
   // artifact body has no innocent reading in a finished deliverable - the artifact is a standalone
   // document, so there is no "next response" for it to be continued in, and nothing inside it can
   // ask the user to reply. Observed verbatim in a shipped artifact that published with no warning.
-  /\b(?:respond|reply|answer|say|type) (?:with )?["'`*]{0,2}continue\b/i,
-  // `in` is deliberately not an alternative here: "// in the next response we get the cursor" is an
-  // ordinary pagination comment, while "see next response" has no such reading.
-  /\b(?:see|continued? in|continues in) (?:the )?next (?:response|message|reply|turn)s?\b/i,
-  // Omission behind a count, narrowed to the two shapes with no innocent reading. First person in
-  // artifact source is the giveaway: shipped code never promises what its author is about to write.
-  // The trailing object is required to keep this off "// I will add validation later", which is a
-  // prose TODO - and bare TODO is excluded from this list by design.
-  /\bI (?:will|shall|'ll|am going to) (?:now |then |immediately )?(?:include|add|send|provide|write|emit|list|continue)\b[^\n]{0,30}\b(?:remaining|rest|others?|further|additional|entries|\d+)\b/i,
-  /\b(?:following|remaining) \d+ [\w-]+ (?:are|will be) (?:all )?(?:individually |each )?(?:defined|included|listed|written|implemented|present)\b/i,
+  //
+  // The quote wrapper is REQUIRED, or an explicit "please". Without one of those, this fired on
+  // ordinary control-flow prose: `// if they say continue, restart the loop` and
+  // `// users can reply continue to resume` are both about the artifact's OWN behaviour, not about
+  // the reader. A model asking for continuation quotes or shouts the token.
+  /\b(?:respond|reply|answer|say|type) (?:with )?["'`*]{1,2}continue\b/i,
+  /\bplease (?:respond|reply|answer) (?:with )?continue\b/i,
+  // Deliberately WITHOUT the `i` flag: an unquoted but shouted CONTINUE is the commonest form of
+  // this instruction and the quote requirement above misses it, while every false-positive reading
+  // spells it lowercase (`if they say continue`, `users can reply continue to resume`). The case of
+  // CONTINUE is the whole discriminator, so do not add `i` here - the VERB is spelled both ways
+  // because it may open a sentence, and only the token needs to be shouted.
+  /\b(?:[Rr]espond|[Rr]eply|[Aa]nswer|[Tt]ype) (?:with )?CONTINUE\b/,
+  // `next response` needs no qualifier. `next message|reply|turn` DOES: bare, it fired on
+  // `// clicking advances the carousel so users see the next message`, an ordinary UI comment. Two
+  // qualified forms have no such reading - an authorial "continued in", or a remainder named right
+  // after. `in` is not an alternative to `see` either, since `// in the next response we get the
+  // cursor` is ordinary pagination.
+  /\b(?:see|continued? in|continues in) (?:the )?next response\b/i,
+  /\bcontinued? in (?:the )?next (?:message|reply|turn)\b/i,
+  /\b(?:see|in) (?:the )?next (?:message|reply|turn)\b[^\n]{0,40}\b(?:rest|remaining|remainder|continuation)\b/i,
+  // Omission behind a count. First person in artifact source is the giveaway: shipped code never
+  // promises what its author is about to write. The trailing object must be a COUNTED or PLURAL
+  // body of content, which is what separates "deferred delivery of the artifact's own content" from
+  // an ordinary prose TODO. A bare number or a bare `remaining` is not enough - those fired on
+  // `// I will add 2 more validation rules below` and `// I will add the remaining validation later`,
+  // the second of which also contradicted this comment's own claim that prose TODOs stay clean.
+  // `the rest` is exempt from the counted-or-plural requirement, because with no noun after it the
+  // phrase can only mean the artifact's own remaining content - which is the admission we want.
+  // The rule exists to exclude a promise about a NAMED feature (`the remaining validation later`),
+  // and that still needs the count or plural.
+  /\bI(?: will| shall|'ll| am going to) (?:now |then |immediately )?(?:include|add|send|provide|write|emit|list|continue)\b[^\n]{0,30}\b(?:the )?(?:(?:remaining|rest of the|other|further|additional)\s+(?:\d+\s+[\w-]+|[\w-]+s)|rest(?:\s+of\s+(?:the|them|it))?)\b/i,
+  // `all individually|each` is REQUIRED, as the real specimen carried it. Without it the truthful
+  // reading is lexically identical to the lying one: `// The following 4 helpers are all defined
+  // below` describes working code, and fired at HIGH confidence.
+  /\b(?:following|remaining) \d+ [\w-]+ (?:are|will be) (?:all (?:individually |each )|individually |each )(?:defined|included|listed|written|implemented|present)\b/i,
 ];
 // Deliberately NOT patterns, all for the same reason - a single match here returns HIGH confidence,
 // so a phrase that reads innocently in working code would flag a complete artifact:
@@ -560,7 +588,16 @@ const HOLLOW_BODY_PATTERNS: readonly RegExp[] = [
   // special-casing only `window.` missed every one of them. The NAME captured is the last segment.
   // Each prefix segment may carry an argument list, so the chain crosses a lookup call:
   // `document.getElementById('a').onclick = () => {}`.
-  /(?:^|[\s;{}])(?:[A-Za-z_$][\w$]*(?:\s*\([^()]*\))?\s*\.\s*)*([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{([^{}]*)\}/gm,
+  //
+  // The repetition is BOUNDED at 8, and that bound is load-bearing rather than cosmetic. Unbounded,
+  // this backtracks quadratically on chain-shaped input written with spaces around the dots
+  // (`a . a . a ...`): the `\s*` makes every space a viable match start and each start re-walks the
+  // remaining chain. Measured before the bound, through detectElidedContent on a `react` body:
+  // 191ms / 771ms / 3119ms at 15 / 30 / 60KB. That runs synchronously on the completion path ahead of
+  // quest save and billing settlement, so it is a HANG, which the surrounding crash guards cannot
+  // catch - they only handle throws. Real handler chains are 2-3 segments, and this detector is
+  // deliberately lossy, so the bound costs nothing observable.
+  /(?:^|[\s;{}])(?:[A-Za-z_$][\w$]*(?:\s*\([^()]*\))?\s*\.\s*){0,8}([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{([^{}]*)\}/gm,
   // object-literal / class method shorthand: `render() {}`, `async load() {}`
   /(?:^|[\s;{,])(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^()]*\)\s*\{([^{}]*)\}/gm,
 ];
@@ -568,7 +605,9 @@ const HOLLOW_BODY_PATTERNS: readonly RegExp[] = [
 /**
  * Extracts comment text - and ONLY comment text - then matches the stub phrases against it.
  * `#` is treated as a comment marker for python artifacts alone; elsewhere it is a CSS colour
- * or a URL fragment. A `//` preceded by `:` is a URL scheme, not a comment.
+ * or a URL fragment. A `//` IMMEDIATELY preceded by `:` is a URL scheme, not a comment - see the
+ * guard in stripCommentsAndStrings for why adjacency rather than nearest-non-whitespace. This claim
+ * described intended behaviour that the lexer did not actually implement until it was reported.
  */
 function findPlaceholderComments(body: string, type?: ArtifactType): ElisionSignal[] {
   const found: ElisionSignal[] = [];
@@ -888,7 +927,21 @@ function stripCommentsAndStrings(source: string, collectInto?: RawCommentSpan[])
       }
     }
 
-    if (ch === '/' && next === '/') {
+    // `scheme://host` is not a comment. Without this, the type-less reply-share fallback lexed prose
+    // like `Docs: https://example.com/x - trimmed for brevity` as comment text and gated sharing a
+    // healthy reply at HIGH confidence.
+    //
+    // Adjacency is required - the raw previous character, NOT `prevMeaningful`, which is what the
+    // regex-literal check below uses. Skipping whitespace first would also swallow
+    // `{ url: // a real comment }` and `cond ? a : // why`, which are ordinary comments; only the
+    // no-space `url://x` form is ambiguous, and that reads as a URL far more often than a comment.
+    //
+    // WHERE A SKIPPED `//` ACTUALLY GOES, because the two halves are load-bearing together:
+    // `startsRegexLiteral` already treats `:` as a regex-opening position, so the slashes fall into
+    // the regex-literal branch below and are consumed as an empty literal rather than as code. Do not
+    // "simplify" either half without re-checking the other - the pinned prose-URL and bare-`//host`
+    // tests cover both directions.
+    if (ch === '/' && next === '/' && source[i - 1] !== ':') {
       const start = i;
       while (i < source.length && source[i] !== '\n') {
         out += ' ';
