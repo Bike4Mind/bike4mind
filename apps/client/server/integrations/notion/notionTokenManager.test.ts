@@ -151,6 +151,76 @@ describe('NotionTokenManager', () => {
       });
     });
 
+    it('should return tokens optimistically on transient network error', async () => {
+      mockFindById.mockResolvedValue({
+        id: 'user-123',
+        notionConnect: {
+          status: 'connected',
+          accessToken: 'valid-token',
+          workspaceId: 'ws-123',
+          workspaceName: 'My Workspace',
+        },
+      });
+
+      mockFetch.mockRejectedValue(new Error('fetch failed'));
+
+      const result = await NotionTokenManager.getValidTokens('user-123');
+
+      expect(result).toEqual({
+        accessToken: 'decrypted-valid-token',
+        workspaceId: 'ws-123',
+        workspaceName: 'My Workspace',
+      });
+      // Should NOT mark as needs_reconnect
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it('should return tokens optimistically on Notion 5xx error', async () => {
+      mockFindById.mockResolvedValue({
+        id: 'user-123',
+        notionConnect: {
+          status: 'connected',
+          accessToken: 'valid-token',
+          workspaceId: 'ws-123',
+          workspaceName: 'My Workspace',
+        },
+      });
+
+      mockFetch.mockResolvedValue({ ok: false, status: 500 });
+
+      const result = await NotionTokenManager.getValidTokens('user-123');
+
+      expect(result).toEqual({
+        accessToken: 'decrypted-valid-token',
+        workspaceId: 'ws-123',
+        workspaceName: 'My Workspace',
+      });
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it('should mark as needs_reconnect only on 403', async () => {
+      mockFindById.mockResolvedValue({
+        id: 'user-123',
+        notionConnect: {
+          status: 'connected',
+          accessToken: 'revoked-token',
+          workspaceId: 'ws-123',
+          workspaceName: 'My Workspace',
+        },
+      });
+
+      mockFetch.mockResolvedValue({ ok: false, status: 403 });
+
+      await expect(NotionTokenManager.getValidTokens('user-123')).rejects.toThrow(NotionReconnectRequiredError);
+
+      expect(mockUpdate).toHaveBeenCalledWith({
+        id: 'user-123',
+        notionConnect: expect.objectContaining({
+          status: 'needs_reconnect',
+        }),
+      });
+    });
+
     it('should validate token against Notion API', async () => {
       mockFindById.mockResolvedValue({
         id: 'user-123',

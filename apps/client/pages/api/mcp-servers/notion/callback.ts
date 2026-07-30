@@ -15,6 +15,14 @@ import { encryptToken } from '@server/security/tokenEncryption';
 const OAUTH_TIMEOUT = 30000;
 const NOTION_API_TIMEOUT = 10000;
 
+/** Redirect to the integrations page with a specific error message shown as a toast. */
+function redirectWithError(res: any, message: string) {
+  res.setHeader('Set-Cookie', [
+    `notion_error=${encodeURIComponent(message)}; Path=/; Max-Age=60; SameSite=Lax; Secure`,
+  ]);
+  return res.redirect('/profile?tab=integrations&notion=error');
+}
+
 interface NotionTokenResponse {
   access_token: string;
   token_type: 'bearer';
@@ -66,22 +74,22 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     console.error('[Notion Callback] OAuth error:', error);
     auditLogger.failure('oauth_error');
     const errorMsg = typeof error === 'string' ? error : 'OAuth authorization failed';
-    res.setHeader('Set-Cookie', [
-      `notion_error=${encodeURIComponent(errorMsg)}; Path=/; Max-Age=60; SameSite=Lax; Secure`,
-    ]);
-    return res.redirect('/profile?tab=integrations&notion=error');
+    return redirectWithError(res, `Notion authorization failed: ${errorMsg}`);
   }
 
   if (!code || typeof code !== 'string') {
     console.error('[Notion Callback] Missing authorization code');
     auditLogger.failure('missing_code');
-    return res.redirect('/profile?tab=integrations&notion=error');
+    return redirectWithError(
+      res,
+      'Notion authorization failed: no authorization code received. Please try connecting again.'
+    );
   }
 
   if (!state || typeof state !== 'string') {
     console.error('[Notion Callback] Missing state parameter');
     auditLogger.failure('missing_state');
-    return res.redirect('/profile?tab=integrations&notion=error');
+    return redirectWithError(res, 'Notion authorization failed: invalid callback state. Please try connecting again.');
   }
 
   // Extract and validate state parameter
@@ -103,7 +111,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   } catch (parseError) {
     console.error('[Notion Callback] Failed to parse state parameter:', parseError);
     auditLogger.failure('invalid_state');
-    return res.redirect('/profile?tab=integrations&notion=error');
+    return redirectWithError(res, 'Notion authorization failed: corrupted callback data. Please try connecting again.');
   }
 
   auditLogger.setUserId(userId);
@@ -113,7 +121,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   if (!secret) {
     console.error('[Notion Callback] JWT_SECRET environment variable is required');
     auditLogger.failure('missing_jwt_secret');
-    return res.redirect('/profile?tab=integrations&notion=error');
+    return redirectWithError(res, 'Notion connection failed: server configuration error. Please contact support.');
   }
   const hmac = crypto.createHmac('sha256', secret);
   hmac.update(`${userId}:${csrfToken}:${timestamp}`);
@@ -122,7 +130,10 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   if (signature !== expectedSignature) {
     console.error('[Notion Callback] CSRF signature validation failed');
     auditLogger.failure('csrf_signature_invalid');
-    return res.redirect('/profile?tab=integrations&notion=error');
+    return redirectWithError(
+      res,
+      'Notion authorization failed: security validation error. Please try connecting again.'
+    );
   }
 
   // Check token age (expire after 10 minutes)
@@ -130,13 +141,19 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   if (tokenAge > 10 * 60 * 1000) {
     console.error('[Notion Callback] CSRF token expired (age: ' + Math.round(tokenAge / 1000) + 's)');
     auditLogger.failure('csrf_token_expired');
-    return res.redirect('/profile?tab=integrations&notion=error');
+    return redirectWithError(
+      res,
+      'Notion authorization timed out (took longer than 10 minutes). Please try connecting again.'
+    );
   }
 
   if (tokenAge < 0) {
     console.error('[Notion Callback] CSRF token timestamp is in the future');
     auditLogger.failure('csrf_token_future');
-    return res.redirect('/profile?tab=integrations&notion=error');
+    return redirectWithError(
+      res,
+      'Notion authorization failed: clock synchronization error. Please try connecting again.'
+    );
   }
 
   // Idempotency check: avoid re-running token exchange if the callback fires more than once
@@ -152,7 +169,10 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   if (!clientId || !clientSecret || !redirectUri) {
     console.error('[Notion Callback] Notion OAuth credentials not configured');
     auditLogger.failure('oauth_not_configured');
-    return res.redirect('/profile?tab=integrations&notion=error');
+    return redirectWithError(
+      res,
+      'Notion integration is not configured on this server. Please contact your administrator.'
+    );
   }
 
   // Step 1: Exchange code for tokens
@@ -187,7 +207,10 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     if (fetchError instanceof Error && fetchError.name === 'AbortError') {
       console.error('[Notion Callback] Token exchange timed out after 30s');
       auditLogger.failure('token_exchange_timeout');
-      return res.redirect('/profile?tab=integrations&notion=error');
+      return redirectWithError(
+        res,
+        'Notion connection timed out while exchanging credentials. Notion may be slow — please try again.'
+      );
     }
     throw fetchError;
   }
@@ -204,7 +227,10 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     console.error('   4. Client ID/Secret mismatch');
     console.error('   Current redirect_uri:', redirectUri);
     auditLogger.failure('token_exchange_failed', { statusCode: tokenResponse.status });
-    return res.redirect('/profile?tab=integrations&notion=error');
+    return redirectWithError(
+      res,
+      `Notion rejected the authorization (HTTP ${tokenResponse.status}). This can happen if the link expired or was already used. Please try connecting again.`
+    );
   }
 
   const tokenData: NotionTokenResponse = await tokenResponse.json();
@@ -212,7 +238,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   if (!tokenData.access_token) {
     console.error('[Notion Callback] No access token returned from Notion');
     auditLogger.failure('no_access_token');
-    return res.redirect('/profile?tab=integrations&notion=error');
+    return redirectWithError(res, 'Notion did not return an access token. Please try connecting again.');
   }
 
   console.log(

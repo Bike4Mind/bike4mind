@@ -89,8 +89,50 @@ const handler = baseApi().get(async (req, res) => {
     res.status(200).json({ pages });
   } catch (error) {
     console.error('[Notion Pages] Error browsing pages:', error);
-    const message = error instanceof Error ? error.message : 'Failed to browse Notion pages';
-    res.status(500).json({ error: message });
+
+    // Surface specific, actionable error messages to the client
+    if (error instanceof Error) {
+      if (error.name === 'NotionReconnectRequiredError') {
+        return res.status(401).json({
+          error: 'Your Notion connection has been revoked. Please reconnect in Settings > Integrations.',
+          code: 'NOTION_RECONNECT_REQUIRED',
+        });
+      }
+
+      if (error.message.includes('Failed to get valid Notion tokens')) {
+        return res.status(401).json({
+          error: 'Notion is not connected. Please connect your Notion account in Settings > Integrations.',
+          code: 'NOTION_NOT_CONNECTED',
+        });
+      }
+
+      if (error.message.includes('Failed to decrypt')) {
+        return res.status(500).json({
+          error: 'Notion credentials could not be read. Please disconnect and reconnect your Notion account.',
+          code: 'NOTION_DECRYPT_FAILED',
+        });
+      }
+
+      if (error.message.includes('Notion search failed')) {
+        const status = error.message.match(/: (\d+)/)?.[1];
+        return res.status(502).json({
+          error: `Notion API returned an error (HTTP ${status || 'unknown'}). This is usually temporary — please try again.`,
+          code: 'NOTION_API_ERROR',
+        });
+      }
+
+      if (error.message.includes('Notion blocks fetch failed')) {
+        const status = error.message.match(/: (\d+)/)?.[1];
+        return res.status(502).json({
+          error: `Could not load child pages from Notion (HTTP ${status || 'unknown'}). The page may have been deleted or unshared.`,
+          code: 'NOTION_BLOCKS_ERROR',
+        });
+      }
+    }
+
+    res.status(500).json({
+      error: 'Unexpected error loading Notion pages. Please try again or reconnect your account.',
+    });
   }
 });
 
