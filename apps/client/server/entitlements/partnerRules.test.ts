@@ -53,6 +53,16 @@ describe('partnerRules resolver', () => {
     const grant = await partnerSignupGrantForEmail('a@other.com', true);
     expect(grant.matched).toBe(false);
     expect(grant.signupCredits).toBe(0);
+    expect(grant.organizationId).toBeNull();
+  });
+
+  it('signup grant carries the rule organizationId when set, and null when absent', async () => {
+    mockFindActiveRules.mockResolvedValue([{ ...RULE, organizationId: 'org-123' }]);
+    expect((await partnerSignupGrantForEmail('a@partner.com', true)).organizationId).toBe('org-123');
+
+    invalidatePartnerRuleCache();
+    mockFindActiveRules.mockResolvedValue([RULE]); // no organizationId on the rule
+    expect((await partnerSignupGrantForEmail('a@partner.com', true)).organizationId).toBeNull();
   });
 
   it('caches the rule set so repeated resolutions hit the DB once', async () => {
