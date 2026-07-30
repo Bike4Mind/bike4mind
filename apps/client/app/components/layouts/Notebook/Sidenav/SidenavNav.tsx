@@ -8,6 +8,7 @@ import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlined';
+import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
@@ -20,6 +21,7 @@ import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useOptiAccess } from '@client/app/hooks/data/opti';
+import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useHelpPanel, openHelpPanel } from '@client/app/hooks/useHelpPanel';
@@ -62,6 +64,9 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // Visibility rides purely on product access (tag/entitlement); the legacy
   // experimental toggle was retired with the open-core carve.
   const isOptiEnabled = hasOptiAccess;
+  // /meetings is a codegen-mounted premium route. The hook folds the route-exists check in
+  // with product access, so an open-core build has no row and no dead-end.
+  const isMeetingsEnabled = useMeetingsAccess();
   // /tavern is a codegen-mounted premium route; builds without the overlay
   // (open core) have no such route, so the entry must hide or it dead-ends.
   const tavernRouteExists = premiumRoutes.some(route => route.path.startsWith('/tavern'));
@@ -155,6 +160,21 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
               closeOnMobile();
               // @ts-expect-error - /opti is a premium route, not in static route tree
               navigate({ to: '/opti' });
+            },
+          },
+        ]
+      : []),
+    ...(isMeetingsEnabled
+      ? [
+          {
+            key: 'meetings',
+            label: 'Interactive Meetings',
+            icon: iconSlot(<GroupsOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname.startsWith('/meetings'),
+            onClick: () => {
+              closeOnMobile();
+              // @ts-expect-error - /meetings is a premium route, not in the static route tree
+              navigate({ to: '/meetings' });
             },
           },
         ]
