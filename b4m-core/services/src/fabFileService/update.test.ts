@@ -128,4 +128,61 @@ describe('updateFabFile (upload moderation gate)', () => {
 
     expect(result.fileUrl).toBe('https://s3.example.com/stale-signed-url');
   });
+
+  // A leave clears the lake's prefixed content tags AFTER the array write, so the object
+  // assembled from the request no longer matches storage. Reported by QA on PR #1128: an API
+  // client trusting the response would think tags survived that were already gone.
+  it('reports the tags as persisted after a lake leave, not the pre-cleanup array', async () => {
+    const inLake = baseFile({
+      mimeType: 'text/plain',
+      fileName: 'notes.txt',
+      moderationStatus: 'clean',
+      tags: [
+        { name: 'datalake:qa-lake', strength: 1 },
+        { name: 'qa:invoices', strength: 1 },
+      ],
+    } as Partial<IFabFileDocument>);
+    findAccessibleById.mockResolvedValue(inLake);
+
+    const lake = {
+      id: 'lake1',
+      datalakeTag: 'datalake:qa-lake',
+      fileTagPrefix: 'qa:',
+      createdByUserId: 'user-123',
+      status: 'active',
+    };
+    // First read is removeFileFromLake testing membership; the second is the post-commit re-read.
+    const findById = vi
+      .fn()
+      .mockResolvedValueOnce(inLake)
+      .mockResolvedValue({ ...inLake, tags: [] });
+
+    const adapters = {
+      db: {
+        fabFiles: {
+          shareable: { findAccessibleById },
+          update: dbUpdate,
+          findById,
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+          computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+        },
+        dataLakes: { findByDatalakeTag: vi.fn().mockResolvedValue(lake), setStats: vi.fn() },
+      },
+      storage: mockAdapters.storage,
+    };
+
+    // The caller drops the meta-tag but asks to keep the folder tag; the leave clears both.
+    const result = await updateFabFile(
+      mockUser,
+      { id: 'file-1', tags: [{ name: 'qa:invoices', strength: 1 }] },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      adapters as any
+    );
+
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('file-1', [
+      'datalake:qa-lake',
+      'qa:invoices',
+    ]);
+    expect(result.tags).toEqual([]);
+  });
 });

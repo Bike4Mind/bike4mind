@@ -133,9 +133,15 @@ export const updateFabFile = async (
   await db.fabFiles.update(updatedFabFile);
 
   // Membership writes land on the persisted array, so they cannot be clobbered by the write
-  // above. The returned object reflects the tags as persisted a moment ago, not the membership
-  // tags this may have just pulled - callers that need the final state re-read.
-  await lakeTags?.commit();
+  // above.
+  if (lakeTags) {
+    await lakeTags.commit();
+    // Leaving a lake also clears its prefixed content tags, so the array assembled above is no
+    // longer what is stored. Report what a subsequent GET would: a caller trusting a response
+    // that still lists tags this call just removed draws the wrong conclusion.
+    const persisted = await db.fabFiles.findById(id);
+    if (persisted) updatedFabFile.tags = persisted.tags;
+  }
 
   return updatedFabFile;
 };
