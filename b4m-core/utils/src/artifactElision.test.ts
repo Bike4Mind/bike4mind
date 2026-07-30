@@ -162,23 +162,86 @@ describe('detectElidedContent', () => {
       ['reader asked to reply', '// Due to system limits, please respond "CONTINUE" and I will send the rest'],
       ['pointer at a later turn', '// see next response for the remaining rows'],
       ['first-person promise', '// I will include the remaining 84 languages below'],
+      ['the contracted first person', "// I'll include the remaining 84 entries below"],
       ['claimed-but-absent count', '// The following 90 languages are all individually defined'],
+      // Restored coverage: tightening these families against false positives first overshot and lost
+      // the shapes below. Each is a realistic marker, and each is discriminated from its
+      // false-positive twin by something specific - shouted case, an authorial verb, or a named
+      // remainder - so they are pinned to stop the next tightening from dropping them again.
+      ['an unquoted but shouted CONTINUE', '// Reply CONTINUE for the remaining entries'],
+      ['a shouted CONTINUE mid-sentence', '// respond CONTINUE to receive the rest'],
+      ['an authorial pointer at the next message', '// continued in the next message'],
+      ['a next-message pointer naming the remainder', '// see next message for the remaining rows'],
+      ['a promise about the bare rest', '// I will send the rest in a follow-up'],
     ])('flags %s', (_label, comment) => {
       const body = `<html><body><script>\n${comment}\nfunction go() { document.title = 'x'; }\ngo();\n</script></body></html>`;
 
       expect(detectElidedContent(body, 'html').confidence).toBe('high');
     });
 
+    // Every row below the first five is a repro from review: each one flagged at HIGH confidence on a
+    // COMPLETE artifact, which is the worst failure this feature can produce - an amber banner plus a
+    // publish gate on healthy output. They are pinned individually rather than as one fixture so a
+    // future widening names the exact phrasing it breaks.
     it.each([
       ['a prose TODO in the first person', '// I will add validation later, once the schema settles'],
       ['a remaining-count in its ordinary sense', '// the remaining 3 bytes are padding'],
       ['pagination that mentions a next response', '// in the next response we get the cursor'],
       ['waiting on a response', '// wait for the next response before retrying'],
       ['a hyphenated path segment', '//cdn.example.com/for-brevity-notes.js'],
+      ['a truthful "are all defined" claim', '// The following 4 helpers are all defined below'],
+      ['a truthful "are included" claim', '// the remaining 12 fields are included for backwards compatibility'],
+      ['a counted prose TODO', '// I will add 2 more validation rules below'],
+      ['a prose TODO naming what remains', '// I will add the remaining validation later'],
+      ['control flow that mentions continue', '// if they say continue, restart the loop'],
+      ['the artifact describing its OWN reply affordance', '// users can reply continue to resume'],
+      ['a carousel advancing to the next message', '// clicking advances the carousel so users see the next message'],
+      ['brevity as the subject matter', '// penalize the score for excessive brevity in the answer'],
+      // These five guard a specific near-miss: the shouted-CONTINUE arm was briefly written with
+      // loose alternation (`\b[Rr]espond|[Rr]eply|...`), which matches a BARE verb anywhere and would
+      // have flagged a large fraction of ordinary comments at HIGH confidence. The group is required.
+      ['a bare reply verb', '// reply to the webhook with the parsed payload'],
+      ['a bare respond verb', '// respond with a 404 when the record is missing'],
+      ['a bare answer noun', '// answer is cached for 5 minutes'],
+      ['a bare type noun', '// type is narrowed by the discriminant'],
+      ['CONTINUE as a subject, not an instruction', '// CONTINUE is a reserved word in this parser'],
     ])('does not flag %s', (_label, comment) => {
       const body = `<html><body><script>\n${comment}\nfunction go() { document.title = 'x'; }\ngo();\n</script></body></html>`;
 
       expect(detectElidedContent(body, 'html').elided).toBe(false);
+    });
+
+    it('does not read a prose URL as a comment in the type-less reply-share fallback', () => {
+      // With no artifact type the whole reply markdown is lexed with JS rules, and `//` after a
+      // scheme colon used to open a line comment - harvesting the rest of the prose line, stub
+      // phrase and all, so sharing a healthy historical reply got gated at HIGH confidence.
+      const reply = 'Docs: https://example.com/guide - trimmed for brevity, ask me for the long form.';
+
+      expect(detectElidedContent(reply, undefined).elided).toBe(false);
+    });
+
+    it('still reads a bare //host line as the comment it is', () => {
+      // The other side of the colon guard: adjacency is required precisely so this keeps working.
+      const body = `<html><body><script>\n//cdn.example.com/x.js - rest of the code omitted\nfunction go() { document.title = 'x'; }\ngo();\n</script></body></html>`;
+
+      expect(detectElidedContent(body, 'html').confidence).toBe('high');
+    });
+
+    it('scans a long member chain in linear time', () => {
+      // Regression guard for quadratic backtracking in the dotted-chain hollow-body pattern. A chain
+      // written with spaces around the dots made every space a viable match start, each re-walking the
+      // rest of the chain: 191ms / 771ms / 3119ms at 15 / 30 / 60KB through this very call, on the
+      // synchronous completion path ahead of quest save and billing settlement. A hang, so the
+      // surrounding crash guards could not have helped. Bounded chain repetition fixed it.
+      // The threshold is deliberately loose - it needs to catch a return to quadratic, not benchmark
+      // the machine, and the pre-fix number at this size was over 3000ms.
+      let chain = 'a';
+      while (chain.length < 60 * 1024) chain += ' . a';
+
+      const started = Date.now();
+      detectElidedContent(chain, 'react');
+
+      expect(Date.now() - started).toBeLessThan(500);
     });
   });
 
