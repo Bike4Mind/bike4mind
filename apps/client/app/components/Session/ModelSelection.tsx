@@ -108,13 +108,12 @@ const getBackendLogo = (backend: string): string | null => {
   return logoMap[backend] || null;
 };
 
-// Badge shown on each model card hosted via AWS Bedrock. Deliberately kept separate
-// from getBackendLogo() above: that map returns provider logos (OpenAI, Anthropic, ...)
-// keyed by who authored the model, whereas this marks the hosting platform - any
-// provider's model can be Bedrock-hosted, so it's a different axis, not another entry.
-// Note: the asset bakes in a teal (#01A88D) background so it reads in both light and
-// dark themes; a transparent/outlined variant would require re-cutting the SVG.
-const BEDROCK_LOGO_SRC = '/images/logos/llm/llm-logo-bedrock.svg';
+// Marks a card as AWS Bedrock-hosted. Deliberately separate from getBackendLogo() above: that
+// map returns provider logos (OpenAI, Anthropic, ...) keyed by who authored the model, whereas
+// this marks the hosting platform - any provider's model can be Bedrock-hosted, so it's a
+// different axis, not another entry. Amazon Bedrock's own teal, so the badge reads as the
+// platform rather than as another status colour.
+const BEDROCK_BADGE_BG = '#01A88D';
 
 // Global image cache to prevent re-requests
 const imageCache = new Map<string, string>();
@@ -260,6 +259,41 @@ const metricIconColor = (variant: ChipVariant): string =>
 // it; getChipStyles hardcodes the identical value for its `purple` variant.
 const NEW_BADGE_BG = '#A52ECD';
 
+// Small label riding the card's top border. Positioning lives on the shared row in the card
+// so multiple badges line up; this only draws the pill.
+const CornerBadge = ({
+  testId,
+  label,
+  tooltip,
+  background,
+}: {
+  testId: string;
+  label: string;
+  tooltip: string;
+  background: string;
+}) => (
+  <Tooltip title={tooltip} placement="top">
+    <Box
+      data-testid={testId}
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        height: '20px',
+        px: '6px',
+        borderRadius: '4px',
+        backgroundColor: background,
+        color: '#FFFFFF',
+        fontSize: '12px',
+        fontWeight: 600,
+        lineHeight: 1,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </Box>
+  </Tooltip>
+);
+
 // Read-only indicator. The frame is what separates these from the star and settings icons
 // sitting beside them - without it, informational glyphs read as pressable. Borrows the
 // card's own border shorthand so the frames, the card and the row divider stay in step.
@@ -320,16 +354,18 @@ const ModelOption = React.memo(
     const isDisabled = !!model.disabled;
     const isList = viewMode === 'list';
 
-    // Hovering the name region reveals the full description.
+    // Each tooltip is scoped to its own element rather than to the whole row: MUI listens on
+    // `mouseover`, which bubbles, so a tooltip on the badge nested inside one on the row would
+    // open both at once.
     const nameBlock = (
-      <Tooltip
-        title={model.description ?? ''}
-        placement="top"
-        variant="soft"
-        sx={{ maxWidth: 320 }}
-        disableHoverListener={!model.description}
-      >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: isList ? 'none' : 1, minWidth: '50px' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: isList ? 'none' : 1, minWidth: '50px' }}>
+        <Tooltip
+          title={model.description ?? ''}
+          placement="top"
+          variant="soft"
+          sx={{ maxWidth: 320 }}
+          disableHoverListener={!model.description}
+        >
           <Typography
             level="body-md"
             sx={{
@@ -340,33 +376,22 @@ const ModelOption = React.memo(
           >
             {model.name}
           </Typography>
-          {/* Bedrock-hosted indicator */}
-          {model.backend === ModelBackend.Bedrock && (
-            <img
-              data-testid={`bedrock-badge-${model.id}`}
-              src={BEDROCK_LOGO_SRC}
-              alt="Hosted on AWS Bedrock"
-              width={18}
-              height={18}
-              style={{ flex: 'none', objectFit: 'contain', display: 'block', borderRadius: 4 }}
-            />
-          )}
-          {/* Selected Checkmark - sits right of the model name / Bedrock icon */}
-          {isSelected && (
-            <CheckIcon
-              sx={{
-                fontSize: '16px',
-                flex: 'none',
-                color: green[800],
-                '& path': {
-                  strokeWidth: '2px',
-                  stroke: green[800],
-                },
-              }}
-            />
-          )}
-        </Box>
-      </Tooltip>
+        </Tooltip>
+        {/* Selected Checkmark - sits right of the model name */}
+        {isSelected && (
+          <CheckIcon
+            sx={{
+              fontSize: '16px',
+              flex: 'none',
+              color: green[800],
+              '& path': {
+                strokeWidth: '2px',
+                stroke: green[800],
+              },
+            }}
+          />
+        )}
+      </Box>
     );
 
     const favoriteLabel = isFavorite ? 'Remove from favorites' : 'Add to favorites';
@@ -571,35 +596,31 @@ const ModelOption = React.memo(
               }),
         }}
       >
-        {/* Straddles the top border rather than the corner: the scroll container in
+        {/* Badges straddle the top border rather than the corner: the scroll container in
             AdvancedAIModal is overflowY:auto, which makes overflow-x compute to auto too, so
             anything reaching left of x=0 gets clipped - and in grid view that would clip the
-            left column while sparing the right. Vertical overhang is unaffected. */}
-        {!isDisabled && isNewModel(model) && (
-          <Tooltip title="Released in the last 3 months" placement="top">
-            <Box
-              data-testid={`model-new-badge-${model.id}`}
-              sx={{
-                position: 'absolute',
-                top: '-7px',
-                left: '12px',
-                zIndex: 1,
-                display: 'flex',
-                alignItems: 'center',
-                height: '20px',
-                px: '6px',
-                borderRadius: '4px',
-                backgroundColor: NEW_BADGE_BG,
-                color: '#FFFFFF',
-                fontSize: '12px',
-                fontWeight: 600,
-                lineHeight: 1,
-              }}
-            >
-              New
-            </Box>
-          </Tooltip>
-        )}
+            left column while sparing the right. Vertical overhang is unaffected. One shared
+            row so New and Bedrock can never overlap each other. */}
+        <Box sx={{ position: 'absolute', top: '-7px', left: '12px', zIndex: 1, display: 'flex', gap: '4px' }}>
+          {!isDisabled && isNewModel(model) && (
+            <CornerBadge
+              testId={`model-new-badge-${model.id}`}
+              label="New"
+              tooltip="Released in the last 3 months"
+              background={NEW_BADGE_BG}
+            />
+          )}
+          {/* Kept on disabled models, unlike New: it identifies *which* of two
+              identically-named models this is. */}
+          {model.backend === ModelBackend.Bedrock && (
+            <CornerBadge
+              testId={`bedrock-badge-${model.id}`}
+              label="AWS Bedrock"
+              tooltip="Hosted on AWS Bedrock, not the provider's own API"
+              background={BEDROCK_BADGE_BG}
+            />
+          )}
+        </Box>
 
         {isList ? (
           <>
@@ -1398,6 +1419,14 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                 '& .MuiAccordionSummary-indicator': {
                   display: 'none',
                 },
+                // Gives the first card's corner badge room to overhang. Joy clips this slot with
+                // overflow: hidden, and its expanded top padding is calc(var(--ListItem-paddingY)
+                // / 2) - a var no Accordion component defines, so the declaration is invalid and
+                // computes to 0. Must stay scoped to .Mui-expanded: Joy zeroes paddingBlock while
+                // collapsed so the section can animate to zero height.
+                '& .MuiAccordionDetails-content.Mui-expanded': {
+                  paddingBlockStart: '8px',
+                },
               })}
             >
               <AccordionSummary sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: '48px' }}>
@@ -1494,6 +1523,14 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                 },
                 '& .MuiAccordionSummary-indicator': {
                   display: 'none',
+                },
+                // Gives the first card's corner badge room to overhang. Joy clips this slot with
+                // overflow: hidden, and its expanded top padding is calc(var(--ListItem-paddingY)
+                // / 2) - a var no Accordion component defines, so the declaration is invalid and
+                // computes to 0. Must stay scoped to .Mui-expanded: Joy zeroes paddingBlock while
+                // collapsed so the section can animate to zero height.
+                '& .MuiAccordionDetails-content.Mui-expanded': {
+                  paddingBlockStart: '8px',
                 },
               })}
             >
