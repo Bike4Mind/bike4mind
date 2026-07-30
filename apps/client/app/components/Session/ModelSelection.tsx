@@ -336,7 +336,6 @@ const ModelOption = React.memo(
               textAlign: 'left',
               color: 'text.primary',
               fontWeight: '500',
-              minWidth: '70px',
             }}
           >
             {model.name}
@@ -539,12 +538,13 @@ const ModelOption = React.memo(
           cursor: isDisabled ? 'not-allowed' : 'pointer',
           opacity: isDisabled ? 0.55 : 1,
           transition: 'all 0.2s ease',
-          backgroundColor: isSelected
-            ? {
-                xs: 'var(--joy-palette-background-panel)',
-                sm: 'var(--joy-palette-background-panel)',
-              }
-            : { xs: 'var(--joy-palette-background-panel)' },
+          backgroundColor: 'var(--joy-palette-aiSettings-modelCard-background)',
+          // Selected tint rides on top as a background *image*, so the surface colour below it
+          // (base or hover) still shows through instead of being replaced.
+          ...(isSelected && {
+            backgroundImage:
+              'linear-gradient(var(--joy-palette-aiSettings-modelCard-activeBackground), var(--joy-palette-aiSettings-modelCard-activeBackground))',
+          }),
           '&:hover': {
             backgroundColor: isDisabled ? undefined : 'var(--joy-palette-aiSettings-modelCard-hoverBackground)',
           },
