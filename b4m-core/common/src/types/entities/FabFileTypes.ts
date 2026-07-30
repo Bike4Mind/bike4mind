@@ -20,6 +20,12 @@ export enum KnowledgeType {
    * This is a user-created knowledge through the Bike4Mind knowledge editor.
    */
   TEXT = 'TEXT',
+  /**
+   * Generated audio (TTS / sound effects). Storable and browsable, but never
+   * ingestable: no model accepts audio as input, so audio is deliberately
+   * excluded from every LLM-attachment and vectorization path.
+   */
+  AUDIO = 'AUDIO',
 }
 
 // Data Lake source types
@@ -233,11 +239,36 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   /** Count chunks that are terminal (have a vector OR are oversized) - for idempotent vectorizedChunkCount recompute. */
   countTerminalChunks(fabFileId: string, contextWindow: number): Promise<number>;
   /**
-   * Bulk-fetch vector-bearing chunks (id, fabFileId, text, vector) for many files in ONE
-   * indexed query, capped for memory safety. Powers semantic search (query embed -> cosine).
-   * Skips chunks without a vector at the DB layer.
+   * One page of vector-bearing chunks (id, fabFileId, text, vector) for the given files,
+   * ascending by `_id`. Skips chunks without a vector at the DB layer. Powers semantic search
+   * (query embed -> cosine).
+   *
+   * Contract callers rely on: `_id` is unique, so the ordering is total and `afterChunkId` is
+   * an exact cursor - paging a corpus never skips or duplicates a chunk, and the same inputs
+   * always yield the same page. An implementation that returns an arbitrary `limit` rows
+   * silently changes retrieval results, so ordering is part of the interface, not an optimization.
    */
-  findVectorsByFabFileIds(fabFileIds: string[], cap?: number): Promise<FabFileChunkVector[]>;
+  findVectorsByFabFileIds(
+    fabFileIds: string[],
+    options?: { limit?: number; afterChunkId?: string }
+  ): Promise<FabFileChunkVector[]>;
+}
+
+/**
+ * Identifies a data lake for file-membership matching: a file belongs on an exact `datalakeTag`
+ * match OR on a `fileTagPrefix` match against a file the lake's CREATOR OWNS. The predicate itself
+ * is `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives here so
+ * `IFabFileRepository` can name it without the packages depending on each other.
+ *
+ * Always build this from the lake DOCUMENT, never from request input: `creatorUserId` widens what
+ * the filter selects, so a caller-supplied scope would reach another user's files - and on the
+ * lifecycle paths, destroy them.
+ */
+export interface DataLakeMembershipScope {
+  datalakeTag: string;
+  fileTagPrefix?: string | null;
+  /** The lake's `createdByUserId` - the identity the prefix arm is anchored to. */
+  creatorUserId?: string | null;
 }
 
 /**
@@ -299,7 +330,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     search: string,
     filters: {
       tags?: string[];
-      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
+      type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[]; // EXCLUDE these ids ($nin)
@@ -315,10 +346,17 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTagPrefixes?: string[]; // OPEN static-registry prefixes (e.g. 'opti:') — ownership-bypass by design
       scopedTagPrefixes?: string[]; // SCOPED dynamic-lake prefixes — matched ONLY within owner/org/shared access
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
+      /**
+       * One lake's membership scope, matching the whole-lake writes exactly. Server-supplied
+       * only: it names the creator whose OWNED files the prefix arm matches, so it must never be
+       * read from request input.
+       */
+      lakeMembership?: DataLakeMembershipScope;
       skipOwnership?: boolean; // Allow-list-as-authority: skip the ownership predicate; ignored unless restrictToFileIds is present
       excludeContent?: boolean; // Exclude heavy fields (content, chunks, vector) for list queries
       excludeFilenameMarkers?: string[]; // Generic retrieval exclusion: leading word-boundary marker match (see @bike4mind/utils/retrievalExclusion)
       vectorizedOnly?: boolean; // Restrict to vectorized files only (excludes unvectorized)
+      stableSort?: boolean; // Add an `_id` tiebreaker so a multi-page walk can't drop/repeat a file (fileName sorts only)
     }
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
@@ -417,15 +455,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number>;
 
   /**
-   * Atomically remove a single tag (matched by exact name) from one file's tags array.
-   * Uses `$pull`, so concurrent removals of DIFFERENT tags on the same file don't clobber
-   * each other the way a read-filter-write `$set: { tags }` would. No-op if the tag is
-   * absent (idempotent).
+   * Atomically remove every tag matching one of `tagNames` (exact names) from one file's
+   * tags array, and clear `primaryTag` if it named one of them. Uses `$pull`, so concurrent
+   * removals of DIFFERENT tags on the same file don't clobber each other the way a
+   * read-filter-write `$set: { tags }` would. Absent names are a no-op (idempotent).
    * @param fabFileId - The ID of the file.
-   * @param tagName - The exact tag name to remove.
-   * @returns The number of files modified (0 if the tag was not present).
+   * @param tagNames - The exact tag names to remove. Empty is a no-op.
+   * @returns Documents modified by the pull. The schema has timestamps, so this can be 1
+   * even when no tag matched - do not read it as "a tag was removed".
    */
-  pullTagByFabFileId(fabFileId: string, tagName: string): Promise<number>;
+  pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
 
   /**
    * Find files by content hashes for a given user (deduplication).
@@ -434,30 +473,39 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @returns Files matching any of the provided hashes.
    */
   findByContentHashes(userId: string, hashes: string[]): Promise<IFabFileDocument[]>;
+  /**
+   * Files in a lake matching any hash, by META-TAG ONLY - deliberately narrower than the
+   * `DataLakeMembershipScope` the rest of the lifecycle family takes. Its callers act on the
+   * answer destructively (the unarchive dedup hard-deletes the losing copy) or by skipping a
+   * caller's upload, and every re-upload path that matters writes the meta-tag, so admitting a
+   * prefix match here would risk the wrong file for no gain.
+   */
   findByContentHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
 
-  // ── Data lake lifecycle (scoped by the lake's datalake: meta-tag) ──────────
+  // ── Data lake lifecycle. Scoped by DataLakeMembershipScope - the lake's meta-tag OR a
+  // fileTagPrefix match on a file the lake's creator OWNS. See buildDataLakeMembershipFilter
+  // in @bike4mind/database for the rule and why the prefix arm needs the ownership conjunct. ──
 
   /**
-   * Authoritative lake stats recomputed from source records (indexed aggregate,
-   * NOT find().length). Counts only live files (not archived, not deleted).
+   * Authoritative lake stats recomputed from source records via an aggregate (NOT
+   * find().length). Counts only live files (not archived, not deleted).
    */
-  computeDataLakeStats(datalakeTag: string): Promise<{ fileCount: number; totalSizeBytes: number }>;
-  /** Soft-archive (reversible) all live files in a lake. Returns affected count. */
-  archiveByDataLakeTag(datalakeTag: string): Promise<number>;
-  /** Reverse archive for all archived files in a lake. */
-  unarchiveByDataLakeTag(datalakeTag: string): Promise<number>;
-  /** Archived files in a lake - used by the unarchive dedup pass. */
-  findArchivedByDataLakeTag(datalakeTag: string): Promise<IFabFileDocument[]>;
-  /** Soft-deleted files in a lake - used by the deleted->active restore dedup pass. */
-  findDeletedByDataLakeTag(datalakeTag: string): Promise<IFabFileDocument[]>;
-  /** Reverse soft-delete for a lake's files, optionally excluding ids (discarded duplicates). Returns count. */
-  undeleteByDataLakeTag(datalakeTag: string, excludeIds?: string[]): Promise<number>;
-  /** Soft-delete (phase 1) all files in a lake. Returns affected file ids. */
-  softDeleteByDataLakeTag(datalakeTag: string): Promise<string[]>;
-  /** Hard-delete (phase 2) all files in a lake, including soft-deleted. Returns purged ids. Idempotent. */
-  hardDeleteByDataLakeTag(datalakeTag: string): Promise<string[]>;
-  /** All file ids carrying the lake meta-tag (including soft-deleted), for chunk/index cleanup. */
-  findIdsByDataLakeTag(datalakeTag: string): Promise<string[]>;
+  computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }>;
+  /** Soft-archive (reversible) all live member files. Returns affected count. */
+  archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
+  /** Reverse archive for all archived member files. */
+  unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
+  /** Archived member files - used by the unarchive dedup pass. */
+  findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]>;
+  /** Soft-deleted member files - used by the deleted->active restore dedup pass. */
+  findDeletedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]>;
+  /** Reverse soft-delete for member files, optionally excluding ids (discarded duplicates). Returns count. */
+  undeleteByDataLakeTag(scope: DataLakeMembershipScope, excludeIds?: string[]): Promise<number>;
+  /** Soft-delete (phase 1) all member files. Returns affected file ids. */
+  softDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
+  /** Hard-delete (phase 2) all member files, including soft-deleted. Returns purged ids. Idempotent. */
+  hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
+  /** All member file ids (including soft-deleted), for chunk/index cleanup. */
+  findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
 }

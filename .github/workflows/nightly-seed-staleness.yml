@@ -1,0 +1,99 @@
+name: Nightly Model-Catalog Seed Staleness
+
+# The seed's notice claims a "last maintained" date, and the catalog falls back
+# to it whenever discovery has never succeeded. That claim goes stale on a DATE,
+# not on a change, so enforcing it in the PR gate would fail every PR - hotfixes
+# included - on a day nobody touched the seed. It runs here instead, where the
+# answer is an issue rather than a blocked merge. The deterministic drift test
+# (regenerating from the adapter tables reproduces the file) stays PR-blocking.
+
+on:
+  schedule:
+    - cron: '30 8 * * *' # 08:30 UTC daily, just after the tsc baseline
+  workflow_dispatch: {}
+
+jobs:
+  check-repository:
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    outputs:
+      should-run: ${{ steps.check.outputs.should-run }}
+    steps:
+      - name: Check repository
+        id: check
+        run: |
+          if [ "${{ github.repository }}" = "${{ vars.CANONICAL_REPO || 'MillionOnMars/lumina5' }}" ]; then
+            echo "should-run=true" >> $GITHUB_OUTPUT
+          else
+            echo "should-run=false" >> $GITHUB_OUTPUT
+            echo "Skipping workflow - not running on the canonical repository"
+          fi
+
+  seed-staleness:
+    needs: check-repository
+    if: ${{ needs.check-repository.outputs.should-run == 'true' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'pnpm'
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      - name: Authenticate with private NPM package
+        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+
+      - name: Install Dependencies
+        run: pnpm i --frozen-lockfile
+
+      - name: Build core packages
+        run: pnpm turbo:core:build
+
+      - name: Seed staleness guard
+        env:
+          B4M_SEED_STALENESS_CHECK: 'true'
+        run: pnpm --filter @bike4mind/database test -- src/seeds/modelCatalogSeed.test.ts
+
+      - name: Open or update failure issue
+        if: failure()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const marker = '<!-- nightly-seed-staleness -->';
+            const title = 'Model catalog seed is stale';
+            const body = [
+              marker,
+              '',
+              'The checked-in model catalog seed is older than the staleness window, so its "last maintained" notice is no longer honest. Deployments where discovery has never succeeded serve this file.',
+              '',
+              `**Failing run:** ${runUrl}`,
+              '',
+              '**To fix:** `pnpm turbo:core:build && pnpm --filter @bike4mind/database generate:model-catalog-seed`, then commit the regenerated `modelCatalog.seed.json`.',
+              '',
+              '_This issue is auto-updated by `.github/workflows/nightly-seed-staleness.yml`._',
+            ].join('\n');
+
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const found = existing.data.find(i => i.body && i.body.includes(marker));
+            if (found) {
+              await github.rest.issues.update({ ...context.repo, issue_number: found.number, body });
+            } else {
+              await github.rest.issues.create({ ...context.repo, title, body });
+            }

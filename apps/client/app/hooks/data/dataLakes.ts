@@ -1,7 +1,8 @@
-import type { DataLakeConfig } from '@bike4mind/common';
+import type { BrowsePublicDataLakesResult, DataLakeConfig, ManageableDataLakeConfig } from '@bike4mind/common';
+import { normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -20,16 +21,44 @@ export function activeOrgId(): string | undefined {
 }
 
 /**
- * Fetches all data lakes accessible to the current user.
+ * Fetches all data lakes accessible to the current user. Manage-gated shape: the server attaches
+ * the editor-only fields (systemPrompt) per lake, and only where `canManage` holds - so a lake the
+ * caller can merely read arrives without them. Keep this in sync with the twin inline type on
+ * `useDataLakes` (hooks/data/dataLakeWizard.ts), which reads the same endpoint.
  */
 export function useGetDataLakes() {
   return useQuery({
     queryKey: DATA_LAKES_KEY,
     queryFn: async () => {
-      const response = await api.get<{ data: DataLakeConfig[] }>('/api/data-lakes');
+      const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
       return response.data.data;
     },
   });
+}
+
+/**
+ * The data lake in the current create scope whose `fileTagPrefix` would overlap `prefix`, if any.
+ *
+ * Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting one would
+ * take files the other holds. The server refuses such a create; this is the form-level mirror so
+ * the wizard blocks before submit. Best-effort only - the lake list cannot show an org peer's
+ * gated lake, so the server stays the authority.
+ *
+ * Overlap is bidirectional: `docs:` matches a `docs:legal:foo` tag, so `docs:` and `docs:legal:`
+ * conflict either way round.
+ */
+export function useDuplicatePrefixLake(prefix: string, skip = false): DataLakeConfig | undefined {
+  const { data: allLakes } = useGetDataLakes();
+  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
+  const scopeOrgId = selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
+
+  if (skip || !normalizeTagPrefix(prefix)) return undefined;
+
+  return allLakes?.find(
+    // Same scope as the server guard: same org, or - in the Personal context - the lakes this
+    // list shows the user, which are the ones they could collide with.
+    lake => (lake.organizationId || undefined) === scopeOrgId && tagPrefixesOverlap(prefix, lake.fileTagPrefix)
+  );
 }
 
 /**
@@ -118,6 +147,40 @@ export function useSetLakeVisibility() {
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to change visibility');
     },
+  });
+}
+
+const PUBLIC_LAKES_KEY = ['data-lakes', 'public'];
+
+/** One page of the public-lake discovery catalog. Fixed so `limit` always stays <= the API cap. */
+export const PUBLIC_LAKES_PAGE_SIZE = 24;
+
+/**
+ * Browse the public-lake discovery catalog: gate-less public lakes across all orgs, with
+ * search + load-more. `search` should already be debounced by the caller. Uses offset paging
+ * with a FIXED page size (not a growing `limit`) so a deep load-more can never exceed the
+ * route's max-limit cap; pages accumulate via useInfiniteQuery. A new `search` is a new query
+ * key, so it resets to the first page automatically.
+ */
+export function useBrowsePublicDataLakes(search: string) {
+  return useInfiniteQuery({
+    queryKey: [...PUBLIC_LAKES_KEY, { search }],
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const params = new URLSearchParams();
+      if (search.trim()) params.set('q', search.trim());
+      params.set('limit', String(PUBLIC_LAKES_PAGE_SIZE));
+      params.set('offset', String(pageParam));
+      const response = await api.get<BrowsePublicDataLakesResult>(`/api/data-lakes/public?${params.toString()}`);
+      return response.data;
+    },
+    // Next offset = how many we've loaded so far; undefined once we've reached the total.
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, page) => n + page.data.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+    // Keep prior pages visible while a new search query resolves (no flash to empty).
+    placeholderData: keepPreviousData,
   });
 }
 

@@ -18,6 +18,10 @@ import {
   RadioGroup,
   Skeleton,
   Stack,
+  Tab,
+  TabList,
+  TabPanel,
+  Tabs,
   Textarea,
   Tooltip,
   Typography,
@@ -44,10 +48,10 @@ import {
   useGetArchivedDataLakes,
   useGetDeletedDataLakes,
 } from '@client/app/hooks/data/dataLakes';
-import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { useDataLakeWizardStore, type ManagerTab } from '@client/app/stores/useDataLakeWizardStore';
+import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
-import { toast } from 'sonner';
 import DataLakeViewer from './DataLakeViewer';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
@@ -56,6 +60,13 @@ export default function DataLakeListPanel() {
   const { data: dataLakes, isLoading } = useDataLakes();
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
+  // Follow the store's target tab so a deep-link (openManager('discover')) always lands on the
+  // right tab, while still letting the user switch freely afterwards. Syncing on the store value
+  // (not just mount) keeps the deep-link working even if the manager Modal ever gains keepMounted
+  // and stops remounting this panel between opens.
+  const managerTab = useDataLakeWizardStore(s => s.managerTab);
+  const [tab, setTab] = useState<ManagerTab>(managerTab);
+  useEffect(() => setTab(managerTab), [managerTab]);
   const [viewingLake, setViewingLake] = useState<{
     id: string;
     name: string;
@@ -81,6 +92,9 @@ export default function DataLakeListPanel() {
           requiredEntitlement: l.requiredEntitlement ?? '',
           organizationId: l.organizationId ?? '',
           isPublic: l.isPublic ?? false,
+          // Absent for a lake the caller can only read - the server withholds it (editor-only).
+          systemPrompt: l.systemPrompt ?? '',
+          canManage: !!l.canManage,
         }
       : null;
   }, [dataLakes, editingLakeId]);
@@ -123,191 +137,223 @@ export default function DataLakeListPanel() {
           >
             {DATA_LAKES}
           </Typography>
-          <Button size="sm" variant="soft" color="primary" startDecorator={<AddIcon />} onClick={openWizard}>
-            Create
-          </Button>
         </Stack>
 
-        {isLoading ? (
-          <Stack gap={1}>
-            {[1, 2, 3].map(i => (
-              <Skeleton key={i} variant="rectangular" height={72} sx={{ borderRadius: 'md' }} />
-            ))}
-          </Stack>
-        ) : !dataLakes || dataLakes.length === 0 ? (
-          <Box sx={{ textAlign: 'center', py: 4 }}>
-            <DataLakeIcon sx={{ fontSize: 40, opacity: 0.3, mb: 1 }} />
-            <Typography level="body-sm" color="neutral">
-              No data lakes yet. Create one to organize your files.
-            </Typography>
-          </Box>
-        ) : (
-          <Stack gap={1}>
-            {dataLakes.map(lake => (
-              <Card
-                key={lake.id}
-                variant="outlined"
-                data-testid={`datalake-card-${lake.id}`}
-                sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: 'primary.300' } }}
-                onClick={() =>
-                  setViewingLake({
-                    id: lake.id,
-                    name: lake.name,
-                    tagPrefix: lake.fileTagPrefix,
-                    canManage: !!lake.canManage,
-                  })
-                }
+        <Tabs
+          value={tab}
+          onChange={(_, v) => setTab(v as ManagerTab)}
+          data-testid="datalake-manager-tabs"
+          sx={{ bgcolor: 'transparent' }}
+        >
+          <TabList size="sm">
+            <Tab value="mine" data-testid="datalake-tab-mine">
+              My lakes
+            </Tab>
+            <Tab value="discover" data-testid="datalake-tab-discover">
+              Discover
+            </Tab>
+          </TabList>
+
+          <TabPanel value="mine" sx={{ p: 0, pt: 2 }}>
+            <Stack direction="row" justifyContent="flex-end" sx={{ mb: 1.5 }}>
+              <Button
+                size="sm"
+                variant="soft"
+                color="primary"
+                startDecorator={<AddIcon />}
+                onClick={openWizard}
+                data-testid="datalake-create-btn"
               >
-                <Stack direction="row" alignItems="center" gap={1.5}>
-                  <DataLakeIcon sx={{ fontSize: 20, color: 'primary.400' }} />
-                  <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography level="title-sm" noWrap>
-                      {lake.name}
-                    </Typography>
-                    <Stack direction="row" gap={0.5} sx={{ mt: 0.25 }}>
-                      <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '10px' }}>
-                        {lake.fileTagPrefix}
-                      </Chip>
-                      {lake.requiredUserTag && (
-                        <Chip size="sm" variant="soft" color="primary" sx={{ fontSize: '10px' }}>
-                          {lake.requiredUserTag}
-                        </Chip>
-                      )}
-                    </Stack>
-                  </Box>
-                  {/* Add files / Settings / Archive are owner-or-admin only (the backend
+                Create
+              </Button>
+            </Stack>
+
+            {isLoading ? (
+              <Stack gap={1}>
+                {[1, 2, 3].map(i => (
+                  <Skeleton key={i} variant="rectangular" height={72} sx={{ borderRadius: 'md' }} />
+                ))}
+              </Stack>
+            ) : !dataLakes || dataLakes.length === 0 ? (
+              <Box sx={{ textAlign: 'center', py: 4 }}>
+                <DataLakeIcon sx={{ fontSize: 40, opacity: 0.3, mb: 1 }} />
+                <Typography level="body-sm" color="neutral">
+                  No data lakes yet. Create one to organize your files.
+                </Typography>
+              </Box>
+            ) : (
+              <Stack gap={1}>
+                {dataLakes.map(lake => (
+                  <Card
+                    key={lake.id}
+                    variant="outlined"
+                    data-testid={`datalake-card-${lake.id}`}
+                    sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: 'primary.300' } }}
+                    onClick={() =>
+                      setViewingLake({
+                        id: lake.id,
+                        name: lake.name,
+                        tagPrefix: lake.fileTagPrefix,
+                        canManage: !!lake.canManage,
+                      })
+                    }
+                  >
+                    <Stack direction="row" alignItems="center" gap={1.5}>
+                      <DataLakeIcon sx={{ fontSize: 20, color: 'primary.400' }} />
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography level="title-sm" noWrap>
+                          {lake.name}
+                        </Typography>
+                        <Stack direction="row" gap={0.5} sx={{ mt: 0.25 }}>
+                          <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '10px' }}>
+                            {lake.fileTagPrefix}
+                          </Chip>
+                          {lake.requiredUserTag && (
+                            <Chip size="sm" variant="soft" color="primary" sx={{ fontSize: '10px' }}>
+                              {lake.requiredUserTag}
+                            </Chip>
+                          )}
+                        </Stack>
+                      </Box>
+                      {/* Add files / Settings / Archive are owner-or-admin only (the backend
                       enforces the same rule). The list surfaces other users' read-only public
                       lakes, so render these only when the caller may manage this lake. */}
-                  {lake.canManage && (
-                    <>
-                      <Tooltip title="Add files" size="sm">
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="primary"
-                          data-testid={`datalake-addfiles-btn-${lake.id}`}
-                          onClick={e => {
-                            stop(e);
-                            openWizardForLake({
-                              id: lake.id,
-                              slug: lake.slug,
-                              name: lake.name,
-                              fileTagPrefix: lake.fileTagPrefix,
-                              requiredUserTag: lake.requiredUserTag,
-                              requiredEntitlement: lake.requiredEntitlement,
-                            });
-                          }}
-                        >
-                          <AddIcon sx={{ fontSize: 16 }} />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Settings" size="sm">
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="neutral"
-                          data-testid={`datalake-settings-btn-${lake.id}`}
-                          onClick={e => {
-                            stop(e);
-                            setEditingLakeId(lake.id);
-                          }}
-                        >
-                          <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Archive" size="sm">
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="warning"
-                          data-testid={`datalake-archive-btn-${lake.id}`}
-                          onClick={e => {
-                            stop(e);
-                            archiveLake.mutate(lake.id);
-                          }}
-                        >
-                          <ArchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                        </IconButton>
-                      </Tooltip>
-                    </>
-                  )}
-                </Stack>
-              </Card>
-            ))}
-          </Stack>
-        )}
+                      {lake.canManage && (
+                        <>
+                          <Tooltip title="Add files" size="sm">
+                            <IconButton
+                              size="sm"
+                              variant="plain"
+                              color="primary"
+                              data-testid={`datalake-addfiles-btn-${lake.id}`}
+                              onClick={e => {
+                                stop(e);
+                                openWizardForLake({
+                                  id: lake.id,
+                                  slug: lake.slug,
+                                  name: lake.name,
+                                  fileTagPrefix: lake.fileTagPrefix,
+                                  requiredUserTag: lake.requiredUserTag,
+                                  requiredEntitlement: lake.requiredEntitlement,
+                                });
+                              }}
+                            >
+                              <AddIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Settings" size="sm">
+                            <IconButton
+                              size="sm"
+                              variant="plain"
+                              color="neutral"
+                              data-testid={`datalake-settings-btn-${lake.id}`}
+                              onClick={e => {
+                                stop(e);
+                                setEditingLakeId(lake.id);
+                              }}
+                            >
+                              <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Archive" size="sm">
+                            <IconButton
+                              size="sm"
+                              variant="plain"
+                              color="warning"
+                              data-testid={`datalake-archive-btn-${lake.id}`}
+                              onClick={e => {
+                                stop(e);
+                                archiveLake.mutate(lake.id);
+                              }}
+                            >
+                              <ArchiveOutlinedIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
+                        </>
+                      )}
+                    </Stack>
+                  </Card>
+                ))}
+              </Stack>
+            )}
 
-        {/* Archived (reversible) */}
-        <LifecycleSection
-          label="Archived"
-          open={showArchived}
-          onToggle={() => setShowArchived(v => !v)}
-          testid="datalake-archived-section"
-          emptyText="No archived data lakes."
-          lakes={showArchived ? archivedLakes : undefined}
-          renderActions={lake => (
-            <>
-              <Tooltip title="Restore" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="success"
-                  data-testid={`datalake-restore-btn-${lake.id}`}
-                  onClick={() => unarchiveLake.mutate(lake.id)}
-                >
-                  <UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Delete (recoverable)" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="danger"
-                  data-testid={`datalake-delete-btn-${lake.id}`}
-                  onClick={() => deleteLake.mutate(lake.id)}
-                >
-                  <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-            </>
-          )}
-        />
+            {/* Archived (reversible) */}
+            <LifecycleSection
+              label="Archived"
+              open={showArchived}
+              onToggle={() => setShowArchived(v => !v)}
+              testid="datalake-archived-section"
+              emptyText="No archived data lakes."
+              lakes={showArchived ? archivedLakes : undefined}
+              renderActions={lake => (
+                <>
+                  <Tooltip title="Restore" size="sm">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="success"
+                      data-testid={`datalake-restore-btn-${lake.id}`}
+                      onClick={() => unarchiveLake.mutate(lake.id)}
+                    >
+                      <UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Delete (recoverable)" size="sm">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="danger"
+                      data-testid={`datalake-delete-btn-${lake.id}`}
+                      onClick={() => deleteLake.mutate(lake.id)}
+                    >
+                      <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                </>
+              )}
+            />
 
-        {/* Deleted (recoverable until purged) */}
-        <LifecycleSection
-          label="Deleted (recoverable)"
-          open={showDeleted}
-          onToggle={() => setShowDeleted(v => !v)}
-          testid="datalake-deleted-section"
-          emptyText="No deleted data lakes."
-          lakes={showDeleted ? deletedLakes : undefined}
-          renderActions={lake => (
-            <>
-              <Tooltip title="Restore" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="success"
-                  data-testid={`datalake-restore-deleted-btn-${lake.id}`}
-                  onClick={() => restoreDeletedLake.mutate(lake.id)}
-                >
-                  <RestoreIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Purge permanently" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="danger"
-                  data-testid={`datalake-purge-btn-${lake.id}`}
-                  onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
-                >
-                  <DeleteForeverIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-            </>
-          )}
-        />
+            {/* Deleted (recoverable until purged) */}
+            <LifecycleSection
+              label="Deleted (recoverable)"
+              open={showDeleted}
+              onToggle={() => setShowDeleted(v => !v)}
+              testid="datalake-deleted-section"
+              emptyText="No deleted data lakes."
+              lakes={showDeleted ? deletedLakes : undefined}
+              renderActions={lake => (
+                <>
+                  <Tooltip title="Restore" size="sm">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="success"
+                      data-testid={`datalake-restore-deleted-btn-${lake.id}`}
+                      onClick={() => restoreDeletedLake.mutate(lake.id)}
+                    >
+                      <RestoreIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Purge permanently" size="sm">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="danger"
+                      data-testid={`datalake-purge-btn-${lake.id}`}
+                      onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
+                    >
+                      <DeleteForeverIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                </>
+              )}
+            />
+          </TabPanel>
+
+          <TabPanel value="discover" sx={{ p: 0, pt: 2 }}>
+            <DataLakeDiscoverPanel />
+          </TabPanel>
+        </Tabs>
       </Box>
 
       {/* Settings editor */}
@@ -376,13 +422,23 @@ interface EditableLake {
   organizationId: string;
   /** Public opt-in. With organizationId, derives the tri-state Visibility control. */
   isPublic: boolean;
+  /**
+   * Per-lake system prompt. '' both when unset AND when the caller may not read it (the server
+   * sends it only to a lake's editors), so the field renders off `canManage`, never off this.
+   */
+  systemPrompt: string;
+  /**
+   * Whether the caller may manage this lake - server-computed, see DataLakeConfig.canManage.
+   * Gates the editor-only System prompt field.
+   */
+  canManage: boolean;
 }
 
 /**
- * Edit a lake's metadata (rename, description, access gate). Wires the previously
- * unused useUpdateDataLake hook. Gates can be set or changed but not cleared here -
- * the backend rejects empty values (a deliberate PHI-boundary non-affordance), so we
- * only send a gate field when it's non-empty.
+ * Edit a lake's metadata (rename, description, access gate). Gate fields are always sent,
+ * including when blank: the backend reads '' as "remove this gate", so a lake gated by
+ * mistake can be returned to ungated. Ungated is NOT world-readable - the lake falls back
+ * to its Visibility (private/organization/public), per Private-by-default on the server.
  */
 export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | null; onClose: () => void }) {
   const updateLake = useUpdateDataLake();
@@ -414,6 +470,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [description, setDescription] = useState('');
   const [requiredUserTag, setRequiredUserTag] = useState('');
   const [requiredEntitlement, setRequiredEntitlement] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('');
 
   // Seed the form once per opened lake, keyed on id (NOT the object): `lake` is now derived
   // from the live list, so it changes identity on every refetch - keying on id keeps a
@@ -424,6 +481,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setDescription(lake.description);
       setRequiredUserTag(lake.requiredUserTag);
       setRequiredEntitlement(lake.requiredEntitlement);
+      setSystemPrompt(lake.systemPrompt);
     }
     // Intentional id-keying: seed once per lake, not on every live-object refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -437,9 +495,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
     setConfirmPublicOpen(false);
   }, [lake?.id]);
 
-  // A gate can be set or changed but not cleared (the backend rejects empty values). If the
-  // user blanks a previously-set gate, the Save silently keeps the old value - surface that
-  // instead of only showing the generic "Data lake updated" success.
+  // Blanking a previously-set gate un-gates the lake. Call it out on the way out: what the
+  // lake becomes reachable by afterwards is its Visibility, which is not what "removed the
+  // gate" reads like on its own.
   const clearingUserTag = !!lake?.requiredUserTag && !requiredUserTag.trim();
   const clearingEntitlement = !!lake?.requiredEntitlement && !requiredEntitlement.trim();
 
@@ -447,34 +505,20 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
     if (!lake) return;
     const trimmedName = name.trim();
     if (!trimmedName) return;
-    const clearing = clearingUserTag || clearingEntitlement;
-    if (clearing) {
-      const kept =
-        clearingUserTag && clearingEntitlement
-          ? 'tag and entitlement were'
-          : clearingUserTag
-            ? 'tag was'
-            : 'entitlement was';
-      toast.warning(`Access gates can be changed but not cleared here — the existing ${kept} kept.`);
-    }
-    // If blanking a gate is the ONLY change, the update is a no-op the backend ignores - skip it so
-    // we don't also fire a misleading "Data lake updated" success alongside the warning above.
-    const hasOtherChange =
-      trimmedName !== lake.name ||
-      description.trim() !== lake.description ||
-      (!!requiredUserTag.trim() && requiredUserTag.trim() !== lake.requiredUserTag) ||
-      (!!requiredEntitlement.trim() && requiredEntitlement.trim() !== lake.requiredEntitlement);
-    if (clearing && !hasOtherChange) {
-      onClose();
-      return;
-    }
     updateLake.mutate(
       {
         id: lake.id,
         name: trimmedName,
         description: description.trim(),
-        ...(requiredUserTag.trim() ? { requiredUserTag: requiredUserTag.trim() } : {}),
-        ...(requiredEntitlement.trim() ? { requiredEntitlement: requiredEntitlement.trim() } : {}),
+        // Sent even when blank - '' is the backend's "remove this gate" sentinel.
+        requiredUserTag: requiredUserTag.trim(),
+        requiredEntitlement: requiredEntitlement.trim(),
+        // Only when the field was actually shown. Defense in depth for a state that should be
+        // unreachable: the gear button is gated on canManage too, and updateDataLake rejects a
+        // non-manager's whole request with a 400 rather than applying part of it - so this branch
+        // guards a path no user can currently take. Blank from an EDITOR is a deliberate clear,
+        // and '' is what unsets it.
+        ...(lake.canManage ? { systemPrompt: systemPrompt.trim() } : {}),
       },
       { onSuccess: onClose }
     );
@@ -504,6 +548,29 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   data-testid="datalake-settings-description"
                 />
               </FormControl>
+              {/* Editor-only: the wording steers every answer drawn from this lake, but a user
+                  who can merely read the lake must never see it - so this renders off the
+                  server-computed manage flag, and the server withholds the text from everyone
+                  else regardless of what the client does with it. */}
+              {lake?.canManage && (
+                <FormControl>
+                  <FormLabel>System prompt</FormLabel>
+                  <Textarea
+                    minRows={3}
+                    maxRows={10}
+                    value={systemPrompt}
+                    onChange={e => setSystemPrompt(e.target.value)}
+                    placeholder="e.g. Answer only from this lake's documents, and always cite the source file."
+                    data-testid="datalake-systemprompt-input"
+                  />
+                  <FormHelperText data-testid="datalake-systemprompt-help">
+                    {`Extra instructions applied to your chats, and to your organization's chats, while this lake is accessible - not only when the lake is used. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+                      // Count what SAVE will persist (trimmed), not the raw field contents.
+                      systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
+                    }`}
+                  </FormHelperText>
+                </FormControl>
+              )}
               <FormControl>
                 <FormLabel>Visibility</FormLabel>
                 <RadioGroup
@@ -541,7 +608,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   {visibility === 'public'
                     ? 'Public — readable by everyone across the app. Only you can manage or add files.'
                     : hasGate
-                      ? 'This lake has an access gate, so it can’t be made public. Choose Private or Organization.'
+                      ? 'This lake has an access gate, so it can’t be made public. Clear the gate below and save, then reopen settings to publish.'
                       : visibility === 'organization'
                         ? `Shared with everyone in ${lakeOrgName ?? 'your organization'}.`
                         : canShareToOrg
@@ -551,7 +618,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                             : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
                 </FormHelperText>
               </FormControl>
-              <FormControl error={clearingUserTag}>
+              <FormControl>
                 <FormLabel>Access tag</FormLabel>
                 <Input
                   value={requiredUserTag}
@@ -559,13 +626,13 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   placeholder="e.g. Opti"
                   data-testid="datalake-settings-usertag"
                 />
-                <FormHelperText>
+                <FormHelperText data-testid="datalake-settings-usertag-help">
                   {clearingUserTag
-                    ? 'A gate can’t be cleared here — saving keeps the current tag. Change it instead, or contact an admin to remove it.'
-                    : 'Users must hold this tag to access the lake. Can be set or changed, not cleared.'}
+                    ? `Saving removes the “${lake?.requiredUserTag}” gate. Access then follows Visibility above.`
+                    : 'Users must hold this tag to access the lake. Leave blank for no tag gate.'}
                 </FormHelperText>
               </FormControl>
-              <FormControl error={clearingEntitlement}>
+              <FormControl>
                 <FormLabel>Required entitlement</FormLabel>
                 <Input
                   value={requiredEntitlement}
@@ -573,10 +640,10 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   placeholder="e.g. product:pro"
                   data-testid="datalake-settings-entitlement"
                 />
-                <FormHelperText>
+                <FormHelperText data-testid="datalake-settings-entitlement-help">
                   {clearingEntitlement
-                    ? 'A gate can’t be cleared here — saving keeps the current entitlement. Change it instead, or contact an admin to remove it.'
-                    : 'Namespaced key (e.g. "product:pro"). Can be set or changed, not cleared.'}
+                    ? `Saving removes the “${lake?.requiredEntitlement}” gate. Access then follows Visibility above.`
+                    : 'Namespaced key (e.g. "product:pro"). Leave blank for no entitlement gate.'}
                 </FormHelperText>
               </FormControl>
             </Stack>

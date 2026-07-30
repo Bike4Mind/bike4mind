@@ -25,6 +25,7 @@ import {
 } from '@mui/icons-material';
 import { B4MLLMTools, OrchestrationDefaultsSchema } from '@bike4mind/common';
 import type { SlackLlmTools } from '@bike4mind/services';
+import type { ToolAvailability } from '@pages/api/settings/serverConfig';
 import React from 'react';
 
 export interface ToolInfo {
@@ -298,6 +299,35 @@ export const AGENT_MODE_TOOL_IDS: ReadonlySet<string> = (() => {
 
 /** Whether a Smart Tools toggle is honored when the composer is in Agent mode. */
 export const isToolAvailableInAgentMode = (toolName: B4MLLMTools): boolean => AGENT_MODE_TOOL_IDS.has(toolName);
+
+/**
+ * Whether the server reported this tool's required API key/config as missing
+ * (`serverConfig.toolAvailability`, computed by `computeToolAvailability` in
+ * `apps/client/pages/api/settings/serverConfig.ts`).
+ *
+ * Tests `=== false` on purpose: availability is `undefined` until /serverConfig
+ * resolves, and treating that as missing would blank the picker on first paint.
+ */
+export const isToolKeyMissing = (toolName: B4MLLMTools, availability: ToolAvailability | undefined): boolean =>
+  availability?.[toolName] === false;
+
+/**
+ * The user's enabled tools minus the ones whose key is missing, for DISPLAY and
+ * interaction gating only.
+ *
+ * A tool enabled while its key was present keeps its stored preference after the key
+ * goes away, so it restores when a valid key returns. Every surface that renders that
+ * preference (toggle state, "N pinned" tallies, composer indicators) has to combine it
+ * with availability, or a greyed-out row reads as enabled.
+ *
+ * NOT for building a send payload: the stored preference is still forwarded to the
+ * model on purpose (see `resolveTools` in useLLMSettingsAssembly), and dropping a tool
+ * here would silently diverge the request from what the user chose.
+ */
+export const filterToolsForDisplay = (
+  enabledTools: readonly B4MLLMTools[],
+  availability: ToolAvailability | undefined
+): B4MLLMTools[] => enabledTools.filter(tool => !isToolKeyMissing(tool, availability));
 
 export const getToolInfo = (toolName: PublicTools): ToolInfo | undefined => {
   return TOOL_MAPPING[toolName];

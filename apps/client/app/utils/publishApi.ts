@@ -20,6 +20,8 @@ export interface ManagedArtifact {
   description?: string;
   visibility: PublishVisibility;
   commentPolicy?: CommentPolicy;
+  /** Owner opt-in to search-engine indexing; absent/false means the page is served noindex. */
+  discoverable?: boolean;
   source: { kind: 'bundle' | 'reply' | 'fabfile'; artifactId?: string };
   size?: { totalBytes: number; fileCount: number };
   viewCount?: number;
@@ -185,6 +187,16 @@ export async function updatePublishedCommentPolicy(publicId: string, commentPoli
   await api.patch(`/api/publish/artifacts/${publicId}`, { commentPolicy });
 }
 
+/**
+ * Opt a published item in or out of search-engine indexing (owner/admin). Off by
+ * default: publishing publicly means "anyone with the link can view", never "listed
+ * in Google". Only takes effect while the item is open-public; link previews in chat
+ * apps are unaffected either way.
+ */
+export async function updatePublishedDiscoverable(publicId: string, discoverable: boolean): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { discoverable });
+}
+
 /** Access gate on top of `visibility: 'public'` - see issue #383. */
 export type PublishAccessGateInput =
   { kind: 'passphrase'; passphrase: string } | { kind: 'domain'; allowedDomains: string[] } | null;
@@ -228,6 +240,7 @@ export interface PublishedManageState {
   accessGate: PublishAccessGateRead;
   embedOrigins: string[];
   commentPolicy: CommentPolicy;
+  discoverable: boolean;
 }
 
 export async function getPublishedManageState(publicId: string): Promise<PublishedManageState> {
@@ -238,6 +251,9 @@ export async function getPublishedManageState(publicId: string): Promise<Publish
     accessGate: a.accessGate ?? null,
     embedOrigins: a.embedOrigins ?? [],
     commentPolicy: a.commentPolicy ?? 'none',
+    // Absent on rows predating the field -> false. Matches the server default: an
+    // artifact is not search-discoverable until its owner says so.
+    discoverable: a.discoverable ?? false,
   };
 }
 

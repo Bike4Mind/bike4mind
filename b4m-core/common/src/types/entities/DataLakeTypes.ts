@@ -47,19 +47,32 @@ export interface IDataLake {
   slug: string;
   /** Optional description of the data lake's purpose and contents */
   description?: string;
+  /**
+   * Optional per-lake system prompt, so a lake can carry its own answering instructions.
+   * Not yet consumed: a later PR (#843) injects it as a labeled system message whenever this
+   * lake is active in a chat turn, refining behavior WITHIN the org prompt (which stays
+   * authoritative on conflict). Editable only by the lake creator or an admin (canManageLake);
+   * uncapped, matching the other system prompts in the codebase. Absent/empty = no per-lake prompt.
+   */
+  systemPrompt?: string;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */
   datalakeTag: string;
-  /** User must have this tag to access the data lake's files. If absent, all authenticated users can access. */
+  /**
+   * User must have this tag to access the data lake's files. Absent/empty means no tag gate -
+   * NOT world-readable: access then falls back to visibility (owner-only, org, or public) per
+   * Private-by-default. Set at create, and changeable or removable later (updateDataLake takes
+   * '' as the clear sentinel).
+   */
   requiredUserTag?: string;
   /**
    * Generic capability: user must hold this entitlement key (e.g. "<product>:pro") to
    * access the lake's files, evaluated against the caller's RESOLVED entitlement keys
    * (subscription-derived + tag-derived). Independent of `requiredUserTag` - access is
    * granted if the user satisfies ANY declared requirement; a lake declaring neither is
-   * public. Values are namespaced (must contain ":") and stored normalized (lowercase).
-   * Product-neutral: any lake may set it.
+   * ungated, which is not the same as public (see `requiredUserTag`). Values are namespaced
+   * (must contain ":") and stored normalized (lowercase). Product-neutral: any lake may set it.
    */
   requiredEntitlement?: string;
   /** User who created this data lake */
@@ -118,14 +131,28 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**
-   * Datastore-side accessibility filter - owner OR (org-match AND tag-match).
-   * The org and tag constraints are BOTH required for a non-owner: a tag-holder in
-   * a different org is excluded. Defaults to the active+draft statuses.
+   * Datastore-side accessibility filter - owner OR public OR (org-match AND requirement-match
+   * AND not-private). The org and requirement constraints are BOTH required for a non-owner: a
+   * tag/entitlement-holder in a different org is excluded, and a lake with no org and no gate
+   * stays owner-only. Defaults to the active+draft statuses.
    */
   findAccessible(
     ctx: AccessContext,
     opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean }
   ): Promise<IDataLakeDocument[]>;
+  /**
+   * The discover/browse catalog: active, PUBLIC, gate-less lakes for the public-browse surface,
+   * independent of any caller identity (the catalog is the same for everyone). Only gate-less
+   * lakes qualify - a lake that acquired a `requiredUserTag`/`requiredEntitlement` after being
+   * published is no longer open to all, so it must not surface in a browse-everyone view (this
+   * mirrors the both-blank requirement arm on the retrieval/list paths). `search` matches name
+   * or description case-insensitively. Returns one page plus the unpaged `total` for the UI.
+   */
+  findPublicLakes(opts?: {
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
   setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null>;
 }

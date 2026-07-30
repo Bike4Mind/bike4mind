@@ -147,10 +147,12 @@ jobs:
         timeout-minutes: 8
         run: npx playwright install chromium --with-deps
 
-      # A staging deploy in flight rotates E2E_CLEANUP_SECRET and swaps the Lambda,
-      # so running e2e against it 401s the create-test-user setup - which then skips
-      # the ENTIRE suite via Playwright's setup-dependency graph (one red, the rest
-      # "did not run"). /api/ping is not enough: CloudFront answers it green all
+      # A staging deploy in flight swaps the Lambda under the suite, so requests can
+      # 401 or 5xx mid-run. When that hits the create-test-user setup it skips the
+      # ENTIRE suite via Playwright's setup-dependency graph (one red, the rest
+      # "did not run"). E2E_CLEANUP_SECRET itself is stable across deploys (every
+      # tier gets the same value), so the secret is not the hazard - the swap is.
+      # /api/ping is not enough: CloudFront answers it green all
       # through a deploy. So gate on the `staging/deploy` commit status: if the
       # newest commit that has one is still `pending`, a deploy is running - wait it
       # out. dev/staging only (a preview has its own env). Best-effort: warns +
@@ -204,13 +206,38 @@ jobs:
           echo "Deployment did not become healthy within 300s"
           exit 1
 
+      - name: Resolve E2E test ID
+        id: testid
+        env:
+          E2E_TEST_ID_INPUT: ${{ inputs.e2e_test_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # NEVER let this be empty. An empty E2E_TEST_ID makes global-setup fall back to the
+          # unscoped sweep, which hard-deletes every -<digits>-e2e@test.com user on the target
+          # stage - including the live users of any suite running concurrently against it, which
+          # then 401s and dies mid-test with unrelated-looking timeouts.
+          # See apps/client/e2e/global-setup.ts + pages/api/test/cleanup.ts.
+
+          # Same alphanumeric strip the TS side applies (e2e/helpers/test-users.ts
+          # getE2ETestId); also stops a dispatch value smuggling a newline into GITHUB_OUTPUT.
+          SAFE_INPUT=$(printf '%s' "$E2E_TEST_ID_INPUT" | tr -cd 'a-zA-Z0-9')
+
+          # Unique per Actions run and traceable straight back to it. A re-run reuses the id
+          # deliberately, so its pre-run cleanup collects its own earlier attempt's leftovers.
+          TEST_ID="gh${RUN_ID}"
+          if [ -n "$SAFE_INPUT" ]; then
+            TEST_ID="${SAFE_INPUT}-${TEST_ID}"
+          fi
+          echo "test_id=$TEST_ID" >> "$GITHUB_OUTPUT"
+          echo "Scoping e2e users and cleanup to testId=$TEST_ID"
+
       - name: Run E2E tests
         id: e2e
         env:
           API_URL: ${{ steps.config.outputs.api_url }}
           # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
           # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
-          E2E_TEST_ID: ${{ inputs.e2e_test_id }}
+          E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
           # Only wire the credits webhook for suites that report credits (show_credits).
           # Core runs the notebook project too, but must NOT post the in-process AI
           # Credits report (global-teardown -> notifyCreditsReport) to the slow-responses

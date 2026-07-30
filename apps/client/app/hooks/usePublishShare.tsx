@@ -13,6 +13,9 @@ export interface ExistingPublication {
    *  one-click re-publish can't silently widen visibility or re-enable comments. */
   visibility: PublishVisibility;
   commentPolicy?: CommentPolicy;
+  /** Whether the prior publication opted into search-engine listing. Seeds the dialog's
+   *  switch, so it must stay in the list endpoint's $project to be non-null in practice. */
+  discoverable?: boolean;
 }
 
 interface ShareState {

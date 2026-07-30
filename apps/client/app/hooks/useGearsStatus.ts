@@ -16,6 +16,7 @@ export type GearKey =
   | 'datalakes'
   | 'files'
   | 'published'
+  | 'hearth'
   // skills (achievements - no nav effect)
   | 'apikey'
   | 'apicall'

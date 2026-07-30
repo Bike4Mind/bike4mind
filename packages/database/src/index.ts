@@ -8,12 +8,16 @@ mongoose.plugin(mongooseLeanVirtuals);
 export * from './models';
 export * from './seeds/seedModelPrices';
 export * from './seeds/generateModelPriceSeed';
+export * from './seeds/seedModelCatalog';
+export * from './seeds/generateModelCatalogSeed';
+export * from './seeds/modelIdAliases';
 export * from './queries/fabFileSearchQuery';
+export * from './queries/dataLakeLifecycleScope';
 export * from './queries/collectionSearchQuery';
 export * from '@bike4mind/db-core';
 // Shadows db-core's connectDB (explicit exports beat star re-exports): every
 // app-layer connect also bootstraps the model price catalog exactly once.
-export { connectDB } from './priceCatalogBootstrap';
+export { connectDB, whenCatalogSeeded } from './priceCatalogBootstrap';
 export * from './utils/ability';
 // Propagate db-core's default export (BaseRepository constructor) through the root barrel.
 // export * does not re-export defaults; this explicit line is required.

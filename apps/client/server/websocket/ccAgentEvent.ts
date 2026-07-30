@@ -1,6 +1,7 @@
 import { activeCodeAgentRepository, ccBridgeDeviceRepository, codeAgentEventRepository } from '@bike4mind/database';
 import { CcAgentEventAction } from '@bike4mind/common';
 import { resolveBridgeWsAuth } from '@server/websocket/ccAgentAuth';
+import { reportCcAgentPresence } from '@server/websocket/ccAgentHearth';
 import { connectionUserCanAccessTavern } from '@server/websocket/tavernWsAuth';
 import { sendToClient, withWebSocketContext } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
@@ -167,6 +168,23 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     );
   } catch (err) {
     logger.warn('[CC_AGENT_EVENT] Failed to broadcast metadata patch (non-fatal):', err as Error);
+  }
+
+  // Hearth dual-write, status events only: a status is a closed-set value that
+  // describes presence, whereas message/tool traffic is content and the Hearth
+  // log is deliberately content-free. The status payload's optional `text`
+  // summary is content too and is dropped here. See ccAgentHearth.ts.
+  if (payload.type === 'status') {
+    await reportCcAgentPresence({
+      userId,
+      instanceId,
+      workspaceName: existing.workspaceName,
+      reason: payload.status,
+      source: existing.source,
+      claudeVersion: existing.claudeVersion,
+      hearthChannelId: device.hearthChannelId,
+      logger,
+    });
   }
 
   return { statusCode: 200 };

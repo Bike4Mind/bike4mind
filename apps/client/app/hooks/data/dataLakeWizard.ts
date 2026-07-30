@@ -4,6 +4,8 @@ import type {
   InferTaxonomyRequestInputType,
   IMessageDataToClient,
   IFabFileDocument,
+  ManageableDataLakeConfig,
+  TaxonomyFileAssignment,
 } from '@bike4mind/common';
 import { isSupportedFabFileMimeType } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType } from '@bike4mind/common';
@@ -13,34 +15,20 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   useDataLakeWizardStore,
+  isTaxonomyStepActive,
+  EMPTY_TAXONOMY,
+  type TaxonomyTag,
   type UploadProgress,
   type UploadErrorKind,
 } from '@client/app/stores/useDataLakeWizardStore';
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';
+import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
 import type { WizardFile } from '@client/app/utils/folderTreeParser';
 import { computeFileHash } from '@client/app/utils/folderTreeParser';
+import { appliedTagsForBatch, tagsForFile } from '@client/app/utils/dataLakeTaxonomy';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import axios from 'axios';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
-
-/**
- * Derive a single tag for a file from its immediate parent folder, so each file
- * is tagged by its source folder (e.g. a disease site) rather than getting every
- * taxonomy category. Returns [] for root-level files (they get only the lake
- * meta-tag). Uses underscores to match the AI taxonomy's folder-slug style.
- */
-function folderTagForFile(relativePath: string, tagPrefix: string): { name: string; strength: number }[] {
-  const segments = relativePath.split('/').filter(Boolean);
-  const parent = segments.length >= 2 ? segments[segments.length - 2] : undefined;
-  if (!parent) return [];
-  const slug = parent
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-  if (!slug) return [];
-  const prefix = tagPrefix.endsWith(':') ? tagPrefix : `${tagPrefix}:`;
-  return [{ name: `${prefix}${slug}`, strength: 1.0 }];
-}
 
 /**
  * Stratified sampling: pick up to `maxPerFolder` files from each unique folder path,
@@ -79,6 +67,71 @@ async function readContentSample(file: File, maxBytes = 500): Promise<string> {
   }
 }
 
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+
+const clampStrength = (value: unknown, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : fallback;
+
+/**
+ * The editable suffix is the tag name with its inferred prefix stripped, so the prefix is
+ * never stored per-tag (it lives once in taxonomy.prefix). A name that does not carry the
+ * inferred prefix keeps its whole text as the suffix.
+ */
+const deriveSuffix = (fullName: string, sourcePrefix: string): string => {
+  const trimmed = fullName.trim();
+  if (!sourcePrefix) return trimmed;
+  const p = sourcePrefix.endsWith(':') ? sourcePrefix : `${sourcePrefix}:`;
+  return trimmed.toLowerCase().startsWith(p.toLowerCase()) ? trimmed.slice(p.length) : trimmed;
+};
+
+/**
+ * Split each inferred category into its stable full name (originalName, the join key for
+ * per-file assignments) and its editable suffix. Drops entries the model returned without a
+ * usable tag name, or that reduce to an empty suffix (the tag was nothing but the prefix).
+ */
+function sanitizeCategories(categories: InferTaxonomyResponse['categories'], sourcePrefix: string): TaxonomyTag[] {
+  if (!Array.isArray(categories)) return [];
+  // originalName is the React key and the sole key for update/delete/merge, so it must be
+  // unique: a model that repeats a tagName would otherwise make one card's edit hit both.
+  const seen = new Set<string>();
+  return categories
+    .filter(cat => cat && isNonEmptyString(cat.tagName))
+    .map(cat => {
+      const originalName = cat.tagName.trim();
+      return {
+        suffix: deriveSuffix(originalName, sourcePrefix),
+        originalName,
+        strength: clampStrength(cat.confidence, 0.7),
+        source: 'ai' as const,
+        matchingFolders: Array.isArray(cat.matchingFolders) ? cat.matchingFolders.filter(isNonEmptyString) : [],
+        deleted: false,
+      };
+    })
+    .filter(t => {
+      if (t.suffix.length === 0) return false;
+      const key = t.originalName.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function sanitizeFileAssignments(assignments: InferTaxonomyResponse['fileAssignments']): TaxonomyFileAssignment[] {
+  if (!Array.isArray(assignments)) return [];
+  return assignments
+    .filter(entry => entry && isNonEmptyString(entry.relativePath))
+    .map(entry => ({
+      // Trim on write to match how categories are stored: tagsForFile matches assignments by
+      // strict path equality, so a padded path would otherwise miss its per-file suggestions.
+      relativePath: entry.relativePath.trim(),
+      suggestedTags: Array.isArray(entry.suggestedTags)
+        ? entry.suggestedTags
+            .filter(tag => tag && isNonEmptyString(tag.name))
+            .map(tag => ({ name: tag.name.trim(), strength: clampStrength(tag.strength, 0.7) }))
+        : [],
+    }));
+}
+
 /**
  * Hook: Infer taxonomy from folder structure using AI.
  */
@@ -87,6 +140,7 @@ export function useInferTaxonomy() {
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const setTaxonomy = useDataLakeWizardStore(s => s.setTaxonomy);
   const setTaxonomyAnalyzing = useDataLakeWizardStore(s => s.setTaxonomyAnalyzing);
+  const markTaxonomyAttempted = useDataLakeWizardStore(s => s.markTaxonomyAttempted);
 
   return useMutation({
     mutationFn: async (options?: { context?: string; existingPrefix?: string }) => {
@@ -94,6 +148,11 @@ export function useInferTaxonomy() {
 
       const included = allFiles.filter(f => !f.excluded);
       if (included.length === 0) throw new Error('No files included');
+
+      // Set BEFORE the content-sampling await below: that read can take hundreds of ms, and
+      // until analyzing flips true the step's Next/Skip gate (`!taxonomy.analyzing`) stays
+      // open, letting the user advance mid-inference and have onSuccess clobber their config.
+      setTaxonomyAnalyzing(true);
 
       const sampled = sampleFiles(included);
 
@@ -117,8 +176,6 @@ export function useInferTaxonomy() {
         })
       );
 
-      setTaxonomyAnalyzing(true);
-
       const response = await api.post<InferTaxonomyResponse>('/api/data-lakes/infer-taxonomy', {
         folderTree: folderEntries,
         existingPrefix: options?.existingPrefix,
@@ -128,23 +185,37 @@ export function useInferTaxonomy() {
       return response.data;
     },
     onSuccess: data => {
+      const previous = useDataLakeWizardStore.getState().taxonomy;
+      // The endpoint validates only suggestedPrefix + categories-is-an-array and otherwise
+      // returns the model's raw JSON, so everything below is sanitized HERE, at the single
+      // boundary where inference enters the store. Downstream (tagsForFile) runs mid-upload,
+      // after the lake exists - a TypeError there would roll back a real upload.
+      // Strip the inferred prefix off each tag into its suffix so the prefix is stored only
+      // once (in `prefix`); the cards render `prefix + suffix`.
+      const tags = sanitizeCategories(data.categories, data.suggestedPrefix || '');
+      // An empty response (no API key configured) must not blank a prefix the user already
+      // has: config.tagPrefix keeps its old value regardless.
+      // Pairs with setTaxonomy's own existing-value-wins rule, which guards the opposite input:
+      // this one keeps an EMPTY suggestion from blanking a stored prefix, setTaxonomy keeps a
+      // NON-EMPTY one from overwriting a prefix the source step already derived. They overlap
+      // only while taxonomy.prefix and config.tagPrefix agree, which every writer enforces -
+      // so this stays as the boundary-level guard rather than leaning on that invariant.
+      const prefix = data.suggestedPrefix || previous.prefix;
+
       setTaxonomy({
-        prefix: data.suggestedPrefix,
-        suggestedName: data.suggestedName,
-        tags: data.categories.map(cat => ({
-          name: cat.tagName,
-          strength: cat.confidence,
-          source: 'ai' as const,
-          sampleFileNames: cat.matchingFolders,
-          deleted: false,
-        })),
-        analyzed: true,
+        prefix,
+        suggestedName: typeof data.suggestedName === 'string' ? data.suggestedName : '',
+        tags,
+        fileAssignments: sanitizeFileAssignments(data.fileAssignments),
+        attempted: true,
         analyzing: false,
       });
-      toast.success(`AI suggested ${data.categories.length} tag categories`);
+      if (tags.length > 0) {
+        toast.success(`AI suggested ${tags.length} tag categories`);
+      }
     },
     onError: (error: Error) => {
-      setTaxonomyAnalyzing(false);
+      markTaxonomyAttempted();
       toast.error(error.message || 'Failed to infer taxonomy');
     },
   });
@@ -285,17 +356,6 @@ export const UPLOAD_ALL_FAILED_MESSAGE =
   'None of the files could be uploaded. This is usually a network or connection issue, not your data lake settings. Please try again.';
 
 /**
- * Slugify a string for use as a data lake slug.
- */
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 60);
-}
-
-/**
  * Translate an upload/create failure into a distinct kind + human message. The lake
  * config validates server-side with zod, whose raw text (e.g. "Too small: expected
  * string to have >=2 characters at 'slug'") must never reach the UI - so a 422 is
@@ -324,8 +384,8 @@ function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: 
   // rather than surfacing the raw validator string.
   if (status === 422) {
     const { config, targetLake } = useDataLakeWizardStore.getState();
-    const slug = targetLake ? targetLake.slug : slugify(config.name);
-    if (slug.length < 2) {
+    const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
+    if (slug.length < MIN_DATA_LAKE_SLUG_LENGTH) {
       return {
         kind: 'validation',
         message: 'The data lake name is too short. Use a name with at least 2 letters or numbers.',
@@ -409,7 +469,10 @@ export function useBatchUpload() {
 
       // Read from store at mutation time to avoid stale closure
       // (same pattern as useComputeHashes)
-      const { config, allFiles, targetLake } = useDataLakeWizardStore.getState();
+      const { config, allFiles, targetLake, taxonomy, optionalSteps } = useDataLakeWizardStore.getState();
+      // A taxonomy the user toggled back off must not still tag the upload. Its tags stay in
+      // the store so re-enabling the step restores them, so the flow decides, not the tags.
+      const appliedTaxonomy = isTaxonomyStepActive({ optionalSteps, targetLake }) ? taxonomy : EMPTY_TAXONOMY;
       let included = allFiles.filter(f => !f.excluded);
       if (included.length === 0) throw new Error('No files to upload');
 
@@ -450,7 +513,7 @@ export function useBatchUpload() {
       // Ensure tag prefix ends with ':'
       const tagPrefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : config.tagPrefix + ':';
       // Append mode reuses the target lake's slug; create mode derives it from the name.
-      const slug = targetLake ? targetLake.slug : slugify(config.name);
+      const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
 
       // Step 1: Create the data lake; skipped in append mode (upload into the existing lake).
       let dataLakeId: string;
@@ -489,12 +552,10 @@ export function useBatchUpload() {
       try {
         const totalSizeBytes = included.reduce((sum, f) => sum + f.size, 0);
 
-        // Per-file tags derived from each file's source folder (one tag = its
-        // folder/disease), so disease folders stay meaningful instead of every
-        // file carrying every taxonomy tag. The lake meta-tag is added server-side.
-        const appliedTags = Array.from(
-          new Set(included.flatMap(f => folderTagForFile(f.relativePath, tagPrefix).map(t => t.name)))
-        ).map(name => ({ name, strength: 1.0 }));
+        // Per-file tags: each file's source folder plus the taxonomy categories the
+        // user reviewed (append mode has no taxonomy step, so it stays folder-only).
+        // The lake meta-tag is added server-side.
+        const appliedTags = appliedTagsForBatch(included, appliedTaxonomy, tagPrefix);
 
         // Step 2: Create batch record
         const batchRes = await api.post<{ id: string }>('/api/data-lakes/batches', {
@@ -541,7 +602,9 @@ export function useBatchUpload() {
                 fileSize: f.size,
                 relativePath: f.relativePath,
                 ...(f.contentHash && { contentHash: f.contentHash }),
-                tags: folderTagForFile(f.relativePath, tagPrefix),
+                // Each file's source folder plus the reviewed taxonomy categories covering
+                // it (append mode has an empty taxonomy, so this stays folder-only).
+                tags: tagsForFile(f.relativePath, appliedTaxonomy, tagPrefix),
               })),
               dataLakeSlug: slug,
               // Correlate every uploaded file to its batch so the pipeline
@@ -815,25 +878,11 @@ export function useDataLakes(enabled = true) {
     enabled,
     retry: false,
     queryFn: async () => {
-      const response = await api.get<{
-        data: Array<{
-          id: string;
-          name: string;
-          slug: string;
-          description?: string;
-          fileTagPrefix: string;
-          requiredUserTag?: string;
-          requiredEntitlement?: string;
-          organizationId?: string;
-          isPublic?: boolean;
-          datalakeTag: string;
-          fileCount?: number;
-          createdAt: string;
-          // Server-computed (admin or creator). Management affordances gate on this: the
-          // list includes other users' read-only public lakes. See DataLakeConfig.canManage.
-          canManage?: boolean;
-        }>;
-      }>('/api/data-lakes');
+      // The server's own shape, not a hand-maintained twin: `canManage` and the editor-only
+      // `systemPrompt` are attached per lake by listDataLakes, and the latter only when the
+      // caller may manage that lake. The former inline type also declared `createdAt` and
+      // `fileCount`, neither of which this projection returns.
+      const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
       return response.data.data;
     },
     refetchOnWindowFocus: false,
@@ -863,8 +912,9 @@ export function useReprocessFabFile(dataLakeId: string | null) {
 }
 
 /**
- * Hook: Remove a single file from a data lake (soft-delete + chunk teardown).
- * Owner/admin only; the server verifies the file actually belongs to the lake.
+ * Hook: Remove a single file from a data lake. Drops the lake's membership tags from the file
+ * and leaves the file itself alone - no soft-delete, no chunk teardown. Owner/admin only; the
+ * server verifies the file actually belongs to the lake.
  */
 export function useRemoveFileFromDataLake(dataLakeId: string | null) {
   const queryClient = useQueryClient();
@@ -878,8 +928,18 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
     onSuccess: () => {
       toast.success('File removed from data lake.');
       if (dataLakeId) queryClient.invalidateQueries({ queryKey: ['dataLakeFiles', dataLakeId] });
-      // Refresh the lake list so the cached fileCount reflects the removal.
+      // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
+      // files only, so removing a file that was in the lake by prefix alone drops a row from
+      // the list without moving the count.
       queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
+      // Removal also drops the file's tags under the lake's prefix, so every tag-derived view
+      // is stale. Invalidate on the bare key prefixes: these are keyed by an opti/datalakes
+      // source discriminator, and a fully-specified key would refresh only one surface.
+      queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
+      queryClient.invalidateQueries({ queryKey: ['dataLakeArticles'] });
+      // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
+      // so dropping tags here staled the list too, not only the counts endpoint.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to remove file from data lake');

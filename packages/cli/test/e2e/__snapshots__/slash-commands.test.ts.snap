@@ -27,6 +27,7 @@ exports[`e2e — slash-command surface > exposes a stable name list (sorted, inc
   "logout",
   "mcp",
   "mcp:list",
+  "model",
   "new",
   "project-config",
   "quit",
@@ -205,6 +206,12 @@ exports[`e2e — slash-command surface > matches the canonical built-in command 
     "args": null,
     "description": "Show MCP server status and connected tools",
     "name": "mcp",
+  },
+  {
+    "aliases": [],
+    "args": "[id-or-name]",
+    "description": "Switch the active model (opens a picker, or matches an id/name argument)",
+    "name": "model",
   },
   {
     "aliases": [],

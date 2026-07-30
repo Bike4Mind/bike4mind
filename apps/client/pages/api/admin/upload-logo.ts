@@ -9,6 +9,7 @@ import { AppFile } from '@bike4mind/database/content';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { baseApi } from '@server/middlewares/baseApi';
+import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
@@ -143,7 +144,8 @@ const handler = baseApi()
         await updateLogoSettings(updatedSettings, session);
 
         return {
-          url: presignedUrl,
+          // Self-host swaps the (browser-unreachable) MinIO presign for the same-origin upload proxy.
+          url: resolveBrowserAppFileUploadUrl(file.id, presignedUrl),
           fileId: file.id,
           fileKey,
           logoUrl: `${process.env.NEXT_PUBLIC_CDN_URL}/admin-logos/${fileKey}`,

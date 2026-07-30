@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { z } from 'zod';
 
 const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount } = vi.hoisted(() => ({
   mockUserFindById: vi.fn(),
@@ -39,6 +40,8 @@ vi.mock('@bike4mind/services', () => ({
   userService: {
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
+    adminUpdateUserSchema: z.object({}).passthrough(),
+    updateUserSchema: z.object({}).passthrough(),
   },
 }));
 

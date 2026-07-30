@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { AccessContext, IDataLakeDocument, IDataLakeBatchDocument } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  UpdateDataLakeRequestInput,
+  type AccessContext,
+  type IDataLakeDocument,
+  type IDataLakeBatchDocument,
+} from '@bike4mind/common';
 import { canAccessLake, assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
 import { canManageLake, assertLakeWriteAccess, assertCanWriteDataLakeTags } from './authorizeLakeWrite';
 import { createDataLake } from './createDataLake';
@@ -10,7 +16,9 @@ import { removeFileFromDataLake } from './removeFileFromDataLake';
 import { setLakeVisibility } from './setLakeVisibility';
 import { updateDataLake } from './updateDataLake';
 import { reconcileStuckBatches, DEFAULT_STUCK_BATCH_TIMEOUT_MS } from './reconcileStuckBatches';
-import { listDataLakes } from './listDataLakes';
+import { listDataLakes, listAllDataLakes, listArchivedDataLakes, listDeletedDataLakes } from './listDataLakes';
+import { redactLakeForActor } from './redactLakeForActor';
+import { browsePublicDataLakes } from './browsePublicDataLakes';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
   ({
@@ -23,6 +31,13 @@ const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
     status: 'active',
     ...overrides,
   }) as IDataLakeDocument;
+
+/** The membership scope the `lake()` fixture yields. */
+const lakeScope = {
+  datalakeTag: 'datalake:lake',
+  fileTagPrefix: 'lk:',
+  creatorUserId: 'owner',
+};
 
 const ctx = (overrides: Partial<AccessContext> = {}): AccessContext => ({
   userId: 'someone',
@@ -257,6 +272,24 @@ describe('canManageLake — the single write/manage rule (creator or admin)', ()
   });
 });
 
+describe('canManageLake - fails closed on a blank identity', () => {
+  it('denies an actor with no userId on an owner-less lake, rather than matching blank to blank', () => {
+    // The synthetic fallback document carries createdByUserId: ''. A bare === would have granted
+    // manage (and, since this predicate now gates prompt disclosure, the prompt with it).
+    expect(canManageLake(lake({ createdByUserId: '' }), { userId: '', isAdmin: false })).toBe(false);
+    expect(
+      canManageLake({ createdByUserId: undefined } as unknown as IDataLakeDocument, {
+        userId: undefined as unknown as string,
+        isAdmin: false,
+      })
+    ).toBe(false);
+  });
+
+  it('still grants an admin on an owner-less lake', () => {
+    expect(canManageLake(lake({ createdByUserId: '' }), { userId: '', isAdmin: true })).toBe(true);
+  });
+});
+
 describe('listDataLakes - per-lake canManage flag for the UI', () => {
   it("marks the caller's own lakes manageable and strangers' (public) lakes read-only", async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
@@ -288,6 +321,153 @@ describe('listDataLakes - per-lake canManage flag for the UI', () => {
 
     expect(fallback).toBeDefined();
     expect(fallback?.canManage).toBe(false);
+  });
+});
+
+// systemPrompt is EDITOR-ONLY: it steers every answer drawn from the lake, but only the lake's
+// creator or an admin may read the wording. The list endpoint is where the editor UI gets the
+// value to seed its form, and it is also the endpoint that surfaces strangers' public lakes.
+describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () => {
+  const withPrompt = (overrides: Partial<IDataLakeDocument>) =>
+    lake({ systemPrompt: 'Always cite the source file.', ...overrides });
+
+  it("returns the prompt for the caller's own lake (seeds the Settings editor)", async () => {
+    const mine = withPrompt({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.systemPrompt).toBe('Always cite the source file.');
+  });
+
+  it("WITHHOLDS the prompt from a stranger reading someone else's PUBLIC lake", async () => {
+    const theirs = withPrompt({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
+    const entry = result.find(l => l.id === 'theirs');
+
+    expect(entry?.canManage).toBe(false);
+    expect(entry?.systemPrompt).toBeUndefined();
+    // Absent, not blanked: the client must not be able to tell "unset" from "withheld".
+    expect(entry && 'systemPrompt' in entry).toBe(false);
+  });
+
+  it('WITHHOLDS the prompt from a non-owner ORG member (read access is not manage access)', async () => {
+    const theirs = withPrompt({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'member', organizationId: 'orgA' }), { db });
+
+    expect(result.find(l => l.id === 'org')?.systemPrompt).toBeUndefined();
+  });
+
+  it("returns the prompt to an admin on another user's lake (admin is an editor)", async () => {
+    const theirs = withPrompt({ id: 'theirs', slug: 'theirs', createdByUserId: 'other' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+
+    expect(result.find(l => l.id === 'theirs')?.systemPrompt).toBe('Always cite the source file.');
+  });
+
+  it('omits a whitespace-only prompt so the client never distinguishes blank from unset', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', systemPrompt: '   \n ' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.systemPrompt).toBeUndefined();
+  });
+});
+
+describe('listAllDataLakes - the admin list still gates the prompt on canManage', () => {
+  it('returns the prompt on every DB lake, since an admin manages them all', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', systemPrompt: 'Cite sources.' });
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([theirs]) } };
+
+    const result = await listAllDataLakes({ db });
+
+    // Pins the manage flag AND the disclosure it now gates: flipping this projection to
+    // canManage:false would silently strip prompts from every admin and break the admin editor.
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'theirs')?.systemPrompt).toBe('Cite sources.');
+  });
+
+  it('never carries a prompt on a built-in fallback lake, whatever the registry holds', async () => {
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+
+    const result = await listAllDataLakes({ db });
+    const fallback = result.find(l => l.id === 'opti-knowledge');
+
+    // The registry is JSON.parse'd from env and keeps unknown keys, so an overlay entry could
+    // arrive carrying a systemPrompt. Routing fallbacks through the projection is what stops it.
+    expect(fallback).toBeDefined();
+    expect(fallback?.canManage).toBe(false);
+    expect(fallback && 'systemPrompt' in fallback).toBe(false);
+  });
+});
+
+// The raw-document exits (GET /api/data-lakes/:id, /archived, /deleted) are gated on READ
+// access, which is deliberately wider than manage - so each one must redact before serializing.
+describe('redactLakeForActor - editor-only fields on the raw-document exits', () => {
+  const prompted = (overrides: Partial<IDataLakeDocument> = {}) =>
+    lake({ createdByUserId: 'owner', systemPrompt: 'Answer only from this lake.', ...overrides });
+
+  it('leaves the document untouched for the owner', () => {
+    const l = prompted();
+    expect(redactLakeForActor(l, { userId: 'owner', isAdmin: false })).toBe(l);
+  });
+
+  it('leaves the document untouched for an admin', () => {
+    const l = prompted();
+    expect(redactLakeForActor(l, { userId: 'admin', isAdmin: true }).systemPrompt).toBe('Answer only from this lake.');
+  });
+
+  it('strips the prompt for a stranger who can READ a published lake', () => {
+    const l = prompted({ isPublic: true });
+    const visible = redactLakeForActor(l, { userId: 'stranger', isAdmin: false });
+
+    expect(visible.systemPrompt).toBeUndefined();
+    expect('systemPrompt' in visible).toBe(false);
+    // Everything a reader is entitled to must survive the redaction.
+    expect(visible.name).toBe('Lake');
+    expect(visible.datalakeTag).toBe('datalake:lake');
+  });
+
+  it('reports a whitespace-only prompt as absent for the OWNER too, matching the list projection', () => {
+    // Without this the same lake reads as "has a prompt" on GET /:id and "has none" in the list.
+    const blank = lake({ createdByUserId: 'owner', systemPrompt: '   \n ' });
+    const visible = redactLakeForActor(blank, { userId: 'owner', isAdmin: false });
+    expect('systemPrompt' in visible).toBe(false);
+  });
+
+  it('does not mutate the source document (the caller may still hold it for a write path)', () => {
+    const l = prompted({ isPublic: true });
+    redactLakeForActor(l, { userId: 'stranger', isAdmin: false });
+    expect(l.systemPrompt).toBe('Answer only from this lake.');
+  });
+
+  it('redacts per lake in the archived management view', async () => {
+    const mine = prompted({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const orgLake = prompted({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, orgLake]), find: vi.fn() } };
+
+    const result = await listArchivedDataLakes(ctx({ userId: 'me', organizationId: 'orgA' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.systemPrompt).toBe('Answer only from this lake.');
+    // Key absence, not undefined: blanking instead of deleting would pass the weaker assertion.
+    const redactedArchived = result.find(l => l.id === 'org')!;
+    expect('systemPrompt' in redactedArchived).toBe(false);
+  });
+
+  it('redacts per lake in the deleted management view', async () => {
+    const orgLake = prompted({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([orgLake]), find: vi.fn() } };
+
+    const result = await listDeletedDataLakes(ctx({ userId: 'me', organizationId: 'orgA' }), { db });
+
+    expect('systemPrompt' in result[0]!).toBe(false);
   });
 });
 
@@ -349,6 +529,115 @@ describe('updateDataLake — gate-after-publish guardrail', () => {
     await expect(
       updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { name: 'Renamed' }, { db })
     ).resolves.toMatchObject({ name: 'Renamed' });
+  });
+});
+
+describe('updateDataLake — per-lake systemPrompt (#843)', () => {
+  it('persists a systemPrompt set by the lake creator', async () => {
+    const l = lake({ createdByUserId: 'owner' });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { systemPrompt: 'Answer as an HR rep.' }, { db })
+    ).resolves.toMatchObject({ systemPrompt: 'Answer as an HR rep.' });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ systemPrompt: 'Answer as an HR rep.' }));
+  });
+
+  it('lets an admin set the systemPrompt on a lake they did not create', async () => {
+    const l = lake({ createdByUserId: 'owner' });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'other', isAdmin: true }, 'lake1', { systemPrompt: 'Be concise.' }, { db })
+    ).resolves.toMatchObject({ systemPrompt: 'Be concise.' });
+  });
+
+  it('rejects a non-creator non-admin editing the systemPrompt (canManageLake gate)', async () => {
+    const l = lake({ createdByUserId: 'owner' });
+    const update = vi.fn();
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'intruder', isAdmin: false }, 'lake1', { systemPrompt: 'Ignore all rules.' }, { db })
+    ).rejects.toThrow(/creator/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('allows clearing the systemPrompt with an empty string (no cap, no min)', async () => {
+    const l = lake({ createdByUserId: 'owner', systemPrompt: 'old prompt' });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { systemPrompt: '' }, { db })
+    ).resolves.toMatchObject({ systemPrompt: '' });
+  });
+});
+
+describe('updateDataLake — clearing an access gate', () => {
+  const gated = () => lake({ createdByUserId: 'owner', requiredUserTag: 'Opti', requiredEntitlement: 'product:pro' });
+  const makeDb = (l: IDataLakeDocument) => {
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    return { db: { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } }, update };
+  };
+
+  it('writes the empty string so the gate is actually removed', async () => {
+    const { db, update } = makeDb(gated());
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { requiredUserTag: '', requiredEntitlement: '' },
+      { db }
+    );
+    // '' (not undefined) is what reaches Mongo: $set drops undefined, so an omitted field
+    // would silently leave the gate in place. Read paths already treat '' as ungated.
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lake1', requiredUserTag: '', requiredEntitlement: '' })
+    );
+  });
+
+  it('leaves an omitted gate field untouched (omit = unchanged, blank = clear)', async () => {
+    const { db, update } = makeDb(gated());
+    await updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db });
+    const written = update.mock.calls[0][0];
+    expect(written).toMatchObject({ requiredUserTag: '' });
+    expect(written).not.toHaveProperty('requiredEntitlement');
+  });
+
+  it('lets an admin clear a gate on someone else’s lake, and refuses a non-owner', async () => {
+    const { db, update } = makeDb(gated());
+    await expect(
+      updateDataLake({ userId: 'admin', isAdmin: true }, 'lake1', { requiredUserTag: '' }, { db })
+    ).resolves.toMatchObject({ requiredUserTag: '' });
+
+    const other = makeDb(gated());
+    await expect(
+      updateDataLake({ userId: 'stranger', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db: other.db })
+    ).rejects.toThrow(/only the creator/i);
+    expect(other.update).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('clearing a gate on a public lake is allowed (the guardrail only blocks ADDING one)', async () => {
+    const { db } = makeDb(lake({ createdByUserId: 'owner', isPublic: true, requiredUserTag: 'Opti' }));
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db })
+    ).resolves.toMatchObject({ requiredUserTag: '' });
+  });
+
+  it('an ungated, org-less lake is owner-only — clearing does not make it world-readable', async () => {
+    const cleared = lake({ createdByUserId: 'owner', requiredUserTag: '', requiredEntitlement: '' });
+    expect(canAccessLake(cleared, ctx({ userId: 'stranger' }))).toBe(false);
+    expect(canAccessLake(cleared, ctx({ userId: 'owner' }))).toBe(true);
+  });
+});
+
+describe('UpdateDataLakeRequestInput — gate clear sentinel', () => {
+  it('accepts the empty string for both gate fields', () => {
+    const parsed = UpdateDataLakeRequestInput.parse({ requiredUserTag: '', requiredEntitlement: '' });
+    expect(parsed).toEqual({ requiredUserTag: '', requiredEntitlement: '' });
+  });
+
+  it('still rejects a non-namespaced entitlement (the sentinel is not a validation hole)', () => {
+    expect(() => UpdateDataLakeRequestInput.parse({ requiredEntitlement: 'pro' })).toThrow();
   });
 });
 
@@ -434,14 +723,88 @@ describe('createDataLake', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ status: 'draft' }));
   });
 
+  it('refuses a tag prefix that overlaps a lake in scope, before touching the slug', async () => {
+    // The helper is unit-tested separately; this proves createDataLake actually calls it. Deleting
+    // the guard makes this pass a create through, so the assertion kills the mutant.
+    const create = vi.fn();
+    const find = vi.fn().mockResolvedValue([lake({ id: 'other', name: 'Sibling', fileTagPrefix: 'xy:' })]);
+    await expect(
+      createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
+    ).rejects.toThrow(/overlaps an existing data lake/i);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('names the clashing lake only when the caller created it', async () => {
+    // An org lake gated by a tag the caller lacks is invisible to them everywhere else, so echoing
+    // its name here would confirm it exists.
+    const theirs = lake({ id: 'other', name: 'Project Zephyr', fileTagPrefix: 'xy:', createdByUserId: 'someone-else' });
+    const find = vi.fn().mockResolvedValue([theirs]);
+    await expect(
+      createDataLake(
+        'owner',
+        { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' },
+        { db: { dataLakes: { create: vi.fn(), find } } },
+        'orgA'
+      )
+    ).rejects.toThrow(/overlaps an existing data lake in this organization/i);
+
+    const mine = lake({ id: 'other', name: 'My Other Lake', fileTagPrefix: 'xy:', createdByUserId: 'owner' });
+    await expect(
+      createDataLake(
+        'owner',
+        { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' },
+        { db: { dataLakes: { create: vi.fn(), find: vi.fn().mockResolvedValue([mine]) } } }
+      )
+    ).rejects.toThrow(/"My Other Lake"/);
+  });
+
+  it('allows a prefix that only collides outside the create scope', async () => {
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    // find() answers the scoped query, so an out-of-scope lake simply is not in the result.
+    const find = vi.fn().mockResolvedValue([]);
+    await createDataLake(
+      'owner',
+      { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' },
+      { db: { dataLakes: { create, find } } }
+    );
+    expect(create).toHaveBeenCalled();
+  });
+
   it('scopes the meta-tag by org and disambiguates a slug collision deterministically', async () => {
     const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
-    // First slug taken, second free.
-    const find = vi.fn().mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
+    // Call order: the tag-prefix availability check, then the slug probes - first slug taken,
+    // second free. `lake()` uses prefix `lk:`, which cannot collide with this lake's `xy:`.
+    const find = vi.fn().mockResolvedValueOnce([lake()]).mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
     const db = { dataLakes: { create, find } };
     // org comes from the principal (4th arg), never the request body.
     await createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db }, 'orgA');
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: 'xy-1', datalakeTag: 'datalake:orgA:xy-1' }));
+  });
+
+  it('refuses to mint a meta-tag the static registry owns, even though no document holds it', () => {
+    // The meta-tag is an ownership bypass downstream, and the registry has no Mongo row for
+    // the unique index to collide with - so a lake slugged after a registry lake would read
+    // every tenant's files in it.
+    const registrySlug = DATA_LAKES[0].slug;
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    const db = { dataLakes: { create, find: vi.fn().mockResolvedValue([]) } };
+
+    return createDataLake('mallory', { name: 'X', slug: registrySlug, fileTagPrefix: 'mine:' }, { db }).then(() => {
+      const written = create.mock.calls[0][0] as IDataLakeDocument;
+      expect(written.datalakeTag).not.toBe(DATA_LAKES[0].datalakeTag);
+      expect(written.slug).toBe(`${registrySlug}-1`);
+    });
+  });
+
+  it('still allows a registry slug inside an org, where the minted tag cannot collide', async () => {
+    // An org lake mints `datalake:<org>:<slug>`, which no registry entry can equal.
+    const registrySlug = DATA_LAKES[0].slug;
+    const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
+    const db = { dataLakes: { create, find: vi.fn().mockResolvedValue([]) } };
+
+    await createDataLake('owner', { name: 'X', slug: registrySlug, fileTagPrefix: 'mine:' }, { db }, 'orgA');
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: registrySlug }));
   });
 });
 
@@ -467,6 +830,10 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
     const result = await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       db: { dataLakes, fabFiles },
     });
+    // The dedup probe stays on the bare meta-tag: it decides which copy gets hard-deleted, and
+    // fileTagPrefix is not unique, so a widened probe could nominate another lake's file.
+    expect(fabFiles.findByContentHashesInDataLake).toHaveBeenCalledWith(['h1', 'h2'], 'datalake:lake');
+    expect(fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope);
     expect(fabFiles.deleteManyInIds).toHaveBeenCalledWith(['a1']);
     expect(result.skippedDuplicates).toBe(1);
     expect(result.restoredCount).toBe(1);
@@ -511,7 +878,9 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
     const result = await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       db: { dataLakes, fabFiles },
     });
-    expect(fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith('datalake:lake', ['d1']);
+    expect(fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['d1']);
+    // Same narrow probe as the unarchive path, for the same reason.
+    expect(fabFiles.findByContentHashesInDataLake).toHaveBeenCalledWith(['h1', 'h2'], 'datalake:lake');
     expect(result.skippedDuplicates).toBe(1);
     expect(result.restoredCount).toBe(1);
   });
@@ -670,12 +1039,17 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
 });
 
 describe('removeFileFromDataLake — single-file removal', () => {
-  // A file that belongs to this lake AND another lake, to prove removal is lake-scoped.
+  // A wizard-ingested file as it really looks: the lake meta-tag AND a folder tag under the
+  // lake's fileTagPrefix (both are membership signals the read path ORs). Also in a second
+  // lake, and carrying that lake's prefixed tag, to prove removal is lake-scoped.
   const fileInLake = {
     id: 'f1',
+    userId: 'owner',
     tags: [
       { name: 'datalake:lake', strength: 1 },
+      { name: 'lk:invoices', strength: 1 },
       { name: 'datalake:other', strength: 1 },
+      { name: 'other:keepme', strength: 1 },
     ],
   };
 
@@ -684,20 +1058,107 @@ describe('removeFileFromDataLake — single-file removal', () => {
       dataLakes: { findById: vi.fn().mockResolvedValue(lake()), setStats: vi.fn() },
       fabFiles: {
         findById: vi.fn().mockResolvedValue(file),
-        pullTagByFabFileId: vi.fn().mockResolvedValue(1),
+        pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
       },
     },
   });
 
-  it('atomically pulls only the lake tag (keeps other lakes), never soft-deletes, and recomputes stats (owner)', async () => {
+  it('clears BOTH membership signals for this lake, keeps other lakes, and recomputes stats (owner)', async () => {
     const adapters = makeAdapters();
     const result = await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
-    // Lake-scoped + concurrency-safe: an atomic $pull of THIS lake's tag only - never a
-    // whole-array rewrite (which could clobber a concurrent removal) and never a soft-delete.
-    expect(adapters.db.fabFiles.pullTagByFabFileId).toHaveBeenCalledWith('f1', 'datalake:lake');
+    // The read path admits a file on the meta-tag OR the lake's fileTagPrefix, so both go in
+    // ONE atomic $pull - never a whole-array rewrite (which could clobber a concurrent
+    // removal) and never a soft-delete. The other lake's tags are untouched.
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalled();
     expect(result).toEqual({ success: true, fileCount: 0, totalSizeBytes: 0 });
+  });
+
+  it('removes a file whose only membership signal is a prefixed tag', async () => {
+    // These exist in quantity (see getDynamicDataLakeAccess): the lake browse lists them, so
+    // testing membership on the meta-tag alone made them permanently unremovable.
+    const prefixOnly = { id: 'f1', userId: 'owner', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(prefixOnly);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).resolves.toMatchObject({ success: true });
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
+  });
+
+  it('refuses to strip a prefixed tag off a file the actor does not own', async () => {
+    // fileTagPrefix is user-chosen and neither unique nor reserved, so a prefix match alone is
+    // not proof of membership. Without the ownership conjunct, minting a lake with someone
+    // else's prefix would be a licence to strip their tags.
+    const someoneElses = { id: 'f1', userId: 'victim', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(someoneElses);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+  });
+
+  it('treats a file with no owner as unowned rather than matching the prefix arm', async () => {
+    const ownerless = { id: 'f1', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(ownerless);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin remove a prefix-only file they do not own', async () => {
+    const someoneElses = { id: 'f1', userId: 'victim', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(someoneElses);
+    await expect(
+      removeFileFromDataLake({ userId: 'root', isAdmin: true }, 'lake1', 'f1', adapters as any)
+    ).resolves.toMatchObject({ success: true });
+  });
+
+  it('ignores a fileTagPrefix no read arm would match, rather than clearing every tag', async () => {
+    // An empty prefix contributes no read arm, so there is nothing for removal to clear. It
+    // must not become a wildcard that empties the file's tags.
+    const adapters = makeAdapters({ id: 'f1', userId: 'owner', tags: [{ name: 'anything', strength: 1 }] });
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ fileTagPrefix: '' }));
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  // The next two pin removal to the SAME normalization the read arms apply, so the prefixes a
+  // query matches are exactly the ones a removal clears - neither more nor fewer.
+  it('ignores a prefix missing its trailing colon, which no read arm honors either', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ fileTagPrefix: 'lk' }));
+    await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
+    // `lk` would match `lk:invoices` on a bare startsWith, but the read path drops the prefix
+    // outright, so clearing that tag would be removing a tag membership never depended on.
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
+  });
+
+  it('clears prefixed tags for a padded prefix, matching the trim the read arms do', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ fileTagPrefix: '  lk:  ' }));
+    await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
+  });
+
+  it('never strips another lake meta-tag, even when this lake claims the reserved prefix', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ fileTagPrefix: 'datalake:' }));
+    await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
+    // Only this lake's own tag: `datalake:other` belongs to a lake the actor may not manage.
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
+  });
+
+  it('reports success when the pull modified nothing (a concurrent removal won the race)', async () => {
+    const adapters = makeAdapters();
+    adapters.db.fabFiles.pullTagsByFabFileId = vi.fn().mockResolvedValue(0);
+    await expect(
+      removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
+    ).resolves.toMatchObject({ success: true });
   });
 
   it('removing the file from its ONLY lake still just pulls the tag — never cascade-deletes the file', async () => {
@@ -708,7 +1169,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
     const result = await removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any);
     // Same tag-pull path as the multi-lake case - the service has no cascade-delete branch,
     // so "last lake" is not special: the tag is pulled and the file is left to exist.
-    expect(adapters.db.fabFiles.pullTagByFabFileId).toHaveBeenCalledWith('f1', 'datalake:lake');
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
     expect(result).toEqual({ success: true, fileCount: 0, totalSizeBytes: 0 });
   });
 
@@ -724,7 +1185,9 @@ describe('removeFileFromDataLake — single-file removal', () => {
     await expect(
       removeFileFromDataLake({ userId: 'intruder', isAdmin: false }, 'lake1', 'f1', adapters as any)
     ).rejects.toThrow(/creator/i);
-    expect(adapters.db.fabFiles.pullTagByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    // The gate runs before any write, so a denial leaves the lake's stats alone too.
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
   });
 
   it('404s when the file does not carry the lake tag (not in this lake)', async () => {
@@ -732,7 +1195,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
     await expect(
       removeFileFromDataLake({ userId: 'owner', isAdmin: false }, 'lake1', 'f1', adapters as any)
     ).rejects.toThrow(/not found in this data lake/i);
-    expect(adapters.db.fabFiles.pullTagByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 
   it('404s when the lake does not exist', async () => {
@@ -759,6 +1222,35 @@ describe('setLakeVisibility — personal ↔ org promotion', () => {
       db,
     } as any);
     expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake1', organizationId: 'orgA' }));
+  });
+
+  /** The move runs the slug query first, then the prefix query; answer them separately. */
+  const makeMoveDb = (prefixClashes: IDataLakeDocument[]) => ({
+    dataLakes: {
+      findById: vi.fn().mockResolvedValue(lake()),
+      find: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(prefixClashes),
+      update: vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => lake(d)),
+    },
+  });
+
+  it('refuses an org move whose tag prefix overlaps a lake already in the target scope', async () => {
+    // Create-time is not enough: this is the other way two lakes end up sharing a prefix, and then
+    // permanently deleting one takes files only the other holds.
+    const db = makeMoveDb([lake({ id: 'other', name: 'Sibling', fileTagPrefix: 'lk:' })]);
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+        db,
+      } as any)
+    ).rejects.toThrow(/overlaps an existing data lake/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'orgA' }));
+  });
+
+  it('allows an org move when nothing in the target scope shares the prefix', async () => {
+    const db = makeMoveDb([lake({ id: 'other', fileTagPrefix: 'other-prefix:' })]);
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+      db,
+    } as any);
+    expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'orgA' }));
   });
 
   it('demotes an org lake back to private by clearing organizationId (null, not undefined)', async () => {
@@ -893,5 +1385,83 @@ describe('setLakeVisibility — personal ↔ org promotion', () => {
     const db = makeDb({ isPublic: true });
     await setLakeVisibility({ userId: 'owner', isAdmin: false }, 'lake1', 'public', { db } as any);
     expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('browsePublicDataLakes — public discover catalog projection', () => {
+  const publicLake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
+    lake({
+      id: 'pub1',
+      slug: 'pub1',
+      name: 'Public One',
+      description: 'a shared lake',
+      createdByUserId: 'owner1',
+      isPublic: true,
+      fileCount: 3,
+      totalSizeBytes: 2048,
+      ...overrides,
+    });
+
+  const makeDb = (lakes: IDataLakeDocument[], total = lakes.length) => ({
+    dataLakes: { findPublicLakes: vi.fn().mockResolvedValue({ lakes, total }) },
+    users: {
+      findByIds: vi.fn().mockResolvedValue([
+        { id: 'owner1', name: 'Ada Owner', username: 'ada', email: 'ada@example.com' },
+        { id: 'owner2', username: 'onlyuser', email: 'nn@example.com' },
+      ]),
+    },
+  });
+
+  it('maps a lake to its card summary with owner name, counts, and per-caller flags', async () => {
+    const db = makeDb([publicLake()]);
+    const { data, total } = await browsePublicDataLakes({ userId: 'someone-else', isAdmin: false }, {}, { db } as any);
+    expect(total).toBe(1);
+    expect(data[0]).toMatchObject({
+      id: 'pub1',
+      name: 'Public One',
+      description: 'a shared lake',
+      ownerDisplayName: 'Ada Owner',
+      fileCount: 3,
+      totalSizeBytes: 2048,
+      isOwn: false,
+      canManage: false,
+    });
+  });
+
+  it('never exposes the owner email; falls back to username when name is absent', async () => {
+    const db = makeDb([publicLake({ id: 'pub2', slug: 'pub2', createdByUserId: 'owner2' })]);
+    const { data } = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db } as any);
+    expect(data[0].ownerDisplayName).toBe('onlyuser');
+    // No summary field should ever carry an email address.
+    expect(JSON.stringify(data)).not.toContain('@example.com');
+  });
+
+  it('marks the caller’s own lake and grants manage to owner and admin', async () => {
+    const db = makeDb([publicLake({ createdByUserId: 'owner1' })]);
+    const asOwner = await browsePublicDataLakes({ userId: 'owner1', isAdmin: false }, {}, { db } as any);
+    expect(asOwner.data[0]).toMatchObject({ isOwn: true, canManage: true });
+
+    const asAdmin = await browsePublicDataLakes({ userId: 'someone', isAdmin: true }, {}, { db } as any);
+    expect(asAdmin.data[0]).toMatchObject({ isOwn: false, canManage: true });
+  });
+
+  it('defaults missing counts to 0 and skips the owner lookup when there are no lakes', async () => {
+    const empty = makeDb([], 0);
+    const { data, total } = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db: empty } as any);
+    expect(data).toEqual([]);
+    expect(total).toBe(0);
+    expect(empty.users.findByIds).not.toHaveBeenCalled();
+
+    const noStats = makeDb([publicLake({ fileCount: undefined, totalSizeBytes: undefined })]);
+    const res = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db: noStats } as any);
+    expect(res.data[0]).toMatchObject({ fileCount: 0, totalSizeBytes: 0 });
+  });
+
+  it('threads search + paging through to the repository', async () => {
+    const db = makeDb([publicLake()]);
+    await browsePublicDataLakes({ userId: 'x', isAdmin: false }, { search: 'widgets', limit: 10, offset: 20 }, {
+      db,
+    } as any);
+    expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith({ search: 'widgets', limit: 10, offset: 20 });
   });
 });

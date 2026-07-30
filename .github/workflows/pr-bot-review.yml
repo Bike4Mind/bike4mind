@@ -1,10 +1,16 @@
 name: pr-bot-review
 
-# Auto-reviews lumina5 PRs using the /bot-review skill.
+# Auto-reviews this repo's PRs using the bot-review skill (fetched at run time
+# from the private b4m-devtools repo; internal dev tooling is not committed here).
 #
-# Fires on:
-#   - opened (non-draft), ready_for_review, reopened → first auto-review
-#   - labeled with `bot-review` → manual re-review after author fixes
+# Fires ONLY on:
+#   - labeled with `bot-review` → an explicitly requested review
+#
+# Auto-review on open/ready_for_review/reopened was REMOVED deliberately. Reviewing
+# every PR by default was the single largest driver of our Anthropic spend, and most
+# of those reviews were never asked for. Opt-in by label means a review happens when
+# someone wants one. To get a review: add the `bot-review` label. The label is
+# auto-removed afterwards, so adding it again requests a fresh review.
 #
 # Drafts are skipped. PRs with >100 changed files are also skipped (cost guard) —
 # a comment is posted instead asking for human review. On `gh pr view` API
@@ -18,23 +24,23 @@ name: pr-bot-review
 #
 # NOTE: paths-ignore is intentionally omitted. GitHub does not reliably fire
 # `labeled` events when paths-ignore is combined with mixed activity types in
-# the same pull_request trigger. The draft guard and size guard (>100 files)
-# are the primary cost controls; occasional docs-only or changeset PRs getting
-# reviewed is an acceptable trade-off.
+# the same pull_request trigger. The label itself is now the primary cost control;
+# the draft and size guards back it up.
 #
-# Double-review de-dupe (#166): opening/readying a PR already triggers a review,
-# but users also manually add `bot-review` to "request" one, firing two triggers
-# close together, and `auto-changeset.yml` pushes a `.changeset/pr-N.md` commit in
-# between, so the second pass reviews an identical diff plus a changeset. Two guards
-# stop the waste:
-#   1. concurrency `cancel-in-progress: true`: a newer trigger supersedes the
-#      in-flight run (handles the concurrent open+label window).
+# Double-review de-dupe (#166): the original open+label double-fire cannot happen
+# any more, since `opened` no longer triggers this workflow. Both guards are kept
+# because they still earn their place on repeat labelling:
+#   1. concurrency `cancel-in-progress: true`: a rapid re-label supersedes the
+#      in-flight run rather than queueing a second full review behind it.
 #   2. the "substantive-change guard" step below: skips when the only commits since
-#      our last review are the b4m-release-bot changeset (handles a later re-label).
+#      our last review are the b4m-release-bot changeset.
 
 on:
   pull_request:
-    types: [opened, ready_for_review, reopened, labeled]
+    # `labeled` only. Any label fires the workflow, and the job-level `if` below
+    # drops everything that is not `bot-review`, so unrelated labels cost nothing
+    # beyond a few seconds of a skipped job.
+    types: [labeled]
 
 permissions:
   contents: read
@@ -45,11 +51,9 @@ permissions:
 
 concurrency:
   group: pr-bot-review-${{ github.event.pull_request.number }}
-  # A newer trigger for the same PR (e.g. a manual `bot-review` label added seconds
-  # after `opened`/`ready_for_review`) supersedes the in-flight run instead of
-  # serializing behind it, so the common "open + click the label" double-fire yields
-  # ONE review on the newer head. The superseded run is the `opened` run (no label to
-  # remove), so label hygiene is unaffected. (#166)
+  # A newer `bot-review` label on the same PR supersedes the in-flight run rather
+  # than queueing a second full review behind it, so a double-click costs one review
+  # instead of two. The surviving run still removes the label when it finishes. (#166)
   cancel-in-progress: true
 
 jobs:
@@ -63,10 +67,8 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.base.ref != 'prod' &&
       github.event.pull_request.head.ref != 'prod' &&
-      !startsWith(github.event.pull_request.head.ref, 'changeset-release/') && (
-        github.event.action != 'labeled' ||
-        github.event.label.name == 'bot-review'
-      )
+      !startsWith(github.event.pull_request.head.ref, 'changeset-release/') &&
+      github.event.label.name == 'bot-review'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 30
     steps:
@@ -76,16 +78,39 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Size guard — skip oversize PRs
+      - name: Size guard — skip oversize PRs, pick review model
         id: size_check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          FILES=$(gh pr view ${{ github.event.pull_request.number }} \
-            --json changedFiles --jq .changedFiles \
-            --repo ${{ github.repository }} || echo 999999)
+          # One API call for all three numbers. On failure SIZE is empty and the
+          # :- fallbacks below force the oversize path — fail-closed, unchanged.
+          SIZE=$(gh pr view ${{ github.event.pull_request.number }} \
+            --json changedFiles,additions,deletions \
+            --jq '"\(.changedFiles) \(.additions) \(.deletions)"' \
+            --repo ${{ github.repository }} || echo "")
+          read -r FILES ADDS DELS <<< "$SIZE"
           FILES=${FILES:-999999}
+          ADDS=${ADDS:-999999}
+          DELS=${DELS:-0}
+          LINES=$((ADDS + DELS))
           echo "changed_files=$FILES" >> "$GITHUB_OUTPUT"
+
+          # Model tiering (cost control). Small, low-risk diffs review on Sonnet 5;
+          # anything bigger stays on Opus 4.7, because mid-size feature PRs are where
+          # the real bugs live. Sonnet 5 and Opus 4.7 share a tokenizer, so this is a
+          # pure list-price difference ($3/$15 vs $5/$25 per MTok) with no token-count
+          # penalty. Emitted UNCONDITIONALLY and defaulting to Opus, so the review step
+          # can never receive an empty --model — including on the API-failure path above,
+          # where FILES=999999 lands here before the oversize branch skips the review.
+          if [ "$FILES" -le 10 ] && [ "$LINES" -le 300 ]; then
+            MODEL=claude-sonnet-5
+          else
+            MODEL=claude-opus-4-7
+          fi
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "Review model: $MODEL ($FILES files, $LINES lines changed)"
+
           if [ "$FILES" -gt 100 ]; then
             gh pr comment ${{ github.event.pull_request.number }} \
               --repo ${{ github.repository }} \
@@ -154,6 +179,45 @@ jobs:
             --repo ${{ github.repository }} \
             --body "🤖 Skipped re-review - the only new commits since the last bot review are the auto-generated changeset (no substantive changes). Push a code change and re-apply \`bot-review\` for a fresh review." || true
 
+      # The bot-review skill lives in the PRIVATE b4m-devtools repo (this public repo
+      # intentionally carries no .claude/ tooling). Mint a token scoped to ONLY
+      # b4m-devtools (the app has org-wide access, but a public workflow should hold
+      # the narrowest token possible), then fetch just the one skill file.
+      - name: Mint b4m-devtools read token
+        id: skill_token
+        if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.PREMIUM_OVERLAY_CLIENT_ID }}
+          private-key: ${{ secrets.PREMIUM_OVERLAY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: b4m-devtools
+
+      - name: Fetch bot-review skill from b4m-devtools (fail loud)
+        id: skill_fetch
+        if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ steps.skill_token.outputs.token }}
+          DEST: ${{ runner.temp }}/bot-review-skill.md
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # FAIL LOUD: a missing / unreadable / empty skill must RED this step, never
+          # silently fall back to a thinner inline review (the exact regression this
+          # replaced). Path is lowercase `skill.md` to match b4m-devtools' convention -
+          # the runner is case-sensitive, so this must stay in lockstep with that repo.
+          if ! gh api "repos/${OWNER}/b4m-devtools/contents/.claude/skills/bot-review/skill.md?ref=main" \
+                 --jq '.content' | base64 -d > "$DEST"; then
+            echo "::error::Could not fetch bot-review skill from b4m-devtools (token / access / path). Refusing to run a degraded review."
+            exit 1
+          fi
+          if [ ! -s "$DEST" ]; then
+            echo "::error::bot-review skill fetched from b4m-devtools is empty. Refusing to run a degraded review."
+            exit 1
+          fi
+          echo "skill_file=$DEST" >> "$GITHUB_OUTPUT"
+          echo "bot-review skill fetched ($(wc -l < "$DEST") lines) from b4m-devtools@main"
+
       - name: Run /bot-review
         id: bot_review
         if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
@@ -164,11 +228,13 @@ jobs:
             You are running in GitHub Actions to auto-review PR
             #${{ github.event.pull_request.number }} in ${{ github.repository }}.
 
-            Run `git show origin/main:.claude/skills/bot-review/SKILL.md` to
-            read the skill, then execute that workflow against PR
+            The bot-review skill has been fetched to
+            `${{ steps.skill_fetch.outputs.skill_file }}` from the private
+            b4m-devtools repo. Read that file with the Read tool to get the review
+            methodology, then execute that workflow against PR
             #${{ github.event.pull_request.number }}.
-            Always read the skill from origin/main — never from the checked-out
-            PR head — so a PR modifying the skill cannot alter its own review.
+            The skill lives in a separate repo this PR cannot modify, so a PR
+            cannot alter the methodology used to review it.
 
             Context for automation — these override the skill body where they conflict:
             - There is no human to interact with. Make reasonable defaults if
@@ -179,13 +245,13 @@ jobs:
             - The repo is already checked out at the PR's head SHA, so use
               `gh pr diff` and read files locally rather than `gh pr checkout`.
               Skip the force-sync git steps from the skill.
-            - Skip the "reinstall dependencies and rebuild core packages"
-              step from the skill (skill step 3, `pnpm i -r && pnpm core:build`).
-              The runner is ephemeral; we are not running typecheck or tests
-              as part of this review.
+            - Skip the skill's "reinstall dependencies and rebuild core
+              packages" step (`pnpm i -r && pnpm core:build`). The runner is
+              ephemeral; we are not running typecheck or tests as part of
+              this review.
             - Restoring the original branch at the end is unnecessary in CI — skip it.
           claude_args: |
-            --model claude-opus-4-7
+            --model ${{ steps.size_check.outputs.model }}
             --allowedTools Bash(gh:*),Bash(git:*),Read,Grep,Glob,Agent,Task
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead
@@ -206,6 +272,18 @@ jobs:
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
             --body "🤖 Automated review did not complete — the run errored or exhausted its turn budget, so no review was posted. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details. Re-apply the \`bot-review\` label to retry, or request a human reviewer."
+
+      - name: Report skill-fetch failure
+        # Fail loud + visible: if the skill couldn't be fetched we skipped the review
+        # entirely (rather than degrade silently), so surface it on the PR, not just as
+        # a red check. Best-effort comment - never red the job further.
+        if: always() && steps.skill_fetch.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "🤖 bot-review could not fetch its review skill from b4m-devtools, so no review ran (failing loud rather than posting a degraded review). See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). This is an infra issue (token/access/path), not a problem with the PR." || true
 
       - name: Remove re-review label
         if: always() && github.event.action == 'labeled' && github.event.label.name == 'bot-review'

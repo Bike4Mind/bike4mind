@@ -1,7 +1,7 @@
 import { User } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
-import { dayjs } from '@bike4mind/common';
 import { UnauthorizedError } from '@server/utils/errors';
+import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -27,7 +27,7 @@ const handler = baseApi({ auth: false })
     // signed with the previous secret for a 24-hour grace period
     const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
     let previousSecret: string | undefined;
-    if (dayjs(secretRotation?.rotatedAt).isAfter(dayjs().subtract(1, 'day'))) {
+    if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {
       previousSecret = secretRotation?.previousKey;
     }
 
@@ -47,7 +47,14 @@ const handler = baseApi({ auth: false })
       throw new UnauthorizedError('Invalid refresh token');
     }
 
-    const tokens = authTokenGenerator.createAccessToken(user.id, user.tokenVersion ?? 0);
+    // Re-stamp impersonatedBy from the refresh token onto the new access token pair - otherwise
+    // an impersonated session that refreshes loses the marker and logout.ts's impersonation
+    // guard silently stops applying (see AuthTokenGeneratorService.createRefreshToken).
+    const tokens = authTokenGenerator.createAccessToken(
+      user.id,
+      user.tokenVersion ?? 0,
+      decoded.impersonatedBy ? { impersonatedBy: decoded.impersonatedBy } : undefined
+    );
 
     return res.status(200).json({
       user,
