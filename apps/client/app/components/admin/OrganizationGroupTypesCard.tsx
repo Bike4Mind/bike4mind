@@ -16,7 +16,7 @@ import { GROUP_TYPE_CATALOG, getGroupType, IOrganizationDocument, WithId } from 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { fetchOrganizationGroups, setOrganizationGroupTypes } from '@client/app/utils/groupsAPICalls';
-import { getErrorMessage } from '@client/app/utils/error';
+import { getErrorMessage, sanitizeErrorMessage } from '@client/app/utils/error';
 
 const GROUP_TYPE_KEYS = GROUP_TYPE_CATALOG.map(type => type.key);
 const labelFor = (key: string) => getGroupType(key)?.label ?? key;
@@ -43,9 +43,13 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
   // the allowed-set contents, because two orgs commonly share the same set (both empty) and a
   // contents key would then fail to resync. setBaseline in the save handler covers the same-org
   // case where the snapshot prop never refreshes.
-  const [prevOrgId, setPrevOrgId] = useState(org.id);
-  if (org.id !== prevOrgId) {
-    setPrevOrgId(org.id);
+  // Keyed on org id AND set contents. Either alone is incomplete: an id-only key misses a
+  // same-org change if this prop ever becomes a live query result, and a contents-only key misses
+  // an org switch between two orgs that happen to share a set (commonly both empty).
+  const orgKey = `${org.id}|${[...(org.allowedGroupTypes ?? [])].sort().join(',')}`;
+  const [syncedOrgKey, setSyncedOrgKey] = useState(orgKey);
+  if (orgKey !== syncedOrgKey) {
+    setSyncedOrgKey(orgKey);
     const next = org.allowedGroupTypes ?? [];
     setSelected(next);
     setBaseline(next);
@@ -137,11 +141,13 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
             <Typography level="body-sm" color="neutral" data-testid="org-group-types-loading">
               Loading provisioned groups...
             </Typography>
-          ) : groupsQuery.isError ? (
+          ) : groupsQuery.isError && !groupsQuery.data ? (
             // Not the empty state: "no groups provisioned" would invite a platform admin to
-            // re-grant types the org may already have.
+            // re-grant types the org may already have. Gated on having no data for the same reason
+            // as the customer-side list: isError also covers a failed refetch that still holds the
+            // previous result, and dropping a rendered list on a blip is worse than a stale one.
             <Typography level="body-sm" color="danger" data-testid="org-group-types-error">
-              Could not load provisioned groups. {getErrorMessage(groupsQuery.error)}
+              Could not load provisioned groups. {sanitizeErrorMessage(getErrorMessage(groupsQuery.error))}
             </Typography>
           ) : groups.length === 0 ? (
             <Typography level="body-sm" color="neutral" data-testid="org-group-types-empty">

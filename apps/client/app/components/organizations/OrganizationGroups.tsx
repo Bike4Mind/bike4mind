@@ -30,7 +30,7 @@ import {
   setOrganizationAdmins,
   unassignGroupMember,
 } from '@client/app/utils/groupsAPICalls';
-import { getErrorMessage } from '@client/app/utils/error';
+import { getErrorMessage, sanitizeErrorMessage } from '@client/app/utils/error';
 
 interface OrganizationGroupsProps {
   organization: WithId<IOrganizationDocument>;
@@ -130,11 +130,15 @@ const OrganizationGroups: FC<OrganizationGroupsProps> = ({ organization, canSetA
           <Typography level="body-sm" color="neutral" data-testid="org-groups-loading">
             Loading groups...
           </Typography>
-        ) : groupsQuery.isError ? (
+        ) : groupsQuery.isError && !groupsQuery.data ? (
           // Distinct from the empty state on purpose: telling an org that already HAS groups to go
           // ask an administrator for group types is worse than saying nothing.
+          // Gated on having no data: react-query reports isError for a failed REFETCH too, while
+          // keeping the last good `data`. Without the guard a transient blip (or a focus refetch -
+          // this query sets no staleTime) would replace a rendered roster with an error line and
+          // strand the operator mid-task. With data in hand, keep showing it.
           <Typography level="body-sm" color="danger" data-testid="org-groups-error">
-            Could not load groups. {getErrorMessage(groupsQuery.error)}
+            Could not load groups. {sanitizeErrorMessage(getErrorMessage(groupsQuery.error))}
           </Typography>
         ) : groups.length === 0 ? (
           <Typography level="body-sm" color="neutral" data-testid="org-groups-empty">
@@ -244,6 +248,10 @@ const GroupCard: FC<{
   // Re-seed from the prop on every entry to edit mode. `name` is initialized once and the card is
   // keyed on group.id, so it survives refetches: without this, a rename by another admin would
   // leave a stale value here that Enter would then commit, silently reverting their change.
+  // NOTE this closes the pre-entry window only. If a concurrent rename lands while the editor is
+  // already OPEN, the input still holds the older value and Enter still last-write-wins over it.
+  // Closing that needs optimistic concurrency on the route (send the expected name, 409 on drift);
+  // tracked separately rather than papered over with a mid-typing reset.
   const beginRename = () => {
     setName(group.name);
     setEditing(true);
