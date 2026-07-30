@@ -94,6 +94,7 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: sendToClientMock }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 vi.mock('@bike4mind/database', () => ({
   MAX_PRESENCE_FIELD_LENGTH: 200,
+  MAX_ROSTER_ROWS: 200,
   hearthRepository: {
     store: storeMock,
     getOwnedChannel: getOwnedChannelMock,
@@ -387,6 +388,19 @@ describe('GET /api/hearth/presence', () => {
   // reads apiKeyInfo - so it passed identically with no apiKeyInfo at all, and
   // would have passed with requiredScopes: []. Split into the two claims that
   // are actually checkable here.
+  it('publishes the row cap so a full page does not read as the whole roster', async () => {
+    getOwnedChannelMock.mockResolvedValue({ _id: 'ch-1' });
+    presenceForChannelMock.mockResolvedValue([]);
+    actorNamesByIdMock.mockResolvedValue(new Map());
+
+    const res = makeRes();
+    await get()(makeReq({}, { channelId: 'ch-1' }), res);
+
+    // The roster is capped for cost (the ranking sort cannot be index-served and
+    // rows are never deleted), so the bound has to be visible to the client.
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ maxRows: 200 }));
+  });
+
   it('declares the read scope list, so a read-only key is admitted', () => {
     // OR semantics, matching the sibling routes: any one of these suffices.
     expect(presenceRouter._config?.requiredScopes).toEqual(['hearth:read', 'hearth:write', 'admin:*']);
