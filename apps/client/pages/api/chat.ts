@@ -299,12 +299,13 @@ function transformToInternalFormat(
     organizationId, // Include for team-wide system prompts
     params: {
       model: request.model,
-      // 4096 is within supported output limits for all configured models and is a
-      // safe default for non-reasoning models. Callers can override via any of
-      // max_tokens / maxTokens / maxOutputTokens. Adaptive reasoning models get a
-      // larger floor applied downstream (ChatCompletionProcess) so their extended
-      // thinking doesn't consume the whole budget and leave an empty reply.
-      max_tokens: request.max_tokens ?? request.maxTokens ?? request.maxOutputTokens ?? 4096,
+      // Any of max_tokens / maxTokens / maxOutputTokens expresses the caller's budget.
+      // Left undefined when none is given so ChatCompletionProcess can pick a
+      // model-aware default - it knows whether the resolved model is an adaptive
+      // reasoning model, which needs a larger default to keep extended thinking from
+      // consuming the whole budget and leaving an empty reply. Sending a number here
+      // would read downstream as a deliberate caller choice and defeat that.
+      max_tokens: request.max_tokens ?? request.maxTokens ?? request.maxOutputTokens,
       ...(request.temperature !== undefined && { temperature: request.temperature }),
       stream: request.stream,
     },

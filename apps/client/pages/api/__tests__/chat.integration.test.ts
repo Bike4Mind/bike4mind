@@ -279,7 +279,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
   // silently pinned to the 4096 default because Zod stripped the camelCase aliases.
   describe('max_tokens override coalescing', () => {
     const invokedParams = () =>
-      (mockInvoke.mock.calls[0][0] as { body: { params: { max_tokens: number } } }).body.params;
+      (mockInvoke.mock.calls[0][0] as { body: { params: { max_tokens?: number } } }).body.params;
 
     it('honors snake_case max_tokens', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
@@ -305,12 +305,15 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(invokedParams().max_tokens).toBe(16000);
     });
 
-    it('falls back to the 4096 default when no budget is supplied', async () => {
+    // Absence must stay absent on the wire. Substituting a number here would read
+    // downstream as a deliberate caller budget and suppress the model-aware default
+    // that gives adaptive reasoning models their output headroom.
+    it('forwards no max_tokens at all when no budget is supplied', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1' } });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(invokedParams().max_tokens).toBe(4096);
+      expect(invokedParams().max_tokens).toBeUndefined();
     });
   });
 });
