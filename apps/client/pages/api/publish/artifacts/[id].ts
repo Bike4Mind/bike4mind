@@ -43,6 +43,10 @@ const PatchSchema = z.object({
   description: z.string().max(1000).optional(),
   visibility: VisibilitySchema.optional(),
   commentPolicy: CommentPolicySchema.optional(),
+  // Search-engine opt-in. Accepted at any visibility (owners commonly set it before
+  // flipping to public), but only has an effect while the artifact is open-public -
+  // the serve route ANDs it with isOpenPublic on every request.
+  discoverable: z.boolean().optional(),
   accessGate: AccessGatePatchSchema.optional(),
   // Raw strings; validateEmbedOrigins normalizes and applies the host/open-public
   // rules server-side. `[]` clears the allowlist. Bounded here so a huge payload
@@ -169,11 +173,27 @@ const handler = baseApi()
       });
     }
     if (parsed.data.commentPolicy !== undefined) artifact.commentPolicy = parsed.data.commentPolicy;
+    const discoverableBefore = !!artifact.discoverable;
+    if (parsed.data.discoverable !== undefined) artifact.discoverable = parsed.data.discoverable;
 
     // Embed allowlist. Validated against the artifact's FINAL open-public state
     // (after any visibility/gate change above), so a gate + embed grant in the
     // same PATCH is rejected as a pair rather than by apply order.
     const isOpenPublicNow = artifact.visibility === 'public' && !artifact.accessGate;
+
+    // DE-ARM on leaving open-public. `discoverable` only has an effect while an artifact
+    // is public AND ungated, so a downgrade or a new gate leaves it set but inert - and
+    // widening the artifact again later would silently re-arm indexing that nobody chose
+    // in that context. Clearing it here (the authoritative layer) means the flag never
+    // outlives the exposure it was granted against, and the client's optimistic reset
+    // when the user picks Private / adds a gate becomes a truthful view of storage
+    // rather than local-only state. The owner re-opts-in explicitly if they want it back.
+    if (!isOpenPublicNow && artifact.discoverable) artifact.discoverable = false;
+
+    // Tracked for the CDN purge below: this flag changes the served X-Robots-Tag AND the
+    // in-document robots <meta>, both of which are part of the cached public bytes.
+    // Compared against the pre-PATCH value so an implicit de-arm counts as a change too.
+    const discoverableChanged = !!artifact.discoverable !== discoverableBefore;
     let embedOriginsChanged = false;
     if (parsed.data.embedOrigins !== undefined) {
       const check = validateEmbedOrigins(parsed.data.embedOrigins, { isOpenPublic: isOpenPublicNow });
@@ -189,11 +209,13 @@ const handler = baseApi()
     await artifact.save();
 
     // Any change that alters the CACHED public response must purge the CDN, or the
-    // stale copy keeps serving up to its TTL. Two triggers: (a) leaving open-public
+    // stale copy keeps serving up to its TTL. Three triggers: (a) leaving open-public
     // (downgrade OR newly-gated) removes the page from cache-eligibility; (b) the
     // embed allowlist changed while still open-public - the served frame-ancestors
-    // CSP header is part of the cached bytes. Fire-and-forget, best-effort.
-    if ((wasOpenPublic && !isOpenPublicNow) || (isOpenPublicNow && embedOriginsChanged)) {
+    // CSP header is part of the cached bytes; (c) discoverability changed - the robots
+    // header and <meta> are cached too, and an owner turning discovery OFF must not
+    // keep serving an indexable copy for up to an hour. Fire-and-forget, best-effort.
+    if ((wasOpenPublic && !isOpenPublicNow) || (isOpenPublicNow && (embedOriginsChanged || discoverableChanged))) {
       void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
     }
     const json = artifact.toJSON() as Record<string, unknown> & {

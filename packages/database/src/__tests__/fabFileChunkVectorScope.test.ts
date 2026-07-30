@@ -137,7 +137,10 @@ describe('FabFileChunkRepository.findVectorsByFabFileIds keyset paging', () => {
       .explain('queryPlanner');
 
     const stages = JSON.stringify(plan.queryPlanner.winningPlan);
-    expect(stages).toContain('IXSCAN');
+    // Naming the index matters: with only `_id_` present the planner still satisfies sort({_id:1})
+    // by an _id scan plus fetch-and-filter, so asserting IXSCAN alone passes even with the compound
+    // gone and pins nothing.
+    expect(stages).toContain('"indexName":"fabFileId_1__id_1"');
     expect(stages).not.toContain('"stage":"SORT"');
   });
 });

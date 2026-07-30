@@ -7,6 +7,7 @@ export const CREDENTIALS: DiscoveryCredentials = {
   gemini: 'test-gemini',
   bfl: 'test-bfl',
   xai: 'test-xai',
+  kimi: 'test-kimi',
   voyageai: null,
   ollama: 'http://localhost:11434',
   imageGen: null,

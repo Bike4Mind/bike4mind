@@ -51,6 +51,8 @@ const SKIP_PATTERNS = [
   /checkDeprecatedModelUsage\.ts$/, // this script
   /fallback\.ts$/, // fallback map keys intentionally reference deprecated models
   /modelCatalog\.seed\.json$/, // catalog seed carries deprecated ids WITH their lifecycle so pinned sessions resolve
+  /modelPrices\.seed\.json$/, // same reason as the catalog seed: a retired model keeps its rate so historical usage still settles
+  /aggregatorKeys\.json$/, // a captured snapshot of what models.dev and litellm publish, retired entries included; not our usage
   /mocks\//, // test mock data
   /test-config\.ts$/, // test config fixtures
   /telemetryFingerprint\.ts$/, // normalization logic references old IDs in comments/examples

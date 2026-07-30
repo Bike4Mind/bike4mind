@@ -14,3 +14,15 @@
  */
 export const resolveBrowserUploadUrl = (fileId: string, directPresignedUrl: string): string =>
   process.env.B4M_SELF_HOST === 'true' ? `/api/files/${fileId}/upload` : directPresignedUrl;
+
+/**
+ * The same rewrite for AppFile uploads (app-files, organization logos, profile photos), which
+ * live in the app-files bucket rather than the fab-file bucket and so need their own proxy route
+ * (pages/api/app-files/[id]/upload.ts).
+ *
+ * Every endpoint that hands the browser an app-files presign - app-files/generate-presigned-url,
+ * organizations/[id]/upload-logo, users/[id]/upload-photo - MUST route through this, or that
+ * upload hits the CSP-blocked MinIO host on self-host.
+ */
+export const resolveBrowserAppFileUploadUrl = (appFileId: string, directPresignedUrl: string): string =>
+  process.env.B4M_SELF_HOST === 'true' ? `/api/app-files/${appFileId}/upload` : directPresignedUrl;

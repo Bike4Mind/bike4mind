@@ -9,6 +9,7 @@ export enum ApiKeyType {
   bfl = 'bfl',
   ollama = 'ollama',
   xai = 'xai',
+  kimi = 'kimi',
   voyageai = 'voyageai',
 }
 

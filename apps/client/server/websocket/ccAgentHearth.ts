@@ -1,6 +1,8 @@
-import { ccBridgeDeviceRepository, hearthRepository } from '@bike4mind/database';
+import { adminSettingsRepository, ccBridgeDeviceRepository, hearthRepository } from '@bike4mind/database';
 import { DEFAULT_HEARTH_CHANNEL_NAME, HearthLog, sessionSlug } from '@bike4mind/hearth';
-import type { ICcAgentSource, ICcAgentStatus } from '@bike4mind/common';
+import { settingsMap, type ICcAgentSource, type ICcAgentStatus } from '@bike4mind/common';
+import { getSettingByName } from '@bike4mind/utils';
+import { isSettingEnabled } from '@server/middlewares/featureFlag';
 
 /**
  * cc-bridge as a Hearth gateway: the bridge WS write points additionally report
@@ -104,6 +106,22 @@ async function resolveChannelId(
 const hearthLog = new HearthLog(hearthRepository.store);
 
 /**
+ * Same flag the HTTP routes enforce via requireFeatureEnabled, read directly
+ * because this is a WebSocket handler with no middleware chain. Fails CLOSED:
+ * if the setting cannot be read we write nothing, since the cost of skipping a
+ * presence report is a missing roster row, while the cost of writing anyway is
+ * a credit grant for a feature the deployment has switched off.
+ */
+async function isHearthEnabled(): Promise<boolean> {
+  try {
+    const value = await getSettingByName('EnableHearth', { adminSettings: adminSettingsRepository });
+    return isSettingEnabled(value ?? settingsMap.EnableHearth?.defaultValue);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Best-effort presence report. Never throws: the bridge WS path is a live
  * product surface, so a Hearth outage must degrade to a log warning rather than
  * failing a register, an event, or a disconnect sweep.
@@ -111,6 +129,15 @@ const hearthLog = new HearthLog(hearthRepository.store);
 export async function reportCcAgentPresence(input: CcAgentPresenceInput): Promise<void> {
   const { userId, instanceId, workspaceName, reason, source, claudeVersion, logger } = input;
   try {
+    // The four HTTP hearth routes all gate on this; the WS path did not, and
+    // EnableHearth defaults to FALSE. Without the gate, a bridge register on a
+    // deployment with Hearth off still created a channel - which is exactly the
+    // predicate the `hearth` gear unlocks on (hasAnyChannelForUser). That gear
+    // carries a 1000-credit reward and no rewardCheck, so a disabled feature
+    // paid out real credits and advertised a CTA to routes that all return 403.
+    // Writing nothing when the feature is off keeps the gear locked at its root.
+    if (!(await isHearthEnabled())) return;
+
     const channelId = await resolveChannelId(userId, input.hearthChannelId, input.deviceId);
     const slug = sessionSlug(instanceId);
     // Same one-actor-per-session convention as the hook's `Claude Code (slug)`:

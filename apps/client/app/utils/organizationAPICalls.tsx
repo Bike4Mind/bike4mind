@@ -10,7 +10,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { z } from 'zod';
-import axios, { AxiosResponse, isAxiosError } from 'axios';
+import { AxiosResponse, isAxiosError } from 'axios';
+import { uploadFileToUrl } from './uploadFileToUrl';
 
 export const fetchOrganizations = async (): Promise<IOrganizationDocument[]> => {
   try {
@@ -181,11 +182,9 @@ export function useUploadOrganizationLogo() {
 
       const { url, fileId } = data;
 
-      await axios.put(url, file, {
-        headers: {
-          'Content-Type': file.type,
-        },
-      });
+      // The shared helper handles both shapes the server can hand back: an S3 presign (hosted,
+      // raw axios) and the same-origin app-file upload proxy (self-host, authed api).
+      await uploadFileToUrl(url, file, file.type);
 
       return fileId;
     },

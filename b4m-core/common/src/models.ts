@@ -14,6 +14,10 @@ export enum ModelBackend {
   Ollama = 'ollama',
   BFL = 'bfl',
   XAI = 'xai',
+  // Moonshot AI's Kimi models, served from their OpenAI-compatible endpoint.
+  // Distinct from Bedrock-served Kimi (moonshotai.kimi-*), which routes through
+  // ModelBackend.Bedrock on the same vendor.
+  Kimi = 'kimi',
   VoyageAI = 'voyageai',
   AWS = 'aws',
   // Self-hosted Stable-Diffusion image backend (A1111-compatible REST API),
@@ -242,6 +246,27 @@ export enum ChatModels {
   GROK_4_5 = 'grok-4.5',
   GROK_BETA = 'grok-beta',
   GROK_VISION_BETA = 'grok-vision-beta',
+
+  // Moonshot AI (Kimi) models, direct from api.moonshot.ai. Ids are unversioned
+  // and unhyphenated-date, matching what GET /v1/models returns verbatim.
+  KIMI_K3 = 'kimi-k3',
+  KIMI_K2_7_CODE = 'kimi-k2.7-code',
+  KIMI_K2_7_CODE_HIGHSPEED = 'kimi-k2.7-code-highspeed',
+  KIMI_K2_6 = 'kimi-k2.6',
+  KIMI_K2_5 = 'kimi-k2.5',
+
+  // Bedrock-served Kimi. Same vendor, different backend, different limits (256K
+  // context but only 16K output against Moonshot's 262K), so these never share a
+  // catalog or price row with the direct ids above.
+  //
+  // The prefixes genuinely disagree and this is NOT a typo: AWS publishes k2.5 as
+  // `moonshotai.` on both endpoints but k2-thinking as `moonshot.` on
+  // bedrock-runtime and `moonshotai.` on bedrock-mantle. These are the
+  // bedrock-runtime spellings, which is the endpoint InvokeModel uses.
+  // @see https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-5.html
+  // @see https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k2-thinking.html
+  KIMI_K2_5_BEDROCK = 'moonshotai.kimi-k2.5',
+  KIMI_K2_THINKING_BEDROCK = 'moonshot.kimi-k2-thinking',
 }
 export const CHAT_MODELS = Object.values(ChatModels);
 export const supportedChatModels = z.enum(ChatModels);
@@ -381,6 +406,18 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
   ChatModels.CLAUDE_5_OPUS,
+  // Moonshot pins temperature and top_p on every current Kimi and documents them
+  // as unmodifiable: the chat API reference states only the moonshot-v1 family
+  // accepts them, and the thinking guide says outright that for kimi-k2.7-code
+  // and kimi-k2.6 temperature is not modifiable and should not be passed. k2.6
+  // was briefly excluded here on the strength of models.dev reporting
+  // `temperature: true`; the primary docs are the authority and the aggregator is
+  // the outlier.
+  ChatModels.KIMI_K3,
+  ChatModels.KIMI_K2_7_CODE,
+  ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
+  ChatModels.KIMI_K2_6,
+  ChatModels.KIMI_K2_5,
 ]);
 
 /**

@@ -11,12 +11,19 @@ export const NOT_INVOCABLE_REASON = 'discovered, not invocable by this build';
  * Which backends a deployment credential unlocks. Bedrock and AWS are IAM-only,
  * which is one flag rather than a key; VoyageAI has a key but no listing path, so
  * the promotion clause reads it the same way every other backend is read.
+ *
+ * MUST COVER EVERY ModelBackend. A backend missing from here has no credential
+ * clause it can ever satisfy, so every model discovery finds for it stays
+ * `discovered` forever - and because `isDispatchBlocked` wins in `reasonFor`, the
+ * admin queue reports "not invocable by this build" and never mentions the
+ * credential. Exported for the coverage test that enforces this.
  */
-const CREDENTIAL_OF_BACKEND: Record<string, (creds: DiscoveryCredentials) => boolean> = {
+export const CREDENTIAL_OF_BACKEND: Record<string, (creds: DiscoveryCredentials) => boolean> = {
   [ModelBackend.OpenAI]: creds => creds.openai !== null,
   [ModelBackend.Anthropic]: creds => creds.anthropic !== null,
   [ModelBackend.Gemini]: creds => creds.gemini !== null,
   [ModelBackend.XAI]: creds => creds.xai !== null,
+  [ModelBackend.Kimi]: creds => creds.kimi !== null,
   [ModelBackend.BFL]: creds => creds.bfl !== null,
   [ModelBackend.VoyageAI]: creds => creds.voyageai !== null,
   [ModelBackend.Ollama]: creds => creds.ollama !== null,

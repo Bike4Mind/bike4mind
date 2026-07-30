@@ -104,6 +104,7 @@ describe('the source registry', () => {
         'openai',
         'anthropic',
         'xai',
+        'kimi',
         'gemini',
         'ollama',
         'bfl',
@@ -113,7 +114,7 @@ describe('the source registry', () => {
         'litellm',
       ])
     );
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(11);
   });
 
   it('registers no duplicates: the report and the min-interval guard key on name', () => {
