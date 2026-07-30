@@ -37,6 +37,11 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
 
 vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () => ({ default: () => null }));
 
+// Collapsed-sidenav clearance reads this store; default open (no extra indent) for these tests.
+vi.mock('@client/app/components/layouts/Notebook', () => ({
+  useNotebookLayout: (sel: (s: { openSideNav: boolean }) => unknown) => sel({ openSideNav: true }),
+}));
+
 // The explorer calls useSetDataLakeMode at render (for the tree close button); its persist
 // logic is covered in useSetDataLakeMode.test. Spy so the close-wiring test below can assert
 // without needing a QueryClient.

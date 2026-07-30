@@ -4,6 +4,7 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import DataLakeTree from './DataLakeTree';
 import { DataLakeNavProvider } from './dataLakeNavContext';
 import { useGetDataLakeArticles, useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
@@ -90,6 +91,9 @@ export default function DataLakeExplorer({
   const { currentSessionId } = useSessions();
   const { setWorkBenchFiles } = useWorkBenchActions();
   const setDataLakeMode = useSetDataLakeMode();
+  // When the sidenav is collapsed its floating expand control overlaps the top-left, so the
+  // tree needs extra left clearance past it (same 48px the deck top bar uses).
+  const sidenavOpen = useNotebookLayout(s => s.openSideNav);
   // Id of the file most recently opened in the viewer, kept to highlight it in the tree.
   const [viewerFileId, setViewerFileId] = useState<string | null>(articleId ?? null);
   // Guards double-clicks while createSessionForFile's POST is in flight - a second click
@@ -290,7 +294,16 @@ export default function DataLakeExplorer({
       )}
       <Box
         className="datalake-explorer-body"
-        sx={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', p: '12px', gap: '8px' }}
+        sx={{
+          display: 'flex',
+          flex: 1,
+          minHeight: 0,
+          overflow: 'hidden',
+          p: '12px',
+          pl: sidenavOpen ? '12px' : '48px',
+          gap: '8px',
+          transition: 'padding-left 0.2s ease',
+        }}
       >
         <DataLakeTree
           tree={tree}

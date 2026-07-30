@@ -8,11 +8,14 @@ import { Breadcrumbs, Link, Typography } from '@mui/joy';
 
 interface OptiModeBreadcrumbProps {
   segments: { label: string; onClick?: () => void }[];
+  /** Bottom margin in theme spacing units. Default 2 (standalone above a hero); pass 0 when
+   *  embedded in a header row that owns its own spacing. */
+  mb?: number;
 }
 
-export function OptiModeBreadcrumb({ segments }: OptiModeBreadcrumbProps) {
+export function OptiModeBreadcrumb({ segments, mb = 2 }: OptiModeBreadcrumbProps) {
   return (
-    <Breadcrumbs size="sm" sx={{ px: 0, mb: 2 }}>
+    <Breadcrumbs size="sm" sx={{ px: 0, mb }}>
       {segments.map((seg, i) => {
         const isLast = i === segments.length - 1;
         if (isLast || !seg.onClick) {
