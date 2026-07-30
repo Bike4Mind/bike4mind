@@ -1,94 +1,247 @@
-import { leave } from './leave';
-import { BadRequestError } from '@bike4mind/utils';
-import { IUserDocument } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { leave } from './leave';
+import { IOrganizationDocument, IUserDocument } from '@bike4mind/common';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { Permission } from '@bike4mind/common';
 
-describe('organizationService.leave', () => {
-  const ORG_ID = 'org-1';
+describe('organizationService - leave', () => {
+  const mockOwnerUser: Partial<IUserDocument> = {
+    id: 'owner1',
+    name: 'Owner User',
+    email: 'owner@example.com',
+  };
 
-  let db: any;
-  const makeUser = (over: Partial<IUserDocument> = {}) =>
-    ({ id: 'user-1', organizationId: ORG_ID, groups: [], ...over }) as IUserDocument;
+  const mockMemberUser: Partial<IUserDocument> = {
+    id: 'user1',
+    name: 'Member User',
+    email: 'member@example.com',
+  };
+
+  const memberUserShare = {
+    userId: 'user1',
+    permissions: [Permission.read, Permission.update],
+  };
+
+  const secondUserShare = {
+    userId: 'user2',
+    permissions: [Permission.read],
+  };
+
+  const existingOrganization: Partial<IOrganizationDocument> = {
+    id: 'org1',
+    name: 'Test Organization',
+    description: 'Test description',
+    userId: 'owner1',
+    users: [memberUserShare, secondUserShare],
+    userDetails: [
+      { id: 'user1', name: 'Member User', email: 'member@example.com', usedCredits: 0, lastCreditUsedAt: null },
+      { id: 'user2', name: 'Second User', email: 'second@example.com', usedCredits: 0, lastCreditUsedAt: null },
+    ],
+    seats: 3,
+    personal: false,
+    createdAt: new Date('2023-01-01'),
+    updatedAt: new Date('2023-01-01'),
+  };
+
+  let mockAdapters: any;
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    db = {
-      organizations: {
-        shareable: { findAccessibleById: vi.fn() },
-        update: vi.fn(),
+    vi.resetAllMocks();
+
+    mockAdapters = {
+      db: {
+        organizations: {
+          shareable: {
+            findAccessibleById: vi.fn().mockResolvedValue(existingOrganization),
+          },
+          update: vi.fn().mockResolvedValue(undefined),
+        },
+        users: {
+          update: vi.fn().mockResolvedValue(undefined),
+        },
+        // No org groups by default, so the group purge is a no-op unless a test sets ids.
+        groups: {
+          findIdsByOrganization: vi.fn().mockResolvedValue([]),
+        },
       },
-      users: { update: vi.fn() },
-      groups: { findIdsByOrganization: vi.fn().mockResolvedValue([]) },
     };
   });
 
-  const org = (over: Record<string, unknown> = {}) => ({
-    id: ORG_ID,
-    userId: 'owner-1',
-    users: [{ userId: 'user-1' }, { userId: 'user-2' }],
-    userDetails: [{ id: 'user-1' }, { id: 'user-2' }],
-    ...over,
-  });
+  it('should allow a user to leave an organization', async () => {
+    const leaveParams = {
+      id: 'org1',
+    };
 
-  it('purges the org’s group ids from the departing user, keeping other groups', async () => {
-    db.organizations.shareable.findAccessibleById.mockResolvedValue(org());
-    db.groups.findIdsByOrganization.mockResolvedValue(['g-org1-a', 'g-org1-b']);
-    const user = makeUser({ groups: ['g-org1-a', 'g-org1-b', 'g-otherorg'] });
+    const result = await leave(mockMemberUser as IUserDocument, leaveParams, mockAdapters);
 
-    await leave(user, { id: ORG_ID }, { db });
+    expect(mockAdapters.db.organizations.shareable.findAccessibleById).toHaveBeenCalledWith(mockMemberUser, 'org1');
 
-    expect(db.groups.findIdsByOrganization).toHaveBeenCalledWith(ORG_ID);
-    expect(db.users.update).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'user-1', groups: ['g-otherorg'], organizationId: null })
+    const expectedUpdatedOrg = {
+      ...existingOrganization,
+      users: [secondUserShare],
+      userDetails: [
+        { id: 'user2', name: 'Second User', email: 'second@example.com', usedCredits: 0, lastCreditUsedAt: null },
+      ],
+    };
+
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        users: [secondUserShare],
+        userDetails: [
+          { id: 'user2', name: 'Second User', email: 'second@example.com', usedCredits: 0, lastCreditUsedAt: null },
+        ],
+      })
     );
-    expect(user.groups).toEqual(['g-otherorg']);
+
+    expect(result).toEqual(expectedUpdatedOrg);
   });
 
-  it('purges groups even when the left org is NOT the user’s selected org', async () => {
-    db.organizations.shareable.findAccessibleById.mockResolvedValue(org());
-    db.groups.findIdsByOrganization.mockResolvedValue(['g-org1-a']);
-    const user = makeUser({ organizationId: 'a-different-org', groups: ['g-org1-a', 'keep'] });
+  it("should clear organizationId when the left org was the user's selected org", async () => {
+    const memberWithSelectedOrg = { ...mockMemberUser, organizationId: 'org1' } as IUserDocument;
 
-    await leave(user, { id: ORG_ID }, { db });
+    await leave(memberWithSelectedOrg, { id: 'org1' }, mockAdapters);
 
-    const patch = db.users.update.mock.calls[0][0];
+    expect(memberWithSelectedOrg.organizationId).toBeNull();
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user1', organizationId: null })
+    );
+  });
+
+  it("should NOT touch organizationId when the user's selected org is a different org", async () => {
+    const memberWithOtherOrg = { ...mockMemberUser, organizationId: 'other-org' } as IUserDocument;
+
+    await leave(memberWithOtherOrg, { id: 'org1' }, mockAdapters);
+
+    expect(memberWithOtherOrg.organizationId).toBe('other-org');
+    expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent under withTransaction retry: a failed user write does not poison the guard', async () => {
+    // Simulate the withTransaction retry path: the SAME user object is reused across
+    // attempts (leave never re-fetches it). A transient failure on the first user
+    // write must NOT leave the in-memory guard field mutated, or the retry would skip
+    // the write and leave a stale organizationId.
+    const user = { ...mockMemberUser, organizationId: 'org1' } as IUserDocument;
+    // fresh org copy per attempt so the callback re-runs cleanly
+    mockAdapters.db.organizations.shareable.findAccessibleById.mockImplementation(async () => ({
+      ...existingOrganization,
+      users: [memberUserShare, secondUserShare],
+      userDetails: existingOrganization.userDetails?.map(d => ({ ...d })),
+    }));
+    mockAdapters.db.users.update
+      .mockRejectedValueOnce(new Error('TransientTransactionError: WriteConflict'))
+      .mockResolvedValueOnce(undefined);
+
+    // Attempt 1 throws on the user write - memory must be untouched.
+    await expect(leave(user, { id: 'org1' }, mockAdapters)).rejects.toThrow('WriteConflict');
+    expect(user.organizationId).toBe('org1');
+
+    // Attempt 2 (retry): guard is still true, so the write re-runs and succeeds.
+    await leave(user, { id: 'org1' }, mockAdapters);
+    expect(user.organizationId).toBeNull();
+    expect(mockAdapters.db.users.update).toHaveBeenCalledTimes(2);
+    expect(mockAdapters.db.users.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'user1', organizationId: null })
+    );
+  });
+
+  it('should throw NotFoundError when organization is not found', async () => {
+    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(null);
+
+    await expect(leave(mockMemberUser as IUserDocument, { id: 'nonexistent-org' }, mockAdapters)).rejects.toThrow(
+      NotFoundError
+    );
+
+    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
+  it('should throw BadRequestError when user tries to leave their own organization', async () => {
+    await expect(leave(mockOwnerUser as IUserDocument, { id: 'org1' }, mockAdapters)).rejects.toThrow(BadRequestError);
+
+    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
+  it('should throw NotFoundError when user is not in the organization', async () => {
+    const notMemberUser: Partial<IUserDocument> = {
+      id: 'not-member',
+      name: 'Not Member User',
+      email: 'notmember@example.com',
+    };
+
+    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(null);
+
+    const leaveParams = {
+      id: 'org1',
+    };
+
+    // Call the function and expect it to throw
+    await expect(leave(notMemberUser as IUserDocument, leaveParams, mockAdapters)).rejects.toThrow(NotFoundError);
+
+    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+  });
+
+  it('should validate and secure parameters', async () => {
+    const leaveParams = {
+      id: 'org1',
+      // @ts-ignore - Adding extra parameters to test parameter validation
+      extraParam: 'should be ignored',
+    };
+
+    await leave(mockMemberUser as IUserDocument, leaveParams, mockAdapters);
+
+    expect(mockAdapters.db.organizations.shareable.findAccessibleById).toHaveBeenCalledWith(mockMemberUser, 'org1');
+
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalled();
+  });
+
+  it('should initialize userDetails as empty array if it is null', async () => {
+    const orgWithoutUserDetails = {
+      ...existingOrganization,
+      userDetails: null,
+    };
+
+    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(orgWithoutUserDetails);
+
+    const leaveParams = {
+      id: 'org1',
+    };
+
+    await leave(mockMemberUser as IUserDocument, leaveParams, mockAdapters);
+
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userDetails: [],
+        users: [secondUserShare],
+      })
+    );
+  });
+
+  it('purges the left org’s group ids from user.groups, keeping other-org groups', async () => {
+    const member = {
+      ...mockMemberUser,
+      organizationId: 'org1',
+      groups: ['g-org1-a', 'g-org1-b', 'g-other'],
+    } as IUserDocument;
+    mockAdapters.db.groups.findIdsByOrganization.mockResolvedValue(['g-org1-a', 'g-org1-b']);
+
+    await leave(member, { id: 'org1' }, mockAdapters);
+
+    expect(mockAdapters.db.groups.findIdsByOrganization).toHaveBeenCalledWith('org1');
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user1', groups: ['g-other'], organizationId: null })
+    );
+    expect(member.groups).toEqual(['g-other']);
+  });
+
+  it('purges org groups even when the left org is not the user’s selected org', async () => {
+    const member = { ...mockMemberUser, organizationId: 'other-org', groups: ['g-org1-a', 'keep'] } as IUserDocument;
+    mockAdapters.db.groups.findIdsByOrganization.mockResolvedValue(['g-org1-a']);
+
+    await leave(member, { id: 'org1' }, mockAdapters);
+
+    const patch = mockAdapters.db.users.update.mock.calls[0][0];
     expect(patch.groups).toEqual(['keep']);
     expect('organizationId' in patch).toBe(false); // selected org untouched
-    expect(user.organizationId).toBe('a-different-org');
-  });
-
-  it('clears organizationId when it matches, with no group changes', async () => {
-    db.organizations.shareable.findAccessibleById.mockResolvedValue(org());
-    const user = makeUser({ groups: [] });
-
-    await leave(user, { id: ORG_ID }, { db });
-
-    expect(db.users.update).toHaveBeenCalledWith({ id: 'user-1', organizationId: null });
-    expect(user.organizationId).toBeNull();
-  });
-
-  it('does not touch the user when nothing changed (not selected org, no org groups)', async () => {
-    db.organizations.shareable.findAccessibleById.mockResolvedValue(org());
-    db.groups.findIdsByOrganization.mockResolvedValue(['g-org1-a']);
-    const user = makeUser({ organizationId: 'other', groups: ['unrelated'] });
-
-    await leave(user, { id: ORG_ID }, { db });
-
-    expect(db.users.update).not.toHaveBeenCalled();
-  });
-
-  it('refuses to let the billing owner leave their own org', async () => {
-    db.organizations.shareable.findAccessibleById.mockResolvedValue(org({ userId: 'user-1' }));
-    await expect(leave(makeUser(), { id: ORG_ID }, { db })).rejects.toThrow(BadRequestError);
-    expect(db.organizations.update).not.toHaveBeenCalled();
-  });
-
-  it('removes the user from the org users[] and userDetails[]', async () => {
-    db.organizations.shareable.findAccessibleById.mockResolvedValue(org());
-    await leave(makeUser(), { id: ORG_ID }, { db });
-
-    const updatedOrg = db.organizations.update.mock.calls[0][0];
-    expect(updatedOrg.users).toEqual([{ userId: 'user-2' }]);
-    expect(updatedOrg.userDetails).toEqual([{ id: 'user-2' }]);
+    expect(member.organizationId).toBe('other-org');
   });
 });
