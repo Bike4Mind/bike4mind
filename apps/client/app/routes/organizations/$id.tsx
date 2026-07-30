@@ -95,13 +95,19 @@ const OrganizationPage: FC = () => {
     return organization.managerId === currentUser.id;
   }, [currentUser, organization]);
 
-  // Who may manage group instances + membership. Mirrors the group routes' authz: billing owner,
-  // an appointed org admin (adminUserIds), or a platform admin. Personal orgs never have groups.
+  // Who may manage group instances + membership. Mirrors assertCanManageOrgGroups
+  // (organizationService/groupMembership.ts) exactly: billing owner, an appointed org admin who is
+  // ALSO still a current member, or a platform admin. Personal orgs never have groups.
+  // The membership conjunct is not redundant - it is what stops a stale adminUserIds entry (a purge
+  // that missed) from being shown a management surface whose every write would 403.
   const canManageGroups = useMemo(() => {
     if (!currentUser || !organization || organization.personal) return false;
     if (currentUser.isAdmin) return true;
     if (currentUser.id === organization.userId) return true;
-    return (organization.adminUserIds ?? []).includes(currentUser.id);
+    return (
+      (organization.adminUserIds ?? []).includes(currentUser.id) &&
+      (organization.users ?? []).some(member => member.userId === currentUser.id)
+    );
   }, [currentUser, organization]);
 
   // Only the billing owner or a platform admin may appoint org admins (admins route authz).

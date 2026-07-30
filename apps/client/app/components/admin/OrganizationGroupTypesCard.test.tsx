@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -55,8 +55,34 @@ describe('OrganizationGroupTypesCard', () => {
     await waitFor(() => expect(screen.getByTestId('org-group-types-provisioned-sales')).toHaveTextContent('Sales (2)'));
   });
 
-  it('disables the save button until the selection changes', () => {
+  // Both directions matter. Asserting only the disabled state is satisfied by a button that is
+  // permanently disabled - i.e. a regression where an admin can never grant a type at all would
+  // be invisible. The enabled case is the positive control.
+  it('disables the save button until the selection changes, and enables it after', async () => {
     renderCard(makeOrg({ allowedGroupTypes: [] }));
-    expect(screen.getByTestId('org-group-types-save-btn')).toBeDisabled();
+    const save = screen.getByTestId('org-group-types-save-btn');
+    expect(save).toBeDisabled();
+
+    const input = screen.getByTestId('org-group-types-input').querySelector('input')!;
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    await waitFor(() => expect(screen.getAllByRole('option').length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByRole('option')[0]);
+
+    await waitFor(() => expect(screen.getByTestId('org-group-types-save-btn')).not.toBeDisabled());
+  });
+
+  it('submits the selected group types', async () => {
+    setOrganizationGroupTypes.mockResolvedValue({ added: ['sales'], removed: [] });
+    renderCard(makeOrg({ allowedGroupTypes: [] }));
+
+    const input = screen.getByTestId('org-group-types-input').querySelector('input')!;
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    await waitFor(() => expect(screen.getAllByRole('option').length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByRole('option')[0]);
+    fireEvent.click(screen.getByTestId('org-group-types-save-btn'));
+
+    await waitFor(() => expect(setOrganizationGroupTypes).toHaveBeenCalledWith('org1', [expect.any(String)]));
   });
 });
