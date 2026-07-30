@@ -110,10 +110,12 @@ const AdminSettingInputField = ({
 
   const saveValue = (next: string | number | boolean) => {
     // Backstop, intentionally unreachable while isDirty excludes the untouched-empty state
-    // above: focusing a sensitive field clears the mask, and a click is not guaranteed to
-    // blur the input first (macOS Safari and Firefox do not focus buttons on click). If the
-    // dirty logic is ever loosened, this still stops '' overwriting a stored key. Kept
-    // deliberately - do not delete it as redundant.
+    // above. Kept because it does not depend on event ordering: the dirty check protects the
+    // button, this protects the write, so loosening one cannot silently expose ''.
+    // Do not delete as redundant. The original rationale cited macOS Safari and Firefox not
+    // blurring the input before a save click; that was measured and is wrong - both do blur
+    // on the button's mousedown and restore the mask. No browser is known to skip the blur,
+    // but nothing in the DOM contract guarantees it either.
     if (setting.isSensitive && next === '' && !secretEdited) return;
 
     updateSettings.mutate(
