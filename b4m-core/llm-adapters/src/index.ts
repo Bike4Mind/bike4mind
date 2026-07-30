@@ -503,4 +503,5 @@ export * from './realtimeVoicePricing';
 export * from './resolveDeprecatedModel';
 export * from './deprecationHorizon';
 export * from './staleReferences';
+export * from './thinkingParams';
 export * from './toolPairingUtils';

@@ -66,6 +66,7 @@ import {
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { toRetrievalFilter, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import {
+  resolveOutputMaxTokens,
   getAvailableModels,
   getLlmByModel,
   type ICompletionOptions,
@@ -188,6 +189,15 @@ const RESPONSE_RESERVE = 8000;
 function assertNeverElisionSignal(signal: never): never {
   throw new Error(`Unhandled elision signal kind: ${JSON.stringify(signal)}`);
 }
+
+/**
+ * Output budget used when a caller supplies no max_tokens. Within supported output
+ * limits for every configured non-reasoning model; adaptive reasoning models default
+ * to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since they spend thinking tokens
+ * inside this budget. Distinct from the catalog's DEFAULT_MAX_OUTPUT_TOKENS, which
+ * fills in a model's *capability* when its record omits one.
+ */
+const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
 
 /**
  * Share of the context budget this file assumes history will take when sizing a history count.
@@ -1592,11 +1602,21 @@ export class ChatCompletionProcess {
       // attached-file content we extract has to be derived from them.
       const contextLimit = modelInfo.contextWindow ?? 200000;
       const modelMaxOutputTokens = modelInfo.max_tokens ?? 16384;
-      let safeMaxTokens = maxTokens;
 
-      if (maxTokens > modelMaxOutputTokens) {
-        safeMaxTokens = modelMaxOutputTokens;
-      }
+      // An explicit caller budget is honored as-is; only its absence is sized for the
+      // model. See resolveOutputMaxTokens for why raising an explicit value is not a
+      // free action (it feeds the credit pre-reservation and maxSafeInputTokens below).
+      const safeMaxTokens = resolveOutputMaxTokens({
+        requested: maxTokens,
+        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+        thinkingStyle: modelInfo.thinkingStyle,
+        modelMaxOutputTokens,
+      });
+
+      // Fetch buffer for URL/file content. Deliberately NOT safeMaxTokens: this is a
+      // *content* budget, unrelated to the output cap (same confusion called out for
+      // attachedFileTokenBudget below), so the adaptive default must not balloon it.
+      const urlContentBudget = maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS;
 
       const safetyBuffer = 1000; // Emergency buffer
       const maxSafeInputTokens = contextLimit - safeMaxTokens - safetyBuffer;
@@ -1635,7 +1655,7 @@ export class ChatCompletionProcess {
         messageFileIds,
         sessionKnowledgeIds: session.knowledgeIds ?? [],
         message,
-        maxTokens,
+        maxTokens: urlContentBudget,
         attachedFileTokenBudget,
         quest,
         embeddingFactory,
@@ -1747,7 +1767,7 @@ export class ChatCompletionProcess {
         // No files - still need to check for URLs in the message
         const urlResult = await processUrlsFromPrompt(
           message,
-          maxTokens,
+          urlContentBudget,
           this.user.id,
           async status => {
             this.sendStatusUpdate(quest, status, { statusAt: new Date() });
@@ -4203,18 +4223,16 @@ export class ChatCompletionProcess {
         // they don't affect quest.reply/replies. Fire-and-forget to avoid blocking response.
         const postSavePromises = postSaveFeatures
           .map(feature =>
-            this.features
-              .get(feature)
-              ?.onComplete({
-                quest,
-                session,
-                messages,
-                questMaster,
-                model,
-                historyCount,
-                oldestIncludedQuestId,
-                verbatimExcludedCount,
-              })
+            this.features.get(feature)?.onComplete({
+              quest,
+              session,
+              messages,
+              questMaster,
+              model,
+              historyCount,
+              oldestIncludedQuestId,
+              verbatimExcludedCount,
+            })
           )
           .filter(p => p);
 
