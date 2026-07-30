@@ -22,10 +22,12 @@ import AnthropicBedrockBackend from './bedrockBackend/anthropic';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
 import LlamaBedrockBackend from './bedrockBackend/llama';
+import MoonshotBedrockBackend from './bedrockBackend/moonshot';
 import TitanBedrockBackend from './bedrockBackend/titan';
 import { UndifferentiatedBedrockBackend } from './bedrockBackend/undifferentiated';
 import { BFLBackend } from './bflBackend';
 import { GeminiBackend } from './geminiBackend';
+import { KimiBackend } from './kimiBackend';
 import { LocalImageBackend } from './localImageBackend';
 import { OllamaBackend } from './ollamaBackend';
 import { OpenAIBackend } from './openaiBackend';
@@ -128,6 +130,10 @@ export function getLlmByModel(
         case ChatModels.DEEPSEEK_V3_1:
           backend = new DeepSeekBedrockBackend();
           break;
+        case ChatModels.KIMI_K2_5_BEDROCK:
+        case ChatModels.KIMI_K2_THINKING_BEDROCK:
+          backend = new MoonshotBedrockBackend();
+          break;
         default:
           backend = null;
       }
@@ -151,6 +157,10 @@ export function getLlmByModel(
     case 'xai':
       if (apiKeyTable.xai === 'expired') throw new Error('xAI API key is expired');
       backend = apiKeyTable.xai ? new XAIBackend(apiKeyTable.xai) : null;
+      break;
+    case 'kimi':
+      if (apiKeyTable.kimi === 'expired') throw new Error('Moonshot API key is expired');
+      backend = apiKeyTable.kimi ? new KimiBackend(apiKeyTable.kimi, logger) : null;
       break;
     case 'aws':
       backend = new AWSBackend();
@@ -325,6 +335,7 @@ export const getAvailableModels = async (
   const ollamaKey = resolveListingKey(ModelBackend.Ollama, gateCtx);
   const bflKey = resolveListingKey(ModelBackend.BFL, gateCtx);
   const xaiKey = resolveListingKey(ModelBackend.XAI, gateCtx);
+  const kimiKey = resolveListingKey(ModelBackend.Kimi, gateCtx);
   const localImageBaseUrl = resolveListingKey(ModelBackend.LocalImage, gateCtx);
 
   const backends = {
@@ -340,6 +351,7 @@ export const getAvailableModels = async (
     [ModelBackend.Ollama]: ollamaKey ? new OllamaBackend(ollamaKey) : null,
     [ModelBackend.BFL]: bflKey ? new BFLBackend(bflKey) : null,
     [ModelBackend.XAI]: xaiKey ? new XAIBackend(xaiKey) : null,
+    [ModelBackend.Kimi]: kimiKey ? new KimiBackend(kimiKey) : null,
     [ModelBackend.AWS]: isBackendUsable(ModelBackend.AWS, gateCtx) ? new AWSBackend() : null,
     [ModelBackend.LocalImage]: localImageBaseUrl
       ? new LocalImageBackend(localImageBaseUrl, Logger.globalInstance)
@@ -454,6 +466,8 @@ export * from './bedrockBackend/base';
 export * from './bedrockBackend/undifferentiated';
 export * from './bflBackend';
 export * from './geminiBackend';
+export * from './kimiBackend';
+export * from './kimiParams';
 export * from './localImageBackend';
 export * from './ollamaBackend';
 export * from './openaiBackend';
@@ -464,6 +478,7 @@ export {
   DeepSeekBedrockBackend,
   JurassicTwoBedrockBackend,
   LlamaBedrockBackend,
+  MoonshotBedrockBackend,
   TitanBedrockBackend,
 };
 

@@ -44,6 +44,14 @@ const MODELS_DEV_KEYS = [
   'grok-4.5',
   'grok-imagine-image-quality',
   'jp.anthropic.claude-opus-4-8',
+  // Moonshot: models.dev publishes the direct ids bare under the `moonshotai`
+  // provider, and the Bedrock copies under `amazon-bedrock` with AWS's own
+  // (inconsistent) prefixes.
+  'kimi-k2.5',
+  'kimi-k2.6',
+  'kimi-k3',
+  'moonshot.kimi-k2-thinking',
+  'moonshotai.kimi-k2.5',
   'o3',
   'o3-mini',
   'o4-mini',
@@ -58,6 +66,17 @@ const MODELS_DEV_KEYS = [
 const LITELLM_KEYS = [
   'ai21.j2-mid-v1',
   'anthropic.claude-opus-4-6-v1',
+  // Moonshot in litellm: first-party keys are `moonshot/`-qualified, the Bedrock
+  // copies are `bedrock/`-qualified, and the reseller copies (fireworks, baseten,
+  // cloudflare, azure_ai) are deliberately present here so the test proves a
+  // reseller can never win the join.
+  'azure_ai/kimi-k2.6',
+  'bedrock/moonshotai.kimi-k2.5',
+  'fireworks_ai/kimi-k2p6',
+  'moonshot.kimi-k2-thinking',
+  'moonshot/kimi-k2.5',
+  'moonshot/kimi-k2.6',
+  'moonshotai.kimi-k2.5',
   'azure_ai/gpt-5.4-mini',
   'black_forest_labs/flux-kontext-max',
   'black_forest_labs/flux-pro',
@@ -183,6 +202,26 @@ const JOIN_TABLE: ReadonlyArray<{ id: string; modelsDev: string | null; litellm:
   { id: 'flux-pro-1.1', modelsDev: null, litellm: 'black_forest_labs/flux-pro-1.1' },
   { id: 'flux-kontext-max', modelsDev: null, litellm: 'black_forest_labs/flux-kontext-max' },
   { id: 'flux-pro', modelsDev: null, litellm: 'black_forest_labs/flux-pro' },
+
+  // Moonshot direct: models.dev publishes bare, litellm `moonshot/`-qualified -
+  // which only resolves because 'moonshot' is in LITELLM_NAMESPACES. Drop that
+  // entry and these two rows fail, which is the regression this section exists
+  // to catch.
+  { id: 'kimi-k2.6', modelsDev: 'kimi-k2.6', litellm: 'moonshot/kimi-k2.6' },
+  { id: 'kimi-k2.5', modelsDev: 'kimi-k2.5', litellm: 'moonshot/kimi-k2.5' },
+  // k3 is newer than litellm's first-party list, so it joins models.dev alone and
+  // its price can only ever be flagged, never landed by the two-aggregator rule.
+  { id: 'kimi-k3', modelsDev: 'kimi-k3', litellm: null },
+
+  // Bedrock-served Moonshot, on AWS's two disagreeing prefixes. Both must resolve
+  // to the BEDROCK key on each side: a reseller or first-party key winning here
+  // would quote the wrong rate for a Bedrock call.
+  { id: 'moonshotai.kimi-k2.5', modelsDev: 'moonshotai.kimi-k2.5', litellm: 'moonshotai.kimi-k2.5' },
+  {
+    id: 'moonshot.kimi-k2-thinking',
+    modelsDev: 'moonshot.kimi-k2-thinking',
+    litellm: 'moonshot.kimi-k2-thinking',
+  },
 
   // AWS Transcribe exists in no aggregator.
   { id: 'transcribe', modelsDev: null, litellm: null },

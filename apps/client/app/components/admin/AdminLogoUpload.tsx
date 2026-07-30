@@ -14,6 +14,7 @@ import {
   ADMIN_SETTINGS_ARRAY_QUERY_KEY,
   BRANDING_SETTINGS_QUERY_KEY,
 } from '@client/app/hooks/data/queryKeys';
+import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 
 export async function compressAdminLogo(file: File, quality: number = 0.8): Promise<File | Blob> {
   return new Promise((resolve, reject) => {
@@ -169,25 +170,9 @@ const AdminLogoUpload: React.FC = () => {
         // Handle dual upload for both light and dark modes
         const { urls, logoUrls } = responseData;
 
-        const lightUploadResponse = await fetch(urls.light, {
-          method: 'PUT',
-          body: compressedFile,
-          headers: {
-            'Content-Type': compressedFile.type || file.type,
-          },
-        });
-
-        const darkUploadResponse = await fetch(urls.dark, {
-          method: 'PUT',
-          body: compressedFile,
-          headers: {
-            'Content-Type': compressedFile.type || file.type,
-          },
-        });
-
-        if (!lightUploadResponse.ok || !darkUploadResponse.ok) {
-          throw new Error('Failed to upload file to S3');
-        }
+        // uploadFileToUrl handles both URL shapes the server can hand back and throws on failure.
+        await uploadFileToUrl(urls.light, compressedFile, compressedFile.type || file.type);
+        await uploadFileToUrl(urls.dark, compressedFile, compressedFile.type || file.type);
 
         console.log('Both logos uploaded successfully:', logoUrls);
 
@@ -196,19 +181,11 @@ const AdminLogoUpload: React.FC = () => {
         setLocalDarkLogoUrl(logoUrls.dark);
       } else {
         // Handle single upload
-        const { url: presignedUrl, fileKey } = responseData;
+        const { url: uploadUrl, fileKey } = responseData;
 
-        const uploadResponse = await fetch(presignedUrl, {
-          method: 'PUT',
-          body: compressedFile,
-          headers: {
-            'Content-Type': compressedFile.type || file.type,
-          },
-        });
-
-        if (!uploadResponse.ok) {
-          throw new Error('Failed to upload file to S3');
-        }
+        // The shared helper handles both shapes the server can hand back: an S3 presign (hosted,
+        // raw axios) and the same-origin app-file upload proxy (self-host, authed api).
+        await uploadFileToUrl(uploadUrl, compressedFile, compressedFile.type || file.type);
 
         // Update with the S3 key (not full URL - will be combined with cdnUrl later)
         if (isDarkMode) {

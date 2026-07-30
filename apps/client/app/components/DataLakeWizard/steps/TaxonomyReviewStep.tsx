@@ -19,7 +19,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import { useTheme } from '@mui/joy/styles';
 import { tagPrefixIssue } from '@bike4mind/common';
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useDataLakeWizardStore, type TaxonomyTag } from '@client/app/stores/useDataLakeWizardStore';
 import { useInferTaxonomy } from '@client/app/hooks/data/dataLakeWizard';
 import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
@@ -202,6 +202,8 @@ export default function TaxonomyReviewStep() {
   const theme = useTheme();
   const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
+  const config = useDataLakeWizardStore(s => s.config);
+  const setConfig = useDataLakeWizardStore(s => s.setConfig);
   const setTagPrefix = useDataLakeWizardStore(s => s.setTagPrefix);
   const updateTag = useDataLakeWizardStore(s => s.updateTag);
   const deleteTag = useDataLakeWizardStore(s => s.deleteTag);
@@ -220,13 +222,18 @@ export default function TaxonomyReviewStep() {
   const duplicatePrefixLake = useDuplicatePrefixLake(taxonomy.prefix, !!targetLake);
   const prefixIssue = tagPrefixIssue(taxonomy.prefix, duplicatePrefixLake);
 
-  // Auto-trigger inference on first mount if not yet attempted
-  const [autoTriggered, setAutoTriggered] = useState(false);
-  if (!taxonomy.attempted && !taxonomy.analyzing && !autoTriggered) {
-    setAutoTriggered(true);
-    // Use setTimeout to avoid setState during render
-    setTimeout(() => inferTaxonomy.mutate({}), 0);
-  }
+  // Auto-run inference on first mount if not yet attempted. Ref-guarded rather than state-guarded
+  // so StrictMode's double-invoked effect can't fire two inference requests. Passes the prefix for
+  // the same reason Re-analyze does: the source step may already have derived one, and a run that
+  // ignored it would return tags in a namespace config.tagPrefix never adopts.
+  const autoTriggered = useRef(false);
+  useEffect(() => {
+    if (autoTriggered.current || taxonomy.attempted || taxonomy.analyzing) return;
+    autoTriggered.current = true;
+    inferTaxonomy.mutate({ existingPrefix: taxonomy.prefix || undefined });
+    // Depends on mutate, not the mutation object: useMutation returns a fresh object every
+    // render, which would re-run this effect on each one (harmless, but noisy to reason about).
+  }, [taxonomy.attempted, taxonomy.analyzing, taxonomy.prefix, inferTaxonomy.mutate]);
 
   // Loading state
   if (taxonomy.analyzing) {
@@ -293,11 +300,26 @@ export default function TaxonomyReviewStep() {
             </FormHelperText>
           )}
         </FormControl>
+        {/* The name is set on the source step now, so setTaxonomy's "fill config.name only if
+            empty" back-fill never fires. Offer the suggestion explicitly instead of showing a
+            value that silently does nothing. */}
         <Box sx={{ flex: 1, minWidth: 200 }}>
           <Typography level="body-xs" fontWeight="bold" sx={{ mb: 0.5 }}>
             Suggested Name
           </Typography>
-          <Typography level="body-sm">{taxonomy.suggestedName || '-'}</Typography>
+          <Stack direction="row" gap={1} alignItems="center">
+            <Typography level="body-sm">{taxonomy.suggestedName || '-'}</Typography>
+            {taxonomy.suggestedName && taxonomy.suggestedName !== config.name && (
+              <Button
+                size="sm"
+                variant="plain"
+                data-testid="taxonomy-use-suggested-name"
+                onClick={() => setConfig({ name: taxonomy.suggestedName })}
+              >
+                Use this name
+              </Button>
+            )}
+          </Stack>
         </Box>
         <Button
           size="sm"
