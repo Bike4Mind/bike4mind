@@ -45,7 +45,7 @@ import {
   runPartnerRuleBackfill,
   type OrganizationOption,
 } from '@client/app/utils/partnerSignupRuleAPICalls';
-import { extractApiError } from '@client/app/utils/extractApiError';
+import { getErrorMessage } from '@client/app/utils/error';
 
 // Options for the entitlements picker; spread to a mutable array for Joy Autocomplete.
 const ENTITLEMENT_OPTIONS = [...KNOWN_ENTITLEMENT_KEYS];
@@ -135,7 +135,7 @@ export default function PartnerSignupRulesTab() {
       toast.success(editing ? `Updated rule for ${rule.domain}` : `Created signup rule for ${rule.domain}`);
     },
     onError: (error: unknown) => {
-      setFormError(extractApiError(error));
+      setFormError(getErrorMessage(error));
     },
   });
 
@@ -145,7 +145,7 @@ export default function PartnerSignupRulesTab() {
       invalidate();
       toast.success(`${rule.domain} ${rule.enabled ? 'enabled' : 'disabled'}`);
     },
-    onError: (error: unknown) => toast.error(extractApiError(error)),
+    onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
   const deleteMutation = useMutation({
@@ -155,7 +155,7 @@ export default function PartnerSignupRulesTab() {
       setDeleteTarget(null);
       toast.success(`Deleted signup rule for ${rule.domain}`);
     },
-    onError: (error: unknown) => toast.error(extractApiError(error)),
+    onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
   // Org picker: debounced name search, only queried while the modal is open. The Autocomplete

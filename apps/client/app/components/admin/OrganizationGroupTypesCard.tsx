@@ -16,7 +16,7 @@ import { GROUP_TYPE_CATALOG, getGroupType, IOrganizationDocument, WithId } from 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { fetchOrganizationGroups, setOrganizationGroupTypes } from '@client/app/utils/groupsAPICalls';
-import { extractApiError } from '@client/app/utils/extractApiError';
+import { getErrorMessage } from '@client/app/utils/error';
 
 const GROUP_TYPE_KEYS = GROUP_TYPE_CATALOG.map(type => type.key);
 const labelFor = (key: string) => getGroupType(key)?.label ?? key;
@@ -37,14 +37,16 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
   // It resyncs when a different org loads (allowedKey) and on each successful save.
   const [selected, setSelected] = useState<string[]>(org.allowedGroupTypes ?? []);
   const [baseline, setBaseline] = useState<string[]>(org.allowedGroupTypes ?? []);
-  // Resync when a different org's allowed set loads (React's adjust-state-during-render pattern,
-  // not an effect). setBaseline in the save handler covers the same-org case where the snapshot
-  // prop never refreshes.
-  const allowedKey = (org.allowedGroupTypes ?? []).join(',');
-  const [prevAllowedKey, setPrevAllowedKey] = useState(allowedKey);
-  if (allowedKey !== prevAllowedKey) {
-    setPrevAllowedKey(allowedKey);
-    const next = allowedKey ? allowedKey.split(',') : [];
+  // Resync when a DIFFERENT org loads into this card (React's adjust-state-during-render pattern,
+  // not an effect). Defensive: today OrganizationsTab renders the profile modal conditionally, so
+  // the card unmounts between orgs and useState re-initializes anyway. Keyed on org.id rather than
+  // the allowed-set contents, because two orgs commonly share the same set (both empty) and a
+  // contents key would then fail to resync. setBaseline in the save handler covers the same-org
+  // case where the snapshot prop never refreshes.
+  const [prevOrgId, setPrevOrgId] = useState(org.id);
+  if (org.id !== prevOrgId) {
+    setPrevOrgId(org.id);
+    const next = org.allowedGroupTypes ?? [];
     setSelected(next);
     setBaseline(next);
   }
@@ -67,7 +69,7 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
       ].filter(Boolean);
       toast.success(parts.length ? `Group types updated: ${parts.join('; ')}` : 'Group types unchanged');
     },
-    onError: error => toast.error(extractApiError(error)),
+    onError: error => toast.error(getErrorMessage(error)),
   });
 
   const isDirty = useMemo(
@@ -131,7 +133,17 @@ const OrganizationGroupTypesCard: FC<{ org: WithId<IOrganizationDocument> }> = (
           <Typography level="body-xs" textColor="text.tertiary">
             Provisioned groups
           </Typography>
-          {groups.length === 0 ? (
+          {groupsQuery.isPending ? (
+            <Typography level="body-sm" color="neutral" data-testid="org-group-types-loading">
+              Loading provisioned groups...
+            </Typography>
+          ) : groupsQuery.isError ? (
+            // Not the empty state: "no groups provisioned" would invite a platform admin to
+            // re-grant types the org may already have.
+            <Typography level="body-sm" color="danger" data-testid="org-group-types-error">
+              Could not load provisioned groups. {getErrorMessage(groupsQuery.error)}
+            </Typography>
+          ) : groups.length === 0 ? (
             <Typography level="body-sm" color="neutral" data-testid="org-group-types-empty">
               No groups provisioned yet.
             </Typography>

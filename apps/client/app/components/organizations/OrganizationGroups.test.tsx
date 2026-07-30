@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -8,11 +8,12 @@ import { IOrganizationDocument, IUserDocument, WithId } from '@bike4mind/common'
 import OrganizationGroups from './OrganizationGroups';
 
 const fetchOrganizationGroups = vi.fn();
+const unassignGroupMember = vi.fn();
 
 vi.mock('@client/app/utils/groupsAPICalls', () => ({
   fetchOrganizationGroups: (...args: unknown[]) => fetchOrganizationGroups(...args),
   assignGroupMember: vi.fn(),
-  unassignGroupMember: vi.fn(),
+  unassignGroupMember: (...args: unknown[]) => unassignGroupMember(...args),
   renameOrganizationGroup: vi.fn(),
   setOrganizationAdmins: vi.fn(),
 }));
@@ -39,12 +40,23 @@ const renderGroups = (org: WithId<IOrganizationDocument>, canSetAdmins: boolean)
   return render(<OrganizationGroups organization={org} canSetAdmins={canSetAdmins} />, { wrapper: Wrapper });
 };
 
-const org = { id: 'org1', name: 'Acme', personal: false, adminUserIds: [] } as unknown as WithId<IOrganizationDocument>;
+// `users` carries the real member rows. The billing owner is deliberately NOT among them (the
+// server never puts the owner in users[]), which is what the picker filter keys on.
+const org = {
+  id: 'org1',
+  name: 'Acme',
+  personal: false,
+  adminUserIds: [],
+  userId: 'owner1',
+  users: [{ userId: 'u1' }, { userId: 'u2' }],
+} as unknown as WithId<IOrganizationDocument>;
 
 describe('OrganizationGroups', () => {
   beforeEach(() => {
     fetchOrganizationGroups.mockReset();
+    unassignGroupMember.mockReset();
     fetchOrganizationGroups.mockResolvedValue([]);
+    unassignGroupMember.mockResolvedValue(undefined);
   });
 
   it('renders group instances and resolves member ids to names', async () => {
@@ -72,5 +84,27 @@ describe('OrganizationGroups', () => {
   it('shows the admins editor when the viewer may set admins', async () => {
     renderGroups(org, true);
     await waitFor(() => expect(screen.getByTestId('org-admins-card')).toBeInTheDocument());
+  });
+
+  it('unassigns a member through the API when the chip delete is clicked', async () => {
+    fetchOrganizationGroups.mockResolvedValue([
+      { id: 'g1', name: 'Sales', type: 'sales', organizationId: 'org1', memberIds: ['u1'], memberCount: 1 },
+    ]);
+    renderGroups(org, false);
+
+    const remove = await screen.findByTestId('org-group-unassign-sales-u1');
+    fireEvent.click(remove);
+
+    await waitFor(() => expect(unassignGroupMember).toHaveBeenCalledWith('org1', 'g1', 'u1'));
+  });
+
+  // A failed groups fetch must NOT render the empty state - telling an org that already has groups
+  // to go ask an administrator for group types is worse than saying nothing.
+  it('distinguishes a failed fetch from an empty result', async () => {
+    fetchOrganizationGroups.mockRejectedValue(new Error('boom'));
+    renderGroups(org, false);
+
+    await waitFor(() => expect(screen.getByTestId('org-groups-error')).toBeInTheDocument());
+    expect(screen.queryByTestId('org-groups-empty')).not.toBeInTheDocument();
   });
 });

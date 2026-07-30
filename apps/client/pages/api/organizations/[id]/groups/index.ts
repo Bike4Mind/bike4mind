@@ -1,27 +1,24 @@
 // GET /api/organizations/:id/groups
 // List an organization's groups, each with its current members.
 
-import { Permission } from '@bike4mind/common';
 import { groupRepository } from '@bike4mind/database/social';
 import { userRepository } from '@bike4mind/database/auth';
 import { Organization } from '@bike4mind/database/infra';
+import { organizationService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@server/utils/errors';
+import { NotFoundError } from '@server/utils/errors';
 
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const organizationId = req.query.id;
     const organization = organizationId && (await Organization.findById(organizationId));
-    // ForbiddenError (an HTTPError), not a bare Error: the error handler maps only HTTPError
-    // subclasses, so a bare throw becomes a 500 and pages on-call for a routine 403.
-    // TODO(#1178, Phase 6): this returns memberIds to any Permission.read member. Fine while group
-    // keys are generic and confer nothing, but once a group gates a confidential capability, tighten
-    // this to the manage predicate (owner/org-admin/platform-admin) so membership is not enumerable
-    // by a plain member. The only current callers (admin card + Groups tab) are already manager-gated.
-    if (!organization || !req.ability!.can(Permission.read, organization)) {
-      throw new ForbiddenError("Not authorized to view this organization's groups");
-    }
+    if (!organization) throw new NotFoundError('Organization not found');
+    // The MANAGE predicate, not Permission.read: this route returns memberIds, and every org
+    // member holds read (addMember writes permissions: [read]), so a read gate would let any
+    // member enumerate who is in which group - resolvable to names via the public profile route.
+    // Shares the single predicate with the group write routes rather than re-deriving it here.
+    organizationService.assertCanManageOrgGroups(req.user, organization);
 
     const groups = await groupRepository.findByOrganization(organizationId as string);
     // Members per group in a single aggregation (org-groups #1172, Phase 4) - one pass keyed by

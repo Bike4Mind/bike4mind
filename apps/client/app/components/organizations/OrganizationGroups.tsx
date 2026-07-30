@@ -30,7 +30,7 @@ import {
   setOrganizationAdmins,
   unassignGroupMember,
 } from '@client/app/utils/groupsAPICalls';
-import { extractApiError } from '@client/app/utils/extractApiError';
+import { getErrorMessage } from '@client/app/utils/error';
 
 interface OrganizationGroupsProps {
   organization: WithId<IOrganizationDocument>;
@@ -54,14 +54,27 @@ const OrganizationGroups: FC<OrganizationGroupsProps> = ({ organization, canSetA
     queryFn: () => fetchOrganizationGroups(orgId),
   });
 
+  // `useGetOrganizationUsers` returns organization.users PLUS the billing owner (getUsers pushes
+  // organization.userId), but the group-membership and admins routes both validate against
+  // organization.users alone - the owner is deliberately not a member row. Offering the owner in
+  // either picker therefore produces a server 400 ("not a member of this organization") on the
+  // most natural first action. Filter to real member rows so the UI can only offer what the
+  // server will accept.
+  const assignableMembers = useMemo(
+    () => members.filter(member => (organization.users ?? []).some(row => row.userId === member.id)),
+    [members, organization.users]
+  );
+
   const membersById = useMemo(() => {
     const map = new Map<string, IUserDocument>();
     members.forEach(member => map.set(member.id, member));
     return map;
   }, [members]);
 
+  // Group membership lives only on the user document; the members endpoint serializes through
+  // toSafeUser, which carries no `groups` field. So assign/unassign cannot change the members
+  // response and only the groups query needs invalidating.
   const invalidateGroups = () => queryClient.invalidateQueries({ queryKey: ['organizations', orgId, 'groups'] });
-  const invalidateMembers = () => queryClient.invalidateQueries({ queryKey: ['users', 'organization', orgId] });
 
   const renameMutation = useMutation({
     mutationFn: ({ groupId, name }: { groupId: string; name: string }) => renameOrganizationGroup(orgId, groupId, name),
@@ -69,17 +82,16 @@ const OrganizationGroups: FC<OrganizationGroupsProps> = ({ organization, canSetA
       invalidateGroups();
       toast.success('Group renamed');
     },
-    onError: error => toast.error(extractApiError(error)),
+    onError: error => toast.error(getErrorMessage(error)),
   });
 
   const assignMutation = useMutation({
     mutationFn: ({ groupId, userId }: { groupId: string; userId: string }) => assignGroupMember(orgId, groupId, userId),
     onSuccess: () => {
       invalidateGroups();
-      invalidateMembers();
       toast.success('Member added to group');
     },
-    onError: error => toast.error(extractApiError(error)),
+    onError: error => toast.error(getErrorMessage(error)),
   });
 
   const unassignMutation = useMutation({
@@ -87,20 +99,19 @@ const OrganizationGroups: FC<OrganizationGroupsProps> = ({ organization, canSetA
       unassignGroupMember(orgId, groupId, userId),
     onSuccess: () => {
       invalidateGroups();
-      invalidateMembers();
       toast.success('Member removed from group');
     },
-    onError: error => toast.error(extractApiError(error)),
+    onError: error => toast.error(getErrorMessage(error)),
   });
 
   const adminsMutation = useMutation({
     mutationFn: (adminUserIds: string[]) => setOrganizationAdmins(orgId, adminUserIds),
     onSuccess: () => {
+      // Prefix match - this already covers ['organizations', orgId] and its 'groups' child.
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
-      queryClient.invalidateQueries({ queryKey: ['organizations', orgId] });
       toast.success('Organization admins updated');
     },
-    onError: error => toast.error(extractApiError(error)),
+    onError: error => toast.error(getErrorMessage(error)),
   });
 
   const groups = groupsQuery.data ?? [];
@@ -108,14 +119,24 @@ const OrganizationGroups: FC<OrganizationGroupsProps> = ({ organization, canSetA
   return (
     <Stack spacing={3} data-testid="org-groups-section">
       {canSetAdmins && (
-        <OrgAdminsEditor organization={organization} members={members} adminsMutation={adminsMutation} />
+        <OrgAdminsEditor organization={organization} members={assignableMembers} adminsMutation={adminsMutation} />
       )}
 
       <Stack spacing={1}>
         <Typography level="title-md" startDecorator={<GroupWorkOutlinedIcon fontSize="small" />}>
           Groups
         </Typography>
-        {groups.length === 0 ? (
+        {groupsQuery.isPending ? (
+          <Typography level="body-sm" color="neutral" data-testid="org-groups-loading">
+            Loading groups...
+          </Typography>
+        ) : groupsQuery.isError ? (
+          // Distinct from the empty state on purpose: telling an org that already HAS groups to go
+          // ask an administrator for group types is worse than saying nothing.
+          <Typography level="body-sm" color="danger" data-testid="org-groups-error">
+            Could not load groups. {getErrorMessage(groupsQuery.error)}
+          </Typography>
+        ) : groups.length === 0 ? (
           <Typography level="body-sm" color="neutral" data-testid="org-groups-empty">
             No group types have been granted to this organization yet. Contact your Bike4Mind administrator to enable
             them.
@@ -126,7 +147,7 @@ const OrganizationGroups: FC<OrganizationGroupsProps> = ({ organization, canSetA
               key={group.id}
               group={group}
               membersById={membersById}
-              members={members}
+              members={assignableMembers}
               onRename={name => renameMutation.mutate({ groupId: group.id, name })}
               onAssign={userId => assignMutation.mutate({ groupId: group.id, userId })}
               onUnassign={userId => unassignMutation.mutate({ groupId: group.id, userId })}
@@ -145,9 +166,20 @@ const OrgAdminsEditor: FC<{
   members: IUserDocument[];
   adminsMutation: { mutate: (ids: string[]) => void; isPending: boolean };
 }> = ({ organization, members, adminsMutation }) => {
-  const [selected, setSelected] = useState<string[]>(organization.adminUserIds ?? []);
-
   const current = organization.adminUserIds ?? [];
+  const [selected, setSelected] = useState<string[]>(current);
+
+  // Resync when the persisted set changes underneath us. PUT /admins is a FULL REPLACE, so without
+  // this a stale `selected` would (a) display the wrong roster and (b) mark itself dirty on its
+  // own - one click then silently de-appoints whoever was added elsewhere. Adjust-during-render
+  // rather than an effect so the first paint after a refetch is already correct.
+  const currentKey = [...current].sort().join(',');
+  const [syncedKey, setSyncedKey] = useState(currentKey);
+  if (currentKey !== syncedKey) {
+    setSyncedKey(currentKey);
+    setSelected(current);
+  }
+
   const isDirty = selected.length !== current.length || selected.some(id => !current.includes(id));
   const selectedMembers = members.filter(member => selected.includes(member.id));
 
@@ -202,11 +234,29 @@ const GroupCard: FC<{
   const [name, setName] = useState(group.name);
 
   const typeLabel = getGroupType(group.type)?.label ?? group.type;
-  const assignable = members.filter(member => !group.memberIds.includes(member.id));
+  // Memoized + Set-backed: `name` is local state in this component, so without this every
+  // keystroke while renaming re-ran an O(members x memberIds) scan of the whole org.
+  const assignable = useMemo(() => {
+    const assigned = new Set(group.memberIds);
+    return members.filter(member => !assigned.has(member.id));
+  }, [members, group.memberIds]);
+
+  // Re-seed from the prop on every entry to edit mode. `name` is initialized once and the card is
+  // keyed on group.id, so it survives refetches: without this, a rename by another admin would
+  // leave a stale value here that Enter would then commit, silently reverting their change.
+  const beginRename = () => {
+    setName(group.name);
+    setEditing(true);
+  };
 
   const commitRename = () => {
     const trimmed = name.trim();
     if (trimmed && trimmed !== group.name) onRename(trimmed);
+    setEditing(false);
+  };
+
+  const cancelRename = () => {
+    setName(group.name);
     setEditing(false);
   };
 
@@ -220,7 +270,11 @@ const GroupCard: FC<{
                 size="sm"
                 value={name}
                 onChange={e => setName(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && commitRename()}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') commitRename();
+                  if (e.key === 'Escape') cancelRename();
+                }}
+                slotProps={{ input: { 'aria-label': `Rename group ${group.name}` } }}
                 data-testid={`org-group-rename-input-${group.type}`}
                 autoFocus
               />
@@ -228,6 +282,7 @@ const GroupCard: FC<{
                 size="sm"
                 variant="soft"
                 color="primary"
+                aria-label={`Save new name for ${group.name}`}
                 onClick={commitRename}
                 data-testid={`org-group-rename-save-${group.type}`}
               >
@@ -236,10 +291,9 @@ const GroupCard: FC<{
               <IconButton
                 size="sm"
                 variant="plain"
-                onClick={() => {
-                  setName(group.name);
-                  setEditing(false);
-                }}
+                aria-label={`Cancel renaming ${group.name}`}
+                onClick={cancelRename}
+                data-testid={`org-group-rename-cancel-${group.type}`}
               >
                 <CloseIcon />
               </IconButton>
@@ -253,7 +307,8 @@ const GroupCard: FC<{
               <IconButton
                 size="sm"
                 variant="plain"
-                onClick={() => setEditing(true)}
+                aria-label={`Rename group ${group.name}`}
+                onClick={beginRename}
                 data-testid={`org-group-rename-btn-${group.type}`}
               >
                 <EditIcon fontSize="small" />
@@ -273,6 +328,9 @@ const GroupCard: FC<{
           ) : (
             group.memberIds.map(userId => {
               const member = membersById.get(userId);
+              // A member id with no matching org member means a stale user.groups entry (a purge
+              // that missed). Show that plainly rather than a bare ObjectId.
+              const label = member?.name || member?.email || 'Unknown member';
               return (
                 <Chip
                   key={userId}
@@ -285,6 +343,7 @@ const GroupCard: FC<{
                     <ChipDelete
                       variant="plain"
                       color="danger"
+                      aria-label={`Remove ${label} from ${group.name}`}
                       onClick={() => onUnassign(userId)}
                       data-testid={`org-group-unassign-${group.type}-${userId}`}
                     >
@@ -292,7 +351,7 @@ const GroupCard: FC<{
                     </ChipDelete>
                   }
                 >
-                  {member?.name || member?.email || userId}
+                  {label}
                 </Chip>
               );
             })
@@ -300,12 +359,13 @@ const GroupCard: FC<{
         </Stack>
 
         <FormControl>
+          <FormLabel>{`Add a member to ${group.name}`}</FormLabel>
           <Autocomplete
             options={assignable}
             value={null}
             getOptionLabel={member => member.name || member.email || member.id}
             isOptionEqualToValue={(option, value) => option.id === value.id}
-            placeholder="Add a member to this group"
+            placeholder="Search members"
             onChange={(_event, value) => value && onAssign(value.id)}
             data-testid={`org-group-assign-input-${group.type}`}
           />
