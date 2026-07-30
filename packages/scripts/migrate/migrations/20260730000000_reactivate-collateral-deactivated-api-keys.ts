@@ -103,7 +103,9 @@ const migration: MigrationFile = {
       return;
     }
 
-    const result = await ApiKey.updateMany({ _id: { $in: ids } }, { $set: { isActive: true } });
+    // deletedAt is re-checked on the write, not just the read above: a key soft-deleted between
+    // the two would otherwise be resurrected as active.
+    const result = await ApiKey.updateMany({ _id: { $in: ids }, deletedAt: null }, { $set: { isActive: true } });
     console.log(
       `[reactivate-collateral-deactivated-api-keys] reactivated ${result.modifiedCount} stranded provider key(s)`
     );

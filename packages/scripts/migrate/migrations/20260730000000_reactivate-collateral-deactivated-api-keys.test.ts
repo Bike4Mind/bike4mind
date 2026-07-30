@@ -143,7 +143,21 @@ describe('reactivate-collateral-deactivated-api-keys migration', () => {
 
     expect(mockDistinct).toHaveBeenCalledWith('userId', { deletedAt: null, isActive: false });
     expect(mockFind).toHaveBeenCalledWith({ deletedAt: null, userId: { $in: ['u1'] } });
-    expect(mockUpdateMany).toHaveBeenCalledWith({ _id: { $in: ['elevenlabs'] } }, { $set: { isActive: true } });
+    expect(mockUpdateMany).toHaveBeenCalledWith(
+      { _id: { $in: ['elevenlabs'] }, deletedAt: null },
+      { $set: { isActive: true } }
+    );
+  });
+
+  it('re-checks deletedAt on the write, so a key soft-deleted mid-run is not resurrected', async () => {
+    mockDistinct.mockResolvedValue(['u1']);
+    mockLean.mockResolvedValue([
+      { _id: 'stranded', userId: 'u1', type: 'elevenLabs', isActive: false, expiresAt: day(30), createdAt: day(-2) },
+    ]);
+
+    await migration.up();
+
+    expect(mockUpdateMany.mock.calls[0][0]).toMatchObject({ deletedAt: null });
   });
 
   it('excludes soft-deleted keys from both queries', async () => {
