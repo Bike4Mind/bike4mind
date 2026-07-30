@@ -25,6 +25,9 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => undefined }));
 vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => false }));
+// Mocked for the same reason as the line above: the real hook calls `useEntitlements`, which is a
+// react-query `useQuery`, and this suite renders without a QueryClientProvider.
+vi.mock('@client/app/hooks/data/meetings', () => ({ useMeetingsAccess: () => false }));
 vi.mock('@client/app/components/Files/Browser', () => ({
   useFileBrowser: () => ({ open: false, setOpen: vi.fn() }),
 }));

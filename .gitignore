@@ -86,7 +86,7 @@ packages/premium/optihashi/
 # `git add` away from publishing it. Same near-miss the optihashi entry above records.
 packages/premium/bob/
 
-# Premium overlay snapshot for interactive-meetings, hydrated at the pinned ref by the
+# Premium overlay snapshot for b4m-interactive-meetings, hydrated at the pinned ref by the
 # deploy pipeline before pnpm install. Seventh of the enumerated overlays: there is no
 # blanket packages/premium/*/ pattern here on purpose, so an unlisted overlay mount shows
 # as untracked and is one bulk `git add` away from publishing private source into this
