@@ -112,6 +112,14 @@ export interface PersistAgentArtifactsDeps {
   isArtifactsEnabled: () => Promise<boolean>;
   artifactExists: (id: string) => Promise<boolean>;
   createArtifact: (userId: string, payload: AgentArtifactPayload) => Promise<void>;
+  /** Has this quest already had its artifacts persisted by an earlier terminal write? */
+  questHasArtifacts: (questId: string) => Promise<boolean>;
+  /**
+   * Remove the content/version rows left behind by a `create` that died partway.
+   * Only ever called once the artifacts row has been confirmed ABSENT, so
+   * nothing can reference what this deletes.
+   */
+  clearPartialArtifact: (artifactId: string) => Promise<void>;
 }
 
 function defaultDeps(): PersistAgentArtifactsDeps {
@@ -142,15 +150,29 @@ function defaultDeps(): PersistAgentArtifactsDeps {
         },
       });
     },
+    questHasArtifacts: async questId => {
+      const { artifactRepository } = await import('@bike4mind/database');
+      return Boolean(await artifactRepository.findOne({ sourceQuestId: questId }));
+    },
+    clearPartialArtifact: async artifactId => {
+      const { ArtifactContent, ArtifactVersion } = await import('@bike4mind/database');
+      // Hard deletes: neither model carries softDeletePlugin, which matters -
+      // a soft-deleted row would still occupy the { artifactId, version } unique
+      // index and the retry would hit E11000 again forever.
+      await ArtifactVersion.deleteMany({ artifactId });
+      await ArtifactContent.deleteMany({ artifactId });
+    },
   };
 }
 
 /**
- * A duplicate id is a SUCCESS here, not a failure: it means this artifact was
- * already persisted by an earlier terminal write for the same run.
- * `artifactService.create` has no upsert - a repeat write throws E11000 off the
- * `{ artifactId, version }` unique index on artifact_contents before the artifact
- * row is touched. Both shapes are checked because a wrapped or serialized error
+ * E11000 off the `{ artifactId, version }` unique index on artifact_contents.
+ *
+ * This is NOT on its own a success signal. `artifactService.create` writes
+ * artifact_contents -> artifact_versions -> artifacts with no transaction, so a
+ * duplicate content row means either "already fully written" or "a previous
+ * attempt died partway". Only the artifacts row distinguishes them - see the
+ * caller. Both error shapes are checked because a wrapped or serialized error
  * may carry only the message.
  */
 function isDuplicateKeyError(err: unknown): boolean {
@@ -165,13 +187,20 @@ function isDuplicateKeyError(err: unknown): boolean {
  * An artifact-persistence failure must not fail a run whose answer the user has
  * already seen.
  *
- * Idempotency is three cheap mechanisms, none optional. The stable Quest-derived
- * id covers the common case; the existence pre-check covers ids that the parser
+ * Idempotency anchors on the QUEST, not on the artifact id. Two real
+ * double-write vectors bypass the executor's `claimExecution` CAS - the
+ * WebSocket `gate_response: stop` handler runs outside it entirely, and a `stop`
+ * can race a `continue`-resumed executor - and crucially those two paths pass
+ * DIFFERENT `replyText` (the executor sends the full post-DAG-bubble reply; the
+ * gate-stop handler sends `finalAnswer ?? 'Agent stopped...'`). Because every
+ * artifact id is derived from the parsed reply, an id-based check cannot see
+ * that the second write is the same run: different text parses to different
+ * identifiers, so the ids differ and both writes land. `questId` is the only
+ * value stable across both, so it is what gates the whole run.
+ *
+ * The per-id existence check stays as a second line - it covers ids the parser
  * cannot make deterministic (`convertToolOutputsToArtifacts` embeds `Date.now()`
- * in the identifier of tool-output recharts/mermaid); treating E11000 as success
- * covers the race between the two. Two real double-write vectors bypass the
- * executor's `claimExecution` CAS: the WebSocket `gate_response: stop` handler
- * runs outside it entirely, and a `stop` can race a `continue`-resumed executor.
+ * in the identifier of tool-output recharts/mermaid) within a single write.
  */
 export async function persistAgentArtifacts(args: {
   replyText: string;
@@ -203,6 +232,19 @@ export async function persistAgentArtifacts(args: {
       return;
     }
 
+    // Quest-level gate. This, not the per-id check below, is what makes a second
+    // terminal write for the same run a no-op - the two write paths pass
+    // different reply text, so their parsed ids do not match and an id-based
+    // check would let both through. See the docstring.
+    if (await deps.questHasArtifacts(questId)) {
+      logger.info('[Artifacts] quest already has persisted artifacts - skipping duplicate terminal write', {
+        executionId,
+        questId,
+        parsed: payloads.length,
+      });
+      return;
+    }
+
     // Payloads run last-to-first through the reply (see buildAgentArtifactPayloads),
     // so this keeps the reply's LAST artifacts. Either end is arbitrary for what is
     // only a runaway-reply valve; taking the head keeps the surviving ids stable.
@@ -219,6 +261,7 @@ export async function persistAgentArtifacts(args: {
 
     let created = 0;
     let skipped = 0;
+    let repaired = 0;
     // Sequential: one artifact's failure must not abort the rest, and the volume
     // is bounded by the cap anyway.
     for (const payload of capped) {
@@ -231,8 +274,36 @@ export async function persistAgentArtifacts(args: {
         created++;
       } catch (artifactErr) {
         if (isDuplicateKeyError(artifactErr)) {
-          skipped++;
-          continue;
+          // A duplicate content row does NOT prove the artifact was written.
+          // `artifactService.create` writes contents -> versions -> artifacts
+          // untransacted, so a crash after the content write leaves a row that
+          // makes every future attempt throw E11000. Swallowing that as success
+          // would lose the artifact permanently and silently: the pre-check above
+          // and the card's `findExistingArtifactId` both read the ARTIFACTS
+          // collection, which would stay empty forever.
+          //
+          // So ask the collection that is actually authoritative.
+          try {
+            if (await deps.artifactExists(payload.id)) {
+              skipped++; // genuinely already written by a concurrent writer
+              continue;
+            }
+            // Orphaned content/version rows from a dead attempt. Nothing
+            // references them (no artifacts row exists), so clearing them is
+            // safe and makes the write retryable instead of permanently wedged.
+            await deps.clearPartialArtifact(payload.id);
+            await deps.createArtifact(userId, payload);
+            repaired++;
+            continue;
+          } catch (repairErr) {
+            logger.error('[Artifacts] could not repair a partially-written artifact - it will need manual cleanup', {
+              executionId,
+              questId,
+              artifactId: payload.id,
+              error: repairErr instanceof Error ? repairErr.message : String(repairErr),
+            });
+            continue;
+          }
         }
         logger.warn('[Artifacts] failed to persist one agent artifact - continuing', {
           executionId,
@@ -249,6 +320,7 @@ export async function persistAgentArtifacts(args: {
       parsed: payloads.length,
       created,
       skipped,
+      repaired,
     });
   } catch (err) {
     logger.error('[Artifacts] agent artifact persistence failed - continuing', {

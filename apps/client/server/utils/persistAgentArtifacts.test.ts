@@ -27,8 +27,44 @@ function stubDeps(overrides: Partial<PersistAgentArtifactsDeps> = {}): PersistAg
     isArtifactsEnabled: vi.fn().mockResolvedValue(true),
     artifactExists: vi.fn().mockResolvedValue(false),
     createArtifact: vi.fn().mockResolvedValue(undefined),
+    questHasArtifacts: vi.fn().mockResolvedValue(false),
+    clearPartialArtifact: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
+}
+
+/**
+ * Deps backed by a fake store that reproduces the real write ordering:
+ * artifact_contents (unique on {artifactId, version}) is written BEFORE the
+ * artifacts row, and there is no transaction. `failAfterContentWrite` simulates
+ * the crash that leaves an orphan content row behind.
+ */
+function storeBackedDeps(options: { failAfterContentWrite?: boolean } = {}) {
+  const contents = new Set<string>();
+  const artifacts = new Map<string, string>(); // artifactId -> questId
+  let failNext = options.failAfterContentWrite ?? false;
+
+  const deps: PersistAgentArtifactsDeps = {
+    isArtifactsEnabled: vi.fn().mockResolvedValue(true),
+    artifactExists: vi.fn(async (id: string) => artifacts.has(id)),
+    questHasArtifacts: vi.fn(async (questId: string) => [...artifacts.values()].includes(questId)),
+    clearPartialArtifact: vi.fn(async (id: string) => {
+      contents.delete(id);
+    }),
+    createArtifact: vi.fn(async (_userId: string, payload: { id: string; sourceQuestId: string }) => {
+      if (contents.has(payload.id)) {
+        throw Object.assign(new Error('E11000 duplicate key error'), { code: 11000 });
+      }
+      contents.add(payload.id);
+      if (failNext) {
+        failNext = false;
+        throw new Error('lambda died after the content write');
+      }
+      artifacts.set(payload.id, payload.sourceQuestId);
+    }),
+  };
+
+  return { deps, contents, artifacts };
 }
 
 function persist(replyText: string, deps: PersistAgentArtifactsDeps) {
@@ -170,13 +206,79 @@ describe('persistAgentArtifacts', () => {
     expect(deps.createArtifact).toHaveBeenCalledTimes(1);
   });
 
-  it('treats a duplicate-key rejection as success, not an error', async () => {
+  it('treats a duplicate key as success when the artifacts row really is there', async () => {
     const deps = stubDeps({
+      // Pre-check misses (a concurrent writer committed between check and write),
+      // then the re-check inside the duplicate branch finds the row.
+      artifactExists: vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true),
       createArtifact: vi.fn().mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 })),
     });
 
     await expect(persist(reactArtifact('foo'), deps)).resolves.toBeUndefined();
+    expect(deps.clearPartialArtifact).not.toHaveBeenCalled();
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  // The blocker: `artifactService.create` writes contents -> versions -> artifacts
+  // with no transaction. A crash after the content write used to make every future
+  // attempt throw E11000, which was swallowed as a clean dedup skip - so the
+  // artifacts row was never written again, on this run or any other.
+  it('recovers an artifact orphaned by a crash partway through create', async () => {
+    const first = storeBackedDeps({ failAfterContentWrite: true });
+
+    await persist(reactArtifact('foo'), first.deps);
+
+    // Crash left a content row and no artifact - exactly the wedged state.
+    expect(first.contents.size).toBe(1);
+    expect(first.artifacts.size).toBe(0);
+
+    // The retry must not silently skip. It clears the orphan and completes.
+    await persist(reactArtifact('foo'), first.deps);
+
+    expect(first.deps.clearPartialArtifact).toHaveBeenCalledTimes(1);
+    expect(first.artifacts.size).toBe(1);
+  });
+
+  it('reports rather than hides an orphan it cannot clear', async () => {
+    const deps = stubDeps({
+      createArtifact: vi.fn().mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 })),
+      clearPartialArtifact: vi.fn().mockRejectedValue(new Error('delete denied')),
+    });
+
+    await expect(persist(reactArtifact('foo'), deps)).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('manual cleanup'), expect.anything());
+  });
+
+  // The second blocker: the executor's natural completion and the gate-stop
+  // handler pass DIFFERENT reply text for the same run, so their parsed
+  // identifiers - and therefore every artifact id - differ. Only the questId is
+  // stable across both, which is why the gate keys off it.
+  it('does not double-write when the two terminal paths send different reply text', async () => {
+    const { deps, artifacts } = storeBackedDeps();
+
+    await persist(`Here is the component.\n\n${reactArtifact('foo')}`, deps);
+    await persist(`Agent stopped by user.\n\n${reactArtifact('foo-v2')}`, deps);
+
+    expect(artifacts.size).toBe(1);
+    expect(deps.createArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it('still writes for a different quest', async () => {
+    const { deps, artifacts } = storeBackedDeps();
+
+    await persist(reactArtifact('foo'), deps);
+    await persistAgentArtifacts({
+      replyText: reactArtifact('bar'),
+      questId: 'quest-2',
+      questCreatedAtMs: QUEST_CREATED_AT_MS,
+      sessionId: SESSION_ID,
+      userId: USER_ID,
+      executionId: EXECUTION_ID,
+      logger,
+      deps,
+    });
+
+    expect(artifacts.size).toBe(2);
   });
 
   it('swallows a generic create failure and logs it', async () => {
