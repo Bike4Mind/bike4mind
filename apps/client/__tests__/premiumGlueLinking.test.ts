@@ -24,7 +24,10 @@ let script: string;
 let clientRoot: string;
 
 function runCodegen() {
-  const result = spawnSync(process.execPath, [script], { encoding: 'utf8' });
+  // CI is forced off: the script hard-fails a hydrated-but-unlinked tree when
+  // CI === 'true' (pinned by its own test below), and this suite runs the
+  // unlinked scenarios on CI runners where CI=true is ambient.
+  const result = spawnSync(process.execPath, [script], { encoding: 'utf8', env: { ...process.env, CI: '' } });
   expect(result.status, result.stderr).toBe(0);
   return result;
 }
@@ -125,6 +128,12 @@ describe('hydrated but UNLINKED overlay', () => {
     const migrations = readFileSync(join(sandbox, 'packages/scripts/migrate/migrations/premium.generated.ts'), 'utf8');
     expect(migrations).toContain('premium/fakeoverlay/src/server/migrations');
     expect(migrations).not.toContain(PKG_NAME);
+  });
+
+  it('refuses the hydrated-but-unlinked state outright when CI=true', () => {
+    const result = spawnSync(process.execPath, [script], { encoding: 'utf8', env: { ...process.env, CI: 'true' } });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('refusing to emit absent glue');
   });
 });
 
