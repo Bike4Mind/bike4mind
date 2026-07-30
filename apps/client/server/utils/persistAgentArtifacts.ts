@@ -112,8 +112,12 @@ export interface PersistAgentArtifactsDeps {
   isArtifactsEnabled: () => Promise<boolean>;
   artifactExists: (id: string) => Promise<boolean>;
   createArtifact: (userId: string, payload: AgentArtifactPayload) => Promise<void>;
-  /** Has this quest already had its artifacts persisted by an earlier terminal write? */
-  questHasArtifacts: (questId: string) => Promise<boolean>;
+  /**
+   * How many rows an earlier terminal write already landed for this quest. A
+   * count, not a boolean: a partially-successful first write must still be
+   * completable by a later one (see the gate in `persistAgentArtifacts`).
+   */
+  countQuestArtifacts: (questId: string) => Promise<number>;
   /**
    * Remove the content/version rows left behind by a `create` that died partway.
    * Only ever called once the artifacts row has been confirmed ABSENT, so
@@ -150,9 +154,12 @@ function defaultDeps(): PersistAgentArtifactsDeps {
         },
       });
     },
-    questHasArtifacts: async questId => {
+    countQuestArtifacts: async questId => {
       const { artifactRepository } = await import('@bike4mind/database');
-      return Boolean(await artifactRepository.findOne({ sourceQuestId: questId }));
+      // Deliberately NOT filtered on deletedAt: a row the user deleted still
+      // means this quest was already processed, and a repeat terminal write
+      // must not resurrect it.
+      return artifactRepository.count({ sourceQuestId: questId });
     },
     clearPartialArtifact: async artifactId => {
       const { ArtifactContent, ArtifactVersion } = await import('@bike4mind/database');
@@ -176,10 +183,15 @@ function defaultDeps(): PersistAgentArtifactsDeps {
  * may carry only the message.
  */
 function isDuplicateKeyError(err: unknown): boolean {
-  if (typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000) {
-    return true;
-  }
-  return err instanceof Error && err.message.includes('E11000');
+  if (typeof err !== 'object' || err === null) return false;
+  if ((err as { code?: unknown }).code === 11000) return true;
+  // Read `message` off any object, not just an Error instance. A driver error
+  // that crossed a serialization boundary arrives as a plain object carrying
+  // only the text, and an `instanceof Error` check would miss it - which would
+  // send a genuine duplicate down the generic failure path and leave an orphan
+  // unrepaired, the exact outcome this module exists to prevent.
+  const message = (err as { message?: unknown }).message;
+  return typeof message === 'string' && message.includes('E11000');
 }
 
 /**
@@ -232,19 +244,6 @@ export async function persistAgentArtifacts(args: {
       return;
     }
 
-    // Quest-level gate. This, not the per-id check below, is what makes a second
-    // terminal write for the same run a no-op - the two write paths pass
-    // different reply text, so their parsed ids do not match and an id-based
-    // check would let both through. See the docstring.
-    if (await deps.questHasArtifacts(questId)) {
-      logger.info('[Artifacts] quest already has persisted artifacts - skipping duplicate terminal write', {
-        executionId,
-        questId,
-        parsed: payloads.length,
-      });
-      return;
-    }
-
     // Payloads run last-to-first through the reply (see buildAgentArtifactPayloads),
     // so this keeps the reply's LAST artifacts. Either end is arbitrary for what is
     // only a runaway-reply valve; taking the head keeps the surviving ids stable.
@@ -256,6 +255,41 @@ export async function persistAgentArtifacts(args: {
         parsed: payloads.length,
         cap: MAX_AGENT_ARTIFACTS_PER_RUN,
         dropped: payloads.length - capped.length,
+      });
+    }
+
+    // Quest-level gate. This, not the per-id check below, is what makes a second
+    // terminal write for the same run a no-op - the two write paths pass
+    // different reply text, so their parsed ids do not match and an id-based
+    // check would let both through. See the docstring.
+    //
+    // A COUNT, not a boolean. Per-artifact failures below are swallowed so one
+    // bad row cannot abort the rest, which means a first write can land some
+    // rows and lose others. A boolean "this quest has artifacts" gate would
+    // then treat that quest as finished forever and the missing rows could
+    // never be retried - trading the duplicate-row bug for a silent-loss one.
+    // Comparing against what this invocation would write lets an incomplete
+    // quest be completed, while a complete one still short-circuits.
+    const alreadyPersisted = await deps.countQuestArtifacts(questId);
+    if (alreadyPersisted >= capped.length) {
+      logger.info('[Artifacts] quest already fully persisted - skipping duplicate terminal write', {
+        executionId,
+        questId,
+        parsed: payloads.length,
+        alreadyPersisted,
+      });
+      return;
+    }
+    if (alreadyPersisted > 0) {
+      // Ids are only stable across writes that parsed the same reply text, so
+      // completing a partial write can duplicate a row when the two terminal
+      // paths disagree. That is the deliberate trade: a visible duplicate beats
+      // a row that silently never lands.
+      logger.warn('[Artifacts] quest is partially persisted - completing the remaining rows', {
+        executionId,
+        questId,
+        parsed: payloads.length,
+        alreadyPersisted,
       });
     }
 

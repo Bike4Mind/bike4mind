@@ -27,7 +27,7 @@ function stubDeps(overrides: Partial<PersistAgentArtifactsDeps> = {}): PersistAg
     isArtifactsEnabled: vi.fn().mockResolvedValue(true),
     artifactExists: vi.fn().mockResolvedValue(false),
     createArtifact: vi.fn().mockResolvedValue(undefined),
-    questHasArtifacts: vi.fn().mockResolvedValue(false),
+    countQuestArtifacts: vi.fn().mockResolvedValue(0),
     clearPartialArtifact: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -47,7 +47,7 @@ function storeBackedDeps(options: { failAfterContentWrite?: boolean } = {}) {
   const deps: PersistAgentArtifactsDeps = {
     isArtifactsEnabled: vi.fn().mockResolvedValue(true),
     artifactExists: vi.fn(async (id: string) => artifacts.has(id)),
-    questHasArtifacts: vi.fn(async (questId: string) => [...artifacts.values()].includes(questId)),
+    countQuestArtifacts: vi.fn(async (questId: string) => [...artifacts.values()].filter(q => q === questId).length),
     clearPartialArtifact: vi.fn(async (id: string) => {
       contents.delete(id);
     }),
@@ -261,6 +261,57 @@ describe('persistAgentArtifacts', () => {
 
     expect(artifacts.size).toBe(1);
     expect(deps.createArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  // A boolean "this quest has artifacts" gate would lock a partially-persisted
+  // quest as finished forever: the first write lands row 1, loses row 2 to a
+  // transient error, and every later write short-circuits. Counting instead
+  // lets the second write finish the job.
+  it('completes a quest whose first write only landed some of its rows', async () => {
+    const persisted = new Set<string>();
+    let failOnce = true;
+    const deps = stubDeps({
+      artifactExists: vi.fn(async (id: string) => persisted.has(id)),
+      countQuestArtifacts: vi.fn(async () => persisted.size),
+      createArtifact: vi.fn(async (_userId: string, payload: { id: string }) => {
+        if (failOnce) {
+          failOnce = false;
+          throw new Error('transient mongo blip');
+        }
+        persisted.add(payload.id);
+      }),
+    });
+
+    const reply = `${reactArtifact('foo')}\n\n${reactArtifact('bar', 'Bar')}`;
+
+    await persist(reply, deps);
+    expect(persisted.size).toBe(1); // one landed, one lost
+
+    await persist(reply, deps);
+    expect(persisted.size).toBe(2); // the retry completed it rather than skipping
+  });
+
+  it('short-circuits only once the quest is fully persisted', async () => {
+    const deps = stubDeps({ countQuestArtifacts: vi.fn().mockResolvedValue(1) });
+
+    await persist(reactArtifact('foo'), deps);
+
+    expect(deps.createArtifact).not.toHaveBeenCalled();
+  });
+
+  // A driver error that crossed a serialization boundary arrives as a plain
+  // object with only `message`. Missing it would send a genuine duplicate down
+  // the generic failure path and leave the orphan unrepaired.
+  it('recognises a duplicate-key error that is a plain object, not an Error', async () => {
+    const deps = stubDeps({
+      createArtifact: vi
+        .fn()
+        .mockRejectedValue({ message: 'E11000 duplicate key error collection: artifact_contents' }),
+    });
+
+    await persist(reactArtifact('foo'), deps);
+
+    expect(deps.clearPartialArtifact).toHaveBeenCalledTimes(1);
   });
 
   it('still writes for a different quest', async () => {
