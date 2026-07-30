@@ -55,7 +55,7 @@ Guidelines:
 - Common dimensions: type, topic, department, year, status, audience
 - Confidence scores: 0.90-1.0 for clear patterns, 0.75-0.89 for likely patterns, 0.70-0.74 for speculative
 - Strength scores for file assignments: 0.7-1.0 based on how well the file matches the tag
-- Group related concepts (don't create too many tags — aim for 5-20 categories)
+- Group related concepts (don't create too many tags - aim for 5-20 categories)
 - Use folder structure as a strong signal for taxonomy
 - If content samples are provided, use them to improve tag accuracy
 - Assign 1-3 tags per file in fileAssignments (only include sampled files)`;

@@ -51,7 +51,6 @@ import {
   useGetDeletedDataLakes,
   useActiveDataLakeBatches,
 } from '@client/app/hooks/data/dataLakes';
-import type { IDataLakeBatchDocument } from '@bike4mind/common';
 import { useDataLakeWizardStore, type ManagerTab } from '@client/app/stores/useDataLakeWizardStore';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
@@ -64,7 +63,14 @@ import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 export default function DataLakeListPanel() {
   const { data: dataLakes, isLoading } = useDataLakes();
   const { data: activeBatches } = useActiveDataLakeBatches();
-  const [reviewingBatch, setReviewingBatch] = useState<IDataLakeBatchDocument | null>(null);
+  // Id only, not the batch object - `reviewingBatch` below is derived from the live, polled
+  // `activeBatches` list (mirroring `editingLake`'s pattern) so a re-analyze's cache refresh
+  // flows into the open review panel instead of leaving it stuck showing pre-refresh suggestions.
+  const [reviewingBatchId, setReviewingBatchId] = useState<string | null>(null);
+  const reviewingBatch = useMemo(
+    () => activeBatches?.find(b => b.id === reviewingBatchId) ?? null,
+    [activeBatches, reviewingBatchId]
+  );
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   // Follow the store's target tab so a deep-link (openManager('discover')) always lands on the
@@ -191,9 +197,14 @@ export default function DataLakeListPanel() {
             ) : (
               <Stack gap={1}>
                 {dataLakes.map(lake => {
-                  // At most one batch per lake is ever in the "needs attention" set at a time
-                  // in practice (taxonomyStatus only starts moving once ingest is terminal).
-                  const batch = activeBatches?.find(b => b.dataLakeId === lake.id);
+                  // A lake can have more than one attention-worthy batch at once now that
+                  // taxonomy analysis is decoupled from ingest (e.g. a completed batch awaiting
+                  // taxonomy review alongside a new in-progress append upload) - prefer the one
+                  // with a non-'none' taxonomyStatus so a ready-to-review batch's chip doesn't
+                  // get hidden behind an unrelated ingest-only batch.
+                  const lakeBatches = activeBatches?.filter(b => b.dataLakeId === lake.id);
+                  const batch =
+                    lakeBatches?.find(b => b.taxonomyStatus && b.taxonomyStatus !== 'none') ?? lakeBatches?.[0];
                   return (
                     <Card
                       key={lake.id}
@@ -251,7 +262,7 @@ export default function DataLakeListPanel() {
                                 data-testid={`datalake-taxonomy-review-${lake.id}`}
                                 onClick={e => {
                                   stop(e);
-                                  setReviewingBatch(batch);
+                                  setReviewingBatchId(batch.id);
                                 }}
                               >
                                 Review AI tags
@@ -267,7 +278,7 @@ export default function DataLakeListPanel() {
                                 data-testid={`datalake-taxonomy-failed-${lake.id}`}
                                 onClick={e => {
                                   stop(e);
-                                  setReviewingBatch(batch);
+                                  setReviewingBatchId(batch.id);
                                 }}
                               >
                                 AI tagging failed
@@ -475,7 +486,7 @@ export default function DataLakeListPanel() {
         <TaxonomyReviewPanel
           batch={reviewingBatch}
           prefix={dataLakes?.find(l => l.id === reviewingBatch.dataLakeId)?.fileTagPrefix ?? ''}
-          onClose={() => setReviewingBatch(null)}
+          onClose={() => setReviewingBatchId(null)}
         />
       )}
     </>

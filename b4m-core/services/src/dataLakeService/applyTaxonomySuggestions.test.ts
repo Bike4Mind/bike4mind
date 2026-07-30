@@ -14,15 +14,6 @@ const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
     ...overrides,
   }) as IDataLakeDocument;
 
-const batch = (overrides: Partial<IDataLakeBatchDocument> = {}): IDataLakeBatchDocument =>
-  ({
-    id: 'b1',
-    dataLakeId: 'lake1',
-    taxonomyStatus: 'ready',
-    taxonomySuggestions: { tags: [], fileAssignments: [] },
-    ...overrides,
-  }) as IDataLakeBatchDocument;
-
 const tag = (overrides: Partial<TaxonomyTag> & { suffix: string }): TaxonomyTag => ({
   originalName: `acme:${overrides.suffix}`,
   strength: 0.9,
@@ -31,6 +22,22 @@ const tag = (overrides: Partial<TaxonomyTag> & { suffix: string }): TaxonomyTag 
   deleted: false,
   ...overrides,
 });
+
+// Defaults to actually having suggested the tag most tests below submit as acceptedTags -
+// applyTaxonomySuggestions cross-checks originalName against this list, so a test exercising
+// something else (e.g. "no files failed") doesn't have to separately wire up a matching
+// suggestion just to avoid being filtered out.
+const batch = (overrides: Partial<IDataLakeBatchDocument> = {}): IDataLakeBatchDocument =>
+  ({
+    id: 'b1',
+    dataLakeId: 'lake1',
+    taxonomyStatus: 'ready',
+    taxonomySuggestions: {
+      tags: [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      fileAssignments: [],
+    },
+    ...overrides,
+  }) as IDataLakeBatchDocument;
 
 const file = (overrides: Record<string, unknown> = {}) => ({
   id: 'f1',
@@ -53,7 +60,7 @@ const makeAdapters = (opts?: {
     },
     fabFiles: {
       findByBatchId: vi.fn().mockResolvedValue(opts?.files ?? [file()]),
-      update: vi.fn().mockResolvedValue(null),
+      bulkUpdateTags: vi.fn().mockImplementation((updates: unknown[]) => Promise.resolve(updates.length)),
     },
   },
 });
@@ -72,9 +79,10 @@ describe('applyTaxonomySuggestions', () => {
     );
 
     expect(result).toEqual({ success: true, filesUpdated: 1 });
-    const updateCall = adapters.db.fabFiles.update.mock.calls[0][0];
-    expect(updateCall.id).toBe('f1');
-    const names = updateCall.tags.map((t: { name: string }) => t.name).sort();
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    expect(updates).toHaveLength(1);
+    expect(updates[0].id).toBe('f1');
+    const names = updates[0].tags.map((t: { name: string }) => t.name).sort();
     // Folder tag kept (unchanged), category tag added - never duplicated.
     expect(names).toEqual(['acme:legal', 'acme:type:contract']);
   });
@@ -91,7 +99,7 @@ describe('applyTaxonomySuggestions', () => {
       adapters as any
     );
 
-    expect(adapters.db.fabFiles.update).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.bulkUpdateTags).toHaveBeenCalledWith([]);
   });
 
   it('rejects a non-owner, non-admin caller', async () => {
@@ -165,5 +173,65 @@ describe('applyTaxonomySuggestions', () => {
       'applying',
       expect.objectContaining({ taxonomyStartedAt: expect.any(Date) })
     );
+  });
+
+  it('reverts the claim to ready and rethrows when the bulk write fails, instead of stranding the batch in applying', async () => {
+    const adapters = makeAdapters();
+    const writeError = new Error('bulkWrite failed');
+    adapters.db.fabFiles.bulkUpdateTags = vi.fn().mockRejectedValue(writeError);
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(writeError);
+
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).toHaveBeenNthCalledWith(2, 'b1', ['applying'], 'ready');
+  });
+
+  // The review panel only ever edits a suggested tag's suffix, never fabricates a new
+  // originalName - so an accepted tag whose originalName the batch never actually suggested
+  // must not be trusted, regardless of what the request schema allowed through.
+  it('drops an accepted tag whose originalName was never actually suggested for this batch', async () => {
+    const adapters = makeAdapters({
+      files: [file({ tags: [] })],
+    });
+
+    await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'made:up', originalName: 'acme:made:up', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(adapters.db.fabFiles.bulkUpdateTags).toHaveBeenCalledWith([]);
+  });
+
+  it('keeps a genuinely suggested tag even after its suffix was edited by the reviewer', async () => {
+    const adapters = makeAdapters({
+      files: [file({ tags: [] })],
+    });
+
+    // Same originalName as the default suggestion (the stable join key), edited suffix.
+    await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'contract:legal', originalName: 'acme:type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    expect(updates[0].tags.map((t: { name: string }) => t.name)).toContain('acme:contract:legal');
+  });
+
+  it('throws instead of silently reporting success when the final applying -> applied transition loses the race', async () => {
+    const adapters = makeAdapters();
+    adapters.db.batches.setTaxonomyStatusIfActive = vi
+      .fn()
+      .mockResolvedValueOnce(batch({ taxonomyStatus: 'applying' })) // claim wins
+      .mockResolvedValueOnce(null) // final transition loses (e.g. reconciler force-failed it first)
+      .mockResolvedValue(null); // the resulting error path's best-effort revert-to-ready call
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(/changed unexpectedly/i);
   });
 });

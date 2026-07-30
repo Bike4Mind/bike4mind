@@ -9,6 +9,7 @@ import DataLakeListPanel, { DataLakeSettingsModal } from './DataLakeListPanel';
 const updateMutate = vi.fn();
 const visibilityMutate = vi.fn();
 const warn = vi.fn();
+const useActiveDataLakeBatches = vi.fn(() => ({ data: [] as unknown[] }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
@@ -22,7 +23,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useCleanupDataLake: mutation,
     useGetArchivedDataLakes: () => ({ data: undefined }),
     useGetDeletedDataLakes: () => ({ data: undefined }),
-    useActiveDataLakeBatches: () => ({ data: [] as unknown[] }),
+    useActiveDataLakeBatches: () => useActiveDataLakeBatches(),
     useBrowsePublicDataLakes: () => ({
       data: { pages: [{ data: [], total: 0 }] },
       isLoading: false,
@@ -33,6 +34,18 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     }),
   };
 });
+
+// Stub renders just enough to assert which batch object the panel was actually given,
+// without needing the full modal UI/its own mutations.
+vi.mock('./TaxonomyReviewPanel', () => ({
+  default: ({ batch, onClose }: { batch: { id: string; taxonomyStatus: string }; onClose: () => void }) => (
+    <div data-testid="taxonomy-review-panel-stub" data-batch-id={batch.id} data-batch-status={batch.taxonomyStatus}>
+      <button data-testid="taxonomy-review-panel-stub-close" onClick={onClose}>
+        Close
+      </button>
+    </div>
+  ),
+}));
 
 const useDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
 vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
@@ -499,5 +512,133 @@ describe('DataLakeListPanel - management affordances gate on canManage', () => {
 
     const textarea = screen.getByTestId('datalake-systemprompt-input').querySelector('textarea')!;
     expect(textarea).toHaveValue('');
+  });
+});
+
+describe('DataLakeListPanel - taxonomy review panel derives live from the batches list', () => {
+  const listLake = (over: Record<string, unknown>) => ({
+    id: 'lk',
+    name: 'Lake',
+    slug: 'lake',
+    fileTagPrefix: 'lk:',
+    datalakeTag: 'datalake:lake',
+    canManage: true,
+    ...over,
+  });
+  const readyBatch = (over: Record<string, unknown> = {}) => ({
+    id: 'batch-1',
+    dataLakeId: 'mine',
+    taxonomyStatus: 'ready',
+    taxonomySuggestions: { tags: [], fileAssignments: [] },
+    ...over,
+  });
+
+  beforeEach(() => {
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
+    useDataLakes.mockReset();
+    useDataLakes.mockReturnValue({ data: [listLake({ id: 'mine', name: 'Mine' })], isLoading: false });
+    useActiveDataLakeBatches.mockReset();
+  });
+
+  it('opens the panel with the batch behind the "Review AI tags" chip', async () => {
+    const user = userEvent.setup();
+    useActiveDataLakeBatches.mockReturnValue({ data: [readyBatch()] });
+
+    render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    await user.click(within(screen.getByTestId('datalake-taxonomy-review-mine')).getByRole('button'));
+
+    const panel = screen.getByTestId('taxonomy-review-panel-stub');
+    expect(panel).toHaveAttribute('data-batch-id', 'batch-1');
+    expect(panel).toHaveAttribute('data-batch-status', 'ready');
+  });
+
+  // This is the actual regression: before this fix, `reviewingBatch` was a frozen snapshot
+  // taken at click time, so a re-analyze completing (the query refetching with fresh
+  // `taxonomyStatus`/`taxonomySuggestions`) never reached the open panel.
+  it('flows a batches-list refetch into the still-open panel instead of showing a frozen snapshot', async () => {
+    const user = userEvent.setup();
+    useActiveDataLakeBatches.mockReturnValue({ data: [readyBatch()] });
+
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+    await user.click(within(screen.getByTestId('datalake-taxonomy-review-mine')).getByRole('button'));
+    expect(screen.getByTestId('taxonomy-review-panel-stub')).toHaveAttribute('data-batch-status', 'ready');
+
+    // Simulate the poll refetching mid-review with a re-analyze in flight, then completing.
+    useActiveDataLakeBatches.mockReturnValue({ data: [readyBatch({ taxonomyStatus: 'analyzing' })] });
+    rerender(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('taxonomy-review-panel-stub')).toHaveAttribute('data-batch-status', 'analyzing');
+
+    useActiveDataLakeBatches.mockReturnValue({
+      data: [
+        readyBatch({
+          taxonomyStatus: 'ready',
+          taxonomySuggestions: { tags: [{ suffix: 'new' }], fileAssignments: [] },
+        }),
+      ],
+    });
+    rerender(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+    // Still open (same batch id), now reflecting the fresh suggestions - not stuck on
+    // the object captured when the chip was first clicked.
+    const panel = screen.getByTestId('taxonomy-review-panel-stub');
+    expect(panel).toHaveAttribute('data-batch-id', 'batch-1');
+    expect(panel).toHaveAttribute('data-batch-status', 'ready');
+  });
+
+  it('closes the panel once the batch drops out of the attention set (e.g. after apply completes)', async () => {
+    const user = userEvent.setup();
+    useActiveDataLakeBatches.mockReturnValue({ data: [readyBatch()] });
+
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+    await user.click(within(screen.getByTestId('datalake-taxonomy-review-mine')).getByRole('button'));
+    expect(screen.getByTestId('taxonomy-review-panel-stub')).toBeInTheDocument();
+
+    // 'applied' isn't in the attention set, so the batch disappears from the list response.
+    useActiveDataLakeBatches.mockReturnValue({ data: [] });
+    rerender(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    expect(screen.queryByTestId('taxonomy-review-panel-stub')).not.toBeInTheDocument();
+  });
+
+  it('prefers a batch with a non-none taxonomyStatus when a lake has more than one active batch', () => {
+    // An append-mode ingest batch (taxonomyStatus 'none', since append never offers AI tagging)
+    // alongside an earlier batch still awaiting taxonomy review - the review chip must not be
+    // hidden behind the unrelated ingest-only batch.
+    useActiveDataLakeBatches.mockReturnValue({
+      data: [{ id: 'ingest-batch', dataLakeId: 'mine', taxonomyStatus: 'none' }, readyBatch({ id: 'review-batch' })],
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-taxonomy-review-mine')).toBeInTheDocument();
   });
 });

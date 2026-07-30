@@ -201,9 +201,12 @@ export const TAXONOMY_NON_TERMINAL_STATUSES: TaxonomyStatus[] = ['queued', 'anal
 /**
  * Every phase the Data Lakes list needs to show a badge for: still running, OR finished and
  * awaiting the user (ready to review / failed and dismissible). Excludes 'none' (never opted
- * in) and 'applied' (already resolved, nothing left to surface).
+ * in) and 'applied' (already resolved, nothing left to surface). Includes 'applying' so a
+ * batch stuck there (e.g. an apply request that errored or hit the Lambda timeout mid-write)
+ * stays visible to the list and the fast read-time reconciler instead of only being reachable
+ * by the daily cron sweep.
  */
-export const TAXONOMY_ATTENTION_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'ready', 'failed'];
+export const TAXONOMY_ATTENTION_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'ready', 'applying', 'failed'];
 
 export interface IDataLakeBatch {
   dataLakeId: string;

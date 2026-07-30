@@ -4,9 +4,7 @@ const h = vi.hoisted(() => ({
   batchFindById: vi.fn(),
   lakeFindById: vi.fn(),
   setTaxonomyStatusIfActive: vi.fn(),
-  fabFindByBatchId: vi.fn(),
-  getEffectiveApiKey: vi.fn(),
-  runTaxonomyInference: vi.fn(),
+  analyzeBatchTaxonomy: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -23,19 +21,10 @@ vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () =>
 // No-op rate limiter: the daily-cap policy itself isn't this test's concern.
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 vi.mock('@server/utils/config', () => ({ isDevelopment: () => false }));
-vi.mock('@server/dataLakes/runTaxonomyInference', () => ({
-  runTaxonomyInference: h.runTaxonomyInference,
-  sampleFabFilesForTaxonomy: (files: unknown[]) => files,
-}));
+vi.mock('@server/dataLakes/analyzeBatchTaxonomy', () => ({ analyzeBatchTaxonomy: h.analyzeBatchTaxonomy }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: { findById: h.batchFindById, setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive },
   dataLakeRepository: { findById: h.lakeFindById },
-  fabFileRepository: { findByBatchId: h.fabFindByBatchId },
-  apiKeyRepository: {},
-  adminSettingsRepository: {},
-}));
-vi.mock('@bike4mind/services', () => ({
-  apiKeyService: { getEffectiveApiKey: h.getEffectiveApiKey },
 }));
 
 import handler from '../reanalyze-taxonomy';
@@ -58,15 +47,12 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
     vi.clearAllMocks();
     h.batchFindById.mockResolvedValue({ id: 'b1', dataLakeId: 'lake1' });
     h.lakeFindById.mockResolvedValue({ id: 'lake1', createdByUserId: 'u1', fileTagPrefix: 'acme:' });
-    h.setTaxonomyStatusIfActive.mockResolvedValue({ id: 'b1', taxonomyStatus: 'analyzing' });
-    h.fabFindByBatchId.mockResolvedValue([{ relativePath: 'legal/a.pdf', fileName: 'a.pdf', fileSize: 10 }]);
-    h.getEffectiveApiKey.mockResolvedValue('sk-test');
-    h.runTaxonomyInference.mockResolvedValue({
-      suggestedPrefix: 'acme:',
-      suggestedName: '',
-      categories: [{ tagName: 'acme:type:contract', confidence: 0.9, matchingFolders: ['legal'] }],
-      fileAssignments: [],
+    h.analyzeBatchTaxonomy.mockResolvedValue({
+      claimed: true,
+      outcome: 'ready',
+      batch: { id: 'b1', taxonomyStatus: 'ready' },
     });
+    h.setTaxonomyStatusIfActive.mockResolvedValue({ id: 'b1' });
   });
 
   it('rejects a non-owner, non-admin caller before touching the taxonomy phase', async () => {
@@ -74,7 +60,7 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
     const { res } = makeRes();
 
     await expect(run('b1', res)).rejects.toThrow(/creator/i);
-    expect(h.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+    expect(h.analyzeBatchTaxonomy).not.toHaveBeenCalled();
   });
 
   it('404s for a missing batch or lake', async () => {
@@ -86,65 +72,63 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
     await expect(run('b1', makeRes().res)).rejects.toThrow(/data lake not found/i);
   });
 
-  it('refuses when the guarded claim is lost (not currently ready/failed)', async () => {
-    h.setTaxonomyStatusIfActive.mockResolvedValue(null);
+  it('delegates to the shared orchestration with the caller identity, allowed states, and context', async () => {
     const { res } = makeRes();
-
-    await run('b1', res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(h.fabFindByBatchId).not.toHaveBeenCalled();
-  });
-
-  it('refreshes taxonomyStartedAt on the claim, so the stuck-job reconciler times out from now', async () => {
-    const { res } = makeRes();
-
-    await run('b1', res);
-
-    expect(h.setTaxonomyStatusIfActive).toHaveBeenNthCalledWith(
-      1,
-      'b1',
-      ['ready', 'failed'],
-      'analyzing',
-      expect.objectContaining({ taxonomyStartedAt: expect.any(Date) })
-    );
-  });
-
-  it('fails closed with a clear message when no OpenAI key is configured', async () => {
-    h.getEffectiveApiKey.mockResolvedValue(null);
-    const { res } = makeRes();
-
-    await run('b1', res);
-
-    expect(h.runTaxonomyInference).not.toHaveBeenCalled();
-    expect(h.setTaxonomyStatusIfActive).toHaveBeenLastCalledWith(
-      'b1',
-      ['analyzing'],
-      'failed',
-      expect.objectContaining({ taxonomyError: expect.stringMatching(/api key/i) })
-    );
-    expect(res.status).toHaveBeenCalledWith(400);
-  });
-
-  it('samples using the lake own fixed prefix, not the model suggestion, and stores sanitized results as ready', async () => {
-    const { res, json } = makeRes();
 
     await run('b1', res, { context: 'legal docs' });
 
-    expect(h.runTaxonomyInference).toHaveBeenCalledWith('sk-test', expect.anything(), {
-      existingPrefix: 'acme:',
-      context: 'legal docs',
-    });
-    expect(h.setTaxonomyStatusIfActive).toHaveBeenLastCalledWith(
+    expect(h.analyzeBatchTaxonomy).toHaveBeenCalledWith(
       'b1',
-      ['analyzing'],
-      'ready',
-      expect.objectContaining({
-        taxonomySuggestions: expect.objectContaining({
-          tags: expect.arrayContaining([expect.objectContaining({ originalName: 'acme:type:contract' })]),
-        }),
-      })
+      'lake1',
+      'u1',
+      expect.objectContaining({ error: expect.any(Function) }),
+      { from: ['ready', 'failed'], context: 'legal docs' }
     );
-    expect(json).toHaveBeenCalled();
+  });
+
+  it('refuses when the guarded claim is lost (not currently ready/failed)', async () => {
+    h.analyzeBatchTaxonomy.mockResolvedValue({ claimed: false });
+    const { res } = makeRes();
+
+    await run('b1', res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('returns a 400 with the real reason for an anticipated failure (e.g. no API key)', async () => {
+    h.analyzeBatchTaxonomy.mockResolvedValue({
+      claimed: true,
+      outcome: 'failed',
+      error: 'No OpenAI API key configured',
+    });
+    const { res, json } = makeRes();
+
+    await run('b1', res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({ error: 'No OpenAI API key configured' });
+  });
+
+  it('returns the updated batch document on success', async () => {
+    const { res, json } = makeRes();
+
+    await run('b1', res);
+
+    expect(json).toHaveBeenCalledWith({ id: 'b1', taxonomyStatus: 'ready' });
+  });
+
+  // Unlike the queue handler, there's no SQS retry safety net on this synchronous path -
+  // an unexpected error must fail the batch immediately with the real reason rather than
+  // leaving it stuck in 'analyzing' until the reconciler's generic timeout kicks in.
+  it('reverts the batch to failed with the real error and rethrows on an unexpected exception', async () => {
+    const boom = new Error('OpenAI request timed out');
+    h.analyzeBatchTaxonomy.mockRejectedValue(boom);
+    const { res } = makeRes();
+
+    await expect(run('b1', res)).rejects.toThrow(boom);
+
+    expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledWith('b1', ['analyzing'], 'failed', {
+      taxonomyError: 'OpenAI request timed out',
+    });
   });
 });

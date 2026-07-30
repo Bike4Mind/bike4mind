@@ -2,13 +2,11 @@ import type { IDataLakeBatchRepository, IDataLakeRepository, IFabFileRepository,
 import { BadRequestError, NotFoundError, folderTagForFile, tagsForFile } from '@bike4mind/common';
 import { canManageLake } from './authorizeLakeWrite';
 
-const APPLY_CONCURRENCY = 10;
-
 interface ApplyTaxonomySuggestionsAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById'>;
     batches: Pick<IDataLakeBatchRepository, 'findById' | 'setTaxonomyStatusIfActive'>;
-    fabFiles: Pick<IFabFileRepository, 'findByBatchId' | 'update'>;
+    fabFiles: Pick<IFabFileRepository, 'findByBatchId' | 'bulkUpdateTags'>;
   };
 }
 
@@ -59,40 +57,63 @@ export const applyTaxonomySuggestions = async (
     throw new BadRequestError('Tag suggestions are not ready to apply for this batch');
   }
 
-  const taxonomySet = { tags: acceptedTags, fileAssignments: batch.taxonomySuggestions?.fileAssignments ?? [] };
-  const files = await db.fabFiles.findByBatchId(batchId);
+  // Cross-check against what was actually suggested: the request schema bounds size/length
+  // but does not (and cannot) verify content, and this function otherwise trusts acceptedTags
+  // completely. Only a suffix EDIT to a genuinely suggested tag is legitimate - a originalName
+  // that never appeared in this batch's real taxonomySuggestions is dropped rather than applied.
+  const suggestedNames = new Set((batch.taxonomySuggestions?.tags ?? []).map(t => t.originalName));
+  const validTags = acceptedTags.filter(t => suggestedNames.has(t.originalName));
 
-  let filesUpdated = 0;
-  for (let i = 0; i < files.length; i += APPLY_CONCURRENCY) {
-    const chunk = files.slice(i, i + APPLY_CONCURRENCY);
-    await Promise.all(
-      chunk.map(async file => {
-        const relativePath = file.relativePath ?? file.fileName;
-        const folderTags = folderTagForFile(relativePath, lake.fileTagPrefix);
-        const folderTagNames = new Set(folderTags.map(t => t.name));
-        // The folder tag is already on the file from upload - keep only the taxonomy-derived
-        // portion so re-running this can never duplicate it.
-        const newTags = tagsForFile(relativePath, taxonomySet, lake.fileTagPrefix).filter(
-          t => !folderTagNames.has(t.name)
-        );
-        if (newTags.length === 0) return;
+  const taxonomySet = { tags: validTags, fileAssignments: batch.taxonomySuggestions?.fileAssignments ?? [] };
 
-        const existingTags = file.tags ?? [];
-        const merged = new Map(existingTags.map(t => [t.name, t.strength]));
-        for (const t of newTags) {
-          const current = merged.get(t.name);
-          if (current === undefined || t.strength > current) merged.set(t.name, t.strength);
-        }
+  try {
+    const files = await db.fabFiles.findByBatchId(batchId);
 
-        await db.fabFiles.update({
-          id: file.id,
-          tags: Array.from(merged, ([name, strength]) => ({ name, strength })),
-        });
-        filesUpdated++;
-      })
-    );
+    // Compute every file's resolved tag set first (pure, no I/O), then write it in one
+    // bulkWrite round trip instead of one findOneAndUpdate per file - a batch can hold
+    // thousands of files, and N sequential writes risked exceeding the caller's request
+    // timeout mid-apply, stranding the batch in 'applying' with only some files updated.
+    const updates = files.flatMap(file => {
+      const relativePath = file.relativePath ?? file.fileName;
+      const folderTags = folderTagForFile(relativePath, lake.fileTagPrefix);
+      const folderTagNames = new Set(folderTags.map(t => t.name));
+      // The folder tag is already on the file from upload - keep only the taxonomy-derived
+      // portion so re-running this can never duplicate it.
+      const newTags = tagsForFile(relativePath, taxonomySet, lake.fileTagPrefix).filter(
+        t => !folderTagNames.has(t.name)
+      );
+      if (newTags.length === 0) return [];
+
+      const existingTags = file.tags ?? [];
+      const merged = new Map(existingTags.map(t => [t.name, t.strength]));
+      for (const t of newTags) {
+        const current = merged.get(t.name);
+        if (current === undefined || t.strength > current) merged.set(t.name, t.strength);
+      }
+
+      return [{ id: file.id, tags: Array.from(merged, ([name, strength]) => ({ name, strength })) }];
+    });
+
+    const filesUpdated = await db.fabFiles.bulkUpdateTags(updates);
+
+    const finalized = await db.batches.setTaxonomyStatusIfActive(batchId, ['applying'], 'applied');
+    if (!finalized) {
+      // Tags were written successfully, but something else (almost certainly the stuck-job
+      // reconciler racing a very slow bulkWrite) moved the batch out of 'applying' first.
+      // Surface it rather than silently reporting success while the stored status disagrees.
+      throw new BadRequestError(
+        'Tag suggestions were applied, but the batch status changed unexpectedly - please refresh.'
+      );
+    }
+
+    return { success: true, filesUpdated };
+  } catch (error) {
+    // Revert the claim so the batch isn't stranded in 'applying' (invisible to the fast
+    // read-time reconciler path notwithstanding, this keeps the state machine honest without
+    // waiting on the daily cron). Re-running apply with the same acceptedTags is safe: the
+    // merge-by-name logic above is idempotent, so a retry after a partial bulkWrite failure
+    // can never duplicate or lose a tag.
+    await db.batches.setTaxonomyStatusIfActive(batchId, ['applying'], 'ready').catch(() => {});
+    throw error;
   }
-
-  await db.batches.setTaxonomyStatusIfActive(batchId, ['applying'], 'applied');
-  return { success: true, filesUpdated };
 };

@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   recomputeLakeStats: vi.fn(),
   recordBatchCompletion: vi.fn(),
   sendToQueue: vi.fn(),
+  tryIncrementWithinLimitFixedWindow: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -16,6 +17,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   dataLakeRepository: { findById: h.findById },
   fabFileRepository: {},
+  cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrementWithinLimitFixedWindow },
 }));
 vi.mock('@bike4mind/services', () => ({ dataLakeService: { recomputeLakeStats: h.recomputeLakeStats } }));
 vi.mock('@server/utils/cloudwatch', () => ({
@@ -84,6 +86,7 @@ describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue'
     vi.clearAllMocks();
     h.setTaxonomyStatusIfActive.mockResolvedValue(batch({ taxonomyStatus: 'queued' }));
     h.sendToQueue.mockResolvedValue('msg-id');
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
   });
 
   it('no-ops for a null batch or one that never opted in', async () => {
@@ -120,5 +123,31 @@ describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue'
       enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true }), logger as never)
     ).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalled();
+  });
+
+  // The automatic path is the primary OpenAI-cost driver (fires once per opted-in upload),
+  // unlike the manual re-analyze endpoint which was already capped - this closes that gap.
+  it('checks a per-user daily cap before claiming, and skips enqueue entirely when exceeded', async () => {
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: false, count: 50, expiresAt: new Date() });
+
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u1' }), logger as never);
+
+    expect(h.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u1:data-lakes/reanalyze-taxonomy',
+      50,
+      24 * 60 * 60 * 1000
+    );
+    expect(h.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('shares its rate-limit bucket with the manual reanalyze endpoint (same key format)', async () => {
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u2' }), logger as never);
+
+    expect(h.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u2:data-lakes/reanalyze-taxonomy',
+      expect.any(Number),
+      expect.any(Number)
+    );
   });
 });

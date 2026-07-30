@@ -541,7 +541,7 @@ describe('DataLakeBatchRepository.findStuck — global cross-user stale scan', (
   });
 });
 
-describe('DataLakeBatchRepository.setTaxonomyStatusIfActive — guarded taxonomy-phase transition', () => {
+describe('DataLakeBatchRepository.setTaxonomyStatusIfActive - guarded taxonomy-phase transition', () => {
   setupMongoTest();
 
   const activeBatch = () =>
@@ -579,7 +579,7 @@ describe('DataLakeBatchRepository.setTaxonomyStatusIfActive — guarded taxonomy
   });
 });
 
-describe('DataLakeBatchRepository.findStuckTaxonomy — global cross-user stale scan', () => {
+describe('DataLakeBatchRepository.findStuckTaxonomy - global cross-user stale scan', () => {
   setupMongoTest();
 
   const CUTOFF = new Date('2021-01-01T00:00:00Z');
@@ -602,7 +602,7 @@ describe('DataLakeBatchRepository.findStuckTaxonomy — global cross-user stale 
   });
 });
 
-describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId — list-surface query', () => {
+describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId - list-surface query', () => {
   setupMongoTest();
 
   const seed = (taxonomyStatus: string, userId = 'u1') =>

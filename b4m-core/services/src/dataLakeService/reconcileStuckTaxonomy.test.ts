@@ -11,7 +11,7 @@ const batch = (overrides: Partial<IDataLakeBatchDocument> = {}): IDataLakeBatchD
     ...overrides,
   }) as IDataLakeBatchDocument;
 
-describe('reconcileStuckTaxonomy — guarded stuck-job reconciliation', () => {
+describe('reconcileStuckTaxonomy - guarded stuck-job reconciliation', () => {
   it('forces a stuck analyzing job to failed', async () => {
     const setTaxonomyStatusIfActive = vi.fn().mockResolvedValue(batch({ taxonomyStatus: 'failed' }));
     const now = DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS + 10_000;

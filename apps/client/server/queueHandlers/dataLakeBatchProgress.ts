@@ -1,8 +1,13 @@
-import { dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import { cacheRepository, dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { IDataLakeBatchDocument } from '@bike4mind/common';
 import { recordBatchCompletion } from '@server/utils/cloudwatch';
 import { sendToQueue } from '@server/utils/sqs';
+import {
+  TAXONOMY_DAILY_CAP,
+  TAXONOMY_RATE_LIMIT_WINDOW_MS,
+  taxonomyRateLimitKey,
+} from '@server/dataLakes/taxonomyRateLimit';
 import { Resource } from 'sst';
 
 /**
@@ -66,6 +71,18 @@ export async function enqueueTaxonomyAnalysisIfWanted(
   if (!batch || !batch.wantsTaxonomy) return;
 
   try {
+    // Same daily cap + bucket as the manual reanalyze endpoint (see taxonomyRateLimit.ts) -
+    // without this, the automatic path (the actual primary OpenAI-cost driver, firing once
+    // per opted-in upload) had no ceiling at all, unlike the deliberately-capped manual path.
+    // Checked before the claim so a blocked batch has zero side effects, same as any other
+    // enqueue failure below: it stays at 'none', which the review UI simply never surfaces.
+    const { success: withinDailyCap } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+      taxonomyRateLimitKey(batch.userId),
+      TAXONOMY_DAILY_CAP,
+      TAXONOMY_RATE_LIMIT_WINDOW_MS
+    );
+    if (!withinDailyCap) return;
+
     const queued = await dataLakeBatchRepository.setTaxonomyStatusIfActive(batch.id, ['none'], 'queued', {
       taxonomyStartedAt: new Date(),
     });
