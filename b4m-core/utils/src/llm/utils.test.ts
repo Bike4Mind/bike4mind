@@ -5,8 +5,10 @@ import {
   getLastBuildDebugInfo,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
+  TOOL_RESULT_NOT_RECORDED,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
+import { DEFAULT_HISTORY_FETCH_LIMIT, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
 import type { IMessage, ISessionDocument } from '@bike4mind/common';
 
 // Define ITokenizer type locally since it's in @bike4mind/utils
@@ -136,7 +138,7 @@ describe('Context Management Tests', () => {
         [],
         tokenBudget + 1000, // Add buffer back
         {},
-        14, // INFINITE_VALUE
+        14,
         mockLogger as any,
         tokenizer
       );
@@ -404,7 +406,7 @@ describe('Context Management Tests', () => {
       expect(historyInResult).toBeLessThanOrEqual(historyCount * 2 + 1); // +1 for current prompt
     });
 
-    it('should use full history for complex queries (INFINITE_VALUE)', async () => {
+    it('should keep the whole history when no window is set', async () => {
       const previousMessages: IMessage[] = Array(10)
         .fill(null)
         .map((_, i) => ({
@@ -412,7 +414,6 @@ describe('Context Management Tests', () => {
           content: `Message ${i}`,
         }));
 
-      const INFINITE_VALUE = 14;
       const tokenizer = createMockTokenizer();
 
       const result = await buildAndSortMessages(
@@ -421,45 +422,71 @@ describe('Context Management Tests', () => {
         [{ role: 'user', content: 'Current prompt' }],
         10000,
         {},
-        INFINITE_VALUE,
+        UNLIMITED_HISTORY_COUNT,
         mockLogger as any,
         tokenizer
       );
 
-      // Should include all previous messages (budget permitting)
       const historyInResult = result
         .filter(m => m.role === 'user' || m.role === 'assistant')
-        .filter(m => m.content !== 'Current prompt').length;
+        .filter(m => m.content !== 'Current prompt');
 
-      expect(historyInResult).toBeGreaterThan(0);
+      expect(historyInResult).toHaveLength(previousMessages.length);
+      expect(getLastBuildDebugInfo()?.truncationMethod).not.toBe('history-limit');
     });
 
-    it('should allocate tokens proportionally when both history and content are large', async () => {
-      const previousMessages: IMessage[] = Array(20)
+    // The pair below is the allocation policy the old in-range sentinel could flip by accident:
+    // same oversubscribed inputs, and the only difference is whether a window was requested.
+    const oversubscribed = () => ({
+      previousMessages: Array(20)
         .fill(null)
         .map((_, i) => ({
           role: i % 2 === 0 ? 'user' : 'assistant',
-          content: `Previous message ${i}`,
-        }));
+          content: `Previous message ${i} ${'H'.repeat(330)}`,
+        })) as IMessage[],
+      fabMessages: [{ role: 'user', content: 'File content: ' + 'X'.repeat(1390) }] as IMessage[],
+      maxInputTokens: 1100,
+    });
 
-      const fabMessages: IMessage[] = [{ role: 'user', content: 'Large knowledge file content: ' + 'X'.repeat(5000) }];
+    const hasFileContent = (messages: IMessage[]) =>
+      messages.some(m => typeof m.content === 'string' && m.content.startsWith('File content:'));
 
-      const tokenBudget = 1000;
-      const tokenizer = createMockTokenizer();
+    it('should split the budget between files and history when no window is set', async () => {
+      const { previousMessages, fabMessages, maxInputTokens } = oversubscribed();
 
       const result = await buildAndSortMessages(
         previousMessages,
         fabMessages,
         [{ role: 'user', content: 'Current prompt' }],
-        tokenBudget + 1000,
+        maxInputTokens,
+        {},
+        UNLIMITED_HISTORY_COUNT,
+        mockLogger as any,
+        createMockTokenizer()
+      );
+
+      expect(hasFileContent(result)).toBe(true);
+      expect(result.some(m => typeof m.content === 'string' && m.content.startsWith('Previous message'))).toBe(true);
+    });
+
+    it('should treat a history count of 14 as an ordinary window, not a request for unlimited history', async () => {
+      const { previousMessages, fabMessages, maxInputTokens } = oversubscribed();
+
+      // 14 is what a 128k model's simple-query ceiling computes to, and it used to mean "unlimited".
+      const result = await buildAndSortMessages(
+        previousMessages,
+        fabMessages,
+        [{ role: 'user', content: 'Current prompt' }],
+        maxInputTokens,
         {},
         14,
         mockLogger as any,
-        tokenizer
+        createMockTokenizer()
       );
 
-      // Both history and knowledge included; allocation ~70% knowledge / 30% history.
-      expect(result.length).toBeGreaterThan(0);
+      // A window gives history absolute priority, so an oversubscribed turn drops file content.
+      expect(hasFileContent(result)).toBe(false);
+      expect(getLastBuildDebugInfo()?.truncationMethod).toBe('history-limit');
     });
   });
 
@@ -1413,6 +1440,147 @@ describe('Context Management Tests', () => {
       expect(meta.oldestIncludedQuestId).toBe(makeItem(2).id);
     });
 
+    describe('history window resolution', () => {
+      it('pages unlimited history at the default limit instead of reading it as "no history"', async () => {
+        const items = [makeItem(3), makeItem(2), makeItem(1)];
+        const getMostRecentChatHistory = vi.fn().mockResolvedValue(items);
+
+        const [messages, count] = await fetchAndProcessPreviousMessages(makeSession(), UNLIMITED_HISTORY_COUNT, {
+          db: { quests: { getMostRecentChatHistory } },
+        });
+
+        // The marker is negative, so an ordering slip would take the "<= 0 means no history" path.
+        expect(count).toBe(2);
+        expect(messages).toHaveLength(4);
+        expect(getMostRecentChatHistory).toHaveBeenCalledWith('session1', DEFAULT_HISTORY_FETCH_LIMIT + 1);
+      });
+
+      it('still returns no history for a zero window', async () => {
+        const getMostRecentChatHistory = vi.fn();
+
+        const [messages, count] = await fetchAndProcessPreviousMessages(makeSession(), 0, {
+          db: { quests: { getMostRecentChatHistory } },
+        });
+
+        expect(count).toBe(0);
+        expect(messages).toHaveLength(0);
+        expect(getMostRecentChatHistory).not.toHaveBeenCalled();
+      });
+
+      it('pages a bounded window at that window', async () => {
+        const getMostRecentChatHistory = vi.fn().mockResolvedValue([]);
+
+        await fetchAndProcessPreviousMessages(makeSession(), 30, {
+          db: { quests: { getMostRecentChatHistory } },
+        });
+
+        expect(getMostRecentChatHistory).toHaveBeenCalledWith('session1', 31);
+      });
+    });
+
+    describe('verbatim token-bounding', () => {
+      // Each item's prompt is ~4000 chars -> ~1146 estimated tokens (chars/3.5).
+      const BIG = 'x'.repeat(4000);
+      const makeBigItem = (n: number) => makeItem(n, { prompt: BIG, reply: `reply ${n}`, replies: [`reply ${n}`] });
+
+      it('keeps only the newest turns that fit the budget and reports the excluded count', async () => {
+        // newest-first input [4,3,2,1] -> reverse [1,2,3,4] -> pop 4 -> [1,2,3] (each ~1146 tokens)
+        const items = [makeBigItem(4), makeBigItem(3), makeBigItem(2), makeBigItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        // Budget ~1500 fits only the single newest kept turn (item 3); 2 would be ~2292.
+        const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          verbatimTokenBudget: 1500,
+        });
+
+        expect(count).toBe(1);
+        expect(meta.oldestIncludedQuestId).toBe(makeItem(3).id);
+        expect(meta.excludedOlderQuestCount).toBe(2);
+      });
+
+      it('keeps multiple turns when the budget allows and excludes the rest', async () => {
+        const items = [makeBigItem(4), makeBigItem(3), makeBigItem(2), makeBigItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        // ~2500 fits two turns (~2292) but not three (~3438).
+        const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          verbatimTokenBudget: 2500,
+        });
+
+        expect(count).toBe(2);
+        expect(meta.oldestIncludedQuestId).toBe(makeItem(2).id);
+        expect(meta.excludedOlderQuestCount).toBe(1);
+      });
+
+      it('counts replayed tool calls, whose serialized parameters can dwarf the text reply', async () => {
+        // A small prompt whose replayable tool call carries a large parameters payload. Ignoring
+        // it would let the turn look cheap and blow the real budget once Priority 2 expands it.
+        const heavyToolItem = (n: number) =>
+          makeItem(n, {
+            prompt: `prompt ${n}`,
+            structuredReplies: undefined,
+            promptMeta: {
+              functionCalls: [
+                { id: `toolu_${n}`, name: 'web_search', parameters: { blob: 'y'.repeat(4000) }, returnValue: 'ok' },
+              ],
+            },
+          });
+
+        const items = [makeItem(3), heavyToolItem(2), heavyToolItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        // Budget fits one heavy turn (~1150 tokens of parameters) but not two.
+        const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          verbatimTokenBudget: 1500,
+        });
+
+        expect(count).toBe(1);
+        expect(meta.excludedOlderQuestCount).toBe(1);
+      });
+
+      it('always keeps the most recent turn even if it alone exceeds the budget', async () => {
+        const items = [makeBigItem(3), makeBigItem(2), makeBigItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        // Tiny budget: still keep exactly the newest kept turn, never zero.
+        const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          verbatimTokenBudget: 1,
+        });
+
+        expect(count).toBe(1);
+        expect(meta.oldestIncludedQuestId).toBe(makeItem(2).id);
+        expect(meta.excludedOlderQuestCount).toBe(1);
+      });
+
+      it('excludes nothing (excludedOlderQuestCount 0) when history fits the budget', async () => {
+        const items = [makeBigItem(3), makeBigItem(2), makeBigItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          verbatimTokenBudget: 1_000_000,
+        });
+
+        expect(meta.oldestIncludedQuestId).toBe(makeItem(1).id);
+        expect(meta.excludedOlderQuestCount).toBe(0);
+      });
+
+      it('is a no-op when no budget is provided (legacy behavior)', async () => {
+        const items = [makeBigItem(3), makeBigItem(2), makeBigItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(count).toBe(2);
+        expect(meta.oldestIncludedQuestId).toBe(makeItem(1).id);
+        expect(meta.excludedOlderQuestCount).toBe(0);
+      });
+    });
+
     describe('recentGeneratedImages', () => {
       const makeImgItem = (n: number, images: string[]) => makeItem(n, { images });
 
@@ -1458,6 +1626,111 @@ describe('Context Management Tests', () => {
         const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
 
         expect(meta.recentGeneratedImages).toEqual([]);
+      });
+    });
+
+    // Priority 2 rebuilds tool_use/tool_result pairs from promptMeta.functionCalls when
+    // structuredReplies is absent. It was unreachable for as long as the Mongoose subschema
+    // dropped functionCalls[].id, so these pin the shape Anthropic requires.
+    describe('Priority 2 tool-pairing reconstruction', () => {
+      const call = (overrides: Record<string, unknown> = {}) => ({
+        id: 'toolu_1',
+        name: 'web_search',
+        parameters: { query: 'weather' },
+        returnValue: 'sunny',
+        ...overrides,
+      });
+
+      const makeToolItem = (n: number, functionCalls: Record<string, unknown>[]) =>
+        makeItem(n, { structuredReplies: undefined, promptMeta: { functionCalls } });
+
+      const runWith = async (item: Record<string, unknown>) => {
+        // item 2 is the current prompt and gets popped, so the turn under test is item 1
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue([makeItem(2), item]) } };
+        const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+        return messages;
+      };
+
+      it('pairs each tool_use with a tool_result carrying the same id, in order', async () => {
+        const messages = await runWith(
+          makeToolItem(1, [call(), call({ id: 'toolu_2', name: 'get_time', returnValue: '10:00' })])
+        );
+
+        const [, assistant, toolResults] = messages;
+        expect(assistant.role).toBe('assistant');
+        expect(assistant.content).toEqual([
+          { type: 'text', text: 'reply 1' },
+          { type: 'tool_use', id: 'toolu_1', name: 'web_search', input: { query: 'weather' } },
+          { type: 'tool_use', id: 'toolu_2', name: 'get_time', input: { query: 'weather' } },
+        ]);
+        expect(toolResults.role).toBe('user');
+        expect(toolResults.content).toEqual([
+          { type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny', is_error: false },
+          { type: 'tool_result', tool_use_id: 'toolu_2', content: '10:00', is_error: false },
+        ]);
+      });
+
+      it('never emits an empty tool_result, which the API rejects', async () => {
+        const messages = await runWith(
+          makeToolItem(1, [call(), call({ id: 'toolu_2', name: 'get_time', returnValue: undefined })])
+        );
+
+        const contents = (messages[2].content as { content: string }[]).map(block => block.content);
+        expect(contents).toEqual(['sunny', TOOL_RESULT_NOT_RECORDED]);
+        expect(contents.every(Boolean)).toBe(true);
+      });
+
+      it('marks a failed call as an error', async () => {
+        const messages = await runWith(
+          makeToolItem(1, [call(), call({ id: 'toolu_2', returnValue: undefined, success: false })])
+        );
+
+        expect(messages[2].content).toEqual([
+          { type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny', is_error: false },
+          { type: 'tool_result', tool_use_id: 'toolu_2', content: 'Tool execution failed', is_error: true },
+        ]);
+      });
+
+      it('falls back to the text reply when no call recorded a result', async () => {
+        // The whole turn is otherwise replaced by tool invocations with nothing to show for them.
+        const messages = await runWith(makeToolItem(1, [call({ returnValue: undefined })]));
+
+        expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+      });
+
+      it('drops incomplete and duplicate calls rather than emitting unpairable blocks', async () => {
+        const messages = await runWith(
+          makeToolItem(1, [
+            call(),
+            call({ name: undefined, id: 'toolu_2' }),
+            call({ id: undefined }),
+            call({ returnValue: 'a duplicate id the API rejects' }),
+          ])
+        );
+
+        expect(messages[1].content).toEqual([
+          { type: 'text', text: 'reply 1' },
+          { type: 'tool_use', id: 'toolu_1', name: 'web_search', input: { query: 'weather' } },
+        ]);
+        expect(messages[2].content).toHaveLength(1);
+      });
+
+      it('coerces non-object parameters, since Anthropic requires an object input', async () => {
+        const messages = await runWith(makeToolItem(1, [call({ parameters: 'not-an-object' })]));
+
+        // index 0 is the text reply; the tool_use follows it
+        expect((messages[1].content as { input: unknown }[])[1].input).toEqual({});
+      });
+
+      it('keeps preferring structuredReplies when both are present', async () => {
+        const item = makeItem(1, {
+          structuredReplies: [{ role: 'assistant', content: [{ type: 'text', text: 'from structured' }] }],
+          promptMeta: { functionCalls: [call()] },
+        });
+
+        const messages = await runWith(item);
+
+        expect(messages[1].content).toEqual([{ type: 'text', text: 'from structured' }]);
       });
     });
   });

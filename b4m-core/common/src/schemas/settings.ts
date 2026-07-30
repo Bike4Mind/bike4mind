@@ -17,6 +17,13 @@ import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
  * ChatCompletionProcess - so an unset/empty/cleared DB value reverts to this and never bricks
  * completions. The prompt (natural-language guidance to the model) is intentionally live-editable;
  * the sandbox runtime + CSP stay in code (a security boundary, not config).
+ *
+ * MUST STAY IN SYNC with `PLACEHOLDER_PATTERNS` in `@bike4mind/utils/artifactElision`: the phrases
+ * the NEVER ABBREVIATE paragraph forbids are the same phrases the detector treats as stub markers.
+ * Adding a forbidden phrase here without adding it there means the model is told not to do something
+ * nobody checks for; the reverse means the detector flags wording the prompt never warned against.
+ * Because this text is live-editable per environment, that drift is silent - an admin edit cannot
+ * update the detector. Prefer changing both in one commit.
  */
 export const ARTIFACT_EMISSION_PROMPT = `ARTIFACT OUTPUT:
 When asked to create something substantial and self-contained - a complete HTML page, an interactive visualization, a React component, an SVG, a Mermaid diagram, or a long code file/document - emit it inside an <artifact> tag, never as raw inline markup. The body between the opening and closing tags MUST be the complete file you generate - the entire document, top to bottom. NEVER put an ellipsis (...), a stand-in, or a "code here" comment as the body; write the real, full content and close the document before </artifact>. Shape (replace the body with your actual complete file):
@@ -62,7 +69,10 @@ SHARING A REACT ARTIFACT (publishing to a /p/ link): the in-chat preview is perm
 - File downloads are sandbox-blocked on the published page (no allow-downloads) - \`XLSX.writeFile\`/save-to-disk buttons won't fire; render results in the page (a table, inline preview) instead of offering a download.
 - Only the importable packages above publish; importing anything else fails the publish with a clear "not publishable yet" error.
 
-COMPLETENESS: Deliver the full artifact - favor completeness over brevity; trim only genuine bloat (boilerplate, dead code, repetition), never requested scope. Only when a deliverable is genuinely too large for one response, build it incrementally: ship a complete first version, then expand under the SAME identifier rather than letting it get cut off mid-tag. Always emit the closing </artifact>. Never paste large raw HTML or code into the chat body outside an <artifact> tag.`;
+COMPLETENESS: Deliver the full artifact - favor completeness over brevity; trim only genuine bloat (boilerplate, dead code, repetition), never requested scope. Only when a deliverable is genuinely too large for one response, build it incrementally: ship a complete first version, then expand under the SAME identifier rather than letting it get cut off mid-tag. Always emit the closing </artifact>. Never paste large raw HTML or code into the chat body outside an <artifact> tag.
+
+NEVER ABBREVIATE THE BODY - THIS IS THE MOST DAMAGING FAILURE YOU CAN PRODUCE HERE: every function the artifact needs must be written out in full, every time, even when you already wrote it in an earlier turn. An artifact whose logic is replaced by a summary comment still parses and still renders a complete-looking UI whose controls silently do nothing - the user cannot see the difference, ships it, and only finds out when a teammate clicks a dead button. That is far worse than an obviously unfinished artifact. Specifically FORBIDDEN as artifact body content, in any comment form: "same as above", "same as before", "identical to previous", "from the previous version", "for brevity" and any padded variant of it ("for the sake of brevity", "in the interest of brevity"), "omitted", "unchanged", "rest of the ...", "<rest of the code>", "code goes here", "implementation here", "[...]", or any comment that stands in for code you wrote previously or intend the reader to copy from elsewhere. Equally forbidden inside the artifact: anything addressed to the reader rather than to the runtime - asking them to reply "CONTINUE", pointing at a "next response", or promising in the first person what you are about to write ("I will include the remaining 84 entries"). The artifact is a standalone document; it has no next turn. Re-emitting the same 300 lines verbatim is CORRECT and expected; referring to them is not.
+If the full deliverable genuinely will not fit, do NOT stub the difference. REDUCE SCOPE EXPLICITLY: build fewer features, completely and working, then say in the chat body (outside the artifact) which features you left out and offer to add them in a follow-up under the same identifier. A working artifact with three of five features plus an honest note beats five features where two are hollow.`;
 
 /**
  * Default text for the help-center nudge system prompt. Single source of truth used BOTH as the
@@ -81,6 +91,7 @@ export const SettingKeySchema = z.enum([
   'anthropicDemoKey',
   'geminiDemoKey',
   'xaiApiKey',
+  'moonshotApiKey',
   'voyageApiKey',
   'FirecrawlApiKey',
   'FirecrawlApiUrl',
@@ -210,6 +221,8 @@ export const SettingKeySchema = z.enum([
 
   // EMBEDDING SETTINGS
   'defaultEmbeddingModel',
+  'dataLakeSearchMaxFiles',
+  'dataLakeSearchMaxChunks',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -297,6 +310,7 @@ export const SettingKeySchema = z.enum([
   // CONTEXT TELEMETRY SETTINGS
   'EnableContextTelemetry',
   'contextTelemetryAlerts',
+  'ContextVerbatimWindowFraction',
 
   // SRE AGENT SETTINGS
   'sreAgentConfig',
@@ -314,6 +328,14 @@ export const SettingKeySchema = z.enum([
 
   // AGENT ORCHESTRATION DEFAULTS
   'orchestrationDefaults',
+
+  // MODEL DISCOVERY (live model registry)
+  'enableModelDiscovery',
+  'modelDiscoveryMode',
+  'modelDiscoveryAutoEnable',
+  'modelDiscoveryAllowEgress',
+  'modelDiscoveryPriceBandPct',
+  'modelDiscoveryAutoRemap',
 ]);
 export type SettingKey = z.infer<typeof SettingKeySchema>;
 
@@ -597,6 +619,23 @@ function makeStringSetting(
       : z.string(),
   };
 }
+
+/**
+ * Data-lake semantic-search scan budgets. Declared here so the admin-settings default and the
+ * retrieval code that applies it cannot drift - `semanticDataLakeSearch` imports these same
+ * constants for the case where no setting row exists.
+ *
+ * Sized for the memory and latency a single search can afford, not for a deployment preference:
+ * the chunk cap is what bounds how long one query may scan, and exceeding either is reported as
+ * a truncated scan rather than silently dropping the remainder.
+ *
+ * The file cap is deliberately only a few pages. The scope walk uses skip pagination, so the last
+ * page's sort has to hold skip + limit documents - a much larger cap would trade the truncation
+ * this change exists to expose for a sort-memory failure on the same large lakes. Raise it only
+ * alongside keyset file pagination.
+ */
+export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
+export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
 
 function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number } & BaseSetting) {
   let numberSchema = z.coerce.number();
@@ -1203,7 +1242,11 @@ export const API_SERVICE_GROUPS = {
     name: 'Embedding Service',
     description: 'Embedding API integration settings',
     icon: 'AutoAwesome',
-    settings: [{ key: 'defaultEmbeddingModel', order: 1 }],
+    settings: [
+      { key: 'defaultEmbeddingModel', order: 1 },
+      { key: 'dataLakeSearchMaxFiles', order: 2 },
+      { key: 'dataLakeSearchMaxChunks', order: 3 },
+    ],
   },
   VOICE_SESSION: {
     id: 'voiceSessionService',
@@ -1226,6 +1269,13 @@ export const API_SERVICE_GROUPS = {
     description: 'xAI API integration settings',
     icon: 'AutoAwesome',
     settings: [{ key: 'xaiApiKey', order: 1 }],
+  },
+  MOONSHOT: {
+    id: 'moonshotAPIService',
+    name: 'Moonshot (Kimi) Service',
+    description: 'Moonshot AI / Kimi API integration settings',
+    icon: 'AutoAwesome',
+    settings: [{ key: 'moonshotApiKey', order: 1 }],
   },
   ANTHROPIC: {
     id: 'anthropicAPIService',
@@ -1510,6 +1560,20 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableAstronomyFeatures', order: 3 },
     ],
   },
+  MODEL_DISCOVERY: {
+    id: 'modelDiscoveryService',
+    name: 'Model Discovery',
+    description: 'Scheduled provider and aggregator discovery of models, capabilities, and lifecycle',
+    icon: 'AutoAwesome',
+    settings: [
+      { key: 'enableModelDiscovery', order: 1 },
+      { key: 'modelDiscoveryMode', order: 2 },
+      { key: 'modelDiscoveryAutoEnable', order: 3 },
+      { key: 'modelDiscoveryAllowEgress', order: 4 },
+      { key: 'modelDiscoveryPriceBandPct', order: 5 },
+      { key: 'modelDiscoveryAutoRemap', order: 6 },
+    ],
+  },
   RATE_LIMITING: {
     id: 'rateLimitingService',
     name: 'API Rate Limiting',
@@ -1573,6 +1637,16 @@ export const settingsMap = {
     isSensitive: true,
     category: 'AI',
     group: API_SERVICE_GROUPS.XAI.id,
+    order: 1,
+  }),
+  moonshotApiKey: makeStringSetting({
+    key: 'moonshotApiKey',
+    name: 'Moonshot (Kimi) API Key',
+    defaultValue: '',
+    description: 'The global API Key for Moonshot AI, which serves the Kimi models.',
+    isSensitive: true,
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MOONSHOT.id,
     order: 1,
   }),
   voyageApiKey: makeStringSetting({
@@ -2770,6 +2844,28 @@ export const settingsMap = {
       ...(process.env.B4M_SELF_HOST === 'true' ? Object.values(OllamaEmbeddingModel) : []),
     ],
   }),
+  dataLakeSearchMaxFiles: makeNumberSetting({
+    key: 'dataLakeSearchMaxFiles',
+    name: 'Data Lake Search Max Files',
+    defaultValue: DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
+    min: 1,
+    description:
+      'Most files one data-lake semantic search will scope. Beyond this the search reports itself as truncated rather than silently ignoring the rest. Raising it well past a few thousand also deepens the paging offset, so prefer reporting truncation over a very large value.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 2,
+  }),
+  dataLakeSearchMaxChunks: makeNumberSetting({
+    key: 'dataLakeSearchMaxChunks',
+    name: 'Data Lake Search Max Chunks',
+    defaultValue: DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
+    min: 1,
+    description:
+      'Most chunk vectors one data-lake semantic search will score. Raising it trades query latency for coverage; lowering it makes truncation more likely (and reported).',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 3,
+  }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({
     key: 'slackSigningSecret',
@@ -3382,6 +3478,17 @@ export const settingsMap = {
     category: 'Admin',
     order: 120,
   }),
+  ContextVerbatimWindowFraction: makeNumberSetting({
+    key: 'ContextVerbatimWindowFraction',
+    name: 'Context Verbatim Window Fraction',
+    defaultValue: 0.55,
+    min: 0,
+    max: 1,
+    description:
+      'Fraction of a model usable input budget (context window minus reserved output) kept as verbatim conversation history before older turns are summarized into working memory. Lower = compact sooner (cheaper, less verbatim detail); higher = keep more raw history.',
+    category: 'AI',
+    order: 121,
+  }),
   sreAgentConfig: makeObjectSetting({
     key: 'sreAgentConfig',
     name: 'SRE Agent Config',
@@ -3457,6 +3564,71 @@ export const settingsMap = {
     order: 140,
     schema: OrchestrationDefaultsSchema,
   }),
+  enableModelDiscovery: makeBooleanSetting({
+    key: 'enableModelDiscovery',
+    name: 'Enable Model Discovery',
+    defaultValue: true,
+    description:
+      'Master switch for scheduled model discovery. Off means no run starts on any driver; the catalog keeps serving the rows already in force.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 1,
+  }),
+  modelDiscoveryMode: makeStringSetting({
+    key: 'modelDiscoveryMode',
+    name: 'Model Discovery Mode',
+    defaultValue: 'report',
+    description:
+      '"report" runs the full discovery calculation and writes nothing but the run report - the soak default. "write" applies the diff to the model catalog.',
+    options: ['report', 'write'],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 2,
+  }),
+  modelDiscoveryAutoEnable: makeStringSetting({
+    key: 'modelDiscoveryAutoEnable',
+    name: 'Model Discovery Auto-Enable Policy',
+    defaultValue: 'priced',
+    description:
+      'When a newly discovered model becomes invocable. "priced": only with a trusted price. "manual": never without an admin click. "all": whenever the build can dispatch it. No policy can promote a model with no dispatch profile.',
+    options: ['priced', 'manual', 'all'],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 3,
+  }),
+  modelDiscoveryAllowEgress: makeBooleanSetting({
+    key: 'modelDiscoveryAllowEgress',
+    name: 'Allow Model Discovery Egress',
+    defaultValue: true,
+    description:
+      'Gates every network source, provider APIs included. Off means discovery makes no outbound request at all and each run reports "no new information".',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 4,
+  }),
+  modelDiscoveryPriceBandPct: makeNumberSetting({
+    key: 'modelDiscoveryPriceBandPct',
+    name: 'Model Discovery Price Band (%)',
+    defaultValue: 50,
+    description:
+      'The largest price move discovery applies without a human, in either direction, measured against the rate in the row it would supersede - so 200 passes anything up to a 3x change. A bigger move is flagged with both sources shown and the existing price keeps billing. 0 flags every move.',
+    min: 0,
+    max: 500,
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 5,
+  }),
+  modelDiscoveryAutoRemap: makeStringSetting({
+    key: 'modelDiscoveryAutoRemap',
+    name: 'Model Discovery Auto-Remap',
+    defaultValue: 'suggest',
+    description:
+      'What discovery does with the successor it computes for a model it deprecates. "suggest": record it for an admin to confirm. "apply": write it into the catalog, but only when the replacement exists, is active, is on the same backend, and does not cost more.',
+    options: ['suggest', 'apply'],
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 6,
+  }),
   // Add more settings as needed
 } satisfies {
   [key in SettingKey]: BaseSetting & {
@@ -3489,13 +3661,63 @@ export interface AdminSettingDoc {
 }
 
 /**
- * Redact encrypted secrets from a single setting before it leaves the server.
- * Masks sreAgentConfig per-repo webhookSecret/callbackToken. Mirrors the v1->v2
- * migration so secrets land in repos[] before masking. Shared by the authed
- * fetch path and the public artifact (defense-in-depth - publicSafe settings
- * should never carry secrets, but redact anyway).
+ * Prefix of the value an `isSensitive` setting is reduced to on its way out of the
+ * server. Deliberately ASCII and 8 chars so it can never collide with a real
+ * provider key, which makes `isMaskedSensitiveSettingValue` a safe write-back test.
+ */
+export const SENSITIVE_SETTING_MASK = '********';
+
+/**
+ * Reduce a stored sensitive value to a display-only mask. Keeps the last 4 chars so an
+ * admin can tell WHICH key is loaded, but only once the value is long enough that 4 chars
+ * is not a meaningful fraction of it.
+ */
+export function maskSensitiveSettingValue(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) return '';
+  return value.length <= 8 ? SENSITIVE_SETTING_MASK : `${SENSITIVE_SETTING_MASK}${value.slice(-4)}`;
+}
+
+/**
+ * Leading-asterisk run that counts as a mask on write-back. Four rather than eight on
+ * purpose: SystemSecrets masks the same underlying credentials with only four asterisks
+ * (apps/client/pages/api/admin/system-secrets/index.ts), and an admin who copies a value
+ * from that screen into an Admin Settings field must not have it stored literally - that
+ * would destroy the real secret. Recognizing the shorter run makes both shapes preserve.
+ */
+const MASK_WRITE_BACK_PATTERN = /^\*{4,}/;
+
+/**
+ * True when a submitted value is one some admin surface previously masked. The client is
+ * never sent the real value, so a mask coming back means "keep what is stored" rather than
+ * "set the value to these asterisks" - see the settings update handler.
+ *
+ * Deliberately broader than the exact output of `maskSensitiveSettingValue`: it also
+ * matches the SystemSecrets mask shape. The cost is that a genuine secret beginning with
+ * four asterisks cannot be stored, which no provider key does; the benefit is that no
+ * masked value from any admin screen can ever be written over a live credential.
+ */
+export function isMaskedSensitiveSettingValue(value: unknown): boolean {
+  return typeof value === 'string' && MASK_WRITE_BACK_PATTERN.test(value);
+}
+
+/**
+ * Redact secrets from a single setting before it leaves the server.
+ *
+ * Two boundaries, both fail-closed against the stored value reaching a client:
+ *  - any setting tagged `isSensitive` collapses to a mask (never the real value),
+ *  - sreAgentConfig (which is NOT isSensitive) has its per-repo webhookSecret and
+ *    callbackToken masked; parsed through the schema first so the v1->v2 migration
+ *    moves secrets into repos[] where the masking looks for them.
+ *
+ * Shared by the authed fetch path and the public artifact (defense-in-depth -
+ * publicSafe settings should never carry secrets, but redact anyway).
  */
 export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc {
+  const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
+  if (definition?.isSensitive) {
+    return { ...setting, settingValue: maskSensitiveSettingValue(setting.settingValue) };
+  }
+
   if (setting.settingName !== 'sreAgentConfig' || !setting.settingValue) return setting;
   let config: SreAgentConfig;
   try {

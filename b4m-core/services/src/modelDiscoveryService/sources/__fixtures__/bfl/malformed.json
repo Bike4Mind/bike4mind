@@ -1,0 +1,28 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "BFL API", "version": "0.1.0" },
+  "paths": {
+    "/v1/flux-pro-1.1": {
+      "post": {
+        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FluxPro11Inputs" } } } }
+      }
+    },
+    "/v1/flux-dangling-ref": {
+      "post": {
+        "requestBody": { "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DoesNotExist" } } } }
+      }
+    },
+    "/v1/flux-no-body": { "post": {} },
+    "/v1/flux-null-op": { "post": null },
+    "/not-versioned": {
+      "post": {
+        "requestBody": { "content": { "application/json": { "schema": { "properties": { "prompt": {} } } } } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "FluxPro11Inputs": { "properties": { "prompt": {}, "image_prompt": {}, "safety_tolerance": {} } }
+    }
+  }
+}

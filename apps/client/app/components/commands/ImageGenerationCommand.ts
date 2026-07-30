@@ -10,7 +10,6 @@ import {
   ImageModels,
   B4MLLMTools,
   GenerateImageToolCall,
-  ModelInfo,
   PromptIntent,
   requiresImageInput,
 } from '@bike4mind/common';
@@ -19,6 +18,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { createOptimisticSessionId } from '@client/app/utils/llm';
+import { getCachedModels } from '@client/app/hooks/data/useModelInfo';
 
 export type ImageGenerationCommandArgs = {
   /** Prompt */
@@ -137,7 +137,7 @@ export async function handleImageGenerationCommand(args: ImageGenerationCommandA
       // (resolver classified intent='continuation') but their selected model can't take an image
       // input. Skip when a workbench file is attached, since that overrides session carryforward.
       if (data.intent === 'continuation' && fabFileIds.length === 0) {
-        const models = queryClient.getQueryData<ModelInfo[]>(['llm', 'models']);
+        const models = getCachedModels(queryClient);
         const modelInfo = models?.find(m => m.id === effectiveModel);
         // Skip required-input models (e.g. Flux Pro Fill): supportsImageVariation is false but
         // they DO carry a prior image forward, so "can't refine prior images" would be wrong.

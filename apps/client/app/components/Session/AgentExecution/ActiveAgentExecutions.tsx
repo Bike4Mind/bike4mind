@@ -14,12 +14,11 @@
 
 import { FC, useEffect, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { Box, CircularProgress, Stack, Typography } from '@mui/joy';
+import { Box } from '@mui/joy';
 import { useAgentExecutionStore, selectExecutionIdsForSession } from '@client/app/stores/useAgentExecutionStore';
 import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
+import ReplyStatus from '@client/app/components/common/ReplyStatus';
 import IterationStream from './IterationStream';
-import ExecutionStatusBanner from './ExecutionStatusBanner';
-import CreditCounter from './CreditCounter';
 import { STARTING_COPY } from './loadingCopy';
 import { useRotatingCopy } from './useRotatingCopy';
 
@@ -97,20 +96,11 @@ const ActiveAgentExecutions: FC<ActiveAgentExecutionsProps> = ({ sessionId }) =>
   if (activeExecutionIds.length > 0) {
     return (
       <Box data-testid="active-agent-executions" sx={{ display: 'flex', flexDirection: 'column', gap: 2, px: 2 }}>
+        {/* Status (incl. current iteration) and the credits counter now live
+            inside IterationStream's own framed header - no separate banner row
+            above the frame. */}
         {activeExecutionIds.map(id => (
-          <Box key={id} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {/* Banner + credit counter sit above the iteration stream. Both
-                are no-ops in terminal/awaiting-permission states (the banner
-                hides; the counter shows the running total but doesn't claim
-                screen real estate visually). This is the surface that lights
-                up after a mount-time reconnect - IterationStream stays empty
-                until new step events arrive. */}
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap' }}>
-              <ExecutionStatusBanner executionId={id} />
-              <CreditCounter executionId={id} />
-            </Stack>
-            <IterationStream executionId={id} />
-          </Box>
+          <IterationStream key={id} executionId={id} />
         ))}
       </Box>
     );
@@ -125,19 +115,25 @@ const ActiveAgentExecutions: FC<ActiveAgentExecutionsProps> = ({ sessionId }) =>
   return null;
 };
 
-// Extracted so the rotating-copy hook is unconditional. Spinner + rotating
-// label keep the dispatch wait feeling intentional even on a cold-start
-// (~5-10s on a low-traffic preview env).
+// Extracted so the rotating-copy hook is unconditional. Reuses ReplyStatus (the
+// bicycle-wheel spinner from the normal prompt-send flow), centered, so the
+// dispatch wait matches the main chat loading indicator instead of a bespoke
+// mini-spinner. Rotating copy feeds ReplyStatus's status label.
 const StartingPlaceholder: FC = () => {
   const copy = useRotatingCopy(STARTING_COPY);
   return (
-    <Box data-testid="active-agent-executions-dispatching" sx={{ display: 'flex', flexDirection: 'column', px: 2 }}>
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ py: 1 }}>
-        <CircularProgress size="sm" thickness={2} />
-        <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-          {copy}
-        </Typography>
-      </Stack>
+    <Box
+      data-testid="active-agent-executions-dispatching"
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '100%',
+        py: 1,
+      }}
+    >
+      <ReplyStatus status={copy} />
     </Box>
   );
 };

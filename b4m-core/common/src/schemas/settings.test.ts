@@ -7,6 +7,9 @@ import {
   experimentalFeatureSettingKeys,
   experimentalNonGroupSettingKeys,
   API_SERVICE_GROUPS,
+  SENSITIVE_SETTING_MASK,
+  maskSensitiveSettingValue,
+  isMaskedSensitiveSettingValue,
   type AdminSettingDoc,
 } from './settings';
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
@@ -162,7 +165,14 @@ describe('public settings projection (M2.5 security boundary)', () => {
 
     it('does not expose any known secret-bearing API key settings', () => {
       const keys = publicSafeSettingKeys();
-      for (const secret of ['openaiDemoKey', 'anthropicDemoKey', 'xaiApiKey', 'geminiDemoKey', 'voyageApiKey']) {
+      for (const secret of [
+        'openaiDemoKey',
+        'anthropicDemoKey',
+        'xaiApiKey',
+        'moonshotApiKey',
+        'geminiDemoKey',
+        'voyageApiKey',
+      ]) {
         expect(keys).not.toContain(secret);
       }
     });
@@ -236,6 +246,92 @@ describe('public settings projection (M2.5 security boundary)', () => {
       const setting: AdminSettingDoc = { settingName: 'enforceMFA', settingValue: 'true' };
       expect(redactSettingSecrets(setting)).toEqual(setting);
     });
+
+    it('masks EVERY isSensitive setting, not a hand-listed subset', () => {
+      const sensitiveKeys = (Object.values(settingsMap) as Array<{ key: string; isSensitive?: boolean }>)
+        .filter(s => s.isSensitive === true)
+        .map(s => s.key);
+      expect(sensitiveKeys.length).toBeGreaterThan(0);
+
+      for (const key of sensitiveKeys) {
+        const secret = `sk-live-${key}-tail`;
+        const redacted = redactSettingSecrets({ settingName: key, settingValue: secret });
+        expect(redacted.settingValue).not.toBe(secret);
+        expect(redacted.settingValue).toBe(`${SENSITIVE_SETTING_MASK}tail`);
+      }
+    });
+
+    it('leaves an unset sensitive setting empty rather than showing a mask', () => {
+      expect(redactSettingSecrets({ settingName: 'anthropicDemoKey', settingValue: '' }).settingValue).toBe('');
+    });
+
+    it('every isSensitive setting is a plain free-text string setting', () => {
+      // The whole mask/preserve protocol assumes a string. A sensitive setting that is a
+      // number, boolean, object, or a string with `options` breaks three ways at once: it
+      // masks to '' and renders as unset, it never routes through the input's focus/blur
+      // edit tracking, and isMaskedSensitiveSettingValue('') is false so the preserve branch
+      // can never fire - leaving it one Save away from being wiped. Fail here instead.
+      const offenders = (
+        Object.values(settingsMap) as Array<{
+          key: string;
+          isSensitive?: boolean;
+          type?: string;
+          options?: unknown[];
+        }>
+      )
+        .filter(s => s.isSensitive === true && (s.type !== 'string' || s.options !== undefined))
+        .map(s => s.key);
+
+      expect(offenders, `isSensitive settings that are not plain string inputs: ${offenders.join(', ')}`).toEqual([]);
+    });
+  });
+});
+
+describe('sensitive setting masking', () => {
+  it('pins the literal mask, because its exact shape is a wire contract', () => {
+    // Every other assertion is written relative to the constant, so lengthening or changing
+    // it would silently turn every stale browser tab's write-back into a literal overwrite
+    // of a live credential. Pin the literal so that change has to be deliberate.
+    expect(SENSITIVE_SETTING_MASK).toBe('********');
+  });
+
+  it('treats the shorter SystemSecrets mask as a placeholder too', () => {
+    // system-secrets/index.ts masks with FOUR asterisks. Both screens can show the same
+    // credential, so a value copied from there must never be stored literally.
+    expect(isMaskedSensitiveSettingValue('****abcd')).toBe(true);
+    expect(isMaskedSensitiveSettingValue('****')).toBe(true);
+  });
+
+  it('does not treat a short asterisk run as a placeholder', () => {
+    expect(isMaskedSensitiveSettingValue('***')).toBe(false);
+    expect(isMaskedSensitiveSettingValue('a****bcd')).toBe(false);
+  });
+
+  it('keeps only the last 4 characters', () => {
+    expect(maskSensitiveSettingValue('sk-ant-api03-abcdefgh')).toBe(`${SENSITIVE_SETTING_MASK}efgh`);
+  });
+
+  it('reveals nothing at all for a short value', () => {
+    // 4 of 8 chars would be half the secret, so the tail is dropped entirely.
+    expect(maskSensitiveSettingValue('12345678')).toBe(SENSITIVE_SETTING_MASK);
+  });
+
+  it('maps a missing or non-string value to empty', () => {
+    expect(maskSensitiveSettingValue('')).toBe('');
+    expect(maskSensitiveSettingValue(undefined)).toBe('');
+    expect(maskSensitiveSettingValue(null)).toBe('');
+    expect(maskSensitiveSettingValue({ nested: 'x' })).toBe('');
+  });
+
+  it('recognizes its own output as a write-back placeholder', () => {
+    expect(isMaskedSensitiveSettingValue(maskSensitiveSettingValue('sk-ant-api03-abcdefgh'))).toBe(true);
+    expect(isMaskedSensitiveSettingValue(maskSensitiveSettingValue('12345678'))).toBe(true);
+  });
+
+  it('does not mistake a real secret for a placeholder', () => {
+    expect(isMaskedSensitiveSettingValue('sk-ant-api03-abcdefgh')).toBe(false);
+    expect(isMaskedSensitiveSettingValue('')).toBe(false);
+    expect(isMaskedSensitiveSettingValue(undefined)).toBe(false);
   });
 });
 

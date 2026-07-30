@@ -64,6 +64,7 @@ import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import ModelSelection from '../ModelSelection';
 import MetadataChip from './MetaDataChips';
 import {
+  buildModelSelectionPatch,
   ChipVariant,
   computeDefaultMaxTokens,
   getModelPriceTier,
@@ -371,17 +372,7 @@ const ResetButton: React.FC<{
   height = '32px',
 }) => {
   const handleReset = () => {
-    const modelMaxTokens = modelInfo?.max_tokens ?? 16384;
-    const contextWindow = modelInfo?.contextWindow ?? 0;
-
-    let defaultMaxTokens;
-    if (contextWindow <= 8192) {
-      defaultMaxTokens = Math.min(modelMaxTokens, Math.floor(contextWindow / 2));
-    } else if (contextWindow <= 32768) {
-      defaultMaxTokens = Math.min(modelMaxTokens, 8192);
-    } else {
-      defaultMaxTokens = Math.min(modelMaxTokens, 16384);
-    }
+    const defaultMaxTokens = computeDefaultMaxTokens(modelInfo);
 
     let quality: OpenAIImageQuality | undefined;
 
@@ -1699,11 +1690,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
       const newModelInfo = modelInfoRepo?.find(m => m.id === newModel);
       if (newModelInfo) {
         startTransition(() => {
-          setLLM({
-            model: newModel,
-            max_tokens: computeDefaultMaxTokens(newModelInfo),
-            ...(FIXED_TEMPERATURE_MODELS.has(newModel) && { temperature: 1.0 }),
-          });
+          setLLM(buildModelSelectionPatch(newModelInfo));
         });
         if (currentSessionId) {
           void updateSessionToServer({ id: currentSessionId, lastUsedModel: newModel }).catch(err =>

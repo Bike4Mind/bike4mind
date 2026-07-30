@@ -8,6 +8,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   IMessage,
+  isAudioMimeType,
   isImageAttachment,
   isImageServeable,
   ISessionDocument,
@@ -19,6 +20,8 @@ import {
   ModelInfo,
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
+  isUnlimitedHistory,
+  resolveHistoryFetchLimit,
 } from '@bike4mind/common';
 import {
   BaseStorage,
@@ -36,7 +39,6 @@ import { BadRequestError, CorruptedFileError } from '../errors';
 import { isAxiosError } from 'axios';
 import { ITokenizer } from '../tokenCounting';
 import { getFileType } from '../file';
-const INFINITE_VALUE = 14;
 const MAX_FILE_SIZE = 6000;
 /** Cap on generated images surfaced to the model for editing (keeps the context note small). */
 const MAX_RECENT_GENERATED_IMAGES = 6;
@@ -78,6 +80,79 @@ const estimateTokenLength = (text: string): number => {
   // Rough estimate: ~3.5 chars per token for English text
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 };
+
+/**
+ * Rough per-quest token size, used only to choose the verbatim-window boundary
+ * (which older turns to fold into contextSummary). Deliberately an estimate, not
+ * the exact tokenizer: buildAndSortMessages still enforces the real budget with
+ * the tokenizer downstream, so this only needs to be directionally right while
+ * staying synchronous (no N async tokenizer calls over a long history). Mirrors
+ * the fields the conversion below actually emits into the prompt.
+ */
+function estimateQuestTokenLength(item: {
+  prompt?: string;
+  replies?: string[];
+  structuredReplies?: unknown[];
+  toolResults?: unknown[];
+  promptMeta?: { functionCalls?: RecordedFunctionCall[] };
+}): number {
+  const parts: string[] = [item.prompt ?? ''];
+  if (item.structuredReplies?.length) {
+    parts.push(JSON.stringify(item.structuredReplies));
+  } else if (item.replies?.length) {
+    parts.push(item.replies.join('\n'));
+  }
+  if (item.toolResults?.length) {
+    parts.push(JSON.stringify(item.toolResults));
+  }
+  // Priority 2 replays these as tool_use/tool_result blocks, and the serialized parameters can
+  // dwarf the text reply. Only counted when it will actually be taken (structuredReplies wins).
+  if (!item.structuredReplies?.length) {
+    const toolCalls = replayableToolCalls(item.promptMeta?.functionCalls);
+    if (toolCalls.length) parts.push(JSON.stringify(toolCalls));
+  }
+  return estimateTokenLength(parts.join('\n'));
+}
+
+/** Stands in for a tool_result whose returnValue was never recorded; must not be empty. */
+export const TOOL_RESULT_NOT_RECORDED = '[tool result not recorded]';
+
+type RecordedFunctionCall = {
+  id?: string;
+  name?: string;
+  parameters?: unknown;
+  returnValue?: string;
+  success?: boolean;
+};
+
+/** A recorded call complete enough to replay as a tool_use/tool_result pair. */
+type ReplayableToolCall = RecordedFunctionCall & { id: string; name: string };
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The recorded tool calls that can be replayed into Anthropic-valid message blocks, or an empty
+ * list if this turn should fall back to its plain text reply instead.
+ *
+ * Both filters are load-bearing. An entry missing an id or name cannot form a valid pair, and
+ * repeated ids are rejected outright, so those are dropped rather than emitted. Beyond that the
+ * turn is only worth replaying if SOME call recorded a returnValue - see the call site for why
+ * replaying result-less calls is worse than not replaying at all.
+ */
+function replayableToolCalls(functionCalls: RecordedFunctionCall[] | undefined): ReplayableToolCall[] {
+  if (!functionCalls?.length) return [];
+
+  const seenIds = new Set<string>();
+  const replayable = functionCalls.filter((fc): fc is ReplayableToolCall => {
+    if (!fc.id || !fc.name || seenIds.has(fc.id)) return false;
+    seenIds.add(fc.id);
+    return true;
+  });
+
+  return replayable.some(fc => fc.returnValue) ? replayable : [];
+}
 
 /**
  * Safely generate embeddings for text that might exceed token limits
@@ -158,16 +233,28 @@ export async function generateSafeEmbedding(
 
 /**
  * Return the previous messages from the database, and the total number of previous messages.
+ *
+ * `historyCount` is a window in quests: null means the default page size, 0 or below means no
+ * history at all, and UNLIMITED_HISTORY_COUNT means no window (which still pages, since the
+ * fetch needs some limit).
  */
 export async function fetchAndProcessPreviousMessages(
   session: ISessionDocument,
   historyCount: number | null = null,
   {
     db,
+    verbatimTokenBudget,
   }: {
     db: {
       quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'>;
     };
+    /**
+     * When set, keep only the newest turns whose estimated size fits this many
+     * tokens verbatim; older turns are excluded from the window (and reported via
+     * excludedOlderQuestCount) so ContextSummarizationFeature can fold them into
+     * contextSummary. Omit to keep the legacy count-only behavior.
+     */
+    verbatimTokenBudget?: number;
   }
 ): Promise<
   [
@@ -178,14 +265,19 @@ export async function fetchAndProcessPreviousMessages(
       fetchTime?: number;
       itemCount?: number;
       oldestIncludedQuestId?: string | null;
+      /** Older turns dropped from the verbatim window by verbatimTokenBudget (0 when none). */
+      excludedOlderQuestCount?: number;
       /** Recently generated images (bare storage keys + originating prompt), newest first. */
       recentGeneratedImages?: { key: string; prompt: string }[];
     },
   ]
 > {
-  if (historyCount !== null && historyCount <= 0) return [[], 0, { cacheHit: false }];
+  // Unlimited is negative, so it has to be recognised before the no-history check below.
+  if (!isUnlimitedHistory(historyCount) && historyCount !== null && historyCount <= 0) {
+    return [[], 0, { cacheHit: false }];
+  }
 
-  const limit = historyCount ?? INFINITE_VALUE;
+  const limit = resolveHistoryFetchLimit(historyCount);
 
   // Query with descending timestamp, to get the <limit> most-recent messages
   // Add 1 to the limit to account for the current prompt
@@ -216,11 +308,39 @@ export async function fetchAndProcessPreviousMessages(
     const filtered = chatHistoryItems.filter(item => item.id > boundary);
     chatHistoryItems.splice(0, chatHistoryItems.length, ...filtered);
   }
+
+  // Token-bound the verbatim window: keep the newest turns whose cumulative
+  // estimated size fits verbatimTokenBudget and drop the older ones, so they fall
+  // outside the window and can be folded into contextSummary. The most recent turn
+  // is always kept even if it alone exceeds the budget. This is what lets a heavy
+  // session with FEW messages still compact (the count window alone would keep
+  // everything and leave nothing to summarize). buildAndSortMessages still applies
+  // the exact-tokenizer budget downstream; this only chooses the summary boundary.
+  let excludedOlderQuestCount = 0;
+  if (verbatimTokenBudget && verbatimTokenBudget > 0 && chatHistoryItems.length > 1) {
+    let usedTokens = 0;
+    let keepFromIndex = 0;
+    for (let i = chatHistoryItems.length - 1; i >= 0; i--) {
+      usedTokens += estimateQuestTokenLength(chatHistoryItems[i]);
+      // Never drop the most recent turn (i === length-1), even if oversized.
+      if (usedTokens > verbatimTokenBudget && i < chatHistoryItems.length - 1) {
+        keepFromIndex = i + 1;
+        break;
+      }
+    }
+    if (keepFromIndex > 0) {
+      excludedOlderQuestCount = keepFromIndex;
+      chatHistoryItems.splice(0, keepFromIndex);
+    }
+  }
+
   const oldestIncludedQuestId = chatHistoryItems[0]?.id ?? null;
 
   // Convert to IMessage format with tool pairing reconstruction.
   const convertedMessages = chatHistoryItems.reduce((acc, cur) => {
     if (cur.prompt) acc.push({ role: 'user', content: cur.prompt });
+
+    const toolCalls = replayableToolCalls(cur.promptMeta?.functionCalls);
 
     // Priority 1: Use structuredReplies if available (new field for complete tool context)
     if (cur.structuredReplies && cur.structuredReplies.length > 0) {
@@ -242,12 +362,14 @@ export async function fetchAndProcessPreviousMessages(
         });
       }
     }
-    // Priority 2: Reconstruct from promptMeta.functionCalls if tool IDs exist (fallback)
-    else if (
-      cur.promptMeta?.functionCalls &&
-      cur.promptMeta.functionCalls.length > 0 &&
-      cur.promptMeta.functionCalls.some(fc => fc.id)
-    ) {
+    // Priority 2: reconstruct tool_use/tool_result pairs from promptMeta.functionCalls when
+    // structuredReplies is absent (older turns, and any writer that does not populate it).
+    //
+    // Requires at least one recorded returnValue. A call with an id but no result carries no
+    // information the model can use, and replaying it would cost the turn its real text reply:
+    // this branch and Priority 3 are mutually exclusive, so entering here on result-less calls
+    // replaces a genuine answer with a list of tool invocations and empty outcomes.
+    else if (toolCalls.length > 0) {
       // Get text reply (excluding thinking blocks)
       const textReply = cur.replies?.find((reply: string) => !reply.trim().startsWith('<think>')) || '';
 
@@ -258,37 +380,30 @@ export async function fetchAndProcessPreviousMessages(
         assistantContent.push({ type: 'text', text: textReply } as MessageContentText);
       }
 
-      for (const fc of cur.promptMeta.functionCalls) {
-        if (fc.id && fc.name) {
-          assistantContent.push({
-            type: 'tool_use',
-            id: fc.id,
-            name: fc.name,
-            input: (fc.parameters as Record<string, unknown>) || {},
-          } as MessageContentToolUse);
-        }
+      for (const fc of toolCalls) {
+        assistantContent.push({
+          type: 'tool_use',
+          id: fc.id,
+          name: fc.name,
+          // Anthropic requires an object here; parameters is Mixed, so a scalar can reach us.
+          input: isPlainObject(fc.parameters) ? fc.parameters : {},
+        } as MessageContentToolUse);
       }
 
-      if (assistantContent.length > 0) {
-        acc.push({ role: 'assistant', content: assistantContent });
+      acc.push({ role: 'assistant', content: assistantContent });
 
-        // Add a tool_result for each function call that had a tool_use block. returnValue is
-        // often unpopulated during completion saving, so we generate a tool_result for every
-        // tool_use to maintain Anthropic's required pairing. Filter matches the tool_use
-        // generation above (fc.id && fc.name) to keep pairs consistent.
-        const toolResults = cur.promptMeta.functionCalls
-          .filter(fc => fc.id && fc.name)
-          .map(fc => ({
-            type: 'tool_result' as const,
-            tool_use_id: fc.id!,
-            content: fc.returnValue ?? (fc.success === false ? 'Tool execution failed' : ''),
-            is_error: fc.success === false,
-          }));
-
-        if (toolResults.length > 0) {
-          acc.push({ role: 'user', content: toolResults });
-        }
-      }
+      // One tool_result per tool_use, same order, ids 1:1 - Anthropic rejects an unpaired block.
+      // returnValue is not always recorded, so fall back to a marker rather than an empty
+      // string, which the API rejects outright.
+      acc.push({
+        role: 'user',
+        content: toolCalls.map(fc => ({
+          type: 'tool_result' as const,
+          tool_use_id: fc.id,
+          content: fc.returnValue || (fc.success === false ? 'Tool execution failed' : TOOL_RESULT_NOT_RECORDED),
+          is_error: fc.success === false,
+        })),
+      });
     }
     // Priority 3: Legacy fallback - text-only replies
     else if (cur.replies && Array.isArray(cur.replies)) {
@@ -326,6 +441,7 @@ export async function fetchAndProcessPreviousMessages(
       fetchTime,
       itemCount: chatHistoryItems.length,
       oldestIncludedQuestId,
+      excludedOlderQuestCount,
       recentGeneratedImages,
     },
   ];
@@ -682,7 +798,12 @@ export async function processFabFilesServer(
   embeddingFactory: EmbeddingFactory,
   fabFiles: IFabFileDocument[],
   userPrompt: string,
-  maxTokens: number,
+  /**
+   * Total tokens of attached-file content this turn may contribute, derived from the
+   * model's INPUT window. Was previously the output-token cap, which bore no relation
+   * to how much of a file could be read. Split across the text files below.
+   */
+  attachedContentTokenBudget: number,
   modelInfo: ModelInfo,
   sendStatusUpdate: (status: string) => Promise<void>,
   {
@@ -754,10 +875,31 @@ export async function processFabFilesServer(
   logger.info(`🕐 [processFabFilesServer] User prompt embedding completed in ${embeddingTime}ms`);
 
   // Cache for file content to avoid redundant processing
+  // The char caps below are applied per file and never summed, so the budget has to be
+  // divided up front or N files would each get the full allowance. Images are excluded:
+  // they do not consume this text budget.
+  const textFileCount = Math.max(1, fabFiles.filter(f => !isImageAttachment(f.mimeType)).length);
+  // Guard the per-file share against 0: the char caps below read a non-positive budget
+  // as "no budget supplied" and fall back to a flat MAX_FILE_SIZE per file, which at N
+  // files is unbounded. A caller that genuinely has no room should send no files.
+  const maxTokens = Math.max(1, Math.floor(attachedContentTokenBudget / textFileCount));
+
   const fileContentCache = new Map<string, string>();
 
   const processFileInParallel = async (file: IFabFileDocument): Promise<void> => {
     try {
+      // Audio (generated TTS / sound effects) is never LLM input: no model
+      // accepts audio, and the non-image branch below would otherwise try to
+      // read the bytes as text. This is the authoritative attachment guard -
+      // every chat/agent path funnels through here, so a file that slips past
+      // the attach UI still can't reach the model.
+      if (isAudioMimeType(file.mimeType)) {
+        logger.warn(
+          `[processFabFilesServer] Skipping audio file ${file.fileName} — audio is not attachable to an LLM.`
+        );
+        return;
+      }
+
       if (supportsVision && isImageAttachment(file.mimeType)) {
         // Never send a not-yet-clean or blocked uploaded image to the model.
         if (!isImageServeable(file)) {
@@ -776,7 +918,12 @@ export async function processFabFilesServer(
 
         switch (modelInfo?.backend) {
           case ModelBackend.OpenAI:
-          case ModelBackend.XAI: {
+          case ModelBackend.XAI:
+          // Moonshot takes OpenAI's base64 `image_url` block verbatim. Grouped
+          // here rather than given its own case because the payload is identical;
+          // without it every Kimi model advertising supportsVision would accept
+          // an attachment, drop it at `default`, and answer as if blind.
+          case ModelBackend.Kimi: {
             // Download image from S3 and send as base64 data URL.
             // Presigned S3 URLs cause timeouts when OpenAI/XAI servers try to fetch them.
             const openaiImageBuffer = await storage.download(file.filePath!);
@@ -843,6 +990,42 @@ export async function processFabFilesServer(
                 },
               });
               // Add filename and fabFileId as text context to prevent hallucinated filenames
+              imageContent.push({
+                type: 'text',
+                text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
+              });
+            } else if (modelInfo.id.startsWith('moonshot')) {
+              // Bedrock-served Kimi speaks OpenAI on the Invoke path, so it takes
+              // the base64 `image_url` block rather than the Anthropic `source`
+              // block the branch above builds. Without this it would fall to the
+              // warn below while still advertising supportsVision.
+              const moonshotBuffer = await resizeImageForModel(
+                await storage.download(file.filePath!),
+                undefined,
+                logger
+              );
+              const { mime: moonshotMimeType } = await getFileType(moonshotBuffer, file.fileName, file.mimeType);
+              const moonshotBase64 = moonshotBuffer.toString('base64');
+
+              // Bedrock caps the Invoke body around 3 MB. If even the resized image
+              // still exceeds it, skip with the same friendly re-upload guidance the
+              // Anthropic branch gives rather than letting Bedrock reject the whole
+              // request with a raw ValidationException. Checked post-resize so we only
+              // reject images that are genuinely too large.
+              const MOONSHOT_MAX_BASE64_BYTES = 3_000_000;
+              if (moonshotBase64.length > MOONSHOT_MAX_BASE64_BYTES) {
+                const encodedMB = (moonshotBase64.length / (1024 * 1024)).toFixed(1);
+                const errorMsg = `⚠️ Image "${file.fileName}" (${encodedMB}MB encoded) is too large for ${modelInfo.name}. Max ~3MB. Please delete this file and re-upload a smaller image.`;
+                logger.warn(errorMsg);
+                await sendStatusUpdate(errorMsg);
+                errorMessages.push({ role: 'error', content: errorMsg });
+                return;
+              }
+
+              imageContent.push({
+                type: 'image_url',
+                image_url: { url: `data:${moonshotMimeType};base64,${moonshotBase64}` },
+              });
               imageContent.push({
                 type: 'text',
                 text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
@@ -1378,8 +1561,9 @@ export async function buildAndSortMessages(
 
   // TODO: also weight previousMessages by cosine score (not just fabMessages) - blocked on not
   // having vectors for previousMessages yet.
-  const historyMessages =
-    historyCount !== INFINITE_VALUE ? previousMessages.slice(-historyCount * 2) : previousMessages;
+  const historyMessages = isUnlimitedHistory(historyCount)
+    ? previousMessages
+    : previousMessages.slice(-historyCount * 2);
   const totalContentTokens = await calculateTotalTokenLength(nonImageMessages, { estimateOnly: true, tokenizer });
   const totalPreviousTokens = await calculateTotalTokenLength(historyMessages, { estimateOnly: true, tokenizer });
   let processedContentMessages: IMessage[] = [];
@@ -1389,8 +1573,9 @@ export async function buildAndSortMessages(
   const allRemovedMessages: Array<{ role: string; tokens: number; priority: number }> = [];
   const originalTotalMessageCount = historyMessages.length + nonImageMessages.length;
 
-  // If historyCount is explicitly set (not INFINITE_VALUE), allocate tokens accordingly.
-  if (historyCount !== INFINITE_VALUE) {
+  // A windowed request gives history absolute priority; an unwindowed one splits the budget
+  // between files and history (see KNOWLEDGE_FILE_TOKEN_ALLOCATION in the else branch).
+  if (!isUnlimitedHistory(historyCount)) {
     // If the history fits within the budget, process it and allocate remaining tokens to content
     if (totalPreviousTokens <= tokenBudget) {
       const historyResult = processMessages(historyMessages, totalPreviousTokens);
@@ -1552,8 +1737,11 @@ export async function buildAndSortMessages(
   }
 
   // Store debug info for external access
-  const truncationMethod: 'priority' | 'token-budget' | 'history-limit' | undefined =
-    historyCount !== INFINITE_VALUE ? 'history-limit' : allRemovedMessages.length > 0 ? 'token-budget' : undefined;
+  const truncationMethod: 'priority' | 'token-budget' | 'history-limit' | undefined = !isUnlimitedHistory(historyCount)
+    ? 'history-limit'
+    : allRemovedMessages.length > 0
+      ? 'token-budget'
+      : undefined;
 
   (buildAndSortMessages as any).lastDebugInfo = {
     messageTruncation: {

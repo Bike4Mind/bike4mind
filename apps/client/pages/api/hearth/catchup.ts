@@ -1,12 +1,17 @@
 import { hearthRepository } from '@bike4mind/database';
 import { HearthLog } from '@bike4mind/hearth';
-import { NotFoundError, UnauthorizedError } from '@bike4mind/common';
+import { ApiKeyScope, NotFoundError, UnauthorizedError } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { requireUser } from '@server/middlewares/requireUser';
-import { toWireHearthEvent, HearthActorParamSchema, resolveRequestActor } from '@server/utils/hearthWire';
+import {
+  toWireHearthEvent,
+  HearthActorParamSchema,
+  resolveRequestActor,
+  assertHearthWriteScope,
+} from '@server/utils/hearthWire';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { z } from 'zod';
 
@@ -27,7 +32,11 @@ const CatchupSchema = z.object({
 
 const hearthLog = new HearthLog(hearthRepository.store);
 
-const handler = baseApi()
+// Read scope admits the tail/peek paths; the cursor-advancing path additionally
+// asserts write scope in-handler, since advancing a cursor consumes events.
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.HEARTH_READ, ApiKeyScope.HEARTH_WRITE, ApiKeyScope.ADMIN],
+})
   .use(requireFeatureEnabled('EnableHearth'))
   .use(requireUser)
   .post<NextApiRequest, NextApiResponse>(csrfProtection(), catchupRateLimit, async (req, res) => {
@@ -47,6 +56,8 @@ const handler = baseApi()
       });
       return;
     }
+
+    if (body.advance) assertHearthWriteScope(req);
 
     const actor = await resolveRequestActor(req.user, body.actor);
     const actorId = actor._id.toString();

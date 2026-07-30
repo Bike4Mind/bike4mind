@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { generateModelPriceSeed, modelPriceRepository, SEED_NOTE } from '@bike4mind/database';
-import { MODEL_PRICE_UNITS, ModelPriceTier } from '@bike4mind/common';
+import { DISCOVERY_PRICE_NOTE_PREFIX, MODEL_PRICE_UNITS, ModelPriceTier } from '@bike4mind/common';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 
 /**
@@ -88,6 +88,14 @@ const handler = baseApi()
     if (note === SEED_NOTE) {
       throw new BadRequestError(
         `note '${SEED_NOTE}' is reserved for seed provenance; describe the source of the reprice`
+      );
+    }
+    // An operator row wearing the discovery prefix would classify as an
+    // automation row, which a newer price seed is allowed to supersede -
+    // silently undoing a deliberate reprice that should be immune forever.
+    if (note.startsWith(DISCOVERY_PRICE_NOTE_PREFIX)) {
+      throw new BadRequestError(
+        `note prefix '${DISCOVERY_PRICE_NOTE_PREFIX}' is reserved for discovery provenance; describe the source of the reprice`
       );
     }
     // 400-class validation here; append()'s own checks would surface as 500s.

@@ -13,7 +13,10 @@ import {
   Radio,
   FormControl,
   FormLabel,
+  FormHelperText,
   Switch,
+  Alert,
+  Checkbox,
 } from '@mui/joy';
 import PublicIcon from '@mui/icons-material/Public';
 import LockIcon from '@mui/icons-material/Lock';
@@ -22,9 +25,11 @@ import LinkIcon from '@mui/icons-material/Link';
 import KeyIcon from '@mui/icons-material/Key';
 import DomainIcon from '@mui/icons-material/Domain';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind/common';
+import { ELISION_PUBLISH_TITLE } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { ShareActions } from './ShareActions';
 import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
@@ -36,6 +41,7 @@ import {
   revokeShareToken,
   updatePublishedVisibility,
   updatePublishedCommentPolicy,
+  updatePublishedDiscoverable,
   updatePublishedAccessGate,
   getPublishedEmbedState,
   type PublishAccessGateInput,
@@ -72,6 +78,8 @@ export interface PublishShareModalProps {
     // one-click re-publish can't silently widen visibility or re-enable comments.
     visibility: PublishVisibility;
     commentPolicy?: CommentPolicy;
+    /** Whether the prior publication opted into search-engine indexing. */
+    discoverable?: boolean;
   } | null>;
   /**
    * When set, offers a "Team" (organization) visibility choice, publishing an org-scoped
@@ -80,6 +88,14 @@ export interface PublishShareModalProps {
    * scope (only Public/Private are offered).
    */
   orgOption?: { label: string; hint: string };
+  /**
+   * Set when the content looks abbreviated/non-functional (see `detectElidedContent`). Shown
+   * as a warning that must be acknowledged before the publish button enables. A published
+   * link is the point of no return - it can reach a teammate or client before anyone
+   * notices the artifact's controls are inert. Heuristic, hence acknowledge-and-proceed
+   * rather than a hard block.
+   */
+  incompleteWarning?: string;
 }
 
 type VisibilityOption = { value: PublishVisibility; label: string; hint: string; icon: React.ReactNode };
@@ -161,9 +177,13 @@ export function PublishShareModal({
   defaultVisibility = 'public',
   resolveExisting,
   orgOption,
+  incompleteWarning,
 }: PublishShareModalProps) {
   const [visibility, setVisibility] = useState<PublishVisibility>(defaultVisibility);
   const [commentsOn, setCommentsOn] = useState(true);
+  // Search-engine opt-IN, off by default. Publishing publicly must never imply
+  // "list this in Google" - that has to be a deliberate click.
+  const [discoverableOn, setDiscoverableOn] = useState(false);
   const [result, setResult] = useState<PublishResult | null>(null);
   const [busy, setBusy] = useState(false);
   // A prior publication of this artifact, resolved asynchronously after the dialog opens.
@@ -175,6 +195,7 @@ export function PublishShareModal({
     versionsCount: number;
     slug: string;
     commentPolicy?: CommentPolicy;
+    discoverable?: boolean;
   } | null>(null);
   const [mode, setMode] = useState<PublishMode>('new');
   // The opt-in no-sign-in (`/a/<token>`) share link, minted lazily only when the owner asks.
@@ -190,6 +211,8 @@ export function PublishShareModal({
   // Whether a gate is live on the published item - drives whether the embed
   // editor is offered (embedding is open-public only). Seeded from the record.
   const [embedGated, setEmbedGated] = useState(false);
+  // Explicit acknowledgement of `incompleteWarning`; gates the publish button.
+  const [incompleteAck, setIncompleteAck] = useState(false);
 
   // Reset to the choose phase each time the dialog is opened fresh.
   useEffect(() => {
@@ -197,6 +220,7 @@ export function PublishShareModal({
       setResult(null);
       setVisibility(defaultVisibility);
       setCommentsOn(true);
+      setDiscoverableOn(false);
       setBusy(false);
       setExisting(null);
       setMode('new');
@@ -207,6 +231,7 @@ export function PublishShareModal({
       setGateDomainsText('');
       setGateTouched(false);
       setEmbedGated(false);
+      setIncompleteAck(false);
     }
   }, [open, defaultVisibility]);
 
@@ -244,6 +269,7 @@ export function PublishShareModal({
           versionsCount: found.versionsCount || 1,
           slug: found.slug,
           commentPolicy: found.commentPolicy,
+          discoverable: found.discoverable,
         });
         setMode('update');
         // Carry the existing publication's exposure into the (now default) "update" action.
@@ -252,6 +278,10 @@ export function PublishShareModal({
         // the owner had turned off - on a plain "add a new version".
         setVisibility(found.visibility);
         setCommentsOn(found.commentPolicy === 'open' || found.commentPolicy === 'restricted');
+        // Unlike visibility/commentPolicy, finalize does NOT $set discoverable, so an
+        // update can't widen it. Seeded anyway so the toggle shows the artifact's real
+        // current state instead of a misleading "off".
+        setDiscoverableOn(!!found.discoverable);
       })
       .catch(() => {
         /* lookup failure -> no choice shown; publishes as new */
@@ -337,6 +367,23 @@ export function PublishShareModal({
           toast.warning('Published, but enabling comments failed - you can toggle them below.');
         });
       }
+      // Search listing. `finalize` does not $set `discoverable` (unlike commentPolicy), so
+      // a re-publish PRESERVES whatever was stored - which means the OFF direction has to
+      // be written explicitly too, or a listed artifact can never be de-listed from this
+      // dialog. Hence "on change", not "when on": `wanted` is what the user is asking for,
+      // `existing?.discoverable` is what storage currently holds.
+      //
+      // The visibility/gate guard forces `wanted` to false rather than skipping the call:
+      // staging the switch ON and then picking Private (or adding a gate) hides the
+      // control, and persisting `true` there would arm a silent opt-in that fires the
+      // moment someone widens the artifact back to public. A failed call leaves the
+      // artifact at its stored value, and the server de-arms on any downgrade anyway.
+      const wanted = discoverableOn && visibility === 'public' && gateKind === 'none';
+      if (wanted !== !!existing?.discoverable) {
+        await updatePublishedDiscoverable(r.publicId, wanted).catch(() => {
+          toast.warning('Published, but the search-listing setting failed - you can toggle it below.');
+        });
+      }
       setResult(r);
       toast.success('Share link ready', { id });
     } catch (err) {
@@ -367,6 +414,31 @@ export function PublishShareModal({
     }
   };
 
+  // Toggle search-engine listing. Live-PATCH once published; otherwise stage the choice.
+  const onToggleDiscoverable = async (next: boolean) => {
+    if (busy) return;
+    if (phase !== 'shared' || !result) {
+      setDiscoverableOn(next);
+      return;
+    }
+    const prev = discoverableOn;
+    setDiscoverableOn(next);
+    setBusy(true);
+    try {
+      await updatePublishedDiscoverable(result.publicId, next);
+      toast.success(
+        next
+          ? 'Search engines may now list this page'
+          : 'Hidden from search engines - the link still works for anyone you send it to'
+      );
+    } catch {
+      setDiscoverableOn(prev);
+      toast.error('Failed to update search listing');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Phase 2 -> change visibility of the already-published item (live PATCH).
   const changeVisibilityLive = async (next: PublishVisibility) => {
     if (!result || next === visibility) return;
@@ -386,6 +458,10 @@ export function PublishShareModal({
 
   const onPick = (next: PublishVisibility) => {
     if (busy) return;
+    // Leaving public retires a staged search-listing choice rather than parking it on a
+    // hidden control. Re-picking Public starts from off, so listing is always a choice
+    // made against the exposure the artifact actually has.
+    if (next !== 'public') setDiscoverableOn(false);
     if (phase === 'shared') void changeVisibilityLive(next);
     else setVisibility(next);
   };
@@ -439,6 +515,10 @@ export function PublishShareModal({
       // Embedding is open-public only, so hide the embed editor the moment a gate
       // goes on (and reveal it again when the gate is cleared) - matches the server rule.
       setEmbedGated(gate !== null);
+      // The PATCH above left open-public, so the server de-armed `discoverable`. Mirror
+      // that here rather than leaving the switch showing a value storage no longer holds.
+      // Clearing a gate does NOT restore it - re-opting-in is an explicit choice.
+      if (gate !== null) setDiscoverableOn(false);
       toast.success(
         gate === null
           ? 'Link is open to anyone again'
@@ -455,6 +535,12 @@ export function PublishShareModal({
 
   const onPickGate = (next: GateKind) => {
     if (busy) return;
+    // Deliberately does NOT touch discoverableOn. Unlike a visibility pick, a gate pick is
+    // not persisted here - it waits for the explicit "Update access" button - so resetting
+    // now would make the switch disagree with storage the moment the user picks `none`
+    // again. applyGateLive does the reset, once the gate is actually live and the server
+    // has de-armed the flag. While gated the switch is hidden anyway, and the staged-
+    // publish path forces `wanted` to false independently.
     setGateKind(next);
     setGateTouched(true);
   };
@@ -562,7 +648,8 @@ export function PublishShareModal({
               Access note below tells the truth instead. */}
           {isPublic && gateKind === 'none' && !existing && !gateTouched && (
             <Typography level="body-xs" sx={{ mt: 0.75, color: AMBER }}>
-              ⚠ Public: anyone with the link will be able to view this.
+              ⚠ Public: anyone with the link will be able to view this. It stays out of search engines unless you turn
+              on &quot;List in search engines&quot; below.
             </Typography>
           )}
         </FormControl>
@@ -657,6 +744,38 @@ export function PublishShareModal({
           </FormControl>
         )}
 
+        {/* Search listing. Offered ONLY for an ungated public item, matching the server
+            rule (discoverable is ANDed with isOpenPublic on every request) - showing it
+            for a private or gated item would promise something that never takes effect. */}
+        {isPublic && gateKind === 'none' && (
+          <FormControl
+            orientation="horizontal"
+            sx={{ mb: 2, justifyContent: 'space-between', alignItems: 'center', gap: 1 }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <TravelExploreIcon fontSize="small" />
+              <Box>
+                <FormLabel sx={{ mb: 0 }}>List in search engines</FormLabel>
+                {/* FormHelperText, not Typography: only a FormHelperText child registers itself into
+                    Joy's FormControl context and lands in the switch's aria-describedby, so a screen-
+                    reader user actually hears this caveat instead of just the label. */}
+                <FormHelperText sx={{ opacity: 0.75 }}>
+                  Off by default. When off, the link still works for anyone you send it to - it just won&apos;t show up
+                  in Google. Link previews in chat apps work either way.
+                </FormHelperText>
+              </Box>
+            </Box>
+            <Switch
+              checked={discoverableOn}
+              disabled={busy}
+              onChange={e => void onToggleDiscoverable(e.target.checked)}
+              // On the INPUT slot, not the root: Joy spreads bare props to the root span,
+              // where a test can't read `.checked`.
+              slotProps={{ input: { 'data-testid': 'publish-share-discoverable-toggle' } }}
+            />
+          </FormControl>
+        )}
+
         <FormControl
           orientation="horizontal"
           sx={{ mb: 2, justifyContent: 'space-between', alignItems: 'center', gap: 1 }}
@@ -674,14 +793,34 @@ export function PublishShareModal({
             checked={commentsOn}
             disabled={busy}
             onChange={e => void onToggleComments(e.target.checked)}
-            data-testid="publish-share-comments-toggle"
+            slotProps={{ input: { 'data-testid': 'publish-share-comments-toggle' } }}
           />
         </FormControl>
+
+        {phase === 'choose' && incompleteWarning && (
+          <Alert
+            color="warning"
+            variant="soft"
+            sx={{ mb: 2, flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}
+            data-testid="publish-share-incomplete-warning"
+          >
+            <Typography level="title-sm">{ELISION_PUBLISH_TITLE}</Typography>
+            <Typography level="body-sm">{incompleteWarning}</Typography>
+            <Checkbox
+              size="sm"
+              checked={incompleteAck}
+              onChange={e => setIncompleteAck(e.target.checked)}
+              label="Publish anyway"
+              slotProps={{ input: { 'data-testid': 'publish-share-incomplete-ack' } }}
+            />
+          </Alert>
+        )}
 
         {phase === 'choose' ? (
           <Button
             onClick={() => void handleCreate()}
             loading={busy}
+            disabled={!!incompleteWarning && !incompleteAck}
             startDecorator={<PublicIcon />}
             data-testid="publish-share-create"
           >

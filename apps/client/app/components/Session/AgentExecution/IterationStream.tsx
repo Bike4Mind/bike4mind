@@ -27,6 +27,7 @@ import {
 import IterationStep from './IterationStep';
 import AbortButton from './AbortButton';
 import PermissionCard from './PermissionCard';
+import CreditCounter from './CreditCounter';
 import SubagentStepNest from './SubagentStepNest';
 import { copyForRunningTool, THINKING_COPY } from './loadingCopy';
 import { useRotatingCopy } from './useRotatingCopy';
@@ -43,15 +44,19 @@ interface IterationStreamProps {
    */
   hideFinalAnswer?: boolean;
   /**
-   * Force every iteration accordion open by default. The live mount relies
-   * on the natural `defaultExpanded={isLast}` behavior (each iteration mounts
-   * as "the latest" at the time, then stays uncontrolled-open as the next
-   * one arrives), but the disclosure replay hydrates all iterations at once,
-   * so without this flag only the last one mounts expanded. The user
-   * expanding "Show reasoning" wants the full trace visible - they
-   * shouldn't have to click each step to see the work.
+   * Start every iteration collapsed. Used by the "Show reasoning" disclosure
+   * replay: the user opened the trace to browse it, so default to a compact,
+   * all-collapsed list they can expand at will (rather than the live default
+   * where the latest iteration is auto-open). A user click always wins over
+   * this default (see `expanded` below), so iterations stay freely collapsible.
    */
-  expandAll?: boolean;
+  collapsedByDefault?: boolean;
+  /**
+   * Render without the outer artifact-style frame (border/bg/radius/padding).
+   * Used by the "Show reasoning" disclosure, which supplies its own frame (with
+   * a "Hide reasoning" header on top) so the trace doesn't get a doubled border.
+   */
+  unframed?: boolean;
 }
 
 interface IterationGroup {
@@ -85,7 +90,12 @@ const STATUS_LABEL: Record<string, { label: string; color: 'neutral' | 'primary'
     failed: { label: 'Failed', color: 'danger' },
   };
 
-const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswer = false, expandAll = false }) => {
+const IterationStream: FC<IterationStreamProps> = ({
+  executionId,
+  hideFinalAnswer = false,
+  collapsedByDefault = false,
+  unframed = false,
+}) => {
   const execution = useAgentExecutionStore(selectExecution(executionId));
 
   // Per-iteration manual override of the default "expanded only if latest"
@@ -179,6 +189,18 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
   const statusMeta = STATUS_LABEL[execution.status] ?? { label: execution.status, color: 'neutral' as const };
   const lastIteration = groups[groups.length - 1]?.iteration ?? 0;
 
+  // The rendered accordions = groups minus final_answer-only ones (those are
+  // surfaced in the success box below, not as an empty accordion). Computed here
+  // so we can tell which accordion is truly *last on screen*: lastIteration (from
+  // the unfiltered groups) can point at a filtered-out final_answer group, which
+  // would otherwise leave the real last accordion with a trailing divider.
+  const renderableGroups = groups
+    .map(group => ({
+      ...group,
+      steps: group.steps.filter(s => s.step.type !== 'final_answer'),
+    }))
+    .filter(group => group.steps.length > 0);
+
   // Active = the executor is doing work right now. We surface a live
   // spinner/working indicator in two places (next to the status chip and
   // under the latest iteration) so the UI doesn't read as "stuck" during
@@ -205,7 +227,24 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
   return (
     <Box
       data-testid={`iteration-stream-${executionId}`}
-      sx={{ display: 'flex', flexDirection: 'column', gap: 1, py: 1 }}
+      // Framed like an artifact card (ArtifactPreviewCard): outlined border +
+      // surface2 background + 8px radius + 16px inner padding, so the whole
+      // reply reads as one contained block. `unframed` drops the frame when a
+      // parent (the "Show reasoning" disclosure) already provides one.
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2.5, // 20px between status header, iterations, and permission card
+        ...(unframed
+          ? {}
+          : {
+              p: 2,
+              border: '1px solid',
+              borderColor: 'neutral.outlinedBorder',
+              backgroundColor: 'background.surface2',
+              borderRadius: '8px',
+            }),
+      }}
     >
       {/* Status header - suppressed when there's nothing meaningful to show
           yet. For a fresh run with no iteration steps and no abort button,
@@ -213,89 +252,135 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
           We still surface the header during active runs (status pill + abort
           button) so the user has feedback and a way to bail out. */}
       {(isActive || visibleIterationCount > 0 || execution.pendingPermission) && (
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap' }}>
-          {isActive ? <CircularProgress size="sm" thickness={2} sx={{ '--CircularProgress-size': '16px' }} /> : null}
-          <Chip size="sm" color={statusMeta.color}>
-            {statusMeta.label}
-          </Chip>
-          {visibleIterationCount > 0 ? (
-            <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-              {visibleIterationCount} iteration{visibleIterationCount === 1 ? '' : 's'}
-            </Typography>
-          ) : null}
-          {/* Live elapsed time during active runs - grounds the wait in real
-              data so the rotating "Thinking..." copy doesn't feel like the
-              only signal that progress is being made. Re-renders ~1/s; the
-              underlying interval lives in the child so toggling visibility
-              doesn't leak timers. */}
-          {isActive && execution.startedAt ? <ElapsedTime startedAt={execution.startedAt} /> : null}
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap', mt: 0.5 }}>
+          {execution.isAborting ? (
+            // Aborting: credits on the left, red "Aborting…" text. No spinner
+            // here - the Stop button already shows a "Stopping…" spinner.
+            <>
+              <CreditCounter executionId={executionId} />
+              <Typography level="body-sm" sx={{ color: 'danger.outlinedColor', fontWeight: 600 }}>
+                Aborting…
+              </Typography>
+            </>
+          ) : isActive ? (
+            // In progress: credits on the left, then the live progress indicator
+            // (spinner + "In Progress · Iteration N · elapsed"). lastKnownIteration
+            // is 0-indexed; the timer re-renders ~1/s via ElapsedTime.
+            <>
+              <CreditCounter executionId={executionId} />
+              <CircularProgress size="sm" thickness={2} sx={{ '--CircularProgress-size': '16px' }} />
+              <Typography level="body-sm" sx={{ color: 'text.primary', fontWeight: 600 }}>
+                In Progress · Iteration {execution.lastKnownIteration + 1}
+                {execution.startedAt ? (
+                  <>
+                    {' · '}
+                    <ElapsedTime startedAt={execution.startedAt} />
+                  </>
+                ) : null}
+              </Typography>
+            </>
+          ) : (
+            // Terminal / awaiting: status chip -> credits -> iteration count.
+            <>
+              <Chip
+                size="sm"
+                color={statusMeta.color}
+                sx={{
+                  '--Chip-minHeight': '24px',
+                  '--Chip-paddingInline': '8px',
+                  '& .MuiChip-label': { fontSize: '13px', fontWeight: 600 },
+                }}
+              >
+                {statusMeta.label}
+              </Chip>
+              <CreditCounter executionId={executionId} />
+              {visibleIterationCount > 0 ? (
+                <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+                  {visibleIterationCount} iteration{visibleIterationCount === 1 ? '' : 's'}
+                </Typography>
+              ) : null}
+            </>
+          )}
           <Box sx={{ flex: 1 }} />
           <AbortButton executionId={executionId} status={execution.status} />
         </Stack>
       )}
 
-      <PermissionCard executionId={executionId} />
-
       <AccordionGroup size="sm" sx={{ '--ListItem-paddingY': '0.25rem' }}>
-        {groups
-          // The `final_answer` step is already surfaced prominently in the
-          // success Box below the accordions - rendering it again inside the
-          // last iteration's accordion was a double-render of the same text.
-          // CLI matches: shows thoughts/actions in the trace, then the final
-          // answer once as the message body. Filter the step out at the group
-          // level so an iteration that contained only a final_answer step
-          // doesn't render an empty accordion.
-          .map(group => ({
-            ...group,
-            steps: group.steps.filter(s => s.step.type !== 'final_answer'),
-          }))
-          .filter(group => group.steps.length > 0)
-          .map(group => {
-            const isLast = group.iteration === lastIteration;
-            // Auto-collapse past iterations as soon as a newer one arrives:
-            // the "current" iteration is the focal point of the live trace,
-            // and a long observation in a finished iteration pushes the input
-            // off-screen. User can re-open any iteration - the override map
-            // sticks across re-renders so the click isn't undone by the next
-            // store update. `expandAll` (disclosure replay) wins absolutely.
-            const userOverride = overrides.get(group.iteration);
-            const expanded = expandAll || (userOverride ?? isLast);
-            return (
-              <Accordion
-                key={group.iteration}
-                expanded={expanded}
-                onChange={(_, isExpanded) => toggleIteration(group.iteration, isExpanded)}
+        {renderableGroups.map((group, renderIdx) => {
+          const isLast = group.iteration === lastIteration;
+          // Last accordion actually on screen (see renderableGroups above).
+          const isLastRendered = renderIdx === renderableGroups.length - 1;
+          // Auto-collapse past iterations as soon as a newer one arrives:
+          // the "current" iteration is the focal point of the live trace,
+          // and a long observation in a finished iteration pushes the input
+          // off-screen. User can re-open any iteration - the override map
+          // sticks across re-renders so the click isn't undone by the next
+          // store update. A user click (userOverride) always wins, so every
+          // iteration stays collapsible - including in the replay.
+          const userOverride = overrides.get(group.iteration);
+          const expanded = userOverride ?? (collapsedByDefault ? false : isLast);
+          return (
+            <Accordion
+              key={group.iteration}
+              expanded={expanded}
+              onChange={(_, isExpanded) => toggleIteration(group.iteration, isExpanded)}
+              // gap: 12px summary->steps but ONLY when expanded (a collapsed
+              // accordion shouldn't show a gap under its title); mt: 12px above
+              // every iteration after the first; pb: 12px between the content and
+              // the divider (so the separator isn't stuck to the frame) on every
+              // iteration that has one; drop the bottom divider on the last one on
+              // screen (so a single iteration has no trailing line).
+              sx={{
+                gap: expanded ? 1.5 : 0,
+                mt: renderIdx === 0 ? 0 : 1.5,
+                pb: isLastRendered ? 0 : 1.5,
+                borderBottom: isLastRendered ? 'none' : undefined,
+              }}
+            >
+              <AccordionSummary
+                // Chevron sits next to the title instead of pushed to the far
+                // right; the whole row stays clickable and gets the same hover
+                // as sidebar rows (notebooklist.hoverBg).
+                sx={theme => ({
+                  '& .MuiAccordionSummary-button': {
+                    justifyContent: 'flex-start',
+                    gap: 0.5,
+                    minHeight: '40px',
+                    borderRadius: '8px', // match the outer iterations frame
+                    '&:hover': { backgroundColor: `${theme.palette.notebooklist.hoverBg} !important` },
+                  },
+                })}
               >
-                <AccordionSummary>
-                  <Typography level="body-sm" sx={{ fontWeight: 500 }}>
-                    Iteration {group.iteration + 1}
-                  </Typography>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <Stack spacing={0.5}>
-                    {group.steps.map(s => {
-                      const stepKey = `${group.iteration}-${s.receivedAt}`;
-                      const nestedChildId = stepToChildId.get(stepKey);
-                      return (
-                        <Box key={stepKey}>
-                          {/* A tool-error observation is "recovered" unless the run
+                <Typography level="body-sm" sx={{ fontWeight: 500, color: 'text.primary' }}>
+                  Iteration {group.iteration + 1}
+                </Typography>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Stack spacing={1}>
+                  {group.steps.map(s => {
+                    const stepKey = `${group.iteration}-${s.receivedAt}`;
+                    const nestedChildId = stepToChildId.get(stepKey);
+                    return (
+                      <Box key={stepKey}>
+                        {/* A tool-error observation is "recovered" unless the run
                               actually failed - the stream knows the run status, the
                               step doesn't. */}
-                          <IterationStep step={s.step} recovered={execution.status !== 'failed'} />
-                          {/* Inline child render for `delegate_to_agent` actions
+                        <IterationStep step={s.step} recovered={execution.status !== 'failed'} />
+                        {/* Inline child render for `delegate_to_agent` actions
                               that dispatched a foreground subagent. Background
                               subagents surface in the header badge instead. */}
-                          {nestedChildId && execution?.childExecutions[nestedChildId] ? (
-                            <SubagentStepNest
-                              topLevelExecutionId={executionId}
-                              child={execution.childExecutions[nestedChildId]}
-                              depth={1}
-                            />
-                          ) : null}
-                        </Box>
-                      );
-                    })}
-                    {/* Live placeholder while a tool call is awaiting its
+                        {nestedChildId && execution?.childExecutions[nestedChildId] ? (
+                          <SubagentStepNest
+                            topLevelExecutionId={executionId}
+                            child={execution.childExecutions[nestedChildId]}
+                            depth={1}
+                          />
+                        ) : null}
+                      </Box>
+                    );
+                  })}
+                  {/* Live placeholder while a tool call is awaiting its
                         observation. The chip-level spinner above already
                         carries the "active" signal - adding a second spinner
                         here is visual noise, so we rely on the italic copy +
@@ -304,27 +389,27 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
                         do, it's on the action step's metadata) - gives the
                         user a real signal about what's happening behind the
                         scenes instead of generic "Running tool...". */}
-                    {isLast && awaitingObservation ? (
-                      <Box
-                        data-testid={`iteration-stream-${executionId}-awaiting-observation`}
-                        sx={{
-                          pl: 2,
-                          py: 0.75,
-                          borderLeft: theme => `2px dashed ${theme.palette.neutral.outlinedBorder}`,
-                        }}
-                      >
-                        <Typography level="body-sm" sx={{ color: 'text.tertiary', fontStyle: 'italic' }}>
-                          {copyForRunningTool(
-                            (lastStep as { metadata?: { toolName?: string } } | undefined)?.metadata?.toolName
-                          )}
-                        </Typography>
-                      </Box>
-                    ) : null}
-                  </Stack>
-                </AccordionDetails>
-              </Accordion>
-            );
-          })}
+                  {isLast && awaitingObservation ? (
+                    <Box
+                      data-testid={`iteration-stream-${executionId}-awaiting-observation`}
+                      sx={{
+                        pl: 2,
+                        py: 0.75,
+                        borderLeft: theme => `2px dashed ${theme.palette.neutral.outlinedBorder}`,
+                      }}
+                    >
+                      <Typography level="body-sm" sx={{ color: 'text.tertiary', fontStyle: 'italic' }}>
+                        {copyForRunningTool(
+                          (lastStep as { metadata?: { toolName?: string } } | undefined)?.metadata?.toolName
+                        )}
+                      </Typography>
+                    </Box>
+                  ) : null}
+                </Stack>
+              </AccordionDetails>
+            </Accordion>
+          );
+        })}
         {/* Live streaming text for the in-flight iteration wins over the generic
             rotating copy - the user sees the agent's actual words as they type
             instead of a placeholder. Falls back to the rotating "Thinking..."
@@ -364,6 +449,12 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
           </Typography>
         </Box>
       ) : null}
+
+      {/* Approval prompt sits at the BOTTOM of the reply - below the iteration
+          trace and any terminal/final-answer block - so it appears next to the
+          latest activity the user is reading instead of detached up top. The
+          card self-gates (renders null unless pendingPermission is set). */}
+      <PermissionCard executionId={executionId} />
     </Box>
   );
 };
@@ -381,11 +472,8 @@ const ElapsedTime: FC<{ startedAt: number }> = ({ startedAt }) => {
   // Compact: "7s" under a minute, "1m 12s" past it. Long-running agents
   // are rare but the format keeps the row readable when they happen.
   const label = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-  return (
-    <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-      · {label}
-    </Typography>
-  );
+  // Plain text so it composes inline inside the single status line.
+  return <>{label}</>;
 };
 
 // Live token stream for the in-flight iteration. Rendered in place of the rotating

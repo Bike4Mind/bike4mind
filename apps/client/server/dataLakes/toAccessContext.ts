@@ -11,6 +11,8 @@ import { getRequestEntitlements, type EntitlementRequest } from '@server/entitle
  * This is the ONE place the management `AccessContext` is constructed: every
  * `/api/data-lakes/**` route (and the data-lake upload door) imports it instead of
  * re-deriving the shape, so threading entitlement keys can't be forgotten at one site.
+ * `resolveAccessibleLakes` also reuses its `entitlementKeys` for the pure static-registry
+ * filter, which is not a management gate - so the keys must stay correct for both.
  *
  * Async because resolving entitlements reads the user's active subscriptions. The read is
  * memoized per request (`req.entitlements`, via `getRequestEntitlements`), so calling this

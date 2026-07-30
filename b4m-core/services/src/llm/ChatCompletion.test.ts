@@ -3,6 +3,8 @@ import {
   ChatCompletionProcess,
   addPairedTool,
   computeSettlementDelta,
+  clampFraction,
+  dropOldestHistoryTurn,
   isAbortError,
   isRequestTimeoutError,
   isStreamIdleTimeoutError,
@@ -25,6 +27,7 @@ import {
   ModelBackend,
   usdToCredits as realUsdToCredits,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
+  type IMessage,
 } from '@bike4mind/common';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
@@ -1907,5 +1910,70 @@ describe('computeSettlementDelta (zero-balance shortfall clamp)', () => {
 
   it('treats a negative balance snapshot as zero', () => {
     expect(computeSettlementDelta(100, 130, -50)).toEqual({ delta: 0, writtenOffCredits: 30 });
+  });
+});
+
+describe('clampFraction (verbatim window fraction admin setting)', () => {
+  it('passes through a valid numeric fraction', () => {
+    expect(clampFraction(0.3, 0.55)).toBe(0.3);
+    expect(clampFraction(1, 0.55)).toBe(1);
+  });
+
+  it('parses a numeric string (admin settings persist as strings)', () => {
+    expect(clampFraction('0.9', 0.55)).toBe(0.9);
+  });
+
+  it('falls back on out-of-range, zero, negative, or non-finite input', () => {
+    expect(clampFraction(0, 0.55)).toBe(0.55);
+    expect(clampFraction(-0.2, 0.55)).toBe(0.55);
+    expect(clampFraction(1.5, 0.55)).toBe(0.55);
+    expect(clampFraction('not-a-number', 0.55)).toBe(0.55);
+    expect(clampFraction(undefined, 0.55)).toBe(0.55);
+  });
+});
+
+describe('dropOldestHistoryTurn (overflow-recovery shed)', () => {
+  // A human turn starts at a user message with STRING content; tool results are
+  // user messages with ARRAY content and must never be treated as a boundary.
+  const user = (text: string): IMessage => ({ role: 'user', content: text });
+  const assistant = (text: string): IMessage => ({ role: 'assistant', content: text });
+  const toolResult = (): IMessage => ({
+    role: 'user',
+    content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }],
+  });
+
+  it('drops the oldest whole turn, leaving the remainder on a clean boundary', () => {
+    const history = [user('q1'), assistant('a1'), user('q2'), assistant('a2')];
+    expect(dropOldestHistoryTurn(history)).toEqual([user('q2'), assistant('a2')]);
+  });
+
+  it('never splits a tool_use/tool_result pair (array-content user msg is not a boundary)', () => {
+    const history = [user('q1'), assistant('a1'), toolResult(), user('q2'), assistant('a2')];
+    // The oldest turn is q1 + a1 + its tool_result; the next boundary is q2.
+    expect(dropOldestHistoryTurn(history)).toEqual([user('q2'), assistant('a2')]);
+  });
+
+  it('returns null when only one turn remains (nothing safe to shed)', () => {
+    expect(dropOldestHistoryTurn([user('q1'), assistant('a1'), toolResult()])).toBeNull();
+  });
+
+  it('returns null on empty history', () => {
+    expect(dropOldestHistoryTurn([])).toBeNull();
+  });
+
+  it('sheds turn-by-turn down to the most recent when called repeatedly', () => {
+    let history: IMessage[] | null = [
+      user('q1'),
+      assistant('a1'),
+      user('q2'),
+      assistant('a2'),
+      user('q3'),
+      assistant('a3'),
+    ];
+    history = dropOldestHistoryTurn(history);
+    expect(history).toEqual([user('q2'), assistant('a2'), user('q3'), assistant('a3')]);
+    history = dropOldestHistoryTurn(history!);
+    expect(history).toEqual([user('q3'), assistant('a3')]);
+    expect(dropOldestHistoryTurn(history!)).toBeNull();
   });
 });

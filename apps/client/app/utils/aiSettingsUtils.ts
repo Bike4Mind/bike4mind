@@ -1,4 +1,4 @@
-import { ModelInfo } from '@bike4mind/common';
+import { FIXED_TEMPERATURE_MODELS, ModelInfo } from '@bike4mind/common';
 import dayjs from 'dayjs';
 
 interface ModelMetric {
@@ -294,13 +294,59 @@ export const getPriceTierTooltip = (priceTier: string): string => {
   }
 };
 
-// Tiered default for max_tokens that leaves headroom in the context window for input tokens.
-// Keeps small-context models usable (halve) while capping large-context models (8192/16384).
+// Smallest default we ever hand a large-context model, so the headroom share below can only
+// raise the old flat cap, never lower it.
+const LARGE_CONTEXT_FLOOR = 16384;
+// Above this window size, headroom is a share of the context rather than a flat cap.
+const SMALL_CONTEXT_WINDOW = 32768;
+
+// Default for max_tokens. The server reserves this whole value out of the context window when
+// it computes maxSafeInputTokens (ChatCompletionProcess), so the default has to leave room for
+// input - but as a *share* of the window, not a flat number. A flat 16384 cap meant a 1M-token
+// model with a 128000-token ceiling could only emit 12.8% of what it advertises, which is what
+// truncated large artifacts. Small windows halve; large ones take a quarter of the window
+// (never below LARGE_CONTEXT_FLOOR), always bounded by the model's own advertised ceiling.
 export const computeDefaultMaxTokens = (modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens'>): number => {
   const contextWindow = modelInfo.contextWindow ?? 0;
   const modelMaxTokens = modelInfo.max_tokens ?? 0;
   if (contextWindow <= 0 || modelMaxTokens <= 0) return Math.floor(modelMaxTokens);
-  if (contextWindow <= 8192) return Math.floor(Math.min(modelMaxTokens, contextWindow / 2));
-  if (contextWindow <= 32768) return Math.floor(Math.min(modelMaxTokens, 8192));
-  return Math.floor(Math.min(modelMaxTokens, 16384));
+  if (contextWindow <= SMALL_CONTEXT_WINDOW) return Math.floor(Math.min(modelMaxTokens, contextWindow / 2));
+  return Math.floor(Math.min(modelMaxTokens, Math.max(LARGE_CONTEXT_FLOOR, contextWindow / 4)));
 };
+
+// Re-fit a persisted max_tokens onto a model. An unset value, or one carried over from a bigger
+// model, is always replaced with this model's default - the former has no meaning and the latter
+// would starve the new model's input budget.
+//
+// Raising a below-default value is opt-in via `allowRaise`, because the two cases differ: on an
+// actual model SWITCH a low carry-over is stale (it would cap a frontier model far below what it
+// can emit - the client value is the binding ceiling, the server only clamps down), but for the
+// model the user is already on it is their own deliberate setting, and raising it there would
+// discard that choice on every page reload and catalog refetch.
+// Keep in sync with the model-change effect in contexts/LLMContext.tsx.
+export const refitMaxTokensForModel = (
+  currentMaxTokens: number,
+  modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens'>,
+  { allowRaise = true }: { allowRaise?: boolean } = {}
+): number => {
+  const ceiling = modelInfo.max_tokens ?? 0;
+  if (ceiling <= 0) return currentMaxTokens;
+  const target = computeDefaultMaxTokens(modelInfo);
+  if (currentMaxTokens <= 0 || currentMaxTokens > ceiling) return target;
+  if (allowRaise && currentMaxTokens < target) return target;
+  return currentMaxTokens;
+};
+
+/**
+ * The LLM-store patch that must accompany every model change. Kept here rather than
+ * inlined at each switch site (the picker in AdvancedAIModal, the stale-pin prompt in
+ * StaleModelPrompt) so the two cannot drift on what "changing model" entails.
+ *
+ * Callers persist the pin separately via updateSessionToServer, since only they know
+ * the session and whether the write should be wrapped in a transition.
+ */
+export const buildModelSelectionPatch = (modelInfo: ModelInfo) => ({
+  model: modelInfo.id,
+  max_tokens: computeDefaultMaxTokens(modelInfo),
+  ...(FIXED_TEMPERATURE_MODELS.has(modelInfo.id) && { temperature: 1.0 }),
+});

@@ -1,6 +1,7 @@
 import {
   IFabFileDocument,
   IFileTag,
+  isAudioMimeType,
   isImageServeable,
   KnowledgeType,
   SupportedFabFileMimeTypes,
@@ -9,6 +10,7 @@ import { useUpdateFabFile } from '@client/app/hooks/data/fabFiles';
 import { ImageModerationPlaceholder } from '@client/app/components/Session/ImageModerationPlaceholder';
 import { Description } from '@mui/icons-material';
 import ArticleIcon from '@mui/icons-material/Article';
+import AudiotrackIcon from '@mui/icons-material/Audiotrack';
 import CodeIcon from '@mui/icons-material/Code';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import DataObjectIcon from '@mui/icons-material/DataObject';
@@ -48,7 +50,25 @@ const ImageThumbnail: FC<{ url: string; fileName: string; size: number }> = ({ u
   );
 };
 
+/** Inline audio player for generated TTS / sound-effect files. Stops click
+ *  propagation so using the transport controls doesn't toggle row selection. */
+const AudioPlayer: FC<{ url: string }> = ({ url }) => (
+  <Box
+    component="audio"
+    controls
+    preload="none"
+    src={url}
+    data-testid="file-browser-audio-player"
+    onClick={e => e.stopPropagation()}
+    sx={{ width: '100%', height: 34, mt: 1 }}
+  />
+);
+
 export const getFileIcon = (file: IFabFileDocument, size: number = 48) => {
+  if (isAudioMimeType(file.mimeType)) {
+    return <AudiotrackIcon sx={{ fontSize: size }} />;
+  }
+
   if (file.mimeType?.startsWith('image/')) {
     // Content-moderation gating: a blocked image never gets a serveable URL;
     // a pending (not-yet-clean) image may briefly have one cached but must not
@@ -432,6 +452,13 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
               {dayjs(createdAt).format('MMM D, YYYY')}
             </Typography>
           </Box>
+
+          {/* Inline audio player for generated TTS / sound-effect files */}
+          {isAudioMimeType(file.mimeType) && (file.fileUrl || file.presignedUrl) && (
+            <Box sx={{ width: '100%', maxWidth: 320 }}>
+              <AudioPlayer url={(file.fileUrl || file.presignedUrl)!} />
+            </Box>
+          )}
         </Box>
 
         {/* Tags and status - positioned immediately after the text */}
@@ -761,6 +788,13 @@ const GridItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
               year: 'numeric',
             })}
           </Typography>
+
+          {/* Inline audio player for generated TTS / sound-effect files */}
+          {isAudioMimeType(file.mimeType) && (file.fileUrl || file.presignedUrl) && (
+            <Box sx={{ width: '100%', px: 1, mt: 1 }}>
+              <AudioPlayer url={(file.fileUrl || file.presignedUrl)!} />
+            </Box>
+          )}
 
           {/* Owner label for shared files (Grid) */}
           {isSharedToMe && (

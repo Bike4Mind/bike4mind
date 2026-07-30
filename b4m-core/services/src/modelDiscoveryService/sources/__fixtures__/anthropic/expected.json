@@ -1,0 +1,112 @@
+[
+  {
+    "modelId": "claude-3-haiku-20240307",
+    "lifecycleEvidence": "docs",
+    "patch": {
+      "id": "claude-3-haiku-20240307",
+      "vendor": "anthropic",
+      "backend": "anthropic",
+      "type": "text",
+      "name": "Claude Haiku 3",
+      "contextWindow": 200000,
+      "maxOutputTokens": 4096,
+      "canStream": true,
+      "reasoning": {
+        "supported": false
+      },
+      "supportsVision": true,
+      "supportsPdfInput": false,
+      "supportsStructuredOutput": false,
+      "lifecycle": {
+        "status": "retired",
+        "deprecationDate": "2026-02-19",
+        "retirementDate": "2026-04-20",
+        "replacedBy": "claude-haiku-4-5-20251001"
+      }
+    }
+  },
+  {
+    "modelId": "claude-opus-5",
+    "lifecycleEvidence": "docs",
+    "patch": {
+      "id": "claude-opus-5",
+      "vendor": "anthropic",
+      "backend": "anthropic",
+      "type": "text",
+      "name": "Claude Opus 5",
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "canStream": true,
+      "reasoning": {
+        "supported": true,
+        "style": "anthropic-adaptive",
+        "effortLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "supportsVision": true,
+      "supportsPdfInput": true,
+      "supportsStructuredOutput": true,
+      "lifecycle": {
+        "status": "active"
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 5,
+      "outputPerMTok": 25
+    }
+  },
+  {
+    "modelId": "claude-sonnet-4-5-20250929",
+    "lifecycleEvidence": "docs",
+    "patch": {
+      "id": "claude-sonnet-4-5-20250929",
+      "vendor": "anthropic",
+      "backend": "anthropic",
+      "type": "text",
+      "name": "Claude Sonnet 4.5",
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "canStream": true,
+      "reasoning": {
+        "supported": true,
+        "style": "anthropic-legacy"
+      },
+      "supportsVision": true,
+      "supportsPdfInput": true,
+      "supportsStructuredOutput": false,
+      "lifecycle": {
+        "status": "active"
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 3,
+      "outputPerMTok": 15
+    }
+  },
+  {
+    "modelId": "claude-sonnet-5",
+    "lifecycleEvidence": "docs",
+    "patch": {
+      "id": "claude-sonnet-5",
+      "vendor": "anthropic",
+      "backend": "anthropic",
+      "type": "text",
+      "name": "Claude Sonnet 5",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "canStream": true,
+      "lifecycle": {
+        "status": "active"
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 2,
+      "outputPerMTok": 10
+    }
+  }
+]

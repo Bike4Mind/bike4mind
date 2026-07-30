@@ -122,6 +122,8 @@ export interface IUserPreferences {
   agentModeDefault?: 'off' | 'auto' | 'on';
   /** Whether to show fun/novelty tools (chess, dice, ISS tracker, etc.) in the tools catalog. Default: false. */
   showFunTools?: boolean;
+  /** Whether generated TTS / sound-effect audio is saved to storage as a browsable FabFile. Default: true. */
+  saveGeneratedAudio?: boolean;
 }
 
 /** Source of a moderation flag - which moderation backend produced the hit. */
@@ -622,6 +624,14 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    * @param count - The amount to increment by (can be negative for decrements)
    */
   incrementCurrentStorage: (userId: string, count: number) => Promise<void>;
+  /**
+   * Atomically bump the user's tokenVersion - the server-side session kill switch.
+   * Every currently-issued access/refresh token for the user carries the old version and
+   * is rejected on its next request (per-request check in auth.ts, and at WS connect).
+   * Returns the new tokenVersion. Throws NotFoundError if the user no longer exists,
+   * rather than silently reporting a successful revoke that never happened.
+   */
+  incrementTokenVersion: (userId: string) => Promise<number>;
   /**
    * Find a user by their Slack user ID
    * Used for OAuth user linking to prevent duplicate Slack ID associations

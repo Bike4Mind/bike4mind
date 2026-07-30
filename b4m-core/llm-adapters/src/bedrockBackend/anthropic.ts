@@ -21,6 +21,7 @@ import {
 } from '../backend';
 import { BaseBedrockBackend } from './base';
 import { getCachingAdapter } from '../caching/adapters';
+import { DispatchModel } from '../dispatchModel';
 import { buildThinkingParams } from '../thinkingParams';
 
 enum ClaudeChunkTypes {
@@ -193,6 +194,33 @@ const TEMPERATURE_ONLY_MODELS = [
 export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   // Track thinking block state
   private isInThinkingBlock = false;
+  /** Catalog view of the model being completed; see DispatchModel. */
+  private readonly _dispatch = new DispatchModel();
+
+  setDispatchModel(info: ModelInfo): void {
+    this._dispatch.set(info);
+  }
+
+  /**
+   * The record the payload is shaped from: the adapter table first, then the
+   * catalog for a model the table never listed. Table-first keeps every
+   * currently-dispatched Bedrock id on exactly today's payload.
+   */
+  private modelRecordFor(model: string): ModelInfo | undefined {
+    return this.getModelInfoList().find(m => m.id === model) ?? this._dispatch.for(model);
+  }
+
+  /**
+   * The adaptive-thinking surface has no sampling knobs: those models reject
+   * temperature and top_p outright. NO_TEMPERATURE_MODELS lists the ids this
+   * build ships; for a model only the catalog knows, `thinkingStyle: 'adaptive'`
+   * is the same statement in record form.
+   */
+  private omitsSamplingParams(model: string): boolean {
+    if (NO_TEMPERATURE_MODELS.has(model)) return true;
+    const listed = this.getModelInfoList().some(m => m.id === model);
+    return !listed && this._dispatch.for(model)?.thinkingStyle === 'adaptive';
+  }
 
   /** Static model info list - synchronous access for getPayload, also used by getModelInfo */
   private getModelInfoList(): ModelInfo[] {
@@ -295,7 +323,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 0.0003 / 1000, output: 0.0015 / 1000 }, // $0.0003 / 1,000 Input tokens, $0.0015 / 1,000 Output tokens. @see https://aws.amazon.com/bedrock/pricing/
+          200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 }, // $3 / 1M Input tokens, $15 / 1M Output tokens. @see https://aws.amazon.com/bedrock/pricing/
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -507,7 +535,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          1_000_000: { input: 15 / 1000000, output: 75 / 1000000 }, // $15 / 1M Input tokens, $75 / 1M Output tokens
+          1_000_000: { input: 5 / 1000000, output: 25 / 1000000 }, // $5 / 1M Input tokens, $25 / 1M Output tokens
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -662,7 +690,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     }
 
     // Add temperature if provided (Claude 4.7 Opus does not accept temperature at all)
-    if (typeof options.temperature === 'number' && !NO_TEMPERATURE_MODELS.has(model)) {
+    if (typeof options.temperature === 'number' && !this.omitsSamplingParams(model)) {
       body.temperature = options.temperature;
     }
 
@@ -671,13 +699,15 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     if (
       typeof options.topP === 'number' &&
       !TEMPERATURE_ONLY_MODELS.includes(model as ChatModels) &&
-      !NO_TEMPERATURE_MODELS.has(model)
+      !this.omitsSamplingParams(model)
     ) {
       body.top_p = options.topP;
     }
 
-    // Add thinking parameters for models that support it
-    const currentModelInfo = this.getModelInfoList().find(m => m.id === model);
+    // Add thinking parameters for models that support it. A catalog-only model
+    // brings its own record, so a new Bedrock Claude gets the right thinking
+    // shape (buildThinkingParams reads thinkingStyle) instead of none at all.
+    const currentModelInfo = this.modelRecordFor(model);
     const supportsThinking = currentModelInfo?.can_think === true;
 
     if (supportsThinking && currentModelInfo) {

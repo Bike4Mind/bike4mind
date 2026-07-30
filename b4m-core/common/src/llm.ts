@@ -99,10 +99,52 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   image: z.string(),
 });
 
+/**
+ * Wire value for "no history window". It is the top mark on the client's history slider
+ * (apps/client/app/components/FibonacciSlider.tsx), so it is a slider position rather than a
+ * count, and clients keep sending it. The server translates it to UNLIMITED_HISTORY_COUNT once,
+ * on ingress; after that only promptMeta.requestedHistoryCount, which records the raw request,
+ * still holds this value.
+ */
+export const CLIENT_UNLIMITED_HISTORY_VALUE = 14;
+
+/**
+ * Internal marker for "no history window". Deliberately negative so it sits outside the
+ * [MIN_HISTORY_COUNT, MAX_HISTORY_COUNT] range that ChatCompletionProcess clamps computed history
+ * counts into: a computed count can never collide with it the way the old in-range sentinel did.
+ * Not a count - anything doing arithmetic on it must go through resolveHistoryFetchLimit.
+ */
+export const UNLIMITED_HISTORY_COUNT = -1;
+
+/** Quests fetched per history page when the caller sets no window of its own. */
+export const DEFAULT_HISTORY_FETCH_LIMIT = 14;
+
+export const isUnlimitedHistory = (historyCount: number | null | undefined): boolean =>
+  historyCount === UNLIMITED_HISTORY_COUNT;
+
+/**
+ * A usable number for callers that need one (page size, overflow math, telemetry). Unlimited
+ * history has no count, so it resolves to the default page size, which is what an unwindowed
+ * request has always actually fetched.
+ */
+export const resolveHistoryFetchLimit = (historyCount: number | null | undefined): number =>
+  isUnlimitedHistory(historyCount) || historyCount == null ? DEFAULT_HISTORY_FETCH_LIMIT : historyCount;
+
+/** Server ingress: swap the client's slider sentinel for the internal marker, exactly once. */
+export const normalizeRequestedHistoryCount = (historyCount: number): number =>
+  historyCount === CLIENT_UNLIMITED_HISTORY_VALUE ? UNLIMITED_HISTORY_COUNT : historyCount;
+
 export const ChatCompletionInvokeParamsSchema = z.object({
   /** Notebook session ID */
   sessionId: z.string(),
-  historyCount: z.number(),
+  /**
+   * A wire value, so never UNLIMITED_HISTORY_COUNT: normalization happens later, in
+   * ChatCompletionProcess, and the marker lives only inside that call. Rejecting negatives
+   * here makes that invariant enforceable rather than merely conventional, so a future path
+   * that forwards a raw client number cannot smuggle the internal marker in from outside.
+   * Zero is legitimate (image models ask for no history).
+   */
+  historyCount: z.number().nonnegative(),
   /** Epoch ms when the client submitted the prompt (for the request-lifecycle status log). */
   clientSubmittedAt: z.number().optional(),
   imageConfig: GenerateImageToolCallSchema.optional(),
@@ -216,6 +258,15 @@ export interface ICacheStrategy {
 
   /** Cache conversation history */
   cacheConversationHistory?: boolean;
+
+  /**
+   * Number of trailing messages to exclude from the conversation-history cache
+   * breakpoint. Lets a caller append volatile, per-request content (e.g. a
+   * reminder message that's stripped and rebuilt every turn) after the stable
+   * history without it becoming the (never-reusable) cache anchor. Defaults to
+   * 0, i.e. the breakpoint anchors on the last message.
+   */
+  historyCacheExcludeTrailingCount?: number;
 
   /** Preferred TTL (only applicable to Anthropic, Bedrock) */
   cacheTTL?: '5m' | '1h';

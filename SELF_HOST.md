@@ -521,6 +521,24 @@ The worker reuses the chatCompletion image and connects to Mongo, ElasticMQ, Min
 
 Running the app on your host with `next dev` instead of the compose `app`? Keep this `worker` up and see [Frontend dev mode](#frontend-dev-mode-host-next-dev) for pointing the app at the compose services - and for why uploads still chunk when the MinIO webhook can't reach your host app.
 
+### Model discovery (off by default)
+
+Model discovery refreshes the model catalog - new model ids, context windows, prices - by querying the providers you have keys for plus two public model catalogs. **It is off unless you turn it on**, and while it is off the stack makes no discovery request at all, so an offline install stays offline.
+
+To enable it, set one flag in `.env.selfhost` and restart the stack:
+
+```bash
+# Makes the `worker` service the discovery driver. Comment on its own line:
+# env_file values are read verbatim, so a trailing comment becomes part of the value.
+B4M_DISCOVERY_DRIVER=true
+# Optional re-run interval in ms; default 21600000 (6h), clamped up to 900000 (15 min).
+# MODEL_DISCOVERY_INTERVAL_MS=21600000
+```
+
+The `worker` is the only service that runs discovery on a schedule, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval. The flag gates the admin "Run now" button too: without it the app answers 503 and starts nothing, so an install that never sets it stays offline however the run is asked for.
+
+Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure. Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.

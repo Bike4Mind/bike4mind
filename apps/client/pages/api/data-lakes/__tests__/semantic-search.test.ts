@@ -8,6 +8,7 @@ const {
   mockGetEffectiveLLMApiKeys,
   mockFindUserById,
   mockGetSettingsValue,
+  mockResolveSearchBudgets,
 } = vi.hoisted(() => ({
   mockResolveScope: vi.fn(),
   mockSemanticSearch: vi.fn(),
@@ -15,6 +16,7 @@ const {
   mockGetEffectiveLLMApiKeys: vi.fn(),
   mockFindUserById: vi.fn(),
   mockGetSettingsValue: vi.fn(),
+  mockResolveSearchBudgets: vi.fn(),
 }));
 
 // Only the middleware chain and the seams below are mocked; @bike4mind/common stays real so
@@ -52,7 +54,21 @@ vi.mock('@bike4mind/services', () => ({
     getEffectiveApiKey: mockGetEffectiveApiKey,
     getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys,
   },
-  dataLakeService: { semanticDataLakeSearch: mockSemanticSearch },
+  dataLakeService: {
+    semanticDataLakeSearch: mockSemanticSearch,
+    resolveSearchBudgets: mockResolveSearchBudgets,
+    emptyScanAccounting: (b?: { maxFiles?: number; maxChunks?: number }) => ({
+      truncated: false,
+      fileBudgetHit: false,
+      chunkBudgetHit: false,
+      filesMatching: 0,
+      filesScoped: 0,
+      filesScanned: 0,
+      chunksScanned: 0,
+      chunksSkippedDimensionMismatch: 0,
+      budgets: { maxFiles: b?.maxFiles ?? 20000, maxChunks: b?.maxChunks ?? 100000 },
+    }),
+  },
   recordOperationalUsage: vi.fn(),
 }));
 
@@ -64,7 +80,24 @@ const DYNAMIC_SCOPE = {
   scopedTagPrefixes: ['acme:'],
 };
 
-const EMPTY_RESULT = { results: [], totalChunksSearched: 0, filesInScope: 0, embeddingModel: 'text-embedding-ada-002' };
+const FULL_SCAN = {
+  truncated: false,
+  fileBudgetHit: false,
+  chunkBudgetHit: false,
+  filesMatching: 3,
+  filesScoped: 3,
+  filesScanned: 3,
+  chunksScanned: 12,
+  chunksSkippedDimensionMismatch: 0,
+  budgets: { maxFiles: 20000, maxChunks: 100000 },
+};
+const EMPTY_RESULT = {
+  results: [],
+  totalChunksSearched: 0,
+  filesInScope: 0,
+  embeddingModel: 'text-embedding-ada-002',
+  scan: { ...FULL_SCAN, filesMatching: 0, filesScoped: 0, filesScanned: 0, chunksScanned: 0 },
+};
 
 // req.on is required by the client-disconnect listener; the logger by the usage-recording catch.
 const makeReq = (body: unknown, user: Record<string, unknown> = { id: 'u1', tags: [] }) =>
@@ -85,6 +118,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     vi.clearAllMocks();
     mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
     mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
+    mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
     mockGetEffectiveApiKey.mockResolvedValue('test-openai-key');
     mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
     // Null user short-circuits the best-effort usage recording, keeping these tests on the
@@ -203,7 +237,15 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     await handler(makeReq({ query: 'onboarding' }), res);
 
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ results: [], total_chunks_searched: 0, embedding_model: 'text-embedding-ada-002' })
+      expect.objectContaining({
+        results: [],
+        total_chunks_searched: 0,
+        files_in_scope: 0,
+        embedding_model: 'text-embedding-ada-002',
+        // The short-circuit must carry the SAME shape as the success path: the RLM loopback
+        // forwards this JSON verbatim, so a missing `scan` would be an inconsistent contract.
+        scan: expect.objectContaining({ truncated: false, files_matching: 0, chunks_scanned: 0 }),
+      })
     );
     // Without these the test still passes with the short-circuit deleted.
     expect(mockGetEffectiveApiKey).not.toHaveBeenCalled();
@@ -255,6 +297,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
       totalChunksSearched: 12,
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
+      scan: FULL_SCAN,
     });
     const res = makeRes();
 
@@ -276,5 +319,81 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
         files_in_scope: 3,
       })
     );
+  });
+});
+
+describe('POST /api/data-lakes/semantic-search scan accounting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
+    mockGetEffectiveApiKey.mockResolvedValue('test-openai-key');
+    mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    mockFindUserById.mockResolvedValue(null);
+    mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
+  });
+
+  it('reports a complete scan as not truncated, with the flat counters agreeing with scan', async () => {
+    mockSemanticSearch.mockResolvedValue({
+      results: [],
+      totalChunksSearched: 12,
+      filesInScope: 3,
+      embeddingModel: 'text-embedding-ada-002',
+      scan: FULL_SCAN,
+    });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'pto' }), res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.scan.truncated).toBe(false);
+    // The pre-existing flat fields must keep meaning the same thing as the new block.
+    expect(body.total_chunks_searched).toBe(body.scan.chunks_scanned);
+    expect(body.files_in_scope).toBe(body.scan.files_scoped);
+  });
+
+  it('surfaces a truncated scan so a caller cannot read an absence of hits as an absence of content', async () => {
+    mockSemanticSearch.mockResolvedValue({
+      results: [],
+      totalChunksSearched: 100000,
+      filesInScope: 2314,
+      embeddingModel: 'text-embedding-ada-002',
+      scan: {
+        truncated: true,
+        fileBudgetHit: false,
+        chunkBudgetHit: true,
+        filesMatching: 2314,
+        filesScoped: 2314,
+        filesScanned: 800,
+        chunksScanned: 100000,
+        chunksSkippedDimensionMismatch: 7,
+        budgets: { maxFiles: 20000, maxChunks: 100000 },
+      },
+    });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'pto' }), res);
+
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scan: expect.objectContaining({
+          truncated: true,
+          chunk_budget_hit: true,
+          file_budget_hit: false,
+          files_scanned: 800,
+          files_matching: 2314,
+          chunks_skipped_dimension_mismatch: 7,
+          budgets: { max_files: 20000, max_chunks: 100000 },
+        }),
+      })
+    );
+  });
+
+  it('passes the operator-configured budgets into the search', async () => {
+    mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 50, maxChunks: 100 });
+    mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
+
+    await handler(makeReq({ query: 'pto' }), makeRes());
+
+    expect(searchParams().budgets).toEqual({ maxFiles: 50, maxChunks: 100 });
   });
 });

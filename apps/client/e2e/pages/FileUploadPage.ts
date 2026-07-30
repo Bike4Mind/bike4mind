@@ -76,7 +76,25 @@ export class FileUploadPage extends BasePage {
   async findFile(filename: string) {
     await this.waitForLoaderToDisappear('file-browser-loader');
     const searchInput = this.page.getByTestId('file-browser-search-input').getByRole('textbox');
+    // The search box debounces 500ms (app/components/Files/Browser/Filter.tsx), so filling it
+    // starts no request synchronously: the loader wait below would resolve against the
+    // pre-search list and the real results would then land mid-interaction, remounting rows
+    // under whatever the caller does next. Arm the wait BEFORE filling so the response can't
+    // be missed, and match on the decoded `search` param so a still-in-flight response for a
+    // previous term (e.g. "cat.png" while searching "cat") can't satisfy it.
+    // Bounded and swallowed: react-query serves an already-cached term without a request, and
+    // then there is nothing to wait for.
+    const searchApplied = this.page
+      .waitForResponse(
+        response =>
+          response.url().includes('/api/files/search') &&
+          response.ok() &&
+          new URL(response.url()).searchParams.get('search') === filename,
+        { timeout: TIMEOUTS.VISIBLE }
+      )
+      .catch(() => null);
     await searchInput.fill(filename);
+    await searchApplied;
     await this.waitForLoaderToDisappear('file-browser-loader');
     const file = this.page
       .getByTestId('file-browser-dialog')
@@ -126,9 +144,17 @@ export class FileUploadPage extends BasePage {
     const menuButton = row.getByTestId('file-browser-actions-menu-btn');
     const renameInput = this.page.getByTestId('file-browser-rename-input');
     const renameItem = this.page.getByTestId('file-browser-rename-item');
+    const saveBtn = this.page.getByTestId('file-browser-rename-save-btn');
+    const successToast = this.page
+      .locator('[data-sonner-toast]')
+      .filter({ hasText: /renamed/i })
+      .first();
 
     // Menu items can be detached by React re-renders, or the click may not register.
-    // Retry the full open-menu -> click-rename -> wait-for-input sequence.
+    // Retry the whole open-menu -> rename -> type -> save sequence, not just entering rename
+    // mode: rename mode is per-row local state (Browser/Item.tsx `useCommon`), so anything that
+    // remounts the row drops out of it and the input plus Save button never come back - a retry
+    // scoped to menu-opening alone would leave the typing and save steps to fail unrecoverably.
     // Every click MUST carry an explicit timeout: the suite sets no `actionTimeout`, so an
     // unbounded click() waits forever for actionability. If a background list refetch re-renders
     // the row mid-click, the stability check never resolves and the click hangs until the whole
@@ -138,17 +164,26 @@ export class FileUploadPage extends BasePage {
         await menuButton.click({ timeout: TIMEOUTS.ELEMENT_STATE });
         await renameItem.click({ timeout: TIMEOUTS.ELEMENT_STATE });
         await expect(renameInput).toBeVisible({ timeout: TIMEOUTS.POST_ACTION });
+        const renameTextbox = renameInput.getByRole('textbox');
+        await renameTextbox.clear({ timeout: TIMEOUTS.ELEMENT_STATE });
+        await renameTextbox.fill(newName, { timeout: TIMEOUTS.ELEMENT_STATE });
+        await saveBtn.click({ timeout: TIMEOUTS.ELEMENT_STATE });
         break;
       } catch {
-        if (attempt === 3) throw new Error('Failed to enter rename mode after retries');
+        // The throw can land after the rename already went through - a save click that registered
+        // but whose actionability re-check then timed out on the re-rendering row. Retrying from
+        // there searches for a row that no longer carries the old name and would report a false
+        // failure, so treat the success toast as done. Bounded wait, not an instant check: the
+        // PUT may still be in flight when the click times out.
+        const renamed = await successToast
+          .waitFor({ state: 'visible', timeout: TIMEOUTS.POST_ACTION })
+          .then(() => true)
+          .catch(() => false);
+        if (renamed) break;
+        if (attempt === 3) throw new Error('Failed to rename file after retries');
         await this.page.keyboard.press('Escape').catch(() => {});
       }
     }
-
-    const renameTextbox = renameInput.getByRole('textbox');
-    await renameTextbox.clear({ timeout: TIMEOUTS.ELEMENT_STATE });
-    await renameTextbox.fill(newName, { timeout: TIMEOUTS.ELEMENT_STATE });
-    await this.page.getByTestId('file-browser-rename-save-btn').click({ timeout: TIMEOUTS.ELEMENT_STATE });
     // Wait for rename API or the inline input to disappear (rename complete)
     await this.waitForResponseOrUI(
       response =>
@@ -156,9 +191,7 @@ export class FileUploadPage extends BasePage {
       () => expect(renameInput).toBeHidden({ timeout: TIMEOUTS.ACTION })
     );
     // Wait for success toast to confirm rename completed and file list refreshed
-    await expect(this.page.locator('[data-sonner-toast]').filter({ hasText: /renamed/i })).toBeVisible({
-      timeout: TIMEOUTS.VISIBLE,
-    });
+    await expect(successToast).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
 
   async deleteFile(filename: string) {

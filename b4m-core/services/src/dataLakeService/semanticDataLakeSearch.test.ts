@@ -1,4 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Cosine is a hoisted mock so individual tests can vary scores; the default keeps every chunk
+// above the floor, which is what the pre-existing exclusion/scoping tests assume.
+const { mockCosine } = vi.hoisted(() => ({ mockCosine: vi.fn(() => 0.9) }));
 
 // Mock only the embedding/provider helpers from the utils barrel; keep the real
 // `@bike4mind/utils/retrievalExclusion` subpath so filterRetrievalExcluded runs for real.
@@ -7,7 +11,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   return {
     ...actual,
     getProviderFromModel: () => 'openai',
-    computeCosineSimilarity: () => 0.9,
+    computeCosineSimilarity: mockCosine,
     EmbeddingFactory: class {
       createEmbeddingService() {
         return { generateEmbedding: async () => [1, 0] };
@@ -21,6 +25,11 @@ import {
   semanticDataLakeSearch,
   type SemanticDataLakeSearchParams,
 } from './semanticDataLakeSearch';
+
+beforeEach(() => {
+  mockCosine.mockReset();
+  mockCosine.mockReturnValue(0.9);
+});
 
 const baseParams = (): SemanticDataLakeSearchParams => ({
   userId: 'u1',
@@ -39,6 +48,8 @@ const makeAdapters = (findVectors: ReturnType<typeof vi.fn>) => ({
           { id: 'm', fileName: 'MARK - retired.pdf', tags: [], vectorized: true },
           { id: 'c', fileName: 'Clean.pdf', tags: [], vectorized: true },
         ],
+        hasMore: false,
+        total: 2,
       }),
     },
     fabfilechunks: { findVectorsByFabFileIds: findVectors },
@@ -71,6 +82,459 @@ describe('semanticDataLakeSearch retrieval exclusion', () => {
     expect(result.results).toEqual([]);
     expect(adapters.db.fabfiles.search).not.toHaveBeenCalled();
     expect(findVectors).not.toHaveBeenCalled();
+    // A short-circuit still reports a well-formed (complete, empty) scan.
+    expect(result.scan.truncated).toBe(false);
+    expect(result.scan.chunksScanned).toBe(0);
+  });
+});
+
+/** Chunk rows for a paging mock: `n` chunks belonging to `fileId`, ids ascending. */
+const chunkRows = (fileId: string, n: number, startIndex = 0) =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `${fileId}-c${String(startIndex + i).padStart(4, '0')}`,
+    fabFileId: fileId,
+    text: `text ${startIndex + i}`,
+    vector: [1, 0],
+  }));
+
+/**
+ * Keyset-paging mock that behaves like the real repository: filters to the requested ids, honours
+ * `afterChunkId`, sorts by id, and applies `limit`. Tests that assert budget/probe behaviour are
+ * only meaningful against a mock that actually pages.
+ */
+const pagingChunkMock = (allRows: { id: string; fabFileId: string; text: string; vector: number[] }[]) =>
+  vi.fn((ids: string[], opts?: { limit?: number; afterChunkId?: string }) => {
+    const limit = opts?.limit ?? 10_000;
+    const rows = allRows
+      .filter(r => ids.includes(r.fabFileId))
+      .filter(r => (opts?.afterChunkId ? r.id > opts.afterChunkId : true))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .slice(0, limit);
+    return Promise.resolve(rows);
+  });
+
+const filesAdapter = (
+  pages: { data: { id: string; fileName: string; tags?: unknown[] }[]; hasMore: boolean; total: number }[]
+) => {
+  const search = vi.fn((..._args: unknown[]) => {
+    const page = (_args[3] as { page: number }).page;
+    return Promise.resolve(pages[page - 1] ?? { data: [], hasMore: false, total: pages[0]?.total ?? 0 });
+  });
+  return search;
+};
+
+/**
+ * A files adapter that serves from ONE corpus using the real skip/limit contract
+ * (`skip = (page - 1) * limit`, as buildFabFileSearchQuery computes it) instead of returning
+ * canned pages keyed on page number. Page-keyed mocks cannot see a wrong offset, which is exactly
+ * how a shrinking page limit shipped a walk that re-read rows and never reached the tail.
+ */
+const skipAwareFilesAdapter = (corpus: { id: string; fileName: string; tags?: unknown[] }[]) =>
+  vi.fn((..._args: unknown[]) => {
+    const { page, limit } = _args[3] as { page: number; limit: number };
+    const skip = (page - 1) * limit;
+    const slice = corpus.slice(skip, skip + limit);
+    return Promise.resolve({ data: slice, hasMore: skip + limit < corpus.length, total: corpus.length });
+  });
+
+const makeLogger = () => ({ warn: vi.fn(), debug: vi.fn(), error: vi.fn(), log: vi.fn() });
+
+describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
+  const oneFile = [{ id: 'f1', fileName: 'F1.pdf', tags: [] }];
+
+  it('a lake that fits stays on the pre-existing single-query path and reports a complete scan', async () => {
+    const search = filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]);
+    const findVectors = pagingChunkMock(chunkRows('f1', 3));
+    const logger = makeLogger();
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), logger: logger as never }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: findVectors } },
+    } as never);
+
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(findVectors).toHaveBeenCalledTimes(1);
+    expect(result.scan.truncated).toBe(false);
+    expect(result.scan.chunksScanned).toBe(3);
+    expect(result.scan.filesMatching).toBe(1);
+  });
+
+  it('a complete scan emits NO warning - an alert that fires on healthy lakes is worthless', async () => {
+    const logger = makeLogger();
+    await semanticDataLakeSearch({ ...baseParams(), logger: logger as never }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 3)) },
+      },
+    } as never);
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('pages the file scope past one page instead of silently dropping the tail', async () => {
+    // The shape that motivated this: a lake bigger than the old single 2000-file page.
+    const pageOne = Array.from({ length: 2000 }, (_, i) => ({ id: `f${i}`, fileName: `F${i}.pdf`, tags: [] }));
+    const pageTwo = Array.from({ length: 314 }, (_, i) => ({ id: `g${i}`, fileName: `G${i}.pdf`, tags: [] }));
+    const search = filesAdapter([
+      { data: pageOne, hasMore: true, total: 2314 },
+      { data: pageTwo, hasMore: false, total: 2314 },
+    ]);
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), budgets: { filePageSize: 2000 } }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+
+    expect(search).toHaveBeenCalledTimes(2);
+    expect((search.mock.calls[1][3] as { page: number }).page).toBe(2);
+    expect(result.scan.filesScoped).toBe(2314);
+    expect(result.scan.filesMatching).toBe(2314);
+    expect(result.scan.truncated).toBe(false);
+  });
+
+  it('keeps the page size constant when the budget is not a multiple of it', async () => {
+    // The query builder derives skip as (page - 1) * limit, so shrinking the limit to fit the
+    // remaining budget silently moves the offset: page 2 would re-read rows it already had and
+    // never reach the tail. Only reachable once an operator sets an odd budget, which the new
+    // admin setting allows, and invisible on the defaults because 20000 is a multiple of 2000.
+    const pageOne = Array.from({ length: 10 }, (_, i) => ({ id: `f${i}`, fileName: `F${i}.pdf`, tags: [] }));
+    const pageTwo = Array.from({ length: 10 }, (_, i) => ({ id: `g${i}`, fileName: `G${i}.pdf`, tags: [] }));
+    const search = filesAdapter([
+      { data: pageOne, hasMore: true, total: 20 },
+      { data: pageTwo, hasMore: false, total: 20 },
+    ]);
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), budgets: { maxFiles: 15, filePageSize: 10 } }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+
+    // Every page asks for the same limit; only `page` advances.
+    const limits = search.mock.calls.map(c => (c[3] as { limit: number }).limit);
+    expect(limits).toEqual([10, 10]);
+    // Trimmed to the budget, with no file counted twice.
+    expect(result.scan.filesScoped).toBe(15);
+    expect(result.scan.fileBudgetHit).toBe(true);
+    expect(result.scan.truncated).toBe(true);
+  });
+
+  it('walks a real skip/limit corpus with no file repeated and none missed', async () => {
+    // Served through the actual skip arithmetic, so a wrong offset shows up as a duplicate or a
+    // gap rather than passing unnoticed the way a page-keyed mock allows.
+    const corpus = Array.from({ length: 23 }, (_, i) => ({
+      id: `f${String(i).padStart(3, '0')}`,
+      fileName: `F${String(i).padStart(3, '0')}.pdf`,
+      tags: [],
+    }));
+    const search = skipAwareFilesAdapter(corpus);
+    const seenIds: string[] = [];
+    const findVectors = vi.fn((ids: string[]) => {
+      seenIds.push(...ids);
+      return Promise.resolve([]);
+    });
+
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), budgets: { maxFiles: 23, filePageSize: 10, fileGroupSize: 100 } },
+      { db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: findVectors } } } as never
+    );
+
+    expect(seenIds).toEqual(corpus.map(f => f.id));
+    expect(new Set(seenIds).size).toBe(23);
+    expect(result.scan.filesScoped).toBe(23);
+    expect(result.scan.filesMatching).toBe(23);
+    expect(result.scan.truncated).toBe(false);
+  });
+
+  it('a small budget shrinks the query itself, not just the result', async () => {
+    // Otherwise lowering the setting to cut latency still sorts and fetches a full page.
+    const corpus = Array.from({ length: 500 }, (_, i) => ({ id: `f${i}`, fileName: `F${i}.pdf`, tags: [] }));
+    const search = skipAwareFilesAdapter(corpus);
+
+    await semanticDataLakeSearch({ ...baseParams(), budgets: { maxFiles: 25, filePageSize: 2000 } }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+
+    expect((search.mock.calls[0][3] as { limit: number }).limit).toBe(25);
+  });
+
+  it('calls search as a method, so a repository whose search uses `this` still works', async () => {
+    // The real FabFileRepository.search delegates to this.executeSearch. Passing the method as a
+    // bare reference unbinds `this` and throws at runtime - and every vi.fn() mock in this file
+    // would still pass, because a plain function has no `this` to lose.
+    class RepoLikeTheRealOne {
+      private pageSize = 10;
+      async executeSearch(page: number) {
+        return { data: page === 1 ? [{ id: 'f1', fileName: 'F1.pdf', tags: [] }] : [], hasMore: false, total: 1 };
+      }
+      async search(..._args: unknown[]) {
+        const { page } = _args[3] as { page: number };
+        // Reading an instance field as well, so a lost binding cannot silently succeed.
+        void this.pageSize;
+        return this.executeSearch(page);
+      }
+    }
+
+    const result = await semanticDataLakeSearch(baseParams(), {
+      db: {
+        fabfiles: new RepoLikeTheRealOne(),
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 2)) },
+      },
+    } as never);
+
+    expect(result.scan.filesScoped).toBe(1);
+    expect(result.scan.chunksScanned).toBe(2);
+  });
+
+  it('a zero or negative budget cannot make the page ceiling Infinite', async () => {
+    // `??` only replaces null/undefined, so an explicit 0 would reach Math.ceil(maxChunks / 0)
+    // and produce Infinity for the loop bound. Clamped, this walks and terminates normally.
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), budgets: { chunkPageSize: 0, fileGroupSize: 0, filePageSize: 0, maxChunks: -5 } },
+      {
+        db: {
+          fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+          fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 3)) },
+        },
+      } as never
+    );
+
+    expect(result.scan.budgets.maxChunks).toBeGreaterThanOrEqual(1);
+    expect(result.scan.chunksScanned).toBeGreaterThanOrEqual(1);
+  });
+
+  it('asks for the _id sort tiebreaker, without which a multi-page walk can lose a file', async () => {
+    const search = filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]);
+    await semanticDataLakeSearch(baseParams(), {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+
+    expect(search.mock.calls[0][5]).toMatchObject({ stableSort: true });
+  });
+
+  it('the file budget marks the scan truncated and warns', async () => {
+    const pageOne = Array.from({ length: 10 }, (_, i) => ({ id: `f${i}`, fileName: `F${i}.pdf`, tags: [] }));
+    const logger = makeLogger();
+
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), logger: logger as never, budgets: { maxFiles: 10, filePageSize: 10 } },
+      {
+        db: {
+          fabfiles: { search: filesAdapter([{ data: pageOne, hasMore: true, total: 50 }]) },
+          fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f0', 1)) },
+        },
+      } as never
+    );
+
+    expect(result.scan.fileBudgetHit).toBe(true);
+    expect(result.scan.truncated).toBe(true);
+    expect(result.scan.filesMatching).toBe(50);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('TRUNCATED'));
+  });
+
+  it('a corpus that exactly fills the chunk budget is NOT reported as truncated', async () => {
+    // The probe case: without asking for one row beyond the budget, "exactly full" and
+    // "overflowing" look identical and a complete scan gets reported as partial.
+    const logger = makeLogger();
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), logger: logger as never, budgets: { maxChunks: 5, chunkPageSize: 2 } },
+      {
+        db: {
+          fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+          fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 5)) },
+        },
+      } as never
+    );
+
+    expect(result.scan.chunksScanned).toBe(5);
+    expect(result.scan.chunkBudgetHit).toBe(false);
+    expect(result.scan.truncated).toBe(false);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('a corpus one chunk over the budget IS reported as truncated, and scores exactly the budget', async () => {
+    const logger = makeLogger();
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), logger: logger as never, budgets: { maxChunks: 5, chunkPageSize: 2 } },
+      {
+        db: {
+          fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+          fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 6)) },
+        },
+      } as never
+    );
+
+    // The probe row must not be counted or ranked, or the budget means nothing.
+    expect(result.scan.chunksScanned).toBe(5);
+    expect(result.scan.chunkBudgetHit).toBe(true);
+    expect(result.scan.truncated).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('TRUNCATED'));
+  });
+
+  it('never requests more than one page beyond the page size - the enforceable memory bound', async () => {
+    const findVectors = pagingChunkMock(chunkRows('f1', 25));
+    await semanticDataLakeSearch({ ...baseParams(), budgets: { chunkPageSize: 4, maxChunks: 100 } }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: findVectors },
+      },
+    } as never);
+
+    for (const call of findVectors.mock.calls) {
+      expect((call[1] as { limit: number }).limit).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it('walks a single file across many pages with an advancing cursor, missing no chunk', async () => {
+    const findVectors = pagingChunkMock(chunkRows('f1', 7));
+    const result = await semanticDataLakeSearch({ ...baseParams(), budgets: { chunkPageSize: 2, maxChunks: 100 } }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: findVectors },
+      },
+    } as never);
+
+    expect(result.scan.chunksScanned).toBe(7);
+    expect(result.scan.truncated).toBe(false);
+    const cursors = findVectors.mock.calls.map(c => (c[1] as { afterChunkId?: string }).afterChunkId);
+    expect(cursors[0]).toBeUndefined();
+    // Strictly increasing after the first page - a stalled cursor would page forever.
+    const seen = cursors.slice(1) as string[];
+    expect(seen).toEqual([...seen].sort());
+    expect(new Set(seen).size).toBe(seen.length);
+  });
+
+  it('throws rather than paging forever if the cursor fails to advance', async () => {
+    // A repository that ignores afterChunkId would otherwise spin until the page ceiling.
+    const stuck = vi.fn().mockResolvedValue(chunkRows('f1', 3));
+    await expect(
+      semanticDataLakeSearch({ ...baseParams(), budgets: { chunkPageSize: 2, maxChunks: 100 } }, {
+        db: {
+          fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+          fabfilechunks: { findVectorsByFabFileIds: stuck },
+        },
+      } as never)
+    ).rejects.toThrow('cursor did not advance');
+  });
+});
+
+describe('semanticDataLakeSearch dimension mismatch accounting', () => {
+  const oneFile = [{ id: 'f1', fileName: 'F1.pdf', tags: [] }];
+
+  it('counts a wrong-width chunk AND keeps it out of the results', async () => {
+    const rows = [
+      { id: 'f1-a', fabFileId: 'f1', text: 'good', vector: [1, 0] },
+      // Query embedding is [1, 0]; a 3-wide vector belongs to a different model's space.
+      { id: 'f1-b', fabFileId: 'f1', text: 'wrong width', vector: [1, 0, 0] },
+    ];
+    const result = await semanticDataLakeSearch(baseParams(), {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(rows as never) },
+      },
+    } as never);
+
+    expect(result.scan.chunksScanned).toBe(2);
+    expect(result.scan.chunksSkippedDimensionMismatch).toBe(1);
+    expect(result.results.map(r => r.chunkText)).toEqual(['good']);
+  });
+
+  it('drops a NaN score instead of letting it outrank every real hit', async () => {
+    // cosine of a zero-magnitude vector is 0/0. NaN fails `score < minScore` AND the top-K reject
+    // test, so without an explicit guard it lands at rank 1 and serialises as null.
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => ((v as number[])[0] === 0 ? NaN : 0.5));
+    const result = await semanticDataLakeSearch({ ...baseParams(), topK: 2 }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+        fabfilechunks: {
+          findVectorsByFabFileIds: pagingChunkMock([
+            { id: 'f1-bad', fabFileId: 'f1', text: 'degenerate', vector: [0, 0] },
+            { id: 'f1-good', fabFileId: 'f1', text: 'real hit', vector: [1, 0] },
+          ] as never),
+        },
+      },
+    } as never);
+
+    expect(result.results.map(r => r.chunkText)).toEqual(['real hit']);
+    expect(result.results.every(r => Number.isFinite(r.score))).toBe(true);
+  });
+
+  it('warns when the WHOLE corpus is the wrong width, but stays quiet for a partial mismatch', async () => {
+    const allWrong = makeLogger();
+    await semanticDataLakeSearch({ ...baseParams(), logger: allWrong as never }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+        fabfilechunks: {
+          findVectorsByFabFileIds: pagingChunkMock([
+            { id: 'f1-a', fabFileId: 'f1', text: 'x', vector: [1, 0, 0] },
+          ] as never),
+        },
+      },
+    } as never);
+    expect(allWrong.warn).toHaveBeenCalledWith(expect.stringContaining('different dimension'));
+
+    // A few stale chunks mid-revectorize are normal; warning on those would train people to ignore it.
+    const partial = makeLogger();
+    await semanticDataLakeSearch({ ...baseParams(), logger: partial as never }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+        fabfilechunks: {
+          findVectorsByFabFileIds: pagingChunkMock([
+            { id: 'f1-a', fabFileId: 'f1', text: 'x', vector: [1, 0] },
+            { id: 'f1-b', fabFileId: 'f1', text: 'y', vector: [1, 0, 0] },
+          ] as never),
+        },
+      },
+    } as never);
+    expect(partial.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('semanticDataLakeSearch determinism', () => {
+  const oneFile = [{ id: 'f1', fileName: 'F1.pdf', tags: [] }];
+
+  it('ranks tied chunks the same however the files were partitioned into chunk queries', async () => {
+    // Chunks are read per file GROUP, so a group boundary changes the order tied chunks arrive
+    // in even though each query is itself _id-sorted. Ties must therefore be broken by an
+    // explicit key, not by arrival: with fileGroupSize 2 the reader yields ch1, ch2, ch3, but
+    // with fileGroupSize 1 it yields ch1, ch3 (file A) then ch2 (file B).
+    mockCosine.mockImplementation(() => 0.8); // exact ties across every chunk
+    const twoFiles = [
+      { id: 'fA', fileName: 'A.pdf', tags: [] },
+      { id: 'fB', fileName: 'B.pdf', tags: [] },
+    ];
+    const interleaved = [
+      { id: 'ch1', fabFileId: 'fA', text: 'a1', vector: [1, 0] },
+      { id: 'ch2', fabFileId: 'fB', text: 'b1', vector: [1, 0] },
+      { id: 'ch3', fabFileId: 'fA', text: 'a2', vector: [1, 0] },
+    ];
+
+    const run = async (fileGroupSize: number) => {
+      const res = await semanticDataLakeSearch({ ...baseParams(), topK: 2, budgets: { fileGroupSize } }, {
+        db: {
+          fabfiles: { search: filesAdapter([{ data: twoFiles, hasMore: false, total: 2 }]) },
+          fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(interleaved as never) },
+        },
+      } as never);
+      return res.results.map(r => r.chunkId);
+    };
+
+    expect(await run(1)).toEqual(await run(2));
+    expect(await run(2)).toEqual(['ch1', 'ch2']);
+  });
+
+  it('keeps the highest-scoring chunks when the corpus exceeds topK', async () => {
+    const rows = chunkRows('f1', 5);
+    // Ascending scores by text index, so the LAST chunks are the best - they must survive
+    // even though the bounded collector saw them last.
+    mockCosine.mockImplementation((_q: unknown, v: unknown) => 0.5 + (v as number[])[1]);
+    const scored = rows.map((r, i) => ({ ...r, vector: [1, i / 100] }));
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), topK: 2, budgets: { chunkPageSize: 2 } }, {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(scored as never) },
+      },
+    } as never);
+
+    expect(result.results.map(r => r.chunkId)).toEqual(['f1-c0004', 'f1-c0003']);
   });
 });
 
@@ -87,7 +551,7 @@ describe('fileScopedSemanticSearch (allow-list scope)', () => {
     chunks?: { id: string; fabFileId: string; vector: number[]; text: string }[];
   }) => {
     const getAccessibleFiles = vi.fn().mockResolvedValue(opts.files ?? []);
-    const findVectorsByFabFileIds = vi.fn().mockResolvedValue(opts.chunks ?? []);
+    const findVectorsByFabFileIds = pagingChunkMock((opts.chunks ?? []) as never);
     return {
       adapters: { db: { fabfiles: { getAccessibleFiles }, fabfilechunks: { findVectorsByFabFileIds } } },
       getAccessibleFiles,
@@ -154,5 +618,41 @@ describe('fileScopedSemanticSearch (allow-list scope)', () => {
     const result = await fileScopedSemanticSearch(scopedParams(['live', 'gone']), adapters as never);
 
     expect(result.results.map(r => r.fileId)).toEqual(['live']);
+  });
+
+  it('scans an unordered allow-list in a stable order so an over-budget scope drops the same files', async () => {
+    // getAccessibleFiles imposes no order; without sorting, WHICH files a budget drops would
+    // be Mongo's natural order and could differ between two identical calls.
+    const { adapters, findVectorsByFabFileIds } = scopedAdapters({
+      files: [
+        { id: 'c', fileName: 'C.pdf', tags: [] },
+        { id: 'a', fileName: 'A.pdf', tags: [] },
+        { id: 'b', fileName: 'B.pdf', tags: [] },
+      ],
+    });
+
+    const result = await fileScopedSemanticSearch(
+      { ...scopedParams(['a', 'b', 'c']), budgets: { maxFiles: 2 } },
+      adapters as never
+    );
+
+    expect(findVectorsByFabFileIds.mock.calls[0][0]).toEqual(['a', 'b']);
+    expect(result.scan.fileBudgetHit).toBe(true);
+    expect(result.scan.truncated).toBe(true);
+    expect(result.scan.filesMatching).toBe(3);
+  });
+
+  it('reports a complete allow-list scan as not truncated', async () => {
+    const { adapters } = scopedAdapters({
+      files: [{ id: 'a', fileName: 'A.pdf', tags: [] }],
+      chunks: [{ id: 'ch1', fabFileId: 'a', vector: [1, 0], text: 'x' }],
+    });
+
+    const result = await fileScopedSemanticSearch(scopedParams(['a']), adapters as never);
+
+    expect(result.scan.truncated).toBe(false);
+    // The pre-existing flat counters must keep agreeing with the new accounting block.
+    expect(result.totalChunksSearched).toBe(result.scan.chunksScanned);
+    expect(result.filesInScope).toBe(result.scan.filesScoped);
   });
 });
