@@ -23,7 +23,13 @@ export function OptiModeBreadcrumb({ segments, mb = 2, ml = 0 }: OptiModeBreadcr
         const isLast = i === segments.length - 1;
         if (isLast || !seg.onClick) {
           return (
-            <Typography key={seg.label} level="body-sm" fontWeight={isLast ? 'lg' : undefined}>
+            <Typography
+              key={seg.label}
+              level="body-sm"
+              fontWeight={isLast ? 400 : undefined}
+              // Active (last) page is text.primary; any non-active plain crumb is muted tertiary.
+              sx={{ color: isLast ? 'text.primary' : 'text.tertiary' }}
+            >
               {seg.label}
             </Typography>
           );
@@ -35,7 +41,13 @@ export function OptiModeBreadcrumb({ segments, mb = 2, ml = 0 }: OptiModeBreadcr
             level="body-sm"
             color="neutral"
             onClick={seg.onClick}
-            sx={{ cursor: 'pointer' }}
+            // Parent crumbs are muted tertiary; override the plain-variant color var so it wins
+            // over Joy's neutral link color (a plain sx color loses to var(--variant-plainColor)).
+            sx={{
+              cursor: 'pointer',
+              color: 'text.tertiary',
+              '--variant-plainColor': 'var(--joy-palette-text-tertiary)',
+            }}
           >
             {seg.label}
           </Link>
