@@ -213,6 +213,11 @@ export const web = new sst.aws.Nextjs(
       // Wildcard SQS permission (below) already grants access to all queues.
       dlqUrls,
       sourceQueueUrls,
+      // Directly linked (not folded into sourceQueueUrls) so the cron reconciler's
+      // stuck-batch backstop can link the same queue via a plain import from './queues'
+      // without a web.ts <-> cron.ts circular import (web.ts already imports cron.ts
+      // exports). Resource.dataLakeTaxonomyQueue.url resolves in both Lambdas this way.
+      dataLakeTaxonomyQueue,
       ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
       ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
     ],
