@@ -120,6 +120,16 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
     expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
   });
 
+  it("ignores a colon-less prefix, which would reach another lake's namespace", async () => {
+    // `acme` without its colon anchors to `^acme` and would sweep in `acmecorp:` tags - a
+    // different lake's content. usableTagPrefixes applies normalizeTagPrefix's rule, so it drops.
+    await makeFile({ tags: ['acmecorp:secret'] });
+
+    const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme']);
+
+    expect(result).toEqual([]);
+  });
+
   it('counts a padded prefix, which builds no usable regex untrimmed', async () => {
     // Both counters share usableTagPrefixes; the sibling suite pins this too, so a future edit
     // dropping the trim is caught on either side rather than only one.

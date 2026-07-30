@@ -65,6 +65,7 @@ const handler = baseApi().post(
       // invisible to tag-counts and to the Explorer's tag tree.
       const tags = await dataLakeService.reconcileDataLakeFallbackTags(data.tags ?? [], {
         db: { dataLakes: dataLakeRepository },
+        logger: req.logger,
       });
 
       // Reject unsupported/binary types (e.g. .exe) - the chunker can't

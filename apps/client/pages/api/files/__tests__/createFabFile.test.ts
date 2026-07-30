@@ -58,7 +58,7 @@ const req = (body: unknown) =>
     user: { id: 'u1', isAdmin: false },
     ability: {},
     body,
-    logger: { error: vi.fn() },
+    logger: { error: vi.fn(), warn: vi.fn() },
   }) as never;
 
 const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);

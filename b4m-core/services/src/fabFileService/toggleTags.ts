@@ -64,8 +64,9 @@ export const toggleTags = async (
       });
 
       // After the toggles, over the array about to be persisted: toggling a lake's meta-tag ON
-      // stamps the lake's fallback, and toggling it OFF retracts the one we stamped instead of
-      // leaving the file behind as a prefix-only member of a lake it just left.
+      // stamps the lake's fallback, and toggling it OFF retracts the one the server stamped.
+      // Only that one: a file carrying user-authored prefix tags stays a member of the lake after
+      // its meta-tag goes, which is #1130's design - real removal is removeFileFromDataLake.
       f.tags = await reconcileTags(f.tags ?? [], previousTags);
 
       await db.fabFiles.update(f);

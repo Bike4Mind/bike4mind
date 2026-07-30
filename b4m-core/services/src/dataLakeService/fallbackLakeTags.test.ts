@@ -16,8 +16,16 @@ const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
 
 const META = 'datalake:acme';
 
-const makeDb = (byTag: Record<string, IDataLakeDocument | null>) => ({
-  dataLakes: { findByDatalakeTag: vi.fn(async (tag: string) => byTag[tag] ?? null) },
+/**
+ * `find` backs the prefix-overlap check. It defaults to returning only the lakes reachable by
+ * meta-tag, so the common case has nothing to collide with; pass `scopeLakes` to seed a
+ * same-creator lake that is NOT a member of the file, which is how a real collision looks.
+ */
+const makeDb = (byTag: Record<string, IDataLakeDocument | null>, scopeLakes?: IDataLakeDocument[]) => ({
+  dataLakes: {
+    findByDatalakeTag: vi.fn(async (tag: string) => byTag[tag] ?? null),
+    find: vi.fn(async () => scopeLakes ?? (Object.values(byTag).filter(Boolean) as IDataLakeDocument[])),
+  },
 });
 
 const tag = (name: string, strength = 1) => ({ name, strength });
@@ -44,9 +52,61 @@ describe('reconcileDataLakeFallbackTags', () => {
     expect(names(result)).toEqual(['acme:uncategorized', META, 'important']);
   });
 
+  it('stamps nothing for a mixed-case prefix that reaches the reserved namespace', async () => {
+    // isReservedTagPrefix folds no case, and neither does the create-time refinement built on it,
+    // so `DataLake:x:` is storable today. Minting under it would be lowercased into a meta-tag by
+    // the next gated write, resolve to no lake, and lock every further edit to this file out.
+    const db = makeDb({ [META]: lake({ fileTagPrefix: 'DataLake:x:' }) });
+    const result = await reconcileDataLakeFallbackTags([tag(META)], { db });
+    expect(names(result)).toEqual([META]);
+  });
+
+  it('stamps nothing when the lake prefix overlaps another lake in the same scope', async () => {
+    // Post-#1130 a prefix tag on a creator-owned file IS membership of any lake sharing that
+    // prefix - including that lake's permanent delete. Auto-minting one would put this file in
+    // another lake's teardown, so decline instead.
+    const db = makeDb({ [META]: lake() }, [
+      lake(),
+      lake({ id: 'lake2', name: 'Other', slug: 'other', fileTagPrefix: 'acme:', datalakeTag: 'datalake:other' }),
+    ]);
+    const warn = vi.fn();
+    const result = await reconcileDataLakeFallbackTags([tag(META)], { db, logger: { warn } });
+    expect(names(result)).toEqual([META]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('overlaps'));
+  });
+
+  it('stamps nothing when a NESTED prefix overlaps, in either direction', async () => {
+    const db = makeDb({ [META]: lake({ fileTagPrefix: 'acme:' }) }, [
+      lake(),
+      lake({ id: 'lake2', name: 'Nested', slug: 'nested', fileTagPrefix: 'acme:hr:', datalakeTag: 'datalake:nested' }),
+    ]);
+    const result = await reconcileDataLakeFallbackTags([tag(META)], { db });
+    expect(names(result)).toEqual([META]);
+  });
+
+  it('still stamps when the overlap lookup itself fails', async () => {
+    // Best-effort: a broken collision read must not fail the write. Falling back to stamping is
+    // the pre-existing behavior, and the warning is what makes the degraded path visible.
+    const db = makeDb({ [META]: lake() });
+    db.dataLakes.find = vi.fn(async () => {
+      throw new Error('mongo down');
+    }) as unknown as typeof db.dataLakes.find;
+    const warn = vi.fn();
+    const result = await reconcileDataLakeFallbackTags([tag(META)], { db, logger: { warn } });
+    expect(names(result)).toEqual(['acme:uncategorized', META]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not check tag-prefix overlap'), expect.anything());
+  });
+
+  it('says nothing on the healthy path', async () => {
+    const db = makeDb({ [META]: lake() });
+    const warn = vi.fn();
+    await reconcileDataLakeFallbackTags([tag(META)], { db, logger: { warn } });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('stamps nothing for a lake whose prefix sits in the reserved namespace', async () => {
-    // Create-time validation rejects such a prefix, so only a legacy row can reach this. The
-    // stamp would be excluded from the tree by the counters and skipped by removal, and since a
+    // The lowercase form, which create does reject, so only a legacy row reaches it. The stamp
+    // would be excluded from the tree by the counters and skipped by removal, and since a
     // datalake:* tag never satisfies a prefix it would be re-appended on every single write.
     const db = makeDb({ [META]: lake({ fileTagPrefix: 'datalake:' }) });
     const result = await reconcileDataLakeFallbackTags([tag(META)], { db });
@@ -63,15 +123,18 @@ describe('reconcileDataLakeFallbackTags', () => {
   });
 
   it('stamps nested prefixes in a stable order regardless of tag order', async () => {
+    // Overlapping prefixes are refused when the collision query can SEE them; this covers the
+    // ordering logic for the pair it cannot, i.e. lakes in different scopes. `scopeLakes: []`
+    // is what "no collision visible" looks like.
     const lakes = {
       'datalake:outer': lake({ id: 'outer', fileTagPrefix: 'a:', datalakeTag: 'datalake:outer' }),
       'datalake:inner': lake({ id: 'inner', fileTagPrefix: 'a:x:', datalakeTag: 'datalake:inner' }),
     };
     const forward = await reconcileDataLakeFallbackTags([tag('datalake:outer'), tag('datalake:inner')], {
-      db: makeDb(lakes),
+      db: makeDb(lakes, []),
     });
     const reversed = await reconcileDataLakeFallbackTags([tag('datalake:inner'), tag('datalake:outer')], {
-      db: makeDb(lakes),
+      db: makeDb(lakes, []),
     });
     expect(names(forward)).toEqual(names(reversed));
     expect(names(forward)).toContain('a:uncategorized');
@@ -141,11 +204,15 @@ describe('reconcileDataLakeFallbackTags', () => {
   });
 
   it('adds one fallback when two lakes share a prefix', async () => {
-    // Nothing makes fileTagPrefix unique, so one tag can satisfy both lakes.
-    const db = makeDb({
-      [META]: lake(),
-      'datalake:beta': lake({ id: 'lake2', slug: 'beta', datalakeTag: 'datalake:beta' }),
-    });
+    // Cross-scope pair, so the collision query returns nothing and the stamp is not refused. What
+    // is under test here is the dedupe: one prefix tag satisfies both lakes, so only one is added.
+    const db = makeDb(
+      {
+        [META]: lake(),
+        'datalake:beta': lake({ id: 'lake2', slug: 'beta', datalakeTag: 'datalake:beta' }),
+      },
+      []
+    );
     const result = await reconcileDataLakeFallbackTags([tag(META), tag('datalake:beta')], { db });
     expect(names(result)).toEqual(['acme:uncategorized', META, 'datalake:beta']);
   });
@@ -205,10 +272,13 @@ describe('reconcileDataLakeFallbackTags - retraction', () => {
     // 'a:b:uncategorized' does satisfy 'a:', so judging satisfaction before the retraction
     // would skip the addition and then remove the tag it counted on, leaving the file in
     // lake 'a:' with no category at all.
-    const db = makeDb({
-      'datalake:outer': lake({ id: 'outer', fileTagPrefix: 'a:', datalakeTag: 'datalake:outer' }),
-      'datalake:inner': lake({ id: 'inner', fileTagPrefix: 'a:b:', datalakeTag: 'datalake:inner' }),
-    });
+    const db = makeDb(
+      {
+        'datalake:outer': lake({ id: 'outer', fileTagPrefix: 'a:', datalakeTag: 'datalake:outer' }),
+        'datalake:inner': lake({ id: 'inner', fileTagPrefix: 'a:b:', datalakeTag: 'datalake:inner' }),
+      },
+      [] // cross-scope, so the overlap gate does not fire and the ordering is what is tested
+    );
     const result = await reconcileDataLakeFallbackTags([tag('datalake:outer'), tag('a:b:uncategorized')], {
       db,
       previousTags: [tag('datalake:outer'), tag('datalake:inner'), tag('a:b:uncategorized')],

@@ -27,6 +27,7 @@ const handler = baseApi().post(
 
     const applyFallbackTags = dataLakeService.createDataLakeFallbackTagger({
       db: { dataLakes: dataLakeRepository },
+      logger: req.logger,
     });
 
     const result = await fabFilesService.toggleTags(

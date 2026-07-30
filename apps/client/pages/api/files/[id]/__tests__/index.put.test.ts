@@ -70,7 +70,7 @@ const req = (body: unknown) =>
     ability: {},
     query: { id: 'file-1' },
     body,
-    logger: { updateMetadata: vi.fn(), error: vi.fn() },
+    logger: { updateMetadata: vi.fn(), error: vi.fn(), warn: vi.fn() },
   }) as never;
 
 const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);

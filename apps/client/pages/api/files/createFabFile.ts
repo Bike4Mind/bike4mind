@@ -36,6 +36,7 @@ const handler = baseApi()
       // invisible to tag-counts and to the Explorer's tag tree.
       const tags = await dataLakeService.reconcileDataLakeFallbackTags(params.tags ?? [], {
         db: { dataLakes: dataLakeRepository },
+        logger: req.logger,
       });
 
       const result = await withTransaction(async () => {

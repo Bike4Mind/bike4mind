@@ -96,6 +96,7 @@ const handler = baseApi()
               dataLakeService.reconcileDataLakeFallbackTags(tags, {
                 db: { dataLakes: dataLakeRepository },
                 previousTags,
+                logger: req.logger,
               }),
             storage: {
               upload: (filepath, content, option) => {
