@@ -1,7 +1,8 @@
-import { Permission, getDataLakeTags } from '@bike4mind/common';
+import { Permission } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
+import { buildTagCountScope } from '@server/utils/tagCountScope';
 import { fabFilesService } from '@bike4mind/services';
 import qs from 'qs';
 import {
@@ -13,30 +14,27 @@ import {
 } from '@bike4mind/database';
 import { getFilesStorage } from '@server/utils/storage';
 
-const handler = baseApi()
-  .get(
-    asyncHandler<{}, unknown, unknown>(async (req, res) => {
-      if (!req.ability?.can(Permission.read, FabFile)) {
-        throw new ForbiddenError('Unauthorized');
-      }
+const handler = baseApi().get(
+  asyncHandler<{}, unknown, unknown>(async (req, res) => {
+    if (!req.ability?.can(Permission.read, FabFile)) {
+      throw new ForbiddenError('Unauthorized');
+    }
 
-      const parsed = qs.parse(req.query as Record<string, any>);
-      const filters = (parsed.filters || {}) as Record<string, unknown>;
-      const isSharedView = filters.shared === 'true' || filters.shared === true;
-      const isCuratedView = filters.curated === 'true' || filters.curated === true;
+    const parsed = qs.parse(req.query as Record<string, any>);
+    const filters = (parsed.filters || {}) as Record<string, unknown>;
+    const isSharedView = filters.shared === 'true' || filters.shared === true;
+    const isCuratedView = filters.curated === 'true' || filters.curated === true;
 
-      // Include shared/data-lake files in the default view so total count
-      // reflects all files the user can access, not just owned files.
-      if (!isSharedView && !isCuratedView) {
-        if (!parsed.options || typeof parsed.options !== 'object') {
-          parsed.options = {};
-        }
-        (parsed.options as Record<string, unknown>).includeShared = true;
-        (parsed.options as Record<string, unknown>).userGroups = req.user.groups ?? [];
-        (parsed.options as Record<string, unknown>).dataLakeTags = getDataLakeTags(req.user.tags ?? []);
-      }
+    // Include shared/data-lake files in the default view so total count reflects all files the
+    // user can access, not just owned files. The shared and curated views carry their own
+    // ownership predicate, so widening them would be wrong as well as pointless.
+    const scope =
+      !isSharedView && !isCuratedView ? { includeShared: true, ...buildTagCountScope(req.user) } : undefined;
 
-      const result = await fabFilesService.search(req.user.id, parsed, {
+    const result = await fabFilesService.search(
+      req.user.id,
+      parsed,
+      {
         db: {
           fabFiles: fabFileRepository,
           users: userRepository,
@@ -57,11 +55,13 @@ const handler = baseApi()
             }
           },
         },
-      });
+      },
+      scope
+    );
 
-      return res.json(result);
-    })
-  );
+    return res.json(result);
+  })
+);
 
 export const config = {
   api: {

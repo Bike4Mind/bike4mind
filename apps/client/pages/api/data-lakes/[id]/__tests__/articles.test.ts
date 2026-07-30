@@ -92,13 +92,21 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
     const { res } = makeRes();
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
 
-    const [, params] = h.search.mock.calls[0];
+    const [, params, , serverOptions] = h.search.mock.calls[0];
     // search() zod-parses params; a forgeable creatorUserId there would read anyone's files.
+    // Every other scope key is out of the parsed params for the same reason.
     expect(params.options).not.toHaveProperty('lakeMembership');
-    // The superseded per-viewer lake arms are gone, so the two predicates cannot drift.
     expect(params.options).not.toHaveProperty('scopedTagPrefixes');
     expect(params.options).not.toHaveProperty('dataLakeTags');
-    expect(params.options.restrictToDataLake).toBe(true);
+    expect(params.options).not.toHaveProperty('dataLakeTagPrefixes');
+    expect(params.options).not.toHaveProperty('includeShared');
+    expect(params.options).not.toHaveProperty('userGroups');
+    expect(params.options).not.toHaveProperty('restrictToDataLake');
+    // The superseded per-viewer lake arms stay off the server side too, so the two predicates
+    // cannot drift; restrictToDataLake is what keeps this to one lake's files.
+    expect(serverOptions).not.toHaveProperty('scopedTagPrefixes');
+    expect(serverOptions).not.toHaveProperty('dataLakeTags');
+    expect(serverOptions.restrictToDataLake).toBe(true);
   });
 
   it('browses a built-in registry lake by its OPEN prefix arm, not the ownership predicate', async () => {
@@ -110,9 +118,9 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
 
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
 
-    const [, params, , serverOptions] = h.search.mock.calls[0];
-    expect(params.options.dataLakeTagPrefixes).toEqual(['acme:']);
-    expect(params.options.dataLakeTags).toEqual(['datalake:org1:acme-docs']);
+    const [, , , serverOptions] = h.search.mock.calls[0];
+    expect(serverOptions.dataLakeTagPrefixes).toEqual(['acme:']);
+    expect(serverOptions.dataLakeTags).toEqual(['datalake:org1:acme-docs']);
     expect(serverOptions?.lakeMembership).toBeUndefined();
     expect(h.lakeMembershipScope).not.toHaveBeenCalled();
   });
