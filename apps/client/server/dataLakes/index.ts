@@ -225,9 +225,10 @@ export async function queryDataLakeTagCounts(
 ): Promise<{
   tagCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeTagsByPrefix>>;
   uniqueArticleCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeUniqueFilesByPrefix>>;
+  lakeFileCounts: Record<string, number>;
 }> {
   if (lakes.length === 0) {
-    return { tagCounts: [], uniqueArticleCounts: { total: 0, byPrefix: {} } };
+    return { tagCounts: [], uniqueArticleCounts: { total: 0, byPrefix: {} }, lakeFileCounts: {} };
   }
   const dataLakeTags = lakes.map(dl => dl.datalakeTag);
   const { openTagPrefixes, scopedTagPrefixes } = splitTagPrefixes(lakes);
@@ -244,10 +245,25 @@ export async function queryDataLakeTagCounts(
     scopedTagPrefixes,
   };
 
-  const [tagCounts, uniqueArticleCounts] = await Promise.all([
+  // Per-lake sizes come from the membership predicate, not from `<prefix>:` tag matches: a lake
+  // whose files carry only the meta-tag (what the upload wizard produces) counts 0 under the
+  // prefix rule, and a file carrying several taxonomy tags counts several times. The lake docs
+  // are fetched because the predicate's prefix arm has to be anchored to the lake's CREATOR -
+  // the config the browse surfaces receive deliberately carries no owner id. A static registry
+  // lake has no doc and no creator, so it falls back to meta-tag-only matching, which is the
+  // safe direction (see buildDataLakeMembershipFilter).
+  const lakeDocs = await Promise.all(dataLakeTags.map(tag => dataLakeRepository.findByDatalakeTag(tag)));
+  const membershipScopes = lakes.map((lake, i) => ({
+    datalakeTag: lake.datalakeTag,
+    fileTagPrefix: lakeDocs[i]?.fileTagPrefix ?? lake.fileTagPrefix,
+    creatorUserId: lakeDocs[i]?.createdByUserId,
+  }));
+
+  const [tagCounts, uniqueArticleCounts, lakeFileCounts] = await Promise.all([
     fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),
     fabFileRepository.countDataLakeUniqueFilesByPrefix(user.id, allPrefixes, countOptions),
+    fabFileRepository.countDataLakeFilesByMembership(membershipScopes),
   ]);
 
-  return { tagCounts, uniqueArticleCounts };
+  return { tagCounts, uniqueArticleCounts, lakeFileCounts };
 }

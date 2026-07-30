@@ -39,11 +39,16 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
   }),
 }));
 
-// Count fallback for lakes whose list entry has no fileCount: same per-prefix unique
-// counts that drive the in-chat tree.
+// Per-lake counts come from lakeFileCounts (membership), NOT from the per-prefix tag counts.
+// The two disagree here on purpose: `theirs` has taxonomy tags but only 2 member files, and
+// `mine` has member files with NO taxonomy tag at all - the shape that used to display 0.
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
   useGetDataLakeTagCounts: () => ({
-    data: { tagCounts: [], uniqueArticleCounts: { total: 4, byPrefix: { 'lk:': 3, 'th:': 1 } } },
+    data: {
+      tagCounts: [],
+      uniqueArticleCounts: { total: 4, byPrefix: { 'lk:': 0, 'th:': 9 } },
+      lakeFileCounts: { 'datalake:mine': 3, 'datalake:theirs': 2 },
+    },
   }),
 }));
 
@@ -128,9 +133,11 @@ describe('DataLakeManagerPanel - root view', () => {
   it('lists the lakes in the sidebar with file counts and shows the overview on the right', () => {
     renderPanel();
     expect(screen.getByTestId('datalake-manager-lake-mine')).toHaveTextContent('Mine');
-    // fileCount is absent from the list entry, so this 3 proves the tag-counts fallback.
+    // 3, not the 0 its `lk:` prefix count reports: the chip sizes the lake by membership, so
+    // files that carry only the lake meta-tag are still counted.
     expect(screen.getByTestId('datalake-manager-lake-mine')).toHaveTextContent('3');
-    expect(screen.getByTestId('datalake-manager-lake-theirs')).toBeInTheDocument();
+    // 2, not the 9 tag occurrences under `th:` - a multi-tagged file counts once.
+    expect(screen.getByTestId('datalake-manager-lake-theirs')).toHaveTextContent('2');
     // Sidebar accordions: lakes + the lifecycle sections; right pane shows the hint,
     // footer keeps Create.
     expect(screen.getByTestId('datalake-manager-lakes-section')).toBeInTheDocument();

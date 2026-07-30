@@ -92,12 +92,13 @@ export default function DataLakeManagerPanel() {
   const openManager = useDataLakeWizardStore(s => s.openManager);
   const { isFeatureEnabled } = useAdminSettingsCache();
 
-  // The lakes list projection carries no per-lake file counts; use the unique per-prefix
-  // counts behind the in-chat tree so both surfaces show the same numbers.
+  // The lakes list projection carries no per-lake file counts. Size a lake by MEMBERSHIP, not
+  // by its `<prefix>:` tag matches: a lake whose files carry only the meta-tag (what the upload
+  // wizard produces) reported 0 while its own file list showed them, and a multi-tagged file
+  // was counted once per tag.
   const { data: tagCountsData } = useGetDataLakeTagCounts('datalakes');
   const lakeCount = useCallback(
-    (lake: ManagerLake): number | undefined =>
-      tagCountsData?.uniqueArticleCounts?.byPrefix?.[normalizePrefix(lake.fileTagPrefix)],
+    (lake: ManagerLake): number | undefined => tagCountsData?.lakeFileCounts?.[lake.datalakeTag],
     [tagCountsData]
   );
 
@@ -217,7 +218,7 @@ export default function DataLakeManagerPanel() {
 interface ManagerNavProps {
   lakes: ManagerLake[] | undefined;
   lakesLoading: boolean;
-  /** Resolved per-lake file count (list fileCount, else the tag-counts fallback). */
+  /** Per-lake live file count, resolved by lake membership (see lakeCount). */
   lakeCount: (lake: ManagerLake) => number | undefined;
   activeLake: ManagerLake | null;
   /** In-lake tag path, seeded with the lake's prefix segments (see selectLake). */

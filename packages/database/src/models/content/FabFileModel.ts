@@ -554,6 +554,27 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return agg ?? { fileCount: 0, totalSizeBytes: 0 };
   }
 
+  /**
+   * Distinct live file count per lake, keyed by `datalakeTag`. Browse surfaces used to size a
+   * lake from `<prefix>:` tag matches, which reads 0 for a lake whose files carry only the
+   * membership tag - the shape the upload wizard and bulk ingest produce - and over-counts a
+   * file carrying several taxonomy tags. Same predicate and live-file filter as
+   * computeDataLakeStats, so a displayed count and a lake's stored stats cannot disagree.
+   */
+  async countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>> {
+    if (scopes.length === 0) return {};
+    const counts = await Promise.all(
+      scopes.map(scope =>
+        this.fabFileModel.countDocuments({
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+        })
+      )
+    );
+    return Object.fromEntries(scopes.map((scope, i) => [scope.datalakeTag, counts[i]]));
+  }
+
   async archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
     const result = await this.fabFileModel.updateMany(
       { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null },
