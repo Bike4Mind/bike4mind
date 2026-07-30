@@ -34,8 +34,11 @@ describe('useSetDataLakeMode', () => {
     expect(setCurrentSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: 's1', forceKnowledgeRetrieval: false })
     );
+    // Minimal wire payload: ONLY the flipped field. Echoing the whole cached session would
+    // let a stale knowledgeIds overwrite the server's (re-adding removed files + fanning
+    // them out to projects) from a mere UI toggle.
     expect(updateSession).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 's1', forceKnowledgeRetrieval: false }),
+      { id: 's1', forceKnowledgeRetrieval: false },
       expect.objectContaining({ onError: expect.any(Function) })
     );
   });

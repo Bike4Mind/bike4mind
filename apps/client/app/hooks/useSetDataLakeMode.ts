@@ -21,14 +21,20 @@ export default function useSetDataLakeMode() {
   return (next: boolean) => {
     setEnabled(next);
     if (!currentSession) return;
-    const updated = { ...currentSession, forceKnowledgeRetrieval: next };
-    setCurrentSession(updated);
-    updateSession(updated, {
-      onError: () => {
-        setEnabled(!next);
-        setCurrentSession(currentSession);
-        toast.error('Could not update Data Lake mode - please try again.');
-      },
-    });
+    setCurrentSession({ ...currentSession, forceKnowledgeRetrieval: next });
+    // Send ONLY the flipped field. Echoing the whole cached session would make the server
+    // treat a stale knowledgeIds as an authoritative overwrite - re-adding a file another
+    // actor removed and fanning it out to projects - which is far outside what a UI toggle
+    // promises. The update schema is optional-per-field, so a minimal payload is complete.
+    updateSession(
+      { id: currentSession.id, forceKnowledgeRetrieval: next },
+      {
+        onError: () => {
+          setEnabled(!next);
+          setCurrentSession(currentSession);
+          toast.error('Could not update Data Lake mode - please try again.');
+        },
+      }
+    );
   };
 }
