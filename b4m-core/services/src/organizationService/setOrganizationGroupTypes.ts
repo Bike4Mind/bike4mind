@@ -74,11 +74,16 @@ export async function setOrganizationGroupTypes(
     await db.groups.createIfMissing({ name: def.label, description: def.description, type, organizationId });
   }
 
-  // Revoke: soft-delete the instances of removed types, then purge their ids from all members.
+  // Revoke: purge the ids from all members, then soft-delete the instances of removed types.
+  // Members first for the same reason as organizationService/delete.ts: user.groups[] is the
+  // access-bearing artifact (the sharing layer's `groups.$elemMatch.groupId $in user.groups` match
+  // still succeeds against a soft-deleted group's id), so it is the one that must go first. Both
+  // orders are equivalent while this runs in a transaction, but the two paths should not disagree
+  // about which write carries the access.
   const revokedGroupIds = liveGroups.filter(group => removed.includes(group.type)).map(group => group.id);
   if (revokedGroupIds.length > 0) {
-    await db.groups.softDeleteByIds(revokedGroupIds);
     await db.users.removeGroupsFromAllUsers(revokedGroupIds);
+    await db.groups.softDeleteByIds(revokedGroupIds);
   }
 
   await db.organizations.update({ id: organizationId, allowedGroupTypes: requested });

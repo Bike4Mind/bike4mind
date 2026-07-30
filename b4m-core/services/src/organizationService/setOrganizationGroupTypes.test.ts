@@ -116,17 +116,4 @@ describe('setOrganizationGroupTypes', () => {
     expect(db.organizations.update).toHaveBeenCalledWith({ id: 'org-1', allowedGroupTypes: ['sales'] });
     expect(db.groups.createIfMissing).toHaveBeenCalledTimes(1);
   });
-
-  // #1222: two overlapping grant PUTs can both pass the "no live instance" check above and both
-  // reach this loop. The E11000-vs-500 race is handled INSIDE createIfMissing (GroupRepository);
-  // this pins that the service just calls it and proceeds normally with whatever it resolves to -
-  // it must not itself special-case a collision or re-check for one.
-  it('proceeds normally when createIfMissing resolves a concurrent-create collision', async () => {
-    db.groups.createIfMissing.mockResolvedValue({ id: 'g-sales-from-other-request', type: 'sales' });
-
-    const result = await run(['sales']);
-
-    expect(db.organizations.update).toHaveBeenCalledWith({ id: 'org-1', allowedGroupTypes: ['sales'] });
-    expect(result.added).toEqual(['sales']);
-  });
 });

@@ -25,7 +25,17 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-const deleteOrganization = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+// Transaction depth observed at the moment deleteOrganization is invoked. Asserting only that
+// withTransaction was *called* is not enough - the delete could sit before or after an empty
+// wrapper and still satisfy that. Recording the depth pins that the delete runs INSIDE the
+// callback, which is the property #1219 actually needs.
+const txn = vi.hoisted(() => ({ depth: 0, depthAtDelete: -1 }));
+
+const deleteOrganization = vi.hoisted(() =>
+  vi.fn(async () => {
+    txn.depthAtDelete = txn.depth;
+  })
+);
 vi.mock('@bike4mind/services', () => ({ organizationService: { deleteOrganization } }));
 
 const organizationRepository = vi.hoisted(() => ({}));
@@ -35,7 +45,16 @@ const groupRepository = vi.hoisted(() => ({}));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository }));
 
 const updateMany = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const withTransaction = vi.hoisted(() => vi.fn((fn: any) => fn()));
+const withTransaction = vi.hoisted(() =>
+  vi.fn(async (fn: any) => {
+    txn.depth++;
+    try {
+      return await fn();
+    } finally {
+      txn.depth--;
+    }
+  })
+);
 vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   partnerSignupRuleRepository: { updateMany },
@@ -60,6 +79,8 @@ describe('DELETE /api/organizations/[id]', () => {
     invalidatePartnerRuleCache.mockClear();
     withTransaction.mockClear();
     findActiveSubscriptionsByOwner.mockClear().mockResolvedValue([]);
+    txn.depth = 0;
+    txn.depthAtDelete = -1;
   });
 
   const call = () => {
@@ -68,9 +89,13 @@ describe('DELETE /api/organizations/[id]', () => {
     return mockRefs.deleteHandler!(req, res);
   };
 
-  it('wraps the delete in withTransaction', async () => {
+  it('runs deleteOrganization INSIDE the withTransaction callback', async () => {
     await call();
+
     expect(withTransaction).toHaveBeenCalledTimes(1);
+    // Depth 1 at invocation time - moving the delete outside the wrapper (before or after) drops
+    // this to 0, which the bare "was withTransaction called" assertion could not detect.
+    expect(txn.depthAtDelete).toBe(1);
   });
 
   it('passes the group and user adapters through to deleteOrganization', async () => {

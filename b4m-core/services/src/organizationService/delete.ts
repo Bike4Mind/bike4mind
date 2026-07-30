@@ -84,6 +84,7 @@ export async function deleteOrganization(
     await adapters.db.groups.softDeleteByIds(groupIds);
   }
 
-  // Delete the organization
-  await adapters.db.organizations.delete(id);
+  // softDeleteById, not the inherited `delete`: the latter soft-deletes through the raw driver and
+  // would commit immediately regardless of the caller's transaction (see the repository note).
+  await adapters.db.organizations.softDeleteById(id);
 }

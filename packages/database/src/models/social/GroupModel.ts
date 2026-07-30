@@ -77,10 +77,20 @@ export class GroupRepository extends BaseRepository<IGroupDocument> implements I
    * success (org-groups #1222). The caller (setOrganizationGroupTypes) checks "does a live
    * instance exist" and calls this only when it does not - but two overlapping grant PUTs can
    * both pass that check before either writes, so the second `create` collides with the
-   * `group_org_type_live` unique index. E11000 is not a TransientTransactionError (withTransaction
-   * will not retry it) and carries no HTTP status (errorHandler falls through to a 500 that pages
-   * on-call), so the fix lives HERE at the repo boundary rather than teaching the service about
-   * Mongo error codes: catch the collision and hand back the row the other request created.
+   * `group_org_type_live` unique index. E11000 carries no HTTP status (errorHandler falls through
+   * to a 500 that pages on-call), so the fix lives HERE at the repo boundary rather than teaching
+   * the service about Mongo error codes.
+   *
+   * The recovery differs by caller, and the transactional case is the non-obvious one:
+   * - Outside a transaction, the read below returns the winner's row and we hand it back.
+   * - Inside one (the group-types route, the only production caller today), E11000 has ALREADY
+   *   aborted the transaction server-side, so the read cannot run on that session: it throws
+   *   NoSuchTransaction (251) instead. Unlike E11000, 251 IS labeled TransientTransactionError, so
+   *   withTransaction retries the whole callback and the retry's "does a live instance exist"
+   *   precheck sees the committed winner and skips the create. The read never returns a row on
+   *   this path - it converts an unretryable error into a retryable one. Do not "simplify" it to a
+   *   bare rethrow: that reinstates the 500. Covered only by non-transactional tests, since the
+   *   suite's mongodb-memory-server is a standalone (no transactions).
    */
   async createIfMissing(data: Pick<IGroupDocument, 'name' | 'description' | 'type' | 'organizationId'>) {
     try {
