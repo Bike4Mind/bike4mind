@@ -1,3 +1,4 @@
+import { usdToCredits } from './pricing';
 import { VoiceGenerationVendor } from './voiceGeneration';
 
 /**
@@ -59,4 +60,17 @@ export function ttsUsdPer1kChars(vendor: VoiceGenerationVendor, model?: string):
 export function computeTtsUsd(vendor: VoiceGenerationVendor, model: string | undefined, characters: number): number {
   if (!Number.isFinite(characters) || characters <= 0) return 0;
   return (characters / 1000) * ttsUsdPer1kChars(vendor, model);
+}
+
+/**
+ * Estimated internal credit cost for synthesizing `characters` input characters.
+ * Client-safe (pure) for the pre-generation credit hint; the authoritative
+ * charge is deducted server-side from the same rate table.
+ */
+export function estimateTtsCreditCost(
+  vendor: VoiceGenerationVendor,
+  model: string | undefined,
+  characters: number
+): number {
+  return usdToCredits(computeTtsUsd(vendor, model, characters));
 }

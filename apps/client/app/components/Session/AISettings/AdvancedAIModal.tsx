@@ -59,6 +59,7 @@ import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useShallow } from 'zustand/react/shallow';
 import { ResearchConfigPanel } from './ResearchConfigPanel';
 import ToolsSection from './ToolsSection';
+import { AudioGenerationSettings } from './AudioGenerationSettings';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 
 import ModelSelection from '../ModelSelection';
@@ -1151,6 +1152,14 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
             <ReasoningEffortSelector model={model} commonInputStyles={commonInputStyles} mode={mode} />
           )}
         </Grid>
+      </Box>
+
+      {/* Audio generation defaults (TTS + sound effects) for the in-app audio generator */}
+      <Box sx={{ px: 1, mb: 2 }}>
+        <Typography level="title-md" sx={{ mb: 1.5 }}>
+          Audio Generation
+        </Typography>
+        <AudioGenerationSettings />
       </Box>
 
       {/* Image Model Settings, with the Templates panel below */}

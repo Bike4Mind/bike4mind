@@ -13,6 +13,7 @@ export * from './voiceGeneration';
 export * from './voicePricing';
 export * from './videoGeneration';
 export * from './soundGeneration';
+export * from './soundPricing';
 export * from './schemas/sora';
 export * from './schemas';
 export * from './constants/user';
