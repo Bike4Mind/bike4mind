@@ -498,3 +498,37 @@ describe('/api/hearth/channels', () => {
     expect((res.body as { channels: Array<{ id: string }> }).channels[0].id).toBe('ch-1');
   });
 });
+
+/**
+ * Scope declarations for EVERY hearth route, not just presence.
+ *
+ * `requiredScopes` is enforced inside baseApi, which this suite mocks, so no test
+ * here can prove enforcement - what it CAN prove is that each route asks for the
+ * right list, which is the part a refactor silently changes. Before the harness
+ * recorded the config, nothing in the suite asserted any route's scopes at all.
+ */
+describe('hearth route scope declarations', () => {
+  const READ_OR_WRITE = ['hearth:read', 'hearth:write', 'admin:*'];
+
+  it.each([
+    ['channels', () => channelsRouter, READ_OR_WRITE],
+    ['catchup', () => catchupRouter, READ_OR_WRITE],
+    ['presence', () => presenceRouter, READ_OR_WRITE],
+    // events is the asymmetric one and deliberately so: appending is a write, so
+    // a hearth:read key must NOT reach it. Pinning the difference is the point -
+    // widening this list to match its siblings would hand every read-only key the
+    // ability to append to the log.
+    ['events', () => eventsRouter, ['hearth:write', 'admin:*']],
+  ])('%s declares its scope list', (_name, router, expected) => {
+    expect(router()._config?.requiredScopes).toEqual(expected);
+  });
+
+  it('no route omits requiredScopes entirely', () => {
+    // An undefined list is the dangerous default: baseApi would apply no scope
+    // constraint at all, and every assertion above would still read as coverage.
+    for (const router of [channelsRouter, catchupRouter, presenceRouter, eventsRouter]) {
+      expect(router._config?.requiredScopes).toBeDefined();
+      expect(router._config?.requiredScopes?.length).toBeGreaterThan(0);
+    }
+  });
+});

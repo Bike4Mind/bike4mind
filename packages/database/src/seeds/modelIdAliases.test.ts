@@ -19,8 +19,8 @@ const INDEXES: Record<AggregatorName, ReturnType<typeof buildAggregatorKeyIndex>
 };
 
 /**
- * Measured against the checked-in seed on 2026-07-26: models.dev 66/113 (58.4%),
- * litellm 101/113 (89.4%). The thresholds sit ~3 points under, which tolerates an
+ * Measured against the checked-in seed on 2026-07-28: models.dev 73/120 (60.8%),
+ * litellm 105/120 (87.5%). The thresholds sit under those, which tolerates an
  * aggregator retiring a handful of entries while still failing a normalizer
  * regression - dropping any single normalization step costs 10 points or more
  * (the region-prefix strip alone carries 17 Bedrock ids).
@@ -28,8 +28,16 @@ const INDEXES: Record<AggregatorName, ReturnType<typeof buildAggregatorKeyIndex>
  * models.dev is the lower of the two by nature, not by defect: roughly 40% of the
  * seed is retired or legacy (Gemini 1.5, Grok 2/3, Claude 3.x, whisper, sora,
  * transcribe, first-gen Bedrock) and models.dev drops what providers retire,
- * while litellm keeps historical entries. Raise these when the seed is next
- * regenerated, never lower them without saying why here.
+ * while litellm keeps historical entries.
+ *
+ * The litellm rate FELL from 89.4% when the SEVEN Moonshot ids landed (five direct
+ * plus two Bedrock-served). All seven join models.dev; only four join litellm,
+ * because its first-party moonshot list carries k2.5 and k2.6 but not k3 or either
+ * k2.7-code. That is the expected shape for a provider newer than the aggregators
+ * rather than a normalizer defect: those three are priced from the seed, and the
+ * two-agreeing-aggregators rule can only flag them until litellm catches up.
+ * Raise these when the seed is next regenerated, never lower them without saying
+ * why here.
  */
 const MIN_JOIN_RATE: Record<AggregatorName, number> = {
   modelsDev: 0.55,

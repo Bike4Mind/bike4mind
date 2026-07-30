@@ -16,11 +16,11 @@ import {
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { UNCLASSIFIED_SOURCE } from '@bike4mind/common';
+import { CreditHolderType, UNCLASSIFIED_SOURCE, type UsageOwnerType } from '@bike4mind/common';
 import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { formatCredits, formatUsd, numberCell } from '../utils/format';
-import { useOrgUsage } from '../hooks/useOrgUsage';
+import { useOwnerUsage } from '../hooks/useOwnerUsage';
 
 const DAY_RANGES = [30, 60, 90] as const;
 type DayRange = (typeof DAY_RANGES)[number];
@@ -48,25 +48,30 @@ const buildBurnSeries = (overTime: { day: string; creditsCharged: number }[], da
 };
 
 /**
- * Per-organization AI spend: a credits burn chart over the selected window plus
- * member / model / feature / API key / source breakdowns. Scoped to spend billed
- * to the org's credit pool (ownerType=Organization). See /api/admin/org-usage.
+ * One owner's AI spend: a credits burn chart over the selected window plus
+ * model / feature / API key / source breakdowns (and, for organizations, a
+ * by-member cut). Serves personal (User) and Organization owners through one
+ * code path - see GET /api/usage.
  *
- * With `organizationId` the org is fixed and the picker is hidden - this is the
- * org owner/manager surface (their org only). Without it, an admin picks any org.
+ * `ownerType` selects the owner kind. `ownerId` pins the owner; when omitted for
+ * an Organization owner an admin org picker is shown (cross-org admin surface).
+ * A User owner is always pinned to `ownerId` (no picker).
  */
-export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organizationId: fixedOrgId }) => {
+export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: string }> = ({ ownerType, ownerId }) => {
   const theme = useTheme();
+  const isOrg = ownerType === CreditHolderType.Organization;
+  const showOrgPicker = isOrg && !ownerId;
+
   const [selectedOrg, setSelectedOrg] = useState<OrgOption | null>(null);
   const [days, setDays] = useState<DayRange>(30);
 
-  const activeOrgId = fixedOrgId ?? selectedOrg?.id ?? null;
+  const activeOwnerId = ownerId ?? (showOrgPicker ? (selectedOrg?.id ?? null) : null);
 
   // Debounce so typing a name fires one request per pause, not one per keystroke.
   const { debouncedValue: orgSearch, setValue: setOrgSearch } = useDebounceValue('', 500);
 
   // Team orgs only: personal orgs are single-user and not the point of an org dashboard.
-  // Skipped entirely in fixed-org mode - the picker is hidden and non-admins can't list orgs.
+  // Skipped entirely unless the admin org picker is shown.
   const { data: orgResult, isLoading: orgsLoading } = useSearchOrganizations(
     {
       page: 1,
@@ -75,7 +80,7 @@ export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organ
       filters: { personal: false },
       orderBy: { by: 'name', direction: 'asc' },
     },
-    { enabled: !fixedOrgId }
+    { enabled: showOrgPicker }
   );
 
   const orgOptions: OrgOption[] = useMemo(
@@ -83,13 +88,13 @@ export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organ
     [orgResult]
   );
 
-  const { data, isLoading, isFetching, error, refetch } = useOrgUsage(activeOrgId, days);
+  const { data, isLoading, isFetching, error, refetch } = useOwnerUsage(ownerType, activeOwnerId, days);
 
   const hasUsage = (data?.totals.requests ?? 0) > 0;
   const chartData = useMemo(() => buildBurnSeries(data?.overTime ?? [], days), [data, days]);
 
   return (
-    <Box sx={{ p: { xs: 1, sm: 2 } }} data-testid="org-usage-dashboard">
+    <Box sx={{ p: { xs: 1, sm: 2 } }} data-testid="usage-dashboard">
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         justifyContent="space-between"
@@ -97,9 +102,7 @@ export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organ
         spacing={1}
         sx={{ mb: 1 }}
       >
-        {fixedOrgId ? (
-          <Box />
-        ) : (
+        {showOrgPicker ? (
           <Autocomplete
             placeholder="Select an organization"
             options={orgOptions}
@@ -110,15 +113,17 @@ export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organ
             onInputChange={(_, value) => setOrgSearch(value)}
             loading={orgsLoading}
             sx={{ minWidth: 260 }}
-            data-testid="org-usage-org-select"
+            data-testid="usage-org-select"
           />
+        ) : (
+          <Box />
         )}
         <Stack direction="row" spacing={1} alignItems="center">
           <ToggleButtonGroup
             size="sm"
             value={String(days)}
             onChange={(_, value) => value && setDays(Number(value) as DayRange)}
-            data-testid="org-usage-range-toggle"
+            data-testid="usage-range-toggle"
           >
             {DAY_RANGES.map(r => (
               <Button key={r} value={String(r)}>
@@ -129,8 +134,8 @@ export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organ
           <IconButton
             size="sm"
             onClick={() => refetch()}
-            disabled={!activeOrgId || isFetching}
-            data-testid="org-usage-refresh-btn"
+            disabled={!activeOwnerId || isFetching}
+            data-testid="usage-refresh-btn"
           >
             <RefreshIcon />
           </IconButton>
@@ -138,21 +143,22 @@ export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organ
       </Stack>
 
       <Alert color="neutral" size="sm" sx={{ mb: 2 }}>
-        Spend billed to this organization&apos;s credit pool (owner-scoped). Members are the users who ran each call;
-        feature is the product surface (chat, agent, operations, embedding). Data comes from usage events recorded since
-        deploy.
+        {isOrg
+          ? "Spend billed to this organization's credit pool (owner-scoped). Members are the users who ran each call; feature is the product surface (chat, agent, operations, embedding). Data comes from usage events recorded since deploy."
+          : "Spend billed to your personal credit pool (owner-scoped). Feature is the product surface (chat, agent, operations, embedding); keys billed to an organization appear in that org's dashboard instead. Data comes from usage events recorded since deploy."}
       </Alert>
 
       {error && (
-        <Alert color="danger" sx={{ mb: 2 }} data-testid="org-usage-error">
-          {(error as Error)?.message || 'Failed to load organization usage'}
+        <Alert color="danger" sx={{ mb: 2 }} data-testid="usage-error">
+          {(error as Error)?.message || 'Failed to load usage'}
         </Alert>
       )}
 
-      {!activeOrgId ? (
+      {!activeOwnerId ? (
+        // Only reachable in admin org-picker mode; a pinned owner always has an id.
         <Box sx={{ p: 4, textAlign: 'center' }}>
           <Typography level="body-sm" color="neutral">
-            Select an organization to see its spend.
+            {showOrgPicker ? 'Select an organization to see its spend.' : 'No usage to show.'}
           </Typography>
         </Box>
       ) : isLoading ? (
@@ -162,13 +168,13 @@ export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organ
       ) : (
         <Stack spacing={3}>
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-            <Chip color="primary" variant="soft" data-testid="org-usage-total-credits">
+            <Chip color="primary" variant="soft" data-testid="usage-total-credits">
               {formatCredits(data?.totals.creditsCharged ?? 0)} credits
             </Chip>
-            <Chip color="neutral" variant="soft" data-testid="org-usage-total-cogs">
+            <Chip color="neutral" variant="soft" data-testid="usage-total-cogs">
               {formatUsd(data?.totals.cogsUsd ?? 0)} COGS
             </Chip>
-            <Chip color="neutral" variant="soft" data-testid="org-usage-total-requests">
+            <Chip color="neutral" variant="soft" data-testid="usage-total-requests">
               {(data?.totals.requests ?? 0).toLocaleString()} requests
             </Chip>
           </Stack>
@@ -208,23 +214,25 @@ export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organ
             )}
           </Box>
 
-          <BreakdownTable
-            title="By member"
-            testid="org-usage-member-table"
-            keyLabel="Member"
-            rows={(data?.byMember ?? []).map(r => ({
-              key: r.userId,
-              label: r.userName ?? 'Unknown user',
-              title: r.userId,
-              requests: r.requests,
-              cogsUsd: r.cogsUsd,
-              creditsCharged: r.creditsCharged,
-            }))}
-          />
+          {isOrg && (
+            <BreakdownTable
+              title="By member"
+              testid="usage-member-table"
+              keyLabel="Member"
+              rows={(data?.byMember ?? []).map(r => ({
+                key: r.userId,
+                label: r.userName ?? 'Unknown user',
+                title: r.userId,
+                requests: r.requests,
+                cogsUsd: r.cogsUsd,
+                creditsCharged: r.creditsCharged,
+              }))}
+            />
+          )}
 
           <BreakdownTable
             title="By model"
-            testid="org-usage-model-table"
+            testid="usage-model-table"
             keyLabel="Model"
             rows={(data?.byModel ?? []).map(r => ({
               key: `${r.provider}-${r.model}`,
@@ -237,7 +245,7 @@ export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organ
 
           <BreakdownTable
             title="By feature"
-            testid="org-usage-feature-table"
+            testid="usage-feature-table"
             keyLabel="Feature"
             rows={(data?.byFeature ?? []).map(r => ({
               key: r.feature,
@@ -253,10 +261,12 @@ export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organ
               By API key
             </Typography>
             <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
-              API-token spend billed to this org (from the ledger; no COGS on API-key rows).
+              {isOrg
+                ? 'API-token spend billed to this org (from the ledger; no COGS on API-key rows).'
+                : 'API-token spend billed to you (from the ledger; no COGS on API-key rows).'}
             </Typography>
             <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
-              <Table stickyHeader hoverRow size="sm" data-testid="org-usage-apikey-table">
+              <Table stickyHeader hoverRow size="sm" data-testid="usage-apikey-table">
                 <thead>
                   <tr>
                     <th>API key</th>
@@ -295,11 +305,12 @@ export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organ
               By source
             </Typography>
             <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
-              Where this org&apos;s spend originated (from the ledger; credits only, no COGS). &quot;Unclassified&quot;
-              is usage with no source recorded on the ledger row.
+              {isOrg
+                ? 'Where this org\'s spend originated (from the ledger; credits only, no COGS). "Unclassified" is usage with no source recorded on the ledger row.'
+                : 'Where your spend originated (from the ledger; credits only, no COGS). "Unclassified" is usage with no source recorded on the ledger row.'}
             </Typography>
             <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
-              <Table stickyHeader hoverRow size="sm" data-testid="org-usage-source-table">
+              <Table stickyHeader hoverRow size="sm" data-testid="usage-source-table">
                 <thead>
                   <tr>
                     <th>Source</th>

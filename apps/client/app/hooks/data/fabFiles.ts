@@ -20,7 +20,7 @@ import {
 import { getContentFromFabfile as getContentFromFabfileInString } from '@client/app/utils/fabFileUtils';
 import { isOptimisticId } from '@client/app/utils/llm';
 import { getErrorMessage } from '@client/app/utils/error';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import { ActualFileObject } from 'filepond';
 import { toast } from 'sonner';
@@ -141,6 +141,10 @@ export function useCreateFabFileWithUpload(options?: {
       });
 
       queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
+      // A created file can carry tags, and per-tag counts are derived from the files holding each
+      // tag. This hook has no callers today; the invalidation is here so wiring it up later cannot
+      // silently reintroduce the stale-count bug the other write paths were fixed for.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       options?.onSuccess?.(newFabFile);
       return newFabFile;
     } catch (err) {
@@ -558,6 +562,11 @@ export function usePaginatedSearchFabFiles(parameters?: ISearchFabFilesParams & 
     },
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5, // Cache results for 5 minutes
+    // Search text and page number are part of the query key, so without this every
+    // keystroke or page change would drop `data` to undefined and unmount every row.
+    // That flickers the list and destroys per-row local state mid-interaction (an
+    // in-progress inline rename loses its edit mode - see Browser/Item.tsx ToggleRename).
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -578,6 +587,9 @@ export function useUpdateFabFile(callback?: { onSuccess?: () => void }) {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
       // Invalidate and force refetch system prompt files (they have long staleTime)
       queryClient.invalidateQueries({ queryKey: ['system-prompt-files'], exact: false, refetchType: 'all' });
+      // This route replaces the whole tags array, so any tag surface showing a per-tag file count
+      // is stale afterwards. The bare prefix also covers ['file-tags','counts'].
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       callback?.onSuccess?.();
     },
   });

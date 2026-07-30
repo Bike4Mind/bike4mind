@@ -65,6 +65,10 @@ const handler = baseApi().get(async (req, res) => {
         description: 1,
         visibility: 1,
         commentPolicy: 1,
+        // Needed by the share dialog to seed its "List in search engines" switch. Without
+        // it the control renders OFF for an artifact that is genuinely listed, and the
+        // owner has no way to turn it off from that dialog.
+        discoverable: 1,
         source: 1,
         size: 1,
         publishedAt: 1,

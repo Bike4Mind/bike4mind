@@ -177,12 +177,20 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
   it('clamps an out-of-range or malformed tier into range, never wider than the max', async () => {
     const TIER_2 = ['activity', 'hook_event_name', 'session_id', 'slug', 'workspace'];
     const TIER_0 = ['hook_event_name', 'session_id', 'slug'];
-    // Above the max clamps to the max; below zero clamps to the MINIMUM (the safe
-    // direction); unparseable falls back to the documented default.
+    // Above the max clamps to the max; below zero clamps to the minimum;
+    // unparseable resolves to the MINIMUM, because a broken privacy setting must
+    // fail closed. Only genuinely unset gets the default (asserted separately).
     const cases: Array<[string, string[]]> = [
       ['99', TIER_2],
       ['-5', TIER_0],
-      ['banana', TIER_2],
+      // Unparseable means MINIMUM, not default. This case previously asserted
+      // TIER_2 and so pinned the fail-open in place: `none`, `off`, `min`,
+      // `zero`, `"0"`, and an unexpanded `$LEVEL` all land here, and every one
+      // of them is somebody reaching for less disclosure.
+      ['banana', TIER_0],
+      ['none', TIER_0],
+      ['off', TIER_0],
+      ['$UNEXPANDED', TIER_0],
     ];
 
     for (const [raw, keys] of cases) {

@@ -79,7 +79,8 @@ export function renderPassphraseShell(): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
 <title>Passphrase required</title>
 <style>
   body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;

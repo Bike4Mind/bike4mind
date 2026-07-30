@@ -6,11 +6,10 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import CloseIcon from '@mui/icons-material/Close';
 import AddIcon from '@mui/icons-material/Add';
 import { useTheme } from '@mui/joy/styles';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import type { FolderTreeNode } from '@client/app/utils/folderTreeParser';
-import { formatBytes, getFileTypeBreakdown, countExcludedFiles } from '@client/app/utils/folderTreeParser';
-import { toast } from 'sonner';
+import { formatBytes, getFileTypeBreakdown } from '@client/app/utils/folderTreeParser';
 
 // Folder Tree Node Component
 
@@ -116,17 +115,6 @@ export default function PreviewStep() {
   const toggleFolderExcl = useDataLakeWizardStore(s => s.toggleFolderExclusion);
   const setExcludedPatterns = useDataLakeWizardStore(s => s.setExcludedPatterns);
   const [newPattern, setNewPattern] = useState('');
-
-  // Show toast on mount about auto-excluded files
-  useEffect(() => {
-    if (folderTree) {
-      const excludedCount = countExcludedFiles(folderTree);
-      if (excludedCount > 0) {
-        toast.info(`Auto-excluded ${excludedCount} junk file${excludedCount !== 1 ? 's' : ''}`);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only on mount
 
   const includedFiles = useMemo(() => allFiles.filter(f => !f.excluded), [allFiles]);
   const breakdown = useMemo(() => getFileTypeBreakdown(allFiles), [allFiles]);

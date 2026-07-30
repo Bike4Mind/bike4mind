@@ -1,6 +1,4 @@
-import { getAvailableModels } from '@bike4mind/llm-adapters';
-import type { ApiKeyTable } from '@bike4mind/llm-adapters';
-import { ModelBackend } from '@bike4mind/common';
+import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
@@ -23,19 +21,10 @@ async function buildModelsResponse(userId: string | null) {
   const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
   const coreKeys = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
 
-  // Key the table by ModelBackend, which is what the shared listing gate reads.
-  // `imageGen` is the getEffectiveLLMApiKeys spelling of the same value and has
-  // no backend of that name, so leaving it un-normalized drops every local image
-  // model on the floor.
-  const apiKeys: ApiKeyTable = {
-    [ModelBackend.OpenAI]: coreKeys.openai || undefined,
-    [ModelBackend.Anthropic]: coreKeys.anthropic || undefined,
-    [ModelBackend.Gemini]: coreKeys.gemini || undefined,
-    [ModelBackend.BFL]: coreKeys.bfl || undefined,
-    [ModelBackend.Ollama]: coreKeys.ollama || undefined,
-    [ModelBackend.XAI]: coreKeys.xai || undefined,
-    [ModelBackend.LocalImage]: coreKeys.imageGen || undefined,
-  };
+  // Keyed by ModelBackend, which is what the shared listing gate reads. Built by
+  // the shared helper rather than a literal here: this route is the picker, so a
+  // provider missing from the table is a provider no user can select.
+  const apiKeys = buildApiKeyTable(coreKeys);
 
   const models = await getAvailableModels(apiKeys, {
     perBackendTimeoutMs: BACKEND_TIMEOUT_MS,
