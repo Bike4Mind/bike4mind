@@ -133,6 +133,7 @@ import {
   mapMimeTypeToArtifactType,
   ARTIFACT_EMISSION_PROMPT,
   HELP_CENTER_PROMPT,
+  ELISION_WARNING,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 
@@ -1893,103 +1894,103 @@ export class ChatCompletionProcess {
       // Extracted so the overflow-guard safety net below can rebuild with a trimmed
       // history without duplicating this (long, order-sensitive) system/context block.
       const contextAndSystemMessages: IMessage[] = [
-          dateTimeContext, // Always provide current date/time awareness
-          ...extraContextMessages, // Add extra context messages from external sources at the top
-          // Artifact emission guidance. Without this, correct <artifact> usage
-          // is left to the model's defaults and large HTML/code can leak into the chat
-          // body as raw markup. Gated on the same EnableArtifacts flag as extraction.
-          ...(getSettingsValue('EnableArtifacts', defaultAdminSettings)
-            ? [
-                {
-                  role: 'system' as const,
-                  // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings);
-                  // falls back to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared,
-                  // so a blank value can never strip artifact guidance from completions.
-                  content: getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
-                },
-              ]
-            : []),
-          // Help-center awareness. Makes the model aware of the in-app
-          // Help Center so a user who types a how-to question ("how do I add to my data lake?")
-          // gets pointed to it instead of an ungrounded guess. Admin-editable via the
-          // `HelpCenterPrompt` setting; a blank value falls back to the built-in default so the
-          // nudge can never be silently stripped. Skipped for local models (lean prompt).
-          ...(isLocalModel
-            ? []
-            : [
-                {
-                  role: 'system' as const,
-                  content: getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT),
-                },
-              ]),
-          // Inject view registry summary when navigate_view tool is enabled
-          ...(enabledTools.includes('navigate_view')
-            ? [
-                {
-                  role: 'system' as const,
-                  content: (() => {
-                    // Extract current path from extraContextMessages for context-aware prompting
-                    const viewCtx = extraContextMessages.find(
-                      m => typeof m.content === 'string' && m.content.includes('[Current View Context]')
-                    );
-                    const ctxStr = typeof viewCtx?.content === 'string' ? viewCtx.content : '';
-                    const currentPath = ctxStr.match(/Path:\s*(\S+)/)?.[1] || '';
-                    let summary = getViewSummaryForLLM({ isAdmin: this.user?.isAdmin });
-                    // Add path-specific emphasis
-                    if (currentPath.startsWith('/admin')) {
-                      summary +=
-                        '\n\nThe user is currently on the Admin page. When they ask about any admin feature, you MUST call navigate_view with the matching admin.* tab.';
-                    }
-                    return summary;
-                  })(),
-                },
-              ]
-            : []),
-          ...(toolPromptMessage ? [toolPromptMessage] : []), // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
-          ...(featureContextMessages['agentDetection'] ?? []), // Add agent system prompts
-          ...(featureContextMessages['questMaster'] ?? []),
-          ...(featureContextMessages['organizationPrompt'] ?? []), // Add team-wide system prompt
-          ...(featureContextMessages['dataLakePrompt'] ?? []), // Per-lake system prompts (defer to the org block above)
-          ...(featureContextMessages['sessionPrompt'] ?? []), // Per-session system prompt (product surfaces)
-          ...(featureContextMessages['knowledgeRetrieval'] ?? []), // Forced data-lake retrieval (grounding + citations)
-          // Add LLM-optimized context summary if available (covers messages before verbatim window)
-          ...(session.contextSummary
-            ? [
-                {
-                  role: 'system' as const,
-                  content: `[Context from earlier in this conversation]\n${session.contextSummary}`,
-                },
-              ]
-            : []),
-          ...(featureContextMessages['mementos'] ?? []),
-          ...(featureContextMessages['project'] ?? []),
-          // Recently generated images - gives the model a handle to edit a prior
-          // generated image ("make it cartoonish"). Generated images persist as
-          // bare storage keys in quest.images with no fabFile record, so without
-          // this note the model can't reference them and either declines or (worse)
-          // claims success without calling a tool. Gated on edit_image being
-          // available (paired with image_generation).
-          ...(enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
-            ? [
-                {
-                  role: 'system' as const,
-                  content: [
-                    '# Recently generated images',
-                    '',
-                    'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
-                    '',
-                    ...cacheInfo.recentGeneratedImages!.map(
-                      img => `- ${img.key}${img.prompt ? ` — from: "${img.prompt}"` : ''}`
-                    ),
-                    '',
-                    'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
-                  ].join('\n'),
-                },
-              ]
-            : []),
-          ...urlMessages,
-          ...fabMessages,
-        ];
+        dateTimeContext, // Always provide current date/time awareness
+        ...extraContextMessages, // Add extra context messages from external sources at the top
+        // Artifact emission guidance. Without this, correct <artifact> usage
+        // is left to the model's defaults and large HTML/code can leak into the chat
+        // body as raw markup. Gated on the same EnableArtifacts flag as extraction.
+        ...(getSettingsValue('EnableArtifacts', defaultAdminSettings)
+          ? [
+              {
+                role: 'system' as const,
+                // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings);
+                // falls back to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared,
+                // so a blank value can never strip artifact guidance from completions.
+                content: getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
+              },
+            ]
+          : []),
+        // Help-center awareness. Makes the model aware of the in-app
+        // Help Center so a user who types a how-to question ("how do I add to my data lake?")
+        // gets pointed to it instead of an ungrounded guess. Admin-editable via the
+        // `HelpCenterPrompt` setting; a blank value falls back to the built-in default so the
+        // nudge can never be silently stripped. Skipped for local models (lean prompt).
+        ...(isLocalModel
+          ? []
+          : [
+              {
+                role: 'system' as const,
+                content: getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT),
+              },
+            ]),
+        // Inject view registry summary when navigate_view tool is enabled
+        ...(enabledTools.includes('navigate_view')
+          ? [
+              {
+                role: 'system' as const,
+                content: (() => {
+                  // Extract current path from extraContextMessages for context-aware prompting
+                  const viewCtx = extraContextMessages.find(
+                    m => typeof m.content === 'string' && m.content.includes('[Current View Context]')
+                  );
+                  const ctxStr = typeof viewCtx?.content === 'string' ? viewCtx.content : '';
+                  const currentPath = ctxStr.match(/Path:\s*(\S+)/)?.[1] || '';
+                  let summary = getViewSummaryForLLM({ isAdmin: this.user?.isAdmin });
+                  // Add path-specific emphasis
+                  if (currentPath.startsWith('/admin')) {
+                    summary +=
+                      '\n\nThe user is currently on the Admin page. When they ask about any admin feature, you MUST call navigate_view with the matching admin.* tab.';
+                  }
+                  return summary;
+                })(),
+              },
+            ]
+          : []),
+        ...(toolPromptMessage ? [toolPromptMessage] : []), // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
+        ...(featureContextMessages['agentDetection'] ?? []), // Add agent system prompts
+        ...(featureContextMessages['questMaster'] ?? []),
+        ...(featureContextMessages['organizationPrompt'] ?? []), // Add team-wide system prompt
+        ...(featureContextMessages['dataLakePrompt'] ?? []), // Per-lake system prompts (defer to the org block above)
+        ...(featureContextMessages['sessionPrompt'] ?? []), // Per-session system prompt (product surfaces)
+        ...(featureContextMessages['knowledgeRetrieval'] ?? []), // Forced data-lake retrieval (grounding + citations)
+        // Add LLM-optimized context summary if available (covers messages before verbatim window)
+        ...(session.contextSummary
+          ? [
+              {
+                role: 'system' as const,
+                content: `[Context from earlier in this conversation]\n${session.contextSummary}`,
+              },
+            ]
+          : []),
+        ...(featureContextMessages['mementos'] ?? []),
+        ...(featureContextMessages['project'] ?? []),
+        // Recently generated images - gives the model a handle to edit a prior
+        // generated image ("make it cartoonish"). Generated images persist as
+        // bare storage keys in quest.images with no fabFile record, so without
+        // this note the model can't reference them and either declines or (worse)
+        // claims success without calling a tool. Gated on edit_image being
+        // available (paired with image_generation).
+        ...(enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
+          ? [
+              {
+                role: 'system' as const,
+                content: [
+                  '# Recently generated images',
+                  '',
+                  'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
+                  '',
+                  ...cacheInfo.recentGeneratedImages!.map(
+                    img => `- ${img.key}${img.prompt ? ` — from: "${img.prompt}"` : ''}`
+                  ),
+                  '',
+                  'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
+                ].join('\n'),
+              },
+            ]
+          : []),
+        ...urlMessages,
+        ...fabMessages,
+      ];
       const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
       let messages = await buildAndSortMessages(
         previousMessages,
@@ -3294,6 +3295,12 @@ export class ChatCompletionProcess {
           // Elision hits accumulate across every reply/artifact, then get stamped on promptMeta
           // once below. Pre-formatted at push time so no type from the detector needs importing
           // into this module's static graph (@bike4mind/utils is loaded dynamically here).
+          //
+          // KNOWN SCOPE MISMATCH, accepted rather than fixed: the verdict is QUEST-level while the
+          // client renders ONE reply, so on a multi-reply quest a verdict earned by a sibling reply
+          // banners the rendered one. Narrowing it needs per-reply metadata, which `promptMeta` has no
+          // shape for, and the failure is a slightly over-eager advisory banner on a rare shape - not
+          // worth a storage change on this path. If per-reply metadata ever lands, scope this with it.
           const elisionHits: Array<{ confidence: 'high' | 'low'; signals: string[] }> = [];
 
           quest.replies = quest.replies?.map(reply => {
@@ -3415,16 +3422,25 @@ export class ChatCompletionProcess {
             if (stamp && quest.promptMeta) {
               quest.promptMeta.suspectedElision = stamp.suspectedElision;
               quest.promptMeta.warnings = stamp.warnings;
-              // DATA CLASSIFICATION: `details[0]` carries up to ~280 chars of model-authored artifact
-              // text (a capped title plus a matched comment). Every other log line in this file emits
-              // lengths and ids rather than reply content, so this one deliberately crosses that line -
-              // without the matched text the entry cannot be acted on, since the whole point is which
-              // phrase tripped the detector. The content is already persisted on the quest in Mongo; the
-              // only change is that a snippet also lands in the log tier, which has its own retention
-              // and access rules. Keep it capped, and do not extend this to the full artifact body.
+              // DATA CLASSIFICATION: no model-authored artifact text in this line, deliberately. It
+              // once carried `details[0]` (~280 chars: a capped title plus the matched comment) on the
+              // grounds that the phrase is what makes the entry actionable - but the phrase is already
+              // persisted on the quest, so quoting it here bought one saved lookup in exchange for
+              // putting user content in a tier with its own retention and access rules. Every other
+              // log line in this file emits ids and lengths; this one now matches. Triage reads
+              // `promptMeta.suspectedElision.details` on the quest, which has the FULL array rather
+              // than just the first entry. Do not reintroduce reply content here.
               logger.warn(
-                `[Elision] Suspected abbreviated artifact (model=${currentModel.id}, confidence=${stamp.suspectedElision.confidence}, signals=${stamp.suspectedElision.signalCount}): ${stamp.suspectedElision.details[0]}`
+                `[Elision] Suspected abbreviated artifact (quest=${quest.id}, model=${currentModel.id}, confidence=${stamp.suspectedElision.confidence}, signals=${stamp.suspectedElision.signalCount}); phrases on promptMeta.suspectedElision.details`
               );
+            } else if (quest.promptMeta?.suspectedElision) {
+              // Zero hits this pass, so any verdict present came from an earlier one - clear it rather
+              // than let it stand. `buildElisionStamp` returns null on zero hits and therefore cannot
+              // express "no longer elided" on its own. Unreachable as a bug today because the retry
+              // path replaces `promptMeta` wholesale, but an in-place re-completion would otherwise
+              // inherit a banner for content that no longer has any stub markers.
+              quest.promptMeta.suspectedElision = undefined;
+              quest.promptMeta.warnings = (quest.promptMeta.warnings ?? []).filter(w => w !== ELISION_WARNING);
             }
           } catch (elisionError) {
             logger.warn('[Elision] Failed to stamp the elision verdict; reply left intact', elisionError);
@@ -4163,7 +4179,16 @@ export class ChatCompletionProcess {
         fireAndForgetFeatures.forEach(feature => {
           this.features
             .get(feature)
-            ?.onComplete({ quest, session, messages, questMaster, model, historyCount, oldestIncludedQuestId, verbatimExcludedCount })
+            ?.onComplete({
+              quest,
+              session,
+              messages,
+              questMaster,
+              model,
+              historyCount,
+              oldestIncludedQuestId,
+              verbatimExcludedCount,
+            })
             ?.catch(err => logger.error(`Error in fire-and-forget ${feature} onComplete:`, err));
         });
 
@@ -4180,7 +4205,16 @@ export class ChatCompletionProcess {
           .map(feature =>
             this.features
               .get(feature)
-              ?.onComplete({ quest, session, messages, questMaster, model, historyCount, oldestIncludedQuestId, verbatimExcludedCount })
+              ?.onComplete({
+                quest,
+                session,
+                messages,
+                questMaster,
+                model,
+                historyCount,
+                oldestIncludedQuestId,
+                verbatimExcludedCount,
+              })
           )
           .filter(p => p);
 
