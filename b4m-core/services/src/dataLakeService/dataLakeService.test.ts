@@ -16,7 +16,8 @@ import { removeFileFromDataLake } from './removeFileFromDataLake';
 import { setLakeVisibility } from './setLakeVisibility';
 import { updateDataLake } from './updateDataLake';
 import { reconcileStuckBatches, DEFAULT_STUCK_BATCH_TIMEOUT_MS } from './reconcileStuckBatches';
-import { listDataLakes } from './listDataLakes';
+import { listDataLakes, listAllDataLakes, listArchivedDataLakes, listDeletedDataLakes } from './listDataLakes';
+import { redactLakeForActor } from './redactLakeForActor';
 import { browsePublicDataLakes } from './browsePublicDataLakes';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
@@ -271,6 +272,24 @@ describe('canManageLake — the single write/manage rule (creator or admin)', ()
   });
 });
 
+describe('canManageLake - fails closed on a blank identity', () => {
+  it('denies an actor with no userId on an owner-less lake, rather than matching blank to blank', () => {
+    // The synthetic fallback document carries createdByUserId: ''. A bare === would have granted
+    // manage (and, since this predicate now gates prompt disclosure, the prompt with it).
+    expect(canManageLake(lake({ createdByUserId: '' }), { userId: '', isAdmin: false })).toBe(false);
+    expect(
+      canManageLake({ createdByUserId: undefined } as unknown as IDataLakeDocument, {
+        userId: undefined as unknown as string,
+        isAdmin: false,
+      })
+    ).toBe(false);
+  });
+
+  it('still grants an admin on an owner-less lake', () => {
+    expect(canManageLake(lake({ createdByUserId: '' }), { userId: '', isAdmin: true })).toBe(true);
+  });
+});
+
 describe('listDataLakes - per-lake canManage flag for the UI', () => {
   it("marks the caller's own lakes manageable and strangers' (public) lakes read-only", async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
@@ -302,6 +321,153 @@ describe('listDataLakes - per-lake canManage flag for the UI', () => {
 
     expect(fallback).toBeDefined();
     expect(fallback?.canManage).toBe(false);
+  });
+});
+
+// systemPrompt is EDITOR-ONLY: it steers every answer drawn from the lake, but only the lake's
+// creator or an admin may read the wording. The list endpoint is where the editor UI gets the
+// value to seed its form, and it is also the endpoint that surfaces strangers' public lakes.
+describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () => {
+  const withPrompt = (overrides: Partial<IDataLakeDocument>) =>
+    lake({ systemPrompt: 'Always cite the source file.', ...overrides });
+
+  it("returns the prompt for the caller's own lake (seeds the Settings editor)", async () => {
+    const mine = withPrompt({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.systemPrompt).toBe('Always cite the source file.');
+  });
+
+  it("WITHHOLDS the prompt from a stranger reading someone else's PUBLIC lake", async () => {
+    const theirs = withPrompt({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
+    const entry = result.find(l => l.id === 'theirs');
+
+    expect(entry?.canManage).toBe(false);
+    expect(entry?.systemPrompt).toBeUndefined();
+    // Absent, not blanked: the client must not be able to tell "unset" from "withheld".
+    expect(entry && 'systemPrompt' in entry).toBe(false);
+  });
+
+  it('WITHHOLDS the prompt from a non-owner ORG member (read access is not manage access)', async () => {
+    const theirs = withPrompt({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'member', organizationId: 'orgA' }), { db });
+
+    expect(result.find(l => l.id === 'org')?.systemPrompt).toBeUndefined();
+  });
+
+  it("returns the prompt to an admin on another user's lake (admin is an editor)", async () => {
+    const theirs = withPrompt({ id: 'theirs', slug: 'theirs', createdByUserId: 'other' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+
+    expect(result.find(l => l.id === 'theirs')?.systemPrompt).toBe('Always cite the source file.');
+  });
+
+  it('omits a whitespace-only prompt so the client never distinguishes blank from unset', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', systemPrompt: '   \n ' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.systemPrompt).toBeUndefined();
+  });
+});
+
+describe('listAllDataLakes - the admin list still gates the prompt on canManage', () => {
+  it('returns the prompt on every DB lake, since an admin manages them all', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', systemPrompt: 'Cite sources.' });
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([theirs]) } };
+
+    const result = await listAllDataLakes({ db });
+
+    // Pins the manage flag AND the disclosure it now gates: flipping this projection to
+    // canManage:false would silently strip prompts from every admin and break the admin editor.
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'theirs')?.systemPrompt).toBe('Cite sources.');
+  });
+
+  it('never carries a prompt on a built-in fallback lake, whatever the registry holds', async () => {
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+
+    const result = await listAllDataLakes({ db });
+    const fallback = result.find(l => l.id === 'opti-knowledge');
+
+    // The registry is JSON.parse'd from env and keeps unknown keys, so an overlay entry could
+    // arrive carrying a systemPrompt. Routing fallbacks through the projection is what stops it.
+    expect(fallback).toBeDefined();
+    expect(fallback?.canManage).toBe(false);
+    expect(fallback && 'systemPrompt' in fallback).toBe(false);
+  });
+});
+
+// The raw-document exits (GET /api/data-lakes/:id, /archived, /deleted) are gated on READ
+// access, which is deliberately wider than manage - so each one must redact before serializing.
+describe('redactLakeForActor - editor-only fields on the raw-document exits', () => {
+  const prompted = (overrides: Partial<IDataLakeDocument> = {}) =>
+    lake({ createdByUserId: 'owner', systemPrompt: 'Answer only from this lake.', ...overrides });
+
+  it('leaves the document untouched for the owner', () => {
+    const l = prompted();
+    expect(redactLakeForActor(l, { userId: 'owner', isAdmin: false })).toBe(l);
+  });
+
+  it('leaves the document untouched for an admin', () => {
+    const l = prompted();
+    expect(redactLakeForActor(l, { userId: 'admin', isAdmin: true }).systemPrompt).toBe('Answer only from this lake.');
+  });
+
+  it('strips the prompt for a stranger who can READ a published lake', () => {
+    const l = prompted({ isPublic: true });
+    const visible = redactLakeForActor(l, { userId: 'stranger', isAdmin: false });
+
+    expect(visible.systemPrompt).toBeUndefined();
+    expect('systemPrompt' in visible).toBe(false);
+    // Everything a reader is entitled to must survive the redaction.
+    expect(visible.name).toBe('Lake');
+    expect(visible.datalakeTag).toBe('datalake:lake');
+  });
+
+  it('reports a whitespace-only prompt as absent for the OWNER too, matching the list projection', () => {
+    // Without this the same lake reads as "has a prompt" on GET /:id and "has none" in the list.
+    const blank = lake({ createdByUserId: 'owner', systemPrompt: '   \n ' });
+    const visible = redactLakeForActor(blank, { userId: 'owner', isAdmin: false });
+    expect('systemPrompt' in visible).toBe(false);
+  });
+
+  it('does not mutate the source document (the caller may still hold it for a write path)', () => {
+    const l = prompted({ isPublic: true });
+    redactLakeForActor(l, { userId: 'stranger', isAdmin: false });
+    expect(l.systemPrompt).toBe('Answer only from this lake.');
+  });
+
+  it('redacts per lake in the archived management view', async () => {
+    const mine = prompted({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const orgLake = prompted({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, orgLake]), find: vi.fn() } };
+
+    const result = await listArchivedDataLakes(ctx({ userId: 'me', organizationId: 'orgA' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.systemPrompt).toBe('Answer only from this lake.');
+    // Key absence, not undefined: blanking instead of deleting would pass the weaker assertion.
+    const redactedArchived = result.find(l => l.id === 'org')!;
+    expect('systemPrompt' in redactedArchived).toBe(false);
+  });
+
+  it('redacts per lake in the deleted management view', async () => {
+    const orgLake = prompted({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([orgLake]), find: vi.fn() } };
+
+    const result = await listDeletedDataLakes(ctx({ userId: 'me', organizationId: 'orgA' }), { db });
+
+    expect('systemPrompt' in result[0]!).toBe(false);
   });
 });
 

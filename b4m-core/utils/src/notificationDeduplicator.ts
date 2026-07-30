@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import type { CloudWatchLogsDecodedData, CloudWatchLogsLogEvent } from 'aws-lambda';
 import { postMessageToSlack } from './slack';
 
 interface DeduplicationEntry {
@@ -115,8 +116,8 @@ export class NotificationDeduplicator {
     errorMessage: string,
     severity: string,
     metadata: Record<string, string>,
-    logData: any,
-    logEvent: any,
+    logData: CloudWatchLogsDecodedData,
+    logEvent: CloudWatchLogsLogEvent,
     stage: string,
     slackUrl: string
   ): Promise<void> {
@@ -164,8 +165,8 @@ export class NotificationDeduplicator {
     message: string,
     severity: string,
     metadata: Record<string, string>,
-    logData: any,
-    logEvent: any,
+    logData: CloudWatchLogsDecodedData,
+    logEvent: CloudWatchLogsLogEvent,
     stage: string,
     slackUrl: string,
     count: number,

@@ -787,6 +787,9 @@ describe('useRemoveFileFromDataLake cache invalidation', () => {
     // a fully-specified key would refresh only one of the two surfaces.
     expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
     expect(keys).toContain(JSON.stringify(['dataLakeArticles']));
-    expect(keys).toContain(JSON.stringify(['file-tags', 'counts']));
+    // The bare file-tags prefix, not ['file-tags','counts']: the tag list itself now carries a
+    // fileCount derived from the files holding each tag, and invalidating only the longer key
+    // leaves that list stale. Prefix matching covers the counts endpoint too.
+    expect(keys).toContain(JSON.stringify(['file-tags']));
   });
 });
