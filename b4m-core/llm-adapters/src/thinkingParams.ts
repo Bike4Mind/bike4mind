@@ -10,6 +10,17 @@ export type ThinkingConfig =
   | { thinking: { type: 'enabled'; budget_tokens: number }; output_config?: never }
   | { thinking: { type: 'adaptive' }; output_config: { effort: 'high' | 'medium' | 'low' } };
 
+/**
+ * max_tokens floor for adaptive reasoning models (Claude 4.7+/Opus 5). These
+ * models self-manage extended thinking *within* max_tokens, which is a ceiling
+ * (they stop at end_turn), not a target - so a larger floor costs nothing on
+ * short replies but keeps reasoning from consuming the whole budget and leaving
+ * no room for the visible answer. Must stay in sync with the floor used by
+ * buildThinkingParams below and by any path that sizes an adaptive model's
+ * output budget without going through this function (see ChatCompletionProcess).
+ */
+export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
+
 export interface ThinkingResult {
   /** The thinking parameter object to spread into the API request body */
   thinkingConfig: ThinkingConfig;
@@ -48,8 +59,7 @@ export function buildThinkingParams(
     // ~10-11K-token HTML artifact plus high-effort thinking could exceed the
     // shared budget and get truncated mid-tag; 64K leaves ample room
     // for both while staying well under these models' 128K output capability.
-    const adaptiveFloor = 64_000;
-    const maxTokens = Math.max(currentMaxTokens, adaptiveFloor);
+    const maxTokens = Math.max(currentMaxTokens, ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
 
     return {
       thinkingConfig: {

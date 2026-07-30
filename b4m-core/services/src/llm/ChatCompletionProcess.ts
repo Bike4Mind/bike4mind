@@ -66,6 +66,7 @@ import {
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { toRetrievalFilter, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import {
+  ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   getAvailableModels,
   getLlmByModel,
   type ICompletionOptions,
@@ -1576,6 +1577,18 @@ export class ChatCompletionProcess {
 
       if (maxTokens > modelMaxOutputTokens) {
         safeMaxTokens = modelMaxOutputTokens;
+      }
+
+      // Adaptive reasoning models (Claude 4.7+/Opus 5) spend extended-thinking
+      // tokens *inside* max_tokens, so a small budget (e.g. the 4096 default) can
+      // be consumed entirely by reasoning, leaving an empty visible reply. When
+      // thinking is explicitly enabled the adapter's buildThinkingParams already
+      // floors max_tokens; this covers the paths that never set thinking (e.g. the
+      // public /api/chat). max_tokens is a ceiling for these models, not a target,
+      // so the floor costs nothing on short replies. Held to the model's own output
+      // cap. Keep the floor in sync with buildThinkingParams (same constant).
+      if (modelInfo.thinkingStyle === 'adaptive') {
+        safeMaxTokens = Math.max(safeMaxTokens, Math.min(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, modelMaxOutputTokens));
       }
 
       const safetyBuffer = 1000; // Emergency buffer
@@ -4064,18 +4077,16 @@ export class ChatCompletionProcess {
         // they don't affect quest.reply/replies. Fire-and-forget to avoid blocking response.
         const postSavePromises = postSaveFeatures
           .map(feature =>
-            this.features
-              .get(feature)
-              ?.onComplete({
-                quest,
-                session,
-                messages,
-                questMaster,
-                model,
-                historyCount,
-                oldestIncludedQuestId,
-                verbatimExcludedCount,
-              })
+            this.features.get(feature)?.onComplete({
+              quest,
+              session,
+              messages,
+              questMaster,
+              model,
+              historyCount,
+              oldestIncludedQuestId,
+              verbatimExcludedCount,
+            })
           )
           .filter(p => p);
 
