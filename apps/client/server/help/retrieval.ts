@@ -15,7 +15,7 @@
  */
 
 import { computeCosineSimilarity } from '@bike4mind/utils';
-import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
+import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { isSupportedEmbeddingModel } from '@bike4mind/common';
 import type { HelpIndex, HelpIndexEntry, HelpEmbeddingsIndex, HelpEmbeddingChunk } from '@bike4mind/scripts/help/types';
 import { chunkByHeadings, stripFrontmatter, truncateAndNormalize } from '@bike4mind/scripts/help/utils';
@@ -364,21 +364,12 @@ export async function searchHelpContext(params: {
         logger.warn(`[HelpRetrieval] Embeddings model "${embeddingModel}" unsupported, using keyword search`);
       } else {
         const requiredProvider = getProviderFromModel(embeddingModel);
-        const embeddingConfig: {
-          openaiApiKey?: string | null;
-          voyageApiKey?: string | null;
-          ollamaBaseUrl?: string | null;
-        } = {};
-        if (requiredProvider === 'openai' && apiKeys?.openai) {
-          embeddingConfig.openaiApiKey = apiKeys.openai;
-        } else if (requiredProvider === 'voyageai' && apiKeys?.voyageai) {
-          embeddingConfig.voyageApiKey = apiKeys.voyageai;
-        } else if (requiredProvider === 'ollama' && apiKeys?.ollama) {
-          // apiKeys.ollama carries the Ollama base URL (no secret) in self-host.
-          embeddingConfig.ollamaBaseUrl = apiKeys.ollama;
-        }
+        // Gate on a MISSING credential, not on the config being non-empty. A keyless provider
+        // (Bedrock, via the AWS credential chain) correctly populates nothing, and the old
+        // emptiness check read that as "no credentials" and fell through to keyword search.
+        const { config: embeddingConfig, missing } = resolveEmbeddingConfig(requiredProvider, apiKeys);
 
-        if (embeddingConfig.openaiApiKey || embeddingConfig.voyageApiKey || embeddingConfig.ollamaBaseUrl) {
+        if (!missing) {
           const embeddingFactory = new EmbeddingFactory(embeddingConfig);
           const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
 
