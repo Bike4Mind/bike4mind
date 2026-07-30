@@ -41,11 +41,12 @@ vi.mock('@server/auth/oktaOidcClient', () => ({
 const mockVerifyState = vi.fn();
 vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: (...a: any[]) => mockVerifyState(...a) }));
 
-// Remaining leaf collaborators.
-vi.mock('@server/auth/tokenGenerator', () => ({
-  authTokenGenerator: {
-    createAccessToken: () => ({ accessToken: 'jwt-access', refreshToken: 'jwt-refresh' }),
-  },
+// Remaining leaf collaborators. Mock the session helper directly (rather than @bike4mind/services)
+// so the test never pulls the real services barrel -- the callback now mints via issueSessionForRequest.
+vi.mock('@server/auth/issueSession', () => ({
+  issueSessionForRequest: vi
+    .fn()
+    .mockResolvedValue({ accessToken: 'jwt-access', refreshToken: 'jwt-refresh', sid: 'sid' }),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
