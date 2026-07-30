@@ -252,6 +252,16 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     await this.model.updateMany({ groups: { $in: groupIds } }, { $pull: { groups: { $in: groupIds } } });
   }
 
+  /** Add one group id to one user (idempotent via $addToSet). */
+  async addGroupToUser(userId: string, groupId: string): Promise<void> {
+    await this.model.updateOne({ _id: userId }, { $addToSet: { groups: groupId } });
+  }
+
+  /** Remove one group id from one user. */
+  async removeGroupFromUser(userId: string, groupId: string): Promise<void> {
+    await this.model.updateOne({ _id: userId }, { $pull: { groups: groupId } });
+  }
+
   async findAllByEmailsOrUsernames(emails: string[], usernames: string[]) {
     const result = await this.model.find({
       $or: [{ email: { $in: emails } }, { username: { $in: usernames } }],

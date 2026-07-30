@@ -595,6 +595,10 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   findByEmail: (email: string) => Promise<IUserDocument | null>;
   /** Remove the given group ids from every user's `groups[]` (used when a group is revoked/deleted). */
   pullGroups: (groupIds: string[]) => Promise<void>;
+  /** Add a single group id to one user's `groups[]` (idempotent; used when assigning a member). */
+  addGroupToUser: (userId: string, groupId: string) => Promise<void>;
+  /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */
+  removeGroupFromUser: (userId: string, groupId: string) => Promise<void>;
   findByEmailVerificationToken: (token: string) => Promise<IUserDocument | null>;
   findByPendingEmailToken: (token: string) => Promise<IUserDocument | null>;
   findByIdWithPassword: (id: string) => Promise<IUserDocument | null>;

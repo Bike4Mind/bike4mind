@@ -129,6 +129,8 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     ...createMockRepository<IUserDocument>(),
     findByEmail: vi.fn(),
     pullGroups: vi.fn(),
+    addGroupToUser: vi.fn(),
+    removeGroupFromUser: vi.fn(),
     findByIds: vi.fn(),
     findByUsernameOrEmail: vi.fn(),
     findByIdWithPassword: vi.fn(),
