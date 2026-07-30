@@ -1,8 +1,9 @@
 // GET /api/organizations/:id/groups
-// Index route to get all groups for the given organization
+// List an organization's groups, each with its current member count.
 
 import { Permission } from '@bike4mind/common';
-import { Group } from '@bike4mind/database/social';
+import { groupRepository } from '@bike4mind/database/social';
+import { userRepository } from '@bike4mind/database/auth';
 import { Organization } from '@bike4mind/database/infra';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -13,8 +14,13 @@ const handler = baseApi().get(
     const organization = organizationId && (await Organization.findById(organizationId));
     if (!organization || !req.ability!.can(Permission.read, organization)) throw new Error('Unauthorized');
 
-    const groups = await Group.find({ organizationId });
-    return res.status(200).json({ groups });
+    const groups = await groupRepository.findByOrganization(organizationId as string);
+    // Member count = users whose groups[] contains this group id (org-groups #1172, Phase 4).
+    const withCounts = await Promise.all(
+      groups.map(async group => ({ ...group, memberCount: await userRepository.count({ groups: group.id }) }))
+    );
+
+    return res.status(200).json({ groups: withCounts });
   })
 );
 
