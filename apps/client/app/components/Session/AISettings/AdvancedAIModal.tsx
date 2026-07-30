@@ -1154,14 +1154,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
         </Grid>
       </Box>
 
-      {/* Audio generation defaults (TTS + sound effects) for the in-app audio generator */}
-      <Box sx={{ px: 1, mb: 2 }}>
-        <Typography level="title-md" sx={{ mb: 1.5 }}>
-          Audio Generation
-        </Typography>
-        <AudioGenerationSettings />
-      </Box>
-
       {/* Image Model Settings, with the Templates panel below */}
       {isImageModel(model) && (
         <>
@@ -1953,55 +1945,57 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 </IconButton>
               </Box>
 
-              {/* CONDITIONAL TABS OR DIRECT AI SETTINGS */}
-              {isResearchModeFeatureEnabled ? (
-                <Tabs
-                  value={activeTab}
-                  onChange={(_, newValue) => setActiveTab(newValue as 'ai-settings' | 'research-mode')}
+              {/* Tabs: AI Settings + Audio always available; Research Mode only when its
+                  feature flag is on. Audio-generation defaults are model-independent, so
+                  they get their own top-level tab rather than hiding in a per-model panel. */}
+              <Tabs
+                value={activeTab}
+                onChange={(_, newValue) => setActiveTab(newValue as 'ai-settings' | 'research-mode' | 'audio')}
+                sx={{
+                  width: '100%',
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}
+              >
+                <TabList
                   sx={{
-                    width: '100%',
-                    height: '100%',
+                    backgroundColor: 'transparent',
+                    borderBottom: theme => `1px solid ${theme.palette.divider}`,
+                    mb: { xs: 2, sm: 3 },
+                    p: 0,
+                    boxShadow: 'none',
+                    maxHeight: '40px',
+                    height: { sm: '40px' },
                     display: 'flex',
-                    flexDirection: 'column',
+                    gap: 0,
+                    '& .MuiTab-root': {
+                      fontSize: { xs: '14px', sm: '16px' },
+                      fontWeight: 400,
+                      py: 0,
+                      px: { xs: 1.5, sm: 3 },
+                      color: 'text.primary50',
+                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
+                      maxWidth: { xs: 'none', sm: 'unset' },
+                      minWidth: { xs: 0, sm: 'unset' },
+                      textAlign: 'center',
+                      '&.Mui-selected': {
+                        color: 'text.primary',
+                      },
+                    },
                   }}
                 >
-                  <TabList
+                  <Tab
+                    value="ai-settings"
                     sx={{
-                      backgroundColor: 'transparent',
-                      borderBottom: theme => `1px solid ${theme.palette.divider}`,
-                      mb: { xs: 2, sm: 3 },
-                      p: 0,
-                      boxShadow: 'none',
-                      maxHeight: '40px',
-                      height: { sm: '40px' },
-                      display: 'flex',
-                      gap: 0,
-                      '& .MuiTab-root': {
-                        fontSize: { xs: '14px', sm: '16px' },
-                        fontWeight: 400,
-                        py: 0,
-                        px: { xs: 1.5, sm: 3 },
-                        color: 'text.primary50',
-                        flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                        maxWidth: { xs: 'none', sm: 'unset' },
-                        minWidth: { xs: 0, sm: 'unset' },
-                        textAlign: 'center',
-                        '&.Mui-selected': {
-                          color: 'text.primary',
-                        },
-                      },
+                      width: { xs: 'auto', sm: '200px' },
+                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
                     }}
                   >
-                    <Tab
-                      value="ai-settings"
-                      sx={{
-                        width: { xs: 'auto', sm: '200px' },
-                        flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                      }}
-                    >
-                      AI Settings
-                    </Tab>
+                    AI Settings
+                  </Tab>
 
+                  {isResearchModeFeatureEnabled && (
                     <Tab
                       value="research-mode"
                       sx={{
@@ -2011,38 +2005,45 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                     >
                       Research Mode
                     </Tab>
-                  </TabList>
+                  )}
 
-                  {/* AI SETTINGS TAB */}
-                  <TabPanel
-                    value="ai-settings"
-                    sx={{ p: 0, height: isResearchModeFeatureEnabled ? 'calc(100% - 37px)' : '100%' }}
+                  <Tab
+                    value="audio"
+                    data-testid="ai-settings-audio-tab"
+                    sx={{
+                      width: { xs: 'auto', sm: '200px' },
+                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
+                    }}
                   >
-                    {activeTab === 'ai-settings' && (
-                      <AISettingsTab
-                        model={typedModel}
-                        handleModelSelection={handleModelSelection}
-                        onSelectionComplete={onClose}
-                        modelFilter={modelFilter}
-                        handleModelChange={handleModelChange}
-                        isMobile={isMobile}
-                        onViewDetails={handleViewDetails}
-                        isResearchModeFeatureEnabled={isResearchModeFeatureEnabled}
-                      />
-                    )}
-                  </TabPanel>
+                    Audio
+                  </Tab>
+                </TabList>
 
-                  {/* RESEARCH MODE TAB */}
+                {/* AI SETTINGS TAB */}
+                <TabPanel value="ai-settings" sx={{ p: 0, height: 'calc(100% - 37px)' }}>
+                  {activeTab === 'ai-settings' && (
+                    <AISettingsTab
+                      model={typedModel}
+                      handleModelSelection={handleModelSelection}
+                      onSelectionComplete={onClose}
+                      modelFilter={modelFilter}
+                      handleModelChange={handleModelChange}
+                      isMobile={isMobile}
+                      onViewDetails={handleViewDetails}
+                      isResearchModeFeatureEnabled={isResearchModeFeatureEnabled}
+                    />
+                  )}
+                </TabPanel>
+
+                {/* RESEARCH MODE TAB */}
+                {isResearchModeFeatureEnabled && (
                   <TabPanel
                     value="research-mode"
                     sx={{
                       p: 0,
                       overflowY: 'auto',
                       overflowX: 'hidden',
-                      height: {
-                        xs: isResearchModeFeatureEnabled ? 'calc(100dvh - 180px)' : 'calc(100dvh - 110px)',
-                        sm: 'auto',
-                      },
+                      height: { xs: 'calc(100dvh - 180px)', sm: 'auto' },
                     }}
                   >
                     {activeTab === 'research-mode' && (
@@ -2060,19 +2061,26 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                       />
                     )}
                   </TabPanel>
-                </Tabs>
-              ) : (
-                <AISettingsTab
-                  model={typedModel}
-                  handleModelSelection={handleModelSelection}
-                  onSelectionComplete={onClose}
-                  modelFilter={modelFilter}
-                  handleModelChange={handleModelChange}
-                  isMobile={isMobile}
-                  onViewDetails={handleViewDetails}
-                  isResearchModeFeatureEnabled={isResearchModeFeatureEnabled}
-                />
-              )}
+                )}
+
+                {/* AUDIO TAB - model-independent defaults for the in-app audio generator */}
+                <TabPanel
+                  value="audio"
+                  sx={{ p: 0, overflowY: 'auto', overflowX: 'hidden', height: 'calc(100% - 37px)' }}
+                >
+                  {activeTab === 'audio' && (
+                    <Box sx={{ px: 1, py: 1 }}>
+                      <Typography level="title-md" sx={{ mb: 0.5 }}>
+                        Audio Generation
+                      </Typography>
+                      <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 2 }}>
+                        Defaults for the in-app audio generator (Files Manager &rarr; Generate Audio).
+                      </Typography>
+                      <AudioGenerationSettings />
+                    </Box>
+                  )}
+                </TabPanel>
+              </Tabs>
             </Box>
           </Sheet>
         </ModalDialog>
