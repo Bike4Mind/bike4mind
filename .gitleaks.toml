@@ -3,7 +3,10 @@
 
 title = "Bike4Mind Gitleaks Configuration"
 
-# Global allowlist for non-sensitive patterns matching secret formats
+# Global allowlist for non-sensitive patterns matching secret formats.
+# Keep the singular [allowlist] table. The [[allowlists]] array form is accepted by
+# gitleaks 8.26 but SILENTLY IGNORED by 8.24.3, which CI pins - switching would drop
+# every exclusion below without any error, so the two must not diverge.
 [allowlist]
 description = "Global allowlist for non-sensitive patterns"
 paths = [
@@ -13,17 +16,17 @@ paths = [
   ".*\\.bundle\\.js$",
   ".*build/.*",
   ".*dist/.*",
-  # Test fixtures and test files — strings here are by definition not live credentials
+  # Test fixtures and test files - strings here are by definition not live credentials
   ".*/__fixtures__/.*",
   ".*/__mocks__/.*",
   ".*\\.test\\.[tj]sx?$",
   ".*\\.spec\\.[tj]sx?$",
   ".*/__tests__/.*",
-  # Documentation — placeholder strings are expected here
+  # Documentation - placeholder strings are expected here
   ".*docs/.*",
   ".*docs-site/.*",
   ".*README\\.md$",
-  # Environment example files — values here are intentional placeholders
+  # Environment example files - values here are intentional placeholders
   "\\.env\\.example$",
   "\\.env\\..*\\.example$"
 ]
@@ -31,7 +34,7 @@ paths = [
 regexes = [
   # Pre-existing
   "SHORTKEY=",
-  # AWS documentation canonical fake access key — never a real credential
+  # AWS documentation canonical fake access key - never a real credential
   "AKIAIOSFODNN7EXAMPLE",
   # Slack sample workspace / channel / token patterns from Slack docs
   "T00000000",
@@ -42,6 +45,8 @@ regexes = [
   # Generic placeholder shapes
   "your[-_]secret[-_]here",
   "your[-_]api[-_]key",
+  # Uppercase placeholder shapes in docs and demo snippets, e.g. `Bearer YOUR_TOKEN`
+  "(?i)your[-_](api[-_])?(token|key|secret)",
   "insert[-_].*[-_]here",
   "<your[-_]",
   "\\$\\{[A-Z_]+\\}",
@@ -65,9 +70,9 @@ regexes = [
   "mongodb(\\+srv)?://username:password@cluster",
   "mongodb(\\+srv)?://\\$\\{",
   "mongodb(\\+srv)?://\\{\\{",
-  # Literal ellipsis placeholder — used in console.log usage examples
+  # Literal ellipsis placeholder - used in console.log usage examples
   "mongodb(\\+srv)?://\\.\\.\\.",
-  # Documentation example in echo statements — user:pass with known placeholder hostnames only
+  # Documentation example in echo statements - user:pass with known placeholder hostnames only
   "mongodb(\\+srv)?://user:pass@(localhost|127\\.0\\.0\\.1|example\\.com|cluster\\.|docdb\\.|your-cluster)"
 ]
 
@@ -114,7 +119,7 @@ entropy = 3.5
 [rules.allowlist]
 regexTarget = "secret"
 regexes = [
-  # Redaction test fixtures — the value is input to sanitizeErrorMessage(), not a live key
+  # Redaction test fixtures - the value is input to sanitizeErrorMessage(), not a live key
   "sanitizeErrorMessage",
   "REDACTED",
   "redact",
@@ -138,5 +143,28 @@ regexes = [
   "XXXXXXXXXXXXXXXXXXXXXXXXX"
 ]
 
-# Use default builtin rules as well
-[useBuiltinRules]
+# Inherit gitleaks' builtin rules (aws-access-token, github-pat, stripe, gcp,
+# private keys, ...) on top of the domain rules above. This must stay
+# `[extend] useDefault = true`: a bare `[useBuiltinRules]` table is not gitleaks
+# config syntax, so it parsed as an empty table and left every builtin disabled.
+#
+# generic-api-key stays off. It is a pure entropy heuristic with no credential
+# shape, and it fires on ordinary camelCase identifiers - every `key: 'xEnabled'`
+# in the settings schema scores above its threshold.
+#
+# Allowlist-based narrowing does not work across the two gitleaks versions in play
+# (CI pins 8.24.3, brew ships 8.26.0): a `paths` allowlist exempts the file from ALL
+# rules rather than one, because 8.26 ignores `targetRules` and `matchCondition` on
+# a global allowlist, and secret/stopword allowlists are ignored outright by 8.24.3.
+#
+# Redefining the rule with a raised entropy floor DOES work on both versions, and is
+# the alternative to this line. It is not used here because it requires vendoring
+# gitleaks' builtin regex into this file, where it would silently go stale as
+# upstream tunes the rule - the same class of silent staleness as the
+# [useBuiltinRules] bug above. Revisit if generic-api-key coverage is wanted back.
+#
+# Specific-shape rules (aws, github, stripe, anthropic, gemini, slack, mongodb,
+# JWT/session secrets) all remain active and are what actually catch leaks.
+[extend]
+useDefault = true
+disabledRules = ["generic-api-key"]

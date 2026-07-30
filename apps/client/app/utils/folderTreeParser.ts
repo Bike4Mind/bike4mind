@@ -28,8 +28,15 @@ export interface FolderTreeNode {
   fileCount: number;
   /** Recursive total size in bytes (includes children) */
   totalSize: number;
-  /** Whether this folder is excluded from upload */
+  /** Whether this folder is excluded from upload (manually, by pattern, or both) */
   excluded: boolean;
+  /**
+   * Set when the user unticked this folder in the Preview tree, as opposed to a pattern
+   * having excluded it. Kept separate so re-applying patterns can recompute `excluded`
+   * without discarding a manual choice, and so removing a pattern can't silently re-include
+   * a folder the user deselected by hand.
+   */
+  manuallyExcluded: boolean;
 }
 
 export interface FileTypeBreakdown {
@@ -137,6 +144,7 @@ export function parseFilesToTree(files: File[], excludedPatterns: string[]): Fol
     fileCount: 0,
     totalSize: 0,
     excluded: false,
+    manuallyExcluded: false,
   };
 
   // Detect root folder name from first file's path
@@ -176,6 +184,7 @@ export function parseFilesToTree(files: File[], excludedPatterns: string[]): Fol
           fileCount: 0,
           totalSize: 0,
           excluded: isExcluded(segments[i], excludedPatterns),
+          manuallyExcluded: false,
         };
         nodeMap.set(currentPath, node);
         parentNode.children.push(node);
@@ -380,43 +389,69 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
- * Toggles exclusion on a folder by path. Returns a new tree (immutable update).
+ * Push folder exclusion down onto every file beneath it, so `WizardFile.excluded` alone
+ * answers "will this upload?".
+ *
+ * This matters because the tree's own `excluded` flag is read by the Preview tree and
+ * computeCounts, but EVERY other consumer - the source-step summary, the Config file count,
+ * and useBatchUpload itself - filters `allFiles` on the per-file flag. Without this pass a
+ * folder the user unticked stays greyed out in the tree while its files upload anyway.
+ *
+ * A file is excluded if any ancestor folder is excluded OR a pattern matches it, so
+ * re-including a folder cannot resurrect pattern-excluded junk inside it.
  */
-export function toggleFolderExclusion(root: FolderTreeNode, targetPath: string): FolderTreeNode {
+function applyFileExclusions(node: FolderTreeNode, patterns: string[], ancestorExcluded: boolean): FolderTreeNode {
+  const excludedHere = ancestorExcluded || node.excluded;
+  return {
+    ...node,
+    files: node.files.map(f => ({
+      ...f,
+      excluded: excludedHere || isFileExcluded(f.relativePath, patterns),
+    })),
+    children: node.children.map(child => applyFileExclusions(child, patterns, excludedHere)),
+  };
+}
+
+/**
+ * Toggles exclusion on a folder by path. Returns a new tree (immutable update).
+ *
+ * `patterns` is required rather than defaulted: applyFileExclusions re-evaluates the WHOLE
+ * tree, so an empty list would silently re-include every pattern-excluded file anywhere in it,
+ * not merely skip re-evaluating the toggled subtree. Pass the active excludedPatterns.
+ */
+export function toggleFolderExclusion(root: FolderTreeNode, targetPath: string, patterns: string[]): FolderTreeNode {
   function toggle(node: FolderTreeNode): FolderTreeNode {
     if (node.path === targetPath) {
-      return { ...node, excluded: !node.excluded };
+      const manuallyExcluded = !node.excluded;
+      return { ...node, excluded: manuallyExcluded, manuallyExcluded };
     }
     const updatedChildren = node.children.map(toggle);
     if (updatedChildren === node.children) return node;
     return { ...node, children: updatedChildren };
   }
 
-  const updated = toggle(root);
+  const updated = applyFileExclusions(toggle(root), patterns, false);
   computeCounts(updated);
   return updated;
 }
 
 /**
- * Re-applies exclusion patterns to all files and folders in the tree.
+ * Re-applies exclusion patterns to all files and folders in the tree. A folder the user
+ * unticked by hand stays excluded regardless of the patterns.
  */
 export function reapplyExclusions(root: FolderTreeNode, patterns: string[]): FolderTreeNode {
   function apply(node: FolderTreeNode): FolderTreeNode {
-    const updatedFiles = node.files.map(f => ({
-      ...f,
-      excluded: isFileExcluded(f.relativePath, patterns),
-    }));
     const updatedChildren = node.children.map(child => {
       const updated = apply(child);
       return {
         ...updated,
-        excluded: isExcluded(updated.name, patterns),
+        excluded: updated.manuallyExcluded || isExcluded(updated.name, patterns),
       };
     });
-    return { ...node, files: updatedFiles, children: updatedChildren };
+    return { ...node, children: updatedChildren };
   }
 
-  const updated = apply(root);
+  const updated = applyFileExclusions(apply(root), patterns, false);
   computeCounts(updated);
   return updated;
 }

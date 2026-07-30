@@ -31,7 +31,11 @@ const bulkDeleteMutate = vi.fn();
 const confirmRun = vi.fn((opts: { onOk?: () => void | Promise<void> }) => opts.onOk?.());
 
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
-  usePaginatedSearchFabFiles: () => ({ data: { data: [testFile], total: 1 }, isLoading: false, isFetching: false }),
+  usePaginatedSearchFabFiles: () => ({
+    data: { data: [testFile], total: 1 },
+    isLoading: false,
+    isPlaceholderData: false,
+  }),
   useSearchFabFiles: () => ({ data: { data: [], total: 0 }, isLoading: false }),
   useBulkDeleteFiles: () => ({ mutateAsync: bulkDeleteMutate }),
   useCreateFabFile: () => ({ mutate: vi.fn(), isPending: false }),

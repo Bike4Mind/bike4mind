@@ -14,9 +14,17 @@ type ManageActor = Pick<AccessContext, 'userId' | 'isAdmin'>;
  * Deliberately narrower than `canAccessLake` (read): a tag/entitlement/org grant lets a member
  * READ a lake but NOT write into it. Injecting a file (applying the lake's meta-tag) is a write,
  * so it must clear this gate, closing the read-can-write asymmetry.
+ *
+ * The truthiness guard makes the owner arm fail closed on a blank identity: without it, a lake with
+ * no `createdByUserId` (the synthetic fallback document) would match an actor with no `userId`, since
+ * `undefined === undefined` and `'' === ''`. Unreachable today - the schema requires the field and
+ * `AccessContext.userId` is a required string - but this predicate now gates prompt DISCLOSURE as
+ * well as writes, so it should not depend on those invariants holding elsewhere. Mirrors the same
+ * guard in `getDataLakePrompts.ts`.
  */
 export function canManageLake(lake: Pick<IDataLakeDocument, 'createdByUserId'>, actor: ManageActor): boolean {
-  return actor.isAdmin || lake.createdByUserId === actor.userId;
+  if (actor.isAdmin) return true;
+  return !!actor.userId && !!lake.createdByUserId && lake.createdByUserId === actor.userId;
 }
 
 /**
@@ -69,7 +77,10 @@ export const assertCanWriteDataLakeTags = async (
   for (const tag of metaTags) {
     const lake = await db.dataLakes.findByDatalakeTag(tag);
     if (!lake || !canManageLake(lake, actor)) {
-      throw new BadRequestError('Only the creator can add files to this data lake');
+      // Direction-neutral wording: this gate sees a tag payload, not an intent, so the same
+      // refusal covers adding a file to the lake and removing one from it. Saying "add" here
+      // told a caller their removal was refused for the wrong reason.
+      throw new BadRequestError("Only the creator can change this data lake's files");
     }
   }
 };

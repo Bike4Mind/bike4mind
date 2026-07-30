@@ -122,7 +122,7 @@ export const reconcileLakeTags = async (
       // Joins need no write here: the caller has already persisted the canonical meta-tag as part
       // of `tagsToPersist`, and their gate ran above, before that write. They still need stats.
       for (const lake of [...leaves, ...joins]) {
-        await recomputeLakeStats(lake.id, lake.datalakeTag, { db });
+        await recomputeLakeStats(lake, { db });
       }
     },
   };

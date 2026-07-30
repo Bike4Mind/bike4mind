@@ -67,7 +67,7 @@ describe('POST /api/files/tags/toggle', () => {
   });
 
   it('does not toggle anything when the lake write gate denies a meta-tag', async () => {
-    h.assertCanWriteDataLakeTags.mockRejectedValue(new Error('Only the creator can add files to this data lake'));
+    h.assertCanWriteDataLakeTags.mockRejectedValue(new Error("Only the creator can change this data lake's files"));
     const { res } = makeRes();
 
     await expect(call(req({ ids: ['f1'], tags: ['datalake:someone-elses'] }), res)).rejects.toThrow(

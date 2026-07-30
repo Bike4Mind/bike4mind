@@ -78,6 +78,7 @@ export default function WizardStepIndicator({ currentStep, stepKeys }: WizardSte
               </Box>
               <Typography
                 level="body-xs"
+                data-testid="wizard-step-label"
                 sx={{
                   mt: 0.5,
                   fontWeight: isCurrent ? 'bold' : 'normal',

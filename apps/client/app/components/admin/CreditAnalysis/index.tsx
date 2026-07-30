@@ -8,7 +8,8 @@ import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import HistoryIcon from '@mui/icons-material/History';
 import { MarginDashboard } from './components/MarginDashboard';
 import { ModelPricingCatalog } from './components/ModelPricingCatalog';
-import { OrgUsageDashboard } from './components/OrgUsageDashboard';
+import { UsageDashboard } from './components/UsageDashboard';
+import { CreditHolderType } from '@bike4mind/common';
 import { TransactionLedger } from './components/TransactionLedger';
 import { CreditAdjustmentsLog } from './components/CreditAdjustmentsLog';
 import { UserCreditsManager } from './components/UserCreditsManager';
@@ -74,7 +75,7 @@ export const CreditAnalyticsTab: React.FC = () => {
         </TabPanel>
 
         <TabPanel value="org-usage" sx={{ p: 0 }}>
-          <OrgUsageDashboard />
+          <UsageDashboard ownerType={CreditHolderType.Organization} />
         </TabPanel>
 
         <TabPanel value="ledger" sx={{ p: 0 }}>

@@ -95,8 +95,9 @@ export const toggleTags = async (userId: string, params: unknown, { db }: FabFil
     const pending = db.dataLakes.findByDatalakeTag(key).then(lake => {
       if (!lake) {
         // Same refusal the route-level gate gives, so a meta-tag naming no lake is rejected
-        // identically whichever check sees it first.
-        throw new BadRequestError('Only the creator can add files to this data lake');
+        // identically whichever check sees it first. Direction-neutral: this resolves the lake
+        // before the join/leave decision, so it cannot know which way the toggle was going.
+        throw new BadRequestError("Only the creator can change this data lake's files");
       }
       return lake;
     });
@@ -163,7 +164,7 @@ export const toggleTags = async (userId: string, params: unknown, { db }: FabFil
   );
 
   for (const lake of touchedLakes.values()) {
-    await recomputeLakeStats(lake.id, lake.datalakeTag, { db });
+    await recomputeLakeStats(lake, { db });
   }
 
   // Lake meta-tags are deliberately absent from these counters: they are lake membership, not
