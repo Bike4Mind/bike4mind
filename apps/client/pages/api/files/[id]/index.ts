@@ -1,4 +1,4 @@
-import { FileEvents, IFabFile, KnowledgeType } from '@bike4mind/common';
+import { FileEvents, IFabFile, isDatalakeMetaTag, KnowledgeType } from '@bike4mind/common';
 import {
   changeStorageSize,
   dataLakeRepository,
@@ -230,6 +230,35 @@ const handler = baseApi()
         );
       }
     });
+
+    // A delete is a membership change too: deleteFabFile soft-deletes via `deletedAt`, and
+    // computeDataLakeStats matches `deletedAt: null`, so every lake this file belonged to now
+    // reports a stale count. Uses the tags read above, since the document is gone by now.
+    // Best-effort per lake for the same reasons as the PUT branch: the write already succeeded.
+    if (deleteAction === 'deleted') {
+      const metaTags = new Set(
+        (fabFile?.tags ?? [])
+          .map(tag => tag?.name)
+          .filter(isDatalakeMetaTag)
+          .map(name => name.toLowerCase())
+      );
+      for (const tag of metaTags) {
+        try {
+          const lake = await dataLakeRepository.findByDatalakeTag(tag);
+          if (lake) {
+            await dataLakeService.recomputeLakeStats(lake.id, lake.datalakeTag, {
+              db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+            });
+          }
+        } catch (error) {
+          req.logger.error('Error recomputing data lake stats after a file delete:', {
+            error,
+            fileId: fabFileId,
+            datalakeTag: tag,
+          });
+        }
+      }
+    }
 
     // Deduct storage size after successful deletion
     if (sizeToDeduct > 0) {

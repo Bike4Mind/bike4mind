@@ -1271,6 +1271,20 @@ describe('assertCanReplaceDataLakeTags - wholesale tag replace gate', () => {
     ).resolves.toEqual({ affectedLakes: [{ id: 'lakeA', datalakeTag: 'datalake:lake' }], clearPrimaryTag: false });
   });
 
+  // QA could not tell from a probe whether the exemption came from the admin role or from owning
+  // the file. It is the role: the gate's actor is only {userId, isAdmin}, so no ownership signal
+  // reaches it. Passing the file's owner as the actor must still be refused.
+  it('refuses the file owner when they do not manage the lake (ownership is not an exemption)', async () => {
+    const db = makeDb({ 'datalake:lake': owned });
+    await expect(
+      assertCanReplaceDataLakeTags(
+        { userId: 'file-owner-who-is-not-the-lake-creator', isAdmin: false },
+        { stored: ['datalake:lake'], next: [] },
+        { db }
+      )
+    ).rejects.toThrow(/remove files/i);
+  });
+
   it('lets an admin drop a meta-tag on a lake owned by someone else', async () => {
     const db = makeDb({ 'datalake:lake': owned });
     await expect(

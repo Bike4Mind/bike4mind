@@ -84,6 +84,16 @@ describe('sessionSummarization - the summary file keeps its data-lake membership
   const tagsWrittenTo = (mock: { mock: { calls: unknown[][] } }, argIndex: number) =>
     (mock.mock.calls[0][argIndex] as { tags: { name: string }[] }).tags;
 
+  // sessionId alone is not an ownership claim, so an unscoped lookup could select - and overwrite -
+  // a file belonging to another user.
+  it('looks the summary file up scoped to the session owner', async () => {
+    h.findOne.mockResolvedValue({ id: 'ff1', tags: [] });
+
+    await run();
+
+    expect(h.findOne).toHaveBeenCalledWith({ sessionId: 's1', userId: 'u1' });
+  });
+
   it('carries an existing lake meta-tag through a re-summarization', async () => {
     h.findOne.mockResolvedValue({ id: 'ff1', tags: [{ name: 'datalake:lake', strength: 1 }, { name: 'stale' }] });
 

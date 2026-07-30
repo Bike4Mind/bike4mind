@@ -5,6 +5,8 @@ const h = vi.hoisted(() => ({
   // transaction is distinguishable from one that runs after the commit.
   committed: { value: false },
   assertCanReplaceDataLakeTags: vi.fn(),
+  findByDatalakeTag: vi.fn(),
+  deleteFabFile: vi.fn(),
   recomputeLakeStats: vi.fn(),
   updateFabFile: vi.fn(),
   findAccessibleById: vi.fn(),
@@ -28,7 +30,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   changeStorageSize: vi.fn(),
-  dataLakeRepository: { name: 'dataLakeRepository' },
+  dataLakeRepository: { name: 'dataLakeRepository', findByDatalakeTag: h.findByDatalakeTag },
   fabFileChunkRepository: {},
   fabFileRepository: {
     name: 'fabFileRepository',
@@ -51,7 +53,7 @@ vi.mock('@bike4mind/services', () => ({
     assertCanReplaceDataLakeTags: h.assertCanReplaceDataLakeTags,
     recomputeLakeStats: h.recomputeLakeStats,
   },
-  fabFilesService: { updateFabFile: h.updateFabFile },
+  fabFilesService: { updateFabFile: h.updateFabFile, deleteFabFile: h.deleteFabFile },
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn() }) }));
@@ -241,5 +243,68 @@ describe('PUT /api/files/[id] - data-lake membership authorization', () => {
     expect(h.findAccessibleById).not.toHaveBeenCalled();
     expect(h.assertCanReplaceDataLakeTags).not.toHaveBeenCalled();
     expect(h.updateFabFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/files/[id] - a delete is a lake membership change too', () => {
+  const makeDelReq = () =>
+    ({
+      method: 'DELETE',
+      query: { id: FILE_ID },
+      body: {},
+      user: USER,
+      ability: {},
+      logger: { updateMetadata: vi.fn(), error: vi.fn() },
+    }) as never;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.committed.value = false;
+    h.findById.mockResolvedValue({ id: FILE_ID, userId: USER.id, tags: [{ name: 'datalake:a' }, { name: 'notes' }] });
+    h.deleteFabFile.mockResolvedValue({ action: 'deleted', fabFile: { id: FILE_ID, userId: USER.id } });
+    h.findByDatalakeTag.mockResolvedValue({ id: 'lakeA', datalakeTag: 'datalake:a' });
+    h.recomputeLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 });
+    h.logEvent.mockResolvedValue(undefined);
+  });
+
+  // deleteFabFile soft-deletes and computeDataLakeStats matches deletedAt: null, so without this
+  // every lake the file belonged to keeps counting it.
+  it('recomputes stats for each lake the deleted file belonged to', async () => {
+    const { res } = makeRes();
+
+    await call(makeDelReq(), res);
+
+    expect(h.findByDatalakeTag).toHaveBeenCalledWith('datalake:a');
+    expect(h.recomputeLakeStats).toHaveBeenCalledWith('lakeA', 'datalake:a', expect.anything());
+  });
+
+  it('does not recompute for a file that was in no lake', async () => {
+    h.findById.mockResolvedValue({ id: FILE_ID, userId: USER.id, tags: [{ name: 'notes' }] });
+    const { res } = makeRes();
+
+    await call(makeDelReq(), res);
+
+    expect(h.recomputeLakeStats).not.toHaveBeenCalled();
+  });
+
+  // An unshare leaves the file - and its membership - in place.
+  it('does not recompute when the delete was an unshare rather than a removal', async () => {
+    h.deleteFabFile.mockResolvedValue({ action: 'unshared', fabFile: { id: FILE_ID, userId: 'someone-else' } });
+    const { res } = makeRes();
+
+    await call(makeDelReq(), res);
+
+    expect(h.recomputeLakeStats).not.toHaveBeenCalled();
+  });
+
+  it('still returns the delete result when a stats recompute throws', async () => {
+    h.recomputeLakeStats.mockRejectedValue(new Error('mongo down'));
+    const req = makeDelReq();
+    const { res, json } = makeRes();
+
+    await call(req, res);
+
+    expect(json).toHaveBeenCalledWith({ msg: 'Fab file deleted', action: 'deleted' });
+    expect((req as unknown as { logger: { error: ReturnType<typeof vi.fn> } }).logger.error).toHaveBeenCalled();
   });
 });

@@ -191,7 +191,9 @@ export const handler = withEventContext(async (event, logger) => {
   // entire summarization - the summary text is already saved on the session.
   try {
     await withTransaction(async () => {
-      const fabfile = await fabFileRepository.findOne({ sessionId: session.id });
+      // Scoped to the session's owner: sessionId alone is not an ownership claim, so an
+      // unscoped lookup can select a file belonging to someone else and overwrite its content.
+      const fabfile = await fabFileRepository.findOne({ sessionId: session.id, userId: session.userId });
       if (fabfile) {
         await fabFilesService.updateFabFile(
           user,
