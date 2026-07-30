@@ -616,8 +616,9 @@ export default function PartnerSignupRulesTab() {
           </Typography>
           <Divider sx={{ my: 1 }} />
           <Typography level="body-sm">
-            Add existing <b>verified</b> users on <b>{backfillTarget?.domain}</b> to this rule&apos;s organization.
-            Users already in the org are skipped, and no one is ever removed.
+            Add existing <b>verified</b> users on <b>{backfillTarget?.domain}</b>
+            {' to '}
+            this rule&apos;s organization. Users already in the org are skipped, and no one is ever removed.
           </Typography>
 
           {backfillPreviewLoading ? (
