@@ -10,10 +10,14 @@ const handler = baseApi().get(
       throw new ForbiddenError('Unauthorized');
     }
 
+    // One scope for both halves of the response: the client keys workspace rows off the tag
+    // counts and sizes them from the namespace counts, so a narrower scope on either one shows
+    // a shared or data-lake workspace as empty. Also shared with the tag list in ./index.ts.
+    const scope = buildTagCountScope(req.user);
+
     const [tagCounts, namespaceCounts] = await Promise.all([
-      // Shared with the tag list in ./index.ts; the two must count the same files.
-      fabFileRepository.countFilesByTagForUser(req.user.id, buildTagCountScope(req.user)),
-      fabFileRepository.countUniqueFilesByNamespaceForUser(req.user.id),
+      fabFileRepository.countFilesByTagForUser(req.user.id, scope),
+      fabFileRepository.countUniqueFilesByNamespaceForUser(req.user.id, scope),
     ]);
 
     return res.json({ tagCounts, namespaceCounts });

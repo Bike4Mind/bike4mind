@@ -292,6 +292,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         $match: {
           $and: [ownershipFilter, sessionFilter],
           deletedAt: null,
+          // Must mirror buildFabFileSearchQuery's baseFilter: this count is rendered as a badge
+          // beside the list that filter produces, so a file either feeds both or neither.
+          // Equality to null matches missing too, leaving files that were never archived alone.
+          archivedAt: null,
           tags: { $exists: true, $ne: [] },
         },
       },
@@ -349,6 +353,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         $match: {
           $and: [ownershipFilter, sessionFilter],
           deletedAt: null,
+          // Belt-and-braces: the caller only ever passes prefixes of non-archived lakes
+          // (listDataLakes filters on status), so nothing archived reaches here today. Keeping
+          // the conjunct makes "archived files never count" a property of the aggregate rather
+          // than of whoever calls it.
+          archivedAt: null,
           tags: { $elemMatch: { name: { $regex: prefixRegex } } },
         },
       },
@@ -391,7 +400,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         { tags: { $elemMatch: { name: 'curated-notebook' } } },
       ],
     };
-    const baseMatch = { $and: [ownershipFilter, sessionFilter], deletedAt: null };
+    // archivedAt: null for the same reason as countDataLakeTagsByPrefix above.
+    const baseMatch = { $and: [ownershipFilter, sessionFilter], deletedAt: null, archivedAt: null };
 
     // One indexed countDocuments per prefix (few lakes), plus one for the combined total.
     // $elemMatch on the anchored prefix regex lets MongoDB use the tags.name index and
@@ -414,19 +424,41 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return { total, byPrefix };
   }
 
-  async countUniqueFilesByNamespaceForUser(userId: string): Promise<{ namespace: string; fileCount: number }[]> {
+  /**
+   * Per-namespace unique file counts, served alongside countFilesByTagForUser by
+   * GET /api/files/tags/counts. Takes the SAME optional scope as that sibling and must keep
+   * being called with it: the workspace rows are keyed off the tag counts but sized by these
+   * ones, so an owner-only namespace count renders a shared or data-lake workspace as zero.
+   */
+  async countUniqueFilesByNamespaceForUser(
+    userId: string,
+    options?: {
+      userGroups?: string[];
+      dataLakeTags?: string[];
+      dataLakeTagPrefixes?: string[];
+      scopedTagPrefixes?: string[];
+    }
+  ): Promise<{ namespace: string; fileCount: number }[]> {
+    const ownershipFilter = options ? { $or: buildOwnershipConditions(userId, options) } : { userId };
+    // Exclude session summaries (unless curated-notebook) to match search behavior. Both this and
+    // the ownership filter can be an $or, so they go under $and rather than into one object where
+    // the second $or key would overwrite the first.
+    const sessionFilter = {
+      $or: [
+        { sessionId: null },
+        { sessionId: { $exists: false } },
+        { tags: { $elemMatch: { name: 'curated-notebook' } } },
+      ],
+    };
+
     const result = await this.fabFileModel.aggregate([
       {
         $match: {
-          userId,
+          $and: [ownershipFilter, sessionFilter],
           deletedAt: null,
+          // See countFilesByTagForUser: a count beside a list covers the list's file set.
+          archivedAt: null,
           tags: { $exists: true, $ne: [] },
-          // Exclude session summaries (unless curated-notebook) to match search behavior
-          $or: [
-            { sessionId: null },
-            { sessionId: { $exists: false } },
-            { tags: { $elemMatch: { name: 'curated-notebook' } } },
-          ],
         },
       },
       { $unwind: '$tags' },
