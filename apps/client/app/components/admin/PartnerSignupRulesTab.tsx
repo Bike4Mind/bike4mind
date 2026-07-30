@@ -185,7 +185,7 @@ export default function PartnerSignupRulesTab() {
           (result.failed ? `, ${result.failed} failed` : '')
       );
     },
-    onError: (error: unknown) => toast.error(extractApiError(error)),
+    onError: (error: unknown) => toast.error(getErrorMessage(error)),
   });
 
   const openCreate = () => {
