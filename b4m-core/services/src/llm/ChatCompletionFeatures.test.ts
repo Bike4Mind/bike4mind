@@ -378,6 +378,7 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
           findByFabFileId: vi.fn(),
           findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
         },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
       // Resolver injected by ChatCompletionProcess; no entitlements in these citation tests.
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
@@ -515,6 +516,7 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
           findByFabFileId: vi.fn(),
           findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
         },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
@@ -585,10 +587,18 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
 
   /** Defaults to full coverage (no more pages), so tests opt in to partiality via `hasMore`. */
   const makeCtx = (opts: {
-    files?: { id: string; fileName: string; tags?: unknown[]; embeddingModel?: string }[];
+    files?: {
+      id: string;
+      fileName: string;
+      tags?: unknown[];
+      embeddingModel?: string;
+      vectorizedChunkCount?: number;
+    }[];
     rows?: (ids: string[]) => unknown[];
     total?: number;
     hasMore?: boolean;
+    /** Admin's configured default-embedding-model setting; undefined = unset (factory default wins). */
+    defaultEmbeddingModel?: string;
   }) => {
     const files = opts.files ?? [{ id: 'fileA', fileName: 'A.pdf', tags: [] }];
     // Honours limit + afterChunkId like the real repository, so the probe and the within-batch
@@ -613,6 +623,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
             .mockResolvedValue({ data: files, hasMore: opts.hasMore ?? false, total: opts.total ?? files.length }),
         },
         fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(opts.defaultEmbeddingModel) },
       },
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
@@ -675,7 +686,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect((quest.promptMeta as { warnings?: string[] }).warnings).toBeUndefined();
   });
 
-  it('skips a wrong-width vector, still grounds on the good one, and reports the mismatch', async () => {
+  it('skips a wrong-width vector, still grounds on the good one, and reports the mismatch as partial coverage', async () => {
     const ctx = makeCtx({
       files: [
         { id: 'good', fileName: 'Good.pdf', tags: [] },
@@ -687,22 +698,28 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
         { id: 'c2', fabFileId: 'stale', text: 'unmatchable content', vector: [1, 0, 0] },
       ],
     });
-    const { content } = await run(ctx);
+    const { quest, content } = await run(ctx);
     expect(content).toContain('usable content');
     expect(content).not.toContain('unmatchable content');
-    // A FEW mismatches are normal mid-revectorize, so this must not hedge the prompt - same policy
-    // as semanticDataLakeSearch, which warns only when the entire corpus is the wrong width.
-    expect(content).not.toContain('Coverage note');
+    // ANY skipped chunk is partial coverage, matching the shared ranking core's policy
+    // (embeddingMismatch.ts recomputes `partial` on `mismatched > 0`, not on "all"). A half-migrated
+    // library grounding silently on the half that still compares is exactly the case to hedge.
+    expect(content).toContain('Coverage note');
+    expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
   });
 
-  it('an entirely wrong-width corpus says so, distinctly from having no vectors at all', async () => {
+  it('an entirely wrong-width corpus reports partial coverage, distinctly from having no vectors at all', async () => {
     const ctx = makeCtx({
       rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'x', vector: [1, 0, 0] }],
     });
-    const { messages } = await run(ctx);
+    const { quest, messages } = await run(ctx);
     expect(messages).toEqual([]);
     const warn = (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn;
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('needs re-vectorizing'));
+    // Reported through the SAME path as every other coverage gap - previously this call site sat
+    // before reportCoverage ever ran, so a fully-mismatched library warned to the operator log
+    // only, with no promptMeta write.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('embedded with a different model and cannot be matched'));
+    expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
     // Must NOT be reported as "no vectorized chunks" - these files have vectors, at the wrong width.
     const logs = (ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.flat().join(' ');
     expect(logs).not.toContain('no vectorized chunks');
@@ -824,16 +841,106 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
   });
 
   it('warns when candidate documents declare more than one embedding model', async () => {
+    // vectorizedChunkCount > 0 on both: only files that actually hold vectors get an opinion on
+    // which embedding space the corpus lives in.
     const ctx = makeCtx({
       files: [
-        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-ada-002' },
-        { id: 'fileB', fileName: 'B.pdf', tags: [], embeddingModel: 'voyage-3' },
+        { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-ada-002', vectorizedChunkCount: 1 },
+        { id: 'fileB', fileName: 'B.pdf', tags: [], embeddingModel: 'voyage-3', vectorizedChunkCount: 1 },
       ],
     });
     await run(ctx);
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
       expect.stringContaining('different embedding models')
     );
+  });
+
+  it("falls back to the admin's configured default, not the embedding factory's credential-derived default", async () => {
+    // A single unlabeled-but-vectorized file votes for the fallback. If the factory default won,
+    // this would embed the query as ada-002 instead of the admin's configured voyage-3.
+    const createEmbeddingService = vi.fn().mockReturnValue({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) });
+    const factory = { createEmbeddingService, getDefaultEmbeddingModel: () => 'text-embedding-ada-002' };
+    const ctx = makeCtx({
+      files: [{ id: 'f1', fileName: 'F1.pdf', vectorizedChunkCount: 3 }],
+      rows: () => [{ id: 'c1', fabFileId: 'f1', text: 'content', vector: [1, 0] }],
+      defaultEmbeddingModel: 'voyage-3',
+    });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      makeQuest(),
+      factory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'q'
+    );
+    expect(createEmbeddingService).toHaveBeenCalledWith('voyage-3');
+  });
+
+  it('falls back to the embedding factory default when the admin setting is unset', async () => {
+    const createEmbeddingService = vi.fn().mockReturnValue({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) });
+    const factory = { createEmbeddingService, getDefaultEmbeddingModel: () => 'voyage-3' };
+    const ctx = makeCtx({
+      files: [{ id: 'f1', fileName: 'F1.pdf', vectorizedChunkCount: 3 }],
+      rows: () => [{ id: 'c1', fabFileId: 'f1', text: 'content', vector: [1, 0] }],
+    });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      makeQuest(),
+      factory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'q'
+    );
+    expect(createEmbeddingService).toHaveBeenCalledWith('voyage-3');
+  });
+
+  it('excludes never-vectorized files from the majority vote, so a label majority cannot outvote the corpus that actually has vectors', async () => {
+    const createEmbeddingService = vi.fn().mockReturnValue({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) });
+    const factory = { createEmbeddingService, getDefaultEmbeddingModel: () => 'text-embedding-ada-002' };
+    const ctx = makeCtx({
+      files: [
+        // The only file with vectors: unlabeled, so it votes for the fallback.
+        { id: 'legacy', fileName: 'legacy.pdf', vectorizedChunkCount: 5 },
+        // Three never-vectorized files (e.g. images) declaring a model they were never embedded
+        // with. If they counted, their 3-1 label majority would flip the vote to voyage-3.
+        { id: 'img1', fileName: 'img1.png', embeddingModel: 'voyage-3', vectorizedChunkCount: 0 },
+        { id: 'img2', fileName: 'img2.png', embeddingModel: 'voyage-3', vectorizedChunkCount: 0 },
+        { id: 'img3', fileName: 'img3.png', embeddingModel: 'voyage-3', vectorizedChunkCount: 0 },
+      ],
+      rows: () => [{ id: 'c1', fabFileId: 'legacy', text: 'legacy content', vector: [1, 0] }],
+      defaultEmbeddingModel: 'text-embedding-3-small',
+    });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      makeQuest(),
+      factory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'q'
+    );
+    expect(createEmbeddingService).toHaveBeenCalledWith('text-embedding-3-small');
+  });
+
+  it('withholds foreign-model files before the chunk load, and reports even when every candidate is excluded', async () => {
+    const ctx = makeCtx({
+      files: [
+        { id: 'good1', fileName: 'Good1.pdf', vectorizedChunkCount: 1 },
+        { id: 'good2', fileName: 'Good2.pdf', vectorizedChunkCount: 1 },
+        { id: 'foreign', fileName: 'Foreign.pdf', embeddingModel: 'text-embedding-3-small', vectorizedChunkCount: 1 },
+      ],
+      // Only the excluded file has a matching row - good1/good2 are listed but never vectorized
+      // any content the mock can return, so the run below still forces the partition to load them.
+      rows: () => [{ id: 'c1', fabFileId: 'foreign', text: 'cross-space noise', vector: [1, 0] }],
+    });
+    const { quest, messages } = await run(ctx);
+    expect(messages).toEqual([]);
+    // The foreign file's id must never reach the chunk query at all.
+    const calledIds = (ctx.db.fabfilechunks.findVectorsByFabFileIds as ReturnType<typeof vi.fn>).mock.calls.flatMap(
+      c => c[0] as string[]
+    );
+    expect(calledIds).not.toContain('foreign');
+    expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
+    expect((quest.promptMeta as { warnings?: string[] }).warnings?.[0]).toContain('excluded entirely');
   });
 
   it('truncates the last chunk at the char budget without spilling over', async () => {
@@ -880,7 +987,10 @@ describe('KnowledgeRetrievalFeature same-width model mismatch', () => {
     getDefaultEmbeddingModel: () => ADA,
   };
 
-  const makeCtx = (files: { id: string; fileName: string; embeddingModel?: string }[], rows: unknown[]) => ({
+  const makeCtx = (
+    files: { id: string; fileName: string; embeddingModel?: string; vectorizedChunkCount?: number }[],
+    rows: unknown[]
+  ) => ({
     logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
     user: { id: 'u1', tags: [], groups: [] },
     db: {
@@ -902,6 +1012,7 @@ describe('KnowledgeRetrievalFeature same-width model mismatch', () => {
           )
         ),
       },
+      adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
     },
     resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),

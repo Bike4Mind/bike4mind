@@ -362,7 +362,9 @@ describe('search_knowledge_base embedding-mismatch disclosure', () => {
 
   it('carries the notice through the keyword fall-through when everything was withheld', async () => {
     // The worst case: no semantic hits BECAUSE every matching file was excluded. The arm has no
-    // output, keyword search answers instead, and the notice has to survive that hand-off.
+    // output, keyword search answers instead, and the notice has to survive that hand-off - on
+    // BOTH channels: the model's tool string AND the human-visible status/promptMeta write, which
+    // previously only ran inside emitSemanticCitables (never reached when semantic found nothing).
     semanticDataLakeSearchMock.mockResolvedValue({
       ...emptySemanticResult(),
       results: [],
@@ -375,6 +377,36 @@ describe('search_knowledge_base embedding-mismatch disclosure', () => {
     expect(ctx.db.fabfiles!.search).toHaveBeenCalledTimes(1);
     expect(out).toContain('Keyword doc.pdf');
     expect(out).toContain(SMALL_3);
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const withWarning = calls.find(c => (c[0] as { promptMeta?: { warnings?: string[] } })?.promptMeta?.warnings);
+    expect(withWarning).toBeDefined();
+    expect((withWarning![0] as { promptMeta: { warnings: string[] } }).promptMeta.warnings[0]).toContain(SMALL_3);
+    expect(withWarning![1]).toContain('partial results');
+  });
+
+  it('surfaces the notice on the status line even when keyword search ALSO finds nothing', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [],
+      embeddingMismatch: mismatchReport(),
+    });
+    const ctx = makeSemanticContext({
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }) },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    const out = await run(ctx);
+
+    expect(out).toContain(SMALL_3);
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const withWarning = calls.find(c => (c[0] as { promptMeta?: { warnings?: string[] } })?.promptMeta?.warnings);
+    expect(withWarning).toBeDefined();
+    expect(withWarning![1]).toContain('partial results');
   });
 
   it('does not invent a notice when the semantic arm throws', async () => {
@@ -384,6 +416,24 @@ describe('search_knowledge_base embedding-mismatch disclosure', () => {
 
     expect(out).toContain('Keyword doc.pdf');
     expect(out).not.toContain('partial');
+  });
+
+  it('repeats the last notice on the capped call, which runs no search of its own', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+      embeddingMismatch: mismatchReport(),
+    });
+    const ctx = makeSemanticContext();
+    const tool = knowledgeBaseSearchTool.implementation(ctx, undefined);
+    for (let i = 0; i < 3; i++) {
+      await tool.toolFn({ query: 'q' });
+    }
+    // The 4th call is capped: no search runs, so without carrying the notice forward it would be
+    // silently dropped from the model's view even though the corpus is still mid-migration.
+    const capped = await tool.toolFn({ query: 'q' });
+    expect(capped).toContain('STOP searching');
+    expect(capped).toContain(SMALL_3);
   });
 
   it('accretes the warning onto promptMeta alongside the citables', async () => {

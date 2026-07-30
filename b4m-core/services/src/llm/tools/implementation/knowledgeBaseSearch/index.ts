@@ -376,6 +376,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
     // the relevant passages, we hard-stop the loop and tell the model to compose its answer.
     let searchCallCount = 0;
     const MAX_SEARCHES = 3;
+    // Carries the most recent skip notice across calls in this completion, so the model still
+    // hears about a comparability gap on the capped call, which never runs a search of its own.
+    let lastSkipNotice: string | null = null;
     return {
       toolFn: async value => {
         const params = value as KnowledgeBaseSearchParams;
@@ -390,7 +393,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           return (
             `You have already run ${searchCallCount - 1} knowledge-base searches; the relevant passages are in the conversation above. ` +
             `STOP searching and compose your complete answer NOW from those results. Do NOT call search_knowledge_base ` +
-            `or retrieve_knowledge_content again unless a specific named fact is genuinely missing.`
+            `or retrieve_knowledge_content again unless a specific named fact is genuinely missing.` +
+            formatSkipNotice(lastSkipNotice)
           );
         }
 
@@ -415,6 +419,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
         const semantic = scope
           ? await tryScopedSemanticKbSearch(context, scope.fileIds, query, max_results)
           : await trySemanticKbSearch(context, query, tags, max_results);
+        lastSkipNotice = semantic.skipNotice;
         // Must test .output, not the object: the arm always resolves to a truthy result now, and
         // `if (semantic)` would swallow the keyword fallback entirely.
         if (semantic.output) return semantic.output;
@@ -567,17 +572,26 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // Scoped wording avoids "data lake" framing - a scoped caller sees only the
             // agent's KB, and the status must not imply a wider corpus exists.
             const corpusLabel = scope ? "this agent's knowledge base" : 'the data lake';
-            const foundStatus = `📄 Found ${rankedResults.length} in ${corpusLabel}: ${names.join(', ')}${more}`;
-            await context.statusUpdate({ promptMeta: { citables } } as any, foundStatus);
+            // The semantic arm's notice (e.g. every matching file withheld for a model mismatch)
+            // has to land here too: when semantic finds nothing to say, this keyword status is the
+            // ONLY user-visible write for the turn, so a total-withholding warning would otherwise
+            // never reach the promptMeta inspector or the status line.
+            const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
+            const foundStatus = `📄 Found ${rankedResults.length} in ${corpusLabel}: ${names.join(', ')}${more}${skipSuffix}`;
+            await context.statusUpdate(
+              { promptMeta: { citables, ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}) } } as any,
+              foundStatus
+            );
             context.logger.log(`📚 Knowledge Base Search: Stored ${citables.length} citables`);
           } else {
             // No hits - tell the user what was searched so the wait reads as deliberate.
             const clippedQuery = query.length > 50 ? query.slice(0, 49) + '…' : query;
+            const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
             await context.statusUpdate(
-              {} as any,
-              scope
+              { promptMeta: semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {} } as any,
+              (scope
                 ? `📭 No matches in this agent's knowledge base for “${clippedQuery}”`
-                : `📭 No data-lake matches for “${clippedQuery}” — broadening…`
+                : `📭 No data-lake matches for “${clippedQuery}” — broadening…`) + skipSuffix
             );
           }
 

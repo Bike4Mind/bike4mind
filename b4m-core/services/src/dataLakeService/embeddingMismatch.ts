@@ -7,8 +7,9 @@ import { isSupportedEmbeddingModel, type SupportedEmbeddingModel } from '@bike4m
  * Shared by BOTH data-lake ranking loops - semanticDataLakeSearch's rankChunksForFiles (the
  * endpoint, the chat KB tool and the RLM tools) and KnowledgeRetrievalFeature's forced-retrieval
  * injection - so the two apply one definition of "cannot be compared". They still resolve the
- * QUERY model differently (the tool reads the admin setting, forced retrieval infers it from the
- * corpus), and that choice is what any given chunk is then judged against.
+ * QUERY model differently (the tool reads the admin setting directly; forced retrieval votes
+ * across the corpus and falls back to that same admin setting when unlabeled files decide it),
+ * and that choice is what any given chunk is then judged against.
  *
  * Two distinct failure modes, and only one of them is visible to a vector-width check:
  *  - different WIDTH (e.g. an Ollama embedder at 768 vs OpenAI at 1536): computeCosineSimilarity
