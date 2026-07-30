@@ -10,12 +10,6 @@ interface MetadataChipProps {
   tooltip?: string;
   variant?: ChipVariant;
   isMaximum?: boolean;
-  /**
-   * Renders a square icon-only chip: `icon` replaces the visible text and `label`
-   * becomes the accessible name. Passed as a child rather than a decorator, since
-   * Joy gives decorators a negative `--Icon-margin` that would knock it off-centre.
-   */
-  icon?: React.ReactNode;
 }
 
 const MetadataChip: React.FC<MetadataChipProps> = ({
@@ -25,14 +19,12 @@ const MetadataChip: React.FC<MetadataChipProps> = ({
   tooltip,
   variant = 'default',
   isMaximum,
-  icon,
 }) => {
   const chipContent = (
     <Chip
       size="sm"
-      aria-label={icon ? label : undefined}
       startDecorator={
-        icon ? undefined : isMaximum ? (
+        isMaximum ? (
           <Box style={{ display: 'flex', alignItems: 'center' }}>
             <Box
               style={{
@@ -58,27 +50,9 @@ const MetadataChip: React.FC<MetadataChipProps> = ({
           startDecorator
         )
       }
-      sx={{
-        ...getChipStyles(variant, isMaximum ?? false, mode, label),
-        // Square out the chip: getChipStyles' 12px inline padding is sized for a text label.
-        ...(icon && {
-          padding: 0,
-          width: '32px',
-          minWidth: '32px',
-          height: '32px',
-          minHeight: '32px',
-          // Joy's label slot is `inline-block; flex-grow: 1`, so it fills the chip and lays
-          // the glyph out inline - left-aligned and on the text baseline. Centring has to
-          // happen inside the label; the root's justify-content can't reach it.
-          '& .MuiChip-label': {
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          },
-        }),
-      }}
+      sx={getChipStyles(variant, isMaximum ?? false, mode, label)}
     >
-      {icon ?? label}
+      {label}
     </Chip>
   );
 

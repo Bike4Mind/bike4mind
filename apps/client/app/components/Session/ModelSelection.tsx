@@ -260,6 +260,31 @@ const metricIconColor = (variant: ChipVariant): string =>
 // it; getChipStyles hardcodes the identical value for its `purple` variant.
 const NEW_BADGE_BG = '#A52ECD';
 
+// Read-only indicator. The frame is what separates these from the star and settings icons
+// sitting beside them - without it, informational glyphs read as pressable. Borrows the
+// card's own border shorthand so the frames, the card and the row divider stay in step.
+const MetricIcon = ({ label, tooltip, children }: { label: string; tooltip: string; children: React.ReactNode }) => (
+  <Tooltip title={tooltip} placement="top">
+    <Box
+      role="img"
+      aria-label={label}
+      sx={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '24px',
+        height: '24px',
+        flex: 'none',
+        boxSizing: 'border-box',
+        borderRadius: '50%',
+        border: 'var(--joy-palette-aiSettings-modelCard-border)',
+      }}
+    >
+      {children}
+    </Box>
+  </Tooltip>
+);
+
 const ModelOption = React.memo(
   ({
     model,
@@ -426,8 +451,9 @@ const ModelOption = React.memo(
         useFlexGap
         flexWrap="wrap"
         alignItems="center"
-        // Levels the text chips with the 32px icon chips. Set from the row rather than in
-        // getChipStyles, which is shared with the model-details dialog.
+        // Unavailable is the only framed chip left in this row; 32px gives it presence next to
+        // the 24px indicators. Set here rather than in getChipStyles, which the model-details
+        // dialog also uses.
         sx={{ '& .MuiChip-root': { height: '32px' } }}
       >
         {isDisabled ? (
@@ -440,51 +466,41 @@ const ModelOption = React.memo(
           />
         ) : (
           <>
-            <MetadataChip
-              label={`${priceTierInfo.tier} cost`}
-              mode={mode}
-              tooltip={getPriceTierTooltip(priceTierInfo.tier)}
-              icon={<AttachMoneyIcon sx={{ fontSize: '18px', color: metricIconColor(priceTierInfo.variant) }} />}
-            />
+            {/* Metrics first: they are always present, so leading with them keeps a stable
+                first column in this left-aligned group while the optional capabilities trail. */}
+            <MetricIcon label={`${priceTierInfo.tier} cost`} tooltip={getPriceTierTooltip(priceTierInfo.tier)}>
+              <AttachMoneyIcon sx={{ fontSize: '16px', color: metricIconColor(priceTierInfo.variant) }} />
+            </MetricIcon>
 
             {!statsLoading && modelSpeed && (
-              <MetadataChip
+              <MetricIcon
                 label={`${modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)} speed`}
-                mode={mode}
                 tooltip={getModelSpeedTooltip(modelSpeed)}
-                icon={<SpeedIcon sx={{ fontSize: '18px', color: metricIconColor(getModelSpeedVariant(modelSpeed)) }} />}
-              />
+              >
+                <SpeedIcon sx={{ fontSize: '16px', color: metricIconColor(getModelSpeedVariant(modelSpeed)) }} />
+              </MetricIcon>
             )}
 
             {/* Capabilities are present-or-absent, so they stay neutral: no colour to imply
-                a scale that doesn't exist. Absence of the chip is the "no" state. */}
+                a scale that doesn't exist. Absence of the icon is the "no" state. */}
             {model.supportsVision && (
-              <MetadataChip
-                label="Vision"
-                mode={mode}
-                tooltip="Able to understand images"
-                icon={<VisibilityOutlinedIcon sx={{ fontSize: '18px', color: 'text.tertiary' }} />}
-              />
+              <MetricIcon label="Vision" tooltip="Able to understand images">
+                <VisibilityOutlinedIcon sx={{ fontSize: '16px', color: 'text.tertiary' }} />
+              </MetricIcon>
             )}
 
             {model.can_think && (
-              <MetadataChip
-                label="Thinking"
-                mode={mode}
-                tooltip="Reasons step-by-step before responding"
-                // 20px where the others are 18: this glyph carries far more detail than the
-                // MUI icons, so it needs the extra couple of px to stay legible.
-                icon={<SupportsToolsIcon width={20} height={20} fill="var(--joy-palette-text-tertiary)" />}
-              />
+              <MetricIcon label="Thinking" tooltip="Reasons step-by-step before responding">
+                {/* 18px where the others are 16: this glyph carries far more detail than the
+                    MUI icons, so it needs the extra couple of px to stay legible. */}
+                <SupportsToolsIcon width={18} height={18} fill="var(--joy-palette-text-tertiary)" />
+              </MetricIcon>
             )}
 
             {model.supportsTools && (
-              <MetadataChip
-                label="Tools"
-                mode={mode}
-                tooltip="Able to use a growing list of tools"
-                icon={<ConstructionIcon sx={{ fontSize: '18px', color: 'text.tertiary' }} />}
-              />
+              <MetricIcon label="Tools" tooltip="Able to use a growing list of tools">
+                <ConstructionIcon sx={{ fontSize: '16px', color: 'text.tertiary' }} />
+              </MetricIcon>
             )}
           </>
         )}
@@ -544,7 +560,7 @@ const ModelOption = React.memo(
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 2,
-                padding: '12px 16px',
+                padding: '16px',
                 maxHeight: 'none',
               }
             : {
@@ -587,14 +603,26 @@ const ModelOption = React.memo(
 
         {isList ? (
           <>
-            {/* Title, then tags + context beneath it; actions pushed to the right. */}
+            {/* Title with its indicators beneath, context pushed right, then a rule separating
+                what the row *says* from what you can *do* to it. */}
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1, minWidth: 0, textAlign: 'left' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>{nameBlock}</Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                {metadataChips}
-                {contextSummary}
-              </Box>
+              {metadataChips}
             </Box>
+
+            <Box sx={{ display: 'flex', alignItems: 'center', flex: 'none' }}>{contextSummary}</Box>
+
+            <Box
+              sx={{
+                display: { xs: 'none', sm: 'block' },
+                alignSelf: 'stretch',
+                my: '4px',
+                flex: 'none',
+                // Reuses the card's own border shorthand so the two can't drift apart.
+                borderLeft: 'var(--joy-palette-aiSettings-modelCard-border)',
+              }}
+            />
+
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
               {favoriteToggle}
               {viewMoreButton}
