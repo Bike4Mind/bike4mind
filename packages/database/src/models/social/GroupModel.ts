@@ -33,9 +33,20 @@ GroupSchema.plugin(softDeletePlugin);
 // One LIVE group per (organization, type) - the epic's "one group per type per org in v1"
 // invariant. The partial filter scopes uniqueness to live rows so revoke (soft-delete) then
 // re-grant of the same type still works. Also serves findByOrganization (organizationId prefix).
+//
+// The `$type: 'string'` guards are load-bearing, not cosmetic: legacy Group rows predate both
+// `type` and `organizationId` (strict mode dropped organizationId before it was in the schema),
+// so they carry neither field and `deletedAt` defaults to null - they would all key as
+// (null, null) and collide with E11000 on index build. Requiring both to be real strings excludes
+// them, mirroring the email_1 partial index. MUST stay identical to the migration
+// (20260730000000) or autoIndex and the migrator conflict (IndexKeySpecsConflict).
 GroupSchema.index(
   { organizationId: 1, type: 1 },
-  { unique: true, partialFilterExpression: { deletedAt: null }, name: 'group_org_type_live' }
+  {
+    unique: true,
+    partialFilterExpression: { deletedAt: null, organizationId: { $type: 'string' }, type: { $type: 'string' } },
+    name: 'group_org_type_live',
+  }
 );
 
 export const Group: mongoose.Model<IGroupDocument> =

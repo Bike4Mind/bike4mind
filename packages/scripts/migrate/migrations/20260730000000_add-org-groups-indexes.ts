@@ -1,4 +1,4 @@
-import { safeDropIndex, User } from '@bike4mind/database';
+import { User } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 const migration: MigrationFile = {
@@ -18,21 +18,25 @@ const migration: MigrationFile = {
 
     // group_org_type_live: one LIVE group per (organizationId, type) - the "one group per type per
     // org in v1" invariant. The partial filter scopes uniqueness to live rows so revoke
-    // (soft-delete) then re-grant of the same type still succeeds.
-    await User.db
-      .collection('groups')
-      .createIndex(
-        { organizationId: 1, type: 1 },
-        { unique: true, partialFilterExpression: { deletedAt: null }, name: 'group_org_type_live' }
-      );
+    // (soft-delete) then re-grant of the same type still succeeds. The `$type: 'string'` guards
+    // exclude legacy rows that predate `type`/`organizationId` (they carry neither field, so
+    // without the guard they would all key as (null, null) and collide with E11000 on build).
+    // MUST stay identical to the GroupModel.ts schema declaration (IndexKeySpecsConflict otherwise).
+    await User.db.collection('groups').createIndex(
+      { organizationId: 1, type: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { deletedAt: null, organizationId: { $type: 'string' }, type: { $type: 'string' } },
+        name: 'group_org_type_live',
+      }
+    );
     console.log('✓ Created group_org_type_live index');
   },
 
-  down: async () => {
-    await safeDropIndex(User.collection, 'user_groups');
-    await safeDropIndex(User.db.collection('groups'), 'group_org_type_live');
-    console.log('✓ Dropped org-groups indexes');
-  },
+  // No-op: autoIndex (mongo.ts) recreates both indexes from the schema declarations at next boot,
+  // so dropping them here would just churn. Mirrors 20260619000000's down(). The forward migration
+  // is idempotent (createIndex with a matching spec is a no-op), so re-running up() is the recovery.
+  down: async () => {},
 };
 
 export default migration;

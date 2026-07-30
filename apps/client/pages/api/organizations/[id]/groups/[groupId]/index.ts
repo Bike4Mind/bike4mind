@@ -3,7 +3,7 @@
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { groupRepository } from '@bike4mind/database/social';
 import { organizationService } from '@bike4mind/services';
@@ -17,16 +17,9 @@ const handler = baseApi().patch(
     const groupId = req.query.groupId;
     if (!organizationId || !groupId) throw new BadRequestError('Organization id and group id are required');
 
-    let name: string;
-    try {
-      ({ name } = bodySchema.parse(req.body));
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        // Preserve path + message (matches group-types.ts) rather than collapsing to one string.
-        throw new BadRequestError(error.issues.map(e => `${e.path.join('.') || 'value'}: ${e.message}`).join('; '));
-      }
-      throw error;
-    }
+    // Let a ZodError propagate to the central errorHandler (maps it to 422 via fromZodError) rather
+    // than hand-rolling a divergent 400 here.
+    const { name } = bodySchema.parse(req.body);
 
     // Authorization + the "group belongs to this org" invariant live in the service (shared with
     // the membership writes and covered by its tests), so this route only extracts and delegates.
@@ -35,6 +28,8 @@ const handler = baseApi().patch(
       { organizationId, groupId, name },
       { db: { organizations: organizationRepository, groups: groupRepository } }
     );
+    // Null only if the group vanished between the service's existence check and the update (race).
+    if (!updated) throw new NotFoundError('Group not found');
     return res.status(200).json({ group: updated });
   })
 );

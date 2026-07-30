@@ -98,7 +98,8 @@ the normal case for a doc shared with two people at different levels. Example: a
 grants only `share`, bob's entry grants `read`; alice's `read` check matches her id on her
 entry and `read` on bob's, so alice is over-granted `read`. Deferring it is defensible on
 **blast-radius** grounds (a live change, out of scope for this dormant-path pass), not on the
-mistaken "listed once" reasoning. Tracked as its own P1-severity issue.
+mistaken "listed once" reasoning. Warrants its own P1-severity issue (to be filed separately - not
+yet tracked at time of writing).
 
 ## Sign-off
 

@@ -21,16 +21,8 @@ const handler = baseApi().post(
     const groupId = req.query.groupId;
     if (!organizationId || !groupId) throw new BadRequestError('Organization id and group id are required');
 
-    let userId: string;
-    try {
-      ({ userId } = bodySchema.parse(req.body));
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        // Preserve path + message (matches group-types.ts) rather than collapsing to one string.
-        throw new BadRequestError(error.issues.map(e => `${e.path.join('.') || 'value'}: ${e.message}`).join('; '));
-      }
-      throw error;
-    }
+    // ZodError propagates to the central errorHandler (422 via fromZodError). No hand-rolled 400.
+    const { userId } = bodySchema.parse(req.body);
 
     await organizationService.assignUserToGroup(
       req.user!,

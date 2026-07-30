@@ -16,17 +16,9 @@ const handler = baseApi().put(
     const organizationId = req.query.id;
     if (!organizationId) throw new BadRequestError('Organization id is required');
 
-    let adminUserIds: string[];
-    try {
-      ({ adminUserIds } = bodySchema.parse(req.body));
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        // Preserve path + message (matches group-types.ts) rather than collapsing to one string.
-        throw new BadRequestError(error.issues.map(e => `${e.path.join('.') || 'value'}: ${e.message}`).join('; '));
-      }
-      throw error;
-    }
-    adminUserIds = [...new Set(adminUserIds)];
+    // ZodError propagates to the central errorHandler (422 via fromZodError). No hand-rolled 400.
+    const parsed = bodySchema.parse(req.body);
+    const adminUserIds = [...new Set(parsed.adminUserIds)];
 
     const organization = await organizationRepository.findById(organizationId);
     if (!organization) throw new NotFoundError('Organization not found');

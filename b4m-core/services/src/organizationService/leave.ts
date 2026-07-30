@@ -44,7 +44,7 @@ export const leave = async (
   // doc, persisted just below). `user.groups[]`/`adminUserIds` carry no org qualifier, so leaving
   // must clear them or the user keeps group-shared data access (the data-lake membership leak
   // class) and org-admin authority. Idempotent, so safe under a withTransaction retry.
-  await purgeOrgMembershipArtifacts(user.id, organization, id, adapters);
+  organization.adminUserIds = await purgeOrgMembershipArtifacts(user.id, organization, adapters);
 
   await adapters.db.organizations.update(organization);
 

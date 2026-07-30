@@ -27,15 +27,8 @@ const handler = baseApi().put(
     const organizationId = req.query.id;
     if (!organizationId) throw new BadRequestError('Organization id is required');
 
-    let body: z.infer<typeof bodySchema>;
-    try {
-      body = bodySchema.parse(req.body);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        throw new BadRequestError(error.issues.map(e => `${e.path.join('.') || 'value'}: ${e.message}`).join('; '));
-      }
-      throw error;
-    }
+    // ZodError propagates to the central errorHandler (422 via fromZodError). No hand-rolled 400.
+    const body = bodySchema.parse(req.body);
 
     const result = await withTransaction(() =>
       organizationService.setOrganizationGroupTypes(

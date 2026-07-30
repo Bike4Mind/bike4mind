@@ -33,7 +33,10 @@ export interface GroupTypeDefinition {
 // from Mongo, and a type alias cannot be augmented by a private overlay without forcing
 // overlay-specific keys into this public repo. No `as const` here - the `readonly
 // GroupTypeDefinition[]` annotation already widens `key` to `string`, so `as const` bought nothing.
-export const GROUP_TYPE_CATALOG: readonly GroupTypeDefinition[] = [
+// Object.freeze (not `as const`): a runtime immutability guarantee for this shared singleton, since
+// the `readonly GroupTypeDefinition[]` annotation is compile-time only and `as const` would widen
+// away under it anyway (see the note above on why `key` stays `string`).
+export const GROUP_TYPE_CATALOG: readonly GroupTypeDefinition[] = Object.freeze([
   {
     key: 'sales',
     label: 'Sales',
@@ -52,7 +55,7 @@ export const GROUP_TYPE_CATALOG: readonly GroupTypeDefinition[] = [
     description: 'Customer-facing members.',
     priority: 30,
   },
-];
+]);
 
 /** The set of valid group-type keys - the single source the grant route and UI validate against. */
 export const KNOWN_GROUP_TYPE_KEYS: readonly string[] = GROUP_TYPE_CATALOG.map(t => t.key);

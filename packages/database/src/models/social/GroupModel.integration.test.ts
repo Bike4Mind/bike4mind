@@ -15,13 +15,20 @@ let server: Awaited<ReturnType<typeof createMongoServer>>;
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
+  // Build indexes before any test runs - the unique-index test asserts a duplicate insert
+  // REJECTS, which only holds once group_org_type_live exists. autoIndex is async and races the
+  // first insert, so without this the assertion is order-dependent (green only when earlier tests
+  // happen to give the build time). syncIndexes awaits the build deterministically.
+  await Group.syncIndexes();
 }, 30000);
 afterAll(async () => {
   await mongoose.disconnect();
   await server?.stop();
 }, 30000);
 afterEach(async () => {
-  await Group.deleteMany({});
+  // hardDelete: the plugin turns a plain deleteMany into a soft-delete, which would leave rows
+  // accumulating across tests (harmless for the unique index since it is live-only, but noise).
+  await Group.deleteMany({}, { hardDelete: true });
 });
 
 describe('GroupModel', () => {

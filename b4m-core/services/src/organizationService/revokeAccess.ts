@@ -49,7 +49,7 @@ export const revokeAccess = async (
   // Mirror leave.ts: an involuntarily-removed member must not keep the org's group ids (data
   // access) or a seat in adminUserIds (org-admin authority - assertCanManageOrgGroups reads it).
   // Involuntary removal is exactly where retained access matters most. Idempotent under retry.
-  await purgeOrgMembershipArtifacts(userId, organization, id, adapters);
+  organization.adminUserIds = await purgeOrgMembershipArtifacts(userId, organization, adapters);
 
   await adapters.db.organizations.update(organization);
 
