@@ -256,6 +256,10 @@ export type ModelViewMode = 'grid' | 'list';
 const metricIconColor = (variant: ChipVariant): string =>
   variant === 'green' ? green[800] : variant === 'yellow' ? orange[450] : red[400];
 
+// Same purple the New chip used before it became a corner badge. No theme token exists for
+// it; getChipStyles hardcodes the identical value for its `purple` variant.
+const NEW_BADGE_BG = '#A52ECD';
+
 const ModelOption = React.memo(
   ({
     model,
@@ -436,15 +440,6 @@ const ModelOption = React.memo(
           />
         ) : (
           <>
-            {isNewModel(model) && (
-              <MetadataChip
-                label="New"
-                mode={mode}
-                variant="purple"
-                tooltip="This model is released in the last 3 months"
-              />
-            )}
-
             <MetadataChip
               label={`${priceTierInfo.tier} cost`}
               mode={mode}
@@ -560,6 +555,36 @@ const ModelOption = React.memo(
               }),
         }}
       >
+        {/* Straddles the top border rather than the corner: the scroll container in
+            AdvancedAIModal is overflowY:auto, which makes overflow-x compute to auto too, so
+            anything reaching left of x=0 gets clipped - and in grid view that would clip the
+            left column while sparing the right. Vertical overhang is unaffected. */}
+        {!isDisabled && isNewModel(model) && (
+          <Tooltip title="Released in the last 3 months" placement="top">
+            <Box
+              data-testid={`model-new-badge-${model.id}`}
+              sx={{
+                position: 'absolute',
+                top: '-7px',
+                left: '12px',
+                zIndex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                height: '20px',
+                px: '6px',
+                borderRadius: '4px',
+                backgroundColor: NEW_BADGE_BG,
+                color: '#FFFFFF',
+                fontSize: '12px',
+                fontWeight: 600,
+                lineHeight: 1,
+              }}
+            >
+              New
+            </Box>
+          </Tooltip>
+        )}
+
         {isList ? (
           <>
             {/* Title, then tags + context beneath it; actions pushed to the right. */}
