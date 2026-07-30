@@ -110,6 +110,20 @@ describe('selectKeysToReactivate', () => {
   it('returns nothing for an empty collection', () => {
     expect(selectKeysToReactivate([], NOW)).toEqual([]);
   });
+
+  it('ignores a legacy row with no type, which no read would ever match', () => {
+    const keys = [key({ _id: 'typeless', type: undefined as unknown as string })];
+
+    expect(selectKeysToReactivate(keys, NOW)).toEqual([]);
+  });
+
+  it('does not merge two providers when a userId contains the group separator', () => {
+    // userId is a free-form String on the schema, so a joined "userId<sep>type" key could
+    // collide: 'a|b' + 'c' and 'a' + 'b|c' must stay two groups, each reactivated on its own.
+    const keys = [key({ _id: 'left', userId: 'a|b', type: 'c' }), key({ _id: 'right', userId: 'a', type: 'b|c' })];
+
+    expect(selectKeysToReactivate(keys, NOW).sort()).toEqual(['left', 'right']);
+  });
 });
 
 describe('reactivate-collateral-deactivated-api-keys migration', () => {

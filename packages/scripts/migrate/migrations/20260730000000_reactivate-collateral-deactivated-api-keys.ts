@@ -10,10 +10,14 @@ import { type MigrationFile } from './index';
  * provider quietly resolved to the org demo key instead. The service now scopes the
  * deactivation by type, but the fix does not reach rows already written.
  *
- * LIMITATION: a group with no active key is indistinguishable from a user who deleted their
- * own active key and left an older one behind. Both resolve to "use the key the user actually
- * registered rather than the org demo key", which is the safer of the two outcomes, so this
- * treats them the same.
+ * LIMITATION: nothing on the row records why a key is inactive, so a collateral deactivation
+ * is indistinguishable from two other ways a provider ends up with no active key - a user who
+ * deleted their active key and left an older one behind, and a key deliberately created with
+ * isActive: false (which is the documented workaround for this very bug). All three get the
+ * same treatment. The outcome in every case is "use a key the user registered themselves
+ * rather than the org demo key", and there is no UI for deactivating a key on purpose, so
+ * that is the safer default. Groups that still have an active key are never touched, which is
+ * what keeps deliberate same-provider supersession intact.
  *
  * Idempotent: a second run finds every group already has an active key and matches nothing.
  */
@@ -27,7 +31,10 @@ type ApiKeyLean = {
   createdAt?: Date | null;
 };
 
-const groupKey = (key: ApiKeyLean) => `${key.userId}|${key.type}`;
+// JSON rather than a joined string: userId is a free-form String in the schema, so no single
+// separator char is provably absent from it, and a collision would merge two providers'
+// groups.
+const groupKey = (key: ApiKeyLean) => JSON.stringify([key.userId, key.type]);
 const time = (date?: Date | null) => (date ? date.getTime() : 0);
 
 /**
@@ -46,6 +53,11 @@ const time = (date?: Date | null) => (date ? date.getTime() : 0);
 export const selectKeysToReactivate = (keys: ApiKeyLean[], now: Date): unknown[] => {
   const groups = new Map<string, ApiKeyLean[]>();
   for (const key of keys) {
+    // `type` is required on the schema but rows predating it exist (the settings UI defaults a
+    // missing one to openAi). Activating such a row would be inert, since every read filters on
+    // type, so leave it out of the invariant entirely rather than resurrect it.
+    if (!key.type) continue;
+
     const group = groups.get(groupKey(key));
     if (group) group.push(key);
     else groups.set(groupKey(key), [key]);
