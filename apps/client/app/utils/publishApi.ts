@@ -1,5 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
 import type {
+  ArtifactType,
   CommentPolicy,
   PublishResult,
   PublishScopeTier,
@@ -7,7 +8,8 @@ import type {
   ReportReason,
   UploadUrlResponse,
 } from '@bike4mind/common';
-import { SCOPE_URL_PREFIX } from '@bike4mind/common';
+import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX } from '@bike4mind/common';
+import { detectElidedSafe } from '@client/app/utils/artifactParser';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
 
 /** Summary row for the published-artifacts management list. */
@@ -416,10 +418,20 @@ export function artifactBundlePublisher(input: {
  * lookup and the write. A drifted id (e.g. a positional `artifact-<tabIndex>` fallback) both
  * misses the lookup - silently degrading "update existing" to publish-as-new - AND gets
  * persisted as `source.artifactId`, corrupting the linkage. Callers must pass a stable id.
+ *
+ * CALL FROM AN EVENT HANDLER, NOT A RENDER BODY: `incompleteWarning` scans the whole artifact
+ * body synchronously. Both current callers invoke this on the share click, which is why the cost
+ * is invisible; running it per render on a large body would not be.
  */
 export function buildArtifactPublishWiring(input: {
   artifactId: string;
-  type: string;
+  /**
+   * Narrowed to the union rather than `string`. A plain string would let an unrecognised value through
+   * to the detector, where the JS-bearing scans are gated on html/react and would silently switch
+   * themselves off - the exact class of silent miss this feature exists to catch. Both callers already
+   * pass a value constrained by `ArtifactModel`, so this costs them nothing.
+   */
+  type: ArtifactType;
   content: string;
   title: string;
   userId: string;
@@ -428,10 +440,15 @@ export function buildArtifactPublishWiring(input: {
 }): {
   resolveExisting: () => Promise<ManagedArtifact | null>;
   publish: (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult>;
+  incompleteWarning?: string;
 } {
   return {
     resolveExisting: () => findPublishedByArtifact(input.artifactId),
     publish: artifactBundlePublisher(input),
+    // A /p/ link is the point of no return: it can be handed to a client before anyone
+    // notices the artifact's buttons are inert. Computed here rather than in the dialog so
+    // every publish surface that routes through this wiring inherits the check.
+    ...(detectElidedSafe(input.content, input.type) ? { incompleteWarning: ELISION_PUBLISH_BODY } : {}),
   };
 }
 

@@ -17,6 +17,13 @@ import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
  * ChatCompletionProcess - so an unset/empty/cleared DB value reverts to this and never bricks
  * completions. The prompt (natural-language guidance to the model) is intentionally live-editable;
  * the sandbox runtime + CSP stay in code (a security boundary, not config).
+ *
+ * MUST STAY IN SYNC with `PLACEHOLDER_PATTERNS` in `@bike4mind/utils/artifactElision`: the phrases
+ * the NEVER ABBREVIATE paragraph forbids are the same phrases the detector treats as stub markers.
+ * Adding a forbidden phrase here without adding it there means the model is told not to do something
+ * nobody checks for; the reverse means the detector flags wording the prompt never warned against.
+ * Because this text is live-editable per environment, that drift is silent - an admin edit cannot
+ * update the detector. Prefer changing both in one commit.
  */
 export const ARTIFACT_EMISSION_PROMPT = `ARTIFACT OUTPUT:
 When asked to create something substantial and self-contained - a complete HTML page, an interactive visualization, a React component, an SVG, a Mermaid diagram, or a long code file/document - emit it inside an <artifact> tag, never as raw inline markup. The body between the opening and closing tags MUST be the complete file you generate - the entire document, top to bottom. NEVER put an ellipsis (...), a stand-in, or a "code here" comment as the body; write the real, full content and close the document before </artifact>. Shape (replace the body with your actual complete file):
@@ -62,7 +69,10 @@ SHARING A REACT ARTIFACT (publishing to a /p/ link): the in-chat preview is perm
 - File downloads are sandbox-blocked on the published page (no allow-downloads) - \`XLSX.writeFile\`/save-to-disk buttons won't fire; render results in the page (a table, inline preview) instead of offering a download.
 - Only the importable packages above publish; importing anything else fails the publish with a clear "not publishable yet" error.
 
-COMPLETENESS: Deliver the full artifact - favor completeness over brevity; trim only genuine bloat (boilerplate, dead code, repetition), never requested scope. Only when a deliverable is genuinely too large for one response, build it incrementally: ship a complete first version, then expand under the SAME identifier rather than letting it get cut off mid-tag. Always emit the closing </artifact>. Never paste large raw HTML or code into the chat body outside an <artifact> tag.`;
+COMPLETENESS: Deliver the full artifact - favor completeness over brevity; trim only genuine bloat (boilerplate, dead code, repetition), never requested scope. Only when a deliverable is genuinely too large for one response, build it incrementally: ship a complete first version, then expand under the SAME identifier rather than letting it get cut off mid-tag. Always emit the closing </artifact>. Never paste large raw HTML or code into the chat body outside an <artifact> tag.
+
+NEVER ABBREVIATE THE BODY - THIS IS THE MOST DAMAGING FAILURE YOU CAN PRODUCE HERE: every function the artifact needs must be written out in full, every time, even when you already wrote it in an earlier turn. An artifact whose logic is replaced by a summary comment still parses and still renders a complete-looking UI whose controls silently do nothing - the user cannot see the difference, ships it, and only finds out when a teammate clicks a dead button. That is far worse than an obviously unfinished artifact. Specifically FORBIDDEN as artifact body content, in any comment form: "same as above", "same as before", "identical to previous", "from the previous version", "for brevity" and any padded variant of it ("for the sake of brevity", "in the interest of brevity"), "omitted", "unchanged", "rest of the ...", "<rest of the code>", "code goes here", "implementation here", "[...]", or any comment that stands in for code you wrote previously or intend the reader to copy from elsewhere. Equally forbidden inside the artifact: anything addressed to the reader rather than to the runtime - asking them to reply "CONTINUE", pointing at a "next response", or promising in the first person what you are about to write ("I will include the remaining 84 entries"). The artifact is a standalone document; it has no next turn. Re-emitting the same 300 lines verbatim is CORRECT and expected; referring to them is not.
+If the full deliverable genuinely will not fit, do NOT stub the difference. REDUCE SCOPE EXPLICITLY: build fewer features, completely and working, then say in the chat body (outside the artifact) which features you left out and offer to add them in a follow-up under the same identifier. A working artifact with three of five features plus an honest note beats five features where two are hollow.`;
 
 /**
  * Default text for the help-center nudge system prompt. Single source of truth used BOTH as the

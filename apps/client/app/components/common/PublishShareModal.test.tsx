@@ -446,6 +446,52 @@ describe('PublishShareModal - embed allowlist', () => {
   });
 });
 
+/**
+ * Pre-publish completeness gate. A /p/ link can be handed to a teammate before anyone
+ * notices the artifact's controls are inert, so the warning is acknowledge-to-proceed
+ * rather than passive - but never a hard block, since the signal is a heuristic.
+ */
+describe('PublishShareModal - incomplete-artifact warning', () => {
+  const renderWith = (incompleteWarning?: string) =>
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={noopPublish}
+          title="My artifact"
+          incompleteWarning={incompleteWarning}
+        />
+      </Wrapper>
+    );
+
+  it('shows nothing and leaves publish enabled when the content looks complete', () => {
+    renderWith(undefined);
+
+    expect(screen.queryByTestId('publish-share-incomplete-warning')).toBeNull();
+    expect(screen.getByTestId('publish-share-create')).not.toBeDisabled();
+  });
+
+  it('disables publish until the warning is acknowledged', () => {
+    renderWith('Parts of this artifact look like placeholders.');
+
+    expect(screen.getByTestId('publish-share-incomplete-warning')).toBeInTheDocument();
+    expect(screen.getByTestId('publish-share-create')).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('publish-share-incomplete-ack'));
+
+    expect(screen.getByTestId('publish-share-create')).not.toBeDisabled();
+  });
+
+  it('does not publish while the warning stands unacknowledged', () => {
+    renderWith('Parts of this artifact look like placeholders.');
+
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+
+    expect(noopPublish).not.toHaveBeenCalled();
+  });
+});
+
 describe('PublishShareModal — search-engine listing is opt-in', () => {
   const renderModal = (props: Partial<React.ComponentProps<typeof PublishShareModal>> = {}) =>
     render(
