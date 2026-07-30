@@ -1,8 +1,15 @@
 import { IMongoDocument } from '.';
+import { IBaseRepository } from './BaseTypes';
 
 export interface IGroup {
   name: string;
   description: string;
+
+  /**
+   * The GroupType key this instance is an instance of (see GROUP_TYPE_CATALOG). Required -
+   * groups are provisioned as a side effect of granting a type to an org, never untyped.
+   */
+  type: string;
 
   // Which organization this group belongs to:
   organizationId: string;
@@ -15,3 +22,10 @@ export interface IGroup {
 // While a Group is manageable by users, it will be in the context of
 // the organization, and the Group documents don't extend from IShareableDocument.
 export interface IGroupDocument extends IGroup, IMongoDocument {}
+
+export interface IGroupRepository extends IBaseRepository<IGroupDocument> {
+  /** Live (non-soft-deleted) group instances owned by an organization. */
+  findByOrganization(organizationId: string): Promise<IGroupDocument[]>;
+  /** Soft-delete the given group instances (used when a group type is revoked). */
+  softDeleteByIds(groupIds: string[]): Promise<void>;
+}

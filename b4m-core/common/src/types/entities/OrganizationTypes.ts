@@ -14,6 +14,18 @@ export interface IUserDetails {
 export interface IOrganization extends ICreditHolder, IModelConfig {
   name: string;
   personal: boolean; // True if this is a personal organization
+
+  /**
+   * Group-type keys (GROUP_TYPE_CATALOG) this org is allowed to have. Platform-admin writes
+   * only; defaults to empty = fail-closed. An org starts with no group types (org-groups #1172).
+   */
+  allowedGroupTypes: string[];
+  /**
+   * User ids appointed as org admins by the billing owner or a platform admin. NOT a `Permission`
+   * verb and NOT on the shared `users[]` ACL. The billing owner (`userId`) is implicitly an admin
+   * and need not appear here.
+   */
+  adminUserIds: string[];
   description: string;
   billingContact: string;
   seats: number;

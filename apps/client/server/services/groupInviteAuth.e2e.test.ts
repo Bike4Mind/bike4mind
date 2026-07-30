@@ -61,7 +61,7 @@ const seedGroupInvite = async () => {
     userId: 'owner-1',
     users: [{ userId: memberUser.id, permissions: ['share'] }],
   });
-  const group = await Group.create({ name: 'G', description: 'd', organizationId: String(org._id) });
+  const group = await Group.create({ name: 'G', description: 'd', type: 'sales', organizationId: String(org._id) });
   const invite = await Invite.create({
     type: InviteType.Group,
     documentId: String(group._id),
