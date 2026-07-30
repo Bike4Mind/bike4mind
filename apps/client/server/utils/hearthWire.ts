@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { HearthEvent } from '@bike4mind/hearth';
+import { reasonForHookEvent, type HearthEvent } from '@bike4mind/hearth';
 import {
   hearthRepository,
   MAX_PRESENCE_FIELD_LENGTH,
@@ -78,6 +78,7 @@ type ActorParam = z.infer<typeof HearthActorParamSchema>;
  * a whole presence update over a long workspace name is the worse failure.
  */
 const PresencePayloadSchema = z.object({
+  hook_event_name: z.string().nullish(),
   session_id: z.string().nullish(),
   slug: z.string().nullish(),
   workspace: z.string().nullish(),
@@ -112,6 +113,16 @@ export function toPresenceProjection(args: {
   if (!parsed.success) return null;
   const { activity } = parsed.data;
 
+  // Fall back to the EVENT NAME when no activity block arrived. The hook attaches
+  // `activity` only at disclosure tier 2 but writes `hook_event_name` at every
+  // tier, so reading activity.reason alone left `reason` undefined for tiers 0
+  // and 1 - and an undefined reason projects to `running`, so a SessionEnd
+  // recorded an ended session as permanently live with no later event to correct
+  // it. The event name carries no environment disclosure (it is a fixed
+  // vocabulary of Claude Code lifecycle names), so using it costs a low-tier
+  // session nothing it was trying to withhold.
+  const reason = activity?.reason ?? reasonForHookEvent(parsed.data.hook_event_name);
+
   return {
     channelId: args.event.channelId,
     actorId: args.event.actorId,
@@ -119,7 +130,7 @@ export function toPresenceProjection(args: {
     // The event's own time, so a delayed delivery cannot look more recent than
     // an event that actually happened later.
     lastSeen: args.event.createdAt,
-    reason: clamp(activity?.reason),
+    reason: clamp(reason),
     workspace: clamp(parsed.data.workspace),
     tool: clamp(activity?.tool),
     permissionMode: clamp(activity?.permission_mode),

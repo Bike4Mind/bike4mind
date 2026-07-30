@@ -336,6 +336,15 @@ export const PublishedArtifactSchema = z.object({
    *  `visibility`. Defaults to `none` (read-only) until the owner opts in. */
   commentPolicy: CommentPolicySchema.prefault('none'),
 
+  /** Search-engine opt-IN. `visibility: 'public'` means "anyone with the link may
+   *  view"; it does NOT mean "list this in Google". Those are different promises and
+   *  owners consistently read the first as the second, so indexability is a separate
+   *  explicit choice that defaults OFF: every viewer surface is served `noindex`
+   *  unless the owner turns this on for an open-public artifact.
+   *  Independent of social unfurling - OG/Twitter cards still render either way, so a
+   *  non-discoverable link previews correctly in chat without entering a search index. */
+  discoverable: z.boolean().prefault(false),
+
   /** Exact external origins permitted to embed this artifact (frame-ancestors
    *  grants). Publication-level; empty/absent means app host only. Uses the same
    *  normalizing/deduping EmbedOriginsSchema as the write path so the stored

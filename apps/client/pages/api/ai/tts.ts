@@ -14,6 +14,7 @@ import {
   deductTtsCredits,
   InsufficientTtsCreditsError,
 } from '@server/utils/deductTtsCredits';
+import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
 
 const DEFAULT_PROVIDER: VoiceGenerationVendor = 'openai';
 
@@ -30,7 +31,7 @@ const DEFAULT_PROVIDER: VoiceGenerationVendor = 'openai';
  * adapters over the same aiVoiceService abstraction.
  */
 const handler = baseApi().post(async (req, res) => {
-  const { text, provider, model, voice, format, encoding, stability, similarityBoost, languageCode } =
+  const { text, provider, model, voice, format, encoding, stability, similarityBoost, languageCode, preview } =
     ttsRequestSchema.parse(req.body);
 
   const vendor = provider ?? DEFAULT_PROVIDER;
@@ -107,10 +108,44 @@ const handler = baseApi().post(async (req, res) => {
       });
     }
 
+    // Persist a browsable copy of the audio. On by default; a user can opt out
+    // via the saveGeneratedAudio preference, and the Settings voice-audition
+    // player passes preview:true to skip throwaway previews. Best-effort: a save
+    // failure (e.g. over quota) never blocks returning the audio already paid for.
+    const shouldSave = !preview && !!userId && (req.user?.preferences?.saveGeneratedAudio ?? true);
+    const save = shouldSave
+      ? await persistGeneratedAudio({
+          userId: userId!,
+          audio: result.audio,
+          contentType: result.contentType,
+          format: result.format,
+          source: 'tts',
+          text,
+          logger: req.logger,
+        })
+      : undefined;
+
+    const saveInfo = save
+      ? save.saved
+        ? ({ saved: true, fabFileId: save.fabFileId, fileUrl: save.fileUrl } as const)
+        : ({ saved: false, saveSkippedReason: save.reason } as const)
+      : undefined;
+
+    if (saveInfo) {
+      res.setHeader('X-B4M-Audio-Saved', String(saveInfo.saved));
+      if (saveInfo.saved) res.setHeader('X-B4M-Audio-Fab-File-Id', saveInfo.fabFileId);
+    }
+
     // Serverless response-size guard: a buffered audio body over ~4MB exceeds the
     // Lambda/API Gateway payload cap and would fail as an opaque CloudFront 502.
+    // If a browsable copy was saved, the caller can still retrieve the audio from
+    // its FabFile url instead of hitting a dead end (partially addresses #745).
     if (exceedsTtsResponseLimit(result.audio.length)) {
-      return res.status(413).json({ error: TTS_RESPONSE_TOO_LARGE_MESSAGE, provider: vendor });
+      return res.status(413).json({
+        error: TTS_RESPONSE_TOO_LARGE_MESSAGE,
+        provider: vendor,
+        ...(saveInfo?.saved ? { saved: true, fabFileId: saveInfo.fabFileId, fileUrl: saveInfo.fileUrl } : {}),
+      });
     }
 
     if (encoding === 'base64') {
@@ -118,6 +153,7 @@ const handler = baseApi().post(async (req, res) => {
         audio: result.audio.toString('base64'),
         format: result.format,
         contentType: result.contentType,
+        ...(saveInfo ?? {}),
       });
     }
 

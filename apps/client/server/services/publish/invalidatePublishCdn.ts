@@ -52,7 +52,15 @@ export function publishCachePaths(t: PublishCacheTarget): string[] {
   if (t.sourceKind === 'fabfile') return [`/p/f/${t.publicId}`];
   const base = buildPublishUrlPath(t.tier, t.scopeId, t.slug); // /p/{prefix}/{scopeId}/{slug}
   const ucBase = base.replace(/^\/p\b/, '/uc'); // isolated-origin path (mirrors the serve handler)
-  return [base, `${base}/*`, ucBase, `${ucBase}/*`]; // /p + /uc, index + every asset under each
+  // `${base}*` (no slash) in addition to `${base}/*`: a slash-wildcard matches further path
+  // SEGMENTS, so it does not clear query-string variants (`?format=raw`, `?embed=1`, `?v=`).
+  // If the distribution's cache policy keys on query string - it is supplied by id via
+  // PROD_CACHE_POLICY_ID, so this cannot be settled from the repo - those variants would
+  // otherwise keep serving stale bytes for a full s-maxage after a takedown, a visibility
+  // downgrade, or a search-listing opt-out. The bare-wildcard form covers them either way.
+  // Cost of the belt: it can also match a SIBLING slug sharing this prefix, whose only
+  // consequence is an extra cache miss.
+  return [base, `${base}*`, `${base}/*`, ucBase, `${ucBase}*`, `${ucBase}/*`];
 }
 
 /**

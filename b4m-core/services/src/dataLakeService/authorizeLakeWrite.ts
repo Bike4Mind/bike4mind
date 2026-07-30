@@ -20,11 +20,18 @@ const BUILT_IN_READ_ONLY = 'This data lake is built into the platform and is rea
  * Deliberately narrower than `canAccessLake` (read): a tag/entitlement/org grant lets a member
  * READ a lake but NOT write into it. Injecting a file (applying the lake's meta-tag) is a write,
  * so it must clear this gate, closing the read-can-write asymmetry.
+ *
+ * The truthiness guard makes the owner arm fail closed on a blank identity: without it, a lake with
+ * no `createdByUserId` (the synthetic fallback document) would match an actor with no `userId`, since
+ * `undefined === undefined` and `'' === ''`. Unreachable today - the schema requires the field and
+ * `AccessContext.userId` is a required string - but this predicate now gates prompt DISCLOSURE as
+ * well as writes, so it should not depend on those invariants holding elsewhere. Mirrors the same
+ * guard in `getDataLakePrompts.ts`. It also decides tag REMOVAL (`assertCanReplaceDataLakeTags`),
+ * so a both-blank match would cost data and not merely leak a prompt.
  */
 export function canManageLake(lake: Pick<IDataLakeDocument, 'createdByUserId'>, actor: ManageActor): boolean {
-  // Positive ownership: both ids must be PRESENT and equal. A bare `===` grants when both are
-  // missing, which now costs data - this gate decides tag REMOVAL, not just addition.
-  return actor.isAdmin || (!!lake.createdByUserId && lake.createdByUserId === actor.userId);
+  if (actor.isAdmin) return true;
+  return !!actor.userId && !!lake.createdByUserId && lake.createdByUserId === actor.userId;
 }
 
 /**
