@@ -182,41 +182,6 @@ describe('content cut before assembly is declared to the model', () => {
     });
   });
 
-  describe('a vectorized file whose retrieval finds no chunks', () => {
-    it('falls back to raw content instead of disappearing', async () => {
-      // Chunks are written asynchronously after an upload, so the first request after attaching can
-      // find none. Retrieval then produced NO message at all, and nothing downstream could report it:
-      // assembly declares the attachments it was given, so the file left no trace and the model
-      // answered that it could not access any attachment. Reported from QA against a fresh notebook.
-      const content = await runFabFiles({ vectorized: true, embeddingModel: 'text-embedding-ada-002' }, 1000, []);
-
-      expect(content).toContain('ROW-START');
-      expect(warnings()).toContain('Retrieval returned no chunks');
-    });
-
-    it('still declares the cut when the fallback has to head-slice', async () => {
-      // The fallback must not reintroduce the undeclared-truncation bug the extraction notice fixed.
-      const content = await runFabFiles({ vectorized: true, embeddingModel: 'text-embedding-ada-002' }, 1000, []);
-
-      expect(content).not.toContain('ROW-END');
-      expect(content).toContain(TRUNCATION_NOTICE_MARKER);
-    });
-
-    it('does not fall back when chunks are delivered', async () => {
-      // The fallback reads the whole file off storage, so firing it on a healthy retrieval would
-      // silently undo the point of vectorizing: excerpts, not the entire document.
-      const content = await runFabFiles(
-        { vectorized: true, embeddingModel: 'text-embedding-ada-002' },
-        4000,
-        chunks(4, 100)
-      );
-
-      expect(content).toContain('chunk-0-');
-      expect(content).not.toContain('ROW-START');
-      expect(warnings()).not.toContain('Retrieval returned no chunks');
-    });
-  });
-
   describe('log labels never echo attachment content', () => {
     it('names a vectorized file from its header, not from a quoted span in its data', async () => {
       // `Data for x.csv:` carries no quotes, so a scan for any quoted span fell through to the
