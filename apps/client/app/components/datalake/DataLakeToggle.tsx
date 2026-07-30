@@ -28,7 +28,21 @@ export default function DataLakeToggle() {
         startDecorator={<WaterOutlinedIcon sx={{ fontSize: 18 }} />}
         onClick={() => setMode(true)}
         data-testid="datalake-mode-toggle"
-        sx={{ height: 32, minHeight: 32, fontWeight: 400, fontSize: 14, px: '12px', borderRadius: '6px' }}
+        // Match the sidebar's own fill (background.surface2) so the pill reads as chrome, not a CTA.
+        // Set background-color directly AND override the outlined variant's CSS vars (default
+        // transparent) so the fill wins regardless of Joy's var(--variant-outlinedBg) rule.
+        sx={theme => ({
+          height: 32,
+          minHeight: 32,
+          fontWeight: 400,
+          fontSize: 14,
+          px: '12px',
+          borderRadius: '6px',
+          backgroundColor: theme.palette.background.surface2,
+          '--variant-outlinedBg': theme.palette.background.surface2,
+          '--variant-outlinedHoverBg': theme.palette.notebooklist.hoverBg,
+          '--variant-outlinedActiveBg': theme.palette.notebooklist.hoverBg,
+        })}
       >
         Data Lakes
       </Button>
