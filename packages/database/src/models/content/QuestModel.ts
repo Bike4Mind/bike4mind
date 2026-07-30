@@ -81,6 +81,8 @@ const ExecutionTrackingSchema = subSchema({
   failedSteps: { type: [String], required: false, default: undefined },
 });
 
+// Nothing writes humanReview today. Declared anyway so the shape is pinned and the parity guard
+// stays satisfied; do not go looking for the writer.
 const HumanReviewSchema = subSchema({
   required: { type: Boolean, required: false },
   approved: { type: Boolean, required: false },

@@ -79,7 +79,9 @@ const PromptMetaAttachedFileSchema = z.object({
   type: z.string().optional(),
   size: z.number().optional(),
   mimeType: z.string().optional(),
-  lastModified: z.date().optional(),
+  // attachedFiles already persists, so a writer that starts setting this would hit the same
+  // JSON round trip as the fields above. Promoted before that can happen rather than after.
+  lastModified: JsonSafeDate.optional(),
 });
 
 const SystemPromptSourceSchema = z.object({

@@ -66,7 +66,10 @@ const FULL_PROMPT_META = {
     settledBasis: 'provider',
   },
   context: {
-    attachedFiles: [{ id: 'f1', name: 'a.pdf', type: 'pdf', size: 10, mimeType: 'application/pdf' }],
+    attachedFiles: [
+      { id: 'f1', name: 'a.pdf', type: 'pdf', size: 10, mimeType: 'application/pdf', lastModified: new Date() },
+      { id: 'f2', name: 'b.png', type: 'png', size: 20, mimeType: 'image/png' },
+    ],
     knowledgeBaseEntries: ['kb-1'],
     messageHistoryLength: 5,
     requestedHistoryCount: 10,
@@ -166,7 +169,14 @@ const FULL_PROMPT_META = {
     completedSteps: ['search'],
     failedSteps: [],
   },
-  humanReview: { required: false, approved: true, comments: 'fine', reviewedBy: 'user-1', reviewedAt: new Date() },
+  humanReview: {
+    required: false,
+    approved: true,
+    comments: 'fine',
+    modifications: 'none',
+    reviewedBy: 'user-1',
+    reviewedAt: new Date(),
+  },
   statusLog: [{ status: 'First model response', timestamp: new Date() }],
   citables: [{ id: 'c-1', type: 'web_url', title: 'A source', url: 'https://example.com' }],
   // contextTelemetry is deliberately absent. It is Mixed in Mongoose, so there is no subpath for
@@ -183,10 +193,10 @@ const EXCLUDED = {
   'context.extraContextMessages': [{ role: 'system', content: 'a server-owned prompt' }],
 };
 
-/** Dotted leaf paths of a plain object; arrays contribute no segment, matching Mongoose naming. */
+/** Dotted leaf paths of a plain object, indexing into arrays so every element is checked. */
 function leafPaths(value: unknown, prefix = '', out: string[] = []): string[] {
   if (Array.isArray(value)) {
-    for (const entry of value) leafPaths(entry, prefix, out);
+    value.forEach((entry, i) => leafPaths(entry, `${prefix}.${i}`, out));
     return out;
   }
   if (value instanceof Date || value === null || typeof value !== 'object') {
@@ -201,12 +211,15 @@ function leafPaths(value: unknown, prefix = '', out: string[] = []): string[] {
 }
 
 function readPath(source: unknown, path: string): unknown {
+  // Array segments are numeric indices, so plain key access walks them without special casing.
   return path.split('.').reduce<unknown>((node, key) => {
     if (node === null || node === undefined) return undefined;
-    if (Array.isArray(node)) return (node[0] as Record<string, unknown>)?.[key];
     return (node as Record<string, unknown>)[key];
   }, source);
 }
+
+/** Excluded paths are written without indices, so drop them before matching. */
+const withoutIndices = (path: string) => path.replace(/\.\d+(?=\.|$)/g, '');
 
 describe('QuestModel promptMeta persistence', () => {
   let mongoServer: MongoMemoryServer;
@@ -251,12 +264,18 @@ describe('QuestModel promptMeta persistence', () => {
     await mongoServer.stop();
   });
 
-  it.each(leafPaths(FULL_PROMPT_META))('persists promptMeta.%s', path => {
+  it.each(leafPaths(FULL_PROMPT_META).filter(p => !(withoutIndices(p) in EXCLUDED)))('persists promptMeta.%s', path => {
     expect(readPath(raw.promptMeta, path)).toEqual(readPath(FULL_PROMPT_META, path));
   });
 
-  it.each(Object.keys(EXCLUDED).concat('context.systemPromptSources.content'))('drops %s', path => {
+  it.each(Object.keys(EXCLUDED))('drops %s', path => {
     expect(readPath(raw.promptMeta, path)).toBeUndefined();
+  });
+
+  it('drops the content of every systemPromptSources entry', () => {
+    const sources = (raw.promptMeta.context?.systemPromptSources ?? []) as Record<string, unknown>[];
+    expect(sources.length).toBeGreaterThan(0);
+    expect(sources.every(source => source.content === undefined)).toBe(true);
   });
 
   it('survives the ingress parse that runs on every subsequent turn', () => {
