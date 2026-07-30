@@ -1,7 +1,13 @@
 import { Box, Button, Modal, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
 import { toast } from 'sonner';
-import { useDataLakeWizardStore, type WizardStep } from '@client/app/stores/useDataLakeWizardStore';
+import {
+  useDataLakeWizardStore,
+  isTaxonomyStepActive,
+  type OptionalSteps,
+  type WizardStep,
+  type WizardTargetLake,
+} from '@client/app/stores/useDataLakeWizardStore';
 import { useBatchUpload, OFFLINE_MESSAGE } from '@client/app/hooks/data/dataLakeWizard';
 import { isValidDataLakeSlug } from '@client/app/hooks/data/dataLakeSlug';
 import { isReservedTagPrefix } from '@bike4mind/common';
@@ -13,9 +19,24 @@ import ConfigStep from './steps/ConfigStep';
 import UploadStep from './steps/UploadStep';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 
-const CREATE_STEPS: WizardStep[] = ['source', 'preview', 'taxonomy', 'config', 'upload'];
-// Append mode reuses the existing lake's tags, so AI taxonomy is skipped.
-const APPEND_STEPS: WizardStep[] = ['source', 'preview', 'config', 'upload'];
+/**
+ * The wizard's step order. Preview and AI taxonomy are opt-in (both default off), so the
+ * minimal create path is name + files -> config -> upload. Taxonomy is never offered in
+ * append mode: the target lake's tag vocabulary already exists.
+ *
+ * The opt-in toggles live on the source step, so an enabled step can only ever be removed
+ * while the user is standing on `source` - the current step can't be spliced out from under
+ * them, and `indexOf(step)` stays >= 0.
+ */
+function stepOrderFor(state: { optionalSteps: OptionalSteps; targetLake: WizardTargetLake | null }): WizardStep[] {
+  return [
+    'source',
+    ...(state.optionalSteps.preview ? (['preview'] as const) : []),
+    ...(isTaxonomyStepActive(state) ? (['taxonomy'] as const) : []),
+    'config',
+    'upload',
+  ];
+}
 
 export default function DataLakeWizardModal() {
   const theme = useTheme();
@@ -26,12 +47,14 @@ export default function DataLakeWizardModal() {
   const updateUploadProgress = useDataLakeWizardStore(s => s.updateUploadProgress);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
+  const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const config = useDataLakeWizardStore(s => s.config);
+  const deriveTagPrefixFromName = useDataLakeWizardStore(s => s.deriveTagPrefixFromName);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
 
   const batchUpload = useBatchUpload();
 
-  const STEP_ORDER = targetLake ? APPEND_STEPS : CREATE_STEPS;
+  const STEP_ORDER = stepOrderFor({ optionalSteps, targetLake });
   const currentIndex = STEP_ORDER.indexOf(step);
 
   const canGoBack = currentIndex > 0 && step !== 'upload';
@@ -45,7 +68,12 @@ export default function DataLakeWizardModal() {
   const canGoNext = (() => {
     switch (step) {
       case 'source':
-        return allFiles.length > 0;
+        // Counts INCLUDED files, not raw ones: auto-exclusion can empty a selection on its own
+        // (e.g. only junk files picked), and Preview - which used to be the mandatory home of
+        // this check - is now skippable, so nothing else would stop the user reaching Start
+        // Upload with zero files to send. Identity is gated here too, by the same slug.min(2)
+        // rule the server enforces; append mode reuses the lake's own slug.
+        return allFiles.some(f => !f.excluded) && (!!targetLake || isValidDataLakeSlug(config.name));
       case 'preview':
         return allFiles.some(f => !f.excluded);
       case 'taxonomy':
@@ -77,14 +105,25 @@ export default function DataLakeWizardModal() {
   };
 
   const handleNext = () => {
-    if (canGoNext && currentIndex < STEP_ORDER.length - 1) {
-      setStep(STEP_ORDER[currentIndex + 1]);
+    if (!canGoNext || currentIndex >= STEP_ORDER.length - 1) return;
+
+    // Leaving source with no taxonomy step to set a prefix: derive one from the name so the
+    // minimal path never stalls on Config's tagPrefix >= 2 gate. Skipped when taxonomy is on,
+    // because setTaxonomy only adopts the inferred prefix while config.tagPrefix is empty -
+    // seeding it here would silently suppress the AI's own suggestion. Fires on every pass so a
+    // rename re-derives; deriveTagPrefixFromName is what decides not to clobber a hand-edited
+    // prefix.
+    if (step === 'source' && !targetLake && !isTaxonomyStepActive({ optionalSteps, targetLake })) {
+      deriveTagPrefixFromName();
     }
+
+    setStep(STEP_ORDER[currentIndex + 1]);
   };
 
   const handleClose = () => {
-    if (allFiles.length > 0 && step !== 'source') {
-      // Confirm close if files are loaded
+    // Files can now be gathered without leaving the source step, so having files - not being
+    // past source - is what marks unsaved progress worth confirming away.
+    if (allFiles.length > 0) {
       if (!window.confirm('You have unsaved progress. Are you sure you want to close the wizard?')) {
         return;
       }
