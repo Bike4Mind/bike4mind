@@ -86,12 +86,22 @@ describe('PendingOtcToken.tryReserveSlot — atomic cooldown enforcement', () =>
   });
 
   describe('cooldownMs = 0 (E2E bypass)', () => {
+    // Even at cooldownMs = 0, a resend in the SAME millisecond as the previous
+    // reservation is blocked (`existing.createdAt >= threshold` compares at ms
+    // resolution), so tests that reserve twice must let the clock tick first.
+    const clockTickPast = async (previous: Date) => {
+      while (Date.now() <= previous.getTime()) {
+        await new Promise(resolve => setTimeout(resolve, 1));
+      }
+    };
+
     it('allows repeated sequential resends to the same email, each overwriting the last nonce', async () => {
       const first = await pendingOtcTokenRepository.tryReserveSlot(EMAIL, 0);
       expect(first.allowed).toBe(true);
       if (!first.allowed) throw new Error('unreachable');
       expect(await pendingOtcTokenRepository.confirmReservation(EMAIL, first.reservedAt, 'nonce-1')).toBe(true);
 
+      await clockTickPast(first.reservedAt);
       const second = await pendingOtcTokenRepository.tryReserveSlot(EMAIL, 0);
       expect(second.allowed).toBe(true);
       if (!second.allowed) throw new Error('unreachable');
@@ -102,7 +112,7 @@ describe('PendingOtcToken.tryReserveSlot — atomic cooldown enforcement', () =>
       expect(await PendingOtcTokenModel.countDocuments({ email: EMAIL })).toBe(1);
     });
 
-    it('concurrent reservations on an already-existing record: exactly one wins (the createdAt < now bug this closes)', async () => {
+    it('concurrent reservations on an already-existing record: winners form a strict supersession chain (the createdAt < now bug this closes)', async () => {
       // Seed an existing record so every racer takes the "reclaim" branch, not the
       // brand-new-email "create" branch (that one was already protected by the
       // unique index, tested separately above).
@@ -112,13 +122,39 @@ describe('PendingOtcToken.tryReserveSlot — atomic cooldown enforcement', () =>
         Array.from({ length: 5 }, () => pendingOtcTokenRepository.tryReserveSlot(EMAIL, 0))
       );
 
-      const allowed = results.filter(r => r.allowed);
-      const blocked = results.filter(r => !r.allowed);
-      // Before the fix, a bare `createdAt < now` filter matched for every racer
-      // (any prior write is always "in the past" relative to a later `now`), so
-      // all 5 would win here and each would silently overwrite the last one's nonce.
-      expect(allowed).toHaveLength(1);
-      expect(blocked).toHaveLength(4);
+      // The winner COUNT is scheduling-dependent, so don't assert it. At cooldownMs = 0
+      // there is no cooldown window: a racer whose read lands after a sibling's claim is
+      // a legitimate NEW winner, exactly like the sequential-resend case above. Promise.all
+      // gives no barrier between one racer's write and another's read, so under CI load
+      // more than one generation can occur (this flaked in CI expecting exactly 1).
+      //
+      // What the CAS does guarantee, under any scheduling:
+      //   - at least one racer wins
+      //   - winners supersede each other: strictly increasing, DISTINCT reservedAt values.
+      //     The pre-fix bare `createdAt < now` filter let every racer win off the same
+      //     stale snapshot (any prior write is always "in the past" relative to a later
+      //     `now`), which shows up here as duplicate reservedAt values.
+      //   - the record is updated in place, never duplicated
+      //   - only the LAST winner holds a confirmable reservation; superseded winners fail
+      const winners = results.filter((r): r is { allowed: true; reservedAt: Date } => r.allowed);
+      expect(winners.length).toBeGreaterThanOrEqual(1);
+
+      const times = winners.map(w => w.reservedAt.getTime()).sort((a, b) => a - b);
+      for (let i = 1; i < times.length; i++) {
+        expect(times[i]).toBeGreaterThan(times[i - 1]);
+      }
+
+      expect(await PendingOtcTokenModel.countDocuments({ email: EMAIL })).toBe(1);
+
+      const latest = winners.reduce((a, b) => (a.reservedAt > b.reservedAt ? a : b));
+      for (const w of winners) {
+        const confirmed = await pendingOtcTokenRepository.confirmReservation(
+          EMAIL,
+          w.reservedAt,
+          `nonce-${w.reservedAt.getTime()}`
+        );
+        expect(confirmed).toBe(w === latest);
+      }
     });
 
     it('confirmReservation fails for a reservation a newer one has since superseded, instead of silently succeeding', async () => {
@@ -129,6 +165,7 @@ describe('PendingOtcToken.tryReserveSlot — atomic cooldown enforcement', () =>
       // A second, later reservation for the same email lands before the first confirms
       // - e.g. a genuinely concurrent resend that arrived just after the first claimed
       // its slot but before it finished generating/sending its code.
+      await clockTickPast(first.reservedAt);
       const second = await pendingOtcTokenRepository.tryReserveSlot(EMAIL, 0);
       expect(second.allowed).toBe(true);
       if (!second.allowed) throw new Error('unreachable');
