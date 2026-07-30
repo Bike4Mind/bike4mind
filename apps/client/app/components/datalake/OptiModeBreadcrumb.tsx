@@ -11,11 +11,14 @@ interface OptiModeBreadcrumbProps {
   /** Bottom margin in theme spacing units. Default 2 (standalone above a hero); pass 0 when
    *  embedded in a header row that owns its own spacing. */
   mb?: number;
+  /** Left margin (spacing units or a raw CSS length). Default 0; used to sit the breadcrumb a
+   *  fixed distance from a sibling control in a header row. */
+  ml?: number | string;
 }
 
-export function OptiModeBreadcrumb({ segments, mb = 2 }: OptiModeBreadcrumbProps) {
+export function OptiModeBreadcrumb({ segments, mb = 2, ml = 0 }: OptiModeBreadcrumbProps) {
   return (
-    <Breadcrumbs size="sm" sx={{ px: 0, mb }}>
+    <Breadcrumbs size="sm" sx={{ px: 0, mb, ml }}>
       {segments.map((seg, i) => {
         const isLast = i === segments.length - 1;
         if (isLast || !seg.onClick) {
