@@ -9,6 +9,14 @@ describe('buildElisionStamp', () => {
     expect(buildElisionStamp([], { wasTruncated: false, priorWarnings: [] })).toBeNull();
   });
 
+  it('cannot express "no longer elided" on its own - the caller must clear a stale verdict', () => {
+    // Pins the contract that motivated the clearing branch in ChatCompletionProcess: null is
+    // indistinguishable from "never checked", so a re-completion in place would otherwise inherit a
+    // verdict from an earlier pass. Unreachable today (the retry path replaces promptMeta wholesale),
+    // which is exactly why it needs a test rather than a reader noticing.
+    expect(buildElisionStamp([], { wasTruncated: false, priorWarnings: [ELISION_WARNING] })).toBeNull();
+  });
+
   it('reports high confidence when ANY artifact was high', () => {
     const stamp = buildElisionStamp([hit('low', 'a'), hit('high', 'b'), hit('low', 'c')], {
       wasTruncated: false,
