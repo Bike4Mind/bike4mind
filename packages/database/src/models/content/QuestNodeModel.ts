@@ -14,6 +14,7 @@ import {
   QuestNodeCreateInput,
   QuestNodeStatusExtra,
   REVIEW_VERDICT_VALUES,
+  RUNNABLE_NODE_STATUS_VALUES,
   GraphState,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
@@ -111,6 +112,27 @@ export function hasCycle(edges: Map<string, string[]>): boolean {
     if ((color.get(id) ?? WHITE) === WHITE && visit(id)) return true;
   }
   return false;
+}
+
+/**
+ * DAG readiness for one node: not yet started, and every dependency finished.
+ * `skipped` counts as satisfied so deliberately dropping a node does not
+ * permanently wedge everything downstream of it.
+ *
+ * Pure and exported because readers that already hold the graph's nodes in
+ * memory (the API's graph-detail view, and the Phase 2 scheduler tick) must
+ * decide readiness with exactly the same rule as `computeReadyNodes` rather
+ * than re-implementing it and drifting.
+ */
+export function isNodeReady(
+  node: Pick<IQuestNode, 'status' | 'dependsOn'>,
+  statusById: Map<string, NodeStatus>
+): boolean {
+  if (node.status !== 'pending' && node.status !== 'ready') return false;
+  return node.dependsOn.every(dep => {
+    const s = statusById.get(dep);
+    return s === 'completed' || s === 'skipped';
+  });
 }
 
 class QuestGraphRepository extends BaseRepository<IQuestGraphDocument> implements IQuestGraphRepository {
@@ -260,6 +282,17 @@ class QuestNodeRepository extends BaseRepository<IQuestNodeDocument> implements 
     return this.questNodeModel.findByIdAndUpdate(id, { $set: set }, { new: true });
   }
 
+  async claimForRun(id: string): Promise<IQuestNodeDocument | null> {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    // The status filter is the lock: Mongo applies it and the $set in one
+    // atomic operation, so of two concurrent claims exactly one matches.
+    return this.questNodeModel.findOneAndUpdate(
+      { _id: convertId(id), status: { $in: RUNNABLE_NODE_STATUS_VALUES } },
+      { $set: { status: 'in_progress', startedAt: new Date() } },
+      { new: true }
+    );
+  }
+
   async linkArtifacts(id: string, artifactIds: string[]): Promise<IQuestNodeDocument | null> {
     return this.questNodeModel.findByIdAndUpdate(
       id,
@@ -275,14 +308,7 @@ class QuestNodeRepository extends BaseRepository<IQuestNodeDocument> implements 
   async computeReadyNodes(graphId: string): Promise<IQuestNodeDocument[]> {
     const nodes = await this.questNodeModel.find({ graphId });
     const statusById = new Map(nodes.map(n => [String(n._id), n.status]));
-    return nodes.filter(
-      n =>
-        (n.status === 'pending' || n.status === 'ready') &&
-        n.dependsOn.every(dep => {
-          const s = statusById.get(dep);
-          return s === 'completed' || s === 'skipped';
-        })
-    );
+    return nodes.filter(n => isNodeReady(n, statusById));
   }
 
   private async buildEdgeMap(graphId: string): Promise<Map<string, string[]>> {
