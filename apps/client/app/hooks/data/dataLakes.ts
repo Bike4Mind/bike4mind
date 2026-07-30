@@ -2,8 +2,10 @@ import type {
   BrowsePublicDataLakesResult,
   DataLakeConfig,
   IDataLakeBatchDocument,
+  ManageableDataLakeConfig,
   TaxonomyTag,
 } from '@bike4mind/common';
+import { normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -25,16 +27,44 @@ export function activeOrgId(): string | undefined {
 }
 
 /**
- * Fetches all data lakes accessible to the current user.
+ * Fetches all data lakes accessible to the current user. Manage-gated shape: the server attaches
+ * the editor-only fields (systemPrompt) per lake, and only where `canManage` holds - so a lake the
+ * caller can merely read arrives without them. Keep this in sync with the twin inline type on
+ * `useDataLakes` (hooks/data/dataLakeWizard.ts), which reads the same endpoint.
  */
 export function useGetDataLakes() {
   return useQuery({
     queryKey: DATA_LAKES_KEY,
     queryFn: async () => {
-      const response = await api.get<{ data: DataLakeConfig[] }>('/api/data-lakes');
+      const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
       return response.data.data;
     },
   });
+}
+
+/**
+ * The data lake in the current create scope whose `fileTagPrefix` would overlap `prefix`, if any.
+ *
+ * Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting one would
+ * take files the other holds. The server refuses such a create; this is the form-level mirror so
+ * the wizard blocks before submit. Best-effort only - the lake list cannot show an org peer's
+ * gated lake, so the server stays the authority.
+ *
+ * Overlap is bidirectional: `docs:` matches a `docs:legal:foo` tag, so `docs:` and `docs:legal:`
+ * conflict either way round.
+ */
+export function useDuplicatePrefixLake(prefix: string, skip = false): DataLakeConfig | undefined {
+  const { data: allLakes } = useGetDataLakes();
+  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
+  const scopeOrgId = selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
+
+  if (skip || !normalizeTagPrefix(prefix)) return undefined;
+
+  return allLakes?.find(
+    // Same scope as the server guard: same org, or - in the Personal context - the lakes this
+    // list shows the user, which are the ones they could collide with.
+    lake => (lake.organizationId || undefined) === scopeOrgId && tagPrefixesOverlap(prefix, lake.fileTagPrefix)
+  );
 }
 
 /**

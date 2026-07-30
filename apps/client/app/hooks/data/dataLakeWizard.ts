@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { IMessageDataToClient, IFabFileDocument } from '@bike4mind/common';
+import type { IMessageDataToClient, IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
 import { isSupportedFabFileMimeType, folderTagForFile } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
@@ -693,25 +693,11 @@ export function useDataLakes(enabled = true) {
     enabled,
     retry: false,
     queryFn: async () => {
-      const response = await api.get<{
-        data: Array<{
-          id: string;
-          name: string;
-          slug: string;
-          description?: string;
-          fileTagPrefix: string;
-          requiredUserTag?: string;
-          requiredEntitlement?: string;
-          organizationId?: string;
-          isPublic?: boolean;
-          datalakeTag: string;
-          fileCount?: number;
-          createdAt: string;
-          // Server-computed (admin or creator). Management affordances gate on this: the
-          // list includes other users' read-only public lakes. See DataLakeConfig.canManage.
-          canManage?: boolean;
-        }>;
-      }>('/api/data-lakes');
+      // The server's own shape, not a hand-maintained twin: `canManage` and the editor-only
+      // `systemPrompt` are attached per lake by listDataLakes, and the latter only when the
+      // caller may manage that lake. The former inline type also declared `createdAt` and
+      // `fileCount`, neither of which this projection returns.
+      const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
       return response.data.data;
     },
     refetchOnWindowFocus: false,
@@ -766,7 +752,9 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       // source discriminator, and a fully-specified key would refresh only one surface.
       queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
       queryClient.invalidateQueries({ queryKey: ['dataLakeArticles'] });
-      queryClient.invalidateQueries({ queryKey: ['file-tags', 'counts'] });
+      // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
+      // so dropping tags here staled the list too, not only the counts endpoint.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to remove file from data lake');

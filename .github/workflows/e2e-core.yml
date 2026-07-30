@@ -18,7 +18,7 @@ on:
         type: string
         required: false
       e2e_test_id:
-        description: 'Tester ID for user isolation (e.g. alice)'
+        description: 'Optional extra tester prefix for test user isolation (e.g. alice). Leave blank - e2e-run always appends a per-run id, so runs are already isolated from each other.'
         type: string
         required: false
       gate_run:

@@ -11,12 +11,15 @@ const handler = baseApi()
   // GET /api/data-lakes/:id - get a single data lake (by ObjectId or slug)
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
+    const ctx = await toAccessContext(req);
     // Single shared gate: resolves the lake and asserts owner/org/tag access,
     // denying with a not-found-style error so existence isn't disclosed.
-    const dataLake = await dataLakeService.assertLakeAccess(id, await toAccessContext(req), {
+    const dataLake = await dataLakeService.assertLakeAccess(id, ctx, {
       db: { dataLakes: dataLakeRepository },
     });
-    return res.json(dataLake);
+    // Read access is wider than manage (org members, gate holders, and anyone at all for a
+    // published lake), so strip the editor-only fields before serializing the raw document.
+    return res.json(dataLakeService.redactLakeForActor(dataLake, ctx));
   })
   // PUT /api/data-lakes/:id - update a data lake (metadata only; not lifecycle)
   .put(async (req: Request, res) => {

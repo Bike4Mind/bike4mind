@@ -29,8 +29,11 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
 }));
 // ConfigStep reads the lake list for its duplicate-name hint; stub it so this test
 // needs no QueryClientProvider.
+const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fileTagPrefix: string } | undefined }));
+
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: [] }),
+  useDuplicatePrefixLake: () => prefixClash.current,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -40,6 +43,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 
 describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
   beforeEach(() => {
+    prefixClash.current = undefined;
     toastMock.error.mockClear();
     batchUploadMutate.mockClear();
     useDataLakeWizardStore.setState({
@@ -113,6 +117,33 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
     expect(btn).toBeDisabled();
     btn.click();
     expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+
+  // The overlap error renders on the prefix field, but THIS is the guard that stops a bad lake
+  // being created: two lakes sharing a fileTagPrefix share their prefix-tagged files, so
+  // permanently deleting one would take files only the other holds. Next is deliberately not
+  // gated (same as the pre-existing reserved-prefix check), so Start Upload is the only block.
+  it('disables Start Upload when the tag prefix overlaps another lake, and clicking it is a no-op', () => {
+    prefixClash.current = { name: 'Docs Lake', fileTagPrefix: 'docs:' };
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    const btn = screen.getByTestId('wizard-start-upload-btn') as HTMLButtonElement;
+    expect(btn).toBeDisabled();
+    btn.click();
+    expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+
+  it('leaves Start Upload enabled when the prefix is free', () => {
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).not.toBeDisabled();
   });
 });
 

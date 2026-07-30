@@ -20,8 +20,10 @@ import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStor
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
 import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
 // The name, its slug rule, and the duplicate-name hint moved to the source step (#824), so
-// their imports live there now; only the reserved-prefix guard is still needed here.
-import { isReservedTagPrefix } from '@bike4mind/common';
+// their imports live there now. tagPrefixIssue covers both prefix problems this step reports:
+// the reserved namespace and an overlap with another lake's prefix.
+import { tagPrefixIssue } from '@bike4mind/common';
+import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
 
 export default function ConfigStep() {
   const theme = useTheme();
@@ -32,7 +34,9 @@ export default function ConfigStep() {
   const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const duplicateCheckResults = useDataLakeWizardStore(s => s.duplicateCheckResults);
-  const reservedTagPrefix = isReservedTagPrefix(config.tagPrefix);
+  // Append mode inherits the target lake's prefix, which by definition already coexists with it.
+  const duplicatePrefixLake = useDuplicatePrefixLake(config.tagPrefix, !!targetLake);
+  const prefixIssue = tagPrefixIssue(config.tagPrefix, duplicatePrefixLake);
   const hashingProgress = useDataLakeWizardStore(s => s.hashingProgress);
 
   const computeHashes = useComputeHashes();
@@ -118,11 +122,10 @@ export default function ConfigStep() {
           />
         </FormControl>
 
-        {/* Tag Prefix - editable here only when no other step owns it (see prefixEditable);
-            read-only when the taxonomy step is in the flow, locked in append mode. Still flags
-            a reserved prefix even when read-only, so a value inherited from the taxonomy step
-            shows its reason here rather than only disabling Start Upload. */}
-        <FormControl required={prefixEditable} error={reservedTagPrefix}>
+        {/* Tag Prefix - editable only in create mode (see prefixEditable), locked in append
+            mode. Still reports a prefix problem even when locked, so an inherited value's
+            issue is visible here rather than only disabling Start Upload. */}
+        <FormControl required={prefixEditable} error={!!prefixIssue}>
           <FormLabel>Tag Prefix</FormLabel>
           <Input
             data-testid="config-tag-prefix-input"
@@ -139,11 +142,10 @@ export default function ConfigStep() {
             disabled={!prefixEditable}
           />
           <FormHelperText data-testid="datalake-config-tagprefix-help">
-            {reservedTagPrefix
-              ? '"datalake:" is reserved for lake membership. Pick another prefix, such as legal:'
-              : prefixEditable
+            {prefixIssue ??
+              (prefixEditable
                 ? 'All tags will be prefixed with this (must end with ":"). Derived from the name - change it if you like.'
-                : 'Inherited from the existing data lake.'}
+                : 'Inherited from the existing data lake.')}
           </FormHelperText>
         </FormControl>
 

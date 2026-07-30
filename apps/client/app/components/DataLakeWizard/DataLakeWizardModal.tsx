@@ -12,6 +12,7 @@ import PreviewStep from './steps/PreviewStep';
 import ConfigStep from './steps/ConfigStep';
 import UploadStep from './steps/UploadStep';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
+import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
 
 /**
  * The wizard's step order. Preview is opt-in (default off), so the minimal create path is
@@ -43,6 +44,7 @@ export default function DataLakeWizardModal() {
   const batchUpload = useBatchUpload();
 
   const STEP_ORDER = stepOrderFor({ optionalSteps });
+  const duplicatePrefixLake = useDuplicatePrefixLake(config.tagPrefix, !!targetLake);
   const currentIndex = STEP_ORDER.indexOf(step);
 
   const canGoBack = currentIndex > 0 && step !== 'upload';
@@ -63,10 +65,13 @@ export default function DataLakeWizardModal() {
         // produce a slug the server will accept (slug.min(2)) before Start Upload enables.
         // The prefix has to clear the server's reserved-namespace rule here too, or the whole
         // upload fails at the final step.
+        // An overlapping prefix is refused by the server, so block here rather than failing the
+        // whole upload at the last step.
         return (
           (!!targetLake || isValidDataLakeSlug(config.name)) &&
           config.tagPrefix.trim().length >= 2 &&
-          !isReservedTagPrefix(config.tagPrefix)
+          !isReservedTagPrefix(config.tagPrefix) &&
+          !duplicatePrefixLake
         );
       case 'upload':
         return false; // No "next" on last step

@@ -99,6 +99,9 @@ export default function DataLakeListPanel() {
           requiredEntitlement: l.requiredEntitlement ?? '',
           organizationId: l.organizationId ?? '',
           isPublic: l.isPublic ?? false,
+          // Absent for a lake the caller can only read - the server withholds it (editor-only).
+          systemPrompt: l.systemPrompt ?? '',
+          canManage: !!l.canManage,
         }
       : null;
   }, [dataLakes, editingLakeId]);
@@ -489,6 +492,16 @@ interface EditableLake {
   organizationId: string;
   /** Public opt-in. With organizationId, derives the tri-state Visibility control. */
   isPublic: boolean;
+  /**
+   * Per-lake system prompt. '' both when unset AND when the caller may not read it (the server
+   * sends it only to a lake's editors), so the field renders off `canManage`, never off this.
+   */
+  systemPrompt: string;
+  /**
+   * Whether the caller may manage this lake - server-computed, see DataLakeConfig.canManage.
+   * Gates the editor-only System prompt field.
+   */
+  canManage: boolean;
 }
 
 /**
@@ -527,6 +540,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [description, setDescription] = useState('');
   const [requiredUserTag, setRequiredUserTag] = useState('');
   const [requiredEntitlement, setRequiredEntitlement] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('');
 
   // Seed the form once per opened lake, keyed on id (NOT the object): `lake` is now derived
   // from the live list, so it changes identity on every refetch - keying on id keeps a
@@ -537,6 +551,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setDescription(lake.description);
       setRequiredUserTag(lake.requiredUserTag);
       setRequiredEntitlement(lake.requiredEntitlement);
+      setSystemPrompt(lake.systemPrompt);
     }
     // Intentional id-keying: seed once per lake, not on every live-object refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -568,6 +583,12 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // Sent even when blank - '' is the backend's "remove this gate" sentinel.
         requiredUserTag: requiredUserTag.trim(),
         requiredEntitlement: requiredEntitlement.trim(),
+        // Only when the field was actually shown. Defense in depth for a state that should be
+        // unreachable: the gear button is gated on canManage too, and updateDataLake rejects a
+        // non-manager's whole request with a 400 rather than applying part of it - so this branch
+        // guards a path no user can currently take. Blank from an EDITOR is a deliberate clear,
+        // and '' is what unsets it.
+        ...(lake.canManage ? { systemPrompt: systemPrompt.trim() } : {}),
       },
       { onSuccess: onClose }
     );
@@ -597,6 +618,29 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   data-testid="datalake-settings-description"
                 />
               </FormControl>
+              {/* Editor-only: the wording steers every answer drawn from this lake, but a user
+                  who can merely read the lake must never see it - so this renders off the
+                  server-computed manage flag, and the server withholds the text from everyone
+                  else regardless of what the client does with it. */}
+              {lake?.canManage && (
+                <FormControl>
+                  <FormLabel>System prompt</FormLabel>
+                  <Textarea
+                    minRows={3}
+                    maxRows={10}
+                    value={systemPrompt}
+                    onChange={e => setSystemPrompt(e.target.value)}
+                    placeholder="e.g. Answer only from this lake's documents, and always cite the source file."
+                    data-testid="datalake-systemprompt-input"
+                  />
+                  <FormHelperText data-testid="datalake-systemprompt-help">
+                    {`Extra instructions applied to your chats, and to your organization's chats, while this lake is accessible - not only when the lake is used. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+                      // Count what SAVE will persist (trimmed), not the raw field contents.
+                      systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
+                    }`}
+                  </FormHelperText>
+                </FormControl>
+              )}
               <FormControl>
                 <FormLabel>Visibility</FormLabel>
                 <RadioGroup
