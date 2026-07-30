@@ -11,6 +11,10 @@ import { PromptMetaSchema } from '../QuestModel';
  *
  * This is the guard that turns that silence into a failing build. Adding a Zod field without the
  * Mongoose declaration fails here, and so does the reverse.
+ *
+ * Scope: path names only. A path declared with a mismatched BSON type, or optional here against a
+ * required Zod field, still passes. QuestModel.promptMetaPersistence.test.ts covers the type half
+ * for anything in its fixture by parsing the stored document back through the Zod schema.
  */
 
 /**
@@ -29,7 +33,7 @@ const INTENTIONALLY_NOT_PERSISTED: Record<string, string> = {
   'context.extraContextMessages.role': 'carries a server-owned prompt for some product surfaces',
   'context.extraContextMessages.content': 'carries a server-owned prompt for some product surfaces',
   'context.extraContextMessages.fabFileIds': 'carries a server-owned prompt for some product surfaces',
-  'context.systemPromptSources.content': 'system prompt text; the UI only reads source, fileName and length',
+  'context.systemPromptSources.content': 'system prompt text; readers of this array use source, fileName and length',
 };
 
 /**

@@ -14,13 +14,18 @@ export interface IChatHistoryItemModel extends Model<IChatHistoryItemDocument> {
 // Each of these is its own Schema, not an inline object, so the parent can set
 // `default: undefined` and keep an unwritten field ABSENT. An inline nested object containing an
 // array materializes on every document, and clients test these for presence.
+//
+// None of them constrain a string field with `enum`. Writers here outrun their declared unions
+// (ModelInfo['type'] has a member the promptMeta union does not), and BaseRepository.create runs
+// validators, so an enum would turn a field that used to be dropped in silence into a thrown
+// quest-creation. Zod remains the contract; this schema's job is to not lose the value.
 const subSchema = (definition: Record<string, unknown>) => new Schema(definition, { _id: false });
 
 const MessageTruncationSchema = subSchema({
   wasTruncated: { type: Boolean, required: false },
   originalMessageCount: { type: Number, required: false },
   truncatedMessageCount: { type: Number, required: false },
-  truncationMethod: { type: String, enum: ['priority', 'token-budget', 'history-limit'], required: false },
+  truncationMethod: { type: String, required: false },
   removedMessages: {
     type: [{ role: { type: String }, tokens: { type: Number }, priority: { type: Number } }],
     required: false,
@@ -32,7 +37,7 @@ const MessageTruncationSchema = subSchema({
 const SystemPromptSourceSchema = subSchema({
   fileId: { type: String, required: false },
   fileName: { type: String, required: false },
-  source: { type: String, enum: ['admin', 'user', 'project', 'session', 'hardcoded'], required: false },
+  source: { type: String, required: false },
   priority: { type: Number, required: false },
   enabled: { type: Boolean, required: false },
 });
@@ -61,7 +66,7 @@ const ExecutionTrackingSchema = subSchema({
     type: [
       subSchema({
         name: { type: String, required: false },
-        status: { type: String, enum: ['pending', 'running', 'completed', 'failed'], required: false },
+        status: { type: String, required: false },
         startTime: { type: Date, required: false },
         endTime: { type: Date, required: false },
         result: { type: String, required: false },
@@ -89,7 +94,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
   {
     model: {
       name: { type: String, required: false },
-      type: { type: String, enum: ['text', 'image', 'video'], required: false },
+      type: { type: String, required: false },
       backend: { type: String, required: false },
       contextWindow: { type: Number, required: false },
       maxTokens: { type: Number, required: false },

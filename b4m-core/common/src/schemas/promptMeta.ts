@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { ContextTelemetrySchema } from './contextTelemetry';
 
+/**
+ * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
+ * MessageContent hands it to the bug-report modal, which posts it to /api/feedback, where this
+ * same schema parses the request body. JSON has no Date, so a bare z.date() would reject every
+ * value that survives that trip. statusLog.timestamp has carried the same allowance for years.
+ */
+const JsonSafeDate = z.date().or(z.string());
+
 const PromptMetaModelParametersSchema = z.object({
   // Text generation parameters
   temperature: z.number().optional(),
@@ -218,7 +226,7 @@ const PromptMetaArtifactSchema = z.object({
   type: z.string(),
   content: z.string(),
   metadata: z.record(z.string(), z.unknown()).optional(),
-  timestamp: z.date().optional(),
+  timestamp: JsonSafeDate.optional(),
 });
 
 const ToolHealthSchema = z.object({
@@ -226,7 +234,7 @@ const ToolHealthSchema = z.object({
   available: z.boolean(),
   failureCount: z.number(),
   lastError: z.string().optional(),
-  lastChecked: z.date().optional(),
+  lastChecked: JsonSafeDate.optional(),
   lastExecutionTime: z.number().optional(),
   successRate: z.number().optional(),
 });
@@ -305,7 +313,7 @@ export const PromptMetaZodSchema = z.object({
       comments: z.string().optional(),
       modifications: z.string().optional(),
       reviewedBy: z.string().optional(),
-      reviewedAt: z.date().optional(),
+      reviewedAt: JsonSafeDate.optional(),
     })
     .optional(),
   executionTracking: z
@@ -315,8 +323,8 @@ export const PromptMetaZodSchema = z.object({
           z.object({
             name: z.string(),
             status: z.enum(['pending', 'running', 'completed', 'failed']),
-            startTime: z.date().optional(),
-            endTime: z.date().optional(),
+            startTime: JsonSafeDate.optional(),
+            endTime: JsonSafeDate.optional(),
             result: z.string().optional(),
             error: z.string().optional(),
           })
