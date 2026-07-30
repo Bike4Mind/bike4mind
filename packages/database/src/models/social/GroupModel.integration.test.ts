@@ -57,6 +57,17 @@ describe('GroupModel', () => {
       >[0])
     ).rejects.toThrow();
   });
+
+  // The create route defaults an omitted description to ''. Mongoose treats '' as missing,
+  // so a `required` description would reject every group created without one (a 500 on the
+  // real provisioning path). Description is optional and defaults to ''.
+  it('allows an omitted/empty description (defaults to "")', async () => {
+    const omitted = await Group.create({ name: 'NoDesc', type: 'sales', organizationId: 'org-1' });
+    expect((await Group.findById(omitted.id))?.description).toBe('');
+
+    const empty = await Group.create({ name: 'EmptyDesc', description: '', type: 'sales', organizationId: 'org-1' });
+    expect((await Group.findById(empty.id))?.description).toBe('');
+  });
 });
 
 describe('GroupRepository', () => {

@@ -6,7 +6,9 @@ import { softDeletePlugin } from '../../utils/mongo';
 export const GroupSchema = new mongoose.Schema<IGroupDocument>(
   {
     name: { type: String, required: true },
-    description: { type: String, required: true },
+    // Optional metadata. NOT required: Mongoose treats '' as missing, so a required
+    // description would 500 the create route (which defaults an omitted description to '').
+    description: { type: String, default: '' },
     // GroupType key (GROUP_TYPE_CATALOG). Required - groups are provisioned via a type grant,
     // never untyped. Safe as required: the prod Group collection is empty (org-groups #1172 audit).
     type: { type: String, required: true },
