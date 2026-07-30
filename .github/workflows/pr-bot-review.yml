@@ -224,6 +224,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # TEMPORARY debug flag: two prior label-triggered runs on this PR completed
+          # with is_error:false but posted no review/comment. Full output is normally
+          # hidden; flip this on to see the actual transcript, then revert once diagnosed.
+          show_full_output: true
           prompt: |
             You are running in GitHub Actions to auto-review PR
             #${{ github.event.pull_request.number }} in ${{ github.repository }}.
