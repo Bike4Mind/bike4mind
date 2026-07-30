@@ -210,7 +210,12 @@ const PromptMetaSessionSchema = z.object({
 });
 
 const PromptMetaArtifactSchema = z.object({
-  type: z.enum(['text', 'image', 'file', 'data']),
+  // Deliberately open. Writers put internal artifact types here (`ArtifactTypeSchema`:
+  // 'chess', 'react', 'html', ...) and tool extraction can fall back to a raw MIME string,
+  // so a closed enum would reject real values. That matters more than usual here, because
+  // ChatCompletionInvoke parses the whole promptMeta on every turn - a value this schema
+  // rejects fails the completion rather than just failing to record telemetry.
+  type: z.string(),
   content: z.string(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   timestamp: z.date().optional(),
