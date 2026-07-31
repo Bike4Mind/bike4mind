@@ -1,17 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import type { IUserCreditAdjustment } from '@client/pages/api/admin/users/[userId]/credit-transactions';
 
-export interface UserCreditAdjustment {
-  id: string;
-  createdAt: string;
-  /** Signed delta: positive for a grant, negative for a deduction. */
-  credits: number;
-  description?: string;
-  reason?: string;
-  actorId?: string;
-  actorName?: string;
-  resultingBalance?: number;
-}
+// Re-exported under the established local name; sourced from the endpoint so
+// the row shape cannot drift from what the API actually returns.
+export type UserCreditAdjustment = IUserCreditAdjustment;
 
 export const userCreditAdjustmentsKey = (userId?: string) => ['admin', 'user-credit-adjustments', userId];
 

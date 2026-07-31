@@ -170,6 +170,7 @@ export class CreditTransactionRepository
     options: {
       days?: number;
       transactionTypes?: ICreditTransaction['type'][];
+      limit?: number;
     }
   ) {
     const query: {
@@ -192,7 +193,11 @@ export class CreditTransactionRepository
       query.type = { $in: options.transactionTypes };
     }
 
-    return this.model.find(query).sort({ createdAt: -1 }).exec();
+    let cursor = this.model.find(query).sort({ createdAt: -1 });
+    if (options.limit !== undefined) {
+      cursor = cursor.limit(options.limit);
+    }
+    return cursor.exec();
   }
 
   async queryLedgerPage(
