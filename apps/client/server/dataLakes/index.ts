@@ -15,7 +15,13 @@
  * (An owner's own gated lake used to be a third difference - the retrieval resolver now
  * restores it, so both surfaces agree.)
  */
-import { DATA_LAKES, getAccessibleDataLakes, hasDeveloperUserTag, isImageServeable } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  getAccessibleDataLakes,
+  hasDeveloperUserTag,
+  isImageServeable,
+  normalizeTagPrefix,
+} from '@bike4mind/common';
 import type { DataLakeConfig, IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
@@ -121,12 +127,21 @@ const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
  *    matched only within owner/org access (see buildOwnershipConditions). Mixing them
  *    is the cross-tenant leak this guards against.
  * The unique `datalakeTag` (exact match, never a prefix) safely covers every lake.
+ *
+ * Normalized through `normalizeTagPrefix` - the same predicate `buildOwnershipConditions`
+ * applies - because the tag-count aggregates build their regex straight from what we return
+ * here. Handing them the raw field let the two disagree: a lake stored with a padded prefix
+ * (` a:` passes create validation, which never trims) matched `^(a:)` in the ownership arm
+ * but `^( a:)` in the counter, so its files were browsable yet counted zero. An unusable
+ * prefix drops out entirely rather than reaching a regex as an empty alternation.
  */
 function splitTagPrefixes(lakes: DataLakeConfig[]): { openTagPrefixes: string[]; scopedTagPrefixes: string[] } {
   const openTagPrefixes: string[] = [];
   const scopedTagPrefixes: string[] = [];
   for (const lake of lakes) {
-    (STATIC_LAKE_IDS.has(lake.id) ? openTagPrefixes : scopedTagPrefixes).push(lake.fileTagPrefix);
+    const prefix = normalizeTagPrefix(lake.fileTagPrefix);
+    if (!prefix) continue;
+    (STATIC_LAKE_IDS.has(lake.id) ? openTagPrefixes : scopedTagPrefixes).push(prefix);
   }
   return { openTagPrefixes, scopedTagPrefixes };
 }
