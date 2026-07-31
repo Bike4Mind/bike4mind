@@ -162,7 +162,6 @@ export type featureNames =
   | 'summarizeNotebook'
   | 'agentDetection'
   | 'organizationPrompt'
-  | 'dataLakePrompt'
   | 'sessionPrompt'
   | 'knowledgeRetrieval'
   | 'contextSummarization'
