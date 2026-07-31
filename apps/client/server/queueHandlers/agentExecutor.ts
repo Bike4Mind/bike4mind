@@ -97,10 +97,16 @@ import type { DagHandoffSignal } from '@bike4mind/services';
 import { maybeBuildFirstIterationQuery } from './agentExecutor.firstIterationQuery';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
-// Per-iteration billing (delta math + #657 context-window guard) lives in its
-// own side-effect-free module so the guard can be unit-tested with injected
-// effect doubles; see `agentExecutor.billing.ts`.
-import { billIteration, type BillingCounters } from './agentExecutor.billing';
+// Per-iteration billing (delta math + #657 context-window guard + tool-internal
+// spend fold, #630) lives in its own side-effect-free module so the guard and the
+// fold can be unit-tested with injected effect doubles; see `agentExecutor.billing.ts`.
+import {
+  billIteration,
+  addToolUsage,
+  takeToolUsage,
+  type BillingCounters,
+  type PendingToolUsage,
+} from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 import {
   resolveTopLevelProfile,
@@ -1102,6 +1108,22 @@ async function processExecution(
       logger,
     });
 
+    // Tool-internal LLM spend accrued since the last iteration was billed. Tools that
+    // make their own llm.complete() call (deep_research, blog_draft, edit_file, ...)
+    // report usage here via ToolContext.onToolLlmUsage; billIterationIfNeeded folds it
+    // into the iteration's cost delta so nested generation isn't billed at zero (#630).
+    // Priced at each tool's OWN model, so we accumulate USD directly rather than
+    // re-pricing tokens at the agent model's rate. Tokens are kept for the analytics
+    // usage event only - they must NOT enter `counters`/`iterationBilling`, which are
+    // agent-only and summed on resume to rebuild cumulative agent cost.
+    const pendingToolUsage: PendingToolUsage = {
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+
     const toolDeps: ToolBuilderDeps = {
       userId: execution.userId,
       user: user as IUserDocument,
@@ -1110,6 +1132,7 @@ async function processExecution(
       // knowledge tools honor the same exclusion as the chat path; absent it fails OPEN
       // (an excluded file leaks + gets cited). Session is resolved above at execution start.
       retrievalFilter: toRetrievalFilter(session),
+      onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {
         apiKeys: apiKeyRepository,
         adminSettings: adminSettingsRepository,
@@ -1506,6 +1529,12 @@ async function processExecution(
       // non-undefined `ModelInfo` type (control-flow narrowing of the outer
       // `const` doesn't always survive into nested closures).
       const resolvedModelInfo = modelInfo;
+      // Snapshot-and-clear the tool-internal LLM spend accrued this iteration (#630) so a
+      // repeat call can't double-count it. The agent cost delta and this are both >= 0, so
+      // any iteration carrying tool spend is always billable; `billIteration` folds the USD
+      // into the charge + analytics event while the resume-critical iterationBilling record
+      // stays agent-only.
+      const toolUsage = takeToolUsage(pendingToolUsage);
       // The fixed billing context (user, org, session, db wiring, WS wire
       // convention) is bound into each effect closure; `billIteration` only
       // decides the amounts and advances `counters` in place. See
@@ -1515,6 +1544,7 @@ async function processExecution(
         checkpoint,
         counters,
         modelInfo: resolvedModelInfo,
+        toolUsage,
         model: execution.model,
         startTime,
         effects: {
