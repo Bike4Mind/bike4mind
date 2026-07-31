@@ -200,9 +200,27 @@ function assertNeverElisionSignal(signal: never): never {
 const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
 
 /**
- * Share of the context budget this file assumes history will take when sizing a history count.
- * It mirrors the 30/70 history/file split buildAndSortMessages applies to an unwindowed request;
- * a windowed request there gives history absolute priority instead.
+ * Usable input window: the context window less the output this request will reserve, less a safety
+ * buffer. Deliberately NOT clamped at zero - the empty-prompt guard depends on seeing a non-positive
+ * budget for a genuinely misconfigured text model.
+ *
+ * Image and video models return media rather than tokens, and every image backend here sets
+ * max_tokens equal to contextWindow because both are the prompt-length limit, so reserving it as
+ * output left no room for the prompt itself. Two callers need this figure - the assembly budget and
+ * the verbatim-history window - and they must not drift apart.
+ */
+const safeInputWindow = (modelInfo: ModelInfo, requestedMaxTokens: number, safetyBuffer = 1000): number => {
+  const contextLimit = modelInfo.contextWindow ?? 200000;
+  const modelMaxOutput = modelInfo.max_tokens ?? 16384;
+  const returnsMedia = modelInfo.type === 'image' || modelInfo.type === 'video';
+  const reservedOutput = returnsMedia ? 0 : Math.min(requestedMaxTokens, modelMaxOutput);
+  return contextLimit - reservedOutput - safetyBuffer;
+};
+
+/**
+ * Share of the context budget this file assumes history will take when sizing a history count. It
+ * does NOT mirror how buildAndSortMessages splits the budget: that depends on historyCount, giving
+ * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise.
  */
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
 /**
@@ -211,10 +229,11 @@ const HISTORY_BUDGET_PERCENTAGE = 0.3;
  * first, keeps the majority. See attachedFileTokenBudget at its only use site.
  *
  * Three different stages, easily confused. HISTORY_BUDGET_PERCENTAGE above sizes the
- * history MESSAGE COUNT before anything is fetched. KNOWLEDGE_FILE_TOKEN_ALLOCATION in
- * utils.ts governs ASSEMBLY, trimming an already-extracted set to fit. This one governs
- * EXTRACTION - how much is read off disk at all - and is held below the assembly share
- * on purpose.
+ * history MESSAGE COUNT before anything is fetched. Two constants in utils.ts govern
+ * ASSEMBLY, trimming an already-extracted set to fit: KNOWLEDGE_FILE_TOKEN_ALLOCATION for
+ * an unwindowed request, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION as the floor for a windowed
+ * one. This constant governs EXTRACTION - how much is read off disk at all - and is held
+ * below the assembly share on purpose.
  */
 const ATTACHED_CONTENT_SHARE = 0.35;
 /**
@@ -1512,11 +1531,14 @@ export class ChatCompletionProcess {
       // of the raw window can exceed the usable input, so verbatim history would
       // never be bounded before buildAndSortMessages' hard trim (which does not
       // advance the summary boundary) and the turn overflows instead of compacting.
-      // Mirror the maxSafeInputTokens formula computed later (requested output
-      // capped at the model max, minus the safety buffer).
+      // Shares safeInputWindow with the assembly budget below, so the window itself cannot drift.
+      // The clamp does NOT carry over there, deliberately: sizing a history window on a negative
+      // number is meaningless, whereas assembly must SEE the negative - that is what makes
+      // buildAndSortMessages return nothing and the empty-prompt guard fire on a misconfigured
+      // model (a context window smaller than its own reserved output). Clamping there would
+      // silently restore the empty payload that guard exists to catch.
       const modelMaxOutput = modelInfo.max_tokens ?? 16384;
-      const reservedOutputTokens = Math.min(params.max_tokens ?? modelMaxOutput, modelMaxOutput);
-      const safeInputTokens = Math.max(0, contextWindow - reservedOutputTokens - 1000);
+      const safeInputTokens = Math.max(0, safeInputWindow(modelInfo, params.max_tokens ?? modelMaxOutput));
       // Reserve the non-history overhead that shares this budget before applying the
       // fraction, so heavier-payload turns (more tools, a longer running summary, a
       // large prompt) compact SOONER rather than overflowing first - this is the
@@ -1619,7 +1641,11 @@ export class ChatCompletionProcess {
       const urlContentBudget = maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS;
 
       const safetyBuffer = 1000; // Emergency buffer
-      const maxSafeInputTokens = contextLimit - safeMaxTokens - safetyBuffer;
+      // safeMaxTokens, not the raw (possibly absent) requested maxTokens: this reserves against the
+      // output budget actually in play, including the adaptive-reasoning floor above, or an adaptive
+      // model could reserve less than it goes on to use and land back on the negative-window bug this
+      // guard exists to prevent.
+      const maxSafeInputTokens = safeInputWindow(modelInfo, safeMaxTokens, safetyBuffer);
 
       // How much attached-file content may be extracted this turn.
       //
@@ -2000,7 +2026,7 @@ export class ChatCompletionProcess {
                   'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
                   '',
                   ...cacheInfo.recentGeneratedImages!.map(
-                    img => `- ${img.key}${img.prompt ? ` — from: "${img.prompt}"` : ''}`
+                    img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
                   ),
                   '',
                   'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
@@ -2022,8 +2048,16 @@ export class ChatCompletionProcess {
         logger,
         this.tokenizer
       );
-      if (!messages) {
-        throw new Error('No messages to send to OpenAI');
+      // The length check is the part that matters: buildAndSortMessages returns an EMPTY ARRAY when
+      // the input budget is non-positive, and `!messages` is false for `[]`, so an empty prompt used
+      // to reach the model. It then answers confidently from nothing, which reads to the user as the
+      // assistant ignoring their file rather than as a misconfiguration.
+      if (!messages || messages.length === 0) {
+        throw new Error(
+          `Cannot build a prompt for ${modelInfo.name || model}: no input budget. The model's context window ` +
+            `(${contextLimit}) minus its reserved output (${safeMaxTokens}) leaves no room for input. Lower the ` +
+            `max output tokens for this model, or pick a model with a larger context window.`
+        );
       }
 
       // Phase 2: Capture message truncation debug info
