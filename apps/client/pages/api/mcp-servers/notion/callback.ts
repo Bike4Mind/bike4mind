@@ -1,4 +1,4 @@
-import type { NextApiResponse } from 'next';
+import type { Response as ExpressResponse } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
 import {
@@ -17,7 +17,7 @@ const OAUTH_TIMEOUT = 30000;
 const NOTION_API_TIMEOUT = 10000;
 
 /** Redirect to the integrations page with a specific error message shown as a toast. */
-function redirectWithError(res: NextApiResponse, message: string) {
+function redirectWithError(res: ExpressResponse, message: string) {
   res.setHeader('Set-Cookie', [
     `notion_error=${encodeURIComponent(message)}; Path=/; Max-Age=60; SameSite=Lax; Secure`,
   ]);
