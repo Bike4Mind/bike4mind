@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { InviteType, Permission } from '@bike4mind/common';
-import { ForbiddenError, UnauthorizedError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, UnauthorizedError } from '@bike4mind/utils';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
@@ -160,13 +160,19 @@ describe('group-invite authorization (end-to-end, real repos + Mongo)', () => {
     expect(await Invite.countDocuments({ documentId: groupId })).toBe(0);
   });
 
-  it('rejects a group invite created from outside the organization and discloses no group name', async () => {
+  it('rejects a group invite created from outside the organization, indistinguishably from a missing group', async () => {
     const { groupId } = await seedOrgAndGroup();
 
+    // Pinned as BadRequestError, not ForbiddenError: a caller outside the org must not be able to
+    // tell a real group id from a nonexistent one. The type check matters - without it a plain
+    // 'message does not contain the name' assertion is satisfied by any error at all.
     await expect(createGroupInvite(strangerUser, groupId)).rejects.toSatisfy(
-      (e: Error) => !e.message.includes(GROUP_NAME)
+      (e: Error) => e instanceof BadRequestError && !e.message.includes(GROUP_NAME)
     );
     expect(await Invite.countDocuments({ documentId: groupId })).toBe(0);
+
+    // Same error for a group id that does not exist at all.
+    await expect(createGroupInvite(strangerUser, '507f1f77bcf86cd799439011')).rejects.toThrow('Document not found');
   });
 
   it('fails closed for a legacy group with no organizationId (pre-fix data)', async () => {

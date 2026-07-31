@@ -72,11 +72,20 @@ describe('sharingService - createInvite (group arm authority)', () => {
     expect(db.invites.create).not.toHaveBeenCalled();
   });
 
-  it('rejects a caller outside the organization and returns no group name', async () => {
+  it('rejects a caller outside the organization indistinguishably from a missing group', async () => {
+    // BadRequestError, not ForbiddenError: a 403 here would confirm to an outsider that this group
+    // id exists. Same error and message as the missing-group case below.
     await expect(create(asUser(OUTSIDER_ID))).rejects.toSatisfy(
-      (e: Error) => e instanceof ForbiddenError && !e.message.includes(GROUP_NAME)
+      (e: Error) => e instanceof BadRequestError && !e.message.includes(GROUP_NAME)
     );
     expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('gives an org member 403 but an outsider the generic error, for the same group', async () => {
+    // The pair is the point: authority failures inside the org stay legible, while existence stays
+    // hidden from outside it. Asserting either alone would not pin the distinction.
+    await expect(create(asUser(PLAIN_MEMBER_ID))).rejects.toThrow(ForbiddenError);
+    await expect(create(asUser(OUTSIDER_ID))).rejects.toThrow(BadRequestError);
   });
 
   it('rejects an appointed org admin who is no longer a member', async () => {
@@ -85,7 +94,10 @@ describe('sharingService - createInvite (group arm authority)', () => {
       users: [{ userId: PLAIN_MEMBER_ID, permissions: [] }],
     }));
 
-    await expect(create(asUser(ADMIN_MEMBER_ID))).rejects.toThrow(ForbiddenError);
+    // A removed admin is no longer in the org, so they get the outsider error rather than a 403 -
+    // a stale adminUserIds entry must not reveal that the group still exists.
+    await expect(create(asUser(ADMIN_MEMBER_ID))).rejects.toThrow(BadRequestError);
+    expect(db.invites.create).not.toHaveBeenCalled();
   });
 
   it('fails closed for a group with no organizationId (pre-org-groups data)', async () => {

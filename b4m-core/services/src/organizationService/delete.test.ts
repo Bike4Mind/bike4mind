@@ -157,9 +157,14 @@ describe('organizationService - delete', () => {
     });
 
     it('should reject an appointed org admin who is not the billing owner', async () => {
+      // orgAdmin1 must ALSO be in users[]: assertCanManageOrgGroups requires adminUserIds AND
+      // membership, so a non-member org admin would fail that predicate too and the test would
+      // pass even if the gate were consolidated onto it. Membership is what makes this pin the
+      // narrowness the gate deliberately keeps.
       vi.spyOn(getOrganization, 'get').mockResolvedValue({
         ...mockOrganization,
         adminUserIds: ['orgAdmin1'],
+        users: [...mockOrganization.users, { userId: 'orgAdmin1', permissions: [] }],
       } as WithId<IOrganizationDocument>);
       const orgAdmin: Partial<IUserDocument> = { id: 'orgAdmin1', isAdmin: false };
 
