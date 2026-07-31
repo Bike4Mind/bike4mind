@@ -367,7 +367,7 @@ function ManagerNav({
         ? activeLake.name
         : humanizeSegment(path[path.length - 2], path.length - 2);
 
-  const rowTypographySx = { fontSize: '14px', fontWeight: 400, color: gray[200] } as const;
+  const rowTypographySx = { fontSize: '14px', fontWeight: 400, color: 'text.primary' } as const;
 
   return (
     <Box
@@ -769,7 +769,7 @@ function NavSectionHeader({
         '--variant-plainHoverBg': hoverBg,
       }}
     >
-      <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: gray[200] }}>
+      <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
         {label}
       </Typography>
       {open ? (
@@ -836,7 +836,10 @@ function NavLifecycleSection({
                   }}
                 >
                   <FolderOutlinedIcon sx={{ fontSize: 16, color: 'text.tertiary', flexShrink: 0 }} />
-                  <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: gray[200] }}>
+                  <Typography
+                    noWrap
+                    sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}
+                  >
                     {lake.name}
                   </Typography>
                   {renderActions(lake)}
