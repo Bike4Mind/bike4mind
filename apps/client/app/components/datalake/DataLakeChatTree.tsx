@@ -136,7 +136,7 @@ export default function DataLakeChatTree({
         }}
       >
         <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Typography noWrap sx={{ fontSize: '14px', fontWeight: 300, color: gray[200] }}>
+          <Typography noWrap sx={{ fontSize: '14px', fontWeight: 300, color: 'text.primary' }}>
             {title}
           </Typography>
           <Tooltip
@@ -234,7 +234,7 @@ export default function DataLakeChatTree({
             }}
           >
             <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
-            <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: gray[200] }}>
+            <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
               {breadcrumb.length === 1
                 ? 'All Categories'
                 : humanizeSegment(breadcrumb[breadcrumb.length - 2], breadcrumb.length - 2)}
@@ -281,7 +281,11 @@ export default function DataLakeChatTree({
                     <ListItemContent>
                       <Typography
                         noWrap
-                        sx={{ fontSize: '14px', fontWeight: selectedFileId === file.id ? 'lg' : 400, color: gray[200] }}
+                        sx={{
+                          fontSize: '14px',
+                          fontWeight: selectedFileId === file.id ? 'lg' : 400,
+                          color: 'text.primary',
+                        }}
                       >
                         {file.fileName.replace(/\.[^/.]+$/, '')}
                       </Typography>
@@ -312,7 +316,7 @@ export default function DataLakeChatTree({
                     >
                       <FolderOutlinedIcon sx={{ fontSize: 16, color: branchInk, flexShrink: 0 }} />
                       <ListItemContent>
-                        <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: gray[200] }}>
+                        <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
                           {humanizeSegment(node.segment, breadcrumb.length)}
                         </Typography>
                       </ListItemContent>
