@@ -7,7 +7,7 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
 
 export interface AudioGenerationResult {
-  /** Playable URL: a data: URL for TTS, a blob: URL for sound effects, or a presigned file URL for large saved audio. */
+  /** Playable URL: a blob: URL for generated audio, or a presigned file URL for large saved audio. */
   url: string;
   /** True when `url` is an object URL that must be revoked on cleanup. */
   isObjectUrl: boolean;
@@ -215,7 +215,14 @@ export function useGenerateAudio() {
         } else if (parsed.status === 401) {
           toast.error('No provider API key is configured. Ask your administrator to set one up.');
         } else if (parsed.status === 402 || parsed.errorCode === 'insufficient_credits') {
-          toast.error('You do not have enough credits to generate this audio.');
+          // Prefer the server's specific "you have X, need Y" message when it
+          // carries the figures (sound-effects route); the plain 402 TTS body
+          // has no such detail, so fall back to the generic line.
+          toast.error(
+            parsed.errorCode === 'insufficient_credits' && parsed.message
+              ? parsed.message
+              : 'You do not have enough credits to generate this audio.'
+          );
         } else {
           toast.error(parsed.message);
         }
