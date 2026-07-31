@@ -10,7 +10,9 @@ export interface SubscriptionData {
   periodEndsAt: Date;
   createdAt: Date;
   updatedAt: Date;
-  user?: {
+  // The subscription owner (a User here — this admin view is User-scoped). The API
+  // (findWithOwnerDetails) projects the joined account under `owner`, not `user`.
+  owner?: {
     username: string;
     email: string;
     name: string;

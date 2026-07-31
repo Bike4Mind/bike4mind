@@ -23,11 +23,11 @@ const SubscriptionTable = ({ subscriptions, planMap }: SubscriptionTableProps) =
               <CardContent sx={{ p: 1.5 }}>
                 <Stack spacing={0.75}>
                   <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
-                    <Typography fontWeight="bold">{subscription.user?.username || 'Unknown User'}</Typography>
+                    <Typography fontWeight="bold">{subscription.owner?.username || 'Unknown User'}</Typography>
                     <SubscriptionStatusChip subscription={subscription} />
                   </Stack>
                   <Typography level="body-xs" sx={{ wordBreak: 'break-word', color: 'text.secondary' }}>
-                    {subscription.user?.email}
+                    {subscription.owner?.email}
                   </Typography>
                   <Divider />
                   <Stack direction="row" justifyContent="space-between">
@@ -73,9 +73,9 @@ const SubscriptionTable = ({ subscriptions, planMap }: SubscriptionTableProps) =
               <tr key={subscription.id || subscription.subscriptionId}>
                 <td>
                   <Stack>
-                    <Typography>{subscription.user?.username || 'Unknown User'}</Typography>
+                    <Typography>{subscription.owner?.username || 'Unknown User'}</Typography>
                     <Typography level="body-xs" sx={{ wordBreak: 'break-word' }}>
-                      {subscription.user?.email}
+                      {subscription.owner?.email}
                     </Typography>
                   </Stack>
                 </td>
