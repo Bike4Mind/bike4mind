@@ -260,3 +260,71 @@ describe('retrieve_knowledge_content agent kbScope enforcement', () => {
     expect(getDynamicDataLakeAccessMock).toHaveBeenCalled();
   });
 });
+
+/**
+ * Retrieval-scoped lake-prompt injection (#1108). Retrieving a trusted lake's CONTENT prepends that
+ * lake's operating instructions (defended); the agent-scoped branch never does. This is the
+ * keyword-fallback deployments' grounding surface - search returns metadata there, content enters
+ * here. Trust is covered by getDataLakePrompts.test.ts; here we lock the WIRING.
+ */
+describe('retrieve_knowledge_content scoped lake-prompt injection (#1108)', () => {
+  const lake = {
+    id: 'lakeX',
+    slug: 'x',
+    name: 'Lake X',
+    fileTagPrefix: 'x:',
+    datalakeTag: 'datalake:x',
+    createdByUserId: 'u1',
+    status: 'active',
+    systemPrompt: 'Prefer the 2026 revision.',
+  };
+
+  function lakeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          findByIdAndUserId: vi
+            .fn()
+            .mockResolvedValue(makeFile({ fileName: 'Doc.pdf', tags: [{ name: 'datalake:x' }] })),
+          findById: vi.fn().mockResolvedValue(makeFile({ fileName: 'Doc.pdf', tags: [{ name: 'datalake:x' }] })),
+          search: vi.fn(),
+        },
+        fabfilechunks: {
+          findByFabFileId: vi.fn().mockResolvedValue([{ id: 'c1', text: 'chunk body', vector: [0.1] }]),
+        },
+        dataLakes: {
+          findActiveByUserTags: vi.fn(),
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([lake]),
+        },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  it('unscoped: prepends the retrieved lake prompt ahead of the document content', async () => {
+    const out = await runById(lakeCtx());
+    expect(out).toContain('[Data Lake Instructions]');
+    expect(out).toContain('[Data Lake - Lake X]\nPrefer the 2026 revision.');
+    expect(out).toContain('chunk body');
+    expect(out.indexOf('[Data Lake - Lake X]')).toBeLessThan(out.indexOf('Retrieved content from'));
+  });
+
+  it('agent-scoped: never injects a lake prompt, even for a lake-tagged file', async () => {
+    const ctx = lakeCtx({ kbScope: { fileIds: [FILE_ID] } as never });
+    const out = await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ file_id: FILE_ID });
+    expect(out).not.toContain('[Data Lake -');
+    expect(out).toContain('chunk body');
+  });
+
+  it('dedupes across repeated retrieves: the same lake is injected once per completion', async () => {
+    // One tool instance = one completion; its injectedLakeTags closure must survive across calls
+    // (MAX_RETRIEVES allows two). A per-call set would re-inject the prompt on the second retrieve.
+    const tool = knowledgeBaseRetrieveTool.implementation(lakeCtx(), undefined);
+    const first = (await tool.toolFn({ file_id: FILE_ID })) as string;
+    const second = (await tool.toolFn({ file_id: FILE_ID })) as string;
+    expect(first).toContain('[Data Lake - Lake X]');
+    expect(second).not.toContain('[Data Lake - Lake X]');
+    expect(second).toContain('chunk body');
+  });
+});
