@@ -124,7 +124,7 @@ export interface IUserPreferences {
   showFunTools?: boolean;
   /** Whether generated audio (TTS, sound-effect, music) is saved to storage as a browsable FabFile. Default: true. */
   saveGeneratedAudio?: boolean;
-  /** Whether to show the prompt suggestion cards on the splash screen. Default: true. */
+  /** Whether to show the prompt suggestion cards on the splash screen. Default: false. */
   showSplashCards?: boolean;
 }
 
