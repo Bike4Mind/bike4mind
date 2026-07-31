@@ -33,7 +33,7 @@ import { handleToolResultStreaming } from './toolStreamingHelper';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
-import { buildThinkingParams, type ThinkingConfig } from './thinkingParams';
+import { buildThinkingParams, THINKING_ANSWER_HEADROOM_TOKENS, type ThinkingConfig } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
 import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
 
@@ -1022,6 +1022,15 @@ export class AnthropicBackend implements ICompletionBackend {
         { model }
       );
       apiParams.max_tokens = ANTHROPIC_NONSTREAMING_MAX_TOKENS;
+
+      // A legacy thinking budget is spent inside max_tokens and the API rejects one that
+      // is not strictly below it, so lowering the ceiling has to bring the budget down
+      // with it - otherwise the clamp trades the SDK's error for a 400 instead of a
+      // working turn. The ceiling keeps the result well above Anthropic's 1024 minimum.
+      const thinking = apiParams.thinking;
+      if (thinking?.type === 'enabled' && thinking.budget_tokens >= apiParams.max_tokens) {
+        thinking.budget_tokens = apiParams.max_tokens - THINKING_ANSWER_HEADROOM_TOKENS;
+      }
     }
 
     // Setup the actual API call with API-specific options
