@@ -1,7 +1,8 @@
-import { CODE_FILE_MIME_TYPES, normalizeTagPrefix } from '@bike4mind/common';
+import { CODE_FILE_MIME_TYPES, normalizeTagPrefix, type DataLakeMembershipScope } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { buildFilenameMarkerRegex } from '@bike4mind/utils/retrievalExclusion';
 import { USE_DOCUMENTDB } from '../utils/documentdb-compat';
+import { buildDataLakeMembershipFilter } from './dataLakeLifecycleScope';
 
 /**
  * Stop words filtered out during text search to improve match quality.
@@ -99,7 +100,7 @@ export { escapeRegex };
 
 /** Map file type filter to MongoDB mimeType query condition */
 export function getMimeTypeFilter(
-  type: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code'
+  type: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio'
 ): Record<string, unknown> {
   switch (type) {
     case 'text':
@@ -126,6 +127,8 @@ export function getMimeTypeFilter(
       return { mimeType: 'text/markdown' };
     case 'code':
       return { mimeType: { $in: CODE_FILE_MIME_TYPES } };
+    case 'audio':
+      return { mimeType: { $regex: '^audio/' } };
   }
 }
 
@@ -162,6 +165,19 @@ export function buildOwnershipConditions(
      * (assertLakeAccess), so matching the unique meta-tag without the ownership arms is safe.
      */
     restrictToDataLake?: boolean;
+    /**
+     * A single lake's membership scope, replacing the `dataLakeTags`/`scopedTagPrefixes` pair
+     * with the SAME predicate the whole-lake writes use, so a single-lake browse lists exactly
+     * what an archive or a permanent delete would act on. Its prefix arm is anchored to the
+     * lake's CREATOR, not the viewer: a viewer's own file that merely happens to carry a
+     * colliding tag prefix is not a member of someone else's lake, and a per-viewer answer could
+     * never agree with the lake's persisted fileCount.
+     *
+     * MUST be built server-side from the lake document. It carries a `creatorUserId` that widens
+     * what the query matches, so a value reaching this from request input would let a caller
+     * name any user and read their files - keep it out of every parsed-input surface.
+     */
+    lakeMembership?: DataLakeMembershipScope;
   }
 ): object[] {
   // Base access: the file genuinely belongs to / is shared with this user. Reused both
@@ -194,6 +210,10 @@ export function buildOwnershipConditions(
   // In lake-scoped mode, start with NO broad ownership arms - only the lake tag/prefix arms
   // below select files, so a single-lake view can't fall back to "all files the user owns".
   const conditions: object[] = options?.restrictToDataLake ? [] : [...baseAccess];
+
+  if (options?.lakeMembership) {
+    conditions.push(buildDataLakeMembershipFilter(options.lakeMembership));
+  }
 
   // Shared with the single-file removal write path (see normalizeTagPrefix): the prefixes
   // matched here are exactly the ones a removal is allowed to clear.
@@ -242,7 +262,7 @@ export function buildOwnershipConditions(
   // ($or must be a non-empty array). Fail fast here with a descriptive error instead.
   if (options?.restrictToDataLake && conditions.length === 0) {
     throw new Error(
-      'buildOwnershipConditions: restrictToDataLake requires at least one of dataLakeTags or scopedTagPrefixes'
+      'buildOwnershipConditions: restrictToDataLake requires lakeMembership, dataLakeTags or scopedTagPrefixes'
     );
   }
 
@@ -250,7 +270,7 @@ export function buildOwnershipConditions(
 }
 
 export type FabFileFilterType =
-  'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
+  'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
 
 export interface FabFileSearchParams {
   userId: string;
@@ -281,6 +301,8 @@ export interface FabFileSearchParams {
     /** Dynamic (owner/org-scoped) lake prefixes - see buildOwnershipConditions. */
     scopedTagPrefixes?: string[];
     /** Single-lake view: return only this lake's files, not all owned files - see buildOwnershipConditions. */
+    /** Server-supplied only - see buildOwnershipConditions.lakeMembership. */
+    lakeMembership?: DataLakeMembershipScope;
     restrictToDataLake?: boolean;
     /**
      * Treat the restrictToFileIds allow-list as the SOLE authorization: skip the
@@ -407,6 +429,7 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
       dataLakeTagPrefixes: options.dataLakeTagPrefixes,
       scopedTagPrefixes: options.scopedTagPrefixes,
       restrictToDataLake: options.restrictToDataLake,
+      lakeMembership: options.lakeMembership,
     });
     andConditions.push({ $or: ownershipConds });
   } else {

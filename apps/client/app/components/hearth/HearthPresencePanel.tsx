@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { IHearthEventAction, ICcAgentStatus } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
+import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { useActorColor } from './actorColors';
 
 // Reuses the shared code-agent status vocabulary rather than a parallel one,
@@ -72,6 +73,14 @@ const MAX_ROSTER_HEIGHT = '30dvh';
  */
 const STALE_ROW_OPACITY = 0.7;
 
+/**
+ * The states that mean a human has to do something. Announced; the rest are not,
+ * because a roster of several sessions each reporting per tool call would turn a
+ * screen reader into a stream of "is working" with the one actionable line buried
+ * in it.
+ */
+const ATTENTION_STATES: ReadonlySet<PresenceState> = new Set(['awaiting_permission', 'awaiting_input']);
+
 function useNow(): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -129,11 +138,18 @@ export default function HearthPresencePanel({ channelId }: { channelId: string }
     }, REFRESH_COALESCE_MS - elapsed);
   }, [queryClient, channelId]);
 
+  // Keyed on channelId, not []: a timer armed for the previous channel used to
+  // survive the switch, fire, and invalidate the OLD query key - swallowing one
+  // refresh for the channel the user had just moved to. Reads as flaky presence
+  // rather than as a bug, which is why it is worth the dependency.
   useEffect(() => {
     return () => {
-      if (pendingRef.current) clearTimeout(pendingRef.current);
+      if (pendingRef.current) {
+        clearTimeout(pendingRef.current);
+        pendingRef.current = null;
+      }
     };
-  }, []);
+  }, [channelId]);
 
   useEffect(() => {
     // Only presence events can change a roster row, so other kinds are ignored
@@ -147,6 +163,16 @@ export default function HearthPresencePanel({ channelId }: { channelId: string }
 
   const rows = roster.data?.presence ?? [];
   const staleAfterMs = roster.data?.staleAfterMs;
+  // Distinct per channel, so two mounted panels cannot both own the same id.
+  const headingId = `hearth-presence-heading-${channelId}`;
+
+  const attention = rows.filter(row => ATTENTION_STATES.has(row.state));
+  const attentionSummary =
+    attention.length === 0
+      ? ''
+      : `${attention.length} ${attention.length === 1 ? 'session needs' : 'sessions need'} attention: ${attention
+          .map(row => `${row.actorName ?? row.actorId} ${STATE_CHIPS[row.state].label.toLowerCase()}`)
+          .join(', ')}`;
 
   return (
     <Sheet
@@ -154,9 +180,21 @@ export default function HearthPresencePanel({ channelId }: { channelId: string }
       sx={{ p: 1.5, borderRadius: 0, maxHeight: MAX_ROSTER_HEIGHT, overflowY: 'auto' }}
       data-testid="hearth-presence-panel"
     >
-      <Typography level="title-sm" sx={{ mb: rows.length > 0 ? 1 : 0 }}>
+      {/* `component` so this is a real heading: Joy's title-sm maps to <p>, which
+          left the panel with no landmark to navigate to. */}
+      <Typography level="title-sm" component="h3" id={headingId} sx={{ mb: rows.length > 0 ? 1 : 0 }}>
         Who is here
       </Typography>
+      {/*
+        A transition into "Needs permission" is the one event in this feature that
+        is genuinely urgent for a human, and it was announced to nobody. Only the
+        actionable states go in the live region, and only their names - the clock
+        tick re-renders this component every 30s, and aria-live re-announces on
+        CHANGED text, so including lastSeen here would nag on a timer.
+      */}
+      <Box aria-live="polite" aria-atomic="true" sx={visuallyHidden} data-testid="hearth-presence-announcer">
+        {attentionSummary}
+      </Box>
       {/*
         Loading and failure must never render as "nobody is here". All three
         collapsed into the empty message before, and the error version was
@@ -194,7 +232,7 @@ export default function HearthPresencePanel({ channelId }: { channelId: string }
           No presence reported in this channel yet.
         </Typography>
       ) : (
-        <Stack spacing={0.75}>
+        <Stack spacing={0.75} role="list" aria-labelledby={headingId}>
           {rows.map(row => {
             // Falls back to 'running' for an unrecognized state, matching the
             // server-side default: never claim the human's attention on a guess.
@@ -209,6 +247,7 @@ export default function HearthPresencePanel({ channelId }: { channelId: string }
                 spacing={1}
                 alignItems="center"
                 flexWrap="wrap"
+                role="listitem"
                 sx={{ opacity: stale ? STALE_ROW_OPACITY : 1 }}
                 data-testid="hearth-presence-row"
               >

@@ -38,6 +38,9 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
      */
     userId: billingOwnerId, // Use billingOwnerId if provided, otherwise default to user
     managerId: validatedParams.managerId ?? null, // Set managerId if provided
+    // Org-groups (#1172): a new org starts with no group types and no appointed admins (fail-closed).
+    allowedGroupTypes: [],
+    adminUserIds: [],
     users: [],
     seats: validatedParams.seats,
     billingContact: user.email!,

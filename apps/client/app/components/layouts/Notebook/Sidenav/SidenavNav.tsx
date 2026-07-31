@@ -10,12 +10,16 @@ import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlined';
 import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
+import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
 import { canAccessTavern } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
+import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
+import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
+import { useEntitlements } from '@client/app/hooks/data/entitlements';
 import { DataLakeIcon, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
@@ -75,6 +79,15 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // so hide the Data Lakes destination when it's off - otherwise the link lands on an
   // Explorer whose every request 403s (mirrors FileBrowser's guard).
   const isDataLakesEnabled = isAdminFeatureEnabled('EnableDataLakes');
+  // Bob (premium overlay) is a codegen-mounted `/bob` route contributed as a
+  // premium nav item. Surface it in the main sidebar only when the overlay contributes it
+  // AND the user's entitlements make it visible - reusing filterVisiblePremiumNavItems so the
+  // gate matches ProfileMenu's source (STRICT: no admin/developer bypass) and open-core builds
+  // (no overlay -> empty premiumNavItems) hide the row instead of dead-ending on a missing route.
+  const { data: entitlements } = useEntitlements();
+  const isBobEnabled = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags).some(
+    item => item.path === '/bob'
+  );
   // Gears (earned nav): feature rows appear once the user has USED the feature -
   // the permanent rail is New Chat / Gears / Help. Unlocks are derived server-side
   // (has >=1 project, agent, lake, file, publication). While the status loads we
@@ -164,6 +177,22 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
+    ...(isBobEnabled
+      ? [
+          {
+            key: 'bob',
+            label: 'Bob',
+            icon: iconSlot(<Diversity3OutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname.startsWith('/bob'),
+            onClick: () => {
+              closeOnMobile();
+              // `/bob` is a codegen-mounted premium route (no core route file), so it is not in
+              // Tanstack's statically-typed route union - same `as never` cast as /tavern below.
+              navigate({ to: '/bob' } as never);
+            },
+          },
+        ]
+      : []),
     ...(isMeetingsEnabled
       ? [
           {
@@ -173,8 +202,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             isActive: location.pathname.startsWith('/meetings'),
             onClick: () => {
               closeOnMobile();
-              // @ts-expect-error - /meetings is a premium route, not in the static route tree
-              navigate({ to: '/meetings' });
+              // `/meetings` is codegen-mounted too, so the same cast applies.
+              navigate({ to: '/meetings' } as never);
             },
           },
         ]
@@ -324,9 +353,10 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   ];
 
   // Pinned vs scroll split for the unified-scroll sidebar: the first two items stay
-  // pinned at the top. items[0] is always New Chat; items[1] is OptiHashi when Opti is
-  // enabled, otherwise Files Manager (the conditional Opti/Data-Lakes entries shift the
-  // rest into the scroll slice). The split is purely positional, so it holds either way.
+  // pinned at the top. items[0] is always New Chat; items[1] is whichever conditional
+  // entry comes first for this user - OptiHashi, Bob, Data Lakes, or the earned Files
+  // Manager - since each is elided when absent. The split is purely positional, so it
+  // holds regardless of which entries are present.
   const shownItems = section === 'pinned' ? items.slice(0, 2) : section === 'scroll' ? items.slice(2) : items;
 
   return (

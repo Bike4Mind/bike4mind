@@ -134,4 +134,34 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(result.fileUrl).toBeUndefined();
     expect((result as { presignedUrl?: string }).presignedUrl).toBe('https://s3.example.com/signed-url');
   });
+
+  // Audio (generated TTS / sound effects) is storable-but-not-ingestable: it was
+  // previously rejected by the mime gate (audio isn't in SupportedFabFileMimeTypes),
+  // and must now be accepted via isStorableFabFileMimeType and stored as AUDIO.
+  it('accepts generated audio and stores it as AUDIO with a servable GET url', async () => {
+    const result = await createFabFile(
+      mockUserId,
+      {
+        fileName: 'speech-hello-1234.mp3',
+        mimeType: 'audio/mpeg',
+        fileSize: 4096,
+        type: KnowledgeType.AUDIO,
+        content: Buffer.from('fake-audio-bytes'),
+        contentType: 'audio/mpeg',
+        prefix: 'generated-audio',
+      },
+      mockAdapters
+    );
+
+    expect(storageUpload).toHaveBeenCalled();
+    // Non-image content path: a GET url is minted immediately (no moderation hold).
+    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get');
+    expect(result.fileUrl).toBe('https://s3.example.com/signed-url');
+
+    const persistedData = fabFilesCreate.mock.calls[0][0];
+    expect(persistedData.type).toBe(KnowledgeType.AUDIO);
+    expect(persistedData.mimeType).toBe('audio/mpeg');
+    // Stored under the generated-audio prefix with an .mp3 extension.
+    expect(persistedData.filePath).toMatch(/^generated-audio\/.+\.mp3$/);
+  });
 });

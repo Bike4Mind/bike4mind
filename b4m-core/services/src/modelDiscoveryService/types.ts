@@ -39,6 +39,8 @@ export interface DiscoveryCredentials {
   gemini: string | null;
   bfl: string | null;
   xai: string | null;
+  /** Moonshot AI, which serves the Kimi models. */
+  kimi: string | null;
   voyageai: string | null;
   /** Base URL, not a key. */
   ollama: string | null;

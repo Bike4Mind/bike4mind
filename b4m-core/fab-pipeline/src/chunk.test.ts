@@ -191,6 +191,14 @@ describe('SmartChunker', () => {
     });
   });
 
+  describe('chunkFile with audio', () => {
+    it('returns no chunks for audio (never vectorized)', async () => {
+      const content = Buffer.from('fake-audio-bytes');
+      expect(await chunker.chunkFile(content, 'audio/mpeg')).toEqual([]);
+      expect(await chunker.chunkFile(content, 'audio/wav')).toEqual([]);
+    });
+  });
+
   describe('chunkFile with PPTX', () => {
     const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 

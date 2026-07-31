@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { InviteType } from '@bike4mind/common';
-import { UnauthorizedError } from '@bike4mind/utils';
+import { InviteType, Permission } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, UnauthorizedError } from '@bike4mind/utils';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
@@ -14,6 +14,7 @@ import {
   fabFileRepository,
   sessionRepository,
   projectRepository,
+  userRepository,
 } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 
@@ -29,6 +30,8 @@ import { sharingService } from '@bike4mind/services';
 
 let mongoServer: MongoMemoryServer;
 
+const GROUP_NAME = 'Confidential Group';
+
 const db = {
   fabFiles: fabFileRepository,
   sessions: sessionRepository,
@@ -36,10 +39,13 @@ const db = {
   organizations: organizationRepository,
   groups: { findById: (id: string) => Group.findById(id) },
   invites: inviteRepository,
+  users: userRepository,
 };
 
 const memberUser = { id: 'member-1', groups: [], isAdmin: false } as any;
 const strangerUser = { id: 'stranger-1', groups: [], isAdmin: false } as any;
+const ownerUser = { id: 'owner-1', username: 'owner', groups: [], isAdmin: false } as any;
+const platformAdminUser = { id: 'platform-1', username: 'padmin', groups: [], isAdmin: true } as any;
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
@@ -61,7 +67,7 @@ const seedGroupInvite = async () => {
     userId: 'owner-1',
     users: [{ userId: memberUser.id, permissions: ['share'] }],
   });
-  const group = await Group.create({ name: 'G', description: 'd', organizationId: String(org._id) });
+  const group = await Group.create({ name: 'G', description: 'd', type: 'sales', organizationId: String(org._id) });
   const invite = await Invite.create({
     type: InviteType.Group,
     documentId: String(group._id),
@@ -70,6 +76,29 @@ const seedGroupInvite = async () => {
   });
   return { groupId: String(group._id), inviteId: String(invite._id) };
 };
+
+// Same org + group shape, but no pre-existing invite: the create path mints its own.
+const seedOrgAndGroup = async () => {
+  const org = await Organization.create({
+    name: 'Org',
+    userId: ownerUser.id,
+    users: [{ userId: memberUser.id, permissions: ['share'] }],
+  });
+  const group = await Group.create({
+    name: GROUP_NAME,
+    description: 'd',
+    type: 'sales',
+    organizationId: String(org._id),
+  });
+  return { groupId: String(group._id), orgId: String(org._id) };
+};
+
+const createGroupInvite = (user: unknown, groupId: string) =>
+  sharingService.createInvite(
+    user as any,
+    { id: groupId, type: InviteType.Group, permissions: [Permission.read], recipients: ['x@y.com'] } as any,
+    { db } as any
+  );
 
 describe('group-invite authorization (end-to-end, real repos + Mongo)', () => {
   it('lists group invites for a caller with an org share grant', async () => {
@@ -102,6 +131,48 @@ describe('group-invite authorization (end-to-end, real repos + Mongo)', () => {
 
     const reloaded = await Invite.findById(inviteId);
     expect(reloaded?.remaining).toBe(0);
+  });
+
+  it('lets the billing owner create a group invite', async () => {
+    const { groupId } = await seedOrgAndGroup();
+
+    const invite = await createGroupInvite(ownerUser, groupId);
+
+    expect(invite.type).toBe(InviteType.Group);
+    expect(invite.name).toBe(GROUP_NAME);
+    expect(await Invite.countDocuments({ documentId: groupId })).toBe(1);
+  });
+
+  it('lets a platform admin create a group invite', async () => {
+    const { groupId } = await seedOrgAndGroup();
+
+    const invite = await createGroupInvite(platformAdminUser, groupId);
+
+    expect(invite.name).toBe(GROUP_NAME);
+  });
+
+  it('rejects a group invite created by a member holding only an org share grant', async () => {
+    // memberUser has permissions: ['share'], which is enough to LIST invites (first test above)
+    // but not to mint one - creating a group invite is a membership grant, not a share action.
+    const { groupId } = await seedOrgAndGroup();
+
+    await expect(createGroupInvite(memberUser, groupId)).rejects.toThrow(ForbiddenError);
+    expect(await Invite.countDocuments({ documentId: groupId })).toBe(0);
+  });
+
+  it('rejects a group invite created from outside the organization, indistinguishably from a missing group', async () => {
+    const { groupId } = await seedOrgAndGroup();
+
+    // Pinned as BadRequestError, not ForbiddenError: a caller outside the org must not be able to
+    // tell a real group id from a nonexistent one. The type check matters - without it a plain
+    // 'message does not contain the name' assertion is satisfied by any error at all.
+    await expect(createGroupInvite(strangerUser, groupId)).rejects.toSatisfy(
+      (e: Error) => e instanceof BadRequestError && !e.message.includes(GROUP_NAME)
+    );
+    expect(await Invite.countDocuments({ documentId: groupId })).toBe(0);
+
+    // Same error for a group id that does not exist at all.
+    await expect(createGroupInvite(strangerUser, '507f1f77bcf86cd799439011')).rejects.toThrow('Document not found');
   });
 
   it('fails closed for a legacy group with no organizationId (pre-fix data)', async () => {

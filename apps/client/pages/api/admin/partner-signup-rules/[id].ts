@@ -5,6 +5,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { updatePartnerSignupRuleSchema } from '@bike4mind/common';
 import { invalidatePartnerRuleCache, assertKnownEntitlements } from '@server/entitlements/partnerRules';
+import { assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { z } from 'zod';
 
 interface RequestQuery {
@@ -29,6 +30,8 @@ const handler = baseApi()
       }
       // Only present on a partial update that touches entitlements.
       if (data.entitlements) assertKnownEntitlements(data.entitlements);
+      // Present (and non-null) only when the update sets/changes the org association.
+      if (data.organizationId) await assertOrganizationExists(data.organizationId);
 
       const updated = await partnerSignupRuleRepository.update({ id, ...data });
       // Null => the row was deleted between check and write (or never existed). 404 rather

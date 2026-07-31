@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { ModelInfo } from '@bike4mind/common';
 import {
   DEPRECATED_MODEL_MAP,
+  buildSupersededIndex,
   catalogSuccessors,
   resetReplacedByOverlay,
   resolveDeprecatedModelId,
@@ -175,6 +177,80 @@ describe('resolveDeprecatedModelId with the catalog overlay', () => {
     updateReplacedByOverlay({ a: 'b' });
     // A failing catalog read never calls the updater at all.
     expect(resolveDeprecatedModelId('a')).toBe('b');
+  });
+});
+
+describe('buildSupersededIndex', () => {
+  const model = (id: string, name: string) => ({ id, name }) as ModelInfo;
+
+  afterEach(() => resetReplacedByOverlay());
+
+  it('names a pin the deprecation filter already hid, from the pre-filter list', () => {
+    const allModels = [model('grok-3', 'Grok 3'), model('grok-4.5', 'Grok 4.5')];
+    const currentModels = [model('grok-4.5', 'Grok 4.5')];
+
+    expect(buildSupersededIndex(allModels, currentModels)).toContainEqual({
+      id: 'grok-3',
+      name: 'Grok 3',
+      replacementId: 'grok-4.5',
+      replacementName: 'Grok 4.5',
+    });
+  });
+
+  it('falls back to the raw id when this deployment never listed the model', () => {
+    const currentModels = [model('grok-4.5', 'Grok 4.5')];
+
+    expect(buildSupersededIndex([], currentModels)).toContainEqual({
+      id: 'grok-3',
+      name: 'grok-3',
+      replacementId: 'grok-4.5',
+      replacementName: 'Grok 4.5',
+    });
+  });
+
+  it('drops mappings whose replacement this deployment cannot run, so no prompt is dead', () => {
+    // No xAI credentials: grok-4.5 is absent, so every grok mapping must drop out.
+    const index = buildSupersededIndex([], [model('claude-sonnet-4-6', 'Claude Sonnet 4.6')]);
+
+    expect(index.some(e => e.replacementId === 'grok-4.5')).toBe(false);
+    expect(index.map(e => e.id)).toContain('claude-3-5-sonnet-20241022');
+  });
+
+  it('offers the catalog successor over the static map, matching what a pinned request resolves to', () => {
+    updateReplacedByOverlay({ 'claude-3-5-sonnet-20241022': 'claude-sonnet-5' });
+    const current = [model('claude-sonnet-5', 'Claude Sonnet 5'), model('claude-sonnet-4-6', 'Claude Sonnet 4.6')];
+
+    const entry = buildSupersededIndex([], current).find(e => e.id === 'claude-3-5-sonnet-20241022');
+    expect(entry).toMatchObject({ replacementId: 'claude-sonnet-5', replacementName: 'Claude Sonnet 5' });
+  });
+
+  it('includes catalog-only ids that the static map has never heard of', () => {
+    updateReplacedByOverlay({ 'some-catalog-model': 'grok-4.5' });
+
+    const index = buildSupersededIndex(
+      [model('some-catalog-model', 'Some Catalog Model')],
+      [model('grok-4.5', 'Grok 4.5')]
+    );
+    expect(index).toContainEqual({
+      id: 'some-catalog-model',
+      name: 'Some Catalog Model',
+      replacementId: 'grok-4.5',
+      replacementName: 'Grok 4.5',
+    });
+  });
+
+  it('follows a multi-hop chain to the id the resolver would land on', () => {
+    updateReplacedByOverlay({ a: 'b', b: 'grok-4.5' });
+
+    const entry = buildSupersededIndex([], [model('grok-4.5', 'Grok 4.5')]).find(e => e.id === 'a');
+    expect(entry?.replacementId).toBe('grok-4.5');
+  });
+
+  it('emits no [model-sunset] warnings: an index build is not traffic being redirected', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    buildSupersededIndex([], [model('grok-4.5', 'Grok 4.5')]);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
 

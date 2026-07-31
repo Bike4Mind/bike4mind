@@ -45,6 +45,8 @@ function toDomainEvent(doc: IHearthEventDoc): HearthEvent {
  * and the insert, that seq is burned and the channel has a numbering gap.
  * Readers are unaffected - eventsSince orders by seq and never assumes
  * density - so this is an accepted trade for lock-free concurrent appends.
+ * The presence TTL in HearthEventModel is the other, routine source of gaps
+ * and relies on this same density-independence.
  */
 export class MongoHearthStore implements HearthStore {
   async appendEvent(input: AppendEventInput): Promise<HearthEvent> {
@@ -120,6 +122,15 @@ export class MongoHearthStore implements HearthStore {
     );
   }
 }
+
+/**
+ * Hard ceiling on rows returned for one channel's roster.
+ *
+ * Generous for the real case (a human with a handful of live sessions) while
+ * keeping an aged account's accreted rows from turning every roster read into an
+ * unbounded in-memory sort. Exported so the route can advertise the same bound.
+ */
+export const MAX_ROSTER_ROWS = 200;
 
 /** Fields a presence event contributes to the roster row it projects onto. */
 export interface UpsertPresenceInput {
@@ -283,19 +294,31 @@ export const hearthRepository = {
       ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
     };
 
+    const filter = {
+      channelId: new Types.ObjectId(input.channelId),
+      actorId: new Types.ObjectId(input.actorId),
+      lastSeen: { $lt: input.lastSeen },
+    };
+
     try {
-      return await HearthPresence.findOneAndUpdate(
-        {
-          channelId: new Types.ObjectId(input.channelId),
-          actorId: new Types.ObjectId(input.actorId),
-          lastSeen: { $lt: input.lastSeen },
-        },
-        update,
-        { upsert: true, new: true }
-      );
+      return await HearthPresence.findOneAndUpdate(filter, update, { upsert: true, new: true });
     } catch (err) {
-      if (isDuplicateKeyError(err)) return null;
-      throw err;
+      if (!isDuplicateKeyError(err)) throw err;
+      // With no row yet, two in-flight events both miss the $lt filter and both
+      // try to insert; the loser takes E11000. Reading that as "too old" dropped
+      // a NEWER event whenever it lost the race, leaving the row on the older
+      // state. The row exists by now, so a retry lets the $lt guard make the real
+      // decision instead of the race deciding for it. Same treatment
+      // ensureChannelByName already gets a few methods up.
+      try {
+        return await HearthPresence.findOneAndUpdate(filter, update, { upsert: true, new: true });
+      } catch (retryErr) {
+        // A second E11000 is the meaningful one: the row now exists AND its
+        // lastSeen is at or past this event's, so the filter legitimately misses
+        // and this event really is stale.
+        if (isDuplicateKeyError(retryErr)) return null;
+        throw retryErr;
+      }
     }
   },
 
@@ -304,8 +327,22 @@ export const hearthRepository = {
    * here rather than in the client because the roster is an inbox, not a feed:
    * every consumer wants the same "who is blocked on me" answer at the top, and
    * duplicating the ranking per surface is how two clients drift apart.
+   *
+   * Bounded by MAX_ROSTER_ROWS. The read was unbounded in every dimension, which
+   * is a growth problem rather than a hypothetical: actors are minted one per
+   * session BY DESIGN, nothing deletes a presence row (the retention TTL covers
+   * events, not this projection), and every session on every machine accretes a
+   * row in the one shared default channel. The $sort is on an $addFields key no
+   * index can serve, so it is always an in-memory sort - which a $limit turns
+   * from "proportional to a user's lifetime session count" into a bounded top-k.
+   * Truncation drops the LEAST urgent, least recent rows, because the ranking
+   * runs before the limit.
    */
-  async presenceForChannel(userId: string, channelId: string): Promise<IHearthPresenceDoc[]> {
+  async presenceForChannel(
+    userId: string,
+    channelId: string,
+    options: { limit?: number } = {}
+  ): Promise<IHearthPresenceDoc[]> {
     const branches = Object.entries(PRESENCE_STATE_RANK).map(([state, rank]) => ({
       case: { $eq: ['$state', state] },
       then: rank,
@@ -317,6 +354,10 @@ export const hearthRepository = {
       // cannot accidentally promote rows to the top of someone's inbox.
       { $addFields: { stateRank: { $switch: { branches, default: branches.length } } } },
       { $sort: { stateRank: 1, lastSeen: -1 } },
+      // Clamped into [1, MAX_ROSTER_ROWS]: Mongo rejects a non-positive $limit
+      // outright, so a caller passing 0 (or a negative) would take down the whole
+      // roster read rather than merely asking for something meaningless.
+      { $limit: Math.max(1, Math.min(options.limit ?? MAX_ROSTER_ROWS, MAX_ROSTER_ROWS)) },
       { $project: { stateRank: 0 } },
     ]);
   },

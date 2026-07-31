@@ -1,8 +1,9 @@
-import { FC, useState, useEffect } from 'react';
+import { FC, useState, useEffect, useMemo } from 'react';
 import { Card, Typography, Box, Button, Stack, Textarea, FormControl, FormLabel, FormHelperText } from '@mui/joy';
 import { IOrganizationDocument } from '@bike4mind/common';
 import { useDeleteOrganization, useUpdateOrganization } from '@client/app/hooks/data/organizations';
 import { useConfirmationModal } from '@client/app/hooks/useConfirmation';
+import { useUser } from '@client/app/contexts/UserContext';
 import { useNavigate } from '@tanstack/react-router';
 
 const MAX_SYSTEM_PROMPT_LENGTH = 10000; // ~2500 tokens
@@ -12,6 +13,15 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
   const updateOrganization = useUpdateOrganization();
   const setConfirmationModal = useConfirmationModal.setState;
   const navigate = useNavigate();
+  const { currentUser } = useUser();
+
+  // Mirrors the server gate in organizationService/delete.ts: billing owner or platform admin only.
+  // The rest of this tab is open to anyone with org update/share, so the Danger Zone needs its own
+  // narrower predicate - otherwise a member with update sees a Delete button whose call would 403.
+  const canDeleteOrg = useMemo(() => {
+    if (!currentUser) return false;
+    return currentUser.isAdmin === true || currentUser.id === organization.userId;
+  }, [currentUser, organization.userId]);
 
   const [systemPrompt, setSystemPrompt] = useState(organization.systemPrompt || '');
   const [hasChanges, setHasChanges] = useState(false);
@@ -97,22 +107,25 @@ const OrganizationSettingsSection: FC<{ organization: IOrganizationDocument }> =
       </Card>
 
       {/* Danger Zone */}
-      <Card variant="outlined">
-        <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
-          Danger Zone
-        </Typography>
-        <Box sx={{ p: 2 }} className="organization-settings-card-content">
-          <Button
-            color="danger"
-            variant="outlined"
-            onClick={handleDelete}
-            loading={deleteOrganization.isPending}
-            className="organization-settings-delete-button"
-          >
-            Delete Organization
-          </Button>
-        </Box>
-      </Card>
+      {canDeleteOrg && (
+        <Card variant="outlined">
+          <Typography level="title-sm" sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider' }}>
+            Danger Zone
+          </Typography>
+          <Box sx={{ p: 2 }} className="organization-settings-card-content">
+            <Button
+              color="danger"
+              variant="outlined"
+              onClick={handleDelete}
+              loading={deleteOrganization.isPending}
+              className="organization-settings-delete-button"
+              data-testid="organization-settings-delete-btn"
+            >
+              Delete Organization
+            </Button>
+          </Box>
+        </Card>
+      )}
     </Stack>
   );
 };

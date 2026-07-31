@@ -128,6 +128,33 @@ function appendWorkflowReminder(messages: IMessage[], provider?: () => string | 
 }
 
 /**
+ * Build the per-iteration prompt-cache strategy. History caching anchors on the
+ * last message so the cached prefix grows each turn (standard Anthropic
+ * incremental-caching pattern), skipping the degenerate case where there's no
+ * prior prefix to reuse yet - except when that last message is a workflow
+ * reminder, which is stripped and rebuilt every iteration and would otherwise
+ * never itself produce a cache hit; in that case the breakpoint anchors on the
+ * message before it instead.
+ */
+function buildCacheStrategy(
+  messages: IMessage[],
+  enableCaching: boolean | undefined,
+  hasTools: boolean
+): ICacheStrategy | undefined {
+  if (!enableCaching) return undefined;
+
+  const lastMessage = messages[messages.length - 1];
+  return {
+    enableCaching: true,
+    cacheSystemPrompt: true,
+    cacheTools: hasTools,
+    cacheConversationHistory: messages.length >= 2,
+    historyCacheExcludeTrailingCount: lastMessage && isWorkflowReminder(lastMessage) ? 1 : 0,
+    cacheTTL: '5m',
+  };
+}
+
+/**
  * Map a tool execution result to the observation string appended to history.
  * Backfills a cancellation placeholder for tools that never ran (absent from the
  * results map) or were aborted mid-flight, so every advertised tool_use is
@@ -433,16 +460,10 @@ export class ReActAgent extends EventEmitter {
 
         appendWorkflowReminder(messages, options.workflowReminder);
 
-        // Build cache strategy for prompt caching (system prompt + tools are static across iterations)
-        const cacheStrategy: ICacheStrategy | undefined = options.enableCaching
-          ? {
-              enableCaching: true,
-              cacheSystemPrompt: true,
-              cacheTools: this.context.tools.length > 0,
-              cacheConversationHistory: false, // History changes each iteration
-              cacheTTL: '5m',
-            }
-          : undefined;
+        // Build cache strategy for prompt caching (system prompt + tools are static
+        // across iterations; conversation history uses a moving breakpoint - see
+        // buildCacheStrategy)
+        const cacheStrategy = buildCacheStrategy(messages, options.enableCaching, this.context.tools.length > 0);
 
         // Stream tokens so consumers (e.g. subagent UI) see live progress within
         // each iteration rather than a blackout until the full LLM response lands.
@@ -1207,15 +1228,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       const iterStartCacheWriteTokens = this.totalCacheWriteTokens;
       const iterStartCredits = this.totalCredits;
 
-      const cacheStrategy: ICacheStrategy | undefined = options.enableCaching
-        ? {
-            enableCaching: true,
-            cacheSystemPrompt: true,
-            cacheTools: this.context.tools.length > 0,
-            cacheConversationHistory: false,
-            cacheTTL: '5m',
-          }
-        : undefined;
+      const cacheStrategy = buildCacheStrategy(this.messages, options.enableCaching, this.context.tools.length > 0);
 
       // Stream tokens so consumers see live progress within the iteration.
       const iterationIndex = this.iterations - 1;

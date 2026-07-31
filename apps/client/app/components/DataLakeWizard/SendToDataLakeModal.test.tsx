@@ -127,6 +127,33 @@ describe('SendToDataLakeModal', () => {
     await waitFor(() => expect(createFabFileOnServerWithUpload).toHaveBeenCalledTimes(2));
   });
 
+  // The send writes the lake's tags onto the new file, and the tag list's fileCount is derived
+  // from the files carrying each tag - so without this the sidebar badge misses the new file.
+  it('invalidates the tag surfaces after tagging the uploaded file', async () => {
+    createFabFileOnServerWithUpload.mockResolvedValue({ id: 'file-1' });
+    updateFabFileOnServer.mockResolvedValue({});
+
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CssVarsProvider theme={appTheme}>
+          <SendToDataLakeModal />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+
+    const user = userEvent.setup({ delay: null });
+    await user.click(screen.getByTestId('send-to-datalake-option-lake-1'));
+    screen.getByTestId('send-to-datalake-confirm-btn').click();
+
+    await waitFor(() => expect(updateFabFileOnServer).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      const keys = invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey: unknown[] })?.queryKey));
+      expect(keys).toContain(JSON.stringify(['file-tags']));
+    });
+  });
+
   it('excludes lakes the caller cannot manage (read-only public lakes are not send targets)', () => {
     render(
       <TestWrapper>

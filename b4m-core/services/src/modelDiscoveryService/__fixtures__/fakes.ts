@@ -264,6 +264,7 @@ export const testCredentials = (overrides: Partial<DiscoveryCredentials> = {}): 
   gemini: 'sk-test',
   bfl: 'sk-test',
   xai: 'sk-test',
+  kimi: 'sk-test',
   voyageai: 'sk-test',
   ollama: 'http://localhost:11434',
   imageGen: null,

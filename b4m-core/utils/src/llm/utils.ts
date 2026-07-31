@@ -8,6 +8,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   IMessage,
+  isAudioMimeType,
   isImageAttachment,
   isImageServeable,
   ISessionDocument,
@@ -93,6 +94,7 @@ function estimateQuestTokenLength(item: {
   replies?: string[];
   structuredReplies?: unknown[];
   toolResults?: unknown[];
+  promptMeta?: { functionCalls?: RecordedFunctionCall[] };
 }): number {
   const parts: string[] = [item.prompt ?? ''];
   if (item.structuredReplies?.length) {
@@ -103,7 +105,53 @@ function estimateQuestTokenLength(item: {
   if (item.toolResults?.length) {
     parts.push(JSON.stringify(item.toolResults));
   }
+  // Priority 2 replays these as tool_use/tool_result blocks, and the serialized parameters can
+  // dwarf the text reply. Only counted when it will actually be taken (structuredReplies wins).
+  if (!item.structuredReplies?.length) {
+    const toolCalls = replayableToolCalls(item.promptMeta?.functionCalls);
+    if (toolCalls.length) parts.push(JSON.stringify(toolCalls));
+  }
   return estimateTokenLength(parts.join('\n'));
+}
+
+/** Stands in for a tool_result whose returnValue was never recorded; must not be empty. */
+export const TOOL_RESULT_NOT_RECORDED = '[tool result not recorded]';
+
+type RecordedFunctionCall = {
+  id?: string;
+  name?: string;
+  parameters?: unknown;
+  returnValue?: string;
+  success?: boolean;
+};
+
+/** A recorded call complete enough to replay as a tool_use/tool_result pair. */
+type ReplayableToolCall = RecordedFunctionCall & { id: string; name: string };
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The recorded tool calls that can be replayed into Anthropic-valid message blocks, or an empty
+ * list if this turn should fall back to its plain text reply instead.
+ *
+ * Both filters are load-bearing. An entry missing an id or name cannot form a valid pair, and
+ * repeated ids are rejected outright, so those are dropped rather than emitted. Beyond that the
+ * turn is only worth replaying if SOME call recorded a returnValue - see the call site for why
+ * replaying result-less calls is worse than not replaying at all.
+ */
+function replayableToolCalls(functionCalls: RecordedFunctionCall[] | undefined): ReplayableToolCall[] {
+  if (!functionCalls?.length) return [];
+
+  const seenIds = new Set<string>();
+  const replayable = functionCalls.filter((fc): fc is ReplayableToolCall => {
+    if (!fc.id || !fc.name || seenIds.has(fc.id)) return false;
+    seenIds.add(fc.id);
+    return true;
+  });
+
+  return replayable.some(fc => fc.returnValue) ? replayable : [];
 }
 
 /**
@@ -292,6 +340,8 @@ export async function fetchAndProcessPreviousMessages(
   const convertedMessages = chatHistoryItems.reduce((acc, cur) => {
     if (cur.prompt) acc.push({ role: 'user', content: cur.prompt });
 
+    const toolCalls = replayableToolCalls(cur.promptMeta?.functionCalls);
+
     // Priority 1: Use structuredReplies if available (new field for complete tool context)
     if (cur.structuredReplies && cur.structuredReplies.length > 0) {
       for (const structuredReply of cur.structuredReplies) {
@@ -312,12 +362,14 @@ export async function fetchAndProcessPreviousMessages(
         });
       }
     }
-    // Priority 2: Reconstruct from promptMeta.functionCalls if tool IDs exist (fallback)
-    else if (
-      cur.promptMeta?.functionCalls &&
-      cur.promptMeta.functionCalls.length > 0 &&
-      cur.promptMeta.functionCalls.some(fc => fc.id)
-    ) {
+    // Priority 2: reconstruct tool_use/tool_result pairs from promptMeta.functionCalls when
+    // structuredReplies is absent (older turns, and any writer that does not populate it).
+    //
+    // Requires at least one recorded returnValue. A call with an id but no result carries no
+    // information the model can use, and replaying it would cost the turn its real text reply:
+    // this branch and Priority 3 are mutually exclusive, so entering here on result-less calls
+    // replaces a genuine answer with a list of tool invocations and empty outcomes.
+    else if (toolCalls.length > 0) {
       // Get text reply (excluding thinking blocks)
       const textReply = cur.replies?.find((reply: string) => !reply.trim().startsWith('<think>')) || '';
 
@@ -328,37 +380,30 @@ export async function fetchAndProcessPreviousMessages(
         assistantContent.push({ type: 'text', text: textReply } as MessageContentText);
       }
 
-      for (const fc of cur.promptMeta.functionCalls) {
-        if (fc.id && fc.name) {
-          assistantContent.push({
-            type: 'tool_use',
-            id: fc.id,
-            name: fc.name,
-            input: (fc.parameters as Record<string, unknown>) || {},
-          } as MessageContentToolUse);
-        }
+      for (const fc of toolCalls) {
+        assistantContent.push({
+          type: 'tool_use',
+          id: fc.id,
+          name: fc.name,
+          // Anthropic requires an object here; parameters is Mixed, so a scalar can reach us.
+          input: isPlainObject(fc.parameters) ? fc.parameters : {},
+        } as MessageContentToolUse);
       }
 
-      if (assistantContent.length > 0) {
-        acc.push({ role: 'assistant', content: assistantContent });
+      acc.push({ role: 'assistant', content: assistantContent });
 
-        // Add a tool_result for each function call that had a tool_use block. returnValue is
-        // often unpopulated during completion saving, so we generate a tool_result for every
-        // tool_use to maintain Anthropic's required pairing. Filter matches the tool_use
-        // generation above (fc.id && fc.name) to keep pairs consistent.
-        const toolResults = cur.promptMeta.functionCalls
-          .filter(fc => fc.id && fc.name)
-          .map(fc => ({
-            type: 'tool_result' as const,
-            tool_use_id: fc.id!,
-            content: fc.returnValue ?? (fc.success === false ? 'Tool execution failed' : ''),
-            is_error: fc.success === false,
-          }));
-
-        if (toolResults.length > 0) {
-          acc.push({ role: 'user', content: toolResults });
-        }
-      }
+      // One tool_result per tool_use, same order, ids 1:1 - Anthropic rejects an unpaired block.
+      // returnValue is not always recorded, so fall back to a marker rather than an empty
+      // string, which the API rejects outright.
+      acc.push({
+        role: 'user',
+        content: toolCalls.map(fc => ({
+          type: 'tool_result' as const,
+          tool_use_id: fc.id,
+          content: fc.returnValue || (fc.success === false ? 'Tool execution failed' : TOOL_RESULT_NOT_RECORDED),
+          is_error: fc.success === false,
+        })),
+      });
     }
     // Priority 3: Legacy fallback - text-only replies
     else if (cur.replies && Array.isArray(cur.replies)) {
@@ -843,6 +888,18 @@ export async function processFabFilesServer(
 
   const processFileInParallel = async (file: IFabFileDocument): Promise<void> => {
     try {
+      // Audio (generated TTS / sound effects) is never LLM input: no model
+      // accepts audio, and the non-image branch below would otherwise try to
+      // read the bytes as text. This is the authoritative attachment guard -
+      // every chat/agent path funnels through here, so a file that slips past
+      // the attach UI still can't reach the model.
+      if (isAudioMimeType(file.mimeType)) {
+        logger.warn(
+          `[processFabFilesServer] Skipping audio file ${file.fileName} — audio is not attachable to an LLM.`
+        );
+        return;
+      }
+
       if (supportsVision && isImageAttachment(file.mimeType)) {
         // Never send a not-yet-clean or blocked uploaded image to the model.
         if (!isImageServeable(file)) {
@@ -861,7 +918,12 @@ export async function processFabFilesServer(
 
         switch (modelInfo?.backend) {
           case ModelBackend.OpenAI:
-          case ModelBackend.XAI: {
+          case ModelBackend.XAI:
+          // Moonshot takes OpenAI's base64 `image_url` block verbatim. Grouped
+          // here rather than given its own case because the payload is identical;
+          // without it every Kimi model advertising supportsVision would accept
+          // an attachment, drop it at `default`, and answer as if blind.
+          case ModelBackend.Kimi: {
             // Download image from S3 and send as base64 data URL.
             // Presigned S3 URLs cause timeouts when OpenAI/XAI servers try to fetch them.
             const openaiImageBuffer = await storage.download(file.filePath!);
@@ -928,6 +990,42 @@ export async function processFabFilesServer(
                 },
               });
               // Add filename and fabFileId as text context to prevent hallucinated filenames
+              imageContent.push({
+                type: 'text',
+                text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
+              });
+            } else if (modelInfo.id.startsWith('moonshot')) {
+              // Bedrock-served Kimi speaks OpenAI on the Invoke path, so it takes
+              // the base64 `image_url` block rather than the Anthropic `source`
+              // block the branch above builds. Without this it would fall to the
+              // warn below while still advertising supportsVision.
+              const moonshotBuffer = await resizeImageForModel(
+                await storage.download(file.filePath!),
+                undefined,
+                logger
+              );
+              const { mime: moonshotMimeType } = await getFileType(moonshotBuffer, file.fileName, file.mimeType);
+              const moonshotBase64 = moonshotBuffer.toString('base64');
+
+              // Bedrock caps the Invoke body around 3 MB. If even the resized image
+              // still exceeds it, skip with the same friendly re-upload guidance the
+              // Anthropic branch gives rather than letting Bedrock reject the whole
+              // request with a raw ValidationException. Checked post-resize so we only
+              // reject images that are genuinely too large.
+              const MOONSHOT_MAX_BASE64_BYTES = 3_000_000;
+              if (moonshotBase64.length > MOONSHOT_MAX_BASE64_BYTES) {
+                const encodedMB = (moonshotBase64.length / (1024 * 1024)).toFixed(1);
+                const errorMsg = `⚠️ Image "${file.fileName}" (${encodedMB}MB encoded) is too large for ${modelInfo.name}. Max ~3MB. Please delete this file and re-upload a smaller image.`;
+                logger.warn(errorMsg);
+                await sendStatusUpdate(errorMsg);
+                errorMessages.push({ role: 'error', content: errorMsg });
+                return;
+              }
+
+              imageContent.push({
+                type: 'image_url',
+                image_url: { url: `data:${moonshotMimeType};base64,${moonshotBase64}` },
+              });
               imageContent.push({
                 type: 'text',
                 text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,

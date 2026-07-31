@@ -17,6 +17,7 @@ const { runModelDiscovery, lastSuccessfulRun, sourceFactories } = vi.hoisted(() 
       createOpenAiSource: stub('openai'),
       createAnthropicSource: stub('anthropic'),
       createXaiSource: stub('xai'),
+      createKimiSource: stub('kimi'),
       createGeminiSource: stub('gemini'),
       createOllamaSource: stub('ollama'),
       createBflSource: stub('bfl'),

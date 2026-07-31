@@ -2,6 +2,7 @@ import { search, searchSchema } from './search';
 import type { SearchParameters } from './search';
 import { get } from './get';
 import { addMember } from './addMember';
+import { applyPartnerRuleMembership } from './applyPartnerRuleMembership';
 import { assignManager } from './assignManager';
 import { removeManager } from './removeManager';
 import getUsers from './getUsers';
@@ -12,12 +13,15 @@ import { listOwn } from './listOwn';
 import { listPendingUsers } from './listPendingUsers';
 import { revokeAccess } from './revokeAccess';
 import { leave } from './leave';
+import { setOrganizationGroupTypes } from './setOrganizationGroupTypes';
+import { assignUserToGroup, removeUserFromGroup, renameGroup, assertCanManageOrgGroups } from './groupMembership';
 
 export {
   search,
   searchSchema,
   get,
   addMember,
+  applyPartnerRuleMembership,
   assignManager,
   removeManager,
   getUsers,
@@ -29,6 +33,11 @@ export {
   listPendingUsers,
   revokeAccess,
   leave,
+  setOrganizationGroupTypes,
+  assignUserToGroup,
+  assertCanManageOrgGroups,
+  removeUserFromGroup,
+  renameGroup,
 };
 
 export type { SearchParameters };

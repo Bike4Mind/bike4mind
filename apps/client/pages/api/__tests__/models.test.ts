@@ -114,6 +114,29 @@ async function callRoute(userId?: string) {
   return body.models;
 }
 
+describe('/api/models provider coverage', () => {
+  /**
+   * The route used to hand-build its ApiKeyTable, so a provider absent from that
+   * literal was a provider no user could select - Kimi shipped that way and the
+   * gap was invisible to a smoke test, because the two Bedrock-served Kimi ids
+   * come from UndifferentiatedBedrockBackend and appeared regardless. The route
+   * now goes through buildApiKeyTable; these cases hold that line.
+   */
+  // The positive case (a Moonshot key yields the five direct ids) lives in
+  // llm-adapters' buildApiKeyTable.test.ts instead: this suite runs in a
+  // browser-like environment where the OpenAI SDK refuses to construct, so no
+  // SDK-backed backend can be instantiated here at all.
+  it('lists no direct Kimi model without a Moonshot key', async () => {
+    const models = await callRoute('user-1');
+    expect(models.some(m => m.backend === ModelBackend.Kimi)).toBe(false);
+  });
+
+  it('offers Bedrock-served Kimi without any provider key, which is why it cannot stand in for the direct check', async () => {
+    const models = await callRoute('user-1');
+    expect(models.some(m => m.id === 'moonshotai.kimi-k2.5')).toBe(true);
+  });
+});
+
 describe('/api/models parity with getAvailableModels', () => {
   it('filters private models out of the picker response', async () => {
     const models = await callRoute('user-1');

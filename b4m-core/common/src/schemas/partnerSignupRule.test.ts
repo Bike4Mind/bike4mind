@@ -56,6 +56,16 @@ describe('createPartnerSignupRuleSchema', () => {
   it('allows a credits-only rule with no entitlements', () => {
     expect(createPartnerSignupRuleSchema.safeParse({ ...base, entitlements: [] }).success).toBe(true);
   });
+
+  it('accepts a 24-char hex organizationId and allows null to clear it', () => {
+    expect(createPartnerSignupRuleSchema.safeParse({ ...base, organizationId: 'a'.repeat(24) }).success).toBe(true);
+    expect(createPartnerSignupRuleSchema.safeParse({ ...base, organizationId: null }).success).toBe(true);
+  });
+
+  it('rejects a malformed organizationId', () => {
+    expect(createPartnerSignupRuleSchema.safeParse({ ...base, organizationId: 'not-an-id' }).success).toBe(false);
+    expect(createPartnerSignupRuleSchema.safeParse({ ...base, organizationId: 'z'.repeat(24) }).success).toBe(false);
+  });
 });
 
 describe('updatePartnerSignupRuleSchema', () => {

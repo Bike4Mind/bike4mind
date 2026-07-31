@@ -64,6 +64,17 @@ const labelSchema = z.string().trim().max(120);
 const notesSchema = z.string().trim().max(2000);
 
 /**
+ * Optional org to auto-add verified signups to. A 24-char hex ObjectId, or `null` to
+ * clear the association. Shape only - that the org EXISTS is checked server-side (the
+ * admin route fetches it) since Zod can't reach the DB.
+ */
+const organizationIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-f0-9]{24}$/i, 'Organization id must be a 24-character hex id')
+  .nullable();
+
+/**
  * Create payload for a partner signup rule. `enabled` defaults to true so a
  * newly-created rule is live immediately (the common case); an admin toggles
  * it off explicitly to stage a rule.
@@ -72,6 +83,7 @@ export const createPartnerSignupRuleSchema = z.object({
   domain: domainSchema,
   entitlements: entitlementsSchema,
   signupCredits: signupCreditsSchema,
+  organizationId: organizationIdSchema.optional(),
   enabled: z.boolean().default(true),
   label: labelSchema.optional(),
   notes: notesSchema.optional(),
@@ -86,6 +98,7 @@ export const updatePartnerSignupRuleSchema = z
   .object({
     entitlements: entitlementsSchema.optional(),
     signupCredits: signupCreditsSchema.optional(),
+    organizationId: organizationIdSchema.optional(),
     enabled: z.boolean().optional(),
     label: labelSchema.optional(),
     notes: notesSchema.optional(),

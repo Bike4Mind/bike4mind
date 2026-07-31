@@ -4,6 +4,8 @@ import {
   hasCompleteOpeningTag,
   parseArtifactsWithFallback,
   isSvgGraphicallyEmpty,
+  shouldWarnElidedArtifact,
+  elidedReplyWarning,
 } from './artifactParser';
 
 describe('extractReactDependencies', () => {
@@ -345,5 +347,136 @@ describe('parseArtifactsWithFallback - attribute values containing quotes', () =
       `<artifact identifier="x" type="text/html" title="mismatched'><p>hi</p></artifact>`
     );
     expect(result.artifacts).toHaveLength(0);
+  });
+});
+
+/**
+ * The elision notice's decision logic. Mirrors how hasCompleteOpeningTag is tested above:
+ * PromptReplies renders the banner, this decides whether it should.
+ */
+describe('shouldWarnElidedArtifact', () => {
+  const ELIDED = {
+    content: '<html><body><script>// ... (same JS as before)\nfunction init(){} init();</script></body></html>',
+    type: 'html' as const,
+  };
+  const COMPLETE = {
+    content: '<html><body><script>function init(){ document.title = "x"; } init();</script></body></html>',
+    type: 'html' as const,
+  };
+
+  it('warns on a completed reply whose artifact body is stubbed', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: false,
+        suspectedElision: false,
+        artifacts: [ELIDED],
+      })
+    ).toBe(true);
+  });
+
+  it('stays silent for a complete artifact', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: false,
+        suspectedElision: false,
+        artifacts: [COMPLETE],
+      })
+    ).toBe(false);
+  });
+
+  it('defers to the truncation banner rather than stacking two warnings', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: true,
+        suspectedElision: true,
+        artifacts: [ELIDED],
+      })
+    ).toBe(false);
+  });
+
+  it('stays silent while the reply is still streaming', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: false,
+        isTruncatedArtifact: false,
+        suspectedElision: true,
+        artifacts: [ELIDED],
+      })
+    ).toBe(false);
+  });
+
+  it("trusts the server's verdict even when the local scan finds nothing", () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: false,
+        suspectedElision: true,
+        artifacts: [COMPLETE],
+      })
+    ).toBe(true);
+  });
+
+  it('warns when any one of several artifacts is stubbed', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: false,
+        suspectedElision: false,
+        artifacts: [COMPLETE, ELIDED],
+      })
+    ).toBe(true);
+  });
+});
+
+describe('elidedReplyWarning', () => {
+  const ELIDED_MARKDOWN = `Here is the dashboard.
+
+<artifact identifier="board" type="text/html" title="Board">
+<html><body><script>
+  function init() {
+    // All the interactive JS from the previous complete artifact
+  }
+  init();
+</script></body></html>
+</artifact>`;
+
+  const CLEAN_MARKDOWN = `Here is the dashboard.
+
+<artifact identifier="board" type="text/html" title="Board">
+<html><body><script>
+  function init() { document.title = 'Board'; }
+  init();
+</script></body></html>
+</artifact>`;
+
+  it('trusts the server verdict when it survived the save', () => {
+    expect(
+      elidedReplyWarning({ suspectedElision: { confidence: 'low', signalCount: 2, details: [] } }, undefined)
+    ).toBe(true);
+  });
+
+  it('falls back to scanning the markdown when there is no server verdict', () => {
+    expect(elidedReplyWarning({}, ELIDED_MARKDOWN)).toBe(true);
+    expect(elidedReplyWarning(undefined, ELIDED_MARKDOWN)).toBe(true);
+    expect(elidedReplyWarning(null, ELIDED_MARKDOWN)).toBe(true);
+  });
+
+  it('does not warn on a reply whose artifact is complete', () => {
+    expect(elidedReplyWarning({}, CLEAN_MARKDOWN)).toBe(false);
+  });
+
+  it('does not warn when there is nothing to share', () => {
+    expect(elidedReplyWarning({}, undefined)).toBe(false);
+    expect(elidedReplyWarning({}, '')).toBe(false);
+  });
+
+  it('does not warn on ordinary prose that merely discusses abbreviation', () => {
+    // The reply body is prose, not code, so the comment-context anchoring is what has to hold here -
+    // this surface scans raw markdown with no artifact type to gate on.
+    const prose = 'The changelog below is abbreviated for brevity; the rest of the entries are omitted.';
+    expect(elidedReplyWarning({}, prose)).toBe(false);
   });
 });

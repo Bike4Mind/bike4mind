@@ -7,6 +7,8 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
+import { useConfig } from '@client/app/hooks/data/settings';
+import { filterToolsForDisplay } from '@client/app/utils/toolMapping';
 import { useIsMobile, useIsTablet } from '@client/app/hooks/useIsMobile';
 import { Casino as CasinoIcon, Tag as TagIcon } from '@mui/icons-material';
 import { useShallow } from 'zustand/react/shallow';
@@ -20,6 +22,7 @@ import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import ToolsButton from './AISettings/ToolsButton';
 import { ICONED_MCP_SERVERS } from '../common/ToolIndicators';
 import AgentsButton from './AISettings/AgentsButton';
+import StaleModelPrompt from './AISettings/StaleModelPrompt';
 import BriefcaseButton from './AISettings/BriefcaseButton';
 import ResearchModeIndicator from './AISettings/ResearchModeIndicator';
 import { ImageTemplateControls } from './ImageTemplates/ImageTemplateControls';
@@ -74,6 +77,10 @@ const AISettings: FC<AISettingsProps> = ({
   const enabledMcpServers = useLLM(state => state.enabledMcpServers);
   const { setState: setLLM } = useLLM;
 
+  // Presence-only availability of key-gated tools. Already mounted app-wide by
+  // WebsocketConfigProvider with a 5-min staleTime, so this shares that cache
+  // rather than adding a request.
+  const { data: serverConfig } = useConfig();
   const { data: mcpServersData = [] } = useMcpServers();
   const availableMcpServers = mcpServersData.filter(server => server.enabled).map(server => server.name);
 
@@ -96,7 +103,12 @@ const AISettings: FC<AISettingsProps> = ({
   };
 
   const primaryTools = ['web_search', 'web_fetch', 'image_generation'] as const;
-  const activePrimaryTools = primaryTools.filter(tool => tools.includes(tool as unknown as (typeof tools)[number]));
+  // Indicators must agree with the Tools picker: a tool whose key is missing renders
+  // off there, so it must not show an icon or feed the "+N" badge here either. The
+  // raw `tools` still goes to ToolsButton below - that array is what handleToggleTool
+  // reads and rewrites, so filtering it would drop preferences on the next toggle.
+  const displayTools = filterToolsForDisplay(tools, serverConfig?.toolAvailability);
+  const activePrimaryTools = primaryTools.filter(tool => displayTools.includes(tool));
   const isThinkingActive = thinking?.enabled ?? false;
   // Enabled integrations without their own icon (e.g. linkedin, notion) roll into the
   // "+N" badge; iconed ones (ICONED_MCP_SERVERS) are shown as icons and excluded here
@@ -111,7 +123,7 @@ const AISettings: FC<AISettingsProps> = ({
     (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) +
     (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
   const otherActiveToolsCount =
-    tools.filter(
+    displayTools.filter(
       tool => !primaryTools.includes(tool as unknown as (typeof primaryTools)[number]) && tool !== 'dice_roll'
     ).length +
     specialToolsCount +
@@ -263,7 +275,8 @@ const AISettings: FC<AISettingsProps> = ({
 
         {!isTablet && (
           <>
-            {/* Dice Roll Icon */}
+            {/* Dice Roll Icon. Raw `tools` on purpose: dice_roll needs no API key, so
+                it has no toolAvailability entry and can never be key-gated. */}
             {tools.includes('dice_roll') && (
               <Tooltip title="Roll Dice">
                 <IconButton
@@ -305,6 +318,9 @@ const AISettings: FC<AISettingsProps> = ({
       />
 
       {isPromptBuilderEnabled && <PromptBuilderModal />}
+
+      {/* Offers an upgrade when the session resumed on a superseded pin (#951) */}
+      <StaleModelPrompt sessionId={currentSessionId} pinnedModel={currentSession?.lastUsedModel} />
     </>
   );
 };

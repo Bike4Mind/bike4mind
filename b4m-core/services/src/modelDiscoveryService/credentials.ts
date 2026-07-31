@@ -25,6 +25,7 @@ const DISCOVERY_ENV_KEYS = {
   anthropic: 'ANTHROPIC_API_KEY',
   gemini: 'GEMINI_API_KEY',
   xai: 'XAI_API_KEY',
+  kimi: 'MOONSHOT_API_KEY',
 } as const;
 
 export type LLMKeyResolver = typeof getEffectiveLLMApiKeys;
@@ -77,6 +78,7 @@ export async function getDiscoveryCredentials(
     anthropic: usable(env[DISCOVERY_ENV_KEYS.anthropic]) ?? usable(keys.anthropic),
     gemini: usable(env[DISCOVERY_ENV_KEYS.gemini]) ?? usable(keys.gemini),
     xai: usable(env[DISCOVERY_ENV_KEYS.xai]) ?? usable(keys.xai),
+    kimi: usable(env[DISCOVERY_ENV_KEYS.kimi]) ?? usable(keys.kimi),
     bfl: usable(keys.bfl),
     voyageai: usable(keys.voyageai),
     ollama: usable(keys.ollama),
