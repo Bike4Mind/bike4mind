@@ -37,7 +37,19 @@ const updateEmbedKey = vi.hoisted(() =>
     branding: (params as any)?.branding,
   }))
 );
-vi.mock('@bike4mind/services', () => ({ userApiKeyService: { updateEmbedKey } }));
+// updateEmbedKey is stubbed (these tests are about what the route screens and
+// forwards), but resolveOwnedApiKey is the REAL one: the branding-owner read is
+// the site that must not drift from the service's resolution, so stubbing it
+// here would make the org-admin assertions below vacuous.
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return {
+    userApiKeyService: {
+      updateEmbedKey,
+      resolveOwnedApiKey: actual.userApiKeyService.resolveOwnedApiKey,
+    },
+  };
+});
 // The route reads the stored key via findByUserIdAndId - both for the branding
 // echo-vs-elevation decision and (post-#891) for the owner ref the gate resolves.
 // Default to no stored key.

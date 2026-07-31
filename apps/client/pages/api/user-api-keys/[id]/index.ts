@@ -57,16 +57,15 @@ const handler = baseApi().patch(
     let gatedBranding = brandingCheck.value;
     if (brandingCheck.value?.hideBranding === true) {
       // Resolve the elevation against the key's billing owner, not the caller.
-      // Same minter-then-org-admin resolution as updateEmbedKey, so an org admin
+      // Same minter-then-org-admin resolution as updateEmbedKey (shared via
+      // resolveOwnedApiKey, so the two can no longer drift), so an org admin
       // editing a teammate's org key gates against the org's owner (matching the
       // ownerHasWhitelabel flag the LIST route computes). A key the caller neither
       // minted nor administers stays unresolved and fails closed to stripped;
       // updateEmbedKey then throws not-found regardless.
-      let existing = await userApiKeyRepository.findByUserIdAndId(userId, keyId);
-      if (!existing) {
-        const administeredOrgIds = await organizationRepository.findIdsAdministeredBy(userId);
-        existing = await userApiKeyRepository.findByOrganizationIdsAndId(administeredOrgIds, keyId);
-      }
+      const existing = await userApiKeyService.resolveOwnedApiKey(userId, keyId, {
+        db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository },
+      });
       gatedBranding = existing
         ? await gateEmbedBrandingWrite(existing, brandingCheck.value, existing.branding?.hideBranding === true)
         : { ...brandingCheck.value, hideBranding: false };
