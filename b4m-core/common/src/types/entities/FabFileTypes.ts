@@ -434,9 +434,18 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ total: number; byPrefix: Record<string, number> }>;
 
   /**
-   * Count unique files per root tag namespace for a user.
+   * Count unique files per root tag namespace for a user. Takes the same optional scope as
+   * countFilesByTagForUser, which it is served beside; omitting it counts owned files only.
    */
-  countUniqueFilesByNamespaceForUser(userId: string): Promise<{ namespace: string; fileCount: number }[]>;
+  countUniqueFilesByNamespaceForUser(
+    userId: string,
+    options?: {
+      userGroups?: string[];
+      dataLakeTags?: string[];
+      dataLakeTagPrefixes?: string[];
+      scopedTagPrefixes?: string[];
+    }
+  ): Promise<{ namespace: string; fileCount: number }[]>;
 
   /**
    * Remove a tag from a user's files.
