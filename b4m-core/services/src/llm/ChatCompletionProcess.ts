@@ -93,7 +93,6 @@ import {
   ContextSummarizationFeature,
   MementoFeature,
   OrganizationPromptFeature,
-  DataLakePromptFeature,
   SessionPromptFeature,
   KnowledgeRetrievalFeature,
   ProjectFeature,
@@ -1874,103 +1873,102 @@ export class ChatCompletionProcess {
       // Extracted so the overflow-guard safety net below can rebuild with a trimmed
       // history without duplicating this (long, order-sensitive) system/context block.
       const contextAndSystemMessages: IMessage[] = [
-          dateTimeContext, // Always provide current date/time awareness
-          ...extraContextMessages, // Add extra context messages from external sources at the top
-          // Artifact emission guidance. Without this, correct <artifact> usage
-          // is left to the model's defaults and large HTML/code can leak into the chat
-          // body as raw markup. Gated on the same EnableArtifacts flag as extraction.
-          ...(getSettingsValue('EnableArtifacts', defaultAdminSettings)
-            ? [
-                {
-                  role: 'system' as const,
-                  // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings);
-                  // falls back to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared,
-                  // so a blank value can never strip artifact guidance from completions.
-                  content: getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
-                },
-              ]
-            : []),
-          // Help-center awareness. Makes the model aware of the in-app
-          // Help Center so a user who types a how-to question ("how do I add to my data lake?")
-          // gets pointed to it instead of an ungrounded guess. Admin-editable via the
-          // `HelpCenterPrompt` setting; a blank value falls back to the built-in default so the
-          // nudge can never be silently stripped. Skipped for local models (lean prompt).
-          ...(isLocalModel
-            ? []
-            : [
-                {
-                  role: 'system' as const,
-                  content: getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT),
-                },
-              ]),
-          // Inject view registry summary when navigate_view tool is enabled
-          ...(enabledTools.includes('navigate_view')
-            ? [
-                {
-                  role: 'system' as const,
-                  content: (() => {
-                    // Extract current path from extraContextMessages for context-aware prompting
-                    const viewCtx = extraContextMessages.find(
-                      m => typeof m.content === 'string' && m.content.includes('[Current View Context]')
-                    );
-                    const ctxStr = typeof viewCtx?.content === 'string' ? viewCtx.content : '';
-                    const currentPath = ctxStr.match(/Path:\s*(\S+)/)?.[1] || '';
-                    let summary = getViewSummaryForLLM({ isAdmin: this.user?.isAdmin });
-                    // Add path-specific emphasis
-                    if (currentPath.startsWith('/admin')) {
-                      summary +=
-                        '\n\nThe user is currently on the Admin page. When they ask about any admin feature, you MUST call navigate_view with the matching admin.* tab.';
-                    }
-                    return summary;
-                  })(),
-                },
-              ]
-            : []),
-          ...(toolPromptMessage ? [toolPromptMessage] : []), // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
-          ...(featureContextMessages['agentDetection'] ?? []), // Add agent system prompts
-          ...(featureContextMessages['questMaster'] ?? []),
-          ...(featureContextMessages['organizationPrompt'] ?? []), // Add team-wide system prompt
-          ...(featureContextMessages['dataLakePrompt'] ?? []), // Per-lake system prompts (defer to the org block above)
-          ...(featureContextMessages['sessionPrompt'] ?? []), // Per-session system prompt (product surfaces)
-          ...(featureContextMessages['knowledgeRetrieval'] ?? []), // Forced data-lake retrieval (grounding + citations)
-          // Add LLM-optimized context summary if available (covers messages before verbatim window)
-          ...(session.contextSummary
-            ? [
-                {
-                  role: 'system' as const,
-                  content: `[Context from earlier in this conversation]\n${session.contextSummary}`,
-                },
-              ]
-            : []),
-          ...(featureContextMessages['mementos'] ?? []),
-          ...(featureContextMessages['project'] ?? []),
-          // Recently generated images - gives the model a handle to edit a prior
-          // generated image ("make it cartoonish"). Generated images persist as
-          // bare storage keys in quest.images with no fabFile record, so without
-          // this note the model can't reference them and either declines or (worse)
-          // claims success without calling a tool. Gated on edit_image being
-          // available (paired with image_generation).
-          ...(enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
-            ? [
-                {
-                  role: 'system' as const,
-                  content: [
-                    '# Recently generated images',
-                    '',
-                    'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
-                    '',
-                    ...cacheInfo.recentGeneratedImages!.map(
-                      img => `- ${img.key}${img.prompt ? ` — from: "${img.prompt}"` : ''}`
-                    ),
-                    '',
-                    'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
-                  ].join('\n'),
-                },
-              ]
-            : []),
-          ...urlMessages,
-          ...fabMessages,
-        ];
+        dateTimeContext, // Always provide current date/time awareness
+        ...extraContextMessages, // Add extra context messages from external sources at the top
+        // Artifact emission guidance. Without this, correct <artifact> usage
+        // is left to the model's defaults and large HTML/code can leak into the chat
+        // body as raw markup. Gated on the same EnableArtifacts flag as extraction.
+        ...(getSettingsValue('EnableArtifacts', defaultAdminSettings)
+          ? [
+              {
+                role: 'system' as const,
+                // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings);
+                // falls back to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared,
+                // so a blank value can never strip artifact guidance from completions.
+                content: getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
+              },
+            ]
+          : []),
+        // Help-center awareness. Makes the model aware of the in-app
+        // Help Center so a user who types a how-to question ("how do I add to my data lake?")
+        // gets pointed to it instead of an ungrounded guess. Admin-editable via the
+        // `HelpCenterPrompt` setting; a blank value falls back to the built-in default so the
+        // nudge can never be silently stripped. Skipped for local models (lean prompt).
+        ...(isLocalModel
+          ? []
+          : [
+              {
+                role: 'system' as const,
+                content: getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT),
+              },
+            ]),
+        // Inject view registry summary when navigate_view tool is enabled
+        ...(enabledTools.includes('navigate_view')
+          ? [
+              {
+                role: 'system' as const,
+                content: (() => {
+                  // Extract current path from extraContextMessages for context-aware prompting
+                  const viewCtx = extraContextMessages.find(
+                    m => typeof m.content === 'string' && m.content.includes('[Current View Context]')
+                  );
+                  const ctxStr = typeof viewCtx?.content === 'string' ? viewCtx.content : '';
+                  const currentPath = ctxStr.match(/Path:\s*(\S+)/)?.[1] || '';
+                  let summary = getViewSummaryForLLM({ isAdmin: this.user?.isAdmin });
+                  // Add path-specific emphasis
+                  if (currentPath.startsWith('/admin')) {
+                    summary +=
+                      '\n\nThe user is currently on the Admin page. When they ask about any admin feature, you MUST call navigate_view with the matching admin.* tab.';
+                  }
+                  return summary;
+                })(),
+              },
+            ]
+          : []),
+        ...(toolPromptMessage ? [toolPromptMessage] : []), // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
+        ...(featureContextMessages['agentDetection'] ?? []), // Add agent system prompts
+        ...(featureContextMessages['questMaster'] ?? []),
+        ...(featureContextMessages['organizationPrompt'] ?? []), // Add team-wide system prompt
+        ...(featureContextMessages['sessionPrompt'] ?? []), // Per-session system prompt (product surfaces)
+        ...(featureContextMessages['knowledgeRetrieval'] ?? []), // Forced data-lake retrieval (grounding + citations)
+        // Add LLM-optimized context summary if available (covers messages before verbatim window)
+        ...(session.contextSummary
+          ? [
+              {
+                role: 'system' as const,
+                content: `[Context from earlier in this conversation]\n${session.contextSummary}`,
+              },
+            ]
+          : []),
+        ...(featureContextMessages['mementos'] ?? []),
+        ...(featureContextMessages['project'] ?? []),
+        // Recently generated images - gives the model a handle to edit a prior
+        // generated image ("make it cartoonish"). Generated images persist as
+        // bare storage keys in quest.images with no fabFile record, so without
+        // this note the model can't reference them and either declines or (worse)
+        // claims success without calling a tool. Gated on edit_image being
+        // available (paired with image_generation).
+        ...(enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
+          ? [
+              {
+                role: 'system' as const,
+                content: [
+                  '# Recently generated images',
+                  '',
+                  'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
+                  '',
+                  ...cacheInfo.recentGeneratedImages!.map(
+                    img => `- ${img.key}${img.prompt ? ` — from: "${img.prompt}"` : ''}`
+                  ),
+                  '',
+                  'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
+                ].join('\n'),
+              },
+            ]
+          : []),
+        ...urlMessages,
+        ...fabMessages,
+      ];
       const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
       let messages = await buildAndSortMessages(
         previousMessages,
@@ -4040,7 +4038,16 @@ export class ChatCompletionProcess {
         fireAndForgetFeatures.forEach(feature => {
           this.features
             .get(feature)
-            ?.onComplete({ quest, session, messages, questMaster, model, historyCount, oldestIncludedQuestId, verbatimExcludedCount })
+            ?.onComplete({
+              quest,
+              session,
+              messages,
+              questMaster,
+              model,
+              historyCount,
+              oldestIncludedQuestId,
+              verbatimExcludedCount,
+            })
             ?.catch(err => logger.error(`Error in fire-and-forget ${feature} onComplete:`, err));
         });
 
@@ -4057,7 +4064,16 @@ export class ChatCompletionProcess {
           .map(feature =>
             this.features
               .get(feature)
-              ?.onComplete({ quest, session, messages, questMaster, model, historyCount, oldestIncludedQuestId, verbatimExcludedCount })
+              ?.onComplete({
+                quest,
+                session,
+                messages,
+                questMaster,
+                model,
+                historyCount,
+                oldestIncludedQuestId,
+                verbatimExcludedCount,
+              })
           )
           .filter(p => p);
 
@@ -4610,22 +4626,11 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.features.set('organizationPrompt', new OrganizationPromptFeature(this, organization));
     }
 
-    // Data lake prompt feature - per-lake system prompts for the caller's trusted lakes.
-    // Gated only on the repo being wired (like skills above): whether any lake actually
-    // carries a prompt is a DB question the feature answers itself, and it emits nothing
-    // when none do. Registered outside the complexity-optimized list so a lake's operating
-    // instructions are not silently dropped on a 'simple' turn.
-    //
-    // COST, accepted deliberately: this adds one accessible-lakes read per turn, and until the
-    // per-lake prompt editor ships it returns nothing useful (no UI writes the field yet). The
-    // collection is tiny, so the alternative - a repo method filtering on a non-empty
-    // systemPrompt - would buy little while adding a THIRD Mongo copy of the access predicate
-    // that the existing two already need a parity test to keep honest. Revisit if lake counts
-    // grow or this shows up in turn latency.
-    if (this.db.dataLakes) {
-      this.logger.log('  - Enabling DataLakePrompt feature');
-      this.features.set('dataLakePrompt', new DataLakePromptFeature(this));
-    }
+    // Per-lake system prompts are injected RETRIEVAL-SCOPED, not as an always-on feature (#1108):
+    // a lake's prompt rides only turns that actually use that lake. Forced retrieval attaches it in
+    // KnowledgeRetrievalFeature; the model-driven path attaches it in the search/retrieve knowledge
+    // tools. The old always-on DataLakePromptFeature injected every trusted lake's prompt into every
+    // turn (org-wide invisible steering) and has been removed.
 
     // Session prompt feature - generic per-session system prompt (e.g. product
     // surfaces that scope a session's behavior without a project record).
