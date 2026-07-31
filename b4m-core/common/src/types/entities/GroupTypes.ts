@@ -24,8 +24,12 @@ export interface IGroup {
 export interface IGroupDocument extends IGroup, IMongoDocument {}
 
 export interface IGroupRepository extends IBaseRepository<IGroupDocument> {
-  /** Live (non-soft-deleted) group instances owned by an organization. */
-  findByOrganization(organizationId: string): Promise<IGroupDocument[]>;
+  /**
+   * Group instances owned by an organization. Live-only by default; `includeDeleted` also returns
+   * soft-deleted rows (org deletion must purge membership for every group the org EVER owned - a
+   * stale id can still linger in `user.groups` from a lost prior revoke; org-groups #1230).
+   */
+  findByOrganization(organizationId: string, options?: { includeDeleted?: boolean }): Promise<IGroupDocument[]>;
   /**
    * Provision a group instance, treating a concurrent create for the same (organizationId, type)
    * as success rather than a 500 (org-groups #1222). Two overlapping grant PUTs can both pass the

@@ -93,6 +93,18 @@ describe('GroupRepository', () => {
     expect(org1Groups.every(g => typeof g.id === 'string')).toBe(true);
   });
 
+  it('findByOrganization({ includeDeleted }) also returns soft-deleted groups (org-delete purge, #1230)', async () => {
+    const a = await Group.create({ name: 'A', description: 'd', type: 'sales', organizationId: 'org-inc' });
+    await Group.create({ name: 'B', description: 'd', type: 'research', organizationId: 'org-inc' });
+    await groupRepository.delete(a.id); // soft-delete one
+
+    // Default drops the soft-deleted row; includeDeleted brings it back so the purge covers it.
+    expect((await groupRepository.findByOrganization('org-inc')).map(g => g.type).sort()).toEqual(['research']);
+    expect(
+      (await groupRepository.findByOrganization('org-inc', { includeDeleted: true })).map(g => g.type).sort()
+    ).toEqual(['research', 'sales']);
+  });
+
   it('enforces one LIVE group per (organizationId, type), but allows revoke-then-regrant', async () => {
     await Group.create({ name: 'Sales', type: 'sales', organizationId: 'org-live' });
 

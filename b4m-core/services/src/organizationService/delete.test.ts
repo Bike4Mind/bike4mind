@@ -217,13 +217,25 @@ describe('organizationService - delete', () => {
 
       await deleteOrganization(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters);
 
-      expect(mockAdapters.db.groups.findByOrganization).toHaveBeenCalledWith('org1');
+      // includeDeleted so the purge reaches already-soft-deleted groups whose ids may linger (#1230).
+      expect(mockAdapters.db.groups.findByOrganization).toHaveBeenCalledWith('org1', { includeDeleted: true });
       expect(mockAdapters.db.users.removeGroupsFromAllUsers).toHaveBeenCalledWith(['group-a', 'group-b']);
       // Each group soft-deleted individually via the inherited delete() (#1228 revert of the bulk workaround).
       expect(mockAdapters.db.groups.delete).toHaveBeenCalledTimes(2);
       expect(mockAdapters.db.groups.delete).toHaveBeenCalledWith('group-a');
       expect(mockAdapters.db.groups.delete).toHaveBeenCalledWith('group-b');
       expect(mockAdapters.db.organizations.delete).toHaveBeenCalledWith('org1');
+    });
+
+    it('purges an already-soft-deleted group id surfaced via includeDeleted (#1230)', async () => {
+      // findByOrganization(includeDeleted) returns a stale (previously soft-deleted) group whose id
+      // may still sit in user.groups; org deletion must purge it, not just the live groups.
+      mockAdapters.db.groups.findByOrganization.mockResolvedValue([{ id: 'stale-group', type: 'sales' }]);
+
+      await deleteOrganization(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(mockAdapters.db.groups.findByOrganization).toHaveBeenCalledWith('org1', { includeDeleted: true });
+      expect(mockAdapters.db.users.removeGroupsFromAllUsers).toHaveBeenCalledWith(['stale-group']);
     });
 
     it('purges membership BEFORE soft-deleting the groups (fail-safe ordering)', async () => {
