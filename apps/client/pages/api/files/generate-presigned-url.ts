@@ -7,10 +7,10 @@ import {
   KnowledgeType,
 } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
-import { adminSettingsRepository, dataLakeRepository } from '@bike4mind/database';
+import { adminSettingsRepository, dataLakeBatchRepository, dataLakeRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
 import { createFabFile } from '@server/managers/fabFileManager';
@@ -67,6 +67,18 @@ const handler = baseApi().post(
         db: { dataLakes: dataLakeRepository },
         logger: req.logger,
       });
+
+      // Verify batch ownership before stamping - batchId comes from the body, and this batch's
+      // taxonomy analysis/apply now read straight off whatever files carry its id, so without
+      // this a caller who learns another user's batchId could inject a file that gets sampled
+      // into that user's inference prompt (billed to them) or have its tags rewritten by apply.
+      // Mirrors the identical guard on the batch-presign endpoint (generate-presigned-urls-batch.ts).
+      if (data.batchId) {
+        const batch = await dataLakeBatchRepository.findById(data.batchId);
+        if (!batch || batch.userId !== userId) {
+          throw new NotFoundError('Batch not found');
+        }
+      }
 
       // Reject unsupported/binary types (e.g. .exe) - the chunker can't
       // vectorize them, and the prior `mime.extension()` guard let generic
