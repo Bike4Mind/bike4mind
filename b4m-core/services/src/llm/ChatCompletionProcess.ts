@@ -1540,7 +1540,19 @@ export class ChatCompletionProcess {
       // model (a context window smaller than its own reserved output). Clamping there would
       // silently restore the empty payload that guard exists to catch.
       const modelMaxOutput = modelInfo.max_tokens ?? 16384;
-      const safeInputTokens = Math.max(0, safeInputWindow(modelInfo, params.max_tokens ?? modelMaxOutput));
+      // Resolved here, above its first use, because BOTH safeInputWindow callers have to
+      // reserve the same output or the window drifts - which is exactly what the note
+      // above promises cannot happen. Falling back to the model's full output cap was
+      // that drift: once an absent max_tokens became representable, this reserved the
+      // whole cap while assembly reserved the resolved default, and verbatim history
+      // compacted far sooner than the turn actually required.
+      const safeMaxTokens = resolveOutputMaxTokens({
+        requested: params.max_tokens,
+        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+        modelInfo,
+        modelMaxOutputTokens: modelMaxOutput,
+      });
+      const safeInputTokens = Math.max(0, safeInputWindow(modelInfo, safeMaxTokens));
       // Reserve the non-history overhead that shares this budget before applying the
       // fraction, so heavier-payload turns (more tools, a longer running summary, a
       // large prompt) compact SOONER rather than overflowing first - this is the
@@ -1625,17 +1637,10 @@ export class ChatCompletionProcess {
       // Input-window limits, needed BEFORE building messages because the amount of
       // attached-file content we extract has to be derived from them.
       const contextLimit = modelInfo.contextWindow ?? 200000;
-      const modelMaxOutputTokens = modelInfo.max_tokens ?? 16384;
-
-      // An explicit caller budget is honored as-is; only its absence is sized for the
-      // model. See resolveOutputMaxTokens for why raising an explicit value is not a
-      // free action (it feeds the credit pre-reservation and maxSafeInputTokens below).
-      const safeMaxTokens = resolveOutputMaxTokens({
-        requested: maxTokens,
-        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
-        modelInfo,
-        modelMaxOutputTokens,
-      });
+      // safeMaxTokens is resolved once further up, where the verbatim-history window
+      // needs it too. An explicit caller budget is honored as-is; only its absence is
+      // sized for the model. See resolveOutputMaxTokens for why raising an explicit
+      // value is not free (it feeds the credit pre-reservation and the window below).
 
       // Fetch buffer for URL/file content. Deliberately NOT safeMaxTokens: this is a
       // *content* budget, unrelated to the output cap (same confusion called out for
