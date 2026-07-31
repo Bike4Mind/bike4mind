@@ -1994,6 +1994,36 @@ describe('computeSettlementDelta (zero-balance shortfall clamp)', () => {
   it('treats a negative balance snapshot as zero', () => {
     expect(computeSettlementDelta(100, 130, -50)).toEqual({ delta: 0, writtenOffCredits: 30 });
   });
+
+  // #1238: the org-wide balance is a HARD STOP - the settlement true-up must never drive it
+  // negative. Pin the invariant across a swept input range, not just the examples above, so a
+  // future refactor of the clamp can't quietly reintroduce a negative-balance path.
+  it('never drives the settled balance below zero, and conserves the shortfall (hard-stop invariant)', () => {
+    for (let reserved = 0; reserved <= 200; reserved += 25) {
+      for (let used = 0; used <= 300; used += 25) {
+        for (let available = 0; available <= 300; available += 25) {
+          const { delta, writtenOffCredits } = computeSettlementDelta(reserved, used, available);
+          // The balance already moved by `reserved` at reservation; settlement applies `delta`.
+          // Post-settlement balance = available + delta and must never be negative.
+          expect(available + delta).toBeGreaterThanOrEqual(0);
+          expect(writtenOffCredits).toBeGreaterThanOrEqual(0);
+          if (used <= reserved) {
+            // Over- or exactly-reserved: pure refund/no-op, nothing written off.
+            expect(writtenOffCredits).toBe(0);
+            expect(delta).toBe(reserved - used);
+          } else {
+            // Under-reserved: the shortfall is either collected (via -delta) or written off,
+            // and the collected part is clamped to what the balance can actually cover.
+            const shortfall = used - reserved;
+            // delta <= 0 here (a shortfall debit); Math.abs avoids a -0 vs +0 Object.is mismatch.
+            const collected = Math.abs(delta);
+            expect(collected + writtenOffCredits).toBe(shortfall);
+            expect(collected).toBe(Math.min(shortfall, available));
+          }
+        }
+      }
+    }
+  });
 });
 
 describe('clampFraction (verbatim window fraction admin setting)', () => {
