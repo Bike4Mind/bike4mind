@@ -138,8 +138,10 @@ describe('GET /api/agents/[id]/embed-keys', () => {
   });
 
   // The org arm grants on Organization billing, not on organizationId alone, so
-  // a user-billed key carrying a stray org id stays invisible to that org's admin.
-  it('excludes a user-billed key whose organizationId matches an administered org', async () => {
+  // a user-billed key carrying a stray org id stays invisible to that org's
+  // admin. createUserApiKey cannot mint that row, so this covers a legacy or
+  // direct-DB write - the same row findByOrganizationIdsAndId refuses to resolve.
+  it('excludes a legacy user-billed key whose organizationId matches an administered org', async () => {
     agentFindById.mockResolvedValue({ id: 'agent-1', userId: 'someone-else', organizationId: 'org-1' });
     findIdsAdministeredBy.mockResolvedValue(['org-1']);
     listAgentEmbedKeys.mockResolvedValue([

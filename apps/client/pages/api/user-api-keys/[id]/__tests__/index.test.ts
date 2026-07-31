@@ -78,6 +78,7 @@ const organizationRepository = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({ organizationRepository, userRepository }));
 
 import { CreditHolderType } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import '@pages/api/user-api-keys/[id]/index';
 
 function patch(id: string | undefined, body: unknown) {
@@ -182,6 +183,31 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
       userApiKeyRepository.findByOrganizationIdsAndId.mockResolvedValue(null);
       // Personal key owned by OWNER, no stored hideBranding.
       userApiKeyRepository.findByUserIdAndId.mockResolvedValue({ userId: OWNER, branding: undefined });
+    });
+
+    // The whole point of the owner-lookup warning is naming the key whose
+    // branding got silently stripped, so the route must pass the resolved key's
+    // id all the way down rather than leaving the log to say "(unsaved key)".
+    it('names the resolved key in the warning when the owner lookup fails', async () => {
+      const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue({
+        id: 'key-42',
+        userId: OWNER,
+        branding: undefined,
+      });
+      getUserEntitlements.mockRejectedValue(new Error('db down'));
+
+      const { req, res } = patch('key-42', { branding: { hideBranding: true } });
+      await mockRefs.patchHandler!(req, res);
+
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ keyId: 'key-42' }));
+      // Fails closed: the unverifiable elevation is still stripped.
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { hideBranding: false } }),
+        expect.anything()
+      );
+      warn.mockRestore();
     });
 
     it('strips hideBranding:true when the key OWNER is unentitled, keeping other fields', async () => {

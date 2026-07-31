@@ -54,8 +54,10 @@ const handler = baseApi().get(async (req, res) => {
   // Defense in depth on top of the agent gate: only keys the caller could see
   // on their own key surfaces (minted by them, or billed to an org they admin).
   // The org arm also requires Organization billing, matching the predicate
-  // findByOrganizationIdsAndId applies on the write paths - a stray
-  // organizationId on a user-billed key must not grant an org admin sight of it.
+  // findByOrganizationIdsAndId applies on the write paths. createUserApiKey
+  // already rejects an organizationId without Organization billing, so this
+  // only bites a legacy or direct-DB row - which is exactly the row the write
+  // paths refuse to resolve, and this surface should not disagree with them.
   const adminOrgSet = new Set(administeredOrgIds);
   const visible = req.user!.isAdmin
     ? keys

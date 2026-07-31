@@ -36,9 +36,12 @@ export async function embedKeyOwnerHasEntitlement(
   key: EntitlementKey,
   keyId?: string
 ): Promise<boolean> {
+  // The branch and the failure log read one predicate, so the log can never
+  // name a different owner than the one resolution actually went after.
+  const orgBilled = info.billingOwnerType === CreditHolderType.Organization;
   let ownerUserId = info.userId;
   try {
-    if (info.billingOwnerType === CreditHolderType.Organization) {
+    if (orgBilled) {
       // Org-billed key: the entitlement is the org billing owner's, never the
       // minter's. Assert positive ownership rather than falling through - a
       // missing organizationId (which create-time invariants forbid, but assert
@@ -57,7 +60,10 @@ export async function embedKeyOwnerHasEntitlement(
     Logger.globalInstance.warn('[embedKeyEntitlement] owner entitlement lookup failed; failing closed', {
       keyId: keyId ?? '(unsaved key)',
       entitlement: key,
-      attemptedOwner: info.organizationId ? `org:${info.organizationId}` : `user:${ownerUserId}`,
+      billingOwner: orgBilled ? `org:${info.organizationId}` : `user:${info.userId}`,
+      // The org billing owner once resolved; still the minter if the org lookup
+      // itself threw, which is what makes it worth logging separately.
+      ownerUserId,
       error,
     });
     return false;

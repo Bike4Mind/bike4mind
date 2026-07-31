@@ -94,7 +94,7 @@ describe('embedKeyOwnerHasEntitlement', () => {
   // trace it happened. It must fire on the fault - and never on a healthy path,
   // or it becomes noise nobody reads.
   describe('lookup-failure warning', () => {
-    it('warns once with the key id and attempted owner when a repository throws', async () => {
+    it('warns once with the key id and billing owner when the org lookup throws', async () => {
       organizationRepository.findById.mockRejectedValue(new Error('db down'));
 
       await expect(embedKeyOwnerHasEntitlement(orgKeyRef, KEY, 'key-1')).resolves.toBe(false);
@@ -102,8 +102,37 @@ describe('embedKeyOwnerHasEntitlement', () => {
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining('owner entitlement lookup failed'),
-        expect.objectContaining({ keyId: 'key-1', attemptedOwner: 'org:org-1' })
+        // The org lookup never returned, so the owner is still the minter.
+        expect.objectContaining({ keyId: 'key-1', billingOwner: 'org:org-1', ownerUserId: 'minter-1' })
       );
+    });
+
+    it('reports the resolved org owner when the failure is downstream of the org lookup', async () => {
+      organizationRepository.findById.mockResolvedValue({ id: 'org-1', userId: 'owner-9' });
+      getUserEntitlements.mockRejectedValue(new Error('db down'));
+
+      await expect(embedKeyOwnerHasEntitlement(orgKeyRef, KEY, 'key-1')).resolves.toBe(false);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ billingOwner: 'org:org-1', ownerUserId: 'owner-9' })
+      );
+    });
+
+    // A user-billed key can carry a stray organizationId; the log must describe
+    // the owner resolution actually performed, which keys off billingOwnerType.
+    it('reports a user-billed key as user-owned even when it carries an organizationId', async () => {
+      userRepository.findById.mockRejectedValue(new Error('db down'));
+
+      await expect(
+        embedKeyOwnerHasEntitlement({ userId: 'minter-1', organizationId: 'org-1' }, KEY, 'key-1')
+      ).resolves.toBe(false);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ billingOwner: 'user:minter-1', ownerUserId: 'minter-1' })
+      );
+      expect(organizationRepository.findById).not.toHaveBeenCalled();
     });
 
     it('marks the key id as unsaved when the caller has none (create path)', async () => {
@@ -113,7 +142,7 @@ describe('embedKeyOwnerHasEntitlement', () => {
 
       expect(warn).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ keyId: '(unsaved key)', attemptedOwner: 'user:minter-1' })
+        expect.objectContaining({ keyId: '(unsaved key)', billingOwner: 'user:minter-1' })
       );
     });
 
