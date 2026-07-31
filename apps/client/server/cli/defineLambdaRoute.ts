@@ -6,9 +6,15 @@ import {
   LEGACY_REQUEST_ID_HEADER,
   resolveRequestId,
 } from '@bike4mind/common';
+import { connectDB, mongoose } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
+import { Config } from '@server/utils/config';
+import { resolveContractAuth, type ContractAuthResult } from './resolveContractAuth';
 
 export type LambdaRouteContext<C extends EndpointContract> = {
   validated: RequestBodyOf<C>;
+  /** The authenticated caller, per `contract.auth`. Undefined only for `public` contracts. */
+  auth?: ContractAuthResult;
   requestId: string;
   event: APIGatewayProxyEventV2;
 };
@@ -17,31 +23,31 @@ export type LambdaRouteResult = { statusCode: number; body: unknown };
 
 /**
  * AWS Lambda Function URL adapter for an {@link EndpointContract} - the transport
- * used for the public endpoints that can't be served by the Next.js API
- * (SST dev + Function URLs + CloudFront had socket hang-ups; see cli/tools.ts).
+ * used for public endpoints the Next.js API can't serve (SST dev + Function URLs +
+ * CloudFront had socket hang-ups; see cli/tools.ts).
  *
- * It handles the boilerplate every Function-URL handler repeats today: request-id
- * resolution, body parsing, contract validation (SAME schema the Next adapter and
- * OpenAPI spec use), JSON response shaping, and turning a thrown handler error into
- * a 500 (rather than letting it surface as an opaque API-gateway 502). The business
- * logic stays in the shared module the handler delegates to.
- *
- * IMPORTANT - this adapter does NOT yet enforce `contract.auth` / `contract.scopes`.
- * It has no non-test callers on this branch; the auth wiring (via resolveContractAuth,
- * mirroring the verifyJwtToken/apiKey flow in cli/tools.ts) and the first real
- * Lambda-served contract land in the follow-up that migrates completions + tools.
- * Until then, do NOT route a non-public contract through this adapter and assume
- * auth is handled - it is not.
+ * Owns the boilerplate every Function-URL handler repeats: request-id resolution,
+ * body parsing (400), DB connect, contract-driven auth (401, via resolveContractAuth
+ * so every JWT/API-key gate matches the rest of the app), contract validation (422 -
+ * the pattern's uniform validation gate), JSON response shaping, and turning a thrown
+ * handler error into a 500 (not an opaque API-gateway 502). Auth runs BEFORE
+ * validation so an unauthenticated caller never triggers validation work or sees
+ * validation detail. Rate limiting and business logic stay in the handler, which
+ * returns an explicit {statusCode, body} (e.g. 429).
  */
 export function defineLambdaRoute<C extends EndpointContract>(
   contract: C,
   handle: (ctx: LambdaRouteContext<C>) => Promise<LambdaRouteResult>
-): (event: APIGatewayProxyEventV2) => Promise<APIGatewayProxyResultV2> {
-  return async (event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> => {
-    const requestId = resolveRequestId(
-      event.headers?.[REQUEST_ID_HEADER.toLowerCase()],
-      event.headers?.[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
-    );
+): (event: APIGatewayProxyEventV2, resolvedRequestId?: string) => Promise<APIGatewayProxyResultV2> {
+  return async (event: APIGatewayProxyEventV2, resolvedRequestId?: string): Promise<APIGatewayProxyResultV2> => {
+    // Reuse the wrapper's id when threaded (so both layers report the same value
+    // even when the caller sent no header), else resolve from headers / generate.
+    const requestId =
+      resolvedRequestId ??
+      resolveRequestId(
+        event.headers?.[REQUEST_ID_HEADER.toLowerCase()],
+        event.headers?.[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
+      );
 
     const json = (statusCode: number, payload: unknown): APIGatewayProxyResultV2 => ({
       statusCode,
@@ -56,17 +62,39 @@ export function defineLambdaRoute<C extends EndpointContract>(
       return json(400, { error: 'Invalid request body', request_id: requestId });
     }
 
+    // Auth needs the DB (the verifiers read the user), so connect first, then
+    // authenticate per the contract's auth mode - BEFORE validation.
+    let auth: ContractAuthResult | undefined;
+    if (contract.auth !== 'public') {
+      if (mongoose.connection.readyState !== 1) {
+        await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), new Logger({ metadata: { requestId } }));
+      }
+      try {
+        auth = await resolveContractAuth(event.headers ?? {}, contract);
+      } catch (error) {
+        return json(401, {
+          error: error instanceof Error ? error.message : 'Authentication failed',
+          request_id: requestId,
+        });
+      }
+    }
+
+    let validated = body as RequestBodyOf<C>;
     if (contract.request) {
       const parsed = contract.request.safeParse(body);
       if (!parsed.success) {
-        return json(422, { error: 'Validation failed', request_id: requestId });
+        return json(422, {
+          error: 'Request body failed validation',
+          request_id: requestId,
+          details: parsed.error.issues,
+        });
       }
-      body = parsed.data;
+      validated = parsed.data as RequestBodyOf<C>;
     }
 
     let result: LambdaRouteResult;
     try {
-      result = await handle({ validated: body as RequestBodyOf<C>, requestId, event });
+      result = await handle({ validated, auth, requestId, event });
     } catch (error) {
       // A thrown handler error must not surface as an opaque API-gateway 502 -
       // shape it into a 500 with the correlation id so the caller/logs can trace it.

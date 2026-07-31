@@ -36,6 +36,9 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({ cliTools: { executeServerTool: vi.fn() } }));
 
 vi.mock('./auth', () => ({
+  // verifyApiKey is imported by resolveContractAuth; unused on the jwtOnly tools
+  // path but must exist so the mocked module doesn't throw on the missing export.
+  verifyApiKey: vi.fn(),
   verifyJwtToken: vi.fn(),
   checkRateLimit: vi.fn(),
 }));
