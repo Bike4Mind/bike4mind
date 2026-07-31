@@ -1,4 +1,4 @@
-import { NO_TEMPERATURE_MODELS, type ModelInfo } from '@bike4mind/common';
+import { NO_TEMPERATURE_MODELS, REASONING_SUPPORTED_MODELS, type ModelInfo } from '@bike4mind/common';
 
 /**
  * Thinking parameter shapes for the Anthropic Messages API.
@@ -22,7 +22,28 @@ export type ThinkingConfig =
 export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
 
 /**
- * Resolves the output budget to send as max_tokens.
+ * Whether the model spends reasoning tokens inside its output budget on every turn,
+ * which is what makes a small budget produce an empty visible reply rather than a
+ * short one. Provider-agnostic on purpose: the trap is identical whether the tokens
+ * are Anthropic extended thinking inside max_tokens or OpenAI reasoning inside
+ * max_completion_tokens.
+ *
+ * Deliberately NOT keyed on can_think alone. Anthropic legacy models set it too, but
+ * their thinking is opt-in and separately budgeted, so they do not starve at a small
+ * default and should not pay for headroom they will not use.
+ *
+ * The last clause is the catalog-only case: a reasoning-shaped model we never
+ * hardcoded still declares a reasoning-shaped max-tokens param, which openaiBackend
+ * already pairs with can_think for the same "not in our tables" reason.
+ */
+export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
+  if (modelInfo.thinkingStyle === 'adaptive') return true;
+  if (REASONING_SUPPORTED_MODELS.has(modelInfo.id)) return true;
+  return modelInfo.dispatchProfile?.maxTokensParam === 'max_completion_tokens' && modelInfo.can_think === true;
+}
+
+/**
+ * Resolves the output budget to send as the model's max-tokens param.
  *
  * The distinction that matters: `requested` being undefined means the caller
  * expressed no preference, which is the only case we are free to size for the
@@ -32,23 +53,23 @@ export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
  * bump is neither harmless nor invisible. Explicit values are still clamped down
  * to the model's own cap, since over-requesting 400s the whole turn.
  *
- * Adaptive reasoning models default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR because
- * they spend extended-thinking tokens inside max_tokens: a small default can be
- * consumed entirely by reasoning, leaving an empty visible reply.
+ * Models that reason inside the output budget default to
+ * ADAPTIVE_THINKING_MAX_TOKENS_FLOOR: a small default can be consumed entirely by
+ * reasoning, leaving an empty visible reply.
  */
 export function resolveOutputMaxTokens({
   requested,
   fallback,
-  thinkingStyle,
+  modelInfo,
   modelMaxOutputTokens,
 }: {
   requested: number | undefined;
   /** Default for models that do not reason inside the output budget. */
   fallback: number;
-  thinkingStyle: ModelInfo['thinkingStyle'];
+  modelInfo: ModelInfo;
   modelMaxOutputTokens: number;
 }): number {
-  const preferred = requested ?? (thinkingStyle === 'adaptive' ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
+  const preferred = requested ?? (reasonsWithinOutputBudget(modelInfo) ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
   return Math.min(preferred, modelMaxOutputTokens);
 }
 
