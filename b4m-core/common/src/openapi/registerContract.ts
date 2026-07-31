@@ -2,7 +2,9 @@ import type { z } from 'zod';
 import { registry } from './registry';
 import { SECURITY_REQUIREMENT, JWT_SECURITY_REQUIREMENT } from './security';
 import { ErrorResponse } from './schemas';
-import { ApiErrorSchema } from '../schemas';
+// Specific file, not the barrel (`../schemas`): the barrel re-exports actions.ts,
+// which imports @bike4mind/hearth - absent in the install-only CI openapi job.
+import { ApiErrorSchema } from '../schemas/chat';
 import type { EndpointContract } from '../api-contract';
 
 type ContractResponse = { description: string; content: Record<string, { schema: z.ZodTypeAny }> };

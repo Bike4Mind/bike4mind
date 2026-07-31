@@ -1,5 +1,9 @@
 import { defineEndpoint } from '../defineEndpoint';
-import { ToolExecutionRequestSchema, ToolExecutionResponseSchema, ApiErrorSchema } from '../../schemas';
+// Import the specific schema files, NOT the barrel (`../../schemas`): the barrel
+// re-exports actions.ts, which imports @bike4mind/hearth, whose dist is absent in
+// the CI openapi job (install-only, no build) and crashes generation.
+import { ToolExecutionRequestSchema, ToolExecutionResponseSchema } from '../../schemas/tools';
+import { ApiErrorSchema } from '../../schemas/chat';
 
 /**
  * Contract for POST /api/ai/v1/tools - server-side tool execution.

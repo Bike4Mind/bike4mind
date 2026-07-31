@@ -1,6 +1,9 @@
 import { defineEndpoint } from '../defineEndpoint';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
-import { CompletionRequestSchema, CompletionStreamEventSchema, ApiErrorSchema } from '../../schemas';
+// Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts
+// (the barrel drags in @bike4mind/hearth, unbuilt in the CI openapi job).
+import { CompletionRequestSchema, CompletionStreamEventSchema } from '../../schemas/cliCompletions';
+import { ApiErrorSchema } from '../../schemas/chat';
 
 /**
  * Contract for POST /api/ai/v1/completions - the public streaming completions
