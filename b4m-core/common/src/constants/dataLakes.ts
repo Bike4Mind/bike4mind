@@ -11,10 +11,15 @@ export const DATALAKE_TAG_PREFIX = 'datalake:';
  * (non-empty, ends with ':'), else null. An empty prefix would match every tag, so it is
  * rejected rather than honored.
  *
- * Shared by `buildOwnershipConditions`' prefix arms and the single-file removal write, which
- * is what keeps a removal clearing the same prefixed tags the lake read scope matches. Other
- * prefix readers (the tag-count aggregates) still build their own regexes, so this is a
- * guarantee about those two, not about every prefix match in the codebase.
+ * The one gate on "is this prefix usable at all", so everything that builds a prefix arm or
+ * writes a prefixed tag agrees: the read arms in `buildOwnershipConditions`, the membership
+ * predicate, the single-file removal write, the browse surface's `splitTagPrefixes`, the
+ * collision checks, and the fallback tag stamper. What the read scope matches, what a removal
+ * clears, what the tag-count aggregates count, and what the stamper writes therefore line up.
+ *
+ * The aggregates still build their own regexes from whatever list they are handed, so a
+ * caller that reaches them without going through `splitTagPrefixes` is outside this
+ * guarantee - they defend themselves by dropping unusable entries.
  */
 export const normalizeTagPrefix = (prefix: string | undefined | null): string | null => {
   const trimmed = typeof prefix === 'string' ? prefix.trim() : '';

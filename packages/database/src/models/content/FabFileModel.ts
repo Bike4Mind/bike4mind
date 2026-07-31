@@ -1,4 +1,5 @@
 import {
+  DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   IFabFileChunkDocument,
   IFabFileChunkRepository,
@@ -14,6 +15,31 @@ import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
 import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
+
+/**
+ * "not a lake membership tag", derived from the one constant rather than spelled out, so a change
+ * to the namespace cannot leave a counter behind. Both tag counters exclude it: a meta-tag is
+ * membership, never content, so it must not appear in the tag tree or inflate a prefix's count.
+ */
+const NOT_META_TAG = { $not: new RegExp(`^${DATALAKE_TAG_PREFIX}`) };
+
+/**
+ * Trim, then drop prefixes that cannot be anchored into a meaningful regex. A blank entry
+ * contributes an empty alternation, so `['acme:', '']` becomes `^(acme:|)` and matches every tag
+ * name - one bad entry would return the caller's entire non-deleted tag cloud. An all-blank list
+ * would likewise become `^()`.
+ *
+ * The rule is `normalizeTagPrefix`'s, applied here so a direct caller gets the same answer as the
+ * lake-resolving ones: trim, and require the trailing colon. Trimming matters because a padded
+ * `' acme:'` builds `^( acme:)` and matches nothing, so the lake reads as empty while its files
+ * stay browsable. The colon matters because a bare `acme` would match `acmecorp:` tags - a
+ * different lake's content.
+ *
+ * NOTE for `countDataLakeUniqueFilesByPrefix`: `byPrefix` is therefore keyed by the NORMALIZED
+ * prefix, so a consumer indexing it with a raw stored value must normalize too.
+ */
+const usableTagPrefixes = (tagPrefixes: string[]): string[] =>
+  tagPrefixes.map(p => p.trim()).filter(p => p.length > 0 && p.endsWith(':'));
 
 interface IFabFileChunkModel extends Model<IFabFileChunkDocument> {}
 
@@ -338,6 +364,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       scopedTagPrefixes?: string[];
     }
   ): Promise<{ tag: string; count: number }[]> {
+    const usablePrefixes = usableTagPrefixes(tagPrefixes);
+    if (usablePrefixes.length === 0) return [];
+
     const ownershipFilter = options ? { $or: buildOwnershipConditions(userId, options) } : { userId };
     const sessionFilter = {
       $or: [
@@ -347,7 +376,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       ],
     };
 
-    const prefixPattern = tagPrefixes.map(p => escapeRegex(p)).join('|');
+    const prefixPattern = usablePrefixes.map(p => escapeRegex(p)).join('|');
     const prefixRegex = new RegExp(`^(${prefixPattern})`);
 
     const result = await this.fabFileModel.aggregate([
@@ -368,7 +397,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         },
       },
       { $unwind: '$tags' },
-      { $match: { $and: [{ 'tags.name': { $regex: prefixRegex } }, { 'tags.name': { $not: /^datalake:/ } }] } },
+      { $match: { $and: [{ 'tags.name': { $regex: prefixRegex } }, { 'tags.name': NOT_META_TAG }] } },
       { $group: { _id: '$tags.name', count: { $sum: 1 } } },
       { $project: { tag: '$_id', count: 1, _id: 0 } },
     ]);
@@ -392,11 +421,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       scopedTagPrefixes?: string[];
     }
   ): Promise<{ total: number; byPrefix: Record<string, number> }> {
-    // Defense-in-depth: an empty prefix list builds `^()`, which matches every
-    // string and would return the user's entire non-deleted scope as the "total".
-    // The endpoint already early-returns when no lakes are accessible, but guard
-    // here too so a direct caller can't accidentally over-count.
-    if (tagPrefixes.length === 0) return { total: 0, byPrefix: {} };
+    const usablePrefixes = usableTagPrefixes(tagPrefixes);
+    if (usablePrefixes.length === 0) return { total: 0, byPrefix: {} };
 
     const ownershipFilter = options ? { $or: buildOwnershipConditions(userId, options) } : { userId };
     const sessionFilter = {
@@ -413,19 +439,23 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // One indexed countDocuments per prefix (few lakes), plus one for the combined total.
     // $elemMatch on the anchored prefix regex lets MongoDB use the tags.name index and
     // counts each file once regardless of how many matching tags it carries.
-    const anyPrefixRegex = new RegExp(`^(${tagPrefixes.map(p => escapeRegex(p)).join('|')})`);
+    //
+    const anyPrefixRegex = new RegExp(`^(${usablePrefixes.map(p => escapeRegex(p)).join('|')})`);
     const [total, ...prefixCounts] = await Promise.all([
-      this.fabFileModel.countDocuments({ ...baseMatch, tags: { $elemMatch: { name: { $regex: anyPrefixRegex } } } }),
-      ...tagPrefixes.map(prefix =>
+      this.fabFileModel.countDocuments({
+        ...baseMatch,
+        tags: { $elemMatch: { name: { $regex: anyPrefixRegex, ...NOT_META_TAG } } },
+      }),
+      ...usablePrefixes.map(prefix =>
         this.fabFileModel.countDocuments({
           ...baseMatch,
-          tags: { $elemMatch: { name: { $regex: new RegExp(`^${escapeRegex(prefix)}`) } } },
+          tags: { $elemMatch: { name: { $regex: new RegExp(`^${escapeRegex(prefix)}`), ...NOT_META_TAG } } },
         })
       ),
     ]);
 
     const byPrefix: Record<string, number> = {};
-    tagPrefixes.forEach((prefix, i) => {
+    usablePrefixes.forEach((prefix, i) => {
       byPrefix[prefix] = prefixCounts[i];
     });
     return { total, byPrefix };

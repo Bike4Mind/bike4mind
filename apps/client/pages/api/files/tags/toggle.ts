@@ -25,6 +25,11 @@ const handler = baseApi().post(
       }
     );
 
+    const applyFallbackTags = dataLakeService.createDataLakeFallbackTagger({
+      db: { dataLakes: dataLakeRepository },
+      logger: req.logger,
+    });
+
     const result = await fabFilesService.toggleTags(
       req.user.id,
       {
@@ -36,6 +41,9 @@ const handler = baseApi().post(
           fileTags: fileTagRepository,
           users: userRepository,
         },
+        // One memoized tagger for the request: this door reconciles every file in the batch, so
+        // the one-shot form would re-read the same lake once per file.
+        reconcileTags: (tags, previousTags) => applyFallbackTags(tags, { previousTags }),
       }
     );
 
