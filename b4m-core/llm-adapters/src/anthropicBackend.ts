@@ -66,6 +66,14 @@ const REQUEST_TIMEOUT_MS = 60000; // 60s timeout for the initial API request bef
 const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models that need longer to begin streaming
 
 /**
+ * Largest max_tokens the SDK will accept without streaming. It derives a projected
+ * duration of 60min * max_tokens / 128000 and throws outright once that exceeds its
+ * 10-minute non-streaming ceiling, so the real limit is 128000 * 10 / 60 = 21333.
+ * Floored to a round number for headroom against that formula being retuned.
+ */
+const ANTHROPIC_NONSTREAMING_MAX_TOKENS = 21_000;
+
+/**
  * Accumulated multi-turn cache token total. Undefined when zero so turns
  * without cache activity keep the pre-cache callback shape.
  */
@@ -999,6 +1007,21 @@ export class AnthropicBackend implements ICompletionBackend {
         cacheHistory: cacheStrategy.cacheConversationHistory,
         cacheTTL: cacheStrategy.cacheTTL,
       });
+    }
+
+    // The SDK refuses a non-streaming request whose max_tokens implies it could run
+    // past its 10-minute ceiling, throwing before any HTTP call is made (see
+    // Anthropic.calculateNonstreamingTimeout: 60min * max_tokens / 128000 > 10min).
+    // Clamping is strictly better than the alternative, which is not a shorter answer
+    // but no answer at all. Reachable from any caller that pairs a large budget with
+    // stream:false - notably an adaptive model, where both the no-budget default and
+    // buildThinkingParams size max_tokens at ADAPTIVE_THINKING_MAX_TOKENS_FLOOR (64K).
+    if (!options.stream && apiParams.max_tokens > ANTHROPIC_NONSTREAMING_MAX_TOKENS) {
+      this.logger.warn(
+        `[AnthropicBackend] max_tokens ${apiParams.max_tokens} exceeds the non-streaming ceiling; clamping to ${ANTHROPIC_NONSTREAMING_MAX_TOKENS}. Stream this request to use the full budget.`,
+        { model }
+      );
+      apiParams.max_tokens = ANTHROPIC_NONSTREAMING_MAX_TOKENS;
     }
 
     // Setup the actual API call with API-specific options
