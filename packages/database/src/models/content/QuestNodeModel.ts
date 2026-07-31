@@ -129,11 +129,33 @@ export function isNodeReady(
   statusById: Map<string, NodeStatus>
 ): boolean {
   if (node.status !== 'pending' && node.status !== 'ready') return false;
-  return node.dependsOn.every(dep => {
+  return dependenciesSatisfied(node, statusById);
+}
+
+/**
+ * Whether a human may dispatch this node right now: its dependencies are
+ * satisfied AND `claimForRun` would accept its status.
+ *
+ * Deliberately NOT the same predicate as {@link isNodeReady}. Readiness is the
+ * scheduler's question ("should this run next, unattended?") and excludes
+ * `failed` so an automated loop cannot retry a broken node forever. Runnability
+ * is the Run button's question, and `failed` IS retryable by hand - the
+ * repository allows it. Conflating the two left a failed node with no way back
+ * except editing it, which is the opposite of what the retry support is for.
+ */
+export function isNodeRunnable(
+  node: Pick<IQuestNode, 'status' | 'dependsOn'>,
+  statusById: Map<string, NodeStatus>
+): boolean {
+  if (!(RUNNABLE_NODE_STATUS_VALUES as readonly string[]).includes(node.status)) return false;
+  return dependenciesSatisfied(node, statusById);
+}
+
+const dependenciesSatisfied = (node: Pick<IQuestNode, 'dependsOn'>, statusById: Map<string, NodeStatus>): boolean =>
+  node.dependsOn.every(dep => {
     const s = statusById.get(dep);
     return s === 'completed' || s === 'skipped';
   });
-}
 
 class QuestGraphRepository extends BaseRepository<IQuestGraphDocument> implements IQuestGraphRepository {
   constructor(private questGraphModel: Model<IQuestGraphDocument>) {

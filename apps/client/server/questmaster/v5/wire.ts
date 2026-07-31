@@ -68,6 +68,8 @@ export const QuestNodeWireSchema = z.object({
   enabledTools: z.array(z.string()),
   artifactIds: z.array(z.string()),
   isReady: z.boolean(),
+  /** Dependencies met AND the status allows a manual dispatch (includes `failed`, which is retryable). */
+  isRunnable: z.boolean(),
   run: QuestNodeRunWireSchema.nullable(),
   startedAt: z.date().optional(),
   completedAt: z.date().optional(),
@@ -111,7 +113,7 @@ export function toQuestGraphWire(graph: IQuestGraphDocument): QuestGraphWire {
 
 export function toQuestNodeWire(
   node: IQuestNodeDocument,
-  extras: { isReady: boolean; run: QuestNodeRunWire | null }
+  extras: { isReady: boolean; isRunnable: boolean; run: QuestNodeRunWire | null }
 ): QuestNodeWire {
   return {
     id: node.id,
@@ -130,6 +132,7 @@ export function toQuestNodeWire(
     enabledTools: node.enabledTools,
     artifactIds: node.artifactIds,
     isReady: extras.isReady,
+    isRunnable: extras.isRunnable,
     run: extras.run,
     startedAt: node.startedAt,
     completedAt: node.completedAt,

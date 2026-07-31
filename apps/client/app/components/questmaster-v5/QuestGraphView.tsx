@@ -187,7 +187,11 @@ export default function QuestGraphView() {
                     <Button
                       size="sm"
                       variant="outlined"
-                      disabled={!node.isReady || node.status === 'in_progress' || runNode.isPending}
+                      // `isRunnable`, not `isReady`: readiness is the scheduler's
+                      // predicate and excludes `failed`, but a failed node IS
+                      // retryable by hand - gating Run on readiness left it with
+                      // no way back.
+                      disabled={!node.isRunnable || node.status === 'in_progress' || runNode.isPending}
                       onClick={e => {
                         e.stopPropagation();
                         handleRun(node.id);

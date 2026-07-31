@@ -45,6 +45,7 @@ const makeNode = (over: Partial<QuestNode> & { id: string }): QuestNode =>
     enabledTools: [],
     artifactIds: [],
     isReady: true,
+    isRunnable: true,
     run: null,
     ...over,
   }) as QuestNode;
@@ -78,7 +79,7 @@ describe('QuestGraphView', () => {
   // Dependency gating is enforced server-side too; this keeps the UI from
   // inviting a request that is guaranteed to 400 and cost a round trip.
   it('disables Run for a node whose dependencies are unmet', () => {
-    nodes = [makeNode({ id: 'n1', isReady: false, dependsOn: ['n0'] })];
+    nodes = [makeNode({ id: 'n1', isReady: false, isRunnable: false, dependsOn: ['n0'] })];
     renderView();
     selectGraph();
 
@@ -103,6 +104,16 @@ describe('QuestGraphView', () => {
 
     expect(runMutate).not.toHaveBeenCalled();
     expect(await screen.findByTestId('questmaster-v5-error')).toHaveTextContent('Pick a model first');
+  });
+
+  // A failed node is retryable server-side (claimForRun accepts it), so the
+  // button must not be gated on isReady, which excludes failed by design.
+  it('still offers Run on a failed node so it can be retried', () => {
+    nodes = [makeNode({ id: 'n1', status: 'failed', isReady: false, isRunnable: true })];
+    renderView();
+    selectGraph();
+
+    expect(screen.getByTestId('questmaster-v5-run-node-btn')).not.toBeDisabled();
   });
 
   it('shows the run answer for a completed node', () => {

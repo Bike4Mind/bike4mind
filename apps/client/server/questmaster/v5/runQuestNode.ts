@@ -135,10 +135,21 @@ export async function runQuestNode(args: {
     // Written before the invoke so a node can never have a live run the graph
     // cannot see.
     const linked = await questNodeRepository.setExecution(node.id, { agentExecutionId: executionId });
+    if (!linked) {
+      // The node vanished between the claim and here. Invoking anyway would
+      // start a billable run that nothing references - the exact thing writing
+      // the ref before the invoke is supposed to prevent. Throw so the catch
+      // below closes out the execution and drops the Quest.
+      throw new Error(`node ${node.id} disappeared before its execution ref could be written`);
+    }
 
     await lambdaClient.send(
       new InvokeCommand({
-        FunctionName: Resource.AgentExecutor.name,
+        // Via `lambdaFunctionNames`, not `Resource.AgentExecutor`: this runs in
+        // the Next.js API route, and the web app does not link the executor
+        // function itself (the WebSocket handler does, which is why the same
+        // call works there). Same pattern the admin model-discovery route uses.
+        FunctionName: Resource.lambdaFunctionNames.agentExecutor,
         InvocationType: 'Event',
         Payload: Buffer.from(
           JSON.stringify({

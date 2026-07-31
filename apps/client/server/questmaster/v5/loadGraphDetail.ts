@@ -1,4 +1,4 @@
-import { agentExecutionRepository, isNodeReady, questNodeRepository } from '@bike4mind/database';
+import { agentExecutionRepository, isNodeReady, isNodeRunnable, questNodeRepository } from '@bike4mind/database';
 import type { IQuestGraphDocument, NodeStatus } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { reconcileQuestNodes, type NodeRunSummary } from './reconcileQuestNodes';
@@ -39,6 +39,7 @@ export async function loadGraphDetail(graph: IQuestGraphDocument, logger: Logger
       const run = executionId ? runs.get(executionId) : undefined;
       return toQuestNodeWire(node, {
         isReady: isNodeReady(node, statusById),
+        isRunnable: isNodeRunnable(node, statusById),
         run: run ? toRunWire(executionId!, run) : null,
       });
     }),

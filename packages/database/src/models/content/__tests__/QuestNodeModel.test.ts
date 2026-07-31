@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import { setupMongoTest } from '../../../__test__/utils';
-import { hasCycle, isNodeReady, questGraphRepository, questNodeRepository } from '../QuestNodeModel';
+import { hasCycle, isNodeReady, isNodeRunnable, questGraphRepository, questNodeRepository } from '../QuestNodeModel';
 
 const makeGraph = (overrides = {}) =>
   questGraphRepository.createGraph({
@@ -45,6 +45,28 @@ describe('isNodeReady', () => {
   // another graph) must read as unsatisfied, not silently as done.
   it('is not ready when a dependency is unknown', () => {
     expect(isNodeReady({ status: 'pending', dependsOn: ['ghost'] }, statuses([]))).toBe(false);
+  });
+});
+
+describe('isNodeRunnable', () => {
+  const statuses = (entries: [string, string][]) => new Map(entries) as Map<string, never>;
+
+  // The Run button's predicate, deliberately wider than isNodeReady: a failed
+  // node is retryable by hand (claimForRun accepts it), and gating the button on
+  // readiness left it with no way back except editing the node.
+  it('allows a manual retry of a failed node', () => {
+    expect(isNodeRunnable({ status: 'failed', dependsOn: [] }, statuses([]))).toBe(true);
+    expect(isNodeReady({ status: 'failed', dependsOn: [] }, statuses([]))).toBe(false);
+  });
+
+  it('still refuses a node that is already running or done', () => {
+    expect(isNodeRunnable({ status: 'in_progress', dependsOn: [] }, statuses([]))).toBe(false);
+    expect(isNodeRunnable({ status: 'completed', dependsOn: [] }, statuses([]))).toBe(false);
+  });
+
+  it('still honours unmet dependencies', () => {
+    expect(isNodeRunnable({ status: 'failed', dependsOn: ['a'] }, statuses([['a', 'in_progress']]))).toBe(false);
+    expect(isNodeRunnable({ status: 'failed', dependsOn: ['a'] }, statuses([['a', 'completed']]))).toBe(true);
   });
 });
 

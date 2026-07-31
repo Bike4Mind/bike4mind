@@ -1,4 +1,4 @@
-import { isNodeReady, questNodeRepository } from '@bike4mind/database';
+import { isNodeReady, isNodeRunnable, questNodeRepository } from '@bike4mind/database';
 import { BadRequestError, UnauthorizedError } from '@bike4mind/common';
 import type { NodeStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -67,6 +67,7 @@ const handler = baseApi()
         executionId,
         node: toQuestNodeWire(dispatched, {
           isReady: isNodeReady(dispatched, statusById),
+          isRunnable: isNodeRunnable(dispatched, statusById),
           run: null,
         }),
       },
