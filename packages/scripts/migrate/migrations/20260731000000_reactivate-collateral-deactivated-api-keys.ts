@@ -80,7 +80,7 @@ export const selectKeysToReactivate = (keys: ApiKeyLean[], now: Date): unknown[]
 };
 
 const migration: MigrationFile = {
-  id: 20260730000000,
+  id: 20260731000000,
   name: 'reactivate-collateral-deactivated-api-keys',
 
   up: async () => {

@@ -17,7 +17,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-import migration, { selectKeysToReactivate } from './20260730000000_reactivate-collateral-deactivated-api-keys';
+import migration, { selectKeysToReactivate } from './20260731000000_reactivate-collateral-deactivated-api-keys';
 
 const NOW = new Date('2026-07-30T00:00:00Z');
 const day = (n: number) => new Date(NOW.getTime() + n * 86_400_000);
