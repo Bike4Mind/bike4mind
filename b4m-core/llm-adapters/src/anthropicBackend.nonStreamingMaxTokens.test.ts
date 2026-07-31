@@ -112,6 +112,23 @@ describe('AnthropicBackend non-streaming max_tokens ceiling', () => {
     expect(budget).toBeGreaterThanOrEqual(1024);
   });
 
+  // A budget that merely squeaks under the ceiling satisfies the API but starves the
+  // answer to a token or two, which is the same empty reply the clamp exists to avoid.
+  it('claws back the answer headroom from a budget that only just fits', async () => {
+    const { backend, getCaptured } = buildBackend();
+
+    await runComplete(
+      backend,
+      { stream: false, thinking: { enabled: true, budget_tokens: 20_999 } } as Partial<ICompletionOptions>,
+      ChatModels.CLAUDE_4_6_OPUS
+    );
+
+    const sent = getCaptured()[0];
+    const maxTokens = sent.max_tokens as number;
+    const budget = (sent.thinking as { budget_tokens: number }).budget_tokens;
+    expect(maxTokens - budget).toBeGreaterThanOrEqual(1000);
+  });
+
   it('leaves a legacy thinking budget alone when streaming', async () => {
     const { backend, getCaptured } = buildBackend();
 

@@ -1023,13 +1023,16 @@ export class AnthropicBackend implements ICompletionBackend {
       );
       apiParams.max_tokens = ANTHROPIC_NONSTREAMING_MAX_TOKENS;
 
-      // A legacy thinking budget is spent inside max_tokens and the API rejects one that
-      // is not strictly below it, so lowering the ceiling has to bring the budget down
-      // with it - otherwise the clamp trades the SDK's error for a 400 instead of a
-      // working turn. The ceiling keeps the result well above Anthropic's 1024 minimum.
+      // A legacy thinking budget is spent inside max_tokens, so lowering the ceiling has
+      // to bring the budget down with it. Keyed on the headroom rather than on max_tokens
+      // itself: a budget merely below the ceiling (20_999 against 21_000) satisfies the
+      // API yet leaves a single token for the visible answer, which is the same empty
+      // reply this whole clamp exists to avoid. The ceiling keeps the result well above
+      // Anthropic's 1024 minimum budget.
+      const maxThinkingBudget = apiParams.max_tokens - THINKING_ANSWER_HEADROOM_TOKENS;
       const thinking = apiParams.thinking;
-      if (thinking?.type === 'enabled' && thinking.budget_tokens >= apiParams.max_tokens) {
-        thinking.budget_tokens = apiParams.max_tokens - THINKING_ANSWER_HEADROOM_TOKENS;
+      if (thinking?.type === 'enabled' && thinking.budget_tokens > maxThinkingBudget) {
+        thinking.budget_tokens = maxThinkingBudget;
       }
     }
 
