@@ -44,7 +44,7 @@ import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
 import { ModelName, ModelInfo, ModelBackend, SpeechToTextModels, isModelDeprecated } from '@bike4mind/common';
 import SearchIcon from '@mui/icons-material/Search';
-import { sortModelsByCapability } from '@client/app/utils/modelRanking';
+import { sortModelsForPicker } from '@client/app/utils/modelRanking';
 import { useTheme } from '@mui/joy';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
@@ -469,6 +469,49 @@ const ModelOption = React.memo(
       </Tooltip>
     );
 
+    const metricIndicators = (
+      <>
+        <MetricIcon label={`${priceTierInfo.tier} cost`} tooltip={getPriceTierTooltip(priceTierInfo.tier)}>
+          <AttachMoneyIcon sx={{ fontSize: '16px', color: metricIconColor(priceTierInfo.variant) }} />
+        </MetricIcon>
+
+        {!statsLoading && modelSpeed && (
+          <MetricIcon
+            label={`${modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)} speed`}
+            tooltip={getModelSpeedTooltip(modelSpeed)}
+          >
+            <SpeedIcon sx={{ fontSize: '16px', color: metricIconColor(getModelSpeedVariant(modelSpeed)) }} />
+          </MetricIcon>
+        )}
+      </>
+    );
+
+    // Capabilities are present-or-absent, so they stay neutral: no colour to imply a scale
+    // that doesn't exist. Absence of the icon is the "no" state.
+    const capabilityIndicators = (
+      <>
+        {model.supportsVision && (
+          <MetricIcon label="Vision" tooltip="Able to understand images">
+            <VisibilityOutlinedIcon sx={{ fontSize: '16px', color: 'text.tertiary' }} />
+          </MetricIcon>
+        )}
+
+        {model.can_think && (
+          <MetricIcon label="Thinking" tooltip="Reasons step-by-step before responding">
+            {/* 18px where the others are 16: this glyph carries far more detail than the
+                MUI icons, so it needs the extra couple of px to stay legible. */}
+            <SupportsToolsIcon width={18} height={18} fill="var(--joy-palette-text-tertiary)" />
+          </MetricIcon>
+        )}
+
+        {model.supportsTools && (
+          <MetricIcon label="Tools" tooltip="Able to use a growing list of tools">
+            <ConstructionIcon sx={{ fontSize: '16px', color: 'text.tertiary' }} />
+          </MetricIcon>
+        )}
+      </>
+    );
+
     const metadataChips = (
       <Stack
         direction="row"
@@ -490,43 +533,13 @@ const ModelOption = React.memo(
             tooltip={model.disabledReason ?? 'This model is currently unavailable'}
           />
         ) : (
+          // Cost and speed are the only two always present, so they anchor the group's fixed
+          // edge and stay column-aligned down the list: leading in grid (left-aligned) and
+          // trailing in list (right-aligned). The optional capabilities take the ragged side.
           <>
-            {/* Metrics first: they are always present, so leading with them keeps a stable
-                first column in this left-aligned group while the optional capabilities trail. */}
-            <MetricIcon label={`${priceTierInfo.tier} cost`} tooltip={getPriceTierTooltip(priceTierInfo.tier)}>
-              <AttachMoneyIcon sx={{ fontSize: '16px', color: metricIconColor(priceTierInfo.variant) }} />
-            </MetricIcon>
-
-            {!statsLoading && modelSpeed && (
-              <MetricIcon
-                label={`${modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)} speed`}
-                tooltip={getModelSpeedTooltip(modelSpeed)}
-              >
-                <SpeedIcon sx={{ fontSize: '16px', color: metricIconColor(getModelSpeedVariant(modelSpeed)) }} />
-              </MetricIcon>
-            )}
-
-            {/* Capabilities are present-or-absent, so they stay neutral: no colour to imply
-                a scale that doesn't exist. Absence of the icon is the "no" state. */}
-            {model.supportsVision && (
-              <MetricIcon label="Vision" tooltip="Able to understand images">
-                <VisibilityOutlinedIcon sx={{ fontSize: '16px', color: 'text.tertiary' }} />
-              </MetricIcon>
-            )}
-
-            {model.can_think && (
-              <MetricIcon label="Thinking" tooltip="Reasons step-by-step before responding">
-                {/* 18px where the others are 16: this glyph carries far more detail than the
-                    MUI icons, so it needs the extra couple of px to stay legible. */}
-                <SupportsToolsIcon width={18} height={18} fill="var(--joy-palette-text-tertiary)" />
-              </MetricIcon>
-            )}
-
-            {model.supportsTools && (
-              <MetricIcon label="Tools" tooltip="Able to use a growing list of tools">
-                <ConstructionIcon sx={{ fontSize: '16px', color: 'text.tertiary' }} />
-              </MetricIcon>
-            )}
+            {!isList && metricIndicators}
+            {capabilityIndicators}
+            {isList && metricIndicators}
           </>
         )}
       </Stack>
@@ -625,14 +638,27 @@ const ModelOption = React.memo(
 
         {isList ? (
           <>
-            {/* Title with its indicators beneath, context pushed right, then a rule separating
-                what the row *says* from what you can *do* to it. */}
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1, minWidth: 0, textAlign: 'left' }}>
+            {/* Title with the context window beneath it, indicators pushed right, then a rule
+                separating what the row *says* from what you can *do* to it. minHeight holds the
+                row steady when contextSummary is absent - image and video models drop that
+                second line, and Favorites is the one section that mixes them with text models. */}
+            <Box
+              sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                gap: '2px',
+                minHeight: '44px',
+                flex: 1,
+                minWidth: 0,
+                textAlign: 'left',
+              }}
+            >
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>{nameBlock}</Box>
-              {metadataChips}
+              {contextSummary}
             </Box>
 
-            <Box sx={{ display: 'flex', alignItems: 'center', flex: 'none' }}>{contextSummary}</Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', flex: 'none' }}>{metadataChips}</Box>
 
             <Box
               sx={{
@@ -851,9 +877,9 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       {} as Record<string, ModelInfo[]>
     );
 
-    // Sort models within each backend by capability
+    // Sort within each backend: newly released first, then curated rank, then recency
     Object.keys(grouped).forEach(backend => {
-      grouped[backend] = sortModelsByCapability(grouped[backend]);
+      grouped[backend] = sortModelsForPicker(grouped[backend]);
     });
 
     // Group models by backend and then by type for "All Models" view
@@ -876,9 +902,9 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
     // Sort models within each backend and type by capability
     Object.keys(groupedByBackendAndType).forEach(backend => {
-      groupedByBackendAndType[backend].text = sortModelsByCapability(groupedByBackendAndType[backend].text);
-      groupedByBackendAndType[backend].image = sortModelsByCapability(groupedByBackendAndType[backend].image);
-      groupedByBackendAndType[backend].video = sortModelsByCapability(groupedByBackendAndType[backend].video);
+      groupedByBackendAndType[backend].text = sortModelsForPicker(groupedByBackendAndType[backend].text);
+      groupedByBackendAndType[backend].image = sortModelsForPicker(groupedByBackendAndType[backend].image);
+      groupedByBackendAndType[backend].video = sortModelsForPicker(groupedByBackendAndType[backend].video);
     });
 
     // Sort backends by priority (OpenAI, Anthropic, Google, Meta, etc.)

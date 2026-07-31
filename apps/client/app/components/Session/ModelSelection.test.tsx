@@ -65,7 +65,7 @@ vi.mock('@client/app/hooks/useFavoriteModels', () => ({
 }));
 
 vi.mock('@client/app/utils/modelRanking', () => ({
-  sortModelsByCapability: (models: ModelInfo[]) => models,
+  sortModelsForPicker: (models: ModelInfo[]) => models,
 }));
 
 vi.mock('@client/app/utils/commands', () => ({
