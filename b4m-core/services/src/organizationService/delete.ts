@@ -29,7 +29,7 @@ export type DeleteValidationFn = (
 interface DeleteAdapters {
   db: {
     organizations: IOrganizationRepository;
-    groups: Pick<IGroupRepository, 'findByOrganization' | 'softDeleteByIds'>;
+    groups: Pick<IGroupRepository, 'findByOrganization' | 'delete'>;
     users: Pick<IUserRepository, 'removeGroupsFromAllUsers'>;
   };
   /**
@@ -90,10 +90,14 @@ export async function deleteOrganization(
   if (orgGroups.length > 0) {
     const groupIds = orgGroups.map(group => group.id);
     await adapters.db.users.removeGroupsFromAllUsers(groupIds);
-    await adapters.db.groups.softDeleteByIds(groupIds);
+    // Soft-delete each group via the inherited `delete` (softDeletePlugin). It now joins the
+    // caller's transaction through transactionAsyncLocalStorage (#1228), so no bulk workaround.
+    for (const groupId of groupIds) {
+      await adapters.db.groups.delete(groupId);
+    }
   }
 
-  // softDeleteById, not the inherited `delete`: the latter soft-deletes through the raw driver and
-  // would commit immediately regardless of the caller's transaction (see the repository note).
-  await adapters.db.organizations.softDeleteById(id);
+  // The inherited `delete` (softDeletePlugin) now joins the caller's transaction via ALS (#1228),
+  // so this soft-delete rolls back with the surrounding writes instead of committing immediately.
+  await adapters.db.organizations.delete(id);
 }

@@ -60,19 +60,6 @@ export class GroupRepository extends BaseRepository<IGroupDocument> implements I
   }
 
   /**
-   * Soft-delete by writing `deletedAt` directly via a Mongoose `updateMany`.
-   * NOT the plugin's `deleteMany` static: that routes through the raw driver
-   * (`this.collection.updateMany`), which Mongoose 8's transactionAsyncLocalStorage
-   * does NOT inject a session into - so a soft-delete inside `withTransaction` would
-   * escape the transaction and, on a transient-error retry, silently skip the member
-   * purge. A real Mongoose query joins the session automatically (see BaseModel notes).
-   */
-  async softDeleteByIds(groupIds: string[]): Promise<void> {
-    if (groupIds.length === 0) return;
-    await this.model.updateMany({ _id: { $in: groupIds }, deletedAt: null }, { $set: { deletedAt: new Date() } });
-  }
-
-  /**
    * Provision a group, treating a concurrent create for the same (organizationId, type) as
    * success (org-groups #1222). The caller (setOrganizationGroupTypes) checks "does a live
    * instance exist" and calls this only when it does not - but two overlapping grant PUTs can

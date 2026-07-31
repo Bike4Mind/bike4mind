@@ -86,7 +86,7 @@ describe('GroupRepository', () => {
     await Group.create({ name: 'C', description: 'd', type: 'sales', organizationId: 'org-2' });
 
     // soft-delete one of org-1's groups; it must drop out of findByOrganization
-    await groupRepository.softDeleteByIds([a.id]);
+    await groupRepository.delete(a.id);
 
     const org1Groups = await groupRepository.findByOrganization('org-1');
     expect(org1Groups.map(g => g.type).sort()).toEqual(['research']);
@@ -103,15 +103,14 @@ describe('GroupRepository', () => {
 
     // ...but soft-deleting the first frees the partial-unique slot, so re-granting succeeds
     const [live] = await groupRepository.findByOrganization('org-live');
-    await groupRepository.softDeleteByIds([live.id]);
+    await groupRepository.delete(live.id);
     await expect(Group.create({ name: 'Sales 3', type: 'sales', organizationId: 'org-live' })).resolves.toBeTruthy();
   });
 
-  it('softDeleteByIds is a soft delete (row survives with deletedAt set) and is a no-op on []', async () => {
+  it('delete() is a soft delete (row survives with deletedAt set)', async () => {
     const g = await Group.create({ name: 'G', description: 'd', type: 'customer', organizationId: 'org-3' });
 
-    await groupRepository.softDeleteByIds([]); // no-op, must not throw
-    await groupRepository.softDeleteByIds([g.id]);
+    await groupRepository.delete(g.id);
 
     expect(await groupRepository.findByOrganization('org-3')).toEqual([]);
     // the document still exists (soft, not hard delete) - visible when bypassing the find hook

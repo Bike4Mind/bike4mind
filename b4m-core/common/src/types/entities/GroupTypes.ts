@@ -26,8 +26,6 @@ export interface IGroupDocument extends IGroup, IMongoDocument {}
 export interface IGroupRepository extends IBaseRepository<IGroupDocument> {
   /** Live (non-soft-deleted) group instances owned by an organization. */
   findByOrganization(organizationId: string): Promise<IGroupDocument[]>;
-  /** Soft-delete the given group instances (used when a group type is revoked). */
-  softDeleteByIds(groupIds: string[]): Promise<void>;
   /**
    * Provision a group instance, treating a concurrent create for the same (organizationId, type)
    * as success rather than a 500 (org-groups #1222). Two overlapping grant PUTs can both pass the
