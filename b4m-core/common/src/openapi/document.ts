@@ -1,6 +1,7 @@
 import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
+import { CONTRACTS } from '../api-contract';
 
 // Importing these modules is what registers their schemas/paths against the
 // shared registry (side-effect imports). Keep them before generateDocument().
@@ -155,6 +156,24 @@ const CODE_SAMPLES: Record<string, { streaming: boolean; authToken: string; body
   },
 };
 
+// Merge legacy (hand-registered) scopes/samples with contract-derived ones, so a
+// contract-based operation publishes x-required-scopes + x-codeSamples with no
+// second declaration. Contracts are the source of truth for their own metadata.
+const REQUIRED_SCOPES_BY_OP: Record<string, readonly string[]> = {
+  ...(REQUIRED_SCOPES as Record<string, readonly string[]>),
+  ...Object.fromEntries(CONTRACTS.filter(c => c.scopes?.length).map(c => [c.operationId, c.scopes as string[]])),
+};
+
+const CODE_SAMPLES_BY_OP: Record<string, { streaming: boolean; authToken: string; body: unknown }> = {
+  ...CODE_SAMPLES,
+  ...Object.fromEntries(
+    CONTRACTS.filter(c => c.codeSample).map(c => [
+      c.operationId,
+      { streaming: c.codeSample!.streaming ?? false, authToken: c.codeSample!.authToken, body: c.codeSample!.body },
+    ])
+  ),
+};
+
 const REQUEST_ID_HEADER_SPEC = {
   'X-Request-ID': {
     description: 'Correlation id for this request; safe to log and quote in support requests.',
@@ -211,9 +230,9 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       const opId = op?.operationId as string | undefined;
       if (!opId) continue;
 
-      const scopes = (REQUIRED_SCOPES as Record<string, readonly string[]>)[opId];
+      const scopes = REQUIRED_SCOPES_BY_OP[opId];
       if (scopes) op['x-required-scopes'] = scopes;
-      const sample = CODE_SAMPLES[opId];
+      const sample = CODE_SAMPLES_BY_OP[opId];
       if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming, sample.authToken);
 
       for (const status of Object.keys(op.responses ?? {})) {

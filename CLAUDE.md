@@ -123,6 +123,12 @@ userSchema.index({ organizationId: 1, createdAt: -1 });   // performance indexes
 - **Always use Tanstack Router** (`@tanstack/react-router`) for client-side routing and its hooks (`useNavigate`, `useRouter`, `useLocation`, `useParams`).
 - **Do not** use Next.js router hooks (`next/router`, `next/navigation`). Next.js serves only the Pages-API backend; the app is a SPA.
 
+## Public API endpoints
+
+- A **public** endpoint (one an API key can call) is defined by a single **contract** — the source of truth the handler, validation, OpenAPI spec, and typed client all derive from. Do not hand-write inline request schemas + separate doc entries for a public route.
+- Add/expose one by following [`b4m-core/common/src/api-contract/README.md`](./b4m-core/common/src/api-contract/README.md); copy the reference (`chat.contract.ts` + `apps/client/pages/api/chat.ts`).
+- Never call `.openapi()` in a shared schema/contract file (crashes the runtime handler); no `.catch()`/top-level `.transform()` in a public request schema (fail-quiet + not OpenAPI-representable).
+
 ## Dependency management
 
 - **Avoid adding dependencies to the root `package.json`.** Install them in the specific workspace package that uses them — clearer ownership, better tree-shaking. Only truly cross-cutting deps belong at the root.

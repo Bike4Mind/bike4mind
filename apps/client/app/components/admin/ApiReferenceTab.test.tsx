@@ -25,4 +25,11 @@ describe('ApiReferenceTab', () => {
     expect(link).toHaveAttribute('href', '/api/v1/openapi.json');
     expect(link).toHaveAttribute('download', 'openapi.json');
   });
+
+  it('warns that the hand-written reference may lag the code, pointing at the generated docs', () => {
+    render(<ApiReferenceTab />, { wrapper: TestWrapper });
+    const banner = screen.getByTestId('api-reference-drift-banner');
+    expect(banner).toHaveTextContent(/hand-maintained and may lag/i);
+    expect(banner.querySelector('a')).toHaveAttribute('href', '/api/v1/docs');
+  });
 });

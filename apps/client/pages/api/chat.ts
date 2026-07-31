@@ -1,7 +1,6 @@
 import { ChatCompletionFeature, ChatCompletionInvoke, ChatCompletionProcess, featureNames } from '@bike4mind/services';
 import { BadRequestError, getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
-import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import {
@@ -11,62 +10,16 @@ import {
   resolveDefaultChatModel,
 } from '@server/utils/chatCompletionDefaults';
 import { adminSettingsRepository, User, Session } from '@bike4mind/database';
-import { z } from 'zod';
-import { ApiKeyScope, B4MLLMTools, B4MLLMToolsList } from '@bike4mind/common';
+import { B4MLLMTools, chatContract, filterKnownTools, type SimplifiedChatRequest } from '@bike4mind/common';
+import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 
-// Simplified external API schema - model will be set dynamically from admin settings
-const SimplifiedChatRequestSchema = z.object({
-  sessionId: z.string().nullish(), // Accepts string, null, or undefined - null treated as "not provided"
-  message: z.string(),
-  model: z.string().optional(), // Made optional - will use admin setting if not provided
-  temperature: z.number().min(0).max(2).optional(),
-  // Output-budget override. `max_tokens` is the canonical field; `maxTokens` and
-  // `maxOutputTokens` are accepted aliases so callers using either casing aren't
-  // silently ignored (Zod strips unknown keys). All three coalesce in transformToInternalFormat.
-  max_tokens: z.number().positive().optional(),
-  maxTokens: z.number().positive().optional(),
-  maxOutputTokens: z.number().positive().optional(),
-  stream: z.boolean().prefault(false),
-  historyCount: z.number().positive().prefault(10).catch(10),
-  fileIds: z.array(z.string()).prefault([]),
-  // New synchronous option - wait for completion before returning
-  wait: z.boolean().prefault(false),
-  // Enable full tool access for agent requests (e.g., voice agent_request portal)
-  enableTools: z.boolean().prefault(false),
-  // Tool selection mode: 'fast' = no tools (pure chat), 'smart' = auto-select tools based on prompt
-  // When set, overrides enableTools. When not set, falls back to enableTools behavior.
-  toolMode: z.enum(['fast', 'smart']).optional(),
-  // Explicit list of tools to use (combined with auto-selected in smart mode)
-  // Validated against known tool IDs; unknown tools are silently filtered out
-  tools: z
-    .array(z.string())
-    .optional()
-    .transform(tools => tools?.filter((t): t is B4MLLMTools => B4MLLMToolsList.includes(t as B4MLLMTools))),
-  // Explicit overrides - when enableTools is true, these default to true but can be
-  // individually disabled (e.g., voice agent_request disables QuestMaster so replies
-  // aren't cleared and replaced with a plan document)
-  enableQuestMaster: z.boolean().optional(),
-  enableMementos: z.boolean().optional(),
-  enableAgents: z.boolean().optional(),
-  // How much of the system stack to place in front of the model. Unset keeps today's behaviour.
-  // 'raw' is the passthrough an evaluation harness needs to compare us against the bare model;
-  // 'grounded' adds data-lake retrieval only; 'surface' adds the org/session prompts on top.
-  // Retrieval itself comes from the session (forceKnowledgeRetrieval), not from this flag.
-  promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
-  // With wait, also return the per-source system prompt breakdown the completion was
-  // assembled from (promptDetails), so callers can verify what fed the model instead of
-  // inferring it from behavior.
-  includePromptDetails: z.boolean().optional(),
-});
-
-type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;
-
-// API-key callers need ai:chat OR ai:generate (OR-parity with the CLI completions
-// default, cli/auth.ts DEFAULT_COMPLETION_SCOPES).
-const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] })
+// Auth mode, required scopes, and request validation all come from chatContract
+// (the single source of truth also driving the OpenAPI spec). `req.validated` is
+// the parsed, typed body.
+const handler = nextRouteForContract(chatContract)
   .use(
     // Per-user request rate limit, tunable per subscription tier. Keyed
     // on userId (IP-independent); admins/developers and the dev server bypass.
@@ -82,7 +35,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_G
     // Admin settings (uses the cached AdminSettingsCache); reused below for the embedding model.
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
 
-    const simplifiedRequest = SimplifiedChatRequestSchema.parse(req.body);
+    const simplifiedRequest = req.validated;
 
     // An explicit request model wins. Otherwise fall back to the admin default, which on a
     // local-only self-host box may itself need a fallback (see resolveDefaultChatModel), so
@@ -292,7 +245,8 @@ function transformToInternalFormat(
   // Compute effective tools for smart mode using pre-computed recommendations
   let effectiveTools: B4MLLMTools[] | undefined;
   if (request.toolMode === 'smart') {
-    const manualTools = (request.tools ?? []) as B4MLLMTools[];
+    // Drop unknown tool ids here (moved off the wire schema so it stays representable).
+    const manualTools = filterKnownTools(request.tools);
     effectiveTools = mergeTools(recommendations, manualTools);
   } else if (request.toolMode === 'fast') {
     effectiveTools = [];

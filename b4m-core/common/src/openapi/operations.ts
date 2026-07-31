@@ -1,5 +1,7 @@
 import { registry } from './registry';
 import { SECURITY_REQUIREMENT, JWT_SECURITY_REQUIREMENT } from './security';
+import { registerContract } from './registerContract';
+import { CONTRACTS } from '../api-contract';
 import {
   CompletionRequest,
   CompletionStreamEvent,
@@ -7,6 +9,12 @@ import {
   ToolExecutionResponse,
   ErrorResponse,
 } from './schemas';
+
+// Contract-derived operations (the migration target). Adding a contract to
+// CONTRACTS is all it takes to publish it - no hand-written block below.
+for (const contract of CONTRACTS) {
+  registerContract(contract);
+}
 
 /**
  * Operation (path) registrations for the versioned `/v1` surface.

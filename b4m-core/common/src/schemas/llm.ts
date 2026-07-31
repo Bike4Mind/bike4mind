@@ -55,6 +55,13 @@ export type B4MLLMTools = z.infer<typeof b4mLLMTools>;
 
 export const B4MLLMToolsList = b4mLLMTools.options.map(tool => tool);
 
+/** Keep only recognized tool ids, dropping unknowns. Used by handlers to sanitize
+ *  a caller-supplied `tools` list (validation keeps it a plain string[] so the
+ *  wire schema stays OpenAPI-representable; the domain filter lives here). */
+export function filterKnownTools(tools: readonly string[] | undefined): B4MLLMTools[] {
+  return (tools ?? []).filter((t): t is B4MLLMTools => B4MLLMToolsList.includes(t as B4MLLMTools));
+}
+
 /**
  * Tool names implemented by premium overlay packages rather than by the core
  * tool registry. Implementations reach the chat pipeline at runtime via the
