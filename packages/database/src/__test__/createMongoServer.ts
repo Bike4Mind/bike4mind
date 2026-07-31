@@ -1,17 +1,5 @@
 import { MongoMemoryReplSet, MongoMemoryServer } from 'mongodb-memory-server';
 
-/**
- * Bounded retry wrapper around `MongoMemoryServer.create()` to absorb the
- * ephemeral-port race under parallel test execution.
- *
- * `mongodb-memory-server` picks a free port then spawns `mongod` to bind it.
- * That check-then-bind is racy: when many suites start `mongod` concurrently,
- * two workers can be handed the same just-freed port and the loser dies with
- * `Port "<n>" already in use`. The library has no retry. Each retry re-runs
- * `create()` (fresh port selection), so a collision does not recur on the next
- * attempt. Only port-in-use is retried; every other startup error surfaces at
- * once so real problems are never masked.
- */
 // Coupled to the exact wording `mongodb-memory-server-core` emits for a port
 // collision (`MongoInstance.ts`). A major version bump can change the message;
 // then this regex stops matching and the wrapper degrades to a passthrough (the
@@ -29,6 +17,18 @@ const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 // in lockstep (the standard retry-storm mitigation).
 const backoffMs = (attempt: number) => RETRY_BACKOFF_MS * attempt + Math.floor(Math.random() * RETRY_BACKOFF_MS);
 
+/**
+ * Bounded retry wrapper around a `mongodb-memory-server` factory (standalone or replica set) to
+ * absorb the ephemeral-port race under parallel test execution.
+ *
+ * The library picks a free port then spawns `mongod` to bind it. That check-then-bind is racy:
+ * when many suites start `mongod` concurrently, two workers can be handed the same just-freed
+ * port and the loser dies with `Port "<n>" already in use`. The library has no retry. Each retry
+ * re-runs the factory (fresh port selection), so a collision does not recur on the next attempt.
+ * Only port-in-use is retried; every other startup error surfaces at once so real problems are
+ * never masked - note that replica-set-specific failures (init or election timeout) are therefore
+ * NOT retried and surface immediately.
+ */
 const withPortRetry = async <T>(start: () => Promise<T>): Promise<T> => {
   let lastError: unknown;
 
@@ -54,10 +54,16 @@ export const createMongoServer = async (): Promise<MongoMemoryServer> =>
 
 /**
  * Single-node replica set. Use this instead of `createMongoServer` whenever a test needs REAL
- * transaction semantics: a standalone mongod cannot start one, so against `createMongoServer`
- * every `withTransaction` silently degrades to unwrapped writes and a test can neither observe a
- * rollback nor catch a write that escapes the session. Slower to boot - reach for it only when
- * transactionality is the thing under test.
+ * transaction semantics.
+ *
+ * A standalone mongod cannot run a transaction at all: the first write inside the session fails
+ * with `MongoServerError` code 20 ("Transaction numbers are only allowed on a replica set member
+ * or mongos"), and `withTransaction` does not classify that as transient, so it rethrows. A
+ * transaction-shaped test against `createMongoServer` therefore errors out loudly - it does NOT
+ * quietly pass with no transactional guarantee. If you are staring at a code-20 failure, this
+ * helper is the fix.
+ *
+ * Slower to boot - reach for it only when transactionality is the thing under test.
  */
 export const createMongoReplSet = async (): Promise<MongoMemoryReplSet> =>
   withPortRetry(() => MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } }));

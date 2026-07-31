@@ -87,6 +87,31 @@ describe('setOrganizationGroupTypes', () => {
     expect(db.organizations.update).toHaveBeenCalledWith({ id: 'org-1', allowedGroupTypes: ['sales'] });
   });
 
+  // Fail-safe ordering, mirroring organizationService/delete.ts: user.groups[] is the
+  // access-bearing artifact (the sharing layer matches groups.$elemMatch.groupId against
+  // user.groups and never joins the Group row), so membership has to go first. Both orders commit
+  // identically inside a transaction, which is exactly why only an explicit assertion stops a
+  // refactor from silently reverting to the fail-open order.
+  it('purges member group ids BEFORE soft-deleting the revoked groups', async () => {
+    db.organizations.findById.mockResolvedValue(org({ allowedGroupTypes: ['sales', 'research'] }));
+    db.groups.findByOrganization.mockResolvedValue([
+      { id: 'g-sales', type: 'sales' },
+      { id: 'g-research', type: 'research' },
+    ]);
+
+    const callOrder: string[] = [];
+    db.users.removeGroupsFromAllUsers.mockImplementation(async () => {
+      callOrder.push('removeGroupsFromAllUsers');
+    });
+    db.groups.softDeleteByIds.mockImplementation(async () => {
+      callOrder.push('softDeleteByIds');
+    });
+
+    await run(['sales']); // research removed
+
+    expect(callOrder).toEqual(['removeGroupsFromAllUsers', 'softDeleteByIds']);
+  });
+
   it('does not touch groups/members when nothing is revoked', async () => {
     db.organizations.findById.mockResolvedValue(org({ allowedGroupTypes: ['sales'] }));
     db.groups.findByOrganization.mockResolvedValue([{ id: 'g-sales', type: 'sales' }]);

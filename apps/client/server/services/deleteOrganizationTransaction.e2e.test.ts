@@ -18,9 +18,9 @@ import { organizationService } from '@bike4mind/services';
  * Transactional guard for #1219: proves the org soft-delete participates in the caller's
  * transaction rather than escaping it.
  *
- * Needs a REAL replica set. Against the standalone createMongoServer used elsewhere,
- * withTransaction degrades to unwrapped writes, so a write that escapes the session is
- * indistinguishable from one that joins it and this suite would pass on the broken code.
+ * Needs a REAL replica set. A standalone mongod (createMongoServer, used by the sibling e2e
+ * suites) rejects the first write inside a session with MongoServerError code 20, so this suite
+ * cannot run there at all - it would error out rather than report anything about the fix.
  *
  * The bug this pins: repository `delete()` routes through the soft-delete plugin's raw-driver
  * static, which transactionAsyncLocalStorage cannot reach. The org row would commit immediately
@@ -93,8 +93,15 @@ describe('deleteOrganization - transaction participation (replica set)', () => {
 
     // All three writes must be absent. Before the fix the org row alone carried deletedAt, because
     // the raw-driver soft-delete had already committed outside the session.
-    expect((await rawOrg(orgId))?.deletedAt ?? null).toBeNull();
-    expect((await rawGroup(groupId))?.deletedAt ?? null).toBeNull();
+    // Assert the rows still EXIST before checking deletedAt: `row?.deletedAt ?? null` is also null
+    // when the document is gone entirely, so without this a mutation that hard-deletes instead of
+    // soft-deleting would slip through green.
+    const org = await rawOrg(orgId);
+    const group = await rawGroup(groupId);
+    expect(org).not.toBeNull();
+    expect(group).not.toBeNull();
+    expect(org!.deletedAt ?? null).toBeNull();
+    expect(group!.deletedAt ?? null).toBeNull();
     expect((await User.findById(memberId))?.groups).toEqual([groupId]);
   });
 
