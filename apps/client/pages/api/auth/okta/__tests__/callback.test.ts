@@ -13,11 +13,12 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 
-// Database: only User + authFailLogRepository are touched by the handler.
+// Database: only User + authFailLogRepository + authSessionRepository are touched by the handler.
 const mockFindOne = vi.fn();
 const mockUpdateOne = vi.fn();
 const mockCreate = vi.fn();
 const mockAuthFailCreate = vi.fn();
+const mockRevokeAllByUserId = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: {
     findOne: (...a: any[]) => mockFindOne(...a),
@@ -25,6 +26,7 @@ vi.mock('@bike4mind/database', () => ({
     create: (...a: any[]) => mockCreate(...a),
   },
   authFailLogRepository: { create: (...a: any[]) => mockAuthFailCreate(...a) },
+  authSessionRepository: { revokeAllByUserId: (...a: any[]) => mockRevokeAllByUserId(...a) },
 }));
 
 // Okta OIDC client: token exchange + userinfo are network calls, fully stubbed.
@@ -102,6 +104,7 @@ beforeEach(() => {
   });
   mockUpdateOne.mockResolvedValue({});
   mockCreate.mockResolvedValue({ id: 'new-user', _id: 'new-user', tokenVersion: 0, isBanned: false });
+  mockRevokeAllByUserId.mockResolvedValue(0);
 });
 
 describe('/api/auth/okta/callback — account-link email-equality gate', () => {
@@ -141,6 +144,8 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
     // New provider link: tokenVersion incremented to invalidate other sessions.
     expect(mockUpdateOne).toHaveBeenCalledWith({ _id: 'u2' }, expect.objectContaining({ $inc: { tokenVersion: 1 } }));
+    // ...and the paired AuthSession revoke fires, or opaque refresh tokens would survive the bump.
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u2');
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
   });
 
@@ -160,9 +165,10 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
 
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
     expect(mockAuthFailCreate).not.toHaveBeenCalled();
-    // Routine refresh must NOT bump tokenVersion.
+    // Routine refresh must NOT bump tokenVersion nor revoke existing sessions.
     const updateArg = mockUpdateOne.mock.calls[0]?.[1] ?? {};
     expect(updateArg).not.toHaveProperty('$inc');
+    expect(mockRevokeAllByUserId).not.toHaveBeenCalled();
   });
 
   it('still enforces the local-verified gate when the account HAS a password (regression)', async () => {

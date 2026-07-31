@@ -48,7 +48,8 @@ describe('rotateSession', () => {
     const parsed = parseRefreshToken(result.refreshToken)!;
     expect(parsed.sid).toBe(SID);
     expect(parsed.secret).not.toBe(secret);
-    // previous := the presented hash, so a concurrent sibling holding it stays valid in-window.
+    // previous := the superseded CURRENT hash (equal to the presented one here, since this is a
+    // current-hash match), so the one-generation-back secret stays valid in-window.
     expect(authSessions.rotateHash).toHaveBeenCalledWith(
       SID,
       expect.any(String),
@@ -153,5 +154,76 @@ describe('rotateSession', () => {
     await expect(rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken })).rejects.toBeInstanceOf(
       UnauthorizedError
     );
+  });
+
+  // The single-rotation cases above stub rotateHash to a fresh default session, so they cannot see
+  // how `previous`/`current` evolve across a SEQUENCE of rotations. These drive the real rotateSession
+  // against a mutable in-memory row -- the only shape that catches an incorrect `previous` anchor.
+  describe('rotation sequences (stateful row)', () => {
+    type MutableSession = {
+      sid: string;
+      userId: string;
+      refreshTokenHash: string;
+      previousRefreshTokenHash: string | null;
+      graceExpiresAt: Date | null;
+      revokedAt: Date | null;
+      expiresAt: Date;
+      impersonatedBy: string | null;
+    };
+
+    const setupStateful = (initialSecret: string) => {
+      const state = makeSession({
+        refreshTokenHash: hashRefreshSecret(initialSecret),
+      }) as unknown as MutableSession;
+      const authSessions = createMockAuthSessionRepository();
+      const users = createMockUserRepository();
+      users.findById.mockResolvedValue({ id: 'user-1', tokenVersion: 7 } as never);
+      authSessions.findBySid.mockImplementation(async () => state as never);
+      authSessions.rotateHash.mockImplementation(async (_sid, nextHash, previousHash, graceExpiresAt) => {
+        // Mirror AuthSessionModel.rotateHash: scoped to a live row, otherwise no-op (null).
+        if (state.revokedAt || state.expiresAt <= new Date()) return null;
+        state.refreshTokenHash = nextHash;
+        state.previousRefreshTokenHash = previousHash;
+        state.graceExpiresAt = graceExpiresAt;
+        return state as never;
+      });
+      authSessions.revokeBySid.mockImplementation(async () => {
+        state.revokedAt = new Date();
+        return state as never;
+      });
+      const signAccessToken = vi.fn().mockReturnValue('ACCESS');
+      return { state, authSessions, users, signAccessToken, db: { authSessions, users } };
+    };
+
+    it('does not revoke when two tabs rotate from the same secret and the first refreshes again', async () => {
+      const s1 = generateRefreshSecret();
+      const { state, authSessions, db, signAccessToken } = setupStateful(s1);
+
+      // Tab A rotates S1 -> S2.
+      const a = await rotateSession(buildRefreshToken(SID, s1), { db, signAccessToken });
+      const s2 = parseRefreshToken(a.refreshToken)!.secret;
+      // Tab B, still holding S1, rotates inside the grace window -> S3.
+      await rotateSession(buildRefreshToken(SID, s1), { db, signAccessToken });
+      // Tab A refreshes with the S2 it was legitimately issued: previous must have advanced to S2's
+      // predecessor, so this succeeds instead of tripping the theft response.
+      await expect(rotateSession(buildRefreshToken(SID, s2), { db, signAccessToken })).resolves.toBeTruthy();
+      expect(authSessions.revokeBySid).not.toHaveBeenCalled();
+      expect(state.revokedAt).toBeNull();
+    });
+
+    it('rejects a second replay of the same superseded secret (grace does not extend indefinitely)', async () => {
+      const s1 = generateRefreshSecret();
+      const { authSessions, db, signAccessToken } = setupStateful(s1);
+
+      // Rotate S1 -> S2; S1 becomes the one-generation-back grace hash.
+      await rotateSession(buildRefreshToken(SID, s1), { db, signAccessToken });
+      // First in-window replay of S1 is tolerated (genuine concurrent burst).
+      await expect(rotateSession(buildRefreshToken(SID, s1), { db, signAccessToken })).resolves.toBeTruthy();
+      // `previous` advanced past S1, so a second replay is now stale reuse -> reject + revoke.
+      await expect(rotateSession(buildRefreshToken(SID, s1), { db, signAccessToken })).rejects.toBeInstanceOf(
+        UnauthorizedError
+      );
+      expect(authSessions.revokeBySid).toHaveBeenCalledWith(SID);
+    });
   });
 });

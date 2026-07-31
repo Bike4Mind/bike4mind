@@ -29,8 +29,9 @@ export interface RotatedSession {
  *
  * Reuse detection: a presented secret must hash to the session's CURRENT hash, or (within the grace
  * window) its PREVIOUS hash. Anything else means an already-rotated token was replayed -- treated as
- * theft: the session is revoked and the caller rejected. On a valid rotation the presented hash
- * becomes the new `previous` (anchored to what live clients hold) and a new secret becomes current.
+ * theft: the session is revoked and the caller rejected. On a valid rotation the just-superseded
+ * CURRENT hash becomes the new `previous` (the one-generation-back secret live clients may still
+ * hold) and a new secret becomes current.
  *
  * Callers pass ONLY opaque tokens here; legacy JWT refresh tokens are handled + lazily migrated at
  * the endpoint (which then calls issueSession). Throws UnauthorizedError for any invalid/expired/
@@ -73,9 +74,18 @@ export const rotateSession = async (
 
   const nextSecret = generateRefreshSecret();
   const graceExpiresAt = new Date(now.getTime() + graceWindowMs);
-  // previous := the hash the caller presented, so a sibling still holding that same secret stays
-  // valid inside the refreshed window.
-  const updated = await db.authSessions.rotateHash(sid, hashRefreshSecret(nextSecret), presentedHash, graceExpiresAt);
+  // previous := the CURRENT hash we are superseding (not the presented one). In the common-case
+  // current match these are equal, but when a sibling presents the previous-in-grace hash they
+  // differ: anchoring to `presentedHash` there would freeze `previous` on a stale secret -- it would
+  // never advance, letting one secret be replayed indefinitely and locking out whichever tab rotated
+  // first (its freshly issued token would match neither current nor previous). Anchoring to the
+  // superseded current hash keeps `previous` exactly one generation back on every rotation.
+  const updated = await db.authSessions.rotateHash(
+    sid,
+    hashRefreshSecret(nextSecret),
+    session.refreshTokenHash,
+    graceExpiresAt
+  );
   if (!updated) throw new UnauthorizedError('Invalid refresh token'); // raced revoke/expiry
 
   const accessToken = signAccessToken(user.id, user.tokenVersion ?? 0, {
