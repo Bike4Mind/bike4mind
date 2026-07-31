@@ -1,6 +1,6 @@
 import type { AccessContext, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { DATA_LAKES, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
 
 interface AssertLakeAccessAdapters {
   db: {
@@ -52,8 +52,11 @@ export function canAccessLake(
   if (!lake.organizationId && !lake.requiredUserTag && !lake.requiredEntitlement) return false;
 
   // Org is a hard prerequisite when the lake is org-scoped - evaluated BEFORE the
-  // tag/entitlement any-of so a holder in a different org can never pass.
-  if (lake.organizationId && lake.organizationId !== ctx.organizationId) return false;
+  // tag/entitlement any-of so a holder in a different org can never pass. Normalize both
+  // sides: the ctx org id can reach here as an ObjectId or populated doc, and a raw strict
+  // compare then 404s a lake the casting Mongo collection query still returns (#1109).
+  const lakeOrgId = normalizeId(lake.organizationId);
+  if (lakeOrgId && lakeOrgId !== normalizeId(ctx.organizationId)) return false;
 
   return lakeMatchesAccess(lake, normalizedTags, normalizedKeys);
 }
@@ -88,7 +91,8 @@ export function assertLakeWritable(lake: Pick<IDataLakeDocument, 'id'>): void {
 function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLakeDocument | null {
   const config = DATA_LAKES.find(dl => dl.id === lakeIdOrSlug || dl.slug === lakeIdOrSlug);
   if (!config) return null;
-  if (config.organizationId && config.organizationId !== ctx.organizationId) return null;
+  const configOrgId = normalizeId(config.organizationId);
+  if (configOrgId && configOrgId !== normalizeId(ctx.organizationId)) return null;
   if (!ctx.isAdmin) {
     const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
     const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
