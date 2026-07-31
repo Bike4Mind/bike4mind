@@ -18,6 +18,28 @@ const lambdaClient = new LambdaClient({});
 const HEADLESS_CONNECTION_ID = 'questmaster-v5-headless';
 
 /**
+ * The executor's function name off the `lambdaFunctionNames` Linkable, read
+ * through a Record view rather than as `Resource.lambdaFunctionNames.agentExecutor`.
+ *
+ * The generated `sst-env.d.ts` is committed and only learns a new key on the
+ * next successful deploy, so a compile-time property access breaks a fresh
+ * checkout's build - and CI's, which typechecks against the committed file.
+ * Same bridge `modelDiscovery/runNow.ts` uses for exactly this reason.
+ *
+ * Returns undefined when the link is absent (the web app links the executor's
+ * NAME, not the function - the WebSocket handler is the one with the direct
+ * link), which the caller reports as a deployment gap rather than a bad request.
+ */
+function linkedAgentExecutorName(): string | undefined {
+  try {
+    return (Resource as unknown as { lambdaFunctionNames?: Record<string, string | undefined> }).lambdaFunctionNames
+      ?.agentExecutor;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Render a node into the single prompt its agent run receives.
  *
  * Acceptance criteria are included even though nothing scores against them yet
@@ -83,6 +105,16 @@ export async function runQuestNode(args: {
     );
   }
 
+  // Resolved BEFORE the claim: an unlinked executor is a deployment gap, and
+  // failing here leaves the node untouched rather than claiming it, rolling it
+  // back to `failed`, and making the operator wonder what they did wrong.
+  const executorFunctionName = linkedAgentExecutorName();
+  if (!executorFunctionName) {
+    throw new InternalServerError(
+      'Agent executor is not linked to this deployment; a stack deploy is needed before nodes can run'
+    );
+  }
+
   const claimed = await questNodeRepository.claimForRun(node.id);
   if (!claimed) {
     // Deliberately does not quote `node.status`: that value was read before the
@@ -145,11 +177,7 @@ export async function runQuestNode(args: {
 
     await lambdaClient.send(
       new InvokeCommand({
-        // Via `lambdaFunctionNames`, not `Resource.AgentExecutor`: this runs in
-        // the Next.js API route, and the web app does not link the executor
-        // function itself (the WebSocket handler does, which is why the same
-        // call works there). Same pattern the admin model-discovery route uses.
-        FunctionName: Resource.lambdaFunctionNames.agentExecutor,
+        FunctionName: executorFunctionName,
         InvocationType: 'Event',
         Payload: Buffer.from(
           JSON.stringify({
