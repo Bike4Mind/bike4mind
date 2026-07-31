@@ -22,6 +22,7 @@ export * from './reconcileStuckBatches';
 export * from './reconcileStuckTaxonomy';
 export * from './applyTaxonomySuggestions';
 export * from './getDynamicDataLakeTags';
+export * from './embeddingMismatch';
 export * from './getDataLakePrompts';
 export * from './semanticDataLakeSearch';
 export * from './boundedTopK';
