@@ -5,7 +5,7 @@ import { InviteType, Permission } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
-import { Project, inviteRepository, projectRepository } from '@bike4mind/database';
+import { Project, inviteRepository, projectRepository, userRepository } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 
 /**
@@ -20,14 +20,18 @@ let mongoServer: MongoMemoryServer;
 
 const db = {
   invites: inviteRepository,
-  users: { findAllByEmailsOrUsernames: async () => [] },
+  // The real repository, not a stub: the adapter also declares `findById`, and a stub plus the
+  // `{ db } as any` cast below would let a future read of it fail at runtime instead of compile time.
+  users: userRepository,
   projects: projectRepository,
 };
 
-const ownerUser = { id: 'owner-1', username: 'owner', isAdmin: false } as any;
-const shareMemberUser = { id: 'share-member-1', username: 'sharer', isAdmin: false } as any;
-const updateOnlyMemberUser = { id: 'update-only-1', username: 'updater', isAdmin: false } as any;
-const outsiderUser = { id: 'outsider-1', username: 'outsider', isAdmin: false } as any;
+// `groups: []` matters - findShareAccessById's third arm reads user.groups, so omitting it leaves
+// that arm structurally unreachable from these fixtures.
+const ownerUser = { id: 'owner-1', username: 'owner', groups: [], isAdmin: false } as any;
+const shareMemberUser = { id: 'share-member-1', username: 'sharer', groups: [], isAdmin: false } as any;
+const updateOnlyMemberUser = { id: 'update-only-1', username: 'updater', groups: [], isAdmin: false } as any;
+const outsiderUser = { id: 'outsider-1', username: 'outsider', groups: [], isAdmin: false } as any;
 
 const PROJECT_NAME = 'Confidential Project';
 
@@ -93,8 +97,33 @@ describe('project-invite authorization (end-to-end, real repos + Mongo)', () => 
   it('rejects a caller with no relationship to the project, indistinguishably from a missing one', async () => {
     const project = await seedProject();
 
-    await expect(createProjectInvite(outsiderUser, String(project._id))).rejects.toThrow(BadRequestError);
-    await expect(createProjectInvite(outsiderUser, '507f1f77bcf86cd799439011')).rejects.toThrow('Document not found');
+    // Capture both rejections and compare them: asserting only a class for one and only a message
+    // for the other would let `BadRequestError('No share access to <name>')` keep this green while
+    // reintroducing the existence oracle the test is named for.
+    const denied = await createProjectInvite(outsiderUser, String(project._id)).catch((e: Error) => e);
+    const missing = await createProjectInvite(outsiderUser, '507f1f77bcf86cd799439011').catch((e: Error) => e);
+
+    expect(denied).toBeInstanceOf(BadRequestError);
+    expect(missing).toBeInstanceOf(BadRequestError);
+    expect(denied.message).toBe(missing.message);
+    expect(denied.message).not.toContain(PROJECT_NAME);
+
     expect(await inviteRepository.findAllByDocumentId(String(project._id))).toHaveLength(0);
+  });
+
+  it('lets a collaborator whose share grant comes from a group create a project invite', async () => {
+    // The third arm of findShareAccessById (groups[].share) is otherwise unexercised on this path.
+    const project = await Project.create({
+      name: PROJECT_NAME,
+      description: 'd',
+      userId: ownerUser.id,
+      sessionIds: [],
+      fileIds: [],
+      groups: [{ groupId: 'grp-1', permissions: [Permission.share] }],
+    });
+
+    const invite = await createProjectInvite({ ...outsiderUser, groups: ['grp-1'] }, String(project._id));
+
+    expect(invite.name).toBe(PROJECT_NAME);
   });
 });

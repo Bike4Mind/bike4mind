@@ -156,11 +156,11 @@ describe('sharingService - createInvite (project arm authority)', () => {
     expect(findShareAccessById).toHaveBeenCalledWith(user, PROJECT_ID);
   });
 
-  it('rejects a caller with no share access, indistinguishably from a missing project', async () => {
-    // findShareAccessById returns null for both "no access" and "does not exist" (real Mongo
-    // semantics, see SharableDocumentModel.integration.test.ts), so create.ts's existing `!doc`
-    // guard already collapses them - no separate oracle-closing logic is needed here, unlike the
-    // Group arm.
+  it('rejects when the scoped lookup finds nothing', async () => {
+    // Deliberately NOT named "indistinguishably from a missing project": with a single mock,
+    // "no access" and "does not exist" are the same input, so nothing here distinguishes them.
+    // That property is real (findShareAccessById returns null for both) but only the e2e test can
+    // demonstrate it - see projectInviteAuth.e2e.test.ts.
     findShareAccessById.mockResolvedValue(null);
 
     await expect(create(asUser('outsider-1'))).rejects.toThrow(BadRequestError);
