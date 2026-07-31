@@ -50,7 +50,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
   );
 
   if (!apiKey) {
-    return res.status(401).json({ error: `No ${provider} API key configured` });
+    // 503, not 401: the caller IS authenticated - the provider key is a server-side
+    // capability gap. A 401 would tell an API-key caller to re-authenticate, which
+    // never fixes a missing ElevenLabs key. The message survives to the CLI via the
+    // arraybuffer error decode + mapApiError's server-message fallback.
+    return res.status(503).json({ error: `No ${provider} API key configured` });
   }
 
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
@@ -218,7 +222,16 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
       logger: req.logger,
     });
     res.setHeader('X-B4M-Audio-Saved', String(save.saved));
-    if (save.saved) res.setHeader('X-B4M-Audio-Fab-File-Id', save.fabFileId);
+    if (save.saved) {
+      res.setHeader('X-B4M-Audio-Fab-File-Id', save.fabFileId);
+      res.setHeader('X-B4M-Audio-File-Name', save.fileName);
+      // Forward the signed URL minted at creation. Non-image audio gets a working URL
+      // immediately (createFabFile), whereas re-resolving it via GET /api/files/:id
+      // fails closed until the async moderation scan flips moderationStatus to 'clean'
+      // (isImageServeable gates every mime type) - so callers must use this URL, not
+      // re-fetch one. Absent only in the rare case createFabFile minted no URL.
+      if (save.fileUrl) res.setHeader('X-B4M-Audio-File-Url', save.fileUrl);
+    }
   }
 
   res.setHeader('Content-Type', contentType);

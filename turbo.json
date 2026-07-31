@@ -4,6 +4,10 @@
   "globalPassThroughEnv": ["NODE_OPTIONS"],
   "tasks": {
     "codegen": {
+      // Not cacheable: output depends on node_modules link state (which overlay
+      // packages resolve), which no input glob can capture. A cache replay would
+      // restore glue for the WRONG link state. The script is sub-second.
+      "cache": false,
       "inputs": [
         "scripts/generate-premium-glue.mjs",
         "../../packages/premium/*/package.json",

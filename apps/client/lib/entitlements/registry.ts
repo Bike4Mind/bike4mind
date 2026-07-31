@@ -171,6 +171,14 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // gates Bob's `/bob` route and its nav entry (the premium-bob overlay). No Stripe
   // price yet; granted-only initially. Removed when Bob is extracted.
   { tag: 'bob', entitlements: ['bob:pro'] },
+  // [DELETION-FOOTPRINT] Interactive Meetings comp grant: the `meetings` tag bridges to
+  // `meetings:pro`, which gates the `/meetings` route and its rail entry (the
+  // interactive-meetings overlay). No Stripe price; granted-only, and deliberately so - the
+  // product is not ready to be self-serve. Listing it here is what puts the key in
+  // KNOWN_ENTITLEMENT_KEYS, so it can be granted from the admin Product Access panel instead
+  // of by writing a tag straight into the user document, and so the partner-rules write
+  // boundary stops rejecting it as unknown. Removed when the overlay is extracted.
+  { tag: 'meetings', entitlements: ['meetings:pro'] },
   // Embed white-label: the `embed-whitelabel` tag bridges to `embed:whitelabel`,
   // which gates hiding the "Powered by" branding on the public embed widget
   // (epic #41 Phase D). Checked against the KEY OWNER (org billing owner), not

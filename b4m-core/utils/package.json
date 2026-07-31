@@ -29,6 +29,16 @@
         "default": "./dist/artifactParser.cjs"
       }
     },
+    "./artifactElision": {
+      "import": {
+        "types": "./dist/artifactElision.d.mts",
+        "default": "./dist/artifactElision.mjs"
+      },
+      "require": {
+        "types": "./dist/artifactElision.d.cts",
+        "default": "./dist/artifactElision.cjs"
+      }
+    },
     "./imageModeration": {
       "import": {
         "types": "./dist/imageModeration/index.d.mts",

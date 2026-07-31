@@ -246,6 +246,46 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     super(model);
   }
 
+  /** Remove the given group ids from EVERY user that has them (group-type revoke/delete). */
+  async removeGroupsFromAllUsers(groupIds: string[]): Promise<void> {
+    if (groupIds.length === 0) return;
+    await this.model.updateMany({ groups: { $in: groupIds } }, { $pull: { groups: { $in: groupIds } } });
+  }
+
+  /** Add one group id to one user (idempotent via $addToSet). */
+  async addGroupToUser(userId: string, groupId: string): Promise<void> {
+    await this.model.updateOne({ _id: userId }, { $addToSet: { groups: groupId } });
+  }
+
+  /** Remove one group id from one user. */
+  async removeGroupFromUser(userId: string, groupId: string): Promise<void> {
+    await this.model.updateOne({ _id: userId }, { $pull: { groups: groupId } });
+  }
+
+  /** Remove several group ids from one user (idempotent $pull). No-op on an empty list. */
+  async removeGroupsFromUser(userId: string, groupIds: string[]): Promise<void> {
+    if (groupIds.length === 0) return;
+    await this.model.updateOne({ _id: userId }, { $pull: { groups: { $in: groupIds } } });
+  }
+
+  /** Member ids per group id in one aggregation (keyed by group id; absent = no members). */
+  async findUserIdsByGroupIds(groupIds: string[]): Promise<Record<string, string[]>> {
+    if (groupIds.length === 0) return {};
+    // $addToSet, not $push: a user whose user.groups array holds a duplicate entry for the same
+    // group (e.g. a pre-#1224 double-accept via the legacy group-invite path) would otherwise be
+    // counted twice for that group. $addToSet makes memberCount correct by construction rather
+    // than relying on every writer to dedupe user.groups itself.
+    const rows = await this.model.aggregate<{ _id: string; userIds: string[] }>([
+      { $match: { groups: { $in: groupIds } } },
+      { $unwind: '$groups' },
+      { $match: { groups: { $in: groupIds } } },
+      { $group: { _id: '$groups', userIds: { $addToSet: { $toString: '$_id' } } } },
+    ]);
+    const membersByGroup: Record<string, string[]> = {};
+    for (const row of rows) membersByGroup[row._id] = row.userIds;
+    return membersByGroup;
+  }
+
   async findAllByEmailsOrUsernames(emails: string[], usernames: string[]) {
     const result = await this.model.find({
       $or: [{ email: { $in: emails } }, { username: { $in: usernames } }],
@@ -843,6 +883,11 @@ UserSchema.index(
 // Explicit name MUST match migration 20260620000000's createIndex name, otherwise autoIndex
 // (mongo.ts) and the migrator create the same key pattern under two names -> IndexKeySpecsConflict.
 UserSchema.index({ 'authProviders.strategy': 1, 'authProviders.id': 1 }, { name: 'authProviders_strategy_id' });
+// Serves the group-membership reads added by org-groups #1172: the per-group memberCount on
+// GET /organizations/:id/groups and the $pull in removeGroupsFromAllUsers on group-type revoke.
+// Without it both scan the full users collection. Explicit name so the migration and autoIndex
+// (mongo.ts) agree - see the authProviders_strategy_id note above.
+UserSchema.index({ groups: 1 }, { name: 'user_groups' });
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });

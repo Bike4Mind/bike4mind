@@ -4,6 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeArticle from './DataLakeArticle';
+import { DEFAULT_DATA_LAKE_SURFACE_TOKENS } from './surfaceTokens';
 
 // The content hook hits react-query; stub it so the empty state renders without a provider.
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
@@ -39,6 +40,6 @@ describe('DataLakeArticle - create-first empty state (#837)', () => {
     );
 
     expect(screen.queryByTestId('datalake-empty-create-btn')).not.toBeInTheDocument();
-    expect(screen.getByText(/sonar idle/i)).toBeInTheDocument();
+    expect(screen.getByText(DEFAULT_DATA_LAKE_SURFACE_TOKENS.copy.emptyTitle)).toBeInTheDocument();
   });
 });

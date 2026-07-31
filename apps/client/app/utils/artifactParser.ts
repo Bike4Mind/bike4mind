@@ -5,6 +5,7 @@ import {
   ArtifactType,
   mapMimeTypeToArtifactType,
 } from '@bike4mind/common';
+import { detectElidedContent } from '@bike4mind/utils/artifactElision';
 import { tryParseChartJSON } from './chartJsonParser';
 
 // Built from the shared ARTIFACT_ATTRS_PATTERN so the attribute sub-pattern
@@ -938,6 +939,74 @@ export function generateCompleteArtifactId(type: string, identifier: string, tim
  */
 export function hasCompleteOpeningTag(tail: string): boolean {
   return new RegExp(`^<artifact\\s+${ARTIFACT_ATTRS_PATTERN}>`).test(tail);
+}
+
+/**
+ * Whether to show the "may be incomplete" notice for a reply. Companion to the truncation
+ * check above and deliberately subordinate to it: a truncated reply already gets a more
+ * accurate banner, so this stays quiet rather than stacking two warnings on one artifact.
+ *
+ * `suspectedElision` is the server's verdict (stamped in ChatCompletionProcess); the local
+ * scan is the fallback for replies generated before that shipped and for backends that
+ * persist no promptMeta. Advisory only - the caller must still render the artifact as-is.
+ */
+/**
+ * `detectElidedContent` behind a catch, for symmetry with the server call sites, which are all
+ * wrapped. The detector is advisory, so a throw must never cost the user something real - and the
+ * render path is the dangerous one, since a throw inside a render memo would unmount the reply
+ * container over a warning that was never load-bearing. Fails OPEN: no warning beats no reply.
+ *
+ * Lives CLIENT-side rather than next to the detector in `@bike4mind/utils` on purpose: it reports
+ * through `console.warn`, which is this file's convention for a degraded path but wrong on the Lambda,
+ * where the server call sites wrap their own calls with `logger.warn` instead. Shared code would have
+ * to pick one. `publishApi` imports it from here for that reason.
+ */
+export function detectElidedSafe(content: string, type?: ArtifactType): boolean {
+  try {
+    return detectElidedContent(content, type).elided;
+  } catch (error) {
+    // Logged rather than swallowed silently: the server call sites log their failures, and a detector
+    // that starts throwing in the browser would otherwise look exactly like a detector that finds
+    // nothing. Matches the console.warn convention used elsewhere in this file for degraded paths.
+    console.warn('Elision detection failed; treating artifact as complete:', error);
+    return false;
+  }
+}
+
+export function shouldWarnElidedArtifact(input: {
+  completed: boolean;
+  isTruncatedArtifact: boolean;
+  suspectedElision: boolean;
+  artifacts: Array<{ content: string; type: ArtifactType }>;
+}): boolean {
+  if (!input.completed || input.isTruncatedArtifact) return false;
+  if (input.suspectedElision) return true;
+  return input.artifacts.some(a => detectElidedSafe(a.content, a.type));
+}
+
+/**
+ * Whether sharing a whole REPLY should warn that it may be incomplete.
+ *
+ * Separate from `shouldWarnElidedArtifact` because the inputs differ: the reply-share surface has no
+ * parsed artifact list and no artifact type, only the raw markdown it is about to snapshot. Publishing
+ * a reply persists that markdown INCLUDING any `<artifact>` body, so this surface can put an elided
+ * artifact behind a public link just as the artifact surfaces can.
+ *
+ * Prefers the server verdict; falls back to scanning the markdown. The fallback is weaker on purpose
+ * and not a bug: with no type to gate on, the JS-bearing scans (undefined references, hollow bodies)
+ * do not run, so only the placeholder-comment signal applies. That is the loudest, highest-confidence
+ * signal, and a missed warning here leaves the surface exactly as it was before this existed.
+ *
+ * Note this is NOT subordinate to truncation the way the chat banner is: there is no truncation
+ * affordance in the share dialog to defer to, so suppressing here would just lose the warning.
+ */
+export function elidedReplyWarning(
+  promptMeta: { suspectedElision?: unknown } | null | undefined,
+  markdown: string | undefined
+): boolean {
+  if (promptMeta?.suspectedElision) return true;
+  if (!markdown) return false;
+  return detectElidedSafe(markdown);
 }
 
 // Re-export validation functions from the core utils package

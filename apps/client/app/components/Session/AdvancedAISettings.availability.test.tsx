@@ -46,6 +46,8 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({ data: [{ id: 'gpt-4o', name: 'GPT-4o', supportsTools: true }] }),
+  // Read by StaleModelPrompt, which this component renders; empty keeps it silent here.
+  useSupersededModels: () => ({ data: [] }),
 }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false, useIsTablet: () => false }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({

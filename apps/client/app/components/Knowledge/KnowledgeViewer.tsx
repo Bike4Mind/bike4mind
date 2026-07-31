@@ -37,6 +37,7 @@ import DocxViewer from './DOCXViewer';
 import CSVViewer from './CSVViewer';
 import QuestMasterReply from '../GenAI/QuestMasterReply';
 import { QuestMasterData } from '@bike4mind/common';
+import type { ArtifactType } from '@bike4mind/common';
 import PictureInPictureIcon from '@mui/icons-material/PictureInPicture';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CloseIcon from '@mui/icons-material/Close';
@@ -1006,7 +1007,11 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       toast.error('You must be signed in to publish');
       return;
     }
-    let type: string = item.type;
+    // Typed as the union, not `string`: the switch below only lets publishable kinds through, and the
+    // publish wiring runs the elision detector, whose JS-bearing scans are gated on this value. A
+    // widened `string` compiled fine and silently disabled those scans - narrow so a new unhandled
+    // kind is a compile error here instead.
+    let type: ArtifactType = item.type;
     let content = '';
     // ArtifactData is a union with no top-level `title`; each case below sets it
     // from the per-type content. Fall back to a generic title.

@@ -8,6 +8,7 @@ import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlined';
+import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
@@ -24,6 +25,7 @@ import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useOptiAccess } from '@client/app/hooks/data/opti';
+import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useHelpPanel, openHelpPanel } from '@client/app/hooks/useHelpPanel';
@@ -66,6 +68,9 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // Visibility rides purely on product access (tag/entitlement); the legacy
   // experimental toggle was retired with the open-core carve.
   const isOptiEnabled = hasOptiAccess;
+  // /meetings is a codegen-mounted premium route. The hook folds the route-exists check in
+  // with product access, so an open-core build has no row and no dead-end.
+  const isMeetingsEnabled = useMeetingsAccess();
   // /tavern is a codegen-mounted premium route; builds without the overlay
   // (open core) have no such route, so the entry must hide or it dead-ends.
   const tavernRouteExists = premiumRoutes.some(route => route.path.startsWith('/tavern'));
@@ -184,6 +189,21 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
               // `/bob` is a codegen-mounted premium route (no core route file), so it is not in
               // Tanstack's statically-typed route union - same `as never` cast as /tavern below.
               navigate({ to: '/bob' } as never);
+            },
+          },
+        ]
+      : []),
+    ...(isMeetingsEnabled
+      ? [
+          {
+            key: 'meetings',
+            label: 'Interactive Meetings',
+            icon: iconSlot(<GroupsOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname.startsWith('/meetings'),
+            onClick: () => {
+              closeOnMobile();
+              // `/meetings` is codegen-mounted too, so the same cast applies.
+              navigate({ to: '/meetings' } as never);
             },
           },
         ]

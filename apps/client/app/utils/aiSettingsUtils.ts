@@ -1,4 +1,4 @@
-import { ModelInfo } from '@bike4mind/common';
+import { FIXED_TEMPERATURE_MODELS, ModelInfo } from '@bike4mind/common';
 import dayjs from 'dayjs';
 
 interface ModelMetric {
@@ -336,3 +336,17 @@ export const refitMaxTokensForModel = (
   if (allowRaise && currentMaxTokens < target) return target;
   return currentMaxTokens;
 };
+
+/**
+ * The LLM-store patch that must accompany every model change. Kept here rather than
+ * inlined at each switch site (the picker in AdvancedAIModal, the stale-pin prompt in
+ * StaleModelPrompt) so the two cannot drift on what "changing model" entails.
+ *
+ * Callers persist the pin separately via updateSessionToServer, since only they know
+ * the session and whether the write should be wrapped in a transition.
+ */
+export const buildModelSelectionPatch = (modelInfo: ModelInfo) => ({
+  model: modelInfo.id,
+  max_tokens: computeDefaultMaxTokens(modelInfo),
+  ...(FIXED_TEMPERATURE_MODELS.has(modelInfo.id) && { temperature: 1.0 }),
+});

@@ -13,6 +13,7 @@ const {
   userIncrement,
   orgIncrement,
   recordUsage,
+  persistGeneratedAudio,
 } = vi.hoisted(() => ({
   getEffectiveApiKey: vi.fn(),
   deductCredits: vi.fn(),
@@ -24,6 +25,7 @@ const {
   userIncrement: vi.fn(),
   orgIncrement: vi.fn(),
   recordUsage: vi.fn(),
+  persistGeneratedAudio: vi.fn(),
 }));
 
 // baseApi mock: routes by req.method; a thrown ZodError maps to 422 (mirroring
@@ -84,6 +86,9 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => ({})),
   getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
 }));
+vi.mock('@server/utils/persistGeneratedAudio', () => ({
+  persistGeneratedAudio: (...a: unknown[]) => persistGeneratedAudio(...a),
+}));
 
 import handler from '../sound-effects';
 
@@ -111,8 +116,12 @@ beforeEach(() => {
     userIncrement,
     orgIncrement,
     recordUsage,
+    persistGeneratedAudio,
   ].forEach(m => m.mockReset());
   recordUsage.mockResolvedValue(undefined);
+  // Default: persistence is a no-op that reports "not saved", so tests not
+  // exercising the save path see no persisted-file headers.
+  persistGeneratedAudio.mockResolvedValue({ saved: false, reason: 'error' });
   getEffectiveApiKey.mockResolvedValue('eleven-key');
   generate.mockResolvedValue({ audio: Buffer.from('boom'), contentType: 'audio/mpeg' });
   findById.mockResolvedValue({ id: 'u1', currentCredits: 100 });
@@ -203,16 +212,57 @@ describe('POST /api/ai/sound-effects', () => {
     expect(recordUsage).not.toHaveBeenCalled();
   });
 
-  it('returns 401 when no provider key resolves (no reservation)', async () => {
+  it('returns 503 (not 401) when no provider key resolves (no reservation)', async () => {
     getEffectiveApiKey.mockResolvedValue(null);
 
     const { res, promise } = run({ text: 'rain' });
     await promise;
 
-    expect(res._getStatusCode()).toBe(401);
+    // A missing provider key is a capability gap, not an auth failure - a 401 would
+    // wrongly tell an API-key caller to re-authenticate.
+    expect(res._getStatusCode()).toBe(503);
+    expect(res._getJSONData()).toMatchObject({ error: 'No elevenlabs API key configured' });
     expect(userIncrement).not.toHaveBeenCalled();
     expect(generate).not.toHaveBeenCalled();
     expect(deductCredits).not.toHaveBeenCalled();
+  });
+
+  it('forwards the persisted-file id, name, and signed URL as response headers', async () => {
+    getSettingsValue.mockReturnValue(false);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
+    persistGeneratedAudio.mockResolvedValue({
+      saved: true,
+      fabFileId: 'fab1',
+      fileName: 'sound-effect-rain.mp3',
+      fileUrl: 'https://signed.example/audio.mp3',
+    });
+
+    const { res, promise } = run({ text: 'rain', durationSeconds: 3 });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    // The signed URL must ride the header: the CLI cannot re-resolve one via
+    // GET /api/files/:id until the async moderation scan flips the file to 'clean'.
+    expect(res.getHeader('X-B4M-Audio-Saved')).toBe('true');
+    expect(res.getHeader('X-B4M-Audio-Fab-File-Id')).toBe('fab1');
+    expect(res.getHeader('X-B4M-Audio-File-Name')).toBe('sound-effect-rain.mp3');
+    expect(res.getHeader('X-B4M-Audio-File-Url')).toBe('https://signed.example/audio.mp3');
+  });
+
+  it('reports not-saved and forwards no file headers when persistence fails', async () => {
+    getSettingsValue.mockReturnValue(false);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
+    persistGeneratedAudio.mockResolvedValue({ saved: false, reason: 'storage_limit' });
+
+    const { res, promise } = run({ text: 'rain', durationSeconds: 3 });
+    await promise;
+
+    // Persist failure never blocks the audio the caller was billed for.
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData().toString()).toBe('boom');
+    expect(res.getHeader('X-B4M-Audio-Saved')).toBe('false');
+    expect(res.getHeader('X-B4M-Audio-Fab-File-Id')).toBeUndefined();
+    expect(res.getHeader('X-B4M-Audio-File-Url')).toBeUndefined();
   });
 
   it('rejects an invalid body (422) without resolving a key', async () => {
