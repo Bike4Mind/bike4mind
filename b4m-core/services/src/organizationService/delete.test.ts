@@ -129,6 +129,48 @@ describe('organizationService - delete', () => {
     expect(mockAdapters.db.organizations.delete).toHaveBeenCalledWith('org1');
   });
 
+  describe('delete authority', () => {
+    // `get` resolves via findAccessibleById, which any member holding read satisfies, so these pin
+    // that deletion additionally requires the billing owner or a platform admin.
+    it('should allow the billing owner to delete', async () => {
+      const owner: Partial<IUserDocument> = { id: 'user1', isAdmin: false };
+
+      mockAdapters.db.organizations.delete.mockResolvedValue(undefined);
+
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(mockAdapters.db.organizations.delete).toHaveBeenCalledWith('org1');
+    });
+
+    it('should reject a read-only member and perform no writes', async () => {
+      const member: Partial<IUserDocument> = { id: 'member1', isAdmin: false };
+      mockAdapters.validation = { canDeleteOrganization: vi.fn() };
+
+      await expect(deleteOrganization(member as IUserDocument, { id: 'org1' }, mockAdapters)).rejects.toThrow(
+        'Not authorized to delete this organization'
+      );
+
+      expect(mockAdapters.db.organizations.delete).not.toHaveBeenCalled();
+      // The gate precedes the subscription check, so a caller without authority cannot read the
+      // org's billing state out of the validation reason.
+      expect(mockAdapters.validation.canDeleteOrganization).not.toHaveBeenCalled();
+    });
+
+    it('should reject an appointed org admin who is not the billing owner', async () => {
+      vi.spyOn(getOrganization, 'get').mockResolvedValue({
+        ...mockOrganization,
+        adminUserIds: ['orgAdmin1'],
+      } as WithId<IOrganizationDocument>);
+      const orgAdmin: Partial<IUserDocument> = { id: 'orgAdmin1', isAdmin: false };
+
+      await expect(deleteOrganization(orgAdmin as IUserDocument, { id: 'org1' }, mockAdapters)).rejects.toThrow(
+        'Not authorized to delete this organization'
+      );
+
+      expect(mockAdapters.db.organizations.delete).not.toHaveBeenCalled();
+    });
+  });
+
   it('should throw if delete operation fails', async () => {
     const mockAdminUser: Partial<IUserDocument> = {
       id: 'admin1',
