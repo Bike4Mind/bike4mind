@@ -8,7 +8,7 @@ import {
   ISessionDocument,
   IUserDocument,
 } from '@bike4mind/common';
-import { NotFoundError, secureParameters } from '@bike4mind/utils';
+import { NotFoundError, secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
 import { z } from 'zod';
 
 const cancelInviteSchema = z.object({
@@ -51,7 +51,9 @@ export const cancelInvite = async (
   { db }: CancelInviteAdapters
 ) => {
   const { id, type, email } = secureParameters(parameters, cancelInviteSchema);
-  if (!user.email) throw new Error('User has no email');
+  // Typed errors, not bare `Error`: errorHandler cannot map a bare Error, so it falls through to a
+  // 500, which trips the LiveOps CloudWatch filter on what are ordinary client conditions.
+  if (!user.email) throw new UnprocessableEntityError('User has no email');
 
   if (type === InviteType.FabFile) {
     const fabFile = await db.fabFiles.findByIdAndUserId(id, user.id);
@@ -84,7 +86,7 @@ export const cancelInvite = async (
   }
 
   const invites = await db.invites.findAllByDocumentId(id);
-  if (invites.length === 0) throw new Error('Invite not found');
+  if (invites.length === 0) throw new NotFoundError('Invite not found');
 
   for (const invite of invites) {
     // If email is provided, we need to remove it from the pending list

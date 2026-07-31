@@ -71,12 +71,60 @@ describe('sharingService - cancelInvite authority', () => {
     expect(db.invites.update).not.toHaveBeenCalled();
   });
 
-  it('still authorizes the pre-existing arms', async () => {
+  it('denies every pre-existing arm when its lookup finds nothing', async () => {
     await expect(cancel(InviteType.FabFile)).rejects.toThrow(NotFoundError);
     await expect(cancel(InviteType.Session)).rejects.toThrow(NotFoundError);
     await expect(cancel(InviteType.Organization)).rejects.toThrow(NotFoundError);
     await expect(cancel(InviteType.Group)).rejects.toThrow(NotFoundError);
 
     expect(db.invites.update).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Positive controls. Without these the deny cases above pass trivially - the default mocks return
+   * null for everything, so an arm could lose its caller scoping (or be deleted outright) and every
+   * deny assertion would still hold. Each case asserts the arm both SUCCEEDS when authorized and
+   * passes the acting caller to its predicate, which is what pins the scoping.
+   */
+  describe('positive controls - each arm authorizes on its own predicate, scoped to the caller', () => {
+    it('FabFile: requires the caller own the file', async () => {
+      db.fabFiles.findByIdAndUserId = vi.fn(async () => ({ id: DOC_ID }));
+
+      const result = await cancel(InviteType.FabFile);
+
+      expect(db.fabFiles.findByIdAndUserId).toHaveBeenCalledWith(DOC_ID, CALLER_ID);
+      expect(result[0].remaining).toBe(0);
+    });
+
+    it('Session: requires the caller own the session', async () => {
+      db.sessions.findByIdAndUserId = vi.fn(async () => ({ id: DOC_ID }));
+
+      const result = await cancel(InviteType.Session);
+
+      expect(db.sessions.findByIdAndUserId).toHaveBeenCalledWith(DOC_ID, CALLER_ID);
+      expect(result[0].remaining).toBe(0);
+    });
+
+    it('Organization: requires the caller hold share access on the org', async () => {
+      db.organizations.shareable.findShareAccessById = vi.fn(async () => ({ id: DOC_ID }));
+
+      const result = await cancel(InviteType.Organization);
+
+      expect(db.organizations.shareable.findShareAccessById).toHaveBeenCalledWith(asUser(), DOC_ID);
+      // The non-admin path must not fall back to the unscoped lookup.
+      expect(db.organizations.findById).not.toHaveBeenCalled();
+      expect(result[0].remaining).toBe(0);
+    });
+
+    it("Group: requires share access on the group's owning organization", async () => {
+      db.groups.findById = vi.fn(async () => ({ id: DOC_ID, organizationId: 'org-9' }));
+      db.organizations.shareable.findShareAccessById = vi.fn(async () => ({ id: 'org-9' }));
+
+      const result = await cancel(InviteType.Group);
+
+      // Scoped to the group's org, not to the group id the caller supplied.
+      expect(db.organizations.shareable.findShareAccessById).toHaveBeenCalledWith(asUser(), 'org-9');
+      expect(result[0].remaining).toBe(0);
+    });
   });
 });

@@ -107,6 +107,9 @@ describe('project-invite authorization (end-to-end, real repos + Mongo)', () => 
     expect(missing).toBeInstanceOf(BadRequestError);
     expect(denied.message).toBe(missing.message);
     expect(denied.message).not.toContain(PROJECT_NAME);
+    // errorHandler spreads `additionalInfo` verbatim into the response body, so it is a second
+    // channel the message assertions above do not cover.
+    expect((denied as BadRequestError).additionalInfo).toEqual((missing as BadRequestError).additionalInfo);
 
     expect(await inviteRepository.findAllByDocumentId(String(project._id))).toHaveLength(0);
   });
