@@ -39,10 +39,8 @@ function generateNewApiKey(): { key: string; keyPrefix: string; keyHash: string 
 }
 
 /**
- * Rotate a key's secret. Resolvable by the key's minter OR by an admin of the
- * org the key is billed to (owner or manager), mirroring the org-admin-aware
- * LIST route and updateEmbedKey. The org-admin lookup is lazy: the minter path
- * pays no extra query.
+ * Rotate a key's secret, scoped by resolveOwnedApiKey (the key's minter, or an
+ * admin of the org it is billed to).
  */
 export const rotateUserApiKey = async (
   userId: string,

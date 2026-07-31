@@ -23,11 +23,10 @@ export interface RevokeUserApiKeyResult {
 }
 
 /**
- * Revoke (disable) a key. Resolvable by the key's minter OR by an admin of the
- * org the key is billed to (owner or manager), mirroring the org-admin-aware
- * LIST route and updateEmbedKey. `revokedBy` records the acting caller, which is
- * now genuinely distinct from the minter when an org admin revokes a teammate's
- * key. The org-admin lookup is lazy: the minter path pays no extra query.
+ * Revoke (disable) a key, scoped by resolveOwnedApiKey (the key's minter, or an
+ * admin of the org it is billed to). `revokedBy` records the acting caller,
+ * which is genuinely distinct from the minter when an org admin revokes a
+ * teammate's key.
  */
 export const revokeUserApiKey = async (
   userId: string,
