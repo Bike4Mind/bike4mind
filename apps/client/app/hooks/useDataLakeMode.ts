@@ -22,7 +22,11 @@ const useDataLakeMode = create<DataLakeModeState>(set => ({
   setEnabled: enabled => set({ enabled }),
   seedFromSession: session => {
     if (!session?.id) {
-      set({ enabled: false, seededSessionId: null });
+      // /new (no session yet): PRESERVE the toggle so a Data-Lake-on new chat (or a quick
+      // pre-select that routes through /new) keeps the tree open - the first send then creates
+      // the grounded session (see useSetDataLakeMode). Only clear the seeded-id so the created
+      // session re-seeds cleanly; resetting `enabled` here was what closed the sidebar.
+      set({ seededSessionId: null });
       return;
     }
     set(state =>

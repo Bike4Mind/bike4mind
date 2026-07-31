@@ -26,8 +26,16 @@ describe('useDataLakeMode', () => {
     expect(useDataLakeMode.getState().seededSessionId).toBe('s2');
   });
 
-  it('resets to off when there is no session (e.g. /new)', () => {
+  it('preserves the toggle when there is no session (/new) so a new chat can start grounded', () => {
     useDataLakeMode.getState().seedFromSession({ id: 's1', forceKnowledgeRetrieval: true });
+    useDataLakeMode.getState().seedFromSession(null);
+    // Enabled is preserved (not reset) so the tree stays open on /new; only the seeded-id clears.
+    expect(useDataLakeMode.getState().enabled).toBe(true);
+    expect(useDataLakeMode.getState().seededSessionId).toBe(null);
+  });
+
+  it('leaves the toggle off on /new when it was already off', () => {
+    useDataLakeMode.getState().seedFromSession({ id: 's1', forceKnowledgeRetrieval: false });
     useDataLakeMode.getState().seedFromSession(null);
     expect(useDataLakeMode.getState().enabled).toBe(false);
     expect(useDataLakeMode.getState().seededSessionId).toBe(null);
