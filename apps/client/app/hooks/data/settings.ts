@@ -21,13 +21,18 @@ export function useUpdateSettings() {
     mutationFn: async ({
       key,
       value,
+      confirmClear,
     }: {
       key: SettingKey;
       value: z.TypeOf<(typeof settingsMap)[SettingKey]['schema']>;
+      // Required by the server to unset a sensitive setting - clearing one destroys a live
+      // credential, so the intent has to be explicit rather than inferred from an empty value.
+      confirmClear?: boolean;
     }) => {
       const { data } = await api.put(`/api/settings/update`, {
         key,
         value,
+        ...(confirmClear ? { confirmClear } : {}),
       });
 
       return data;

@@ -18,7 +18,7 @@ vi.mock('../models', () => ({
 }));
 
 import { defineAbilitiesFor } from './ability';
-import { Prompt } from '../models';
+import { Prompt, FabFile } from '../models';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
   ({ id: 'u1', isAdmin: false, tags: [], groups: [], email: 'user@example.com', ...overrides }) as IUserDocument;
@@ -59,5 +59,47 @@ describe('db-core defineAbilitiesFor - Prompt library', () => {
 
   it('grants nothing to an undefined user', () => {
     expect(defineAbilitiesFor(undefined).can('read', Prompt)).toBe(false);
+  });
+});
+
+// Org Groups (#1172): the db-core ability is the copy the quest/slack processors and the
+// image/video generators compile into a Mongo query via accessibleBy - the path where a
+// cross-element group match actually bites. Must stay in sync with the HTTP ability
+// (apps/client/server/auth/ability.ts); these mirror that file's group tests exactly.
+describe('db-core defineAbilitiesFor - group-shared document access', () => {
+  type GroupShare = { groupId: string; permissions: string[] };
+  const sharedWithGroups = (groups: GroupShare[]) =>
+    Object.assign(new FabFile(), { userId: 'owner', users: [], groups });
+
+  it('grants read to a member of a group the doc shares read with', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: ['g1'] }));
+    const doc = sharedWithGroups([{ groupId: 'g1', permissions: ['read'] }]);
+    expect(ability.can('read', doc)).toBe(true);
+  });
+
+  it('denies a non-member (no overlapping group id)', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: ['g-other'] }));
+    const doc = sharedWithGroups([{ groupId: 'g1', permissions: ['read'] }]);
+    expect(ability.can('read', doc)).toBe(false);
+  });
+
+  // The over-broad-grant guard: groupId and permission must hold on the SAME entry.
+  // The user is in g1 (granted only `share`); `read` is granted to g2, which they are
+  // NOT in. A dotted filter satisfied the two conditions across the two entries and
+  // leaked read; $elemMatch keeps them denied.
+  it('does not leak a permission granted to a different group (no cross-element match)', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: ['g1'] }));
+    const doc = sharedWithGroups([
+      { groupId: 'g1', permissions: ['share'] },
+      { groupId: 'g2', permissions: ['read'] },
+    ]);
+    expect(ability.can('read', doc)).toBe(false);
+    expect(ability.can('share', doc)).toBe(true);
+  });
+
+  it('denies when the user has no groups (empty array is the prod no-op)', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: [] }));
+    const doc = sharedWithGroups([{ groupId: 'g1', permissions: ['read'] }]);
+    expect(ability.can('read', doc)).toBe(false);
   });
 });

@@ -328,12 +328,17 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
   };
 
   let mockOrganizationRepository: any;
+  let mockGroupRepository: any;
+  let mockUserRepository: any;
 
   beforeEach(() => {
     mockOrganizationRepository = {
       findById: vi.fn().mockResolvedValue({ ...mockOrganization }),
       update: vi.fn().mockImplementation(org => Promise.resolve(org)),
     };
+    // revokeAccess now purges the removed member's org group ids + adminUserIds (org-groups #1172).
+    mockGroupRepository = { findByOrganization: vi.fn().mockResolvedValue([]) };
+    mockUserRepository = { removeGroupsFromUser: vi.fn().mockResolvedValue(undefined) };
   });
 
   it('should allow manager to revoke access from members', async () => {
@@ -346,6 +351,8 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
       {
         db: {
           organizations: mockOrganizationRepository,
+          groups: mockGroupRepository,
+          users: mockUserRepository,
         },
       }
     );
@@ -371,6 +378,8 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
         {
           db: {
             organizations: mockOrganizationRepository,
+            groups: mockGroupRepository,
+            users: mockUserRepository,
           },
         }
       )
@@ -387,6 +396,8 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
       {
         db: {
           organizations: mockOrganizationRepository,
+          groups: mockGroupRepository,
+          users: mockUserRepository,
         },
       }
     );
