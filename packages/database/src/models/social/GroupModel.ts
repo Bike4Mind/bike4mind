@@ -54,22 +54,13 @@ export const Group: mongoose.Model<IGroupDocument> =
 
 export class GroupRepository extends BaseRepository<IGroupDocument> implements IGroupRepository {
   /** Live instances (the soft-delete plugin's find hook excludes `deletedAt` rows). */
-  async findByOrganization(organizationId: string): Promise<IGroupDocument[]> {
-    const groups = await this.model.find({ organizationId });
+  async findByOrganization(organizationId: string, options?: { includeDeleted?: boolean }): Promise<IGroupDocument[]> {
+    const query = this.model.find({ organizationId });
+    // Opt out of the soft-delete find hook so the org-delete purge can reach already-soft-deleted
+    // groups whose ids may still sit in user.groups (#1230). Live-only otherwise.
+    if (options?.includeDeleted) query.setOptions({ includeDeleted: true });
+    const groups = await query;
     return groups.map(group => group.toObject());
-  }
-
-  /**
-   * Soft-delete by writing `deletedAt` directly via a Mongoose `updateMany`.
-   * NOT the plugin's `deleteMany` static: that routes through the raw driver
-   * (`this.collection.updateMany`), which Mongoose 8's transactionAsyncLocalStorage
-   * does NOT inject a session into - so a soft-delete inside `withTransaction` would
-   * escape the transaction and, on a transient-error retry, silently skip the member
-   * purge. A real Mongoose query joins the session automatically (see BaseModel notes).
-   */
-  async softDeleteByIds(groupIds: string[]): Promise<void> {
-    if (groupIds.length === 0) return;
-    await this.model.updateMany({ _id: { $in: groupIds }, deletedAt: null }, { $set: { deletedAt: new Date() } });
   }
 
   /**

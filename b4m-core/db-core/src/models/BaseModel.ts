@@ -75,11 +75,23 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     }
     return query;
   }
+  /**
+   * Delete by id. Routes to `softDeletePlugin` (soft delete) for the plugin-carrying models, or a
+   * hard delete for the rest.
+   *
+   * HAZARD - do NOT pass `{ session }` here. Mongoose's `transactionAsyncLocalStorage` guard is a
+   * key-PRESENCE check (`!Object.hasOwn(options, 'session')`), so passing `{ session: undefined }`
+   * SETS the key and suppresses ALS injection: the delete then escapes the caller's
+   * `withTransaction` and commits immediately, surviving a rollback - a data-loss path on hard
+   * deletes (org-groups #1228, mechanism 2; same trap the `update`/`updateMany` `.session(null)`
+   * note above guards against). Omitting the argument lets ALS inject the active session for
+   * Mongoose-query (hard) deletes, and `withAlsSession` inside `softDeletePlugin` does the same for
+   * the raw-driver soft-delete path. `_txn` is null on every path that reaches `delete()` (the only
+   * `.txn` setter runs inside a `withTransaction` callback, which ALS already covers), so it is
+   * deliberately not threaded here.
+   */
   async delete(id: string): Promise<unknown> {
-    // Use deleteOne - models with softDeletePlugin will do soft delete automatically
-    // Models without the plugin will do hard delete
-    // Pass session as an option since softDeletePlugin returns a Promise, not a Query
-    return this.model.deleteOne({ _id: convertId(id) }, { session: this._txn ?? undefined });
+    return this.model.deleteOne({ _id: convertId(id) });
   }
   count(filter: Record<string, unknown>) {
     return this.model.countDocuments(filter);
