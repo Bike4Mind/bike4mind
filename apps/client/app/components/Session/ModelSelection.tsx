@@ -472,7 +472,17 @@ const ModelOption = React.memo(
     const metricIndicators = (
       <>
         <MetricIcon label={`${priceTierInfo.tier} cost`} tooltip={getPriceTierTooltip(priceTierInfo.tier)}>
-          <AttachMoneyIcon sx={{ fontSize: '16px', color: metricIconColor(priceTierInfo.variant) }} />
+          <AttachMoneyIcon
+            sx={{
+              fontSize: '16px',
+              color: metricIconColor(priceTierInfo.variant),
+              // The $ glyph is drawn 0.59 units left of centre inside its own 24-unit viewBox
+              // (ink spans x 6.32..16.50), so centring the <svg> still leaves it visibly left
+              // in a round frame. Divided by 24 in em so it tracks fontSize. Speed and the
+              // capability glyphs measure centred and are deliberately left alone.
+              transform: 'translateX(calc(0.59em / 24))',
+            }}
+          />
         </MetricIcon>
 
         {!statsLoading && modelSpeed && (
