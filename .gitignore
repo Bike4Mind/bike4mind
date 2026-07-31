@@ -80,12 +80,18 @@ packages/premium/tavern/
 packages/premium/optihashi/
 
 # Premium overlay snapshot for b4m-bob, hydrated at the pinned ref by the deploy
-# pipeline before pnpm install. Last of the six to be listed here: bootstrap-premium.sh
-# clones every overlay in the deployer's overlay-pins.json, so without this entry a
-# local `pnpm bootstrap:premium` against this PUBLIC checkout leaves private overlay
-# source untracked, one bulk `git add` away from publishing it. Same near-miss the
-# optihashi entry above records.
+# pipeline before pnpm install. bootstrap-premium.sh clones every overlay in the
+# deployer's overlay-pins.json, so without this entry a local `pnpm bootstrap:premium`
+# against this PUBLIC checkout leaves private overlay source untracked, one bulk
+# `git add` away from publishing it. Same near-miss the optihashi entry above records.
 packages/premium/bob/
+
+# Premium overlay snapshot for b4m-interactive-meetings, hydrated at the pinned ref by the
+# deploy pipeline before pnpm install. Seventh of the enumerated overlays: there is no
+# blanket packages/premium/*/ pattern here on purpose, so an unlisted overlay mount shows
+# as untracked and is one bulk `git add` away from publishing private source into this
+# PUBLIC repo. Same near-miss the optihashi and bob entries above record.
+packages/premium/interactive-meetings/
 
 # Docusaurus
 docs-site/build/
