@@ -40,9 +40,12 @@ vi.mock('@bike4mind/database', () => {
     // chainable Query, so calling `.session()` on the return value throws in production
     // (see softDeletePlugin in b4m-core/db-core/src/utils/mongo.ts). Session must be
     // passed as an options argument instead.
-    static deleteMany = (...args: unknown[]) => {
-      mockRefs.deleteManyArgs = args;
-      return Promise.resolve({ deletedCount: fabFileDocs.length });
+    static deleteMany = (filter: unknown, ...rest: unknown[]) => {
+      mockRefs.deleteManyArgs = [filter, ...rest];
+      // Only the CASL-scoped accessible filter should ever reach here - a wrong/widened filter
+      // (e.g. {}) resolves 0, which the test below can tell apart from the real filter.
+      const deletedCount = filter === accessibleFilter ? fabFileDocs.length : 0;
+      return Promise.resolve({ deletedCount });
     };
   }
   class User {
@@ -72,7 +75,8 @@ vi.mock('@bike4mind/services', () => ({
 
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn(), delete: vi.fn() }) }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
+const accessibleFilter = vi.hoisted(() => ({ __accessibleFilter: true }));
+vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => accessibleFilter }) }));
 
 // Import after mocks are registered so the chain capture runs.
 import '@pages/api/files';
@@ -153,6 +157,10 @@ describe('DELETE /api/files', () => {
 
     await mockRefs.deleteHandler!(req, res);
 
+    // Both the CASL-scoped filter and the session must reach deleteMany unchanged - checking only
+    // the session option would let a widened/wrong filter (e.g. {}, matching every user's files)
+    // pass unnoticed.
+    expect(mockRefs.deleteManyArgs?.[0]).toBe(accessibleFilter);
     expect(mockRefs.deleteManyArgs?.[1]).toEqual({ session: { __fakeSession: true } });
   });
 
