@@ -8,33 +8,58 @@ import { createMocks } from 'node-mocks-http';
  * that a query string cannot acquire one.
  */
 
-// Collapse the baseApi().get().delete() chain and capture the GET handler.
+// Collapse the baseApi().get().delete() chain and capture both handlers.
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
+  deleteHandler: null as null | ((req: any, res: any) => unknown),
   searchArgs: undefined as unknown[] | undefined,
+  deleteManyArgs: undefined as unknown[] | undefined,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     use: () => chain,
-    delete: () => chain,
     get: (fn: any) => {
       mockRefs.getHandler = fn;
+      return chain;
+    },
+    delete: (fn: any) => {
+      mockRefs.deleteHandler = fn;
       return chain;
     },
   };
   return { baseApi: () => chain };
 });
 
-vi.mock('@bike4mind/database', () => ({
-  FabFile: class FabFile {},
-  User: class User {},
-  fabFileRepository: { __repo: 'fabFiles' },
-  userRepository: { __repo: 'users' },
-  projectRepository: { __repo: 'projects' },
-  adminSettingsRepository: { __repo: 'adminSettings' },
-  withTransaction: vi.fn(),
-}));
+const fabFileDocs = vi.hoisted(() => [{ filePath: 'a/one.png' }, { filePath: 'b/two.png' }]);
+
+vi.mock('@bike4mind/database', () => {
+  class FabFile {
+    static find = () => ({ select: () => ({ session: async () => fabFileDocs }) });
+    // Mirrors the real soft-delete plugin static: it settles to a plain Promise, not a
+    // chainable Query, so calling `.session()` on the return value throws in production
+    // (see softDeletePlugin in b4m-core/db-core/src/utils/mongo.ts). Session must be
+    // passed as an options argument instead.
+    static deleteMany = (...args: unknown[]) => {
+      mockRefs.deleteManyArgs = args;
+      return Promise.resolve({ deletedCount: fabFileDocs.length });
+    };
+  }
+  class User {
+    static findById = () => ({
+      session: async () => ({ save: vi.fn().mockResolvedValue(undefined), currentStorageSize: 0 }),
+    });
+  }
+  return {
+    FabFile,
+    User,
+    fabFileRepository: { __repo: 'fabFiles' },
+    userRepository: { __repo: 'users' },
+    projectRepository: { __repo: 'projects' },
+    adminSettingsRepository: { __repo: 'adminSettings' },
+    withTransaction: vi.fn((fn: (session: unknown) => unknown) => fn({ __fakeSession: true })),
+  };
+});
 
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: {
@@ -102,5 +127,40 @@ describe('GET /api/files', () => {
     expect(params.search).toBe('invoice');
     expect(params.filters).toEqual({ type: 'pdf' });
     expect(params.pagination).toEqual({ page: '2' });
+  });
+});
+
+function invokeDelete() {
+  const { req, res } = createMocks({ method: 'DELETE', url: '/api/files' });
+  (req as any).user = { id: 'user-1' };
+  (req as any).ability = { can: () => true };
+  (req as any).logger = { error: vi.fn() };
+  return { req, res };
+}
+
+describe('DELETE /api/files', () => {
+  beforeEach(() => {
+    mockRefs.deleteManyArgs = undefined;
+  });
+
+  // Regression for the TypeError that fired in production: FabFile.deleteMany() comes from the
+  // soft-delete plugin, which resolves to a plain Promise rather than a Query, so chaining
+  // `.session(session)` onto it throws `.session is not a function`. Passing session as an
+  // options object is the only shape that both works and keeps the delete inside the transaction.
+  it('passes the session as an option to deleteMany instead of chaining it', async () => {
+    expect(mockRefs.deleteHandler).toBeTypeOf('function');
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(mockRefs.deleteManyArgs?.[1]).toEqual({ session: { __fakeSession: true } });
+  });
+
+  it('completes the request without throwing', async () => {
+    const { req, res } = invokeDelete();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(204);
   });
 });
