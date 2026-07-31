@@ -4,7 +4,14 @@ import { FabFile, User, adminSettingsRepository } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 
-export type GeneratedAudioSource = 'tts' | 'sound-effect';
+export type GeneratedAudioSource = 'tts' | 'sound-effect' | 'music';
+
+/** Human-friendly file-name prefix for each generated-audio source. */
+const FILE_NAME_LABELS: Record<GeneratedAudioSource, string> = {
+  tts: 'speech',
+  'sound-effect': 'sound-effect',
+  music: 'music',
+};
 
 /**
  * Outcome of trying to persist generated audio. `saved: false` is never fatal:
@@ -41,7 +48,7 @@ export async function persistGeneratedAudio(params: {
   const { userId, audio, contentType, source, text, format, logger } = params;
 
   const ext = extensionFromMimeType(contentType) || format || 'mp3';
-  const label = source === 'tts' ? 'speech' : 'sound-effect';
+  const label = FILE_NAME_LABELS[source];
   // Short, sanitized snippet of the prompt (no dots, so the appended extension
   // is the only one getFileExtension can pick up).
   const snippet = text

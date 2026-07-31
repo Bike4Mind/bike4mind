@@ -119,6 +119,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const speechToTextUsageTransactions = sortedTransactions.filter(t => t.type === 'speech_to_text_usage');
     const textToSpeechUsageTransactions = sortedTransactions.filter(t => t.type === 'text_to_speech_usage');
     const soundEffectsUsageTransactions = sortedTransactions.filter(t => t.type === 'sound_effects_usage');
+    const musicUsageTransactions = sortedTransactions.filter(t => t.type === 'music_generation_usage');
 
     // Combined deduct transactions for burn rate calculation
     const allDeductTransactions = [
@@ -132,6 +133,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...speechToTextUsageTransactions,
       ...textToSpeechUsageTransactions,
       ...soundEffectsUsageTransactions,
+      ...musicUsageTransactions,
     ];
 
     // Calculate burn rate (average daily usage)
@@ -217,6 +219,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const speechToTextUsageDailyData = new Map<string, { x: string; y: number }>();
     const textToSpeechUsageDailyData = new Map<string, { x: string; y: number }>();
     const soundEffectsUsageDailyData = new Map<string, { x: string; y: number }>();
+    const musicUsageDailyData = new Map<string, { x: string; y: number }>();
     const creditsAddedDailyData = new Map<string, { x: string; y: number }>(); // Combined purchases, subscriptions, and generic adds
     const allUsageDailyData = new Map<string, { x: string; y: number }>(); // Combined all usage types including generic deducts
 
@@ -250,6 +253,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     processTransactionType(speechToTextUsageTransactions, speechToTextUsageDailyData);
     processTransactionType(textToSpeechUsageTransactions, textToSpeechUsageDailyData);
     processTransactionType(soundEffectsUsageTransactions, soundEffectsUsageDailyData);
+    processTransactionType(musicUsageTransactions, musicUsageDailyData);
 
     // Create combined credits added (purchases + subscriptions + generic adds)
     [...purchaseTransactions, ...subscriptionTransactions, ...genericAddTransactions].forEach(transaction => {
@@ -273,6 +277,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...speechToTextUsageTransactions,
       ...textToSpeechUsageTransactions,
       ...soundEffectsUsageTransactions,
+      ...musicUsageTransactions,
     ].forEach(transaction => {
       const day = dayjs(transaction.createdAt).format('YYYY-MM-DD');
       if (!allUsageDailyData.has(day)) {
@@ -301,6 +306,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
         speechToTextUsageDailyData,
         textToSpeechUsageDailyData,
         soundEffectsUsageDailyData,
+        musicUsageDailyData,
         creditsAddedDailyData,
         allUsageDailyData,
       ].forEach(dataMap => {
@@ -329,6 +335,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const speechToTextUsageDataPoints = sortDataPoints(speechToTextUsageDailyData);
     const textToSpeechUsageDataPoints = sortDataPoints(textToSpeechUsageDailyData);
     const soundEffectsUsageDataPoints = sortDataPoints(soundEffectsUsageDailyData);
+    const musicUsageDataPoints = sortDataPoints(musicUsageDailyData);
     const creditsAddedDataPoints = sortDataPoints(creditsAddedDailyData);
     const allUsageDataPoints = sortDataPoints(allUsageDailyData);
 
@@ -457,6 +464,14 @@ const CreditAnalyticsTabContent: React.FC = () => {
           id: 'sound_effects_usage',
           data: soundEffectsUsageDataPoints,
           color: theme.palette.warning[400],
+        });
+      }
+
+      if (musicUsageDataPoints.some(p => p.y > 0)) {
+        lines.push({
+          id: 'music_generation_usage',
+          data: musicUsageDataPoints,
+          color: theme.palette.success[400],
         });
       }
 
@@ -969,6 +984,8 @@ const CreditAnalyticsTabContent: React.FC = () => {
                       return 'Text to Speech';
                     case 'sound_effects_usage':
                       return 'Sound Effects';
+                    case 'music_generation_usage':
+                      return 'Music Generation';
                     case 'usage':
                       return t('credits.credits_used');
                     case 'credits_added':
