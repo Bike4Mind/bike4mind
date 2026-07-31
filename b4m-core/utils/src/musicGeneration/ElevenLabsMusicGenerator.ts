@@ -5,6 +5,13 @@ import { GeneratedMusic, MusicGenerationOptions, MusicGenerator } from './types'
 const MUSIC_GENERATION_ENDPOINT = 'https://api.elevenlabs.io/v1/music';
 const DEFAULT_OUTPUT_FORMAT = 'mp3_44100_128';
 
+// The provider round-trip runs inside a 60s-capped serving function while a
+// credit reservation is already debited. Abort with headroom (leaving room for
+// the surrounding reserve/settle/persist work) so a slow provider surfaces as a
+// rejected fetch - which the route's catch refunds - instead of the process
+// being killed mid-call with the charge applied and no refund.
+const MUSIC_GENERATION_TIMEOUT_MS = 45_000;
+
 /** Maps an ElevenLabs `output_format` token to its MIME type. */
 function contentTypeForFormat(format: string): string {
   if (format.startsWith('mp3')) return 'audio/mpeg';
@@ -59,6 +66,7 @@ export class ElevenLabsMusicGenerator implements MusicGenerator {
         ...(options.lengthMs !== undefined ? { music_length_ms: options.lengthMs } : {}),
         ...(options.forceInstrumental !== undefined ? { force_instrumental: options.forceInstrumental } : {}),
       }),
+      signal: AbortSignal.timeout(MUSIC_GENERATION_TIMEOUT_MS),
     });
 
     if (!res.ok) {

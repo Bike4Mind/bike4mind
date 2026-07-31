@@ -52,6 +52,17 @@ describe('ElevenLabsMusicGenerator', () => {
     expect(JSON.parse(init.body)).toEqual({ prompt: 'ambient pad', model_id: 'music_v1' });
   });
 
+  it('arms an abort signal so a slow provider round-trip cannot outlive the serving function', async () => {
+    const fetchImpl = mockFetch('x');
+    const generator = new ElevenLabsMusicGenerator({ apiKey: 'secret', logger, fetchImpl });
+
+    await generator.generate('drone');
+
+    const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    // The route's catch/refund path only runs if the fetch can reject on timeout.
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
   it('maps the requested output format to the right content type', async () => {
     const fetchImpl = mockFetch('x');
     const generator = new ElevenLabsMusicGenerator({ apiKey: 'secret', logger, fetchImpl });

@@ -30,13 +30,22 @@ export const DEFAULT_MUSIC_LENGTH_MS = 10_000;
 
 /** ElevenLabs music length bounds, in milliseconds (`music_length_ms`). */
 export const MIN_MUSIC_LENGTH_MS = 3_000;
-export const MAX_MUSIC_LENGTH_MS = 600_000;
+/**
+ * Capped well below the provider's own 600s ceiling because generation happens
+ * inside a 60s-limited serving function whose provider fetch aborts at ~45s (see
+ * ElevenLabsMusicGenerator). The abort makes over-budget requests fail safe
+ * (reservation refunded), so this cap is purely to avoid accepting lengths that
+ * would predictably time out. Conservative and provisional: raise it once real
+ * ElevenLabs generation latency is measured against the fetch budget.
+ */
+export const MAX_MUSIC_LENGTH_MS = 120_000;
 
 /**
  * Inbound request body for `POST /api/ai/music`.
  *
- * `lengthMs` bounds mirror the ElevenLabs Music API (`music_length_ms`,
- * 3s-600s). It carries a default rather than being optional so the billed
+ * `lengthMs` upper bound is capped below the ElevenLabs Music API ceiling to fit
+ * the serving function's time budget (see MAX_MUSIC_LENGTH_MS). It carries a
+ * default rather than being optional so the billed
  * length is always known up front (the reserve/settle path needs a deterministic
  * cost before generation) and the route can force that exact length on the
  * provider. `format` is the provider-specific output encoding token (e.g.

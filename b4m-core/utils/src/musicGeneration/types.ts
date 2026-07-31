@@ -1,7 +1,8 @@
 import { MusicModel } from '@bike4mind/common';
 
 export interface MusicGenerationOptions {
-  /** Target track length in ms. The provider clamps to its own 3s-600s range. */
+  /** Target track length in ms. Bounded by the route to fit the serving-function
+   * budget (see MAX_MUSIC_LENGTH_MS); the provider's own range is 3s-600s. */
   lengthMs?: number;
   /** When true, ask the provider for an instrumental (no vocals) track. */
   forceInstrumental?: boolean;

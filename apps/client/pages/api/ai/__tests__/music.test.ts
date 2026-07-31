@@ -140,6 +140,15 @@ describe('POST /api/ai/music', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getData().toString()).toBe('song');
+    // The billed length is what's forced on the provider: the same lengthMs must
+    // drive the cost estimate AND the generate call, or billed != generated.
+    expect(estimateMusicCredits).toHaveBeenCalledWith('elevenlabs', { lengthMs: 30000 });
+    expect(generate).toHaveBeenCalledWith('lofi beat', {
+      lengthMs: 30000,
+      forceInstrumental: undefined,
+      modelId: 'music_v1',
+      format: undefined,
+    });
     // Reserved up front (single call: funded, no rollback), then settled.
     expect(userIncrement).toHaveBeenCalledTimes(1);
     expect(userIncrement).toHaveBeenCalledWith('u1', -150);
@@ -248,6 +257,9 @@ describe('POST /api/ai/music', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
+    // Persisted under the 'music' source so it's tagged/named as music, not a
+    // sound effect (the two routes share persistGeneratedAudio).
+    expect(persistGeneratedAudio).toHaveBeenCalledWith(expect.objectContaining({ source: 'music' }));
     // The signed URL must ride the header: the CLI cannot re-resolve one via
     // GET /api/files/:id until the async moderation scan flips the file to 'clean'.
     expect(res.getHeader('X-B4M-Audio-Saved')).toBe('true');
@@ -291,6 +303,28 @@ describe('POST /api/ai/music', () => {
     expect(recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ feature: 'music_generation', status: 'error', creditsCharged: 0, costUsd: 0 })
     );
+  });
+
+  it('refunds the ORG pool (not the user) when an org-billed generation fails', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 200, usdCost: 0.1, billedSeconds: 40 });
+    findById.mockResolvedValue({ id: 'u1', currentCredits: 0 });
+    orgFindById.mockResolvedValue({ id: 'org1', currentCredits: 10000, userDetails: [] });
+    generate.mockRejectedValue(new Error('ElevenLabs music generation failed: 500'));
+
+    const { res, promise } = run(
+      { prompt: 'orchestral', lengthMs: 40000 },
+      { billingOwnerType: CreditHolderType.Organization, organizationId: 'org1' }
+    );
+    await promise;
+
+    expect(res._getStatusCode()).toBe(502);
+    // The refund must go back to whoever was reserved against - the org, via
+    // holderMethods - not the user pool.
+    expect(orgIncrement).toHaveBeenNthCalledWith(1, 'org1', -200);
+    expect(orgIncrement).toHaveBeenNthCalledWith(2, 'org1', 200);
+    expect(userIncrement).not.toHaveBeenCalled();
+    expect(deductCredits).not.toHaveBeenCalled();
   });
 
   it('still reports the charge (creditsCharged) when the settlement ledger write fails', async () => {
