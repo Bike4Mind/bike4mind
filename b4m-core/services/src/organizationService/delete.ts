@@ -6,7 +6,7 @@ import {
   IUserRepository,
   WithId,
 } from '@bike4mind/common';
-import { BadRequestError, secureParameters } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { get } from './get';
 
@@ -62,6 +62,15 @@ export async function deleteOrganization(
 
   // Get organization first to validate
   const organization = await get(user, { id }, adapters);
+
+  // Deleting an organization is owner-scoped. `get` authorizes via findAccessibleById, which any
+  // member holding read satisfies, so it is not by itself a sufficient gate on an org-wide
+  // destructive operation. Deliberately narrower than assertCanManageOrgGroups, which also admits
+  // appointed org admins: an appointed admin manages groups, not the organization's existence.
+  // A member who wants out uses organizationService.leave instead.
+  if (!user.isAdmin && organization.userId !== user.id) {
+    throw new ForbiddenError('Not authorized to delete this organization');
+  }
 
   // Run validation if provided
   if (adapters.validation?.canDeleteOrganization) {
