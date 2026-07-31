@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import DataLakeExplorer from '@client/app/components/datalake/DataLakeExplorer';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { useManageKnowledge } from '@client/app/components/datalake/manageKnowledge';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 
 /**
@@ -12,12 +13,16 @@ import { useChatInput } from '@client/app/hooks/useChatInput';
  *
  * The management panel + wizard modals are store-driven singletons already mounted
  * globally by ProviderBundle (Files/Browser). We only drive them via the store
- * (`openManager`); mounting our own copies here would stack a second modal on the
- * same `isManagerOpen`/`isOpen` flag.
+ * (`openManager`, reached through the shared `useManageKnowledge` capability);
+ * mounting our own copies here would stack a second modal on the same
+ * `isManagerOpen`/`isOpen` flag.
  */
 export default function DataLakesHome() {
   const navigate = useNavigate();
   const { article } = useSearch({ strict: false }) as { article?: string };
+  // Shared manage-knowledge capability (#841) - the gate and the open-manager wiring
+  // live in core, not here. No `requireAdmin`: these are the user's OWN lakes.
+  const { onManage } = useManageKnowledge();
   const openManager = useDataLakeWizardStore(s => s.openManager);
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
 
@@ -37,7 +42,7 @@ export default function DataLakesHome() {
       articleId={article ?? null}
       onBack={() => navigate({ to: '/new' })}
       onAskAbout={handleAskAbout}
-      onManage={openManager}
+      onManage={onManage}
       onDiscover={() => openManager('discover')}
       onCreate={openWizard}
     />
