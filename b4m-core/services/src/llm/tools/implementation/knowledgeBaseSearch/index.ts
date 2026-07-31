@@ -10,6 +10,8 @@ import { createTokenizer, getProviderFromModel, getSettingsByNames, type ITokeni
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
+import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import {
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
@@ -171,6 +173,16 @@ async function emitSemanticCitables(
 }
 
 /**
+ * A semantic arm's tool output plus the `datalake:` provenance of the passages it returned.
+ * `datalakeTags` drives retrieval-scoped lake-prompt injection (#1108); it is EMPTY for the
+ * agent-scoped arm, which must never inject a lake prompt (see prependRetrievedLakePrompts).
+ */
+interface SemanticArmResult {
+  text: string;
+  datalakeTags: string[];
+}
+
+/**
  * Semantic-first KB search: embed the query and cosine-rank against the pre-computed chunk
  * vectors (tag-independent, ranks by meaning), returning the matching passage TEXT inline so
  * the model answers without a search->retrieve-N loop. Returns null to fall through to the
@@ -184,7 +196,7 @@ async function trySemanticKbSearch(
   query: string,
   tags: string[] | undefined,
   maxResults: number
-): Promise<string | null> {
+): Promise<SemanticArmResult | null> {
   const chunkRepo = context.db.fabfilechunks;
   if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
     return null; // semantic deps not wired — use keyword
@@ -232,7 +244,11 @@ async function trySemanticKbSearch(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)})`
     );
 
-    return formatSemanticResults(ranked, search.scan);
+    // Provenance for retrieval-scoped lake-prompt injection: which lakes these passages came from.
+    return {
+      text: formatSemanticResults(ranked, search.scan),
+      datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
+    };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
     return null;
@@ -250,7 +266,7 @@ async function tryScopedSemanticKbSearch(
   scopeFileIds: string[],
   query: string,
   maxResults: number
-): Promise<string | null> {
+): Promise<SemanticArmResult | null> {
   const chunkRepo = context.db.fabfilechunks;
   if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
     return null;
@@ -280,7 +296,9 @@ async function tryScopedSemanticKbSearch(
 
     const ranked = search.results.slice(0, maxResults);
     await emitSemanticCitables(context, ranked, "this agent's knowledge base");
-    return formatSemanticResults(ranked, search.scan);
+    // Agent-scoped results never carry a lake prompt: this arm must not consult owner-wide access
+    // or imply a wider corpus, so its provenance is intentionally empty (no injection downstream).
+    return { text: formatSemanticResults(ranked, search.scan), datalakeTags: [] };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
     return null;
@@ -330,6 +348,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
     // the relevant passages, we hard-stop the loop and tell the model to compose its answer.
     let searchCallCount = 0;
     const MAX_SEARCHES = 3;
+    // Per-completion set of `datalake:` tags whose lake prompt has already been injected this turn,
+    // so multiple search_knowledge_base calls never restate the same lake's instructions (#1108).
+    const injectedLakeTags = new Set<string>();
     return {
       toolFn: async value => {
         const params = value as KnowledgeBaseSearchParams;
@@ -369,7 +390,12 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
         const semantic = scope
           ? await tryScopedSemanticKbSearch(context, scope.fileIds, query, max_results)
           : await trySemanticKbSearch(context, query, tags, max_results);
-        if (semantic) return semantic;
+        // Attach the retrieved lakes' scoped prompts (no-op for the agent-scoped arm, whose
+        // datalakeTags are empty). The keyword fallback below returns metadata only (no grounded
+        // content), so it injects nothing - a lake prompt rides only actual retrieved content, and
+        // the keyword path's content enters later via retrieve_knowledge_content, which injects there.
+        if (semantic)
+          return prependRetrievedLakePrompts(context, semantic.text, semantic.datalakeTags, injectedLakeTags);
 
         try {
           let searchResults;
