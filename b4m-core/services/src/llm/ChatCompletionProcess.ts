@@ -1641,7 +1641,11 @@ export class ChatCompletionProcess {
       const urlContentBudget = maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS;
 
       const safetyBuffer = 1000; // Emergency buffer
-      const maxSafeInputTokens = safeInputWindow(modelInfo, maxTokens, safetyBuffer);
+      // safeMaxTokens, not the raw (possibly absent) requested maxTokens: this reserves against the
+      // output budget actually in play, including the adaptive-reasoning floor above, or an adaptive
+      // model could reserve less than it goes on to use and land back on the negative-window bug this
+      // guard exists to prevent.
+      const maxSafeInputTokens = safeInputWindow(modelInfo, safeMaxTokens, safetyBuffer);
 
       // How much attached-file content may be extracted this turn.
       //
