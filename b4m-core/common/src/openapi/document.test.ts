@@ -49,24 +49,24 @@ describe('buildOpenApiDocument', () => {
   it('models the completions response as an SSE stream referencing the stream-event component', () => {
     const ok = completions.responses['200'];
     expect(Object.keys(ok.content)).toEqual(['text/event-stream']);
-    expect(ok.content['text/event-stream'].schema).toEqual(ref('CompletionStreamEvent'));
+    expect(ok.content['text/event-stream'].schema).toEqual(ref('createCompletionResponse200'));
   });
 
   it('wires request bodies and responses via $ref (no inline duplication)', () => {
-    expect(completions.requestBody.content['application/json'].schema).toEqual(ref('CompletionRequest'));
-    expect(tools.requestBody.content['application/json'].schema).toEqual(ref('ToolExecutionRequest'));
+    expect(completions.requestBody.content['application/json'].schema).toEqual(ref('createCompletionRequest'));
+    expect(tools.requestBody.content['application/json'].schema).toEqual(ref('executeToolRequest'));
     // 4xx references the shared error envelope; tools 500 returns the full result body.
     expect(completions.responses['400'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
     expect(tools.responses['400'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
-    expect(tools.responses['200'].content['application/json'].schema).toEqual(ref('ToolExecutionResponse'));
-    expect(tools.responses['500'].content['application/json'].schema).toEqual(ref('ToolExecutionResponse'));
+    expect(tools.responses['200'].content['application/json'].schema).toEqual(ref('executeToolResponse200'));
+    expect(tools.responses['500'].content['application/json'].schema).toEqual(ref('executeToolResponse500'));
   });
 
   it('provides request AND response examples for both operations', () => {
-    expect(doc.components.schemas.CompletionRequest.example).toBeDefined();
-    expect(doc.components.schemas.CompletionStreamEvent.example).toBeDefined();
-    expect(doc.components.schemas.ToolExecutionRequest.example).toBeDefined();
-    expect(doc.components.schemas.ToolExecutionResponse.example).toBeDefined();
+    expect(doc.components.schemas.createCompletionRequest.example).toBeDefined();
+    expect(doc.components.schemas.createCompletionResponse200.example).toBeDefined();
+    expect(doc.components.schemas.executeToolRequest.example).toBeDefined();
+    expect(doc.components.schemas.executeToolResponse200.example).toBeDefined();
   });
 
   it('attaches x-required-scopes ONLY where scopes are enforced, x-codeSamples on both', () => {

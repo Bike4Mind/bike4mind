@@ -31,6 +31,14 @@ export type AuthMode = 'apiKeyOrJwt' | 'jwtOnly' | 'public';
 export type ResponseSpec = {
   description: string;
   schema: z.ZodTypeAny;
+  /**
+   * Response media type, default `application/json`. Set to `text/event-stream`
+   * for an SSE endpoint so the generated spec advertises the stream shape rather
+   * than a JSON body (the schema then documents a single stream event).
+   */
+  contentType?: string;
+  /** Example response body, attached to the generated component. */
+  example?: unknown;
 };
 
 /** curl/JS/Python sample body for the docs (attached as x-codeSamples). */
