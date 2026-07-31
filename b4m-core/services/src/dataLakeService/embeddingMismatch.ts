@@ -33,9 +33,10 @@ export type ChunkSkipReason = 'unknownFile' | 'modelMismatch' | 'missingVector' 
 const SKIP_REASONS: ChunkSkipReason[] = ['unknownFile', 'modelMismatch', 'missingVector', 'dimensionMismatch'];
 
 /**
- * The short decoration appended to a live status line when a search was partial. Exported so the
- * chat tool and forced retrieval share one phrase instead of hand-copying it; the substantive
- * sentence comes from describeEmbeddingMismatch below.
+ * The short decoration appended to a live status line when a search was partial. Exported so
+ * every caller that decorates a status line this way shares one phrase instead of hand-copying
+ * it; the substantive sentence comes from describeEmbeddingMismatch below. Forced retrieval
+ * writes its own promptMeta sentence via reportCoverage and does not use this suffix.
  */
 export const PARTIAL_RESULTS_STATUS_SUFFIX = ' - partial results, some content could not be searched';
 

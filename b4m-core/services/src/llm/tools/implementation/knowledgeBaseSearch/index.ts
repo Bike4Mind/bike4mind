@@ -590,8 +590,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             await context.statusUpdate(
               { promptMeta: semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {} } as any,
               (scope
-                ? `📭 No matches in this agent's knowledge base for “${clippedQuery}”`
-                : `📭 No data-lake matches for “${clippedQuery}” — broadening…`) + skipSuffix
+                ? `📭 No matches in this agent's knowledge base for "${clippedQuery}"`
+                : `📭 No data-lake matches for "${clippedQuery}" - broadening...`) + skipSuffix
             );
           }
 
