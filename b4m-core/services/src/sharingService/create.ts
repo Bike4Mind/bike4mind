@@ -17,6 +17,7 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
 
 const defaultExpiration = () => new Date(new Date().getFullYear() + 100, new Date().getMonth(), new Date().getDate());
 export const DEFAULT_AVAILABLE = 1;
@@ -80,11 +81,23 @@ export const createInvite = async (
 
       name = doc?.name;
       break;
-    case InviteType.Group:
+    case InviteType.Group: {
       if (!rest.permissions) throw new BadRequestError('Invalid invite group request');
-      doc = await db.groups.findById(id);
-      name = doc?.name;
+      const group = await db.groups.findById(id);
+      if (!group) throw new BadRequestError('Document not found');
+      // Minting a group invite is a grant of group membership, so it takes the same authority as
+      // the members route (organizationService/groupMembership.ts assertCanManageOrgGroups). This
+      // is the grant half of the write-path invariant; accept.ts owns the receive half.
+      // Asserted before `name` is read so the group's name is never returned to a caller who
+      // lacks authority over its organization. A group with no organizationId (pre-#1181 data)
+      // fails closed, matching the authorizeByInviteType arm.
+      const organization = group.organizationId ? await db.organizations.findById(group.organizationId) : null;
+      if (!organization) throw new BadRequestError('Document not found');
+      assertCanManageOrgGroups(user, organization);
+      doc = group;
+      name = group.name;
       break;
+    }
     case InviteType.Project:
       if (!rest.permissions.length) throw new BadRequestError('Invalid invite group request');
       doc = await db.projects.findById(id);
