@@ -193,18 +193,39 @@
           "ScopeDownStatement": {
             "NotStatement": {
               "Statement": {
-                "ByteMatchStatement": {
-                  "SearchString": "/api/modals/",
-                  "FieldToMatch": {
-                    "UriPath": {}
-                  },
-                  "TextTransformations": [
+                "OrStatement": {
+                  "Statements": [
                     {
-                      "Priority": 0,
-                      "Type": "NONE"
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/modals/",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "NONE"
+                          }
+                        ],
+                        "PositionalConstraint": "STARTS_WITH"
+                      }
+                    },
+                    {
+                      "ByteMatchStatement": {
+                        "SearchString": "/api/settings/update",
+                        "FieldToMatch": {
+                          "UriPath": {}
+                        },
+                        "TextTransformations": [
+                          {
+                            "Priority": 0,
+                            "Type": "LOWERCASE"
+                          }
+                        ],
+                        "PositionalConstraint": "EXACTLY"
+                      }
                     }
-                  ],
-                  "PositionalConstraint": "STARTS_WITH"
+                  ]
                 }
               }
             }

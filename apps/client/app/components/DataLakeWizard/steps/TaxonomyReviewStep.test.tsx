@@ -6,6 +6,10 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore, type TaxonomyTag } from '@client/app/stores/useDataLakeWizardStore';
 import TaxonomyReviewStep from './TaxonomyReviewStep';
 
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  useDuplicatePrefixLake: () => undefined,
+}));
+
 /**
  * The prefix is a single shared value (taxonomy.prefix); each card renders `prefix + suffix`.
  * So editing a tag can only change its suffix (never inject a second namespace), and editing

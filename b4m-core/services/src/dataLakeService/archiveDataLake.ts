@@ -6,11 +6,13 @@ import type {
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { recomputeLakeStats } from './recomputeLakeStats';
+import { lakeMembershipScope } from './lakeMembershipScope';
+import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 
 interface ArchiveDataLakeAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'find'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'archiveByDataLakeTag' | 'computeDataLakeStats'>;
   };
@@ -52,8 +54,13 @@ export const archiveDataLake = async (
   // Step 2: transitional state (crash-visible).
   await db.dataLakes.update({ id: dataLakeId, status: 'archiving' });
 
-  // Step 3: soft-hide files + best-effort index removal.
-  await db.fabFiles.archiveByDataLakeTag(existing.datalakeTag);
+  // Step 3: soft-hide files + best-effort index removal. The scope covers prefix-tagged
+  // members too, so a file that never got the meta-tag no longer stays browsable here.
+  // Archive hides files, so a colliding sibling lake loses its prefix-tagged files from every
+  // browse (they filter archivedAt: null) - and unarchiving either lake brings back BOTH lakes'
+  // archived files, since the flip matches on archivedAt alone.
+  await warnOnPrefixCollision(db, existing, logger);
+  await db.fabFiles.archiveByDataLakeTag(lakeMembershipScope(existing));
   await bestEffortIndexRemove(retrievalIndex, existing.datalakeTag, logger);
 
   // Step 4: settle to archived and reconcile stats from source (now 0 live files).
@@ -61,7 +68,7 @@ export const archiveDataLake = async (
   if (!updated) {
     throw new NotFoundError('Data lake not found after archive');
   }
-  await recomputeLakeStats(dataLakeId, existing.datalakeTag, { db });
+  await recomputeLakeStats(existing, { db });
 
   return updated;
 };

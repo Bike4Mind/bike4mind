@@ -15,6 +15,7 @@
  */
 import { agentExecutionRepository, Quest } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
+import { persistAgentArtifacts } from './persistAgentArtifacts';
 
 export async function persistRunAsQuest(
   executionId: string,
@@ -89,8 +90,10 @@ export async function persistRunAsQuest(
       },
       { new: true }
     );
-    if (!updated) {
-      await Quest.create({
+    // Bound (not discarded) so the artifact write below can link rows to the Quest.
+    let questDoc = updated;
+    if (!questDoc) {
+      questDoc = await Quest.create({
         sessionId: execution.sessionId,
         type: 'message',
         prompt: execution.query,
@@ -112,6 +115,29 @@ export async function persistRunAsQuest(
           };
           return Object.keys(promptMeta).length ? { promptMeta } : {};
         })(),
+      });
+    }
+
+    // Durable artifact rows for the run. The client cannot do this on the agent
+    // path: the quests change-stream never reaches the browser for agent quests,
+    // and the WS `completed` payload carries the PRE-bubble answer. `replyText`
+    // here is post-DAG-bubble (agentExecutor reassigns it before calling us), so
+    // child artifacts are covered too. Total by contract - never throws.
+    const questId = questDoc?._id ? String(questDoc._id) : undefined;
+    if (questId && execution.userId) {
+      const rawCreatedAt = (questDoc as { createdAt?: Date | string }).createdAt;
+      // Quest-derived and therefore stable across retries, which is what makes the
+      // artifact id idempotent. 0 for a legacy Quest predating `timestamps: true` -
+      // the id only has to be STABLE, not meaningful.
+      const questCreatedAtMs = rawCreatedAt ? new Date(rawCreatedAt).getTime() : 0;
+      await persistAgentArtifacts({
+        replyText,
+        questId,
+        questCreatedAtMs,
+        sessionId: execution.sessionId,
+        userId: execution.userId,
+        executionId,
+        logger,
       });
     }
 

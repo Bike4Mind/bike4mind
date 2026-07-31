@@ -259,6 +259,15 @@ export interface ICacheStrategy {
   /** Cache conversation history */
   cacheConversationHistory?: boolean;
 
+  /**
+   * Number of trailing messages to exclude from the conversation-history cache
+   * breakpoint. Lets a caller append volatile, per-request content (e.g. a
+   * reminder message that's stripped and rebuilt every turn) after the stable
+   * history without it becoming the (never-reusable) cache anchor. Defaults to
+   * 0, i.e. the breakpoint anchors on the last message.
+   */
+  historyCacheExcludeTrailingCount?: number;
+
   /** Preferred TTL (only applicable to Anthropic, Bedrock) */
   cacheTTL?: '5m' | '1h';
 

@@ -479,6 +479,28 @@ jobs:
         env:
           CI: 'true'
 
+      # Persist the downloaded mongod binary across runs so the pre-warm below is usually a
+      # no-op restore. restore-keys lets a lockfile bump reuse the prior binary (the pre-warm
+      # then tops up any new version) instead of a cold download every time.
+      - name: Cache mongodb-memory-server binary
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: ${{ runner.os }}-mongodb-binaries-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-mongodb-binaries-
+
+      # Resolve (download if absent) the mongod binary in a dedicated step, OUTSIDE any test's
+      # beforeAll hook budget. Under CI load a cold download + createMongoServer's port-retry
+      # loop can blow that budget, timing out the hook and silently skipping the whole file -
+      # the #1 flake in #1098. Fail-soft: tests still download on demand if this misses. Uses
+      # the same package + default version as createMongoServer, so the same binary is cached.
+      - name: Pre-warm mongodb-memory-server binary
+        continue-on-error: true
+        run: >-
+          pnpm --filter @bike4mind/database exec node -e
+          "require('mongodb-memory-server').MongoBinary.getPath({}).then(p => console.log('mongod binary ready:', p)).catch(e => console.warn('prewarm skipped:', e.message))"
+
       - name: Run Tests (${{ matrix.shard.name }})
         run: pnpm --recursive --workspace-concurrency=4 ${{ matrix.shard.filter }} test
         env:

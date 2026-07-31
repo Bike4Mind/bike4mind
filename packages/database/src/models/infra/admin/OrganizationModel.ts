@@ -9,7 +9,6 @@ export interface IOrganizationObject extends HydratedDocument<IOrganizationDocum
 
 interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
   isNew: boolean;
-  pushUserPermission: (organizationId: string, userId: string, permission: Permission[]) => Promise<unknown>;
   update: (organization: IOrganizationDocument) => Promise<unknown>;
   findShareAccessById: (userId: string, id: string) => Promise<IOrganizationDocument | null>;
 }
@@ -46,6 +45,14 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       required: false,
       default: null,
     },
+    // Group-type keys this org may have (platform-admin writes only). Default empty = fail-closed.
+    allowedGroupTypes: { type: [String], default: [] },
+    // Org admins appointed by the billing owner / platform admin (not a Permission verb, not on users[]).
+    adminUserIds: { type: [String], default: [] },
+    // `users[]` (the shareable ACL, from IShareableDocument) is AUTHORITATIVE for org membership -
+    // every membership check reads it. `userDetails[]` below is a per-member credit side-table
+    // (usedCredits / lastCreditUsedAt), NOT a membership list; keep the two in sync but never treat
+    // userDetails as the source of truth for "is X a member" (org-groups #1173).
     userDetails: [
       {
         id: {
@@ -122,9 +129,6 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
         result.users.find((u: IUserShare) => u.userId && u.permissions.includes(Permission.share));
 
         return result;
-      },
-      pushUserPermission: function (organizationId: string, userId: string, permission: Permission[]) {
-        return this.updateOne({ _id: organizationId }, { $push: { userDetails: { userId, permission } } });
       },
       update: function (organization: IOrganizationDocument) {
         return this.updateOne({ _id: organization.id }, { $set: organization });
@@ -271,6 +275,20 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   async findByIdAndUserId(id: string, userId: string): Promise<IOrganizationDocument | null> {
     const result = await this.organizationModel.findOne({ _id: id, userId });
     return result?.toObject() || null;
+  }
+
+  /**
+   * Soft-delete by writing `deletedAt` directly via a Mongoose `updateOne`.
+   * NOT the inherited `delete`: that routes through the soft-delete plugin's static, which uses
+   * the raw driver (`this.collection.updateOne`). Mongoose 8's transactionAsyncLocalStorage only
+   * injects a session into Mongoose queries, so the raw call would commit immediately and escape
+   * the surrounding `withTransaction` - leaving, on a commit-time retry, an organization that is
+   * already gone while its groups and their memberships roll back (org-groups #1219). `get()`
+   * filters `deletedAt`, so the retry then 404s permanently. Same reasoning as
+   * `GroupRepository.softDeleteByIds`.
+   */
+  async softDeleteById(id: string): Promise<void> {
+    await this.organizationModel.updateOne({ _id: id, deletedAt: null }, { $set: { deletedAt: new Date() } });
   }
 
   /**

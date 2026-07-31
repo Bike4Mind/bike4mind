@@ -1,5 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
 import type {
+  ArtifactType,
   CommentPolicy,
   PublishResult,
   PublishScopeTier,
@@ -7,7 +8,8 @@ import type {
   ReportReason,
   UploadUrlResponse,
 } from '@bike4mind/common';
-import { SCOPE_URL_PREFIX } from '@bike4mind/common';
+import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX } from '@bike4mind/common';
+import { detectElidedSafe } from '@client/app/utils/artifactParser';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
 
 /** Summary row for the published-artifacts management list. */
@@ -20,6 +22,8 @@ export interface ManagedArtifact {
   description?: string;
   visibility: PublishVisibility;
   commentPolicy?: CommentPolicy;
+  /** Owner opt-in to search-engine indexing; absent/false means the page is served noindex. */
+  discoverable?: boolean;
   source: { kind: 'bundle' | 'reply' | 'fabfile'; artifactId?: string };
   size?: { totalBytes: number; fileCount: number };
   viewCount?: number;
@@ -185,6 +189,16 @@ export async function updatePublishedCommentPolicy(publicId: string, commentPoli
   await api.patch(`/api/publish/artifacts/${publicId}`, { commentPolicy });
 }
 
+/**
+ * Opt a published item in or out of search-engine indexing (owner/admin). Off by
+ * default: publishing publicly means "anyone with the link can view", never "listed
+ * in Google". Only takes effect while the item is open-public; link previews in chat
+ * apps are unaffected either way.
+ */
+export async function updatePublishedDiscoverable(publicId: string, discoverable: boolean): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { discoverable });
+}
+
 /** Access gate on top of `visibility: 'public'` - see issue #383. */
 export type PublishAccessGateInput =
   { kind: 'passphrase'; passphrase: string } | { kind: 'domain'; allowedDomains: string[] } | null;
@@ -228,6 +242,7 @@ export interface PublishedManageState {
   accessGate: PublishAccessGateRead;
   embedOrigins: string[];
   commentPolicy: CommentPolicy;
+  discoverable: boolean;
 }
 
 export async function getPublishedManageState(publicId: string): Promise<PublishedManageState> {
@@ -238,6 +253,9 @@ export async function getPublishedManageState(publicId: string): Promise<Publish
     accessGate: a.accessGate ?? null,
     embedOrigins: a.embedOrigins ?? [],
     commentPolicy: a.commentPolicy ?? 'none',
+    // Absent on rows predating the field -> false. Matches the server default: an
+    // artifact is not search-discoverable until its owner says so.
+    discoverable: a.discoverable ?? false,
   };
 }
 
@@ -400,10 +418,20 @@ export function artifactBundlePublisher(input: {
  * lookup and the write. A drifted id (e.g. a positional `artifact-<tabIndex>` fallback) both
  * misses the lookup - silently degrading "update existing" to publish-as-new - AND gets
  * persisted as `source.artifactId`, corrupting the linkage. Callers must pass a stable id.
+ *
+ * CALL FROM AN EVENT HANDLER, NOT A RENDER BODY: `incompleteWarning` scans the whole artifact
+ * body synchronously. Both current callers invoke this on the share click, which is why the cost
+ * is invisible; running it per render on a large body would not be.
  */
 export function buildArtifactPublishWiring(input: {
   artifactId: string;
-  type: string;
+  /**
+   * Narrowed to the union rather than `string`. A plain string would let an unrecognised value through
+   * to the detector, where the JS-bearing scans are gated on html/react and would silently switch
+   * themselves off - the exact class of silent miss this feature exists to catch. Both callers already
+   * pass a value constrained by `ArtifactModel`, so this costs them nothing.
+   */
+  type: ArtifactType;
   content: string;
   title: string;
   userId: string;
@@ -412,10 +440,15 @@ export function buildArtifactPublishWiring(input: {
 }): {
   resolveExisting: () => Promise<ManagedArtifact | null>;
   publish: (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult>;
+  incompleteWarning?: string;
 } {
   return {
     resolveExisting: () => findPublishedByArtifact(input.artifactId),
     publish: artifactBundlePublisher(input),
+    // A /p/ link is the point of no return: it can be handed to a client before anyone
+    // notices the artifact's buttons are inert. Computed here rather than in the dialog so
+    // every publish surface that routes through this wiring inherits the check.
+    ...(detectElidedSafe(input.content, input.type) ? { incompleteWarning: ELISION_PUBLISH_BODY } : {}),
   };
 }
 

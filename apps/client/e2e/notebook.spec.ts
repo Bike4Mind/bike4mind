@@ -1,12 +1,12 @@
 import { test, expect } from './fixtures';
-import { TIMEOUTS } from './constants';
+import { TIMEOUTS, MONITORED_MODELS } from './constants';
 import { type ModelCreditsData } from './helpers/slack';
 import { writeCreditsData } from './helpers/credits-store';
 import { apiCreateSession, apiDeleteSession, apiRenameSession } from './helpers/api';
 import { getTestUsers } from './helpers/test-users';
 
-// Update these when monitored models change - names must match the model selector exactly
-const CREDITS_MODELS = ['Claude 4.7 Opus', 'GPT-5.5'];
+// Shared with warmup.setup.ts (which warms these before the measured runs). See constants.ts.
+const CREDITS_MODELS = MONITORED_MODELS;
 const RUNS_PER_MODEL = 2;
 const CREDITS_PROMPT = 'What is the capital of France?';
 

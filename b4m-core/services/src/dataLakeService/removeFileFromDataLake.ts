@@ -21,19 +21,23 @@ interface RemoveFileFromDataLakeAdapters {
  * removing them would break retrieval everywhere else the file is used. Chunk teardown
  * belongs to file deletion, a separate action.
  *
- * Both signals, because buildOwnershipConditions admits a file into a lake's scope on an
- * exact meta-tag match OR a fileTagPrefix match, OR'd. Clearing only the meta-tag left the
- * file matching the prefix arm, so it kept appearing in the lake's browse and in retrieval
- * while computeDataLakeStats (meta-tag only) reported it as removed.
+ * Both signals, because a file is admitted into a lake on an exact meta-tag match OR a
+ * fileTagPrefix match, OR'd (buildDataLakeMembershipFilter). Clearing only the meta-tag left the
+ * file matching the prefix arm, so it kept appearing in the lake's browse and in retrieval while
+ * the stats reported it as removed.
  *
  * Membership is TESTED against both signals too, so a file carrying only a prefixed tag can
- * be removed rather than 404ing forever. The prefix arm additionally requires the actor to own
+ * be removed rather than 404ing forever. The prefix arm additionally requires the ACTOR to own
  * the file, because fileTagPrefix is user-chosen and neither unique nor reserved: without that
  * conjunct, minting a lake with someone else's prefix would be a licence to strip their tags.
- * This bar is deliberately NARROWER than the read arm, which ANDs the prefix with owner OR
- * shared OR group access - a destructive write should not ride a read share. The cost is that
- * a prefix-only file reaching the lake only through a share or a group is still listed and
- * still unremovable; widening the bar needs the actor's groups plumbed in here.
+ *
+ * The whole-lake predicate requires ownership on its prefix arm too, but anchored to the lake's
+ * CREATOR rather than the actor (buildDataLakeMembershipFilter). Neither rides a read share: both
+ * are destructive, and a file someone else owns is not the lake's to hide or purge. The asymmetry
+ * is only in WHOSE ownership counts - this endpoint strips tags on behalf of its caller, so it asks
+ * "may THIS actor edit this file", while archive and delete act on the lake and ask "is this file
+ * the creator's". So an admin removing one file must own it, while the lake-wide sweep they trigger
+ * takes the creator's files instead.
  *
  * A second lake sharing this prefix - not necessarily the caller's, since nothing makes
  * fileTagPrefix unique - loses the shared prefixed tag too. A lake holding its own meta-tag on
@@ -49,8 +53,8 @@ interface RemoveFileFromDataLakeAdapters {
  * no-ops without one). Removal is enforced by Mongo tag state, so it takes effect on the next
  * read - immediately and completely for the single-lake browse, today the only reader that sets
  * restrictToDataLake. Every other lake reader (the aggregate lake browse, lake semantic search,
- * the chat KB tools) leaves the broad ownership arm in place, so the file's OWNER still finds
- * their own file there. That is ownership, not lake membership, and this function cannot change
+ * the chat KB tools) still matches the prefix within the VIEWER's access, so the file's OWNER
+ * still finds their own file there. That is ownership, not lake membership, and this function cannot change
  * it.
  */
 export const removeFileFromDataLake = async (
@@ -93,6 +97,6 @@ export const removeFileFromDataLake = async (
     ...prefixedTags.filter(name => !name.startsWith(DATALAKE_TAG_PREFIX)),
   ]);
 
-  const stats = await recomputeLakeStats(dataLakeId, lake.datalakeTag, { db });
+  const stats = await recomputeLakeStats(lake, { db });
   return { success: true, ...stats };
 };

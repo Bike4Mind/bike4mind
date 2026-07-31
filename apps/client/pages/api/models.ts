@@ -1,4 +1,4 @@
-import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
+import { buildApiKeyTable, getAvailableModels, getSupersededModels } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
@@ -34,7 +34,10 @@ async function buildModelsResponse(userId: string | null) {
     isSelfHost: process.env.B4M_SELF_HOST === 'true',
   });
 
-  return { models };
+  // Superseded pins the client can offer to upgrade, resolved by llm-adapters
+  // through the same catalog-overlay-then-static-map chain a pinned request takes.
+  // Reads the fan-out getAvailableModels just did, so it costs no extra work.
+  return { models, supersededModels: getSupersededModels(models) };
 }
 
 const handler = baseApi().get(async (req, res) => {

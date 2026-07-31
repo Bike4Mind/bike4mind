@@ -1,5 +1,5 @@
 import { AdminSettings } from '@bike4mind/database/infra';
-import { SreAgentConfig, SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, settingsMap } from '@bike4mind/common';
+import { redactSettingSecrets, settingsMap, type AdminSettingDoc } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensurePublicSettingsArtifactOncePerInstance } from '@server/utils/publicSettingsArtifact';
 
@@ -19,32 +19,24 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
   // Only fetch the specific settings that users are allowed to see
   const settings = await AdminSettings.find({ settingName: { $in: permittedKeys } }).lean();
 
-  // Redact encrypted secrets before sending to client.
-  // Parse through SreAgentConfigSchema first to migrate v1->v2 (so secrets
-  // end up in repos[] where redaction looks for them), then mask them.
-  const redacted = (settings ?? []).map(setting => {
-    if (setting.settingName === 'sreAgentConfig' && setting.settingValue) {
-      let config: SreAgentConfig;
-      try {
-        config = SreAgentConfigSchema.parse(setting.settingValue);
-      } catch {
-        return setting;
-      }
-
-      return {
-        ...setting,
-        settingValue: {
-          ...config,
-          repos: (config.repos ?? []).map(repo => ({
-            ...repo,
-            ...(repo.webhookSecret && { webhookSecret: SRE_SECRET_PLACEHOLDER }),
-            ...(repo.callbackToken && { callbackToken: SRE_SECRET_PLACEHOLDER }),
-          })),
-        },
-      };
-    }
-    return setting;
-  });
+  // isSensitive gates WHO may fetch a setting; it does not by itself keep the value out
+  // of the response. Redact on the way out so a sensitive value never reaches the browser
+  // THROUGH THIS ENDPOINT - admins get a mask and write a replacement, never a round-trip
+  // of the stored secret.
+  //
+  // Scope, deliberately stated: this closes the HTTP read path only. It is NOT a
+  // system-wide guarantee. The `adminsettings` WebSocket subscription
+  // (UserSettingsContext) still fans unredacted documents out to admin browsers and
+  // lands them in the same react-query cache key this endpoint fills, and
+  // GET /api/settings returns the collection unredacted. Both are pre-existing and
+  // tracked separately. The real chokepoint for all three would be a redacting
+  // toJSON/toObject transform on AdminSettingsSchema.
+  //
+  // Server-side consumers (apiKeyService.getEffective*) read AdminSettings directly and
+  // are unaffected by this endpoint.
+  const redacted: AdminSettingDoc[] = (settings ?? []).map(setting =>
+    redactSettingSecrets(setting as unknown as AdminSettingDoc)
+  );
 
   // defaultEmbeddingModel's default is env-dependent on self-host (a local Ollama embedder when
   // no cloud key, else the cloud default - see defaultEmbeddingModelForEnv). The client cannot
@@ -59,7 +51,7 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
     redacted.push({
       settingName: 'defaultEmbeddingModel',
       settingValue: settingsMap.defaultEmbeddingModel.defaultValue,
-    } as (typeof redacted)[number]);
+    });
   }
 
   // Ensure the bootstrap completes before the handler returns (Lambda freeze - see above).

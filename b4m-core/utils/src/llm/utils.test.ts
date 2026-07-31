@@ -7,6 +7,7 @@ import {
   getLastBuildDebugInfo,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
+  TOOL_RESULT_NOT_RECORDED,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
 import { DEFAULT_HISTORY_FETCH_LIMIT, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
@@ -1550,6 +1551,33 @@ describe('Context Management Tests', () => {
         expect(meta.excludedOlderQuestCount).toBe(1);
       });
 
+      it('counts replayed tool calls, whose serialized parameters can dwarf the text reply', async () => {
+        // A small prompt whose replayable tool call carries a large parameters payload. Ignoring
+        // it would let the turn look cheap and blow the real budget once Priority 2 expands it.
+        const heavyToolItem = (n: number) =>
+          makeItem(n, {
+            prompt: `prompt ${n}`,
+            structuredReplies: undefined,
+            promptMeta: {
+              functionCalls: [
+                { id: `toolu_${n}`, name: 'web_search', parameters: { blob: 'y'.repeat(4000) }, returnValue: 'ok' },
+              ],
+            },
+          });
+
+        const items = [makeItem(3), heavyToolItem(2), heavyToolItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        // Budget fits one heavy turn (~1150 tokens of parameters) but not two.
+        const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          verbatimTokenBudget: 1500,
+        });
+
+        expect(count).toBe(1);
+        expect(meta.excludedOlderQuestCount).toBe(1);
+      });
+
       it('always keeps the most recent turn even if it alone exceeds the budget', async () => {
         const items = [makeBigItem(3), makeBigItem(2), makeBigItem(1)];
         const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
@@ -1635,6 +1663,111 @@ describe('Context Management Tests', () => {
         const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
 
         expect(meta.recentGeneratedImages).toEqual([]);
+      });
+    });
+
+    // Priority 2 rebuilds tool_use/tool_result pairs from promptMeta.functionCalls when
+    // structuredReplies is absent. It was unreachable for as long as the Mongoose subschema
+    // dropped functionCalls[].id, so these pin the shape Anthropic requires.
+    describe('Priority 2 tool-pairing reconstruction', () => {
+      const call = (overrides: Record<string, unknown> = {}) => ({
+        id: 'toolu_1',
+        name: 'web_search',
+        parameters: { query: 'weather' },
+        returnValue: 'sunny',
+        ...overrides,
+      });
+
+      const makeToolItem = (n: number, functionCalls: Record<string, unknown>[]) =>
+        makeItem(n, { structuredReplies: undefined, promptMeta: { functionCalls } });
+
+      const runWith = async (item: Record<string, unknown>) => {
+        // item 2 is the current prompt and gets popped, so the turn under test is item 1
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue([makeItem(2), item]) } };
+        const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+        return messages;
+      };
+
+      it('pairs each tool_use with a tool_result carrying the same id, in order', async () => {
+        const messages = await runWith(
+          makeToolItem(1, [call(), call({ id: 'toolu_2', name: 'get_time', returnValue: '10:00' })])
+        );
+
+        const [, assistant, toolResults] = messages;
+        expect(assistant.role).toBe('assistant');
+        expect(assistant.content).toEqual([
+          { type: 'text', text: 'reply 1' },
+          { type: 'tool_use', id: 'toolu_1', name: 'web_search', input: { query: 'weather' } },
+          { type: 'tool_use', id: 'toolu_2', name: 'get_time', input: { query: 'weather' } },
+        ]);
+        expect(toolResults.role).toBe('user');
+        expect(toolResults.content).toEqual([
+          { type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny', is_error: false },
+          { type: 'tool_result', tool_use_id: 'toolu_2', content: '10:00', is_error: false },
+        ]);
+      });
+
+      it('never emits an empty tool_result, which the API rejects', async () => {
+        const messages = await runWith(
+          makeToolItem(1, [call(), call({ id: 'toolu_2', name: 'get_time', returnValue: undefined })])
+        );
+
+        const contents = (messages[2].content as { content: string }[]).map(block => block.content);
+        expect(contents).toEqual(['sunny', TOOL_RESULT_NOT_RECORDED]);
+        expect(contents.every(Boolean)).toBe(true);
+      });
+
+      it('marks a failed call as an error', async () => {
+        const messages = await runWith(
+          makeToolItem(1, [call(), call({ id: 'toolu_2', returnValue: undefined, success: false })])
+        );
+
+        expect(messages[2].content).toEqual([
+          { type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny', is_error: false },
+          { type: 'tool_result', tool_use_id: 'toolu_2', content: 'Tool execution failed', is_error: true },
+        ]);
+      });
+
+      it('falls back to the text reply when no call recorded a result', async () => {
+        // The whole turn is otherwise replaced by tool invocations with nothing to show for them.
+        const messages = await runWith(makeToolItem(1, [call({ returnValue: undefined })]));
+
+        expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+      });
+
+      it('drops incomplete and duplicate calls rather than emitting unpairable blocks', async () => {
+        const messages = await runWith(
+          makeToolItem(1, [
+            call(),
+            call({ name: undefined, id: 'toolu_2' }),
+            call({ id: undefined }),
+            call({ returnValue: 'a duplicate id the API rejects' }),
+          ])
+        );
+
+        expect(messages[1].content).toEqual([
+          { type: 'text', text: 'reply 1' },
+          { type: 'tool_use', id: 'toolu_1', name: 'web_search', input: { query: 'weather' } },
+        ]);
+        expect(messages[2].content).toHaveLength(1);
+      });
+
+      it('coerces non-object parameters, since Anthropic requires an object input', async () => {
+        const messages = await runWith(makeToolItem(1, [call({ parameters: 'not-an-object' })]));
+
+        // index 0 is the text reply; the tool_use follows it
+        expect((messages[1].content as { input: unknown }[])[1].input).toEqual({});
+      });
+
+      it('keeps preferring structuredReplies when both are present', async () => {
+        const item = makeItem(1, {
+          structuredReplies: [{ role: 'assistant', content: [{ type: 'text', text: 'from structured' }] }],
+          promptMeta: { functionCalls: [call()] },
+        });
+
+        const messages = await runWith(item);
+
+        expect(messages[1].content).toEqual([{ type: 'text', text: 'from structured' }]);
       });
     });
   });
