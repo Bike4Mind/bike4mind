@@ -40,6 +40,12 @@ Reference example: `contracts/chat.contract.ts` + `apps/client/pages/api/chat.ts
   only exists after `extendZodWithOpenApi` runs (openapi/registry.ts), which the
   runtime handlers do not import - calling it there crashes the endpoint on import.
   Annotation happens in the OpenAPI layer (`registerContract`) only.
+- **In contract + openapi files, import the SPECIFIC schema file, not the barrel.**
+  Use `from '../../schemas/tools'`, not `from '../../schemas'`. The barrel re-exports
+  everything, including modules that import other `@bike4mind/*` packages (e.g.
+  `actions.ts` -> `@bike4mind/hearth`). The CI `OpenAPI Spec` job regenerates with
+  `pnpm install` only - **no package is built** - so a barrel import drags in an
+  unbuilt dist and crashes generation (passes locally, where dists exist).
 - **Responses assembled inline** in a handler are validated against the contract in
   non-prod by both adapters, so drift shows up in tests. Keep the response schema
   accurate.
