@@ -78,9 +78,9 @@ describe('POST /api/api-keys/create (end-to-end, real service + repository + Mon
   it('leaves no provider stranded when a key is added for every per-user provider', async () => {
     // The 7 LLM providers getEffectiveLLMApiKeys resolves per-user (getEffective.ts:164-170),
     // plus elevenLabs (resolved separately via resolveTtsProvider) - 8 total, all reachable
-    // through this same route. bfl matters most to cover: its fallback is
-    // keyOrExpired(bflUserKey) || bflDemoKey || null, with no envKey() rung, so a stranded bfl
-    // key resolves to null instead of degrading to a demo key.
+    // through this same route. bfl and voyageai matter most to cover: both fallbacks end in
+    // `|| null` with no envKey() rung (getEffective.ts:220,225), so a stranded key for either
+    // resolves to null instead of degrading to a demo key.
     const types = [
       ApiKeyType.openai,
       ApiKeyType.elevenlabs,
