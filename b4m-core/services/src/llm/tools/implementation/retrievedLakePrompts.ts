@@ -8,8 +8,10 @@ import { renderDataLakePromptSection } from '../../../dataLakeService/renderData
  * operating instructions of the trusted lakes whose files this tool call actually returned,
  * identified by the `datalake:` provenance tags on those files.
  *
- * `injectedLakeTags` is a per-completion set shared across a tool's calls: only lakes NOT already
- * injected this turn contribute, so repeated search/retrieve calls never restate the same lake.
+ * `injectedLakeTags` is a per-TOOL set shared across that tool's calls in a completion: only lakes
+ * NOT already injected by this tool contribute, so repeated calls to the SAME tool never restate a
+ * lake. It is deliberately per-tool, not per-completion: search and retrieve each own their own set,
+ * so a lake used by both within one turn is injected once per tool (idempotent, ~a few extra tokens).
  * The block rides INSIDE a tool RESULT, which is model-facing content, so it MUST carry the
  * renderDataLakePromptSection defenses (org-deference header + block-marker defang) - that is what
  * keeps a lake owner from forging an organization block. Fail-safe: any failure (and the agent-
