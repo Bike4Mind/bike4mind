@@ -8,7 +8,10 @@ vi.mock('@bike4mind/database', () => ({ organizationRepository, userRepository }
 const getUserEntitlements = vi.hoisted(() => vi.fn());
 vi.mock('./index', () => ({ getUserEntitlements }));
 
+import { Logger } from '@bike4mind/observability';
 import { embedKeyOwnerHasEntitlement } from './embedKeyEntitlement';
+
+const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
 
 const KEY = 'embed:whitelabel';
 const userKeyRef = { userId: 'minter-1' };
@@ -85,5 +88,47 @@ describe('embedKeyOwnerHasEntitlement', () => {
   it('fails closed when a repository throws', async () => {
     organizationRepository.findById.mockRejectedValue(new Error('db down'));
     await expect(embedKeyOwnerHasEntitlement(orgKeyRef, KEY)).resolves.toBe(false);
+  });
+
+  // A lookup fault strips hideBranding behind a 200, so the log line is the only
+  // trace it happened. It must fire on the fault - and never on a healthy path,
+  // or it becomes noise nobody reads.
+  describe('lookup-failure warning', () => {
+    it('warns once with the key id and attempted owner when a repository throws', async () => {
+      organizationRepository.findById.mockRejectedValue(new Error('db down'));
+
+      await expect(embedKeyOwnerHasEntitlement(orgKeyRef, KEY, 'key-1')).resolves.toBe(false);
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('owner entitlement lookup failed'),
+        expect.objectContaining({ keyId: 'key-1', attemptedOwner: 'org:org-1' })
+      );
+    });
+
+    it('marks the key id as unsaved when the caller has none (create path)', async () => {
+      userRepository.findById.mockRejectedValue(new Error('db down'));
+
+      await expect(embedKeyOwnerHasEntitlement(userKeyRef, KEY)).resolves.toBe(false);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ keyId: '(unsaved key)', attemptedOwner: 'user:minter-1' })
+      );
+    });
+
+    it.each([
+      ['the owner is entitled', async () => getUserEntitlements.mockResolvedValue([KEY])],
+      ['the owner lacks the entitlement', async () => getUserEntitlements.mockResolvedValue(['other:key'])],
+      ['the org has no billing owner', async () => organizationRepository.findById.mockResolvedValue({ userId: null })],
+      ['the owner user is not found', async () => userRepository.findById.mockResolvedValue(null)],
+    ])('stays silent when %s', async (_label, arrange) => {
+      organizationRepository.findById.mockResolvedValue({ id: 'org-1', userId: 'owner-9' });
+      await arrange();
+
+      await embedKeyOwnerHasEntitlement(orgKeyRef, KEY, 'key-1');
+
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 });

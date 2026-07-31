@@ -67,7 +67,12 @@ const handler = baseApi().patch(
         db: { userApiKeys: userApiKeyRepository, organizations: organizationRepository },
       });
       gatedBranding = existing
-        ? await gateEmbedBrandingWrite(existing, brandingCheck.value, existing.branding?.hideBranding === true)
+        ? await gateEmbedBrandingWrite(
+            existing,
+            brandingCheck.value,
+            existing.branding?.hideBranding === true,
+            existing.id
+          )
         : { ...brandingCheck.value, hideBranding: false };
     }
 
