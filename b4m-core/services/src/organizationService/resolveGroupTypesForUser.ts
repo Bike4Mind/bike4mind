@@ -7,6 +7,26 @@ interface ResolveGroupTypesAdapters {
 }
 
 /**
+ * Platform-admin resolution override (org-groups #1236): "resolve AS these group types in this org".
+ * Lets an admin exercise a persona for testing/demo WITHOUT being written into the org's `users[]`.
+ * The caller (overlay #139) owns making it opt-in, non-sticky, and logged; the resolver just applies
+ * it, gated on `isAdmin` and scoped to `organizationId`.
+ */
+export interface GroupTypeResolutionOverride {
+  /** The org the admin is operating in - the override applies ONLY when resolving this org. */
+  organizationId: string;
+  /** Group-type keys to resolve as (validated against GROUP_TYPE_CATALOG; unknown keys dropped). */
+  groupTypes: string[];
+}
+
+/** Catalog-priority order (lower first), stable by key - shared by the membership and override paths. */
+const byCatalogPriority = (a: string, b: string): number => {
+  const pa = getGroupType(a)?.priority ?? Number.MAX_SAFE_INTEGER;
+  const pb = getGroupType(b)?.priority ?? Number.MAX_SAFE_INTEGER;
+  return pa - pb || a.localeCompare(b);
+};
+
+/**
  * Resolve which GROUP-TYPE keys a user holds WITHIN one organization (org-groups #1235).
  *
  * `user.groups[]` stores bare Group ids with no type or org qualifier, so a consumer that wants
@@ -25,9 +45,25 @@ interface ResolveGroupTypesAdapters {
  * mirrors the hardened write-path invariant's org scoping without duplicating its authorization.
  */
 export async function resolveGroupTypesForUser(
-  { user, organizationId }: { user: Pick<IUserDocument, 'groups'>; organizationId: string },
+  {
+    user,
+    organizationId,
+    override,
+  }: {
+    user: Pick<IUserDocument, 'groups'> & { isAdmin?: boolean };
+    organizationId: string;
+    override?: GroupTypeResolutionOverride;
+  },
   adapters: ResolveGroupTypesAdapters
 ): Promise<string[]> {
+  // Platform-admin override (#1236): resolve AS the given types, no membership read. isAdmin-only and
+  // scoped to the override's org, so it can never widen a non-admin or bleed into another org. This
+  // changes only what is RESOLVED, never what is written - the write-path invariant (#1227/#1231) is
+  // untouched. Unknown keys are dropped just like the membership path.
+  if (override && user.isAdmin === true && override.organizationId === organizationId) {
+    return [...new Set(override.groupTypes.filter(isKnownGroupType))].sort(byCatalogPriority);
+  }
+
   const memberGroupIds = new Set(user.groups ?? []);
   if (memberGroupIds.size === 0) return [];
 
@@ -40,9 +76,5 @@ export async function resolveGroupTypesForUser(
     }
   }
 
-  return [...types].sort((a, b) => {
-    const pa = getGroupType(a)?.priority ?? Number.MAX_SAFE_INTEGER;
-    const pb = getGroupType(b)?.priority ?? Number.MAX_SAFE_INTEGER;
-    return pa - pb || a.localeCompare(b);
-  });
+  return [...types].sort(byCatalogPriority);
 }

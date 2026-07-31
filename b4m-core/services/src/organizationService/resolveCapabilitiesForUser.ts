@@ -5,7 +5,7 @@ import {
   getGroupType,
   isKnownGroupType,
 } from '@bike4mind/common';
-import { resolveGroupTypesForUser } from './resolveGroupTypesForUser';
+import { resolveGroupTypesForUser, type GroupTypeResolutionOverride } from './resolveGroupTypesForUser';
 
 interface CapabilityAdapters {
   db: {
@@ -14,7 +14,7 @@ interface CapabilityAdapters {
   };
 }
 
-type CapabilityUser = Pick<IUserDocument, 'id' | 'groups'>;
+type CapabilityUser = Pick<IUserDocument, 'id' | 'groups'> & { isAdmin?: boolean };
 
 /**
  * Resolve the CAPABILITY set a user holds within an organization (org-groups #1234).
@@ -39,14 +39,21 @@ type CapabilityUser = Pick<IUserDocument, 'id' | 'groups'>;
  * the consuming overlay. Returns a sorted, de-duplicated array (a serialisable shape for a client seam).
  */
 export async function resolveCapabilitiesForUser(
-  { user, organizationId }: { user: CapabilityUser; organizationId: string },
+  {
+    user,
+    organizationId,
+    override,
+  }: { user: CapabilityUser; organizationId: string; override?: GroupTypeResolutionOverride },
   adapters: CapabilityAdapters
 ): Promise<string[]> {
   const organization = await adapters.db.organizations.findById(organizationId);
   if (!organization) return [];
 
+  // Forward the platform-admin override (#1236) so capabilities reflect the persona being operated
+  // as. The billing-owner branch below can't fire for an overriding admin (they are not the org's
+  // `userId`), so the override cleanly yields exactly that persona's capabilities.
   const effectiveTypes = new Set(
-    await resolveGroupTypesForUser({ user, organizationId }, { db: { groups: adapters.db.groups } })
+    await resolveGroupTypesForUser({ user, organizationId, override }, { db: { groups: adapters.db.groups } })
   );
 
   // Billing-owner implicit hold: every GRANTED type (allowedGroupTypes), not the whole catalog.
@@ -71,9 +78,14 @@ export async function resolveCapabilitiesForUser(
  * authorization check rather than an array-membership test.
  */
 export async function userHasCapability(
-  { user, organizationId, capability }: { user: CapabilityUser; organizationId: string; capability: string },
+  {
+    user,
+    organizationId,
+    capability,
+    override,
+  }: { user: CapabilityUser; organizationId: string; capability: string; override?: GroupTypeResolutionOverride },
   adapters: CapabilityAdapters
 ): Promise<boolean> {
-  const capabilities = await resolveCapabilitiesForUser({ user, organizationId }, adapters);
+  const capabilities = await resolveCapabilitiesForUser({ user, organizationId, override }, adapters);
   return capabilities.includes(capability);
 }

@@ -36,6 +36,11 @@ const group = (id: string, type: string): IGroupDocument =>
   ({ id, type, organizationId: ORG, name: type, description: '' }) as unknown as IGroupDocument;
 
 const user = (id: string, groups: string[] | null): Pick<IUserDocument, 'id' | 'groups'> => ({ id, groups });
+const admin = (id: string, groups: string[] | null): Pick<IUserDocument, 'id' | 'groups'> & { isAdmin: boolean } => ({
+  id,
+  groups,
+  isAdmin: true,
+});
 
 const org = (over: Partial<{ userId: string; allowedGroupTypes: string[] }> = {}): IOrganizationDocument =>
   ({
@@ -115,6 +120,50 @@ describe('resolveCapabilitiesForUser (#1234)', () => {
       await expect(
         resolveCapabilitiesForUser({ user: user('member-1', []), organizationId: ORG }, adapters)
       ).resolves.toEqual([]);
+    });
+  });
+
+  describe('platform-admin override (#1236)', () => {
+    it('reflects the override persona capabilities for an admin in no group', async () => {
+      // Admin holds no groups; override -> resolves as sales+research, so caps are their union.
+      const { adapters, findByOrganization } = makeAdapters(org(), []);
+      await expect(
+        resolveCapabilitiesForUser(
+          {
+            user: admin('admin-1', []),
+            organizationId: ORG,
+            override: { organizationId: ORG, groupTypes: ['sales', 'research'] },
+          },
+          adapters
+        )
+      ).resolves.toEqual(['crm:read', 'qwork:submit', 'sales:brief']);
+      // Override short-circuits the membership read entirely.
+      expect(findByOrganization).not.toHaveBeenCalled();
+    });
+
+    it('is ignored for a non-admin, who still resolves from real membership', async () => {
+      const { adapters } = makeAdapters(org(), [group('g-sales', 'sales')]);
+      await expect(
+        resolveCapabilitiesForUser(
+          {
+            user: user('member-1', ['g-sales']),
+            organizationId: ORG,
+            override: { organizationId: ORG, groupTypes: ['research'] },
+          },
+          adapters
+        )
+      ).resolves.toEqual(['crm:read', 'sales:brief']);
+    });
+
+    it('gates userHasCapability off the overridden persona', async () => {
+      const { adapters } = makeAdapters(org(), []);
+      const params = {
+        user: admin('admin-1', []),
+        organizationId: ORG,
+        override: { organizationId: ORG, groupTypes: ['research'] },
+      };
+      await expect(userHasCapability({ ...params, capability: 'qwork:submit' }, adapters)).resolves.toBe(true);
+      await expect(userHasCapability({ ...params, capability: 'sales:brief' }, adapters)).resolves.toBe(false);
     });
   });
 
