@@ -52,7 +52,10 @@ const RATE_LIMIT_HEADERS = {
 
 // The Mongo-backed per-API-key rate-limit counter (buffers forever against a
 // stubbed connectDB otherwise). Overridable per-test.
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+  // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it now; only
+  // checkApiKeyRateLimit is stubbed.
+  ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
 
@@ -268,6 +271,26 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
+  // F1: apiKeyAuth must accept the canonical `Authorization: Bearer b4m_<key>` form
+  // (what the OpenAPI spec + code samples advertise), while a Bearer JWT still
+  // falls through to JWT auth.
+  it('authenticates Authorization: Bearer b4m_<key> as an API key', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    const { req, res } = fire({ apiKey: null, bearer: 'b4m_live_testkey' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    // Went the API-key route (not JWT): the key validator ran with the Bearer token.
+    expect(mockValidate).toHaveBeenCalledWith('b4m_live_testkey', expect.anything());
+  });
+
+  it('leaves a Bearer JWT (no b4m_ prefix) to JWT auth, not api-key auth', async () => {
+    const { req, res } = fire({ apiKey: null, bearer: 'eyJhbGciOi.jwt.token' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    // The api-key validator never ran - this was a JWT.
+    expect(mockValidate).not.toHaveBeenCalled();
+  });
+
   it('returns 400 when the resolved default chat model is unusable (self-host, no key, no local model)', async () => {
     // Self-host resolver shape: apiKeys/models ARE present (unlike the hosted default),
     // so chat.ts runs its no-usable-model guard. An empty model list plus an unusable
@@ -280,6 +303,27 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(res._getStatusCode()).toBe(400);
     expect(res._getJSONData().error).toMatch(/no usable default chat model/i);
     expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  // Behaviour change: extracting the schema to the contract dropped
+  // `historyCount`'s `.catch(10)` in favour of `.default(10)` (fail loud). An
+  // invalid value now 422s instead of silently coercing to 10 (pre-PR behaviour).
+  describe('historyCount fail-loud (behaviour change vs pre-contract .catch(10))', () => {
+    it('rejects a non-positive historyCount with 422 (previously silently coerced to 10)', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', historyCount: 0 } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('defaults an omitted historyCount to 10 and proceeds (2xx)', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect((mockInvoke.mock.calls[0][0] as { body: { historyCount?: number } }).body.historyCount).toBe(10);
+    });
   });
 
   // Output-budget override: the handler must forward a caller-supplied token

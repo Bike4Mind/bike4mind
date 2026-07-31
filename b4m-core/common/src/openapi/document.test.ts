@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { buildOpenApiDocument, toPythonLiteral } from './document';
 import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
+import { chatContract } from '../api-contract';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
 const doc = buildOpenApiDocument('9.9.9') as any;
 const completions = doc.paths['/api/ai/v1/completions'].post;
 const tools = doc.paths['/api/ai/v1/tools'].post;
+const chat = doc.paths['/api/chat'].post;
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 
 describe('buildOpenApiDocument', () => {
@@ -74,6 +76,17 @@ describe('buildOpenApiDocument', () => {
     for (const op of [completions, tools]) {
       expect(op['x-codeSamples'].map((s: { lang: string }) => s.lang)).toEqual(['curl', 'JavaScript', 'Python']);
     }
+  });
+
+  it('derives x-required-scopes AND x-codeSamples for a CONTRACT-based op from the contract itself', () => {
+    // Guards against spec-only drift: the contract-derived operation must publish
+    // exactly the contract's scopes + code samples. This catches a published-vs-
+    // enforced mismatch that runtime tests can't (e.g. dropping the CONTRACTS spread
+    // in document.ts strips x-required-scopes while every runtime test still passes).
+    expect(chat.operationId).toBe(chatContract.operationId);
+    expect(chat['x-required-scopes']).toEqual([...(chatContract.scopes ?? [])]);
+    expect(chat['x-required-scopes'].length).toBeGreaterThan(0);
+    expect(chat['x-codeSamples'].map((s: { lang: string }) => s.lang)).toEqual(['curl', 'JavaScript', 'Python']);
   });
 
   it('documents tools 401/429 and JWT-only code samples (matches the JWT-only handler)', () => {

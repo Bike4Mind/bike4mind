@@ -22,13 +22,16 @@ export type LambdaRouteResult = { statusCode: number; body: unknown };
  *
  * It handles the boilerplate every Function-URL handler repeats today: request-id
  * resolution, body parsing, contract validation (SAME schema the Next adapter and
- * OpenAPI spec use), and JSON response shaping. The business logic stays in the
- * shared module the handler delegates to.
+ * OpenAPI spec use), JSON response shaping, and turning a thrown handler error into
+ * a 500 (rather than letting it surface as an opaque API-gateway 502). The business
+ * logic stays in the shared module the handler delegates to.
  *
- * Auth is intentionally left to the caller here: the JWT-vs-API-key decision maps
- * to `contract.auth` / `contract.scopes` and mirrors the existing verifyJwtToken /
- * apiKey flow in cli/tools.ts - a fuller adapter would fold that in. This
- * prototype focuses on proving one contract drives both transports.
+ * IMPORTANT - this adapter does NOT yet enforce `contract.auth` / `contract.scopes`.
+ * It has no non-test callers on this branch; the auth wiring (via resolveContractAuth,
+ * mirroring the verifyJwtToken/apiKey flow in cli/tools.ts) and the first real
+ * Lambda-served contract land in the follow-up that migrates completions + tools.
+ * Until then, do NOT route a non-public contract through this adapter and assume
+ * auth is handled - it is not.
  */
 export function defineLambdaRoute<C extends EndpointContract>(
   contract: C,
@@ -61,7 +64,17 @@ export function defineLambdaRoute<C extends EndpointContract>(
       body = parsed.data;
     }
 
-    const result = await handle({ validated: body as RequestBodyOf<C>, requestId, event });
+    let result: LambdaRouteResult;
+    try {
+      result = await handle({ validated: body as RequestBodyOf<C>, requestId, event });
+    } catch (error) {
+      // A thrown handler error must not surface as an opaque API-gateway 502 -
+      // shape it into a 500 with the correlation id so the caller/logs can trace it.
+      return json(500, {
+        error: error instanceof Error ? error.message : 'Internal server error',
+        request_id: requestId,
+      });
+    }
 
     // Non-prod safety net (see defineNextRoute): warn on a response body that does
     // not match the contract for that status. Warn-only, wrapped, prod-compiled-out.
