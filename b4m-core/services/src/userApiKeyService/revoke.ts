@@ -1,6 +1,7 @@
 import { ApiKeyStatus, IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { resolveOwnedApiKey } from './resolveOwnedApiKey';
 
 const revokeUserApiKeySchema = z.object({
   keyId: z.string(),
@@ -36,11 +37,7 @@ export const revokeUserApiKey = async (
   const { db } = adapters;
   const params = secureParameters(parameters, revokeUserApiKeySchema);
 
-  let apiKey = await db.userApiKeys.findByUserIdAndId(userId, params.keyId);
-  if (!apiKey) {
-    const administeredOrgIds = await db.organizations.findIdsAdministeredBy(userId);
-    apiKey = await db.userApiKeys.findByOrganizationIdsAndId(administeredOrgIds, params.keyId);
-  }
+  const apiKey = await resolveOwnedApiKey(userId, params.keyId, { db });
   if (!apiKey) {
     throw new NotFoundError('API key not found');
   }

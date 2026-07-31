@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
+import { resolveOwnedApiKey } from './resolveOwnedApiKey';
 
 const updateEmbedKeySchema = z.object({
   keyId: z.string(),
@@ -61,11 +62,7 @@ export const updateEmbedKey = async (
   const { db } = adapters;
   const params = secureParameters(parameters, updateEmbedKeySchema);
 
-  let apiKey = await db.userApiKeys.findByUserIdAndId(userId, params.keyId);
-  if (!apiKey) {
-    const administeredOrgIds = await db.organizations.findIdsAdministeredBy(userId);
-    apiKey = await db.userApiKeys.findByOrganizationIdsAndId(administeredOrgIds, params.keyId);
-  }
+  const apiKey = await resolveOwnedApiKey(userId, params.keyId, { db });
   if (!apiKey) {
     throw new NotFoundError('API key not found');
   }

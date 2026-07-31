@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
+import { resolveOwnedApiKey } from './resolveOwnedApiKey';
 
 const rotateUserApiKeySchema = z.object({
   keyId: z.string(),
@@ -51,11 +52,7 @@ export const rotateUserApiKey = async (
   const { db } = adapters;
   const params = secureParameters(parameters, rotateUserApiKeySchema);
 
-  let apiKey = await db.userApiKeys.findByUserIdAndId(userId, params.keyId);
-  if (!apiKey) {
-    const administeredOrgIds = await db.organizations.findIdsAdministeredBy(userId);
-    apiKey = await db.userApiKeys.findByOrganizationIdsAndId(administeredOrgIds, params.keyId);
-  }
+  const apiKey = await resolveOwnedApiKey(userId, params.keyId, { db });
   if (!apiKey) {
     throw new NotFoundError('API key not found');
   }
