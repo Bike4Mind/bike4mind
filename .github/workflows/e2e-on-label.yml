@@ -98,14 +98,21 @@ jobs:
         id: e2e
         env:
           API_URL: ${{ steps.config.outputs.api_url }}
-          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
-          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
+          # Preview stacks live in a SEPARATE AWS account the dev role can't `sst shell`
+          # into, so inject E2E_CLEANUP_SECRET (the only SST value the suite needs) directly
+          # from this repo secret. It must match the stable value the deployer seeds onto
+          # every stage (bike4mind-deployer _tier-deploy.yml).
+          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
           AI_LATENCY_RUN: 'false'
           PW_WORKERS: '1'
           CI: 'true'
         run: |
           set -o pipefail
-          pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- pnpm --filter client exec playwright test 2>&1 | tee apps/client/playwright-output.txt
+          if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
+            echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
+            exit 1
+          fi
+          pnpm --filter client exec playwright test 2>&1 | tee apps/client/playwright-output.txt
 
       - name: Upload Playwright report
         if: always()

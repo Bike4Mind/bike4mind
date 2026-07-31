@@ -13,6 +13,7 @@ const makeFile = (overrides: {
   sessionId?: string | null;
   curatedNotebook?: boolean;
   deleted?: boolean;
+  archived?: boolean;
   fileName?: string;
 }) => {
   const tagNames = [...(overrides.tags ?? [])];
@@ -24,6 +25,7 @@ const makeFile = (overrides: {
     tags: tagNames.map(name => ({ name })),
     ...(overrides.sessionId !== undefined ? { sessionId: overrides.sessionId } : {}),
     ...(overrides.deleted ? { deletedAt: new Date() } : {}),
+    ...(overrides.archived ? { archivedAt: new Date() } : {}),
   });
 };
 
@@ -71,6 +73,19 @@ describe('FabFileRepository.countDataLakeUniqueFilesByPrefix', () => {
     const { total } = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, ['acme:']);
 
     expect(total).toBe(1);
+  });
+
+  // Archiving a lake stamps archivedAt on every file it holds, and the article list this number
+  // labels filters those out. The route only ever passes non-archived lakes' prefixes, so this is
+  // the aggregate holding the line on its own rather than trusting its caller.
+  it('excludes archived files', async () => {
+    await makeFile({ tags: ['acme:industry'], fileName: 'live' });
+    await makeFile({ tags: ['acme:industry'], fileName: 'archived', archived: true });
+
+    const { total, byPrefix } = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, ['acme:']);
+
+    expect(total).toBe(1);
+    expect(byPrefix).toEqual({ 'acme:': 1 });
   });
 
   it('returns zero for an empty prefix list (guards the match-everything regex)', async () => {

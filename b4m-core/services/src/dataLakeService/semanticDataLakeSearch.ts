@@ -7,7 +7,12 @@ import {
   IFabFileRepository,
   SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { computeCosineSimilarity, EmbeddingFactory, getProviderFromModel } from '@bike4mind/utils';
+import {
+  computeCosineSimilarity,
+  EmbeddingFactory,
+  getProviderFromModel,
+  resolveEmbeddingConfig,
+} from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { Logger } from '@bike4mind/observability';
 import { BoundedTopK } from './boundedTopK';
@@ -448,18 +453,13 @@ async function rankChunksForFiles(args: {
 
   // --- Embed the query (reuse EmbeddingFactory; pick the provider the model needs) ---
   const provider = getProviderFromModel(embeddingModel);
-  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null; ollamaBaseUrl?: string | null } =
-    {};
-  if (provider === 'openai') {
-    if (!apiKeyTable?.openai) throw new Error('OpenAI API key required for semantic search but not found.');
-    embeddingConfig.openaiApiKey = apiKeyTable.openai;
-  } else if (provider === 'voyageai') {
-    if (!apiKeyTable?.voyageai) throw new Error('VoyageAI API key required for semantic search but not found.');
-    embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
-  } else if (provider === 'ollama') {
-    // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
-    if (!apiKeyTable?.ollama) throw new Error('Ollama base URL required for semantic search but not found.');
-    embeddingConfig.ollamaBaseUrl = apiKeyTable.ollama;
+  const { config: embeddingConfig, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
+  if (missing) {
+    throw new Error(
+      missing === 'ollama'
+        ? 'Ollama base URL required for semantic search but not found.'
+        : `${missing === 'openai' ? 'OpenAI' : 'VoyageAI'} API key required for semantic search but not found.`
+    );
   }
   const embeddingService = new EmbeddingFactory(embeddingConfig).createEmbeddingService(embeddingModel);
   const queryEmbedding = await embeddingService.generateEmbedding(query);

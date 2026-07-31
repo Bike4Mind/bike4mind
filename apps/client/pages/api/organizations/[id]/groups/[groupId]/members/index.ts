@@ -1,0 +1,55 @@
+import { baseApi } from '@server/middlewares/baseApi';
+import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { BadRequestError } from '@server/utils/errors';
+import { organizationRepository } from '@bike4mind/database';
+import { groupRepository } from '@bike4mind/database/social';
+import { userRepository } from '@bike4mind/database/auth';
+import { organizationService } from '@bike4mind/services';
+import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
+import { z } from 'zod';
+
+/**
+ * POST /api/organizations/[id]/groups/[groupId]/members - assign a user to a group.
+ * Authorization (billing owner / org admin / platform admin) AND the write-path invariant
+ * (group belongs to this org, target user is a member) are enforced in `assignUserToGroup`.
+ */
+const bodySchema = z.object({ userId: z.string().min(1) });
+
+const handler = baseApi().post(
+  asyncHandler<{}, unknown, unknown, { id?: string; groupId?: string }>(async (req, res) => {
+    const organizationId = req.query.id;
+    const groupId = req.query.groupId;
+    if (!organizationId || !groupId) throw new BadRequestError('Organization id and group id are required');
+
+    // ZodError propagates to the central errorHandler (422 via fromZodError). No hand-rolled 400.
+    const { userId } = bodySchema.parse(req.body);
+
+    await organizationService.assignUserToGroup(
+      req.user!,
+      { organizationId, groupId, userId },
+      { db: { organizations: organizationRepository, groups: groupRepository, users: userRepository } }
+    );
+
+    // "Who put user X in the confidential group" - best-effort, never fails the write.
+    await logAuditEvent(
+      {
+        userId: req.user!.id,
+        action: AdminOrgAuditEvents.ORG_GROUP_MEMBER_ASSIGNED,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'] || 'unknown',
+        metadata: { organizationId, groupId, targetUserId: userId },
+      },
+      req.logger
+    );
+
+    res.status(200).json({ success: true });
+  })
+);
+
+export const config = {
+  api: {
+    externalResolver: true,
+  },
+};
+
+export default handler;

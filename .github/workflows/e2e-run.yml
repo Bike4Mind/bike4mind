@@ -235,8 +235,13 @@ jobs:
         id: e2e
         env:
           API_URL: ${{ steps.config.outputs.api_url }}
-          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
-          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
+          # dev/staging read E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper
+          # below (same-account). Preview stacks live in a SEPARATE AWS account the
+          # dev role can't `sst shell` into, so for pr<N> runs we inject the secret
+          # directly from this repo secret instead. It must match the stable value the
+          # deployer seeds onto every stage (bike4mind-deployer _tier-deploy.yml).
+          # E2E_CLEANUP_SECRET is the ONLY SST value the suite needs.
+          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
           E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
           # Only wire the credits webhook for suites that report credits (show_credits).
           # Core runs the notebook project too, but must NOT post the in-process AI
@@ -251,7 +256,17 @@ jobs:
         run: |
           set -o pipefail
           [ -n "$PLAYWRIGHT_ARGS" ] && echo "Running: playwright test $PLAYWRIGHT_ARGS" || echo "Running full suite"
-          pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
+          if [ -n "${{ inputs.pr_number }}" ]; then
+            # Preview (cross-account): E2E_CLEANUP_SECRET is injected from the repo secret above.
+            if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
+              echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
+              exit 1
+            fi
+            pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
+          else
+            # dev/staging (same account): resolve the secret from SST.
+            pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
+          fi
 
       - name: Upload Playwright report
         if: always()

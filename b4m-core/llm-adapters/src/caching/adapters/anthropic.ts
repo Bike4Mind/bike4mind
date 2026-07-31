@@ -41,36 +41,43 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
       }
     }
 
-    // Cache conversation history (mark last message)
+    // Cache conversation history: mark the last message of the stable prefix so it
+    // moves forward each turn. `historyCacheExcludeTrailingCount` skips trailing
+    // messages a caller rebuilds every request (e.g. a reminder that's stripped and
+    // re-appended each iteration) - anchoring there would never produce a cache hit.
     const messagesParam = modifiedParams.messages as unknown[] | undefined;
     if (strategy.cacheConversationHistory && Array.isArray(messagesParam) && messagesParam.length > 0) {
       const messages = [...messagesParam] as Record<string, unknown>[];
-      const lastMsg = messages[messages.length - 1];
-      const msgContent = lastMsg.content;
+      const anchorIndex = messages.length - 1 - (strategy.historyCacheExcludeTrailingCount ?? 0);
 
-      // Convert content to array if needed
-      let contentArray: Record<string, unknown>[];
-      if (typeof msgContent === 'string') {
-        contentArray = [{ type: 'text', text: msgContent }];
-      } else if (Array.isArray(msgContent)) {
-        contentArray = [...msgContent] as Record<string, unknown>[];
-      } else {
-        return modifiedParams; // Skip if content is not string or array
-      }
+      if (anchorIndex >= 0) {
+        const anchorMsg = messages[anchorIndex];
+        const msgContent = anchorMsg.content;
 
-      // Mark last content block
-      if (contentArray.length > 0) {
-        const lastBlock = contentArray[contentArray.length - 1];
-        contentArray[contentArray.length - 1] = {
-          ...lastBlock,
-          cache_control: { type: 'ephemeral', ...(ttl === '1h' ? { ttl } : {}) },
-        };
+        // Convert content to array if needed
+        let contentArray: Record<string, unknown>[];
+        if (typeof msgContent === 'string') {
+          contentArray = [{ type: 'text', text: msgContent }];
+        } else if (Array.isArray(msgContent)) {
+          contentArray = [...msgContent] as Record<string, unknown>[];
+        } else {
+          return modifiedParams; // Skip if content is not string or array
+        }
 
-        messages[messages.length - 1] = {
-          ...lastMsg,
-          content: contentArray,
-        };
-        modifiedParams.messages = messages;
+        // Mark last content block of the anchor message
+        if (contentArray.length > 0) {
+          const lastBlock = contentArray[contentArray.length - 1];
+          contentArray[contentArray.length - 1] = {
+            ...lastBlock,
+            cache_control: { type: 'ephemeral', ...(ttl === '1h' ? { ttl } : {}) },
+          };
+
+          messages[anchorIndex] = {
+            ...anchorMsg,
+            content: contentArray,
+          };
+          modifiedParams.messages = messages;
+        }
       }
     }
 

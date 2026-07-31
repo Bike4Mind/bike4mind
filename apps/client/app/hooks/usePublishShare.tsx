@@ -30,6 +30,7 @@ interface ShareState {
   defaultVisibility: PublishVisibility;
   resolveExisting?: () => Promise<ExistingPublication | null>;
   orgOption?: { label: string; hint: string };
+  incompleteWarning?: string;
 }
 
 interface PublishAndShareOpts {
@@ -57,6 +58,12 @@ interface PublishAndShareOpts {
    * org-scoped page. Omit for personal scope.
    */
   orgOption?: { label: string; hint: string };
+  /**
+   * Set when the content looks abbreviated/non-functional (see `detectElidedContent`). The
+   * dialog shows it and requires an explicit acknowledgement before publishing - a /p/ link
+   * can be handed on before anyone notices the artifact's controls are inert.
+   */
+  incompleteWarning?: string;
 }
 
 /**
@@ -82,6 +89,7 @@ export function usePublishShare() {
       defaultVisibility: opts.defaultVisibility ?? 'public',
       resolveExisting: opts.resolveExisting,
       orgOption: opts.orgOption,
+      incompleteWarning: opts.incompleteWarning,
     });
   }, []);
 
@@ -97,6 +105,7 @@ export function usePublishShare() {
       defaultVisibility={state.defaultVisibility}
       resolveExisting={state.resolveExisting}
       orgOption={state.orgOption}
+      incompleteWarning={state.incompleteWarning}
     />
   );
 

@@ -48,7 +48,18 @@ export const PRESENCE_STATE_RANK: Readonly<Record<HearthPresenceState, number>> 
  * explicit - without them a bridge-reported 'disconnected' or 'idle' would land
  * on 'running', i.e. the roster would show dead sessions as working.
  */
-const REASON_STATES: Readonly<Record<string, HearthPresenceState>> = {
+/*
+ * NULL-PROTOTYPE on purpose. `reason` is attacker-reachable: it arrives from any
+ * hearth:write caller via activity.reason and is only length-clamped. Against a
+ * normal object literal, a prototype-named reason read straight through
+ * Object.prototype - `reason='constructor'` returned the Object function, which
+ * is truthy, so it bypassed the 'running' default and (findOneAndUpdate not
+ * running validators) persisted a `state` outside the declared enum;
+ * `reason='__proto__'` instead threw a CastError, and since upsertPresence only
+ * swallows E11000 the whole roster update was dropped. With no prototype there
+ * are no inherited keys to hit, so lookup misses are plain misses.
+ */
+const REASON_STATES: Readonly<Record<string, HearthPresenceState>> = Object.assign(Object.create(null), {
   // Bridge reasons ARE states. Derived from the enum rather than written out, so
   // a status added to CcAgentStatus cannot silently start falling through.
   ...(Object.fromEntries(CcAgentStatus.options.map(state => [state, state])) as Record<string, HearthPresenceState>),
@@ -61,10 +72,15 @@ const REASON_STATES: Readonly<Record<string, HearthPresenceState>> = {
   agent_completed: 'idle',
   // The session is gone, not merely quiet - the distinction a bare 'idle' loses.
   session_end: 'disconnected',
-};
+});
 
 export function presenceStateForReason(reason: string | undefined): HearthPresenceState {
-  return (reason && REASON_STATES[reason]) || 'running';
+  if (!reason) return 'running';
+  // Explicit membership check rather than `||`: a mapped value is always a
+  // non-empty string today, but relying on truthiness is what let a truthy
+  // INHERITED value through in the first place.
+  const state = REASON_STATES[reason];
+  return state ?? 'running';
 }
 
 /** Shared cap for every projected string field; the writer truncates to it. */

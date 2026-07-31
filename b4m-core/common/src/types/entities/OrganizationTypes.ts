@@ -14,6 +14,18 @@ export interface IUserDetails {
 export interface IOrganization extends ICreditHolder, IModelConfig {
   name: string;
   personal: boolean; // True if this is a personal organization
+
+  /**
+   * Group-type keys (GROUP_TYPE_CATALOG) this org is allowed to have. Platform-admin writes
+   * only; defaults to empty = fail-closed. An org starts with no group types (org-groups #1172).
+   */
+  allowedGroupTypes: string[];
+  /**
+   * User ids appointed as org admins by the billing owner or a platform admin. NOT a `Permission`
+   * verb and NOT on the shared `users[]` ACL. The billing owner (`userId`) is implicitly an admin
+   * and need not appear here.
+   */
+  adminUserIds: string[];
   description: string;
   billingContact: string;
   seats: number;
@@ -96,6 +108,17 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    * @returns The organization document or null if not found
    */
   findByIdAndUserId(id: string, userId: string): Promise<IOrganizationDocument | null>;
+
+  /**
+   * Soft-delete an organization from inside a transaction.
+   *
+   * Distinct from the inherited `delete`, which routes through the soft-delete plugin's raw-driver
+   * static and therefore escapes any surrounding `withTransaction`. Mirrors
+   * `IGroupRepository.softDeleteByIds`.
+   *
+   * @param id - The ID of the organization
+   */
+  softDeleteById(id: string): Promise<void>;
 
   /**
    * Increment the current storage size of an organization

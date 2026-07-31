@@ -434,6 +434,8 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
     options: {
       days?: number;
       transactionTypes?: CreditTransactionType[];
+      /** Max rows returned (newest first). Unset = unbounded, for legacy callers. */
+      limit?: number;
     }
   ): Promise<ICreditTransactionDocument[]>;
 

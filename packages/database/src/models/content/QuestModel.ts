@@ -92,6 +92,19 @@ const HumanReviewSchema = subSchema({
   reviewedAt: { type: Date, required: false },
 });
 
+// The artifact-elision verdict. Its own sub-Schema (via subSchema, like the rest) so the parent can
+// set `default: undefined` and keep "no elision detected" as an ABSENT field - the client reads mere
+// presence as the server verdict (`!!promptMeta?.suspectedElision`), and an inline object with an
+// array would materialize `{ details: [] }` on every quest and banner every artifact ever rendered.
+// No `enum` on `confidence`, matching the block's rule above: BaseRepository.create runs validators,
+// so an enum would throw on quest creation rather than drop silently, and this path must never eat a
+// completed reply. Zod's `suspectedElision` is the contract that constrains it to 'high' | 'low'.
+const SuspectedElisionSchema = subSchema({
+  confidence: { type: String, required: false },
+  signalCount: { type: Number, required: false },
+  details: { type: [String], required: false, default: undefined },
+});
+
 export const PromptMetaSchema = new Schema<PromptMeta>(
   {
     model: {
@@ -265,6 +278,10 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     toolHealth: { type: [ToolHealthSchema], required: false, default: undefined },
     executionTracking: { type: ExecutionTrackingSchema, required: false, default: undefined },
     humanReview: { type: HumanReviewSchema, required: false, default: undefined },
+    // Suspected-elision verdict from the artifact scan. MUST be declared or strict mode drops it on
+    // save; sub-Schema with `default: undefined` keeps an unwritten verdict ABSENT (see the schema
+    // definition above for why presence matters to the client).
+    suspectedElision: { type: SuspectedElisionSchema, required: false, default: undefined },
     statusLog: [{ status: { type: String, required: true }, timestamp: { type: Date, required: true } }],
     // Citable sources referenced in AI responses (from web_search, deep_research, RAG, MCP)
     citables: [

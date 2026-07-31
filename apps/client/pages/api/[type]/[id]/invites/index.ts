@@ -19,6 +19,7 @@ import { BadRequestError } from '@server/utils/errors';
 import { z } from 'zod';
 import { sharingService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
+import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { ProjectEvents } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
 
@@ -128,6 +129,25 @@ const handler = baseApi()
         },
         { ability: req.ability }
       );
+
+      // Group invites carry a membership grant, so they get the same audit trail as the members
+      // route's ORG_GROUP_MEMBER_ASSIGNED. Best-effort, never fails the write.
+      if (inviteType === InviteType.Group) {
+        await logAuditEvent(
+          {
+            userId: req.user.id,
+            action: AdminOrgAuditEvents.ORG_GROUP_INVITE_CREATED,
+            ip: req.ip,
+            userAgent: req.headers['user-agent'] || 'unknown',
+            metadata: {
+              groupId: id,
+              inviteId: created.id,
+              recipientCount: created.recipients?.pending?.length ?? 0,
+            },
+          },
+          req.logger
+        );
+      }
 
       // If this is a project invite, also log ADD_MEMBER event
       if (inviteType === InviteType.Project) {
