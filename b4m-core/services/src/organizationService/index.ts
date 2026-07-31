@@ -15,6 +15,7 @@ import { revokeAccess } from './revokeAccess';
 import { leave } from './leave';
 import { setOrganizationGroupTypes } from './setOrganizationGroupTypes';
 import { assignUserToGroup, removeUserFromGroup, renameGroup, assertCanManageOrgGroups } from './groupMembership';
+import { resolveGroupTypesForUser } from './resolveGroupTypesForUser';
 
 export {
   search,
@@ -38,6 +39,7 @@ export {
   assertCanManageOrgGroups,
   removeUserFromGroup,
   renameGroup,
+  resolveGroupTypesForUser,
 };
 
 export type { SearchParameters };
