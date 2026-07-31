@@ -110,6 +110,17 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   findByIdAndUserId(id: string, userId: string): Promise<IOrganizationDocument | null>;
 
   /**
+   * Soft-delete an organization from inside a transaction.
+   *
+   * Distinct from the inherited `delete`, which routes through the soft-delete plugin's raw-driver
+   * static and therefore escapes any surrounding `withTransaction`. Mirrors
+   * `IGroupRepository.softDeleteByIds`.
+   *
+   * @param id - The ID of the organization
+   */
+  softDeleteById(id: string): Promise<void>;
+
+  /**
    * Increment the current storage size of an organization
    * @param organizationId - The ID of the organization
    * @param count - The amount to increment by (can be negative for decrements)

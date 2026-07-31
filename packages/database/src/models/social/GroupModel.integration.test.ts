@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { Group, groupRepository } from './GroupModel';
@@ -117,5 +117,70 @@ describe('GroupRepository', () => {
     // the document still exists (soft, not hard delete) - visible when bypassing the find hook
     const raw = await mongoose.connection.collection('groups').findOne({ _id: g._id });
     expect(raw?.deletedAt).toBeInstanceOf(Date);
+  });
+
+  describe('createIfMissing (org-groups #1222)', () => {
+    it('creates normally when nothing exists yet', async () => {
+      const group = await groupRepository.createIfMissing({
+        name: 'Sales',
+        description: 'd',
+        type: 'sales',
+        organizationId: 'org-race',
+      });
+
+      expect(group.type).toBe('sales');
+      const [stored] = await groupRepository.findByOrganization('org-race');
+      expect(stored.id).toBe(group.id);
+    });
+
+    // The actual race: simulate two overlapping grant PUTs both calling createIfMissing for the
+    // same (org, type) after both observed no live instance. Real concurrent requests would race
+    // at the driver level; issuing them back-to-back here still exercises the E11000 catch,
+    // since the second call's create() genuinely collides with the first's already-committed row.
+    it('returns the WINNING row instead of throwing when a concurrent create collides', async () => {
+      const first = await groupRepository.createIfMissing({
+        name: 'Sales',
+        description: 'd',
+        type: 'sales',
+        organizationId: 'org-race-2',
+      });
+
+      const second = await groupRepository.createIfMissing({
+        name: 'Sales (loser)',
+        description: 'd',
+        type: 'sales',
+        organizationId: 'org-race-2',
+      });
+
+      // Same row, not a second one - proves this resolved via the E11000 catch, not a silent
+      // second insert (which the unique index would reject anyway).
+      expect(second.id).toBe(first.id);
+      expect(second.name).toBe('Sales');
+      const live = await groupRepository.findByOrganization('org-race-2');
+      expect(live).toHaveLength(1);
+    });
+
+    it('re-throws a genuine E11000 if the winning row cannot be found (e.g. deleted mid-race)', async () => {
+      // Prove the fallback path does not silently swallow every duplicate-key error: force a
+      // simulated E11000 out of create(), then look for a row (org-race-4/research) that does
+      // NOT actually exist. createIfMissing's post-catch findOne must find nothing and re-throw,
+      // not return undefined as if the row were there.
+      const spy = vi.spyOn(groupRepository, 'create').mockImplementationOnce(async () => {
+        const err = new Error('E11000 duplicate key error simulated') as Error & { code: number };
+        err.code = 11000;
+        throw err;
+      });
+
+      await expect(
+        groupRepository.createIfMissing({
+          name: 'Research',
+          description: 'd',
+          type: 'research',
+          organizationId: 'org-race-4',
+        })
+      ).rejects.toThrow(/E11000/);
+
+      spy.mockRestore();
+    });
   });
 });
