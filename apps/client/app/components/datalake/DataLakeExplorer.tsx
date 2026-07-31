@@ -4,16 +4,17 @@ import AddIcon from '@mui/icons-material/Add';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
-import { OptiModeBreadcrumb } from '@client/app/components/datalake/OptiModeBreadcrumb';
+import { SurfaceBreadcrumb } from '@client/app/components/datalake/SurfaceBreadcrumb';
 import DataLakeTree from './DataLakeTree';
 import DataLakeArticle from './DataLakeArticle';
-import { TelemetryTicker, deckBackground } from '@client/app/components/datalake/deckChrome';
+import { StatTicker, surfaceBackground } from '@client/app/components/datalake/surfaceChrome';
+import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { useGetDataLakeArticles, useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import type { DataLakeBrowseSource } from '@client/app/hooks/data/fabFiles';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
 import { readDroppedItems } from '@client/app/utils/dropReader';
-import { DATA_LAKE, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
+import { DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { toast } from 'sonner';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
@@ -24,10 +25,11 @@ interface DataLakeExplorerProps {
   onAskAbout: (prompt: string) => void;
   /** When set (from URL param), auto-select and display this article on mount. */
   articleId?: string | null;
-  /** Which browse backend to read (default 'opti'). The standalone Data Lakes home
-   *  passes 'datalakes' so non-Opti users can browse their own lakes. */
+  /** Which browse backend to read. Only the react-query cache key differs; a branded
+   *  surface passes its own value to keep its cache separate from the standalone home. */
   source?: DataLakeBrowseSource;
-  /** Root breadcrumb crumb label + handler (defaults to the Mission Hub crumb). */
+  /** Overrides the root breadcrumb crumb (which is wired to `onBack`); defaults to
+   *  the surface token, so a branded surface can set it once via the provider. */
   rootLabel?: string;
   /** When provided, renders a "Manage" button that opens the lake management panel. */
   onManage?: () => void;
@@ -46,14 +48,15 @@ export default function DataLakeExplorer({
   onBack,
   onAskAbout,
   articleId,
-  source = 'opti',
-  rootLabel = '⛩ Mission Hub',
+  source = 'datalakes',
+  rootLabel,
   onManage,
   onDiscover,
   onCreate,
 }: DataLakeExplorerProps) {
-  const theme = useTheme();
-  const isDark = theme.palette.mode === 'dark';
+  const muiTheme = useTheme();
+  const isDark = muiTheme.palette.mode === 'dark';
+  const { theme, copy } = useDataLakeSurface();
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
   const [userSelectedFile, setUserSelectedFile] = useState<IFabFileDocument | null>(null);
 
@@ -161,7 +164,7 @@ export default function DataLakeExplorer({
 
   return (
     <Box
-      data-testid="opti-datalake-explorer"
+      data-testid="datalake-explorer"
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -171,12 +174,12 @@ export default function DataLakeExplorer({
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        background: deckBackground(isDark),
+        background: surfaceBackground(isDark, theme.accent, theme.secondary),
       }}
     >
       {isDragging && (
         <Box
-          data-testid="opti-datalake-dropzone"
+          data-testid="datalake-dropzone"
           sx={{
             position: 'absolute',
             inset: 12,
@@ -196,15 +199,17 @@ export default function DataLakeExplorer({
         >
           <CloudUploadIcon sx={{ fontSize: 56, color: 'primary.300' }} />
           <Typography level="h4" sx={{ color: 'common.white' }}>
-            Drop to add to a data lake
+            {copy.dropTitle}
           </Typography>
           <Typography level="body-sm" sx={{ color: 'rgba(255,255,255,0.7)' }}>
-            Files or folders — you&apos;ll pick the destination next
+            {copy.dropHint}
           </Typography>
         </Box>
       )}
       <Box sx={{ px: 3, pt: 2, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <OptiModeBreadcrumb segments={[{ label: rootLabel, onClick: onBack }, { label: `${DATA_LAKE} Explorer` }]} />
+        <SurfaceBreadcrumb
+          segments={[{ label: rootLabel ?? copy.rootLabel, onClick: onBack }, { label: copy.explorerTitle }]}
+        />
         {/* mb:2 matches the breadcrumb's own mb so this icon's center lines up with the
             breadcrumb text in the center-aligned header row (breadcrumb carries mb:2). */}
         <FieldTooltip
@@ -224,7 +229,7 @@ export default function DataLakeExplorer({
             onClick={onCreate}
             sx={{ mb: 2 }}
           >
-            Create {DATA_LAKE.toLowerCase()}
+            {copy.createLabel}
           </Button>
         )}
         {onManage && (
@@ -254,14 +259,14 @@ export default function DataLakeExplorer({
           </Button>
         )}
         <Box sx={{ ml: 'auto', mb: 2 }}>
-          <TelemetryTicker
+          <StatTicker
             stats={[
-              { label: 'Articles', value: String(totalArticles || '—') },
-              { label: 'Branches', value: String(branchCount || '—') },
+              { label: copy.statArticlesLabel, value: String(totalArticles || '-') },
+              { label: copy.statBranchesLabel, value: String(branchCount || '-') },
               {
-                label: 'Depth',
+                label: copy.statDepthLabel,
                 value: String(breadcrumb.length),
-                sub: breadcrumb.length === 0 ? 'surface' : breadcrumb.join(' : '),
+                sub: breadcrumb.length === 0 ? copy.depthRootLabel : breadcrumb.join(' : '),
               },
             ]}
             isDark={isDark}

@@ -16,46 +16,18 @@ import {
 import { alpha } from '@mui/system';
 import SearchIcon from '@mui/icons-material/Search';
 import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
-import FolderIcon from '@mui/icons-material/Folder';
-import FolderOpenIcon from '@mui/icons-material/FolderOpen';
-import ArticleIcon from '@mui/icons-material/Article';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
-import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
-import type { Hue } from '@client/app/components/datalake/deckChrome';
+import { inkFor } from '@client/app/components/datalake/surfaceChrome';
+import type { Hue } from '@client/app/components/datalake/surfaceChrome';
+import { humanizeSegment, useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
+import type { DataLakeSurfaceTheme } from '@client/app/components/datalake/surfaceTokens';
 import type { IFabFileDocument } from '@bike4mind/common';
 
-const PREFIX_LABELS: Record<string, string> = {
-  opti: 'Optimization Knowledge',
-};
-
-/** Hue-code branches by their top-level prefix so depth reads at a glance. */
-const PREFIX_HUES: Record<string, Hue> = {
-  opti: HUES.emerald,
-};
-
-const hueForBranch = (segment: string, breadcrumb: string[]): Hue =>
-  PREFIX_HUES[breadcrumb[0] ?? segment] ?? HUES.amber;
-
-const CATEGORY_LABELS: Record<string, string> = {
-  offering: 'Offering Lines',
-  type: 'Content Type',
-  vertical: 'Customer Verticals',
-  competitor: 'Competitors',
-  stage: 'Sales Stage',
-  content: 'Content Type',
-  family: 'Pattern Families',
-  solver: 'Solvers',
-  level: 'Difficulty Level',
-  industry: 'Industries',
-};
-
-function humanizeSegment(segment: string, depth: number): string {
-  if (depth === 0 && PREFIX_LABELS[segment]) return PREFIX_LABELS[segment];
-  if (depth === 1 && CATEGORY_LABELS[segment]) return CATEGORY_LABELS[segment];
-  return segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
-}
+/** Branch ink comes from the top-level prefix, so a whole subtree reads as one color. */
+const hueForBranch = (segment: string, breadcrumb: string[], theme: DataLakeSurfaceTheme): Hue =>
+  theme.branchHues[breadcrumb[0] ?? segment] ?? theme.branchDefault;
 
 interface DataLakeTreeProps {
   tree: TagNode[];
@@ -79,8 +51,10 @@ export default function DataLakeTree({
   isLoading,
   isError,
 }: DataLakeTreeProps) {
-  const theme = useTheme();
-  const isDark = theme.palette.mode === 'dark';
+  const muiTheme = useTheme();
+  const isDark = muiTheme.palette.mode === 'dark';
+  const { theme, copy, icons, taxonomy } = useDataLakeSurface();
+  const { article: ArticleGlyph, branch: BranchGlyph, leafBranch: LeafBranchGlyph } = icons;
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'count' | 'alpha'>('count');
 
@@ -159,8 +133,8 @@ export default function DataLakeTree({
           <ArrowBackIcon sx={{ fontSize: 16, color: 'text.tertiary' }} />
           <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
             {breadcrumb.length === 1
-              ? 'All Categories'
-              : humanizeSegment(breadcrumb[breadcrumb.length - 2], breadcrumb.length - 2)}
+              ? copy.allCategoriesLabel
+              : humanizeSegment(breadcrumb[breadcrumb.length - 2], breadcrumb.length - 2, taxonomy)}
           </Typography>
         </ListItemButton>
       )}
@@ -197,10 +171,10 @@ export default function DataLakeTree({
                     sx={{ borderRadius: 'sm', gap: 1 }}
                     data-testid={`datalake-file-${file.id}`}
                   >
-                    <ArticleIcon
+                    <ArticleGlyph
                       sx={{
                         fontSize: 16,
-                        color: selectedFileId === file.id ? inkFor(HUES.cyan, isDark) : 'text.tertiary',
+                        color: selectedFileId === file.id ? inkFor(theme.accent, isDark) : 'text.tertiary',
                         flexShrink: 0,
                       }}
                     />
@@ -229,7 +203,7 @@ export default function DataLakeTree({
               </Box>
             ) : (
               filteredNodes.map(node => {
-                const branchInk = inkFor(hueForBranch(node.segment, breadcrumb), isDark);
+                const branchInk = inkFor(hueForBranch(node.segment, breadcrumb, theme), isDark);
                 return (
                   <ListItem key={node.segment}>
                     <ListItemButton
@@ -242,13 +216,13 @@ export default function DataLakeTree({
                       data-testid={`datalake-node-${node.segment}`}
                     >
                       {node.children.length > 0 ? (
-                        <FolderIcon sx={{ fontSize: 18, color: branchInk }} />
+                        <BranchGlyph sx={{ fontSize: 18, color: branchInk }} />
                       ) : (
-                        <FolderOpenIcon sx={{ fontSize: 18, color: alpha(branchInk, 0.7) }} />
+                        <LeafBranchGlyph sx={{ fontSize: 18, color: alpha(branchInk, 0.7) }} />
                       )}
                       <ListItemContent>
                         <Typography level="body-sm" sx={{ fontWeight: 'md' }}>
-                          {humanizeSegment(node.segment, breadcrumb.length)}
+                          {humanizeSegment(node.segment, breadcrumb.length, taxonomy)}
                         </Typography>
                       </ListItemContent>
                       <Chip
