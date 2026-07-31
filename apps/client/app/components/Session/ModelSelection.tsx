@@ -695,7 +695,7 @@ const ModelOption = React.memo(
                 alignItems: 'center',
                 gap: 1,
                 textAlign: 'left',
-                mb: 1,
+                mb: 1.5,
               }}
             >
               {nameBlock}
