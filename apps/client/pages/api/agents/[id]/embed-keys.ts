@@ -1,7 +1,7 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { agentRepository, organizationRepository } from '@bike4mind/database';
-import { ApiKeyStatus } from '@bike4mind/common';
+import { ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 
@@ -53,12 +53,18 @@ const handler = baseApi().get(async (req, res) => {
 
   // Defense in depth on top of the agent gate: only keys the caller could see
   // on their own key surfaces (minted by them, or billed to an org they admin).
+  // The org arm also requires Organization billing, matching the predicate
+  // findByOrganizationIdsAndId applies on the write paths - a stray
+  // organizationId on a user-billed key must not grant an org admin sight of it.
   const adminOrgSet = new Set(administeredOrgIds);
   const visible = req.user!.isAdmin
     ? keys
     : keys.filter(
         key =>
-          (!!key.userId && key.userId === callerId) || (!!key.organizationId && adminOrgSet.has(key.organizationId))
+          (!!key.userId && key.userId === callerId) ||
+          (key.billingOwnerType === CreditHolderType.Organization &&
+            !!key.organizationId &&
+            adminOrgSet.has(key.organizationId))
       );
 
   const items: EmbedKeyListItem[] = visible.map(key => ({

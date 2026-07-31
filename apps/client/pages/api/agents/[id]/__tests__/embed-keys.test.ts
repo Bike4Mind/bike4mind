@@ -35,6 +35,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import '@pages/api/agents/[id]/embed-keys';
+import { CreditHolderType } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 
 const OWNED_KEY = {
@@ -122,11 +123,38 @@ describe('GET /api/agents/[id]/embed-keys', () => {
   it('lets an org admin of the agent org see the org-billed keys', async () => {
     agentFindById.mockResolvedValue({ id: 'agent-1', userId: 'someone-else', organizationId: 'org-1' });
     findIdsAdministeredBy.mockResolvedValue(['org-1']);
-    listAgentEmbedKeys.mockResolvedValue([{ ...OWNED_KEY, userId: 'someone-else', organizationId: 'org-1' }]);
+    listAgentEmbedKeys.mockResolvedValue([
+      {
+        ...OWNED_KEY,
+        userId: 'someone-else',
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
+      },
+    ]);
     const { req, res } = makeReq({ id: 'agent-1' });
     await mockRefs.getHandler!(req, res);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect((res as any)._getJSONData()).toHaveLength(1);
+  });
+
+  // The org arm grants on Organization billing, not on organizationId alone, so
+  // a user-billed key carrying a stray org id stays invisible to that org's admin.
+  it('excludes a user-billed key whose organizationId matches an administered org', async () => {
+    agentFindById.mockResolvedValue({ id: 'agent-1', userId: 'someone-else', organizationId: 'org-1' });
+    findIdsAdministeredBy.mockResolvedValue(['org-1']);
+    listAgentEmbedKeys.mockResolvedValue([
+      {
+        ...OWNED_KEY,
+        id: 'key-2',
+        userId: 'someone-else',
+        billingOwnerType: CreditHolderType.User,
+        organizationId: 'org-1',
+      },
+    ]);
+    const { req, res } = makeReq({ id: 'agent-1' });
+    await mockRefs.getHandler!(req, res);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((res as any)._getJSONData()).toEqual([]);
   });
 
   it('filters out a key with neither a matching owner nor an administered org (both-unset row)', async () => {
