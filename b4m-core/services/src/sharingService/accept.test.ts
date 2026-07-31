@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { InviteType, Permission } from '@bike4mind/common';
-import { NotFoundError, ForbiddenError } from '@bike4mind/utils';
+import { NotFoundError, ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import { acceptInvite } from './accept';
 
 describe('sharingService - acceptInvite (Organization)', () => {
@@ -14,6 +14,7 @@ describe('sharingService - acceptInvite (Organization)', () => {
       sessions: { findById: Mock; update: Mock; findAllByIds: Mock };
       projects: { findById: Mock; update: Mock };
       fabFiles: { findById: Mock; update: Mock; findAllByIds: Mock };
+      groups: { findById: Mock };
       organization: { findById: Mock; update: Mock };
       users: { findById: Mock; update: Mock };
     };
@@ -54,6 +55,7 @@ describe('sharingService - acceptInvite (Organization)', () => {
         sessions: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
         projects: { findById: vi.fn(), update: vi.fn() },
         fabFiles: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
+        groups: { findById: vi.fn() },
         organization: { findById: vi.fn(), update: vi.fn() },
         users: { findById: vi.fn(), update: vi.fn() },
       },
@@ -135,5 +137,130 @@ describe('sharingService - acceptInvite (Organization)', () => {
 
     await expect(acceptInvite(userId, { id: inviteId }, mockAdapters as any)).rejects.toThrow(NotFoundError);
     expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('sharingService - acceptInvite (Group)', () => {
+  // Regression coverage for #1224: the Group case previously wrote user.groups with no org
+  // membership check at all. These pin the write-path invariant (2) it now enforces - the
+  // accepting user must already be a member of the group's owning organization - mirroring
+  // organizationService/groupMembership.ts's assertion of the same rule on every other
+  // group-membership write.
+  const userId = 'user-123';
+  const groupId = 'group-456';
+  const organizationId = 'org-789';
+  const inviteId = 'invite-999';
+
+  let mockAdapters: {
+    db: {
+      invites: { findById: Mock; update: Mock };
+      sessions: { findById: Mock; update: Mock; findAllByIds: Mock };
+      projects: { findById: Mock; update: Mock };
+      fabFiles: { findById: Mock; update: Mock; findAllByIds: Mock };
+      groups: { findById: Mock };
+      organization: { findById: Mock; update: Mock };
+      users: { findById: Mock; update: Mock };
+    };
+  };
+
+  const makeUser = (overrides: Record<string, unknown> = {}) => ({
+    id: userId,
+    email: 'member@example.com',
+    username: 'member',
+    name: 'Member',
+    groups: [] as string[],
+    ...overrides,
+  });
+
+  const makeInvite = () => ({
+    id: inviteId,
+    type: InviteType.Group,
+    documentId: groupId,
+    permissions: [Permission.read],
+    remaining: 1,
+    accepted: 0,
+    recipients: { pending: ['member@example.com'], refused: [], accepted: [] },
+  });
+
+  const makeGroup = (overrides: Record<string, unknown> = {}) => ({
+    id: groupId,
+    name: 'Sales',
+    type: 'sales',
+    organizationId,
+    ...overrides,
+  });
+
+  const makeOrganization = (overrides: Record<string, unknown> = {}) => ({
+    id: organizationId,
+    users: [{ userId, permissions: [Permission.read] }],
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAdapters = {
+      db: {
+        invites: { findById: vi.fn(), update: vi.fn() },
+        sessions: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
+        projects: { findById: vi.fn(), update: vi.fn() },
+        fabFiles: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
+        groups: { findById: vi.fn() },
+        organization: { findById: vi.fn(), update: vi.fn() },
+        users: { findById: vi.fn(), update: vi.fn() },
+      },
+    };
+  });
+
+  it('adds the group id to user.groups for a member of the owning organization', async () => {
+    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.groups.findById.mockResolvedValue(makeGroup());
+    mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization());
+
+    await acceptInvite(userId, { id: inviteId }, mockAdapters as any);
+
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(expect.objectContaining({ groups: [groupId] }));
+  });
+
+  it('rejects a caller who is not a member of the group organization, and does not write', async () => {
+    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.groups.findById.mockResolvedValue(makeGroup());
+    // The accepting user is not in organization.users - an outsider holding the invite id.
+    mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization({ users: [{ userId: 'someone-else' }] }));
+
+    await expect(acceptInvite(userId, { id: inviteId }, mockAdapters as any)).rejects.toThrow(BadRequestError);
+    expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+  });
+
+  it('throws NotFoundError when the group does not exist (or is soft-deleted)', async () => {
+    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.groups.findById.mockResolvedValue(null);
+
+    await expect(acceptInvite(userId, { id: inviteId }, mockAdapters as any)).rejects.toThrow(NotFoundError);
+    expect(mockAdapters.db.organization.findById).not.toHaveBeenCalled();
+    expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+  });
+
+  it("throws NotFoundError when the group's organization does not exist", async () => {
+    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.groups.findById.mockResolvedValue(makeGroup());
+    mockAdapters.db.organization.findById.mockResolvedValue(null);
+
+    await expect(acceptInvite(userId, { id: inviteId }, mockAdapters as any)).rejects.toThrow(NotFoundError);
+    expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+  });
+
+  it('does not duplicate the group id if the user already holds it (double-accept)', async () => {
+    mockAdapters.db.users.findById.mockResolvedValue(makeUser({ groups: [groupId] }));
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.groups.findById.mockResolvedValue(makeGroup());
+    mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization());
+
+    await acceptInvite(userId, { id: inviteId }, mockAdapters as any);
+
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(expect.objectContaining({ groups: [groupId] }));
   });
 });

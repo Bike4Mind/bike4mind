@@ -23,7 +23,12 @@ const SimplifiedChatRequestSchema = z.object({
   message: z.string(),
   model: z.string().optional(), // Made optional - will use admin setting if not provided
   temperature: z.number().min(0).max(2).optional(),
+  // Output-budget override. `max_tokens` is the canonical field; `maxTokens` and
+  // `maxOutputTokens` are accepted aliases so callers using either casing aren't
+  // silently ignored (Zod strips unknown keys). All three coalesce in transformToInternalFormat.
   max_tokens: z.number().positive().optional(),
+  maxTokens: z.number().positive().optional(),
+  maxOutputTokens: z.number().positive().optional(),
   stream: z.boolean().prefault(false),
   historyCount: z.number().positive().prefault(10).catch(10),
   fileIds: z.array(z.string()).prefault([]),
@@ -294,9 +299,13 @@ function transformToInternalFormat(
     organizationId, // Include for team-wide system prompts
     params: {
       model: request.model,
-      // 4096 is within supported output limits for all configured models.
-      // Callers can override via request.max_tokens.
-      max_tokens: request.max_tokens ?? 4096,
+      // Any of max_tokens / maxTokens / maxOutputTokens expresses the caller's budget.
+      // Left undefined when none is given so ChatCompletionProcess can pick a
+      // model-aware default - it knows whether the resolved model is an adaptive
+      // reasoning model, which needs a larger default to keep extended thinking from
+      // consuming the whole budget and leaving an empty reply. Sending a number here
+      // would read downstream as a deliberate caller choice and defeat that.
+      max_tokens: request.max_tokens ?? request.maxTokens ?? request.maxOutputTokens,
       ...(request.temperature !== undefined && { temperature: request.temperature }),
       stream: request.stream,
     },

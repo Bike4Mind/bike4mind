@@ -95,6 +95,7 @@ function buildSources(catalogView: CatalogViewReader): ModelDiscoveryAdapters['s
     modelDiscoveryService.createOpenAiSource(),
     modelDiscoveryService.createAnthropicSource(),
     modelDiscoveryService.createXaiSource(),
+    modelDiscoveryService.createKimiSource(),
     modelDiscoveryService.createGeminiSource(),
     modelDiscoveryService.createOllamaSource(),
     modelDiscoveryService.createBflSource(),
@@ -111,9 +112,10 @@ function buildSources(catalogView: CatalogViewReader): ModelDiscoveryAdapters['s
 }
 
 /**
- * A linked SST secret, read by name. Two of these (OPENAI_API_KEY,
- * XAI_API_KEY) are new in infra/secrets.ts and the generated sst-env.d.ts only
- * learns about them on the next deploy, so a compile-time `Resource.X` access
+ * A linked SST secret, read by name. Three of these (OPENAI_API_KEY,
+ * XAI_API_KEY, MOONSHOT_API_KEY) postdate the original secret set and the
+ * generated sst-env.d.ts only learns about them on the next deploy, so a
+ * compile-time `Resource.X` access
  * would break the build on a fresh checkout. Indexing a Record view keeps
  * secrets linked rather than copied into the lambda environment, which is the
  * repo's convention, without depending on the generated declaration. Any
@@ -140,6 +142,7 @@ export function discoveryEnv(): DiscoveryEnv {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? linkedSecret('ANTHROPIC_API_KEY'),
     GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? linkedSecret('GEMINI_API_KEY'),
     XAI_API_KEY: process.env.XAI_API_KEY ?? linkedSecret('XAI_API_KEY'),
+    MOONSHOT_API_KEY: process.env.MOONSHOT_API_KEY ?? linkedSecret('MOONSHOT_API_KEY'),
   });
 }
 

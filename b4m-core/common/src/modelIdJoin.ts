@@ -70,6 +70,13 @@ const LITELLM_NAMESPACES: ReadonlySet<string> = new Set([
   'elevenlabs',
   'voyage',
   'black_forest_labs',
+  // litellm keys Moonshot first-party entries `moonshot/kimi-k2.6`. Without this
+  // the prefix survives normalization, no Kimi id joins litellm, and the
+  // two-agreeing-aggregators price rule can never be satisfied. Deliberately
+  // NOT the reseller prefixes: litellm carries 79 Kimi keys across bedrock,
+  // fireworks, baseten and cloudflare at different rates, and collapsing those
+  // would let a resold price outrank the direct one.
+  'moonshot',
 ]);
 
 /**
@@ -85,6 +92,9 @@ export const MODELS_DEV_PROVIDER_BY_BACKEND: Readonly<Record<string, string>> = 
   openai: 'openai',
   gemini: 'google',
   xai: 'xai',
+  // 'moonshotai' is the api.moonshot.ai provider; 'moonshotai-cn' (api.moonshot.cn)
+  // is a separate row with its own rates and is deliberately not indexed.
+  kimi: 'moonshotai',
   bedrock: 'amazon-bedrock',
 };
 

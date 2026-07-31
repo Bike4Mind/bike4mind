@@ -4,8 +4,8 @@
  * The Claude Code hook (packages/cli/bin/hearth-hook.mjs) ships as a
  * dependency-free script run under bare `node`, so it carries its own copy of
  * the slug algorithm and the word lists below rather than importing them.
- * identity.parity.test.ts pins the two copies to each other: change one and
- * the test fails until you change the other.
+ * identity.test.ts pins the two copies to each other: change one and the test
+ * fails until you change the other.
  */
 
 /**
@@ -18,9 +18,19 @@
  */
 export const DEFAULT_HEARTH_CHANNEL_NAME = 'agents';
 
-// 32x32 = 1024 pairs. Collisions are cosmetic (the exact session id still
-// travels in the event payload); the point is that a human can tell two live
-// sessions apart at a glance, which a uuid prefix does not achieve.
+// 32x32 = 1024 pairs, so a human can tell two live sessions apart at a glance
+// where a uuid prefix cannot.
+//
+// A collision is NOT purely cosmetic, despite what this comment used to claim.
+// The slug reaches actor.displayName, ensureActor upserts on
+// (userId, kind, displayName), and a roster row is keyed (channelId, actorId) -
+// so two colliding sessions collapse onto ONE actor, one row, and one shared
+// cursor, which is the exact defect per-session identity was introduced to fix.
+// By the birthday bound that is even odds at about 38 concurrent sessions. The
+// exact session id still travels in the payload, so nothing is lost, but the
+// roster under-reports. Widening the lists (or seeding the slug with more of the
+// id) is the fix if that becomes real; recorded here so the next reader does not
+// re-derive it from the word "cosmetic".
 const ADJECTIVES = [
   'amber',
   'brisk',

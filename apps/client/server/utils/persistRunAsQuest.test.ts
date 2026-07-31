@@ -17,11 +17,20 @@ vi.mock('@bike4mind/database', () => ({
 
 // The naming/summary dispatch is fire-and-forget; stub it so tests don't
 // depend on the event bus (which pulls in sst/queue wiring).
+const autoNamePublishMock = vi.fn().mockResolvedValue(undefined);
+const summarizePublishMock = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/utils/eventBus', () => ({
   SessionEvents: {
-    AutoName: { publish: vi.fn().mockResolvedValue(undefined) },
-    Summarize: { publish: vi.fn().mockResolvedValue(undefined) },
+    AutoName: { publish: (...args: unknown[]) => autoNamePublishMock(...args) },
+    Summarize: { publish: (...args: unknown[]) => summarizePublishMock(...args) },
   },
+}));
+
+// Artifact persistence has its own suite; stub it here so this file keeps mocking
+// only agentExecutionRepository + Quest out of @bike4mind/database.
+const persistAgentArtifactsMock = vi.fn().mockResolvedValue(undefined);
+vi.mock('./persistAgentArtifacts', () => ({
+  persistAgentArtifacts: (...args: unknown[]) => persistAgentArtifactsMock(...args),
 }));
 
 const { persistRunAsQuest } = await import('./persistRunAsQuest');
@@ -152,5 +161,70 @@ describe('persistRunAsQuest creditsUsed persistence', () => {
 
     const [, update] = findOneAndUpdateMock.mock.calls[0];
     expect(update.$set.creditsUsed).toBe(0);
+  });
+});
+
+describe('persistRunAsQuest agent artifact persistence', () => {
+  const CREATED_AT = new Date(1700000000000);
+
+  it('hands the persisted quest and the reply text to the artifact writer (update branch)', async () => {
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'q1', createdAt: CREATED_AT });
+
+    await persistRunAsQuest(EXECUTION_ID, 'reply with <artifact>', logger);
+
+    expect(persistAgentArtifactsMock).toHaveBeenCalledTimes(1);
+    const [args] = persistAgentArtifactsMock.mock.calls[0];
+    expect(args).toMatchObject({
+      replyText: 'reply with <artifact>',
+      questId: 'q1',
+      questCreatedAtMs: CREATED_AT.getTime(),
+      sessionId: 's1',
+      userId: 'u1',
+      executionId: EXECUTION_ID,
+    });
+  });
+
+  it('uses the newly created quest on the create branch', async () => {
+    findOneAndUpdateMock.mockResolvedValue(null);
+    createMock.mockResolvedValue({ _id: 'q2', createdAt: CREATED_AT });
+
+    await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+    const [args] = persistAgentArtifactsMock.mock.calls[0];
+    expect(args.questId).toBe('q2');
+  });
+
+  it('falls back to a zero timestamp for a quest with no createdAt', async () => {
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'q1' });
+
+    await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+    const [args] = persistAgentArtifactsMock.mock.calls[0];
+    expect(args.questCreatedAtMs).toBe(0);
+  });
+
+  it('does not run when the execution is missing', async () => {
+    findByIdMock.mockResolvedValue(null);
+
+    await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+    expect(persistAgentArtifactsMock).not.toHaveBeenCalled();
+  });
+
+  it('does not run when the execution has no sessionId', async () => {
+    stubExecution({ sessionId: undefined });
+
+    await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+    expect(persistAgentArtifactsMock).not.toHaveBeenCalled();
+  });
+
+  it('still dispatches session naming and summarization afterwards', async () => {
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'q1', createdAt: CREATED_AT });
+
+    await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+    expect(autoNamePublishMock).toHaveBeenCalled();
+    expect(summarizePublishMock).toHaveBeenCalled();
   });
 });

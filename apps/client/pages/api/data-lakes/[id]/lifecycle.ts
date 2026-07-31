@@ -35,6 +35,7 @@ const handler = baseApi()
       case 'archive': {
         const result = await dataLakeService.archiveDataLake(actor, lake.id, {
           db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+          logger: req.logger,
         });
         return res.json(result);
       }
@@ -54,6 +55,8 @@ const handler = baseApi()
       case 'delete': {
         const result = await dataLakeService.deleteDataLake(actor, lake.id, {
           db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+          // The prefix-overlap warning is the point of logging here: without a sink it no-ops.
+          logger: req.logger,
         });
         return res.json(result);
       }

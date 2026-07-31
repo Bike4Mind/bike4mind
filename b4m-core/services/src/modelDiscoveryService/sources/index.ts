@@ -17,6 +17,7 @@ export * from './bedrock';
 export * from './bfl';
 export * from './elevenlabs';
 export * from './gemini';
+export * from './kimi';
 export * from './litellm';
 export * from './modelsDev';
 export * from './ollama';

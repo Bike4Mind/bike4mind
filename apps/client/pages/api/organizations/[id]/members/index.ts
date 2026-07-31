@@ -15,6 +15,7 @@ import { respond } from '@server/utils/respond';
 import { Request } from 'express';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
+import { groupRepository } from '@bike4mind/database/social';
 
 const handler = baseApi()
   .get(async (req, res) => {
@@ -72,7 +73,13 @@ const handler = baseApi()
       organizationService.leave(
         req.user,
         { ...(req.query as any) },
-        { db: { organizations: organizationRepository, users: userRepository } }
+        {
+          db: {
+            organizations: organizationRepository,
+            users: userRepository,
+            groups: groupRepository,
+          },
+        }
       )
     );
 

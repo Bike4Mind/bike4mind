@@ -16,7 +16,7 @@
  * restores it, so both surfaces agree.)
  */
 import { DATA_LAKES, getAccessibleDataLakes, hasDeveloperUserTag, isImageServeable } from '@bike4mind/common';
-import type { DataLakeConfig } from '@bike4mind/common';
+import type { DataLakeConfig, ManageableDataLakeConfig } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -41,7 +41,7 @@ import { toAccessContext } from './toAccessContext';
  * The retrieval resolver does run that filter and compensates with its own owner re-check
  * (see getDynamicDataLakeAccess) - so if the two are ever unified, ownership must survive.
  */
-export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<DataLakeConfig[]> {
+export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<ManageableDataLakeConfig[]> {
   // toAccessContext, not a local literal: it is the one place this shape is built, and it is
   // what resolves entitlementKeys. Building it inline here silently dropped them, so
   // findAccessible saw no entitlement arm and browse lost a lake gated by requiredEntitlement
@@ -152,11 +152,6 @@ export async function queryDataLakeArticles(
       order: { by: sortBy, direction: sortDir },
       options: {
         textSearch: !!search,
-        includeShared: true,
-        userGroups: user.groups ?? [],
-        dataLakeTags,
-        dataLakeTagPrefixes: openTagPrefixes,
-        scopedTagPrefixes,
         excludeContent: true,
       },
     },
@@ -176,6 +171,15 @@ export async function queryDataLakeArticles(
           }
         },
       },
+    },
+    // Resolved from the lakes this caller can actually reach, never from the query string
+    // (see SearchFabFilesServerOptions).
+    {
+      includeShared: true,
+      userGroups: user.groups ?? [],
+      dataLakeTags,
+      dataLakeTagPrefixes: openTagPrefixes,
+      scopedTagPrefixes,
     }
   );
 

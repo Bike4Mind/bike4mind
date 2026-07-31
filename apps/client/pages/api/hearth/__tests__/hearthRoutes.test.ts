@@ -52,8 +52,12 @@ const {
 // of each verb (per-route middleware like csrf/rate-limit is skipped so the
 // business logic runs directly).
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  // Records the CONFIG and the full middleware chain, not just the terminal
+  // handler. Without `_config` no test could see a route's requiredScopes, so a
+  // suite that read as scope coverage would have passed with requiredScopes: [].
+  baseApi: (config?: unknown) => {
     const routes: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
+    const middleware: Record<string, unknown[]> = {};
     const uses: unknown[] = [];
     const chain = {
       use: (mw: unknown) => {
@@ -62,19 +66,27 @@ vi.mock('@server/middlewares/baseApi', () => ({
       },
       get: (...handlers: unknown[]) => {
         routes.get = handlers[handlers.length - 1] as (typeof routes)['get'];
+        middleware.get = handlers.slice(0, -1);
         return chain;
       },
       post: (...handlers: unknown[]) => {
         routes.post = handlers[handlers.length - 1] as (typeof routes)['post'];
+        middleware.post = handlers.slice(0, -1);
         return chain;
       },
       _routes: routes,
+      _middleware: middleware,
       _uses: uses,
+      _config: config,
     };
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
+// Records the options each route asks for, so a limit can be asserted by value
+// rather than by "some middleware is present".
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: (options: unknown) => Object.assign(vi.fn(), { _rateLimit: options }),
+}));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => vi.fn() }));
 vi.mock('@server/middlewares/requireUser', () => ({ requireUser: vi.fn() }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: featureGateMock }));
@@ -82,6 +94,7 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: sendToClientMock }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' } } }));
 vi.mock('@bike4mind/database', () => ({
   MAX_PRESENCE_FIELD_LENGTH: 200,
+  MAX_ROSTER_ROWS: 200,
   hearthRepository: {
     store: storeMock,
     getOwnedChannel: getOwnedChannelMock,
@@ -104,7 +117,18 @@ vi.mock('@bike4mind/hearth', async importOriginal => ({
 }));
 
 type Handler = (req: Request, res: Response) => Promise<unknown>;
-type MockedRouter = { _routes: Record<string, Handler>; _uses: unknown[] };
+type MockedRouter = {
+  _routes: Record<string, Handler>;
+  _middleware: Record<string, unknown[]>;
+  _uses: unknown[];
+  _config?: { requiredScopes?: string[] };
+};
+
+/** The rate-limit options a route registered for a verb, or undefined if none. */
+function rateLimitOptions(router: MockedRouter, verb: 'get' | 'post'): unknown {
+  const tagged = (router._middleware[verb] ?? []).find(mw => (mw as { _rateLimit?: unknown })._rateLimit);
+  return (tagged as { _rateLimit?: unknown } | undefined)?._rateLimit;
+}
 
 const eventsRouter = (await import('../events')).default as unknown as MockedRouter;
 const catchupRouter = (await import('../catchup')).default as unknown as MockedRouter;
@@ -358,14 +382,42 @@ describe('GET /api/hearth/presence', () => {
     expect(presenceForChannelMock).not.toHaveBeenCalled();
   });
 
-  it('is read-only: a key with only hearth:read may read the roster', async () => {
-    const req = makeReq({}, { channelId: 'ch-1' });
-    (req as unknown as { apiKeyInfo: { scopes: string[] } }).apiKeyInfo = { scopes: ['hearth:read'] };
-    await get()(req, makeRes());
+  // This case used to be titled "a key with only hearth:read may read the
+  // roster" while asserting nothing of the kind: scope enforcement happens in
+  // baseApi's requiredScopes, which the harness discarded, and the handler never
+  // reads apiKeyInfo - so it passed identically with no apiKeyInfo at all, and
+  // would have passed with requiredScopes: []. Split into the two claims that
+  // are actually checkable here.
+  it('publishes the row cap so a full page does not read as the whole roster', async () => {
+    getOwnedChannelMock.mockResolvedValue({ _id: 'ch-1' });
+    presenceForChannelMock.mockResolvedValue([]);
+    actorNamesByIdMock.mockResolvedValue(new Map());
+
+    const res = makeRes();
+    await get()(makeReq({}, { channelId: 'ch-1' }), res);
+
+    // The roster is capped for cost (the ranking sort cannot be index-served and
+    // rows are never deleted), so the bound has to be visible to the client.
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ maxRows: 200 }));
+  });
+
+  it('declares the read scope list, so a read-only key is admitted', () => {
+    // OR semantics, matching the sibling routes: any one of these suffices.
+    expect(presenceRouter._config?.requiredScopes).toEqual(['hearth:read', 'hearth:write', 'admin:*']);
+  });
+
+  it('consumes nothing: reading a roster advances no cursor and mints no actor', async () => {
+    await get()(makeReq({}, { channelId: 'ch-1' }), makeRes());
     expect(presenceForChannelMock).toHaveBeenCalledWith('u1', 'ch-1');
-    // Reading a roster consumes nothing.
     expect(storeMock.setCursor).not.toHaveBeenCalled();
     expect(ensureActorMock).not.toHaveBeenCalled();
+  });
+
+  // Was the only hearth route with no limit at all, and it is the most expensive
+  // one: the roster aggregation sorts on an $addFields key, so no index can serve
+  // it, over a collection that grows one permanent row per session.
+  it('is rate limited on the same budget as the other reads', () => {
+    expect(rateLimitOptions(presenceRouter, 'get')).toEqual({ limit: 120, windowMs: 60000 });
   });
 
   it('returns the repository order untouched (needs-you-first, not by recency)', async () => {
@@ -458,5 +510,39 @@ describe('/api/hearth/channels', () => {
     await channelsRouter._routes.get(makeReq({}), res);
     expect(listChannelsForUserMock).toHaveBeenCalledWith('u1');
     expect((res.body as { channels: Array<{ id: string }> }).channels[0].id).toBe('ch-1');
+  });
+});
+
+/**
+ * Scope declarations for EVERY hearth route, not just presence.
+ *
+ * `requiredScopes` is enforced inside baseApi, which this suite mocks, so no test
+ * here can prove enforcement - what it CAN prove is that each route asks for the
+ * right list, which is the part a refactor silently changes. Before the harness
+ * recorded the config, nothing in the suite asserted any route's scopes at all.
+ */
+describe('hearth route scope declarations', () => {
+  const READ_OR_WRITE = ['hearth:read', 'hearth:write', 'admin:*'];
+
+  it.each([
+    ['channels', () => channelsRouter, READ_OR_WRITE],
+    ['catchup', () => catchupRouter, READ_OR_WRITE],
+    ['presence', () => presenceRouter, READ_OR_WRITE],
+    // events is the asymmetric one and deliberately so: appending is a write, so
+    // a hearth:read key must NOT reach it. Pinning the difference is the point -
+    // widening this list to match its siblings would hand every read-only key the
+    // ability to append to the log.
+    ['events', () => eventsRouter, ['hearth:write', 'admin:*']],
+  ])('%s declares its scope list', (_name, router, expected) => {
+    expect(router()._config?.requiredScopes).toEqual(expected);
+  });
+
+  it('no route omits requiredScopes entirely', () => {
+    // An undefined list is the dangerous default: baseApi would apply no scope
+    // constraint at all, and every assertion above would still read as coverage.
+    for (const router of [channelsRouter, catchupRouter, presenceRouter, eventsRouter]) {
+      expect(router._config?.requiredScopes).toBeDefined();
+      expect(router._config?.requiredScopes?.length).toBeGreaterThan(0);
+    }
   });
 });

@@ -8,7 +8,7 @@ import { parseArtifacts, isSvgGraphicallyEmpty } from './artifactParser';
  * artifacts so raw HTML never leaks into the chat, while content that is already
  * tagged or inside a generic code fence must be left untouched.
  */
-describe('convertCodeBlocksToArtifacts — HTML promotion (#9259)', () => {
+describe('convertCodeBlocksToArtifacts - HTML promotion', () => {
   const promote = (input: string) => {
     const converted = convertCodeBlocksToArtifacts(input);
     const { artifacts } = parseArtifacts(converted);
