@@ -2,15 +2,18 @@ import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH } from '@bike4mind/common';
 import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
-import { canManageLake } from '../dataLakeService/authorizeLakeWrite';
+import { canManageLake, extractDataLakeMetaTags } from '../dataLakeService/authorizeLakeWrite';
+import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import { removeFileFromLake, type MembershipActor, type MembershipLake } from '../dataLakeService/lakeMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 
 interface ReconcileLakeTagsAdapters {
   db: {
     fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'find'>;
   };
+  /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void };
 }
 
 export interface LakeTagReconciliation {
@@ -48,17 +51,25 @@ const isMetaTag = (name: string): boolean => name.toLowerCase().startsWith(DATAL
  * A meta-tag that resolves to no lake is refused when the caller is trying to APPLY it, matching
  * the route gate; the same string being dropped is let through as a plain tag removal, since an
  * orphaned meta-tag left by a deleted lake must not make the file uneditable.
+ *
+ * `tagsToPersist` is also run through the fallback tagger (see `fallbackLakeTags`) before it is
+ * returned, so a lake joined here without a real content tag still gets its `<prefix>uncategorized`
+ * stamp, and a plain edit that happens to drop a file's last qualifying tag for a lake it remains a
+ * member of gets it backfilled too. Retraction never actually fires through this path: a genuine
+ * leave clears every tag under the departing lake's OWN prefix inside `removeFileFromLake` below,
+ * which already includes any stamp this reconciler minted, so nothing is left for the tagger to
+ * retract by the time `commit()` runs.
  */
 export const reconcileLakeTags = async (
   actor: MembershipActor,
   fabFileId: string,
   currentTagNames: string[],
   desiredTags: { name: string; strength: number }[],
-  { db }: ReconcileLakeTagsAdapters
+  { db, logger }: ReconcileLakeTagsAdapters
 ): Promise<LakeTagReconciliation> => {
   const ordinaryTags = desiredTags.filter(tag => !isMetaTag(tag.name));
-  const desiredKeys = new Set(desiredTags.filter(tag => isMetaTag(tag.name)).map(tag => tag.name.toLowerCase()));
-  const currentKeys = new Set(currentTagNames.filter(isMetaTag).map(name => name.toLowerCase()));
+  const desiredKeys = new Set(extractDataLakeMetaTags(desiredTags.map(tag => tag.name)));
+  const currentKeys = new Set(extractDataLakeMetaTags(currentTagNames));
 
   const joins: MembershipLake[] = [];
   const leaves: MembershipLake[] = [];
@@ -104,8 +115,20 @@ export const reconcileLakeTags = async (
     assertLakeWritable(lake);
   }
 
+  const tagsToPersist = [
+    ...ordinaryTags,
+    ...metaTagsToPersist.map(name => ({ name, strength: DATALAKE_TAG_STRENGTH })),
+  ];
+  // previousTags only needs names: the tagger reads nothing else off it, and the departed-lake
+  // set it computes is what the doc comment above notes never actually finds anything to retract.
+  const reconciledTags = await reconcileDataLakeFallbackTags(tagsToPersist, {
+    db,
+    logger,
+    previousTags: currentTagNames.map(name => ({ name })),
+  });
+
   return {
-    tagsToPersist: [...ordinaryTags, ...metaTagsToPersist.map(name => ({ name, strength: DATALAKE_TAG_STRENGTH }))],
+    tagsToPersist: reconciledTags,
     commit: async () => {
       for (const lake of leaves) {
         try {

@@ -295,9 +295,8 @@ describe('ToolsSection unavailable-tool display', () => {
   const switchFor = (container: HTMLElement, toolClass: string) =>
     container.querySelector(`.${toolClass} [role="switch"]`);
   const tallyFor = (container: HTMLElement, section: string) =>
-    Array.from(container.querySelectorAll('.tools-collapsible-title')).find(el =>
-      el.textContent?.startsWith(section)
-    )?.textContent;
+    Array.from(container.querySelectorAll('.tools-collapsible-title')).find(el => el.textContent?.startsWith(section))
+      ?.textContent;
   const setToolsPayloads = () =>
     mocks.useLLM.setState.mock.calls.filter((call: unknown[]) => {
       const payload = call[0];

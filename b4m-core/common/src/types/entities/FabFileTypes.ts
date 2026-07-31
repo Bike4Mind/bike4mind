@@ -316,6 +316,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findAllByIds(ids: string[]): Promise<IFabFileDocument[]>;
 
+  /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
+  findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
+
   /**
    * Search for files.
    * @param userId - The ID of the user.
@@ -434,9 +437,18 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ total: number; byPrefix: Record<string, number> }>;
 
   /**
-   * Count unique files per root tag namespace for a user.
+   * Count unique files per root tag namespace for a user. Takes the same optional scope as
+   * countFilesByTagForUser, which it is served beside; omitting it counts owned files only.
    */
-  countUniqueFilesByNamespaceForUser(userId: string): Promise<{ namespace: string; fileCount: number }[]>;
+  countUniqueFilesByNamespaceForUser(
+    userId: string,
+    options?: {
+      userGroups?: string[];
+      dataLakeTags?: string[];
+      dataLakeTagPrefixes?: string[];
+      scopedTagPrefixes?: string[];
+    }
+  ): Promise<{ namespace: string; fileCount: number }[]>;
 
   /**
    * Remove a tag from a user's files.
@@ -491,6 +503,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * name already present fails its filter, so it neither counts nor bumps updatedAt.
    */
   pushTagsByFabFileId(fabFileId: string, tagNames: string[], strength?: number): Promise<number>;
+
+  /**
+   * Bulk-writes each file's full tags array in a single round trip via bulkWrite, instead of
+   * one findOneAndUpdate per file. Used by applyTaxonomySuggestions, where a batch can hold
+   * thousands of files and one write per file risks exceeding the caller's request timeout.
+   * @param updates - Each file's id and its complete resolved tags array.
+   * @returns Number of documents modified.
+   */
+  bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number>;
 
   /**
    * Find files by content hashes for a given user (deduplication).

@@ -88,6 +88,7 @@ const handler = baseApi()
           },
           {
             db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository },
+            logger: req.logger,
             storage: {
               upload: (filepath, content, option) => {
                 return getFilesStorage().upload(content, filepath, option);

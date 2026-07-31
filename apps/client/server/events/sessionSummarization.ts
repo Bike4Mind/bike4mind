@@ -196,6 +196,12 @@ export const handler = withEventContext(async (event, logger) => {
         // omitting one reads as leaving that lake - so without carrying the file's existing
         // meta-tags through, every re-summarization would evict a lake-indexed summary (and fail
         // outright for a summariser who cannot manage the lake).
+        //
+        // reconcileLakeTags may stamp a content tag for one of these lakes if this file lacks
+        // one - never a NEW membership, since `lakeTags` only ever carries through tags already
+        // stored on the file. Harmless either way: this FabFile always carries a sessionId,
+        // which both tag counters exclude unless it is a curated notebook, so a stamp here could
+        // never reach the tag tree.
         const lakeTags = (fabfile.tags ?? []).filter(
           t => typeof t?.name === 'string' && t.name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)
         );

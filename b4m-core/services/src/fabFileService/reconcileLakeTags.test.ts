@@ -28,7 +28,13 @@ const makeAdapters = (
       pushTagsByFabFileId: vi.fn().mockResolvedValue(1),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 4, totalSizeBytes: 40 }),
     },
-    dataLakes: { findByDatalakeTag: vi.fn().mockResolvedValue(lakeDoc), setStats: vi.fn() },
+    dataLakes: {
+      findByDatalakeTag: vi.fn().mockResolvedValue(lakeDoc),
+      setStats: vi.fn(),
+      // No prefix collisions in these tests; the fallback tagger's own logic is covered by
+      // fallbackLakeTags.test.ts.
+      find: vi.fn().mockResolvedValue([]),
+    },
   },
 });
 
@@ -57,9 +63,11 @@ describe('reconcileLakeTags', () => {
     const result = await run(adapters, [], [tag('datalake:lake', 1)]);
     await result.commit();
 
-    // The join is carried by the persisted array itself, so commit() issues no second write -
-    // only the stats recompute the array write cannot do.
-    expect(result.tagsToPersist).toEqual([tag('datalake:lake', 1)]);
+    // The join is carried by the persisted array itself, so commit() issues no second write for
+    // membership - only the stats recompute it cannot do. The array also gains a fallback
+    // content tag: addFileToLake stamps only the meta-tag, and a join with no qualifying tag
+    // under the lake's prefix would reproduce the "counted but not browseable" bug otherwise.
+    expect(result.tagsToPersist).toEqual([tag('datalake:lake', 1), tag('lk:uncategorized', 1)]);
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
   });
@@ -86,12 +94,14 @@ describe('reconcileLakeTags', () => {
   });
 
   it('leaves membership alone when the caller round-trips the meta-tag', async () => {
+    // Also has no tag under 'lk:', so the fallback tagger backfills one - the invariant applies
+    // on every write through this door, not only a join.
     const adapters = makeAdapters([tag('datalake:lake', 1)]);
 
     const result = await run(adapters, ['datalake:lake'], [tag('datalake:lake', 1), tag('note')]);
     await result.commit();
 
-    expect(result.tagsToPersist).toEqual([tag('note'), tag('datalake:lake', 1)]);
+    expect(result.tagsToPersist).toEqual([tag('note'), tag('datalake:lake', 1), tag('lk:uncategorized', 1)]);
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
   });
@@ -102,7 +112,7 @@ describe('reconcileLakeTags', () => {
     const result = await run(adapters, [], [tag('DataLake:Lake', 1)]);
 
     expect(adapters.db.dataLakes.findByDatalakeTag).toHaveBeenCalledWith('datalake:lake');
-    expect(result.tagsToPersist).toEqual([tag('datalake:lake', 1)]);
+    expect(result.tagsToPersist).toEqual([tag('datalake:lake', 1), tag('lk:uncategorized', 1)]);
   });
 
   it('refuses a meta-tag the caller applied that names no lake', async () => {

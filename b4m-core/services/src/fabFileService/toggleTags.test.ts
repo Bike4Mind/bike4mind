@@ -16,20 +16,45 @@ const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
 
 const file = (id: string, tags: { name: string; strength: number }[] = []) => ({ id, userId: 'owner', tags });
 
-const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocument | null = lake()) => ({
-  db: {
-    fabFiles: {
-      shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(files) },
-      findById: vi.fn(async (id: string) => files.find(f => f.id === id) ?? null),
-      pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
-      pushTagsByFabFileId: vi.fn().mockResolvedValue(1),
-      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 3, totalSizeBytes: 99 }),
+const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocument | null = lake()) => {
+  // A mutable store so pushTagsByFabFileId/pullTagsByFabFileId mutate what findById returns next,
+  // exactly as the real atomic repository methods would - the backfill step re-reads after the
+  // per-tag loop, so its correctness depends on that read seeing the loop's own writes.
+  const store = new Map(files.map(f => [f.id, { ...f, tags: [...f.tags] }]));
+
+  return {
+    db: {
+      fabFiles: {
+        shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(files) },
+        findById: vi.fn(async (id: string) => store.get(id) ?? null),
+        pullTagsByFabFileId: vi.fn(async (id: string, names: string[]) => {
+          const doc = store.get(id);
+          if (!doc) return 0;
+          doc.tags = doc.tags.filter(t => !names.includes(t.name));
+          return 1;
+        }),
+        pushTagsByFabFileId: vi.fn(async (id: string, names: string[], strength = 0) => {
+          const doc = store.get(id);
+          if (!doc) return 0;
+          const toAdd = names.filter(name => !doc.tags.some(t => t.name === name));
+          doc.tags.push(...toAdd.map(name => ({ name, strength })));
+          return toAdd.length;
+        }),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 3, totalSizeBytes: 99 }),
+      },
+      fileTags: { incrementFileCountBy: vi.fn() },
+      dataLakes: {
+        findByDatalakeTag: vi.fn().mockResolvedValue(lakeDoc),
+        setStats: vi.fn(),
+        // No prefix collisions in these tests; the tagger's own collision/reserved-namespace
+        // logic is covered by fallbackLakeTags.test.ts, not re-tested here.
+        find: vi.fn().mockResolvedValue([]),
+      },
+      users: { findById: vi.fn().mockResolvedValue({ id: 'owner', isAdmin: false }) },
     },
-    fileTags: { incrementFileCountBy: vi.fn() },
-    dataLakes: { findByDatalakeTag: vi.fn().mockResolvedValue(lakeDoc), setStats: vi.fn() },
-    users: { findById: vi.fn().mockResolvedValue({ id: 'owner', isAdmin: false }) },
-  },
-});
+    store,
+  };
+};
 
 // real repositories; the mocks implement only the methods under test.
 const run = (adapters: ReturnType<typeof makeAdapters>, params: unknown) =>
@@ -191,12 +216,15 @@ describe('toggleTags - data lake meta-tags', () => {
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 
-  it('looks a lake up once even across several files', async () => {
+  it('looks a lake up once per resolver, even across several files', async () => {
     const adapters = makeAdapters([file('f1'), file('f2')]);
 
     await run(adapters, { ids: ['f1', 'f2'], tags: ['datalake:lake'] });
 
-    expect(adapters.db.dataLakes.findByDatalakeTag).toHaveBeenCalledTimes(1);
+    // Two independently-memoized lookups, each shared across the whole batch: resolveLake (the
+    // join/leave decision) and the fallback tagger's own resolvePrefix (the backfill). Neither
+    // knows about the other's cache, matching how every other lake door wires the tagger in.
+    expect(adapters.db.dataLakes.findByDatalakeTag).toHaveBeenCalledTimes(2);
   });
 
   it('refuses a meta-tag that names no lake, without writing anything', async () => {
@@ -243,5 +271,85 @@ describe('toggleTags - data lake meta-tags', () => {
     await expect(run(adapters, { ids: ['f1', 'f2'], tags: ['datalake:lake'] })).rejects.toThrow(/write failed/);
     // f1's removal committed, so the lake's counts must reflect it rather than stay stale.
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A join above stamps only the meta-tag (addFileToLake never touches content tags), and a leave
+// clears every prefixed tag under that lake's own prefix - the fallback tagger's own reconciler
+// logic (additions, retractions, nested/shared prefixes, reserved namespace, collisions) is
+// covered exhaustively in fallbackLakeTags.test.ts. These pin only that toggleTags WIRES it in
+// correctly: called with the right state, its recommendation applied as atomic ops, and skipped
+// when neither this call nor the file's prior state involves a lake at all.
+describe('toggleTags - lake content-tag backfill', () => {
+  it('stamps a fallback content tag when a join leaves the file with none', async () => {
+    const adapters = makeAdapters([file('f1')]);
+
+    await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
+
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['lk:uncategorized'], 1);
+    expect(
+      adapters.store
+        .get('f1')
+        ?.tags.map(t => t.name)
+        .sort()
+    ).toEqual(['datalake:lake', 'lk:uncategorized']);
+  });
+
+  it('does not stamp a fallback tag when the join already carries a qualifying content tag', async () => {
+    const adapters = makeAdapters([file('f1', [{ name: 'lk:invoices', strength: 1 }])]);
+
+    await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
+
+    const pushedNames = adapters.db.fabFiles.pushTagsByFabFileId.mock.calls.flatMap(call => call[1]);
+    expect(pushedNames).not.toContain('lk:uncategorized');
+  });
+
+  it('backfills when an ordinary-tag removal strips a file last qualifying content tag', async () => {
+    // The file stays a MEMBER of the lake throughout - only its one content tag is toggled off,
+    // with no meta-tag ever mentioned in this request.
+    const adapters = makeAdapters([
+      file('f1', [
+        { name: 'datalake:lake', strength: 1 },
+        { name: 'lk:invoices', strength: 1 },
+      ]),
+    ]);
+
+    await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] });
+
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['lk:invoices']);
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['lk:uncategorized'], 1);
+    expect(
+      adapters.store
+        .get('f1')
+        ?.tags.map(t => t.name)
+        .sort()
+    ).toEqual(['datalake:lake', 'lk:uncategorized']);
+  });
+
+  it('issues no extra write on leave: removeFileFromLake already cleared the fallback tag', async () => {
+    const adapters = makeAdapters([
+      file('f1', [
+        { name: 'datalake:lake', strength: 1 },
+        { name: 'lk:uncategorized', strength: 1 },
+      ]),
+    ]);
+
+    await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
+
+    // One pull for the leave (meta-tag + fallback tag together); no separate retraction call.
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledTimes(1);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:uncategorized']);
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('skips the backfill entirely for a plain tag toggle with no lake involvement', async () => {
+    const adapters = makeAdapters([file('f1', [{ name: 'user-tag', strength: 0 }])]);
+    const findByIdSpy = adapters.db.fabFiles.findById;
+
+    await run(adapters, { ids: ['f1'], tags: ['user-tag'] });
+
+    // No meta-tag in the request and none on the file beforehand: nothing to reconcile, so the
+    // extra re-read this step needs never happens.
+    expect(findByIdSpy).not.toHaveBeenCalled();
   });
 });

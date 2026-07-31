@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   incrementCounter: vi.fn(),
   setStatusIfActive: vi.fn(),
   finalizeBatchIfComplete: vi.fn(),
+  enqueueTaxonomyAnalysisIfWanted: vi.fn(),
   fabFindByIdAndUserId: vi.fn(),
   fabUpdate: vi.fn(),
 }));
@@ -36,6 +37,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
+  enqueueTaxonomyAnalysisIfWanted: h.enqueueTaxonomyAnalysisIfWanted,
 }));
 
 import handler from '../upload-complete';
@@ -55,6 +57,7 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     h.incrementCounter.mockResolvedValue(null);
     h.update.mockResolvedValue(null);
     h.finalizeBatchIfComplete.mockResolvedValue(undefined);
+    h.enqueueTaxonomyAnalysisIfWanted.mockResolvedValue(undefined);
     h.fabFindByIdAndUserId.mockResolvedValue({ id: 'f1', batchId: 'b1' });
     h.fabUpdate.mockResolvedValue(null);
   });
@@ -84,7 +87,19 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     // Status transition is guarded so it can't resurrect a finalized batch.
     expect(h.setStatusIfActive).toHaveBeenCalledWith('b1', 'processing');
     expect(h.finalizeBatchIfComplete).toHaveBeenCalledTimes(1);
+    // The primary trigger for background AI tagging: fires here regardless of how
+    // long chunk/vectorize then takes, not gated on finalizeBatchIfComplete succeeding.
+    expect(h.enqueueTaxonomyAnalysisIfWanted).toHaveBeenCalledTimes(1);
     expect(json).toHaveBeenCalledWith({ success: true });
+  });
+
+  it('enqueues taxonomy analysis with the freshly re-read batch, independent of ingest finalization', async () => {
+    const fresh = { id: 'b1', userId: 'u1', totalFiles: 3, wantsTaxonomy: true };
+    h.findById.mockResolvedValueOnce({ id: 'b1', userId: 'u1', totalFiles: 3 }).mockResolvedValueOnce(fresh);
+    const { res } = makeRes();
+    await run({ batchId: 'b1', failedFiles: 0 }, res);
+
+    expect(h.enqueueTaxonomyAnalysisIfWanted).toHaveBeenCalledWith(fresh, expect.anything());
   });
 
   it('with zero browser failures: skips the increment but still moves to processing + finalizes', async () => {

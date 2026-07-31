@@ -8,6 +8,7 @@ import {
   IUserDocument,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { createDataLakeFallbackTagger } from '../dataLakeService/fallbackLakeTags';
 import { addFileToLake, removeFileFromLake, type MembershipLake } from '../dataLakeService/lakeMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 
@@ -23,9 +24,11 @@ interface FabFileToggleTagsAdapters {
       'shareable' | 'findById' | 'pullTagsByFabFileId' | 'pushTagsByFabFileId' | 'computeDataLakeStats'
     >;
     fileTags: Pick<IFileTagRepository, 'incrementFileCountBy'>;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'find'>;
     users: { findById: (id: string) => Promise<IUserDocument | null> };
   };
+  /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void };
 }
 
 const storedTagNames = (file: Pick<IFabFileDocument, 'tags'>): string[] =>
@@ -52,7 +55,7 @@ const isDataLakeTag = (tag: string): boolean => tag.toLowerCase().startsWith(DAT
  * are not transactional: if one file fails mid-batch, the files already written stay written.
  * Every write is idempotent, so retrying the same call converges rather than double-applying.
  */
-export const toggleTags = async (userId: string, params: unknown, { db }: FabFileToggleTagsAdapters) => {
+export const toggleTags = async (userId: string, params: unknown, { db, logger }: FabFileToggleTagsAdapters) => {
   const { ids, tags: requestedTags } = fabFileToggleTagsSchema.parse(params);
 
   // Toggling one tag twice in a request is meaningless, and acting on it twice is harmful: the
@@ -82,6 +85,9 @@ export const toggleTags = async (userId: string, params: unknown, { db }: FabFil
   const tagCounters: Record<string, number> = {};
   const lakesByTag = new Map<string, Promise<MembershipLake>>();
   const touchedLakes = new Map<string, MembershipLake>();
+  // One tagger for the whole request: it memoizes the lake lookup per meta-tag, so a bulk toggle
+  // into one lake costs a single extra read, not one per file.
+  const applyFallbackTags = createDataLakeFallbackTagger({ db, logger });
 
   // One lookup per distinct meta-tag rather than one per (file, tag) pair. The PROMISE is cached,
   // not its result: files are processed concurrently, so caching only on resolve would let every
@@ -147,6 +153,44 @@ export const toggleTags = async (userId: string, params: unknown, { db }: FabFil
     if (inserted > 0) tagCounters[tag] = (tagCounters[tag] ?? 0) + 1;
   };
 
+  /**
+   * Backfill the lake-content-tag invariant for the WHOLE file, not just lakes this call touched
+   * (see `fallbackLakeTags`): a join above stamps only the meta-tag, and an ordinary-tag removal
+   * elsewhere in this same loop can strip a file's last qualifying tag for a lake it remains a
+   * member of, with no meta-tag ever mentioned in this request. Re-reads because the writes above
+   * are element-level atomic ops with no returned document, so the in-memory `file` is stale the
+   * moment any of them runs.
+   *
+   * Retraction (a departed lake's own stamp) is part of the tagger's contract but never actually
+   * fires here in practice: a real leave already strips every tag under that lake's prefix inside
+   * `removeFileFromLake`, so nothing is left by the time this reads the file back. Handled anyway
+   * rather than assumed away, since the tagger's return is the source of truth either way.
+   */
+  const backfillLakeContentTags = async (file: IFabFileDocument): Promise<void> => {
+    const priorTags = file.tags ?? [];
+    // Skipped when neither this request nor the file's prior state touched a lake at all, so a
+    // plain tag edit on a file with no lake membership costs nothing beyond the toggles above.
+    if (!tags.some(isDataLakeTag) && !priorTags.some(t => isDataLakeTag(t?.name ?? ''))) return;
+
+    const freshFile = await db.fabFiles.findById(file.id);
+    const currentTags = freshFile?.tags ?? [];
+    const reconciled = await applyFallbackTags(currentTags, { previousTags: priorTags });
+
+    const currentNames = new Set(currentTags.map(t => t.name));
+    const reconciledNames = new Set(reconciled.map(t => t.name));
+    const toAdd = reconciled.filter(t => !currentNames.has(t.name));
+    const toRemove = [...currentNames].filter(name => !reconciledNames.has(name));
+
+    // All fallback additions share the reconciler's stamped strength, so one push covers them.
+    if (toAdd.length > 0)
+      await db.fabFiles.pushTagsByFabFileId(
+        file.id,
+        toAdd.map(t => t.name),
+        toAdd[0].strength
+      );
+    if (toRemove.length > 0) await db.fabFiles.pullTagsByFabFileId(file.id, toRemove);
+  };
+
   // Tags are applied one at a time within a file - they mutate the same document - while files
   // are processed concurrently. allSettled rather than all, so every write has finished before
   // the stats below are recomputed: a rejection must not let the recompute race a write that is
@@ -160,6 +204,7 @@ export const toggleTags = async (userId: string, params: unknown, { db }: FabFil
           await toggleOrdinaryTag(file, tag);
         }
       }
+      await backfillLakeContentTags(file);
     })
   );
 

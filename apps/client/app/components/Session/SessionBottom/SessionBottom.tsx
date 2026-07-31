@@ -591,7 +591,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         sx={{
                           position: 'absolute',
                           mr: 20,
-                          zIndex: 2000,
+                          // Passive readout: must stay below composer popovers (attach
+                          // menu zIndex 1000 in AttachFileButton.tsx, slash/mention
+                          // suggestions), or it intercepts their clicks.
+                          zIndex: 1,
                           backgroundColor: 'background.surface',
                           borderRadius: '6px',
                           padding: '4px 8px',

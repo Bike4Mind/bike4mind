@@ -192,6 +192,12 @@ const DLQ_REGISTRY = [
     application: 'DataLakeManagement',
     sourceQueue: 'dataLakeCleanupQueue',
   },
+  {
+    label: 'data-lake-taxonomy',
+    displayName: 'Data Lake Taxonomy Analysis',
+    application: 'DataLakeManagement',
+    sourceQueue: 'dataLakeTaxonomyQueue',
+  },
 ] as const satisfies readonly DlqDescriptor[];
 
 /** Valid source queue names - derived from DLQ_REGISTRY so they stay in sync automatically. */

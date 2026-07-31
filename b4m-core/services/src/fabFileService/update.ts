@@ -46,8 +46,10 @@ interface UpdateFabFileAdapters {
       IFabFileRepository,
       'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
     >;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'find'>;
   };
+  /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void };
   storage: {
     upload: (filePath: string, content: string, metadata?: Record<string, unknown>) => Promise<unknown>;
     generateSignedUrl: (path: string, expireInSeconds: number) => Promise<string>;
@@ -63,7 +65,7 @@ interface UpdateFabFileAdapters {
 export const updateFabFile = async (
   user: IUserDocument,
   parameters: UpdateFabFileParameters,
-  { db, storage }: UpdateFabFileAdapters
+  { db, logger, storage }: UpdateFabFileAdapters
 ) => {
   const { id, fileContent, ...params } = secureParameters(parameters, updateFabFileSchema);
 
@@ -107,7 +109,7 @@ export const updateFabFile = async (
           id,
           (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
           params.tags,
-          { db }
+          { db, logger }
         );
 
   const updatedFabFile: Partial<IFabFileDocument> = {

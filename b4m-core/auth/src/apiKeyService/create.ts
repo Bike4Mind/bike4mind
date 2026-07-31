@@ -14,7 +14,7 @@ type CreateApiKeyParameters = z.infer<typeof createApiKeySchema>;
 
 interface CreateApikeyAdapters {
   db: {
-    apiKeys: Pick<IApiKeyRepository, 'create' | 'updateAllByUserId'>;
+    apiKeys: Pick<IApiKeyRepository, 'create' | 'updateAllByUserIdAndType'>;
   };
 }
 
@@ -25,8 +25,11 @@ export const createApiKey = async (
 ) => {
   const { expireDays, ...params } = secureParameters(parameters, createApiKeySchema);
 
+  // At most one active key per (userId, type): providers do not compete, so scoping the
+  // deactivation by type is what keeps adding one provider's key from stranding the others.
+  // set.ts maintains the same invariant and must stay in sync.
   if (params.isActive) {
-    await db.apiKeys.updateAllByUserId(userId, { isActive: false });
+    await db.apiKeys.updateAllByUserIdAndType(userId, params.type, { isActive: false });
   }
 
   const expiresAt = new Date();

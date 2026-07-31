@@ -32,6 +32,7 @@ const handler = baseApi().post(
         dataLakes: dataLakeRepository,
         users: userRepository,
       },
+      logger: req.logger,
     });
 
     return res.json(result);

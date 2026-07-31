@@ -63,9 +63,9 @@ const handler = baseApi()
     const isFallback = dataLakeService.isFallbackLake(dataLake);
 
     // For a DB lake, membership is ONE predicate shared with the whole-lake writes, so this browse
-    // lists exactly what archiving or permanently deleting the lake would act on. Passed outside
-    // the parsed params because it names the creator whose OWNED files the prefix arm matches
-    // (see SearchFabFilesServerOptions).
+    // lists exactly what archiving or permanently deleting the lake would act on. It names the
+    // creator whose OWNED files the prefix arm matches, which is why it - like the rest of the
+    // scope below - goes in the server-options argument (see SearchFabFilesServerOptions).
     const lakeMembership = isFallback ? undefined : dataLakeService.lakeMembershipScope(dataLake);
 
     // User-provided tags are an additional AND filter, never mixed into lake scoping with OR
@@ -81,11 +81,6 @@ const handler = baseApi()
         order: { by: sortBy, direction: sortDir },
         options: {
           textSearch: !!search,
-          includeShared: true,
-          userGroups: req.user.groups ?? [],
-          ...(isFallback ? { dataLakeTags: [datalakeTag], dataLakeTagPrefixes: [dataLake.fileTagPrefix] } : {}),
-          // Single-lake browser: only this lake's files.
-          restrictToDataLake: true,
           excludeContent: true,
         },
       },
@@ -106,7 +101,14 @@ const handler = baseApi()
           },
         },
       },
-      { lakeMembership }
+      {
+        lakeMembership,
+        includeShared: true,
+        userGroups: req.user.groups ?? [],
+        ...(isFallback ? { dataLakeTags: [datalakeTag], dataLakeTagPrefixes: [dataLake.fileTagPrefix] } : {}),
+        // Single-lake browser: only this lake's files.
+        restrictToDataLake: true,
+      }
     );
 
     return res.json({ data: result.data, total: result.total, hasMore: result.hasMore });

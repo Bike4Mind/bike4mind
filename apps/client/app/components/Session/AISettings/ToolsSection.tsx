@@ -827,7 +827,10 @@ const ToolsSection = ({
                 />
                 <ToolLabel name={getToolDisplayName('web_fetch')} description={getToolDescription('web_fetch')} />
               </Box>
-              <SquareSlideToggle onChange={() => handleToggleTool('web_fetch')} checked={displayTools.includes('web_fetch')} />
+              <SquareSlideToggle
+                onChange={() => handleToggleTool('web_fetch')}
+                checked={displayTools.includes('web_fetch')}
+              />
             </ToolContainer>
           </Grid>
           {/* Knowledge Base Search */}
@@ -1384,7 +1387,10 @@ const ToolsSection = ({
                     />
                   )}
                 </Box>
-                <SquareSlideToggle onChange={() => handleToggleTool('recharts')} checked={displayTools.includes('recharts')} />
+                <SquareSlideToggle
+                  onChange={() => handleToggleTool('recharts')}
+                  checked={displayTools.includes('recharts')}
+                />
               </Box>
             </ToolContainer>
           </Grid>
