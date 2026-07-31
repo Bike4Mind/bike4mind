@@ -30,7 +30,12 @@ vi.mock('@server/utils/storage', () => ({
 // Only `dataLakeRepository.findByDatalakeTag` and the fabFile persistence collaborators are
 // stubbed. `fabFileRepository` here is a bare object (not the real repository) since the route
 // only reaches `.shareable.findAccessibleById` and `.update` on the PUT path under test.
-vi.mock('@bike4mind/database', () => ({
+// Spread the real module first so a transitively-loaded model (Subscription, via the route's
+// dataLakes -> entitlements chain) still finds `mongoose`/`executeFacetCompatible`/BaseRepository
+// at import time - a full-replace mock omits those and fails the suite to load depending on which
+// test in the shard loads the chain first.
+vi.mock('@bike4mind/database', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/database')>()),
   changeStorageSize: vi.fn(),
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   fabFileChunkRepository: {},

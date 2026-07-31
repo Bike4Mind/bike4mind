@@ -513,6 +513,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * find().length). Counts only live files (not archived, not deleted).
    */
   computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }>;
+  /**
+   * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
+   * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
+   * stored stats. Prefer this over counting `<prefix>:` tag matches, which misses files that
+   * carry only the membership tag and over-counts multi-tagged ones.
+   */
+  countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>>;
   /** Soft-archive (reversible) all live member files. Returns affected count. */
   archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
   /** Reverse archive for all archived member files. */

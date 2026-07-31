@@ -1,6 +1,7 @@
 import { useNavigate, useParams } from '@tanstack/react-router';
 import { NotebookFilepondProvider } from '@client/app/components/Session/NotebookFilepondProvider';
 import SessionContainer from '@client/app/components/Session/SessionContainer';
+import DataLakeChatSurface from '@client/app/components/datalake/DataLakeChatSurface';
 import { useGetSession } from '@client/app/hooks/data/sessions';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useEffect, useRef } from 'react';
@@ -63,7 +64,7 @@ const NotebookPage = () => {
 
   return (
     <NotebookFilepondProvider>
-      <SessionContainer currentSessionId={id} isLoading={!id || session.isPending} />
+      <DataLakeChatSurface chat={<SessionContainer currentSessionId={id} isLoading={!id || session.isPending} />} />
     </NotebookFilepondProvider>
   );
 };

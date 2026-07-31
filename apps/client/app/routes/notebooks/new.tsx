@@ -3,6 +3,7 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import SessionContainer from '@client/app/components/Session/SessionContainer';
 import { NotebookFilepondProvider } from '@client/app/components/Session/NotebookFilepondProvider';
+import DataLakeChatSurface from '@client/app/components/datalake/DataLakeChatSurface';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useQuestPreparation } from '@client/app/hooks/useQuestPreparation';
@@ -51,7 +52,7 @@ const NewNotebookPage = () => {
   // so it persists across page navigation
   return (
     <NotebookFilepondProvider>
-      <SessionContainer isLoading={false} />
+      <DataLakeChatSurface chat={<SessionContainer isLoading={false} />} />
     </NotebookFilepondProvider>
   );
 };

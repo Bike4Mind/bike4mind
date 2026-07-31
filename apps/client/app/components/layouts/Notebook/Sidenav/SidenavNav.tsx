@@ -20,9 +20,7 @@ import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.gener
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
 import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
-import { DataLakeIcon, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
-import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useOptiAccess } from '@client/app/hooks/data/opti';
 import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
@@ -56,7 +54,6 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const location = useLocation();
   const currentUser = useUser(s => s.currentUser);
   const { isFeatureEnabled } = useFeatureEnabled();
-  const { isFeatureEnabled: isAdminFeatureEnabled } = useAdminSettingsCache();
   const { open: fileBrowserOpen, setOpen: setFileBrowserOpen } = useFileBrowser();
   const isMobile = useIsMobile();
   const setOpenSideNav = useNotebookLayout(s => s.setOpenSideNav);
@@ -75,10 +72,6 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // (open core) have no such route, so the entry must hide or it dead-ends.
   const tavernRouteExists = premiumRoutes.some(route => route.path.startsWith('/tavern'));
   const isTavernEnabled = tavernRouteExists && canAccessTavern(currentUser);
-  // The server gates every /api/data-lakes endpoint on the EnableDataLakes admin setting,
-  // so hide the Data Lakes destination when it's off - otherwise the link lands on an
-  // Explorer whose every request 403s (mirrors FileBrowser's guard).
-  const isDataLakesEnabled = isAdminFeatureEnabled('EnableDataLakes');
   // Bob (premium overlay) is a codegen-mounted `/bob` route contributed as a
   // premium nav item. Surface it in the main sidebar only when the overlay contributes it
   // AND the user's entitlements make it visible - reusing filterVisiblePremiumNavItems so the
@@ -208,28 +201,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
-    // Data Lakes is a top-level destination in its OWN right - NOT nested under Opti.
-    // It opens the user's own lakes (browse + manage) at /data-lakes, so a non-Opti
-    // user with the feature can reach their lakes too (was previously elided when
-    // Opti was off, and pointed at the Opti static-registry explorer when on).
-    // Gated ONLY on the EnableDataLakes admin flag, deliberately NOT earned-nav: an
-    // admin explicitly turns this feature on, so it must be discoverable immediately.
-    // Earned-nav here was a bootstrapping trap - the row only appeared AFTER a lake
-    // existed, yet the row is how a first-time user reaches the create/manage UI.
-    ...(isDataLakesEnabled
-      ? [
-          {
-            key: 'datalakes',
-            label: t('sidenav.dataLakes', DATA_LAKES),
-            icon: iconSlot(<DataLakeIcon sx={{ fontSize: '18px' }} />),
-            isActive: location.pathname.startsWith('/data-lakes'),
-            onClick: () => {
-              closeOnMobile();
-              navigate({ to: '/data-lakes' });
-            },
-          },
-        ]
-      : []),
+    // No Data Lakes sidebar destination: Data Lakes is reached via the in-chat Data Lakes
+    // toggle (the standalone /data-lakes page stays reachable by URL). See datalake-in-chat-mode.
     ...(gearOpen('files')
       ? [
           {
@@ -354,7 +327,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
 
   // Pinned vs scroll split for the unified-scroll sidebar: the first two items stay
   // pinned at the top. items[0] is always New Chat; items[1] is whichever conditional
-  // entry comes first for this user - OptiHashi, Bob, Data Lakes, or the earned Files
+  // entry comes first for this user - OptiHashi, Bob, or the earned Files
   // Manager - since each is elided when absent. The split is purely positional, so it
   // holds regardless of which entries are present.
   const shownItems = section === 'pinned' ? items.slice(0, 2) : section === 'scroll' ? items.slice(2) : items;

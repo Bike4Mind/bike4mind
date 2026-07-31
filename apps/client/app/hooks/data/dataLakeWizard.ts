@@ -748,8 +748,9 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       // the list without moving the count.
       queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
       // Removal also drops the file's tags under the lake's prefix, so every tag-derived view
-      // is stale. Invalidate on the bare key prefixes: these are keyed by an opti/datalakes
-      // source discriminator, and a fully-specified key would refresh only one surface.
+      // is stale (incl. the manager's count-chip fallback). Invalidate on the bare key
+      // prefixes: these are keyed by an opti/datalakes source discriminator, and a
+      // fully-specified key would refresh only one surface.
       queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
       queryClient.invalidateQueries({ queryKey: ['dataLakeArticles'] });
       // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
