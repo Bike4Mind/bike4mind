@@ -30,6 +30,9 @@ export interface IApiKeyRepository extends IBaseRepository<IApiKeyDocument> {
   findByIdAndUserId: (id: string, userId: string) => Promise<IApiKeyDocument | null>;
   findByIdAndUserIdAndType: (id: string, userId: string, type: ApiKeyType) => Promise<IApiKeyDocument | null>;
   findAllByUserId: (userId: string) => Promise<IApiKeyDocument[]>;
+  // Spans every provider a user owns. For activation state use the ...AndType variant below:
+  // at most one key per (userId, type) is active, and deactivating across types strands the
+  // providers the caller was not touching.
   updateAllByUserId: (userId: string, value: Partial<IApiKeyDocument>) => Promise<unknown>;
   updateAllByUserIdAndType: (userId: string, type: ApiKeyType, value: Partial<IApiKeyDocument>) => Promise<unknown>;
 }
