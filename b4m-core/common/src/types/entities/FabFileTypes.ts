@@ -316,6 +316,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findAllByIds(ids: string[]): Promise<IFabFileDocument[]>;
 
+  /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
+  findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
+
   /**
    * Search for files.
    * @param userId - The ID of the user.
@@ -474,6 +477,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * even when no tag matched - do not read it as "a tag was removed".
    */
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
+
+  /**
+   * Bulk-writes each file's full tags array in a single round trip via bulkWrite, instead of
+   * one findOneAndUpdate per file. Used by applyTaxonomySuggestions, where a batch can hold
+   * thousands of files and one write per file risks exceeding the caller's request timeout.
+   * @param updates - Each file's id and its complete resolved tags array.
+   * @returns Number of documents modified.
+   */
+  bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number>;
 
   /**
    * Find files by content hashes for a given user (deduplication).

@@ -8,7 +8,7 @@ import {
   KnowledgeType,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
-import { convertIds, softDeletePlugin } from '../../utils/mongo';
+import { convertId, convertIds, softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
@@ -251,6 +251,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   async findByUserId(userId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ userId, deletedAt: null });
+    return result.map(d => d.toJSON());
+  }
+
+  async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
+    const result = await this.fabFileModel.find({ batchId, deletedAt: null });
     return result.map(d => d.toJSON());
   }
 
@@ -518,6 +523,21 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           },
         },
       }
+    );
+    return result.modifiedCount;
+  }
+
+  async bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number> {
+    if (updates.length === 0) return 0;
+
+    const result = await this.fabFileModel.bulkWrite(
+      updates.map(({ id, tags }) => ({
+        updateOne: {
+          filter: { _id: convertId(id) },
+          update: { $set: { tags } },
+        },
+      })),
+      { ordered: false, session: this._txn ?? undefined }
     );
     return result.modifiedCount;
   }

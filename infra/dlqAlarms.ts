@@ -32,6 +32,7 @@ import {
   slackExportQueueDLQ,
   questExportQueueDLQ,
   dataLakeCleanupQueueDLQ,
+  dataLakeTaxonomyQueueDLQ,
   videoGenerationDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
@@ -219,6 +220,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'DataLakeManagement',
     sourceQueue: 'dataLakeCleanupQueue',
     queue: dataLakeCleanupQueueDLQ,
+  },
+  {
+    label: 'data-lake-taxonomy',
+    displayName: 'Data Lake Taxonomy Analysis',
+    application: 'DataLakeManagement',
+    sourceQueue: 'dataLakeTaxonomyQueue',
+    queue: dataLakeTaxonomyQueueDLQ,
   },
   {
     label: 'video-generation',

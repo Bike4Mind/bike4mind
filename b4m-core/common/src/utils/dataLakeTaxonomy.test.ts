@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import type { TaxonomyResult, TaxonomyTag } from '@client/app/stores/useDataLakeWizardStore';
+import type { TaxonomyTag, TaxonomyTagSet } from '../types/entities/DataLakeTypes';
 import { appliedTagsForBatch, folderMatches, tagsForFile } from './dataLakeTaxonomy';
 
 /**
  * Regression coverage: the Taxonomy step used to be pure theater - inference returned
  * categories and per-file assignments, the user edited them, and the upload path threw
  * all of it away in favor of a folder slug. These tests pin the review edits (edit, delete)
- * to what actually ships in the presigned-URL request. The applied tag is `prefix + suffix`,
- * so the prefix lives once (in taxonomy.prefix / the passed tagPrefix), never per-tag.
+ * to what actually ships. The applied tag is `prefix + suffix`, so the prefix lives once
+ * (the passed tagPrefix), never per-tag.
  */
 
 const tag = (overrides: Partial<TaxonomyTag> & { suffix: string }): TaxonomyTag => ({
@@ -19,13 +19,9 @@ const tag = (overrides: Partial<TaxonomyTag> & { suffix: string }): TaxonomyTag 
   ...overrides,
 });
 
-const taxonomy = (overrides: Partial<TaxonomyResult> = {}): TaxonomyResult => ({
-  prefix: 'acme:',
-  suggestedName: 'Acme',
+const taxonomy = (overrides: Partial<TaxonomyTagSet> = {}): TaxonomyTagSet => ({
   tags: [],
   fileAssignments: [],
-  attempted: true,
-  analyzing: false,
   ...overrides,
 });
 
