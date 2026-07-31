@@ -16,7 +16,7 @@ import {
 } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
 import { useEffect, useRef } from 'react';
-import { useDataLakeWizardStore, isTaxonomyStepActive } from '@client/app/stores/useDataLakeWizardStore';
+import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
 import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
 // The name, its slug rule, and the duplicate-name hint moved to the source step (#824), so
@@ -31,7 +31,6 @@ export default function ConfigStep() {
   const setConfig = useDataLakeWizardStore(s => s.setConfig);
   const setTagPrefix = useDataLakeWizardStore(s => s.setTagPrefix);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
-  const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
   const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const duplicateCheckResults = useDataLakeWizardStore(s => s.duplicateCheckResults);
@@ -48,15 +47,10 @@ export default function ConfigStep() {
   // on the source step; they appear here read-only in the summary.
   const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
 
-  // The Tag Prefix has exactly one editable home. When the taxonomy step is in play that's
-  // the taxonomy step (#829), which embeds the prefix in every tag it renders; otherwise no
-  // other step owns it, so it is editable here. Append mode always inherits the lake's.
-  // Whether the taxonomy step is enabled can't change while this step is mounted (its toggle
-  // lives on the source step), so this stays stable across edits.
-  // Same predicate the upload path applies tags by, so the summary can't promise categories
-  // a toggled-off taxonomy step will no longer apply.
-  const taxonomyActive = isTaxonomyStepActive({ optionalSteps, targetLake });
-  const prefixEditable = !targetLake && !taxonomyActive;
+  // The Tag Prefix's only editable home is here (the taxonomy step, its former competing
+  // owner, was removed - AI tag suggestion now runs post-upload and never touches the prefix).
+  // Append mode always inherits the target lake's.
+  const prefixEditable = !targetLake;
 
   const autoTriggered = useRef(false);
 
@@ -128,10 +122,9 @@ export default function ConfigStep() {
           />
         </FormControl>
 
-        {/* Tag Prefix - editable here only when no other step owns it (see prefixEditable);
-            read-only when the taxonomy step is in the flow, locked in append mode. Still reports
-            a prefix problem even when read-only, so a value inherited from the taxonomy step
-            shows its reason here rather than only disabling Start Upload. */}
+        {/* Tag Prefix - editable only in create mode (see prefixEditable), locked in append
+            mode. Still reports a prefix problem even when locked, so an inherited value's
+            issue is visible here rather than only disabling Start Upload. */}
         <FormControl required={prefixEditable} error={!!prefixIssue}>
           <FormLabel>Tag Prefix</FormLabel>
           <Input
@@ -152,9 +145,7 @@ export default function ConfigStep() {
             {prefixIssue ??
               (prefixEditable
                 ? 'All tags will be prefixed with this (must end with ":"). Derived from the name - change it if you like.'
-                : targetLake
-                  ? 'Inherited from the existing data lake.'
-                  : 'Set on the AI Taxonomy step. Go back there to change it.')}
+                : 'Inherited from the existing data lake.')}
           </FormHelperText>
         </FormControl>
 
@@ -246,9 +237,11 @@ export default function ConfigStep() {
                 </Typography>
               )}
             </Typography>
-            <Typography level="body-sm">
-              Tag categories: <strong>{taxonomyActive ? taxonomy.tags.filter(t => !t.deleted).length : 0}</strong>
-            </Typography>
+            {optionalSteps.taxonomy && !targetLake && (
+              <Typography level="body-sm" color="neutral">
+                AI tag suggestions will run in the background after upload - review them from the Data Lakes list.
+              </Typography>
+            )}
             {duplicateCheckResults && (
               <Typography level="body-sm" color={duplicateCheckResults.duplicateCount > 0 ? 'warning' : 'success'}>
                 Duplicates: <strong>{duplicateCheckResults.duplicateCount}</strong>

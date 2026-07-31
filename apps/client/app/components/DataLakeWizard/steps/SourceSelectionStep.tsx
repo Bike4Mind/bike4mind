@@ -354,7 +354,7 @@ export default function SourceSelectionStep() {
                 data-testid="source-toggle-taxonomy"
                 checked={optionalSteps.taxonomy}
                 onChange={e => setOptionalStep('taxonomy', e.target.checked)}
-                label="Suggest tags with AI - auto-tag files by topic so you can filter them later"
+                label="Suggest tags with AI - runs in the background after upload, review from the Data Lakes list"
               />
             )}
           </Stack>

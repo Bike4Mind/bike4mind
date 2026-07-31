@@ -328,3 +328,59 @@ describe('retrieve_knowledge_content scoped lake-prompt injection (#1108)', () =
     expect(second).toContain('chunk body');
   });
 });
+
+// Org Groups Phase 2b (#1174): exercise the dormant `user.groups` consumer in the by-id
+// (Path A) in-memory access guard with a NON-empty array. A file is group-accessible only
+// when the user is a member of a group whose entry on the file grants read or write - the
+// same per-entry semantics the $elemMatch query enforces, checked here in memory.
+describe('retrieve_knowledge_content - group-shared access (Path A)', () => {
+  type GroupShare = { groupId: string; permissions: string[] };
+  const sharedFileCtx = (userGroups: string[], fileGroups: GroupShare[]) => {
+    const ctx = makeContext({ retrievalFilter: undefined, user: { id: 'u1', groups: userGroups } as never });
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null); // not owned
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Group Shared.pdf', groups: fileGroups })
+    );
+    return ctx;
+  };
+
+  it('a member of a group granted read retrieves the file', async () => {
+    const out = await runById(sharedFileCtx(['g1'], [{ groupId: 'g1', permissions: ['read'] }]));
+    expect(out).toContain('Retrieved content from');
+  });
+
+  it('a member of a group granted write also retrieves the file', async () => {
+    const out = await runById(sharedFileCtx(['g1'], [{ groupId: 'g1', permissions: ['write'] }]));
+    expect(out).toContain('Retrieved content from');
+  });
+
+  it('a non-member is denied (reads as not-found)', async () => {
+    const out = await runById(sharedFileCtx(['g-other'], [{ groupId: 'g1', permissions: ['read'] }]));
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+  });
+
+  it('a member whose group grants neither read nor write is denied', async () => {
+    const out = await runById(sharedFileCtx(['g1'], [{ groupId: 'g1', permissions: ['share'] }]));
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+  });
+
+  // g1 (the user's group) grants only `share`; `read` is granted to g2, which the user is
+  // NOT in. The per-entry `.some()` must not combine them into a grant.
+  it('does not leak read granted to a different group (no cross-entry match)', async () => {
+    const out = await runById(
+      sharedFileCtx(
+        ['g1'],
+        [
+          { groupId: 'g1', permissions: ['share'] },
+          { groupId: 'g2', permissions: ['read'] },
+        ]
+      )
+    );
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+  });
+
+  it('a user with no groups is denied (empty array is the prod no-op)', async () => {
+    const out = await runById(sharedFileCtx([], [{ groupId: 'g1', permissions: ['read'] }]));
+    expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+  });
+});

@@ -45,6 +45,18 @@ interface RemoveFileFromDataLakeAdapters {
  * prefix-only loses the file outright. One tag string cannot be cleared for one lake and kept
  * for another.
  *
+ * That "only loses the folder grouping" now costs more than it reads. Every lake file carries a
+ * tag under its lake's prefix (see `fallbackLakeTags`), so for a co-prefixed second lake the
+ * stripped tag can be the file's ONLY one under that prefix - it stays a member by meta-tag but
+ * drops out of tag-counts and the tag tree entirely. Closing that means re-stamping the survivor
+ * after the pull, which is not done here because the trade-off above is deliberate.
+ *
+ * The population this can reach is now narrow: create-time collision checks reject a prefix that
+ * overlaps another lake's within the same org or creator (see `tagPrefixCollision`), so two
+ * co-prefixed lakes need either legacy rows predating that guard, or a cross-scope pair whose
+ * files one actor can nonetheless write to. Narrow, not impossible - hence the note rather than
+ * a removal of the caveat.
+ *
  * Lake owner or admin only. Idempotent-safe: a second call 404s because both signals are
  * already gone - the correct "already removed" response for a retry.
  *

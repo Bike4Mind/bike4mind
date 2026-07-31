@@ -4,6 +4,7 @@ import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { createPartnerSignupRuleSchema } from '@bike4mind/common';
 import { invalidatePartnerRuleCache, assertKnownEntitlements } from '@server/entitlements/partnerRules';
+import { assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { z } from 'zod';
 
 const listQuerySchema = z.object({
@@ -44,6 +45,7 @@ const handler = baseApi()
         toBadRequest(error);
       }
       assertKnownEntitlements(data.entitlements);
+      await assertOrganizationExists(data.organizationId);
 
       // Fast, friendly duplicate check. This is a TOCTOU pre-check, not the guarantee - the
       // unique domain index is (see the create catch below).

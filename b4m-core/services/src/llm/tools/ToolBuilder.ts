@@ -177,11 +177,15 @@ function resolveToolStatus(toolName: string, data: any): string | null {
 /**
  * Apply a partial status-update change set onto the live quest object.
  *
- * Most fields are overwritten wholesale via Object.assign, but two fields
+ * Most fields are overwritten wholesale via Object.assign, but three fields
  * accrete across a single turn and MUST merge instead of overwrite:
  *   - promptMeta.citables: accreted by web_search / knowledge retrieval; merged
  *     and deduped by stable identity (id, then url, then title) to avoid duplicate
  *     "Sources" chips and React duplicate-key warnings.
+ *   - promptMeta.warnings: several independent producers append here (response
+ *     truncation, knowledge-base partial results), each sending only its own
+ *     string, so a wholesale overwrite drops whichever landed first. Deduped by
+ *     exact string since the same condition can be reported more than once.
  *   - images: each image_generation / edit_image tool call sends only its own
  *     output through statusUpdate, so a wholesale overwrite collapses an N-image
  *     request down to just the last call's image. Merge-append with dedup;
@@ -205,10 +209,14 @@ export function applyQuestStatusChanges(
       seenCitableKeys.add(key);
       return true;
     });
+    const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
     quest.promptMeta = {
       ...quest.promptMeta,
       ...changedPromptMeta,
       citables: dedupedCitables,
+      // Omit the key entirely when neither side has warnings, so an untouched quest is not
+      // given an empty array it never had.
+      ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),
     };
   } else if (changedPromptMeta) {
     quest.promptMeta = changedPromptMeta;

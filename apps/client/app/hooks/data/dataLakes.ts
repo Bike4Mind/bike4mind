@@ -1,4 +1,10 @@
-import type { BrowsePublicDataLakesResult, DataLakeConfig, ManageableDataLakeConfig } from '@bike4mind/common';
+import type {
+  BrowsePublicDataLakesResult,
+  DataLakeConfig,
+  IDataLakeBatchDocument,
+  ManageableDataLakeConfig,
+  TaxonomyTag,
+} from '@bike4mind/common';
 import { normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
@@ -253,6 +259,80 @@ export function useGetDeletedDataLakes(enabled = true) {
     queryFn: async () => {
       const response = await api.get<{ data: DataLakeConfig[] }>('/api/data-lakes/deleted');
       return response.data.data;
+    },
+  });
+}
+
+// ── Batch progress / background AI tagging ──────────────────────────────────
+
+const ACTIVE_BATCHES_KEY = ['data-lake-batches', 'active'];
+/** Polling cadence for the list's ingest/AI-tagging badges - no per-batch WebSocket wiring
+ * needed for a list view; a short poll is simple and good enough for background progress. */
+const ACTIVE_BATCHES_POLL_MS = 10_000;
+
+/**
+ * Batches the Data Lakes list needs to show a badge for: still uploading/chunking/
+ * vectorizing, OR the background AI-tagging phase is running/ready/failed. These are
+ * independent clocks (a batch can be fully 'completed' while 'analyzing'), reconciled
+ * server-side on every call - see GET /api/data-lakes/batches.
+ */
+export function useActiveDataLakeBatches(enabled = true) {
+  return useQuery({
+    queryKey: ACTIVE_BATCHES_KEY,
+    enabled,
+    queryFn: async () => {
+      const response = await api.get<{ data: IDataLakeBatchDocument[] }>('/api/data-lakes/batches');
+      return response.data.data;
+    },
+    refetchInterval: enabled ? ACTIVE_BATCHES_POLL_MS : false,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Applies the reviewed/edited AI tag suggestions to every matching file in a batch.
+ * `tags` is the review panel's full edited list (including any the reviewer deleted - the
+ * server filters those out, mirroring the shape the old wizard step's TagCard produced).
+ */
+export function useApplyTaxonomySuggestions(batchId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (tags: TaxonomyTag[]) => {
+      const res = await api.post<{ success: true; filesUpdated: number }>(
+        `/api/data-lakes/batches/${batchId}/apply-taxonomy`,
+        { tags }
+      );
+      return res.data;
+    },
+    onSuccess: result => {
+      toast.success(
+        `Tags applied to ${result.filesUpdated.toLocaleString()} file${result.filesUpdated === 1 ? '' : 's'}`
+      );
+      queryClient.invalidateQueries({ queryKey: ACTIVE_BATCHES_KEY });
+      queryClient.invalidateQueries({ queryKey: ['dataLakeFiles'] });
+      queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to apply tag suggestions');
+    },
+  });
+}
+
+/** Manually re-runs AI tag inference for an already-analyzed (or failed) batch. */
+export function useReanalyzeTaxonomy(batchId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (context?: string) => {
+      const res = await api.post<IDataLakeBatchDocument>(`/api/data-lakes/batches/${batchId}/reanalyze-taxonomy`, {
+        context,
+      });
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ACTIVE_BATCHES_KEY });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to re-analyze tags');
     },
   });
 }

@@ -6,12 +6,22 @@ import {
   isSupportedEmbeddingModel,
   SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { createTokenizer, getProviderFromModel, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
+import {
+  createTokenizer,
+  getProviderFromModel,
+  getSettingsByNames,
+  resolveEmbeddingConfig,
+  type ITokenizer,
+} from '@bike4mind/utils';
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
+import {
+  describeEmbeddingMismatch,
+  PARTIAL_RESULTS_STATUS_SUFFIX,
+} from '../../../../dataLakeService/embeddingMismatch';
 import {
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
@@ -44,7 +54,11 @@ function prettyFileName(fn: string): string {
 }
 
 /** Format semantic passages WITH their content so the model can answer without retrieving. */
-function formatSemanticResults(results: SemanticChunkResult[], scan?: SemanticSearchScanAccounting): string {
+function formatSemanticResults(
+  results: SemanticChunkResult[],
+  scan?: SemanticSearchScanAccounting,
+  skipNotice?: string | null
+): string {
   const blocks = results.map((r, i) => {
     const text = r.chunkText.trim();
     const clipped = text.length > CHUNK_TEXT_CAP ? `${text.slice(0, CHUNK_TEXT_CAP)}…` : text;
@@ -56,10 +70,23 @@ function formatSemanticResults(results: SemanticChunkResult[], scan?: SemanticSe
     ? `NOTE: this search covered only ${scan.filesScanned} of ${scan.filesMatching} documents (a scan budget was reached), so these passages may be incomplete. Do not state or imply the knowledge base has nothing further on this topic.\n\n`
     : '';
   return (
+    formatSkipNotice(skipNotice) +
     partial +
     `Found ${results.length} relevant passage(s) in the knowledge base — the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
     blocks.join('\n\n---\n\n')
   );
+}
+
+/**
+ * The tool's return string is the ONLY channel the model reads (statusUpdate reaches the UI, not
+ * the conversation), so a comparability notice has to be part of it. Distinct from the scan note
+ * above: that one says how much of the corpus was REACHED, this says whether what was reached
+ * could be COMPARED. Phrased as an instruction because a bare fact tends to be paraphrased into a
+ * claim of completeness.
+ */
+function formatSkipNotice(skipNotice?: string | null): string {
+  if (!skipNotice) return '';
+  return `NOTE: ${skipNotice} Tell the user the knowledge base may be returning partial results.\n\n`;
 }
 
 /**
@@ -87,10 +114,10 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
     { logger: context.logger }
   );
   const provider = getProviderFromModel(embeddingModel);
-  if (provider === 'openai' && !apiKeyTable?.openai) return null;
-  if (provider === 'voyageai' && !apiKeyTable?.voyageai) return null;
-  // Ollama base URL lives in apiKeyTable.ollama (self-host); without it, fall back to keyword.
-  if (provider === 'ollama' && !apiKeyTable?.ollama) return null;
+  // A missing credential means the semantic arm cannot run, so fall back to keyword search.
+  // Keyless providers (Bedrock, authenticating through the AWS credential chain) report
+  // nothing missing and proceed.
+  if (resolveEmbeddingConfig(provider, apiKeyTable).missing) return null;
 
   const budgets = await resolveSearchBudgets({ adminSettings }, context.logger);
 
@@ -141,7 +168,8 @@ async function recordQueryEmbeddingUsage(
 async function emitSemanticCitables(
   context: ToolContext,
   ranked: SemanticChunkResult[],
-  corpusLabel: string
+  corpusLabel: string,
+  skipNotice?: string | null
 ): Promise<void> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article)
   const seenFile = new Set<string>();
@@ -166,21 +194,33 @@ async function emitSemanticCitables(
   }
   const names = citables.slice(0, 3).map(c => prettyFileName(c.title));
   const more = citables.length > 3 ? ` +${citables.length - 3} more` : '';
+  // Appended to the one found-status rather than a second update, which would read as a bug.
+  // warnings also accretes onto promptMeta so the notice survives in the quest record.
+  const partial = skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
   await context.statusUpdate(
-    { promptMeta: { citables } } as any,
-    `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}`
+    // any: statusUpdate takes a Partial<IChatHistoryItemDocument>; promptMeta's generated type
+    // does not narrow to this literal. Pre-existing pattern in this file.
+    { promptMeta: { citables, ...(skipNotice ? { warnings: [skipNotice] } : {}) } } as any,
+    `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}${partial}`
   );
 }
 
 /**
- * A semantic arm's tool output plus the `datalake:` provenance of the passages it returned.
- * `datalakeTags` drives retrieval-scoped lake-prompt injection (#1108); it is EMPTY for the
- * agent-scoped arm, which must never inject a lake prompt (see prependRetrievedLakePrompts).
+ * What a semantic arm reports back. `output` is the formatted answer, or null to fall through to
+ * keyword search. `skipNotice` is carried SEPARATELY so it survives that fall-through: when every
+ * matching file was withheld the arm has no output at all, and without this the keyword answer
+ * would reach the model with no hint that part of the corpus could not be compared.
+ * `datalakeTags` is the `datalake:` provenance of the returned passages, driving retrieval-scoped
+ * lake-prompt injection (#1108); it is EMPTY for the agent-scoped arm, which must never inject.
  */
 interface SemanticArmResult {
-  text: string;
+  output: string | null;
+  skipNotice: string | null;
   datalakeTags: string[];
 }
+
+/** Nothing to report: dependency missing, no accessible corpus, or the arm threw. */
+const NO_SEMANTIC_RESULT: SemanticArmResult = { output: null, skipNotice: null, datalakeTags: [] };
 
 /**
  * Semantic-first KB search: embed the query and cosine-rank against the pre-computed chunk
@@ -196,18 +236,19 @@ async function trySemanticKbSearch(
   query: string,
   tags: string[] | undefined,
   maxResults: number
-): Promise<SemanticArmResult | null> {
+): Promise<SemanticArmResult> {
   const chunkRepo = context.db.fabfilechunks;
   if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
-    return null; // semantic deps not wired — use keyword
+    return NO_SEMANTIC_RESULT; // semantic deps not wired - use keyword
   }
   try {
     const embedCtx = await resolveEmbeddingContext(context);
-    if (!embedCtx) return null;
+    if (!embedCtx) return NO_SEMANTIC_RESULT;
     const { embeddingModel, provider, apiKeyTable, budgets } = embedCtx;
 
     const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
-    if (dataLakeTags.length === 0) return null; // no accessible data lake — keyword search owns the user's own files
+    // No accessible data lake - keyword search owns the user's own files.
+    if (dataLakeTags.length === 0) return NO_SEMANTIC_RESULT;
 
     const search = await semanticDataLakeSearch(
       {
@@ -232,26 +273,30 @@ async function trySemanticKbSearch(
 
     await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
 
-    if (search.results.length === 0) return null;
+    const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+    // No hits: the keyword arm answers, but it has to carry the notice with it.
+    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [] };
 
     // Honor the max_results contract: topK fetches a wider pool (≥6) so cosine ranking has
     // candidates, but we return at most maxResults passages - parity with the keyword path's
     // .slice(0, max_results) so the tool output can't exceed what the caller asked for.
     const ranked = search.results.slice(0, maxResults);
 
-    await emitSemanticCitables(context, ranked, 'the data lake');
+    await emitSemanticCitables(context, ranked, 'the data lake', skipNotice);
     context.logger.log(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)})`
     );
 
     // Provenance for retrieval-scoped lake-prompt injection: which lakes these passages came from.
     return {
-      text: formatSemanticResults(ranked, search.scan),
+      output: formatSemanticResults(ranked, search.scan, skipNotice),
+      skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
-    return null;
+    // A genuine failure must not fabricate a notice.
+    return NO_SEMANTIC_RESULT;
   }
 }
 
@@ -266,14 +311,14 @@ async function tryScopedSemanticKbSearch(
   scopeFileIds: string[],
   query: string,
   maxResults: number
-): Promise<SemanticArmResult | null> {
+): Promise<SemanticArmResult> {
   const chunkRepo = context.db.fabfilechunks;
   if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
-    return null;
+    return NO_SEMANTIC_RESULT;
   }
   try {
     const embedCtx = await resolveEmbeddingContext(context);
-    if (!embedCtx) return null;
+    if (!embedCtx) return NO_SEMANTIC_RESULT;
     const { embeddingModel, provider, apiKeyTable, budgets } = embedCtx;
 
     const search = await fileScopedSemanticSearch(
@@ -292,16 +337,17 @@ async function tryScopedSemanticKbSearch(
 
     await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
 
-    if (search.results.length === 0) return null;
+    const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [] };
 
     const ranked = search.results.slice(0, maxResults);
-    await emitSemanticCitables(context, ranked, "this agent's knowledge base");
+    await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice);
     // Agent-scoped results never carry a lake prompt: this arm must not consult owner-wide access
     // or imply a wider corpus, so its provenance is intentionally empty (no injection downstream).
-    return { text: formatSemanticResults(ranked, search.scan), datalakeTags: [] };
+    return { output: formatSemanticResults(ranked, search.scan, skipNotice), skipNotice, datalakeTags: [] };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
-    return null;
+    return NO_SEMANTIC_RESULT;
   }
 }
 
@@ -351,6 +397,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
     // Per-completion set of `datalake:` tags whose lake prompt has already been injected this turn,
     // so multiple search_knowledge_base calls never restate the same lake's instructions (#1108).
     const injectedLakeTags = new Set<string>();
+    // Carries the most recent skip notice across calls in this completion, so the model still
+    // hears about a comparability gap on the capped call, which never runs a search of its own.
+    let lastSkipNotice: string | null = null;
     return {
       toolFn: async value => {
         const params = value as KnowledgeBaseSearchParams;
@@ -365,7 +414,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           return (
             `You have already run ${searchCallCount - 1} knowledge-base searches; the relevant passages are in the conversation above. ` +
             `STOP searching and compose your complete answer NOW from those results. Do NOT call search_knowledge_base ` +
-            `or retrieve_knowledge_content again unless a specific named fact is genuinely missing.`
+            `or retrieve_knowledge_content again unless a specific named fact is genuinely missing.` +
+            formatSkipNotice(lastSkipNotice)
           );
         }
 
@@ -390,12 +440,15 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
         const semantic = scope
           ? await tryScopedSemanticKbSearch(context, scope.fileIds, query, max_results)
           : await trySemanticKbSearch(context, query, tags, max_results);
+        lastSkipNotice = semantic.skipNotice;
         // Attach the retrieved lakes' scoped prompts (no-op for the agent-scoped arm, whose
         // datalakeTags are empty). The keyword fallback below returns metadata only (no grounded
-        // content), so it injects nothing - a lake prompt rides only actual retrieved content, and
-        // the keyword path's content enters later via retrieve_knowledge_content, which injects there.
-        if (semantic)
-          return prependRetrievedLakePrompts(context, semantic.text, semantic.datalakeTags, injectedLakeTags);
+        // content), so a lake prompt rides only actual retrieved content; the keyword path's content
+        // enters later via retrieve_knowledge_content, which injects there. Test .output, not the
+        // object: the arm always resolves to a truthy result now, so `if (semantic)` would swallow
+        // the keyword fallback entirely.
+        if (semantic.output)
+          return prependRetrievedLakePrompts(context, semantic.output, semantic.datalakeTags, injectedLakeTags);
 
         try {
           let searchResults;
@@ -545,21 +598,30 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // Scoped wording avoids "data lake" framing - a scoped caller sees only the
             // agent's KB, and the status must not imply a wider corpus exists.
             const corpusLabel = scope ? "this agent's knowledge base" : 'the data lake';
-            const foundStatus = `📄 Found ${rankedResults.length} in ${corpusLabel}: ${names.join(', ')}${more}`;
-            await context.statusUpdate({ promptMeta: { citables } } as any, foundStatus);
+            // The semantic arm's notice (e.g. every matching file withheld for a model mismatch)
+            // has to land here too: when semantic finds nothing to say, this keyword status is the
+            // ONLY user-visible write for the turn, so a total-withholding warning would otherwise
+            // never reach the promptMeta inspector or the status line.
+            const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
+            const foundStatus = `📄 Found ${rankedResults.length} in ${corpusLabel}: ${names.join(', ')}${more}${skipSuffix}`;
+            await context.statusUpdate(
+              { promptMeta: { citables, ...(semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {}) } } as any,
+              foundStatus
+            );
             context.logger.log(`📚 Knowledge Base Search: Stored ${citables.length} citables`);
           } else {
             // No hits - tell the user what was searched so the wait reads as deliberate.
             const clippedQuery = query.length > 50 ? query.slice(0, 49) + '…' : query;
+            const skipSuffix = semantic.skipNotice ? PARTIAL_RESULTS_STATUS_SUFFIX : '';
             await context.statusUpdate(
-              {} as any,
-              scope
-                ? `📭 No matches in this agent's knowledge base for “${clippedQuery}”`
-                : `📭 No data-lake matches for “${clippedQuery}” — broadening…`
+              { promptMeta: semantic.skipNotice ? { warnings: [semantic.skipNotice] } : {} } as any,
+              (scope
+                ? `📭 No matches in this agent's knowledge base for "${clippedQuery}"`
+                : `📭 No data-lake matches for "${clippedQuery}" - broadening...`) + skipSuffix
             );
           }
 
-          return formatSearchResults(rankedResults);
+          return formatSearchResults(rankedResults) + formatSkipNotice(semantic.skipNotice);
         } catch (error) {
           context.logger.error('❌ Knowledge Base Search: Error during search:', error);
           return 'An error occurred while searching your knowledge base. Please try again.';

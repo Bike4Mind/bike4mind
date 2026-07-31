@@ -273,4 +273,47 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(res._getJSONData().error).toMatch(/no usable default chat model/i);
     expect(mockInvoke).not.toHaveBeenCalled();
   });
+
+  // Output-budget override: the handler must forward a caller-supplied token
+  // budget into params.max_tokens regardless of casing. Reasoning models were
+  // silently pinned to the 4096 default because Zod stripped the camelCase aliases.
+  describe('max_tokens override coalescing', () => {
+    const invokedParams = () =>
+      (mockInvoke.mock.calls[0][0] as { body: { params: { max_tokens?: number } } }).body.params;
+
+    it('honors snake_case max_tokens', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', max_tokens: 16000 } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedParams().max_tokens).toBe(16000);
+    });
+
+    it('honors the camelCase maxTokens alias', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', maxTokens: 16000 } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedParams().max_tokens).toBe(16000);
+    });
+
+    it('honors the maxOutputTokens alias', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', maxOutputTokens: 16000 } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedParams().max_tokens).toBe(16000);
+    });
+
+    // Absence must stay absent on the wire. Substituting a number here would read
+    // downstream as a deliberate caller budget and suppress the model-aware default
+    // that gives adaptive reasoning models their output headroom.
+    it('forwards no max_tokens at all when no budget is supplied', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedParams().max_tokens).toBeUndefined();
+    });
+  });
 });

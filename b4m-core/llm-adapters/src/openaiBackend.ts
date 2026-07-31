@@ -777,7 +777,10 @@ export class OpenAIBackend implements ICompletionBackend {
         name: 'GPT-4',
         backend: ModelBackend.OpenAI,
         contextWindow: 8192,
-        max_tokens: 8192,
+        // Half the context window, deliberately: this was listed as the full 8192, which left
+        // maxSafeInputTokens (context - output - buffer) negative and silently emptied the prompt.
+        // Whatever the provider's own output ceiling is, this entry has to keep that figure positive.
+        max_tokens: 4096,
         can_stream: true,
         pricing: {
           8000: { input: 30 / 1000000, output: 60.0 / 1000000 }, // $30 / 1M Input tokens, $60 / 1M Output tokens

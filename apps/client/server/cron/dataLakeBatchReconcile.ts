@@ -18,6 +18,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
+import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'dataLakeBatchReconcile' } });
@@ -36,14 +37,46 @@ export async function handler() {
     db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
     logger,
     metrics: {
-      emitForcedTerminal: () => recordReconcilerForcedTerminal().catch(() => {}),
+      // Also backstops the taxonomy enqueue for a batch that never reached
+      // upload-complete - that path bypasses finalizeBatchIfComplete, so the daily sweep is
+      // the last chance to catch it (the read-time reconciler in batches/index.ts is the
+      // faster backstop for the same gap).
+      emitForcedTerminal: batch =>
+        Promise.all([
+          recordReconcilerForcedTerminal().catch(() => {}),
+          enqueueTaxonomyAnalysisIfWanted(batch, logger).catch(() => {}),
+        ]).then(() => {}),
       emitStuckGauge: count => recordStuckBatchGauge(count).catch(() => {}),
     },
+  });
+
+  // Global fallback for the background AI-tagging phase - the read-time reconciler
+  // (10-minute timeout) is the primary backstop; this daily sweep catches a stuck job on a
+  // lake nobody has reopened since.
+  const taxonomyTimeoutMs = dataLakeService.DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS;
+  const taxonomyCutoff = new Date(Date.now() - taxonomyTimeoutMs);
+  const stuckTaxonomy = await dataLakeBatchRepository.findStuckTaxonomy(taxonomyCutoff, MAX_PER_RUN);
+  const forcedTaxonomy = await dataLakeService.reconcileStuckTaxonomy(stuckTaxonomy, taxonomyTimeoutMs, {
+    db: { batches: dataLakeBatchRepository },
+    logger,
   });
 
   // Heartbeat every run (even zero-work) so a stopped/broken cron alarms on absence of data.
   await recordReconcileRun().catch(() => {});
 
-  logger.info('[DataLakeBatchReconcile] Sweep complete', { candidates: stuck.length, forced: forced.length });
-  return { statusCode: 200, body: JSON.stringify({ candidates: stuck.length, forced: forced.length }) };
+  logger.info('[DataLakeBatchReconcile] Sweep complete', {
+    candidates: stuck.length,
+    forced: forced.length,
+    taxonomyCandidates: stuckTaxonomy.length,
+    taxonomyForced: forcedTaxonomy.length,
+  });
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      candidates: stuck.length,
+      forced: forced.length,
+      taxonomyCandidates: stuckTaxonomy.length,
+      taxonomyForced: forcedTaxonomy.length,
+    }),
+  };
 }

@@ -9,6 +9,7 @@ const {
   mockFindUserById,
   mockGetSettingsValue,
   mockResolveSearchBudgets,
+  mockGetProviderFromModel,
 } = vi.hoisted(() => ({
   mockResolveScope: vi.fn(),
   mockSemanticSearch: vi.fn(),
@@ -17,6 +18,7 @@ const {
   mockFindUserById: vi.fn(),
   mockGetSettingsValue: vi.fn(),
   mockResolveSearchBudgets: vi.fn(),
+  mockGetProviderFromModel: vi.fn(),
 }));
 
 // Only the middleware chain and the seams below are mocked; @bike4mind/common stays real so
@@ -34,7 +36,12 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: unknown, _res: unknown) => undefined }));
 vi.mock('@server/dataLakes/resolveRetrievalLakeScope', () => ({ resolveRetrievalLakeScope: mockResolveScope }));
-vi.mock('@bike4mind/fab-pipeline', () => ({ getProviderFromModel: () => 'openai' }));
+// getProviderFromModel is stubbed so a test can choose the provider, but resolveEmbeddingConfig
+// is the real one: which credential a provider needs is the behaviour under test here.
+vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/fab-pipeline')>()),
+  getProviderFromModel: mockGetProviderFromModel,
+}));
 vi.mock('@bike4mind/utils', () => ({
   createTokenizer: () => ({ countTokens: vi.fn(async () => 3) }),
   getSettingsByNames: vi.fn(),
@@ -49,13 +56,25 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: {},
   userRepository: { findById: mockFindUserById },
 }));
-vi.mock('@bike4mind/services', () => ({
+// The report helpers are the REAL ones: the wording and snake_case mapping are what these tests
+// check, so a reimplementation here would prove nothing. Imported from source because the module
+// is pure, while pulling the whole services barrel into jsdom is not.
+vi.mock('@bike4mind/services', async () => ({
   apiKeyService: {
     getEffectiveApiKey: mockGetEffectiveApiKey,
     getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys,
   },
+  ...(await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch').then(m => ({
+    __mismatch: m,
+  }))),
   dataLakeService: {
     semanticDataLakeSearch: mockSemanticSearch,
+    describeEmbeddingMismatch: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
+    ).describeEmbeddingMismatch,
+    emptyEmbeddingMismatchReport: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
+    ).emptyEmbeddingMismatchReport,
     resolveSearchBudgets: mockResolveSearchBudgets,
     emptyScanAccounting: (b?: { maxFiles?: number; maxChunks?: number }) => ({
       truncated: false,
@@ -72,7 +91,9 @@ vi.mock('@bike4mind/services', () => ({
   recordOperationalUsage: vi.fn(),
 }));
 
+import { BedrockEmbeddingModel, ModelBackend } from '@bike4mind/common';
 import handler from '@pages/api/data-lakes/semantic-search';
+import { emptyEmbeddingMismatchReport } from '../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch';
 
 const DYNAMIC_SCOPE = {
   dataLakeTags: ['datalake:acme-handbook'],
@@ -95,7 +116,9 @@ const EMPTY_RESULT = {
   results: [],
   totalChunksSearched: 0,
   filesInScope: 0,
+  chunksScored: 0,
   embeddingModel: 'text-embedding-ada-002',
+  embeddingMismatch: emptyEmbeddingMismatchReport(),
   scan: { ...FULL_SCAN, filesMatching: 0, filesScoped: 0, filesScanned: 0, chunksScanned: 0 },
 };
 
@@ -121,6 +144,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
     mockGetEffectiveApiKey.mockResolvedValue('test-openai-key');
     mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
     // Null user short-circuits the best-effort usage recording, keeping these tests on the
     // search path only.
     mockFindUserById.mockResolvedValue(null);
@@ -295,6 +319,8 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
         },
       ],
       totalChunksSearched: 12,
+      chunksScored: 12,
+      embeddingMismatch: emptyEmbeddingMismatchReport(),
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
       scan: FULL_SCAN,
@@ -336,6 +362,8 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
     mockSemanticSearch.mockResolvedValue({
       results: [],
       totalChunksSearched: 12,
+      chunksScored: 12,
+      embeddingMismatch: emptyEmbeddingMismatchReport(),
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
       scan: FULL_SCAN,
@@ -355,6 +383,8 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
     mockSemanticSearch.mockResolvedValue({
       results: [],
       totalChunksSearched: 100000,
+      chunksScored: 12,
+      embeddingMismatch: emptyEmbeddingMismatchReport(),
       filesInScope: 2314,
       embeddingModel: 'text-embedding-ada-002',
       scan: {
@@ -395,5 +425,123 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
     await handler(makeReq({ query: 'pto' }), makeRes());
 
     expect(searchParams().budgets).toEqual({ maxFiles: 50, maxChunks: 100 });
+  });
+});
+
+describe('POST /api/data-lakes/semantic-search embedding-mismatch reporting', () => {
+  const SMALL_3 = 'text-embedding-3-small';
+
+  const mismatchReport = () => {
+    const report = emptyEmbeddingMismatchReport();
+    report.excludedFiles = {
+      count: 1,
+      models: [SMALL_3],
+      estimatedChunks: 4,
+      sample: [{ fileId: 'f9', fileName: 'foreign.md', embeddingModel: SMALL_3 }],
+    };
+    report.partial = true;
+    return report;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
+    mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
+    mockGetEffectiveApiKey.mockResolvedValue('test-openai-key');
+    mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    mockFindUserById.mockResolvedValue(null);
+  });
+
+  it('flags a partial result and names the model to re-embed', async () => {
+    mockSemanticSearch.mockResolvedValue({ ...EMPTY_RESULT, chunksScored: 3, embeddingMismatch: mismatchReport() });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.partial_results).toBe(true);
+    expect(body.chunks_scored).toBe(3);
+    expect(body.embedding_mismatch.excluded_files.models).toEqual([SMALL_3]);
+    expect(body.warning).toContain(SMALL_3);
+  });
+
+  it('adds no warning key at all to a healthy search', async () => {
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.partial_results).toBe(false);
+    expect('warning' in body).toBe(false);
+  });
+
+  it('reports mismatch independently of scan truncation - they are different facts', async () => {
+    // A lake can be fully scanned and still return content that could not be compared, and vice
+    // versa; a caller must be able to tell the two apart.
+    mockSemanticSearch.mockResolvedValue({ ...EMPTY_RESULT, embeddingMismatch: mismatchReport() });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.partial_results).toBe(true);
+    expect(body.scan.truncated).toBe(false);
+  });
+});
+
+// #1122: the admin dropdown offers Bedrock embedders and the vectorize pipeline accepts them,
+// but this route resolved credentials through a catch-all `else` that assumed any provider it
+// did not recognise needed an OpenAI or VoyageAI key. Bedrock authenticates through the AWS
+// credential chain and has no key to find, so a corpus that ingested fine failed on every query.
+describe('POST /api/data-lakes/semantic-search keyless embedding providers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
+    mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
+    mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
+    mockGetSettingsValue.mockResolvedValue(BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2);
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.Bedrock);
+    mockFindUserById.mockResolvedValue(null);
+  });
+
+  it('searches with a Bedrock model on an environment holding no provider key at all', async () => {
+    // The environments where Bedrock is most attractive are exactly the ones with no OpenAI key.
+    mockGetEffectiveApiKey.mockResolvedValue(null);
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    expect(res.status).not.toHaveBeenCalledWith(500);
+    expect(mockSemanticSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it('never resolves a provider key for a keyless provider', async () => {
+    mockGetEffectiveApiKey.mockResolvedValue('an-openai-key-that-is-irrelevant-here');
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(mockGetEffectiveApiKey).not.toHaveBeenCalled();
+  });
+
+  it('hands the search an empty key table rather than another provider credential', async () => {
+    mockGetEffectiveApiKey.mockResolvedValue('an-openai-key-that-is-irrelevant-here');
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(searchParams().apiKeyTable).toEqual({});
+  });
+
+  it('still rejects a keyed provider whose credential is genuinely absent', async () => {
+    // The guard must keep failing for providers that DO need a key - the fix is about Bedrock,
+    // not about making every missing credential silent.
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockGetSettingsValue.mockResolvedValue('text-embedding-3-small');
+    mockGetEffectiveApiKey.mockResolvedValue(null);
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
   });
 });
