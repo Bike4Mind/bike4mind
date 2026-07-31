@@ -278,6 +278,20 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
+   * Soft-delete by writing `deletedAt` directly via a Mongoose `updateOne`.
+   * NOT the inherited `delete`: that routes through the soft-delete plugin's static, which uses
+   * the raw driver (`this.collection.updateOne`). Mongoose 8's transactionAsyncLocalStorage only
+   * injects a session into Mongoose queries, so the raw call would commit immediately and escape
+   * the surrounding `withTransaction` - leaving, on a commit-time retry, an organization that is
+   * already gone while its groups and their memberships roll back (org-groups #1219). `get()`
+   * filters `deletedAt`, so the retry then 404s permanently. Same reasoning as
+   * `GroupRepository.softDeleteByIds`.
+   */
+  async softDeleteById(id: string): Promise<void> {
+    await this.organizationModel.updateOne({ _id: id, deletedAt: null }, { $set: { deletedAt: new Date() } });
+  }
+
+  /**
    * IDs of every organization the user administers (billing owner or assigned
    * manager). Used to surface org-scoped resources - e.g. org-scoped skills -
    * to the people who can manage them, without widening visibility to all

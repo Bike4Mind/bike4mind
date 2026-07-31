@@ -71,6 +71,42 @@ export class GroupRepository extends BaseRepository<IGroupDocument> implements I
     if (groupIds.length === 0) return;
     await this.model.updateMany({ _id: { $in: groupIds }, deletedAt: null }, { $set: { deletedAt: new Date() } });
   }
+
+  /**
+   * Provision a group, treating a concurrent create for the same (organizationId, type) as
+   * success (org-groups #1222). The caller (setOrganizationGroupTypes) checks "does a live
+   * instance exist" and calls this only when it does not - but two overlapping grant PUTs can
+   * both pass that check before either writes, so the second `create` collides with the
+   * `group_org_type_live` unique index. E11000 carries no HTTP status (errorHandler falls through
+   * to a 500 that pages on-call), so the fix lives HERE at the repo boundary rather than teaching
+   * the service about Mongo error codes.
+   *
+   * The recovery differs by caller, and the transactional case is the non-obvious one:
+   * - Outside a transaction, the read below returns the winner's row and we hand it back.
+   * - Inside one (the group-types route, the only production caller today), E11000 has ALREADY
+   *   aborted the transaction server-side, so the read cannot run on that session: it throws
+   *   NoSuchTransaction (251) instead. Unlike E11000, 251 IS labeled TransientTransactionError, so
+   *   withTransaction retries the whole callback and the retry's "does a live instance exist"
+   *   precheck sees the committed winner and skips the create. The read never returns a row on
+   *   this path - it converts an unretryable error into a retryable one. Do not "simplify" it to a
+   *   bare rethrow: that reinstates the 500. Covered only by non-transactional tests, since the
+   *   suite's mongodb-memory-server is a standalone (no transactions).
+   */
+  async createIfMissing(data: Pick<IGroupDocument, 'name' | 'description' | 'type' | 'organizationId'>) {
+    try {
+      return await this.create(data);
+    } catch (error) {
+      if ((error as { code?: number })?.code !== 11000) throw error;
+
+      // Lost the race - the winner's row must exist (that's what E11000 means). If it somehow
+      // doesn't (e.g. a concurrent revoke soft-deleted it in the instant between our create
+      // attempt and this read), surface that as the original duplicate-key error rather than a
+      // confusing "group not found" - the caller is expecting a group back, not a null.
+      const existing = await this.findOne({ organizationId: data.organizationId, type: data.type, deletedAt: null });
+      if (existing) return existing;
+      throw error;
+    }
+  }
 }
 
 export const groupRepository = new GroupRepository(Group);
