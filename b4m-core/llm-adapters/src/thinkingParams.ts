@@ -22,6 +22,14 @@ export type ThinkingConfig =
 export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
 
 /**
+ * Room reserved for the visible answer above a legacy thinking budget. The API rejects a
+ * thinking budget that is not strictly below max_tokens, and a budget that merely squeaks
+ * under it starves the answer instead, so anything that moves either value has to preserve
+ * this gap - see the non-streaming clamp in anthropicBackend.
+ */
+export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
+
+/**
  * Whether the model spends reasoning tokens inside its output budget on every turn,
  * which is what makes a small budget produce an empty visible reply rather than a
  * short one. Provider-agnostic on purpose: the trap is identical whether the tokens
@@ -124,7 +132,7 @@ export function buildThinkingParams(
   }
 
   // Legacy models: explicit budget_tokens, inflate max_tokens to fit
-  const maxTokens = Math.max(currentMaxTokens, budgetTokens + 1000);
+  const maxTokens = Math.max(currentMaxTokens, budgetTokens + THINKING_ANSWER_HEADROOM_TOKENS);
 
   return {
     thinkingConfig: {
