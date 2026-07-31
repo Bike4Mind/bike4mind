@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import type { TaxonomyFileAssignment } from '@bike4mind/common';
 import { isReservedTagPrefix } from '@bike4mind/common';
+import type { TaxonomyStatus } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
 import { slugifyDataLakeName } from '../hooks/data/dataLakeSlug';
 import {
@@ -13,53 +13,17 @@ import {
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-export type WizardStep = 'source' | 'preview' | 'taxonomy' | 'config' | 'upload';
+export type WizardStep = 'source' | 'preview' | 'config' | 'upload';
 
 /** The two tabs of the Data Lakes management panel: own lakes vs. the public discover catalog. */
 export type ManagerTab = 'mine' | 'discover';
 
-export interface TaxonomyTag {
-  /**
-   * The editable part of the tag AFTER the shared prefix, e.g. "type:contract". The full
-   * applied tag is `taxonomy.prefix + suffix`, so the prefix lives in exactly one place
-   * (taxonomy.prefix) and can never be duplicated or drift into a tag's own text.
-   */
-  suffix: string;
-  /**
-   * The full name inference assigned (incl. its original prefix), kept stable across user
-   * edits. Per-file assignments reference it, so it is the join key at upload time.
-   */
-  originalName: string;
-  /** Confidence/relevance score 0.0-1.0 */
-  strength: number;
-  /** How this tag was inferred */
-  source: 'folder' | 'ai';
-  /** Folder paths this tag covers; drives both the review preview and which files get it */
-  matchingFolders: string[];
-  /** Whether this tag has been soft-deleted by the user */
-  deleted: boolean;
-}
-
-export interface TaxonomyResult {
-  /**
-   * The single shared tag prefix (kept in sync with config.tagPrefix). Every tag is
-   * `prefix + tag.suffix`, so editing this one value re-namespaces every card at once.
-   */
-  prefix: string;
-  suggestedName: string;
-  tags: TaxonomyTag[];
-  /** Per-file tag suggestions for the sampled files (inference only samples a subset) */
-  fileAssignments: TaxonomyFileAssignment[];
-  /** Inference has been run - success OR failure. Never gates progression; the step is optional. */
-  attempted: boolean;
-  analyzing: boolean;
-}
-
 /**
- * Which of the two optional steps the user opted into on the source step. Both default off,
- * so the minimal create path is name + files -> config -> upload; enabling one splices it back
- * into the wizard's step order. Only mutable while on the source step, which is what keeps the
- * current step from ever being spliced out from under the user.
+ * Which of the two optional steps/behaviors the user opted into on the source step.
+ * `preview` splices a step into the wizard; `taxonomy` no longer does - it opts the
+ * batch into a background AI tag-suggestion job that runs AFTER upload completes, reviewed
+ * later from the Data Lakes list rather than blocking the wizard. Both default off, so the
+ * minimal create path is name + files -> config -> upload.
  */
 export interface OptionalSteps {
   preview: boolean;
@@ -95,19 +59,17 @@ export interface UploadProgress {
   errorMessage?: string;
   errorKind?: UploadErrorKind;
   currentBatchId?: string;
+  /**
+   * Background AI-tag suggestion phase, pushed over the same batch-progress
+   * WebSocket channel as chunked/vectorized. Undefined until the first message naming it
+   * arrives (enqueueing happens async, right after upload - not necessarily before this
+   * step renders), so the UI treats "unset" the same as "still starting up" while
+   * optionalSteps.taxonomy is true.
+   */
+  taxonomyStatus?: TaxonomyStatus;
 }
 
 // ── Defaults ────────────────────────────────────────────────────────────────
-
-/** A taxonomy that applies nothing - the upload path's stand-in when the step is not in play. */
-export const EMPTY_TAXONOMY: TaxonomyResult = {
-  prefix: '',
-  suggestedName: '',
-  tags: [],
-  fileAssignments: [],
-  attempted: false,
-  analyzing: false,
-};
 
 const DEFAULT_OPTIONAL_STEPS: OptionalSteps = {
   preview: false,
@@ -136,19 +98,16 @@ const DEFAULT_UPLOAD_PROGRESS: UploadProgress = {
 /**
  * A clean create-session's worth of state (everything except isOpen). Shared by openWizard,
  * openWizardForLake, and resetWizard so opening the wizard can never inherit a prior session's
- * files, config, or taxonomy - the fields are a synced set (e.g. taxonomy.prefix <-> config
- * .tagPrefix), so resetting only some of them would desync them.
+ * files or config.
  */
 const freshSession = () => ({
   step: 'source' as WizardStep,
   folderTree: null,
   allFiles: [] as WizardFile[],
   excludedPatterns: [...DEFAULT_EXCLUDED_PATTERNS],
-  taxonomy: { ...EMPTY_TAXONOMY },
   optionalSteps: { ...DEFAULT_OPTIONAL_STEPS },
   config: { ...DEFAULT_CONFIG },
   autoDerivedTagPrefix: '',
-  inferredTagPrefix: '',
   duplicateCheckResults: null,
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
@@ -159,8 +118,9 @@ const freshSession = () => ({
 
 /**
  * When set, the wizard runs in "append" mode: it uploads into this existing lake
- * instead of creating a new one (skips lake creation + the taxonomy step, and
- * locks the Config fields to the existing lake's values).
+ * instead of creating a new one (skips lake creation, and locks the Config fields
+ * to the existing lake's values). AI tag suggestion is never offered in this mode -
+ * the target lake's tag vocabulary already exists.
  */
 export interface WizardTargetLake {
   id: string;
@@ -171,20 +131,6 @@ export interface WizardTargetLake {
   requiredEntitlement?: string;
 }
 
-/**
- * Whether the AI taxonomy step is part of this session's flow, and therefore whether its
- * reviewed tags get applied at upload. Toggling the step back off deliberately leaves
- * taxonomy.tags in the store - re-enabling it restores the user's edits without paying for
- * another inference run - so the step's presence in the flow, never the presence of tags, is
- * the authority. Shared by the wizard's step order and the upload path so they cannot drift.
- */
-export function isTaxonomyStepActive(state: {
-  optionalSteps: OptionalSteps;
-  targetLake: WizardTargetLake | null;
-}): boolean {
-  return !state.targetLake && state.optionalSteps.taxonomy;
-}
-
 interface DataLakeWizardStore {
   // State
   isOpen: boolean;
@@ -192,8 +138,7 @@ interface DataLakeWizardStore {
   folderTree: FolderTreeNode | null;
   allFiles: WizardFile[];
   excludedPatterns: string[];
-  taxonomy: TaxonomyResult;
-  /** Opt-ins for the two skippable steps; drives the wizard's step order. */
+  /** Opt-ins: `preview` (a wizard step) and `taxonomy` (a post-upload background job). */
   optionalSteps: OptionalSteps;
   config: DataLakeFormValues;
   /**
@@ -201,13 +146,6 @@ interface DataLakeWizardStore {
    * hand-edited prefix stays untouched. Never read outside that action.
    */
   autoDerivedTagPrefix: string;
-  /**
-   * The last prefix inference supplied, so turning the AI Taxonomy step back off can re-derive
-   * over it. Without this the lake keeps a namespace named after a step it no longer runs -
-   * and, since inference tends to shorten a name the same way twice, two unrelated lakes can
-   * collide on one prefix. Cleared by setTagPrefix: once the user edits it, it is theirs.
-   */
-  inferredTagPrefix: string;
   duplicateCheckResults: { duplicateCount: number; checkedAt: number } | null;
   uploadProgress: UploadProgress;
   hashingProgress: { total: number; completed: number; status: 'idle' | 'hashing' | 'done' };
@@ -234,13 +172,7 @@ interface DataLakeWizardStore {
   toggleFolderExclusion: (path: string) => void;
   setExcludedPatterns: (patterns: string[]) => void;
 
-  // Taxonomy step
-  setTaxonomy: (result: TaxonomyResult) => void;
-  setTaxonomyAnalyzing: (analyzing: boolean) => void;
-  markTaxonomyAttempted: () => void;
-  updateTag: (originalName: string, updates: Partial<TaxonomyTag>) => void;
-  mergeTags: (sourceOriginalName: string, targetOriginalName: string) => void;
-  deleteTag: (originalName: string) => void;
+  // Tag prefix (owned by the Config step; the taxonomy step's competing home was removed)
   setTagPrefix: (prefix: string) => void;
   deriveTagPrefixFromName: () => void;
 
@@ -269,11 +201,9 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   folderTree: null,
   allFiles: [],
   excludedPatterns: [...DEFAULT_EXCLUDED_PATTERNS],
-  taxonomy: { ...EMPTY_TAXONOMY },
   optionalSteps: { ...DEFAULT_OPTIONAL_STEPS },
   config: { ...DEFAULT_CONFIG },
   autoDerivedTagPrefix: '',
-  inferredTagPrefix: '',
   duplicateCheckResults: null,
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
@@ -283,8 +213,6 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
 
   // ── Navigation ──────────────────────────────────────────────────────────
 
-  // Always a clean session: taxonomy now drives the tags files are uploaded with, and config
-  // .tagPrefix is synced to taxonomy.prefix, so a stale prior session must not leak in.
   openWizard: () => set({ isOpen: true, ...freshSession() }),
 
   // Management panel (list lakes, add files, lifecycle). Its internal "Create"
@@ -294,7 +222,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   closeManager: () => set({ isManagerOpen: false }),
 
   // Append mode: upload into an existing lake. Preseeds config from the lake so
-  // the (locked) Config step shows the right values; taxonomy is skipped.
+  // the (locked) Config step shows the right values.
   openWizardForLake: lake =>
     set({
       isOpen: true,
@@ -345,104 +273,27 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
     set({ excludedPatterns: patterns, folderTree: updated, allFiles: getAllFiles(updated) });
   },
 
-  // ── Taxonomy Step ───────────────────────────────────────────────────────
+  // ── Tag Prefix ──────────────────────────────────────────────────────────
 
-  setTaxonomy: result =>
-    set({
-      // Second half of the prefix fallback that useInferTaxonomy's onSuccess starts (see the
-      // note there): that one handles an empty suggestion, this one a conflicting suggestion.
-      // taxonomy.prefix follows the SAME existing-value-wins rule as config.tagPrefix below,
-      // not just for symmetry: taxonomy.prefix renders the tag cards while config.tagPrefix is
-      // what upload actually applies, so adopting result.prefix here while config keeps a
-      // seeded value would show one namespace and tag files with another.
-      taxonomy: { ...result, prefix: get().taxonomy.prefix || result.prefix },
-      // Auto-fill config from the suggestion, but a value the user already typed wins - else
-      // a Re-analyze would silently overwrite the name/prefix they set on the Config step.
-      config: {
-        ...get().config,
-        name: get().config.name || result.suggestedName,
-        tagPrefix: get().config.tagPrefix || result.prefix,
-      },
-      // Remember an adopted suggestion as inference's, so unticking the step can re-derive over
-      // it. Only when it was actually adopted - an existing value wins above, and marking a
-      // value inference never applied would hand someone else's prefix away on the next derive.
-      inferredTagPrefix: get().config.tagPrefix ? get().inferredTagPrefix : result.prefix,
-    }),
-
-  setTaxonomyAnalyzing: analyzing => set(state => ({ taxonomy: { ...state.taxonomy, analyzing } })),
-
-  // Failure path: inference is optional, so a failed run still counts as attempted -
-  // otherwise the step shows a blank pane instead of its empty state + Re-analyze.
-  markTaxonomyAttempted: () => set(state => ({ taxonomy: { ...state.taxonomy, attempted: true, analyzing: false } })),
-
-  // All three mutators key on originalName (stable inference id), never the editable suffix:
-  // editing one tag's suffix to match another's would otherwise make a delete hit both.
-  updateTag: (originalName, updates) =>
-    set(state => ({
-      taxonomy: {
-        ...state.taxonomy,
-        tags: state.taxonomy.tags.map(t => (t.originalName === originalName ? { ...t, ...updates } : t)),
-      },
-    })),
-
-  mergeTags: (sourceOriginalName, targetOriginalName) =>
-    set(state => {
-      const sourceTag = state.taxonomy.tags.find(t => t.originalName === sourceOriginalName);
-      const targetTag = state.taxonomy.tags.find(t => t.originalName === targetOriginalName);
-      if (!sourceTag || !targetTag) return state;
-
-      return {
-        taxonomy: {
-          ...state.taxonomy,
-          tags: state.taxonomy.tags.map(t => {
-            if (t.originalName === targetOriginalName) {
-              return {
-                ...t,
-                matchingFolders: [...new Set([...t.matchingFolders, ...sourceTag.matchingFolders])],
-                strength: Math.max(t.strength, sourceTag.strength),
-              };
-            }
-            if (t.originalName === sourceOriginalName) {
-              return { ...t, deleted: true };
-            }
-            return t;
-          }),
-        },
-      };
-    }),
-
-  deleteTag: originalName =>
-    set(state => ({
-      taxonomy: {
-        ...state.taxonomy,
-        tags: state.taxonomy.tags.map(t => (t.originalName === originalName ? { ...t, deleted: true } : t)),
-      },
-    })),
-
-  // The Tag Prefix's single editable home is the taxonomy step (#829): the prefix is
-  // embedded in every applied tag name there and consumed by Re-analyze. Kept in sync with
-  // config.tagPrefix so the Config gate and append-mode display read one value.
+  // The Tag Prefix's single editable home is the Config step (the taxonomy step's former
+  // competing one was removed - AI tag suggestion now runs post-upload and never touches the
+  // prefix). Clears the auto-derive provenance marker: once the user types a prefix, it's
+  // theirs, and a later rename must not silently overwrite it.
   setTagPrefix: prefix =>
     set(state => ({
-      taxonomy: { ...state.taxonomy, prefix },
       config: { ...state.config, tagPrefix: prefix },
-      // A typed prefix is the user's; drop both provenance markers so neither a rename nor
-      // unticking the taxonomy step can derive over it.
       autoDerivedTagPrefix: '',
-      inferredTagPrefix: '',
     })),
 
   /**
-   * Derive the tag prefix from the lake name, for flows with no taxonomy step to supply one.
-   * Re-derives over a prefix this last produced (so a rename can't leave the prefix quoting an
-   * abandoned name) or one inference supplied (so unticking the AI step hands the namespace
-   * back to the name). A prefix the user typed is never touched. Callers own the when (see
-   * DataLakeWizardModal's source-step guard); this owns the whether.
+   * Derive the tag prefix from the lake name. Re-derives over a prefix this last produced (so
+   * a rename can't leave the prefix quoting an abandoned name); a prefix the user typed by
+   * hand is never touched. Called when leaving the source step (see DataLakeWizardModal).
    */
   deriveTagPrefixFromName: () =>
     set(state => {
       const current = state.config.tagPrefix.trim();
-      const isOurs = !current || current === state.autoDerivedTagPrefix || current === state.inferredTagPrefix;
+      const isOurs = !current || current === state.autoDerivedTagPrefix;
       if (!isOurs) return state;
       const prefix = `${slugifyDataLakeName(state.config.name)}:`;
       // A lake named "Datalake" derives the reserved membership namespace, which the server
@@ -451,8 +302,6 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
       if (isReservedTagPrefix(prefix)) return state;
       return {
         autoDerivedTagPrefix: prefix,
-        inferredTagPrefix: '',
-        taxonomy: { ...state.taxonomy, prefix },
         config: { ...state.config, tagPrefix: prefix },
       };
     }),

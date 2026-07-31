@@ -681,6 +681,20 @@ export const getTextModelCost = (
   );
 };
 
+/**
+ * A model that is no longer the right thing to run, paired with what should replace it.
+ * Served alongside the model list so the client can recognize a session pinned to a model
+ * the picker has already hidden. Built by buildSupersededIndex in @bike4mind/llm-adapters, so
+ * the replacement named here is the same one resolveDeprecatedModelId sends a pinned request to.
+ */
+export interface SupersededModelInfo {
+  id: string;
+  /** Display name, or the raw id when this deployment does not list the model. */
+  name: string;
+  replacementId: string;
+  replacementName: string;
+}
+
 /** Returns true if the model is deprecated on or before the provided date (default: now). */
 export const isModelDeprecated = (model: ModelInfo, now: Date = new Date()): boolean => {
   if (!model.deprecationDate) return false;

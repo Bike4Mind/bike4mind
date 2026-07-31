@@ -6,27 +6,53 @@ import { CreateBatchRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { recordReconcilerForcedTerminal } from '@server/utils/cloudwatch';
+import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
-  // GET: list user's active batches (reconciles stuck ones at read time first)
+  // GET: list batches the user still needs to see - either ingest is in flight, or the
+  // background AI-tagging phase is running/awaiting review. These are independent
+  // clocks: a batch can be fully 'completed' (ingest) while 'analyzing' (taxonomy), so they
+  // are fetched, reconciled, and re-fetched as two separate sets, then merged for the caller.
   .get(async (req: Request, res) => {
     const userId = req.user.id;
-    const active = await dataLakeBatchRepository.findActiveByUserId(userId);
+    const [ingestActive, taxonomyAttention] = await Promise.all([
+      dataLakeBatchRepository.findActiveByUserId(userId),
+      dataLakeBatchRepository.findTaxonomyAttentionByUserId(userId),
+    ]);
 
     // Read-time reconciliation: force non-terminal batches idle past the timeout to a
     // terminal state (guarded), and recompute lake stats from source. The daily
     // dataLakeBatchReconcile cron is the fallback for batches nobody ever opens the list for.
-    await dataLakeService.reconcileStuckBatches(active, dataLakeService.DEFAULT_STUCK_BATCH_TIMEOUT_MS, {
+    await dataLakeService.reconcileStuckBatches(ingestActive, dataLakeService.DEFAULT_STUCK_BATCH_TIMEOUT_MS, {
       db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
       logger: console,
       // Forced-terminal is rare, so the awaited emit only costs latency on the exceptional path; the
       // stuck gauge is deliberately omitted here (it belongs on the cron's fixed cadence, not per read).
-      metrics: { emitForcedTerminal: () => recordReconcilerForcedTerminal().catch(() => {}) },
+      // Also backstops the taxonomy enqueue for a batch that never reached upload-complete -
+      // that path bypasses finalizeBatchIfComplete, so this is the only place left to catch it.
+      metrics: {
+        emitForcedTerminal: batch =>
+          Promise.all([
+            recordReconcilerForcedTerminal().catch(() => {}),
+            enqueueTaxonomyAnalysisIfWanted(batch, console).catch(() => {}),
+          ]).then(() => {}),
+      },
+    });
+    // taxonomyAttention includes 'ready'/'failed' (finished, not stuck) alongside the
+    // in-flight phases - reconcileStuckTaxonomy only acts on the latter, so passing the
+    // wider set here is harmless.
+    await dataLakeService.reconcileStuckTaxonomy(taxonomyAttention, dataLakeService.DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS, {
+      db: { batches: dataLakeBatchRepository },
+      logger: console,
     });
 
-    const batches = await dataLakeBatchRepository.findActiveByUserId(userId);
-    return res.json({ data: batches });
+    const [freshIngestActive, freshTaxonomyAttention] = await Promise.all([
+      dataLakeBatchRepository.findActiveByUserId(userId),
+      dataLakeBatchRepository.findTaxonomyAttentionByUserId(userId),
+    ]);
+    const byId = new Map([...freshIngestActive, ...freshTaxonomyAttention].map(b => [b.id, b]));
+    return res.json({ data: Array.from(byId.values()) });
   })
   // POST: create a new batch
   .post(async (req: Request, res) => {
@@ -63,6 +89,8 @@ const handler = baseApi()
       files: [],
       appliedTags: data.appliedTags || [],
       startedAt: new Date(),
+      wantsTaxonomy: data.wantsTaxonomy ?? false,
+      taxonomyStatus: 'none',
     });
 
     // Creating the first batch flips a draft lake to active (one-way).

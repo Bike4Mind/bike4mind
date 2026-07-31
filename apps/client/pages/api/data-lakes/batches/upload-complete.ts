@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeBatchRepository, fabFileRepository } from '@bike4mind/database';
-import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import { finalizeBatchIfComplete, enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { Request } from 'express';
 import { z } from 'zod';
 
@@ -71,6 +71,11 @@ const handler = baseApi()
     // recomputes lake stats from source - now that the orphans above are gone.
     const fresh = await dataLakeBatchRepository.findById(batchId);
     await finalizeBatchIfComplete(fresh, req.logger);
+
+    // Background AI-tag suggestion: the browser upload phase is done here regardless
+    // of how much longer chunk/vectorize takes, so this fires independently of the finalize
+    // call above rather than waiting behind it.
+    await enqueueTaxonomyAnalysisIfWanted(fresh, req.logger);
 
     return res.json({ success: true });
   });

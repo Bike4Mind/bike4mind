@@ -185,11 +185,6 @@ export async function queryDataLakeArticles(
       order: { by: sortBy, direction: sortDir },
       options: {
         textSearch: !!search,
-        includeShared: true,
-        userGroups: user.groups ?? [],
-        dataLakeTags,
-        dataLakeTagPrefixes: openTagPrefixes,
-        scopedTagPrefixes,
         excludeContent: true,
       },
     },
@@ -209,6 +204,15 @@ export async function queryDataLakeArticles(
           }
         },
       },
+    },
+    // Resolved from the lakes this caller can actually reach, never from the query string
+    // (see SearchFabFilesServerOptions).
+    {
+      includeShared: true,
+      userGroups: user.groups ?? [],
+      dataLakeTags,
+      dataLakeTagPrefixes: openTagPrefixes,
+      scopedTagPrefixes,
     }
   );
 

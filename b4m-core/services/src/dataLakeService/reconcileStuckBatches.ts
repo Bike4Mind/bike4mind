@@ -19,11 +19,17 @@ interface ReconcileStuckBatchesAdapters {
   logger?: { info: (msg: string, ...args: unknown[]) => void; warn: (msg: string, ...args: unknown[]) => void };
   /**
    * Optional metric hooks, wired by the app callers (core can't import the CloudWatch helper).
-   * `emitForcedTerminal` fires once per batch actually forced terminal; `emitStuckGauge` reports
-   * the stuck count and is wired only from the cron (a fixed cadence), never the read-time path.
+   * `emitForcedTerminal` fires once per batch actually forced terminal, passed the full
+   * (post-transition) batch doc - app callers use this both to record the metric and to
+   * backstop the background AI-tag-suggestion enqueue: a batch forced terminal here
+   * bypassed `finalizeBatchIfComplete` entirely (e.g. the browser tab closed mid-upload and
+   * `upload-complete` never ran), so this is the only place left that can still trigger it.
+   * The taxonomy-phase transition is independently guarded, so calling it again here when
+   * upload-complete already fired it is a harmless no-op. `emitStuckGauge` reports the stuck
+   * count and is wired only from the cron (a fixed cadence), never the read-time path.
    */
   metrics?: {
-    emitForcedTerminal?: (batchId: string, dataLakeId: string) => void | Promise<void>;
+    emitForcedTerminal?: (batch: IDataLakeBatchDocument) => void | Promise<void>;
     emitStuckGauge?: (count: number) => void | Promise<void>;
   };
 }
@@ -64,7 +70,7 @@ export const reconcileStuckBatches = async (
     if (!won) continue; // a real increment finalized it first - nothing to reconcile.
     forced.push(batch.id);
     try {
-      await metrics?.emitForcedTerminal?.(batch.id, batch.dataLakeId);
+      await metrics?.emitForcedTerminal?.(won);
     } catch (error) {
       logger?.warn(`Reconciler forced-terminal metric emit failed for batch ${batch.id}:`, error);
     }

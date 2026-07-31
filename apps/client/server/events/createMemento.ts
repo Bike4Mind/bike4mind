@@ -2,7 +2,7 @@ import { withEventContext } from '@server/events/utils';
 import { LLMEvents } from '@server/utils/eventBus';
 import { apiKeyRepository, adminSettingsRepository, Memento } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
+import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { ChatModels, MEMENTO_EMBEDDING_MODEL, toMementoVector, MementoTier, MementoType } from '@bike4mind/common';
 import { apiKeyService, MementoEvaluationService, mementoService } from '@bike4mind/services';
 import { isMementosV2Enabled, writeFactToLedger } from '@server/memory/mementoLedgerMirror';
@@ -95,15 +95,7 @@ export const handler = withEventContext(async (event, logger) => {
   let v2EmbeddingService: EmbeddingService | null = null;
   if (writeV2) {
     const v2Provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
-    const v2Config: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
-    let v2KeyMissing = false;
-    if (v2Provider === 'openai') {
-      if (!apiKeyTable?.openai) v2KeyMissing = true;
-      else v2Config.openaiApiKey = apiKeyTable.openai;
-    } else if (v2Provider === 'voyageai') {
-      if (!apiKeyTable?.voyageai) v2KeyMissing = true;
-      else v2Config.voyageApiKey = apiKeyTable.voyageai;
-    }
+    const { config: v2Config, missing: v2KeyMissing } = resolveEmbeddingConfig(v2Provider, apiKeyTable);
     if (v2KeyMissing) {
       logger.warn(
         `No ${v2Provider} API key for the V2 ledger embedding (${MEMENTO_EMBEDDING_MODEL}); writing facts WITHOUT a vector. They stay lexically recallable, and the re-embed backfill will vectorize them once a key is present.`

@@ -26,7 +26,7 @@ describe('organizationService - delete', () => {
 
   // Create a base mock repository with all required methods
   const createMockRepository = () => ({
-    delete: vi.fn(),
+    softDeleteById: vi.fn(),
     shareable: {
       findAccessibleById: vi.fn(),
     },
@@ -36,6 +36,13 @@ describe('organizationService - delete', () => {
     mockAdapters = {
       db: {
         organizations: createMockRepository(),
+        groups: {
+          findByOrganization: vi.fn().mockResolvedValue([]),
+          softDeleteByIds: vi.fn(),
+        },
+        users: {
+          removeGroupsFromAllUsers: vi.fn(),
+        },
       },
     };
     vi.spyOn(getOrganization, 'get').mockResolvedValue(mockOrganization);
@@ -47,12 +54,12 @@ describe('organizationService - delete', () => {
       isAdmin: true,
     };
 
-    mockAdapters.db.organizations.delete.mockResolvedValue(undefined);
+    mockAdapters.db.organizations.softDeleteById.mockResolvedValue(undefined);
 
     await deleteOrganization(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters);
 
     expect(getOrganization.get).toHaveBeenCalledWith(mockAdminUser, { id: 'org1' }, mockAdapters);
-    expect(mockAdapters.db.organizations.delete).toHaveBeenCalledWith('org1');
+    expect(mockAdapters.db.organizations.softDeleteById).toHaveBeenCalledWith('org1');
   });
 
   it('should fail if validation fails', async () => {
@@ -72,7 +79,7 @@ describe('organizationService - delete', () => {
 
     expect(getOrganization.get).toHaveBeenCalledWith(mockAdminUser, { id: 'org1' }, mockAdapters);
     expect(mockAdapters.validation.canDeleteOrganization).toHaveBeenCalledWith(mockOrganization);
-    expect(mockAdapters.db.organizations.delete).not.toHaveBeenCalled();
+    expect(mockAdapters.db.organizations.softDeleteById).not.toHaveBeenCalled();
   });
 
   it('should fail if validation fails without reason', async () => {
@@ -92,7 +99,7 @@ describe('organizationService - delete', () => {
 
     expect(getOrganization.get).toHaveBeenCalledWith(mockAdminUser, { id: 'org1' }, mockAdapters);
     expect(mockAdapters.validation.canDeleteOrganization).toHaveBeenCalledWith(mockOrganization);
-    expect(mockAdapters.db.organizations.delete).not.toHaveBeenCalled();
+    expect(mockAdapters.db.organizations.softDeleteById).not.toHaveBeenCalled();
   });
 
   it('should succeed if validation passes', async () => {
@@ -106,13 +113,13 @@ describe('organizationService - delete', () => {
       canDeleteOrganization: vi.fn().mockResolvedValue({ canDelete: true }),
     };
 
-    mockAdapters.db.organizations.delete.mockResolvedValue(undefined);
+    mockAdapters.db.organizations.softDeleteById.mockResolvedValue(undefined);
 
     await deleteOrganization(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters);
 
     expect(getOrganization.get).toHaveBeenCalledWith(mockAdminUser, { id: 'org1' }, mockAdapters);
     expect(mockAdapters.validation.canDeleteOrganization).toHaveBeenCalledWith(mockOrganization);
-    expect(mockAdapters.db.organizations.delete).toHaveBeenCalledWith('org1');
+    expect(mockAdapters.db.organizations.softDeleteById).toHaveBeenCalledWith('org1');
   });
 
   it('should proceed with deletion if no validation is provided', async () => {
@@ -121,12 +128,59 @@ describe('organizationService - delete', () => {
       isAdmin: true,
     };
 
-    mockAdapters.db.organizations.delete.mockResolvedValue(undefined);
+    mockAdapters.db.organizations.softDeleteById.mockResolvedValue(undefined);
 
     await deleteOrganization(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters);
 
     expect(getOrganization.get).toHaveBeenCalledWith(mockAdminUser, { id: 'org1' }, mockAdapters);
-    expect(mockAdapters.db.organizations.delete).toHaveBeenCalledWith('org1');
+    expect(mockAdapters.db.organizations.softDeleteById).toHaveBeenCalledWith('org1');
+  });
+
+  describe('delete authority', () => {
+    // `get` resolves via findAccessibleById, which any member holding read satisfies, so these pin
+    // that deletion additionally requires the billing owner or a platform admin.
+    it('should allow the billing owner to delete', async () => {
+      const owner: Partial<IUserDocument> = { id: 'user1', isAdmin: false };
+
+      mockAdapters.db.organizations.softDeleteById.mockResolvedValue(undefined);
+
+      await deleteOrganization(owner as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(mockAdapters.db.organizations.softDeleteById).toHaveBeenCalledWith('org1');
+    });
+
+    it('should reject a read-only member and perform no writes', async () => {
+      const member: Partial<IUserDocument> = { id: 'member1', isAdmin: false };
+      mockAdapters.validation = { canDeleteOrganization: vi.fn() };
+
+      await expect(deleteOrganization(member as IUserDocument, { id: 'org1' }, mockAdapters)).rejects.toThrow(
+        'Not authorized to delete this organization'
+      );
+
+      expect(mockAdapters.db.organizations.softDeleteById).not.toHaveBeenCalled();
+      // The gate precedes the subscription check, so a caller without authority cannot read the
+      // org's billing state out of the validation reason.
+      expect(mockAdapters.validation.canDeleteOrganization).not.toHaveBeenCalled();
+    });
+
+    it('should reject an appointed org admin who is not the billing owner', async () => {
+      // orgAdmin1 must ALSO be in users[]: assertCanManageOrgGroups requires adminUserIds AND
+      // membership, so a non-member org admin would fail that predicate too and the test would
+      // pass even if the gate were consolidated onto it. Membership is what makes this pin the
+      // narrowness the gate deliberately keeps.
+      vi.spyOn(getOrganization, 'get').mockResolvedValue({
+        ...mockOrganization,
+        adminUserIds: ['orgAdmin1'],
+        users: [...mockOrganization.users, { userId: 'orgAdmin1', permissions: [] }],
+      } as WithId<IOrganizationDocument>);
+      const orgAdmin: Partial<IUserDocument> = { id: 'orgAdmin1', isAdmin: false };
+
+      await expect(deleteOrganization(orgAdmin as IUserDocument, { id: 'org1' }, mockAdapters)).rejects.toThrow(
+        'Not authorized to delete this organization'
+      );
+
+      expect(mockAdapters.db.organizations.softDeleteById).not.toHaveBeenCalled();
+    });
   });
 
   it('should throw if delete operation fails', async () => {
@@ -137,13 +191,80 @@ describe('organizationService - delete', () => {
 
     // Mock delete to throw an error
     const deleteError = new Error('Failed to delete organization');
-    mockAdapters.db.organizations.delete.mockRejectedValue(deleteError);
+    mockAdapters.db.organizations.softDeleteById.mockRejectedValue(deleteError);
 
     await expect(deleteOrganization(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters)).rejects.toThrow(
       deleteError
     );
 
     expect(getOrganization.get).toHaveBeenCalledWith(mockAdminUser, { id: 'org1' }, mockAdapters);
-    expect(mockAdapters.db.organizations.delete).toHaveBeenCalledWith('org1');
+    expect(mockAdapters.db.organizations.softDeleteById).toHaveBeenCalledWith('org1');
+  });
+
+  // Regression coverage for #1219: deleteOrganization previously had NO reference to groups or
+  // users at all, so a deleted org's groups stayed live (soft-delete never applied) and every
+  // member kept the group ids in user.groups - continuing to satisfy the sharing layer's
+  // `groups.$elemMatch.groupId $in user.groups` match against a group whose org no longer exists.
+  describe('group footprint purge', () => {
+    const mockAdminUser: Partial<IUserDocument> = { id: 'admin1', isAdmin: true };
+
+    it('purges member group ids and soft-deletes the org groups when the org has live groups', async () => {
+      mockAdapters.db.groups.findByOrganization.mockResolvedValue([
+        { id: 'group-a', type: 'sales' },
+        { id: 'group-b', type: 'research' },
+      ]);
+      mockAdapters.db.organizations.softDeleteById.mockResolvedValue(undefined);
+
+      await deleteOrganization(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(mockAdapters.db.groups.findByOrganization).toHaveBeenCalledWith('org1');
+      expect(mockAdapters.db.users.removeGroupsFromAllUsers).toHaveBeenCalledWith(['group-a', 'group-b']);
+      expect(mockAdapters.db.groups.softDeleteByIds).toHaveBeenCalledWith(['group-a', 'group-b']);
+      expect(mockAdapters.db.organizations.softDeleteById).toHaveBeenCalledWith('org1');
+    });
+
+    it('purges membership BEFORE soft-deleting the groups (fail-safe ordering)', async () => {
+      const callOrder: string[] = [];
+      mockAdapters.db.groups.findByOrganization.mockResolvedValue([{ id: 'group-a', type: 'sales' }]);
+      mockAdapters.db.users.removeGroupsFromAllUsers.mockImplementation(async () => {
+        callOrder.push('removeGroupsFromAllUsers');
+      });
+      mockAdapters.db.groups.softDeleteByIds.mockImplementation(async () => {
+        callOrder.push('softDeleteByIds');
+      });
+      mockAdapters.db.organizations.softDeleteById.mockImplementation(async () => {
+        callOrder.push('organizations.softDeleteById');
+      });
+
+      await deleteOrganization(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(callOrder).toEqual(['removeGroupsFromAllUsers', 'softDeleteByIds', 'organizations.softDeleteById']);
+    });
+
+    it('does not call the purge or soft-delete when the org has no live groups', async () => {
+      mockAdapters.db.groups.findByOrganization.mockResolvedValue([]);
+      mockAdapters.db.organizations.softDeleteById.mockResolvedValue(undefined);
+
+      await deleteOrganization(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+      expect(mockAdapters.db.users.removeGroupsFromAllUsers).not.toHaveBeenCalled();
+      expect(mockAdapters.db.groups.softDeleteByIds).not.toHaveBeenCalled();
+      expect(mockAdapters.db.organizations.softDeleteById).toHaveBeenCalledWith('org1');
+    });
+
+    it('does not purge groups if validation rejects the delete', async () => {
+      mockAdapters.validation = {
+        canDeleteOrganization: vi.fn().mockResolvedValue({ canDelete: false, reason: 'blocked' }),
+      };
+      mockAdapters.db.groups.findByOrganization.mockResolvedValue([{ id: 'group-a', type: 'sales' }]);
+
+      await expect(deleteOrganization(mockAdminUser as IUserDocument, { id: 'org1' }, mockAdapters)).rejects.toThrow(
+        'Organization deletion validation failed: blocked'
+      );
+
+      expect(mockAdapters.db.groups.findByOrganization).not.toHaveBeenCalled();
+      expect(mockAdapters.db.users.removeGroupsFromAllUsers).not.toHaveBeenCalled();
+      expect(mockAdapters.db.groups.softDeleteByIds).not.toHaveBeenCalled();
+    });
   });
 });

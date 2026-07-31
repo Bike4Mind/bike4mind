@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { ContextTelemetrySchema } from './contextTelemetry';
 
+/**
+ * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
+ * MessageContent hands it to the bug-report modal, which posts it to /api/feedback, where this
+ * same schema parses the request body. JSON has no Date, so a bare z.date() would reject every
+ * value that survives that trip. statusLog.timestamp has carried the same allowance for years.
+ */
+const JsonSafeDate = z.date().or(z.string());
+
 const PromptMetaModelParametersSchema = z.object({
   // Text generation parameters
   temperature: z.number().optional(),
@@ -71,7 +79,9 @@ const PromptMetaAttachedFileSchema = z.object({
   type: z.string().optional(),
   size: z.number().optional(),
   mimeType: z.string().optional(),
-  lastModified: z.date().optional(),
+  // attachedFiles already persists, so a writer that starts setting this would hit the same
+  // JSON round trip as the fields above. Promoted before that can happen rather than after.
+  lastModified: JsonSafeDate.optional(),
 });
 
 const SystemPromptSourceSchema = z.object({
@@ -210,10 +220,15 @@ const PromptMetaSessionSchema = z.object({
 });
 
 const PromptMetaArtifactSchema = z.object({
-  type: z.enum(['text', 'image', 'file', 'data']),
+  // Deliberately open. Writers put internal artifact types here (`ArtifactTypeSchema`:
+  // 'chess', 'react', 'html', ...) and tool extraction can fall back to a raw MIME string,
+  // so a closed enum would reject real values. That matters more than usual here, because
+  // ChatCompletionInvoke parses the whole promptMeta on every turn - a value this schema
+  // rejects fails the completion rather than just failing to record telemetry.
+  type: z.string(),
   content: z.string(),
   metadata: z.record(z.string(), z.unknown()).optional(),
-  timestamp: z.date().optional(),
+  timestamp: JsonSafeDate.optional(),
 });
 
 const ToolHealthSchema = z.object({
@@ -221,7 +236,7 @@ const ToolHealthSchema = z.object({
   available: z.boolean(),
   failureCount: z.number(),
   lastError: z.string().optional(),
-  lastChecked: z.date().optional(),
+  lastChecked: JsonSafeDate.optional(),
   lastExecutionTime: z.number().optional(),
   successRate: z.number().optional(),
 });
@@ -284,6 +299,23 @@ export const PromptMetaZodSchema = z.object({
    * letting the client render a truncated-artifact recovery affordance.
    */
   finishReason: z.string().optional(),
+  /**
+   * Set when an emitted artifact looks voluntarily abbreviated - placeholder comments in
+   * place of real code, or calls into functions that were never defined. The complement to
+   * `finishReason === 'max_tokens'`: truncation is a hard stop the provider reports, elision
+   * finishes cleanly and reports nothing, so this is the only completeness signal available
+   * for it (and the only one at all on backends that never emit a stop reason).
+   * Advisory - the client renders a "may be incomplete" notice; content is never altered.
+   */
+  suspectedElision: z
+    .object({
+      confidence: z.enum(['high', 'low']),
+      /** Total signals across every artifact in the reply. */
+      signalCount: z.number().nonnegative(),
+      /** Human-readable signal descriptions, capped for payload size. */
+      details: z.array(z.string()),
+    })
+    .optional(),
   statusLog: z
     .array(
       z.object({
@@ -300,7 +332,7 @@ export const PromptMetaZodSchema = z.object({
       comments: z.string().optional(),
       modifications: z.string().optional(),
       reviewedBy: z.string().optional(),
-      reviewedAt: z.date().optional(),
+      reviewedAt: JsonSafeDate.optional(),
     })
     .optional(),
   executionTracking: z
@@ -310,8 +342,8 @@ export const PromptMetaZodSchema = z.object({
           z.object({
             name: z.string(),
             status: z.enum(['pending', 'running', 'completed', 'failed']),
-            startTime: z.date().optional(),
-            endTime: z.date().optional(),
+            startTime: JsonSafeDate.optional(),
+            endTime: JsonSafeDate.optional(),
             result: z.string().optional(),
             error: z.string().optional(),
           })

@@ -36,7 +36,8 @@ vi.mock('@client/app/components/layouts/Notebook', () => ({
 vi.mock('sonner', () => ({ toast: { info: vi.fn(), error: vi.fn() } }));
 
 // Surface the breadcrumb the Explorer passes down so we can assert navigate() drilled the tree.
-vi.mock('./DataLakeTree', () => ({
+// Chat mode (chatSlot set) renders DataLakeChatTree, so that is what we stub here.
+vi.mock('./DataLakeChatTree', () => ({
   default: ({ breadcrumb }: { breadcrumb: string[] }) => (
     <div data-testid="mock-tree" data-breadcrumb={breadcrumb.join('/')} />
   ),

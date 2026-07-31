@@ -207,9 +207,13 @@ const handler = baseApi()
       const userIdForService = req.user?.id || 'system';
       const embeddingProvider = getProviderFromModel(embedding_model as SupportedEmbeddingModel);
 
-      // Ollama (self-host) is keyless: it needs a base URL, resolved via the effective
-      // LLM keys, not a stored secret. Other providers resolve a single API key.
-      let embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null };
+      // Branch POSITIVELY on the provider. A catch-all `else` here assumed every provider it
+      // did not recognise needed an OpenAI or VoyageAI key, so Bedrock - which authenticates
+      // through the AWS credential chain and has no key to find - resolved a credential it
+      // never needed and 500'd on environments without one, after ingesting the corpus fine.
+      // A keyless provider's ready state is an EMPTY table; semanticDataLakeSearch treats it
+      // as such via resolveEmbeddingConfig. Adding a provider means adding an arm here.
+      let embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } = {};
       if (embeddingProvider === ModelBackend.Ollama) {
         const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
           userIdForService,
@@ -222,7 +226,7 @@ const handler = baseApi()
           });
         }
         embeddingApiKeyTable = { ollama: effectiveKeys.ollama };
-      } else {
+      } else if (embeddingProvider === ModelBackend.OpenAI || embeddingProvider === ModelBackend.VoyageAI) {
         const embeddingKeyType = embeddingProvider === ModelBackend.VoyageAI ? ApiKeyType.voyageai : ApiKeyType.openai;
         const embeddingApiKey = await apiKeyService.getEffectiveApiKey(
           userIdForService,

@@ -45,6 +45,7 @@ import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
 import { IAgent } from '@bike4mind/common';
+import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
@@ -52,6 +53,7 @@ import { useConfig } from '@client/app/hooks/data/settings';
 import {
   hasCompleteOpeningTag,
   parseArtifactsWithFallback,
+  shouldWarnElidedArtifact,
   validateMermaidSyntax,
 } from '@client/app/utils/artifactParser';
 import RechartsRenderer from '../Charts/RechartsRenderer';
@@ -1406,6 +1408,24 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     };
   }, [cleanReply, rechartsDisplayMode, isStreamingArtifact, isTruncatedArtifact]);
 
+  // Suspected elision: the model abbreviated the artifact body instead of running out of
+  // room, so the stop reason is clean and the truncation banner never fires. Decision logic
+  // lives in shouldWarnElidedArtifact (unit-tested); memoized because the local fallback
+  // scan walks every artifact body and this component re-renders per streamed token.
+  // Depends on the BOOLEAN, not the object: a referentially-fresh but identical
+  // `suspectedElision` would otherwise re-run the scan for no change in the answer.
+  const hasServerElisionVerdict = !!promptMeta?.suspectedElision;
+  const isElidedArtifact = useMemo(
+    () =>
+      shouldWarnElidedArtifact({
+        completed: !!completed,
+        isTruncatedArtifact,
+        suspectedElision: hasServerElisionVerdict,
+        artifacts,
+      }),
+    [completed, isTruncatedArtifact, hasServerElisionVerdict, artifacts]
+  );
+
   const chessArtifacts = useMemo(() => artifacts.filter(a => a.type === 'chess'), [artifacts]);
   const nonChessArtifacts = useMemo(() => artifacts.filter(a => a.type !== 'chess'), [artifacts]);
 
@@ -1533,6 +1553,12 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           </Typography>
         </Alert>
       )}
+
+      {/* Suspected-elision notice: the artifact finished cleanly but its body looks
+          abbreviated (placeholder comments, or handlers calling functions that were never
+          defined). Deliberately softer than the truncation copy above - this is a heuristic,
+          and the artifact below is shown exactly as generated. */}
+      {isElidedArtifact && <ArtifactElisionBanner />}
 
       {showSyntaxHighlight ? (
         <SyntaxHighlighter style={oneDark}>{processedContent || cleanReply}</SyntaxHighlighter>

@@ -84,7 +84,7 @@ export class DataLakePage extends BasePage {
     // is the real readiness gate, so we don't need to block navigation on full 'load'.
     await this.page.goto('/data-lakes', { waitUntil: 'domcontentloaded' });
     await this.dismissModals();
-    await expect(this.page.getByTestId('opti-datalake-explorer')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+    await expect(this.page.getByTestId('datalake-explorer')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
   }
 
   /** From the explorer, open the management panel (list of lakes + lifecycle). */

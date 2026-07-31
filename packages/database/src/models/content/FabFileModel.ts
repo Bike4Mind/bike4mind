@@ -8,7 +8,7 @@ import {
   KnowledgeType,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
-import { convertIds, softDeletePlugin } from '../../utils/mongo';
+import { convertId, convertIds, softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
@@ -254,6 +254,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
+  async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
+    const result = await this.fabFileModel.find({ batchId, deletedAt: null });
+    return result.map(d => d.toJSON());
+  }
+
   async countByUserIdAndTag(userId: string, tag: string): Promise<number> {
     const result = await this.fabFileModel.countDocuments({
       userId,
@@ -292,6 +297,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         $match: {
           $and: [ownershipFilter, sessionFilter],
           deletedAt: null,
+          // Must mirror buildFabFileSearchQuery's baseFilter: this count is rendered as a badge
+          // beside the list that filter produces, so a file either feeds both or neither.
+          // Equality to null matches missing too, leaving files that were never archived alone.
+          archivedAt: null,
           tags: { $exists: true, $ne: [] },
         },
       },
@@ -349,6 +358,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         $match: {
           $and: [ownershipFilter, sessionFilter],
           deletedAt: null,
+          // Load-bearing, not just symmetry with the list: archiving a lake stamps archivedAt on
+          // its prefix-tagged files, and a file caught by a COLLIDING sibling prefix belongs to a
+          // lake that is still active (see archiveDataLake). Its prefix therefore does reach this
+          // aggregate, so without the conjunct that lake's tag tree counts files its own browse
+          // hides.
+          archivedAt: null,
           tags: { $elemMatch: { name: { $regex: prefixRegex } } },
         },
       },
@@ -391,7 +406,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         { tags: { $elemMatch: { name: 'curated-notebook' } } },
       ],
     };
-    const baseMatch = { $and: [ownershipFilter, sessionFilter], deletedAt: null };
+    // archivedAt: null for the same reason as countDataLakeTagsByPrefix above - a colliding
+    // sibling lake's files are archived while that lake itself stays active.
+    const baseMatch = { $and: [ownershipFilter, sessionFilter], deletedAt: null, archivedAt: null };
 
     // One indexed countDocuments per prefix (few lakes), plus one for the combined total.
     // $elemMatch on the anchored prefix regex lets MongoDB use the tags.name index and
@@ -414,19 +431,41 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return { total, byPrefix };
   }
 
-  async countUniqueFilesByNamespaceForUser(userId: string): Promise<{ namespace: string; fileCount: number }[]> {
+  /**
+   * Per-namespace unique file counts, served alongside countFilesByTagForUser by
+   * GET /api/files/tags/counts. Takes the SAME optional scope as that sibling and must keep
+   * being called with it: the workspace rows are keyed off the tag counts but sized by these
+   * ones, so an owner-only namespace count renders a shared or data-lake workspace as zero.
+   */
+  async countUniqueFilesByNamespaceForUser(
+    userId: string,
+    options?: {
+      userGroups?: string[];
+      dataLakeTags?: string[];
+      dataLakeTagPrefixes?: string[];
+      scopedTagPrefixes?: string[];
+    }
+  ): Promise<{ namespace: string; fileCount: number }[]> {
+    const ownershipFilter = options ? { $or: buildOwnershipConditions(userId, options) } : { userId };
+    // Exclude session summaries (unless curated-notebook) to match search behavior. Both this and
+    // the ownership filter can be an $or, so they go under $and rather than into one object where
+    // the second $or key would overwrite the first.
+    const sessionFilter = {
+      $or: [
+        { sessionId: null },
+        { sessionId: { $exists: false } },
+        { tags: { $elemMatch: { name: 'curated-notebook' } } },
+      ],
+    };
+
     const result = await this.fabFileModel.aggregate([
       {
         $match: {
-          userId,
+          $and: [ownershipFilter, sessionFilter],
           deletedAt: null,
+          // See countFilesByTagForUser: a count beside a list covers the list's file set.
+          archivedAt: null,
           tags: { $exists: true, $ne: [] },
-          // Exclude session summaries (unless curated-notebook) to match search behavior
-          $or: [
-            { sessionId: null },
-            { sessionId: { $exists: false } },
-            { tags: { $elemMatch: { name: 'curated-notebook' } } },
-          ],
         },
       },
       { $unwind: '$tags' },
@@ -484,6 +523,21 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           },
         },
       }
+    );
+    return result.modifiedCount;
+  }
+
+  async bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number> {
+    if (updates.length === 0) return 0;
+
+    const result = await this.fabFileModel.bulkWrite(
+      updates.map(({ id, tags }) => ({
+        updateOne: {
+          filter: { _id: convertId(id) },
+          update: { $set: { tags } },
+        },
+      })),
+      { ordered: false, session: this._txn ?? undefined }
     );
     return result.modifiedCount;
   }

@@ -8,6 +8,7 @@ import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlined';
+import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
@@ -19,9 +20,12 @@ import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.gener
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
 import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
+import { DataLakeIcon, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
+import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useOptiAccess } from '@client/app/hooks/data/opti';
+import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useHelpPanel, openHelpPanel } from '@client/app/hooks/useHelpPanel';
@@ -52,6 +56,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const location = useLocation();
   const currentUser = useUser(s => s.currentUser);
   const { isFeatureEnabled } = useFeatureEnabled();
+  const { isFeatureEnabled: isAdminFeatureEnabled } = useAdminSettingsCache();
   const { open: fileBrowserOpen, setOpen: setFileBrowserOpen } = useFileBrowser();
   const isMobile = useIsMobile();
   const setOpenSideNav = useNotebookLayout(s => s.setOpenSideNav);
@@ -63,10 +68,17 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // Visibility rides purely on product access (tag/entitlement); the legacy
   // experimental toggle was retired with the open-core carve.
   const isOptiEnabled = hasOptiAccess;
+  // /meetings is a codegen-mounted premium route. The hook folds the route-exists check in
+  // with product access, so an open-core build has no row and no dead-end.
+  const isMeetingsEnabled = useMeetingsAccess();
   // /tavern is a codegen-mounted premium route; builds without the overlay
   // (open core) have no such route, so the entry must hide or it dead-ends.
   const tavernRouteExists = premiumRoutes.some(route => route.path.startsWith('/tavern'));
   const isTavernEnabled = tavernRouteExists && canAccessTavern(currentUser);
+  // The server gates every /api/data-lakes endpoint on the EnableDataLakes admin setting,
+  // so hide the Data Lakes destination when it's off - otherwise the link lands on an
+  // Explorer whose every request 403s (mirrors FileBrowser's guard).
+  const isDataLakesEnabled = isAdminFeatureEnabled('EnableDataLakes');
   // Bob (premium overlay) is a codegen-mounted `/bob` route contributed as a
   // premium nav item. Surface it in the main sidebar only when the overlay contributes it
   // AND the user's entitlements make it visible - reusing filterVisiblePremiumNavItems so the
@@ -181,8 +193,43 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
-    // No Data Lakes sidebar destination: the /data-lakes page was retired for the in-chat
-    // Data Lake mode (header toggle + manager modal) - see datalake-in-chat-mode design.
+    ...(isMeetingsEnabled
+      ? [
+          {
+            key: 'meetings',
+            label: 'Interactive Meetings',
+            icon: iconSlot(<GroupsOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname.startsWith('/meetings'),
+            onClick: () => {
+              closeOnMobile();
+              // `/meetings` is codegen-mounted too, so the same cast applies.
+              navigate({ to: '/meetings' } as never);
+            },
+          },
+        ]
+      : []),
+    // Data Lakes is a top-level destination in its OWN right - NOT nested under Opti.
+    // It opens the user's own lakes (browse + manage) at /data-lakes, so a non-Opti
+    // user with the feature can reach their lakes too (was previously elided when
+    // Opti was off, and pointed at the Opti static-registry explorer when on).
+    // Gated ONLY on the EnableDataLakes admin flag, deliberately NOT earned-nav: an
+    // admin explicitly turns this feature on, so it must be discoverable immediately.
+    // Earned-nav here was a bootstrapping trap - the row only appeared AFTER a lake
+    // existed, yet the row is how a first-time user reaches the create/manage UI.
+    ...(isDataLakesEnabled
+      ? [
+          {
+            key: 'datalakes',
+            label: t('sidenav.dataLakes', DATA_LAKES),
+            icon: iconSlot(<DataLakeIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname.startsWith('/data-lakes'),
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/data-lakes' });
+            },
+          },
+        ]
+      : []),
     ...(gearOpen('files')
       ? [
           {
@@ -307,9 +354,9 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
 
   // Pinned vs scroll split for the unified-scroll sidebar: the first two items stay
   // pinned at the top. items[0] is always New Chat; items[1] is whichever conditional
-  // entry comes first for this user - OptiHashi, Bob, or the earned Files Manager -
-  // since each is elided when absent. The split is purely positional, so it holds
-  // regardless of which entries are present.
+  // entry comes first for this user - OptiHashi, Bob, Data Lakes, or the earned Files
+  // Manager - since each is elided when absent. The split is purely positional, so it
+  // holds regardless of which entries are present.
   const shownItems = section === 'pinned' ? items.slice(0, 2) : section === 'scroll' ? items.slice(2) : items;
 
   return (

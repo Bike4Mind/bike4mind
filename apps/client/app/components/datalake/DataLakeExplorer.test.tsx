@@ -54,8 +54,8 @@ vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => setModeS
 vi.mock('sonner', () => ({ toast: { info: toastInfo, error: toastError } }));
 
 // Stub the tree so we can trigger onSelectFile/onClose deterministically and read the
-// highlight prop.
-vi.mock('./DataLakeTree', () => ({
+// highlight prop. Chat mode (chatSlot set) renders DataLakeChatTree, so that is what we stub.
+vi.mock('./DataLakeChatTree', () => ({
   default: ({
     onSelectFile,
     selectedFileId,

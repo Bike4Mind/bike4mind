@@ -61,6 +61,9 @@ export const PartnerSignupRuleSchema = new Schema<IPartnerSignupRuleDocument, IP
     domain: { type: String, required: true, unique: true, set: normalizeSignupRuleDomain },
     entitlements: { type: [String], default: [] },
     signupCredits: { type: Number, default: 0 },
+    // Stored as a plain string id (like createdBy) so toJSON yields a string matching
+    // IPartnerSignupRule.organizationId; existence is validated in the admin route, not here.
+    organizationId: { type: String, default: null },
     enabled: { type: Boolean, default: true },
     label: { type: String, default: null },
     notes: { type: String, default: null },
@@ -79,6 +82,8 @@ export const PartnerSignupRuleSchema = new Schema<IPartnerSignupRuleDocument, IP
 
 // Performance indexes (unique domain is declared on the field as a data constraint).
 PartnerSignupRuleSchema.index({ enabled: 1 });
+// Backs the org-delete cleanup sweep (updateMany by organizationId) and backfill lookups.
+PartnerSignupRuleSchema.index({ organizationId: 1 });
 
 export const PartnerSignupRule =
   (mongoose.models.PartnerSignupRule as unknown as IPartnerSignupRuleModel) ??
