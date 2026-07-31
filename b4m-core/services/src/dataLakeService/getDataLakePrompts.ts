@@ -6,6 +6,10 @@ import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
  * The distinct `datalake:*` provenance tags among a bag of file tag names - i.e. which lakes a set
  * of retrieved files belongs to. Feeds `restrictToDatalakeTags` so an injection site scopes to the
  * lakes a turn ACTUALLY used. Order-independent; deduped.
+ *
+ * Each returned value is a WHOLE `datalakeTag` (a file carries its lake's `datalakeTag` verbatim,
+ * see buildDatalakeTag). `restrictToDatalakeTags` then matches these EXACTLY, never as a prefix -
+ * so this scoping cannot over-match a sibling lake whose tag shares a prefix.
  */
 export function datalakeTagsFrom(tagNames: Iterable<string>): string[] {
   const out = new Set<string>();
