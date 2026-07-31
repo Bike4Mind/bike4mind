@@ -713,6 +713,14 @@
             "type": "number",
             "exclusiveMinimum": 0
           },
+          "maxTokens": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "maxOutputTokens": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
           "stream": {
             "type": "boolean",
             "default": false
@@ -811,7 +819,7 @@
         },
         "responses": {
           "200": {
-            "description": "Message accepted. On the async path this is a queued ACK.",
+            "description": "Message accepted. The default (async) path returns this queued ACK. With `wait: true` the body additionally carries the completed reply (`response`/`responses`), `createdAt`, and `performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up.",
             "content": {
               "application/json": {
                 "schema": {
@@ -852,6 +860,24 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/sendChatMessageResponse404"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },

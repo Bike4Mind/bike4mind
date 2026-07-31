@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import { registry } from './registry';
 import { SECURITY_REQUIREMENT, JWT_SECURITY_REQUIREMENT } from './security';
+import { ErrorResponse } from './schemas';
 import type { EndpointContract } from '../api-contract';
 
 type JsonResponse = { description: string; content: { 'application/json': { schema: z.ZodTypeAny } } };
@@ -30,6 +31,17 @@ export function registerContract(contract: EndpointContract): void {
           schema: spec.schema.openapi(`${contract.operationId}Response${status}`),
         },
       },
+    };
+  }
+
+  // Any contract with a request body returns 422 on validation failure - both
+  // adapters guarantee it (Next: ZodError -> errorHandler -> UnprocessableEntity;
+  // Lambda: safeParse -> 422). Auto-document it (unless the contract declares its
+  // own 422) so no author forgets and generated SDKs know the shape.
+  if (contract.request && !responses['422']) {
+    responses['422'] = {
+      description: 'Request body failed validation.',
+      content: { 'application/json': { schema: ErrorResponse } },
     };
   }
 

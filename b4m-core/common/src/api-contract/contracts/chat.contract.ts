@@ -24,7 +24,13 @@ export const chatContract = defineEndpoint({
   request: SimplifiedChatRequestSchema,
   requestExample: { message: 'How do I reset my password?', toolMode: 'smart' },
   responses: {
-    200: { description: 'Message accepted. On the async path this is a queued ACK.', schema: ChatAckSchema },
+    200: {
+      description:
+        'Message accepted. The default (async) path returns this queued ACK. With `wait: true` the ' +
+        'body additionally carries the completed reply (`response`/`responses`), `createdAt`, and ' +
+        '`performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up.',
+      schema: ChatAckSchema,
+    },
     400: { description: 'No usable default chat model is configured and none was supplied.', schema: ApiErrorSchema },
     404: { description: 'No notebook/session exists to attach the message to.', schema: ApiErrorSchema },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
