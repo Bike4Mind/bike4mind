@@ -6,6 +6,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
 import ArtifactRenderer from '@client/app/components/Session/artifacts/ArtifactRenderer';
+import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import {
   useAddQuestNode,
   useCreateQuestGraph,
@@ -429,15 +430,31 @@ function NodeAnswer({ node, sessionId }: { node: QuestNode; sessionId?: string }
       {artifacts.length > 0 && (
         <Stack spacing={2} sx={{ mt: 1.5 }} data-testid="questmaster-v5-rendered-artifacts">
           {artifacts.map((artifact, index) => (
-            <ArtifactRenderer
+            // Per artifact, not around the whole list: a handler that throws
+            // should cost you that one preview, not the others beside it.
+            //
+            // The try/catch above only guards PARSING. Rendering runs the
+            // per-type handlers - React sandbox, Mermaid, HTML/SVG - over
+            // model-generated content, and a throw there is a React render
+            // error that no try/catch can catch. Without this, one malformed
+            // artifact takes down the whole node panel.
+            <ErrorBoundary
               key={`${artifact.type}_${artifact.identifier}_${index}`}
-              artifact={artifact}
-              index={index}
-              // Only a fallback for minting an id when nothing is persisted yet;
-              // the executionId is stable per run, unlike a chat message id.
-              messageId={node.run?.executionId ?? node.id}
-              sessionId={sessionId}
-            />
+              fallback={
+                <Alert color="warning" size="sm" data-testid="questmaster-v5-artifact-render-error">
+                  {`Could not render this ${artifact.type} artifact. The reply is intact - open the run in the notebook to see it.`}
+                </Alert>
+              }
+            >
+              <ArtifactRenderer
+                artifact={artifact}
+                index={index}
+                // Only a fallback for minting an id when nothing is persisted
+                // yet; the executionId is stable per run, unlike a chat message id.
+                messageId={node.run?.executionId ?? node.id}
+                sessionId={sessionId}
+              />
+            </ErrorBoundary>
           ))}
         </Stack>
       )}
