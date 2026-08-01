@@ -72,5 +72,6 @@ export function estimateTtsCreditCost(
   model: string | undefined,
   characters: number
 ): number {
+  if (!Number.isFinite(characters) || characters <= 0) return 0;
   return usdToCredits(computeTtsUsd(vendor, model, characters));
 }
