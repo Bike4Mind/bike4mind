@@ -155,6 +155,58 @@ describe('resolveCapabilitiesForUser (#1234)', () => {
       ).resolves.toEqual(['crm:read', 'sales:brief']);
     });
 
+    it('forwards the logger so an override resolved through the capability layer is still recorded', async () => {
+      const { adapters } = makeAdapters(org(), []);
+      const info = vi.fn();
+      await resolveCapabilitiesForUser(
+        {
+          user: admin('admin-1', []),
+          organizationId: ORG,
+          override: { organizationId: ORG, groupTypes: ['sales'] },
+        },
+        { ...adapters, logger: { info } }
+      );
+      expect(info).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT union the billing-owner implicit hold when the overriding admin IS the org owner', async () => {
+      // The likely shape for this affordance: the admin who created the demo org is its `userId`.
+      // Unioned, the preview would report sales caps the `customer` persona does not hold.
+      const { adapters } = makeAdapters(org({ userId: 'admin-1', allowedGroupTypes: ['sales', 'research'] }), []);
+      await expect(
+        resolveCapabilitiesForUser(
+          {
+            user: admin('admin-1', []),
+            organizationId: ORG,
+            override: { organizationId: ORG, groupTypes: ['customer'] },
+          },
+          adapters
+        )
+      ).resolves.toEqual([]); // customer confers nothing; owner's sales/research must NOT leak in
+    });
+
+    it('still gives an owner-admin their implicit hold when they pass NO override', async () => {
+      // Guards the fix above from over-reaching: skipping the union is override-scoped, not admin-scoped.
+      const { adapters } = makeAdapters(org({ userId: 'admin-1', allowedGroupTypes: ['sales'] }), []);
+      await expect(
+        resolveCapabilitiesForUser({ user: admin('admin-1', []), organizationId: ORG }, adapters)
+      ).resolves.toEqual(['crm:read', 'sales:brief']);
+    });
+
+    it('keeps the billing-owner hold when the override is ignored (wrong org)', async () => {
+      const { adapters } = makeAdapters(org({ userId: 'admin-1', allowedGroupTypes: ['sales'] }), []);
+      await expect(
+        resolveCapabilitiesForUser(
+          {
+            user: admin('admin-1', []),
+            organizationId: ORG,
+            override: { organizationId: 'org-other', groupTypes: ['research'] },
+          },
+          adapters
+        )
+      ).resolves.toEqual(['crm:read', 'sales:brief']);
+    });
+
     it('gates userHasCapability off the overridden persona', async () => {
       const { adapters } = makeAdapters(org(), []);
       const params = {

@@ -3,10 +3,11 @@
 **Question:** Is an organization's `currentCredits` balance a hard stop (a real floor that
 rejects spend at zero), or a soft limit that can be pushed negative?
 
-**Verdict: it is a hard stop.** An org's balance floors at zero on every metered spend path; it is
-never driven negative in the single-request path. The one residual soft edge is concurrent
-settlement (best-effort, already documented in code), and the whole floor is gated on the
-`enforceCredits` admin setting by design (except the embed path, which is settings-free).
+**Verdict: it is a hard stop per single request.** An org's balance floors at zero on every metered
+spend path and is never driven negative by one request. The residual soft edges are both
+concurrency-shaped - concurrent settlement of a chat stream, and concurrent standalone image/video
+deducts (both below) - and the whole floor is gated on the `enforceCredits` admin setting by design
+(except the embed path, which is settings-free).
 
 This matters because org-wide balance is the only bound on *aggregate* spend. The per-member cap
 (`maxCreditsPerMember`) limits any single member but scales with headcount; once orgs self-serve
@@ -43,13 +44,26 @@ Three independent layers, all keyed on the org balance when the request is org-b
   **inline-triplicated** rather than a shared helper. Currently consistent; a shared
   `reserveOrReject` seam would prevent drift (suggested follow-up, deliberately not done here to
   avoid refactoring hot billing paths under a "confirm" task).
-- The image/video/tool paths validate through the shared `validateUserCredits`
-  (`b4m-core/services/src/llm/tools/base/utils.ts`), which is a **check-then-act** comparison
-  against `organization.currentCredits` (not an atomic reserve). A concurrent-request window can
-  momentarily let two tool calls both pass the check, but the settlement clamp (layer 2) bounds the
-  aggregate so the balance still cannot end up negative. In-stream, the reserved balance is written
-  back to `organization.currentCredits` so mid-stream tool validation sees the reduced figure
-  (`ChatCompletionProcess.ts:2460-2461`).
+- The image/video/tool paths do a **check-then-act** comparison against `organization.currentCredits`
+  rather than an atomic reserve, so a concurrent-request window can momentarily let two requests both
+  pass the check. How that window is bounded differs by path, and the distinction matters:
+  - **In-stream tool calls** validate through the shared `validateUserCredits`
+    (`b4m-core/services/src/llm/tools/base/utils.ts`) inside an already-reserved chat completion. The
+    reserved balance is written back to `organization.currentCredits` so mid-stream validation sees
+    the reduced figure (`ChatCompletionProcess.ts:2460-2461`), and the settlement clamp (layer 2)
+    trues the whole stream up without going negative.
+  - **Standalone image/video generation** is bounded by the check-then-act *only* - layer 2 does not
+    reach it. `ImageGeneration.ts` has its own private `validateUserCredits` (`credits <
+    requiredCredits`, ~line 450) and never touches `ChatCompletionProcess` or
+    `computeSettlementDelta`; it deducts post-generation via `deductCreditsWithOrgSupport` (~line
+    1278) with no `skipBalanceUpdate`, so it reaches the bare `$inc` in
+    `subtractCredits.ts:242` -> `incrementCredits`
+    (`packages/database/src/models/infra/admin/OrganizationModel.ts:186-192`), which has no floor
+    guard. Two concurrent standalone image requests against a near-zero org balance can therefore
+    both pass the check and both deduct, with nothing downstream to clamp or refund. This inherits
+    the same concurrency softness recorded under "Concurrent settlement" below; the per-single-request
+    verdict is unaffected. Making it exact needs the same fix: a conditional atomic decrement, or
+    routing these paths through a shared `reserveOrReject`.
 
 ## Where it is (deliberately) soft
 
@@ -62,6 +76,9 @@ Three independent layers, all keyed on the org balance when the request is org-b
   concurrency. Making it exact would require a conditional atomic decrement (`$inc` guarded by
   `balance >= amount`) - out of scope for this confirmation; flag if concurrency-driven negatives
   are observed.
+- **Concurrent standalone image/video generation.** Check-then-act with no atomic reserve and no
+  settlement clamp downstream (see "Consistency across spend paths"). Pre-existing and unchanged;
+  called out here so the clamp is not read as covering it.
 - **Per-member cap** (`maxCreditsPerMember`) is a documented check-then-act TOCTOU (off-by-one under
   concurrency: `deductCreditsWithOrgSupport.ts:155`). That is the *per-member* axis, not the
   org-wide balance, and does not affect the balance floor.
@@ -70,6 +87,11 @@ Three independent layers, all keyed on the org balance when the request is org-b
 
 - `computeSettlementDelta` example cases and a swept **hard-stop invariant** (`available + delta >= 0`
   for all inputs; shortfall conserved between collected and written-off) live in
-  `b4m-core/services/src/llm/ChatCompletion.test.ts`.
+  `b4m-core/services/src/llm/ChatCompletion.test.ts`, with a fractional-credit case alongside the
+  integer sweep (real credits are token-derived floats).
+  Scope: that is a unit test on one pure function. It pins the arithmetic of the clamp, **not** that
+  any given spend path calls it - the standalone image/video path does not. The cross-path claims in
+  this document rest on code reading, which is what a "confirm" task can establish; do not cite this
+  test as broader proof.
 - `assertOwnerHasCredits` (embed floor) is pinned in
   `b4m-core/services/src/billing/assertOwnerHasCredits.test.ts`.

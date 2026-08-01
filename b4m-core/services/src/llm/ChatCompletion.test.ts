@@ -1998,6 +1998,10 @@ describe('computeSettlementDelta (zero-balance shortfall clamp)', () => {
   // #1238: the org-wide balance is a HARD STOP - the settlement true-up must never drive it
   // negative. Pin the invariant across a swept input range, not just the examples above, so a
   // future refactor of the clamp can't quietly reintroduce a negative-balance path.
+  // The grid below is deliberately coarse non-negative INTEGERS so the conservation assertion can use
+  // exact equality. Real credits are token-derived floats, where `collected + writtenOff === shortfall`
+  // is not exact - hence the separate fractional case, which asserts the floor exactly (it is a
+  // comparison, not a sum) and conservation approximately.
   it('never drives the settled balance below zero, and conserves the shortfall (hard-stop invariant)', () => {
     for (let reserved = 0; reserved <= 200; reserved += 25) {
       for (let used = 0; used <= 300; used += 25) {
@@ -2021,6 +2025,25 @@ describe('computeSettlementDelta (zero-balance shortfall clamp)', () => {
             expect(collected).toBe(Math.min(shortfall, available));
           }
         }
+      }
+    }
+  });
+
+  it('holds the floor for fractional credits (token-derived costs are not integers)', () => {
+    const fractional: Array<[number, number, number]> = [
+      [0.1, 0.30000000000000004, 0.15], // shortfall the balance only partly covers
+      [1.7, 2.9, 0.05],
+      [0.25, 0.25, 0.1], // exact settlement on a fractional basis
+      [0.2, 0.7, 0], // whole shortfall written off at zero balance
+      [3.3, 1.1, 0.5], // over-reserved: fractional refund
+    ];
+    for (const [reserved, used, available] of fractional) {
+      const { delta, writtenOffCredits } = computeSettlementDelta(reserved, used, available);
+      expect(available + delta).toBeGreaterThanOrEqual(0);
+      expect(writtenOffCredits).toBeGreaterThanOrEqual(0);
+      if (used > reserved) {
+        // Conservation only up to FP error here; its exact form is pinned by the integer sweep above.
+        expect(Math.abs(delta) + writtenOffCredits).toBeCloseTo(used - reserved, 10);
       }
     }
   });
