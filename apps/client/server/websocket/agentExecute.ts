@@ -24,6 +24,7 @@ import {
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
 import { publishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
@@ -178,8 +179,10 @@ const lambdaClient = new LambdaClient({});
  * because they're a downstream effect of an already-counted parent.
  *
  * TODO: Make this configurable per organization or plan tier.
+ *
+ * The value itself lives in `@server/utils/executionLimits` so the QuestMaster
+ * v5 node runner enforces the same cap - see that module.
  */
-const MAX_CONCURRENT_EXECUTIONS_PER_USER = 3;
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -319,7 +322,6 @@ async function handleStart(
   // pays the DB hit. Threshold cooperates with the 20-min sweep window -
   // a 60s memo can't hide a stale execution from the next sweep more than
   // 60s past its eligibility.
-  const STALE_ACTIVE_MS = 20 * 60 * 1000;
   const now = Date.now();
   const lastSweptAt = lastSweptAtByUser.get(userId) ?? 0;
   if (now - lastSweptAt > SWEEP_MEMO_TTL_MS) {

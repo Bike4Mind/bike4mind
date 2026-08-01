@@ -12,6 +12,7 @@ import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
 import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepartmentOutlined';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
@@ -280,6 +281,23 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             onClick: () => {
               closeOnMobile();
               navigate({ to: '/hearth' });
+            },
+          },
+        ]
+      : []),
+    // Single-gated on the experimental flag (unlike Hearth's flag+gear pair):
+    // v5 has no gear, and the flag is opt-in-only, so anyone who turned it on
+    // asked for the surface and needs a way to reach it.
+    ...(isFeatureEnabled('enableQuestMasterV5')
+      ? [
+          {
+            key: 'quests-v5',
+            label: t('sidenav.questsV5', 'Quests v5'),
+            icon: iconSlot(<AccountTreeOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname.startsWith('/quests-v5'),
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/quests-v5' });
             },
           },
         ]
