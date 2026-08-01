@@ -39,6 +39,11 @@ export function buildUserActivityRequest({
 }: UserActivityRequestState): UserActivityRequest {
   const isAllSelected = selectedOrganizations.includes(ALL_VALUE);
 
+  // "Add Filter" seeds a blank field when the current page carries no metadata to suggest from.
+  // Sending it would fail the server's field allowlist and 400 the whole grid, where the
+  // pre-pagination client just skipped it. An unfinished filter row is not a query.
+  const activeMetadataFilters = metadataFilters.filter(filter => filter.field.trim() !== '');
+
   return {
     startDate: dateFilters.startDate,
     endDate: dateFilters.endDate,
@@ -50,6 +55,6 @@ export function buildUserActivityRequest({
       : [],
     counterName: userActivityFilters.counterNameSearch || undefined,
     userEmail: userActivityFilters.userEmailSearch || undefined,
-    metadataFilters: metadataFilters.length ? metadataFilters : undefined,
+    metadataFilters: activeMetadataFilters.length ? activeMetadataFilters : undefined,
   };
 }

@@ -1,10 +1,16 @@
 /**
  * Builds the User Activity aggregation for GET /api/users/counterLogs.
  *
- * The pipeline emits one flat row per (day, counter, user, metadata) - the exact row the
- * admin Analytics grid renders - and pages it server-side. The previous shape re-grouped
- * rows into a nested `users[]` array and returned every match unpaginated, which reached
- * ~17MB on production data and tripped Lambda's 6MB response cap (413 -> 502).
+ * The pipeline emits one flat row per (day, counter, user, metadata) and pages it
+ * server-side. The previous shape re-grouped rows into a nested `users[]` array and returned
+ * every match unpaginated, which reached ~17MB on production data and tripped Lambda's 6MB
+ * response cap (413 -> 502).
+ *
+ * ROW UNIT: `metadata` is part of the group key, so two events that differ only in metadata
+ * stay separate rows. The pre-pagination client merged them (per day/counter/user), so the
+ * grid shows more, finer rows than it used to and `total` counts those finer rows. That is a
+ * deliberate interim state - defragmenting the group key is tracked separately, and has to
+ * come with a decision about which metadata keys are worth splitting on.
  *
  * Every filter that decides which rows are visible must be applied here, not in the browser:
  * with server-side paging, a client-side filter would only ever filter the current page.
@@ -31,7 +37,9 @@ const METADATA_FIELD = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*){0,4}$/
 const MetadataFilterSchema = z.object({
   field: z.string().max(64).regex(METADATA_FIELD),
   operator: z.enum(['equals', 'contains', 'in', 'exists', 'not_exists']),
-  value: z.unknown().optional(),
+  // Scalars only. `unknown` let a crafted object reach String(value) and throw (an object with
+  // non-callable toString/valueOf has no primitive), which surfaced as a 500 rather than a 400.
+  value: z.union([z.string().max(200), z.number(), z.boolean()]).optional(),
 });
 
 export type MetadataFilter = z.infer<typeof MetadataFilterSchema>;
@@ -56,6 +64,21 @@ export interface UserActivityQueryParams {
   usersCollection?: string;
 }
 
+/**
+ * Escapes a value for use as a regex, dropping control characters first: BSON rejects a pattern
+ * containing NUL, and that driver error escapes the ZodError branch as a 500 rather than a 400.
+ * A codepoint filter rather than a character class, to stay clear of no-control-regex.
+ */
+const regexSource = (value: unknown) =>
+  escapeRegex(
+    Array.from(String(value ?? ''))
+      .filter(ch => {
+        const code = ch.codePointAt(0)!;
+        return code > 0x1f && code !== 0x7f;
+      })
+      .join('')
+  );
+
 /** Widens a filter value so a numeric/boolean metadata field still matches its string form. */
 function coerceValues(value: unknown): unknown[] {
   const asString = String(value ?? '');
@@ -75,7 +98,7 @@ function metadataCondition({ field, operator, value }: MetadataFilter): Record<s
     case 'not_exists':
       return { $or: [{ [path]: { $exists: false } }, { [path]: null }] };
     case 'contains':
-      return { [path]: { $regex: escapeRegex(String(value ?? '')), $options: 'i' } };
+      return { [path]: { $regex: regexSource(value), $options: 'i' } };
     case 'in':
       return {
         [path]: {
@@ -83,7 +106,7 @@ function metadataCondition({ field, operator, value }: MetadataFilter): Record<s
             .split(',')
             .map(v => v.trim())
             .filter(Boolean)
-            .map(v => new RegExp(`^${escapeRegex(v)}$`, 'i')),
+            .map(v => new RegExp(`^${regexSource(v)}$`, 'i')),
         },
       };
     case 'equals':
@@ -178,8 +201,20 @@ export function buildUserActivityPipeline({
     // The email lives on the joined user, so this can only be matched after the join.
     ...(userEmail ? [{ $match: { userEmail: { $regex: escapeRegex(userEmail), $options: 'i' } } }] : []),
     // Sort before the facet: a $sort inside a $facet sub-pipeline is held to the 100MB
-    // in-memory limit, and counterName/userEmail break ties so a row can't straddle pages.
-    { $sort: { '_id.date': -1, count: -1, '_id.counterName': 1, userEmail: 1 } },
+    // in-memory limit. The tiebreak has to be TOTAL or a row can straddle or skip a page
+    // across the two facet executions - userEmail cannot do it, since every row whose join
+    // missed shares the same '' fallback. Covering the whole group key (userId + metadata,
+    // ordered by BSON comparison) makes the order unique, because the key is unique per row.
+    {
+      $sort: {
+        '_id.date': -1,
+        count: -1,
+        '_id.counterName': 1,
+        userEmail: 1,
+        '_id.userId': 1,
+        '_id.metadata': 1,
+      },
+    },
   ];
 
   const facetStages: Record<string, any[]> = {

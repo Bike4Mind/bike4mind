@@ -75,7 +75,9 @@ const CounterLogsQuerySchema = z.object({
         return z.NEVER;
       }
     }),
-  page: z.coerce.number().int().positive().prefault(1),
+  // Bounded as well as positive: an absurd page yields a $skip Mongo rejects (500) and mints a
+  // fresh 1h cache document per distinct value after running the full aggregation.
+  page: z.coerce.number().int().positive().max(1_000_000).prefault(1),
   // Clamped rather than rejected: an over-large page is a client bug, not a caller error,
   // and the cap is what keeps the response under Lambda's 6MB limit.
   limit: z.coerce
@@ -184,18 +186,25 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     } else {
       // Page-scoped key: the pre-pagination key omitted page/limit/search, so any change
       // of page would have been served the first page's cached body.
+      //
+      // Each segment is percent-encoded before joining. counterName/userEmail are free text,
+      // so a raw ':' in one segment would otherwise shift the delimiter and let two different
+      // filter sets collide - e.g. counterName='a:b' + userEmail='c' vs counterName='a' +
+      // userEmail='b:c' - serving one admin the other's rows and total for the full hour.
       const cacheKey = [
         'logs:v2',
-        startDate,
-        endDate,
-        page,
-        limit,
-        events?.join(',') ?? '',
-        orgs?.join(',') ?? '',
-        excludeOrgs?.join(',') ?? '',
-        counterName ?? '',
-        userEmail ?? '',
-        JSON.stringify(metadataFilters ?? []),
+        ...[
+          startDate,
+          endDate,
+          String(page),
+          String(limit),
+          events?.join(',') ?? '',
+          orgs?.join(',') ?? '',
+          excludeOrgs?.join(',') ?? '',
+          counterName ?? '',
+          userEmail ?? '',
+          JSON.stringify(metadataFilters ?? []),
+        ].map(encodeURIComponent),
       ].join(':');
 
       const cachedResult = await cacheRepository.findByKey(cacheKey);
@@ -223,12 +232,10 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       // actually sends (orgs/excludeOrgs are always present), because it blocks the
       // { datetime, counterName, userOrganization } compound index the planner would pick.
       // A hint would also hard-fail the whole request if the index were ever absent.
-      const [facet] = await executeFacetCompatible(
-        CounterLog,
-        convertPipelineForDocumentDB(pipeline),
-        facetStages,
-        { allowDiskUse: true, maxTimeMS: AGGREGATION_MAX_TIME_MS }
-      );
+      const [facet] = await executeFacetCompatible(CounterLog, convertPipelineForDocumentDB(pipeline), facetStages, {
+        allowDiskUse: true,
+        maxTimeMS: AGGREGATION_MAX_TIME_MS,
+      });
       const rows = facet?.rows ?? [];
       const total = facet?.total?.[0]?.value ?? 0;
 
@@ -247,7 +254,9 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     }
   } catch (error) {
     if (error instanceof z.ZodError) {
-      throw new BadRequestError('Invalid query parameters', { error: error.issues });
+      // Keyed `issues`, not `error`: errorHandler spreads additionalInfo and then writes its own
+      // `error` message over it, so a detail under that name never reaches the client.
+      throw new BadRequestError('Invalid query parameters', { issues: error.issues });
     }
     throw error;
   }

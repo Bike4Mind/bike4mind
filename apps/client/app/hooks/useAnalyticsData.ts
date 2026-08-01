@@ -1,5 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { fetchCounterLogs, type CounterLogRow } from '@client/app/utils/userAPICalls';
+import {
+  fetchCounterLogs,
+  type AnalyticsReport,
+  type CounterLogRow,
+  type FetchCounterLogsParams,
+} from '@client/app/utils/userAPICalls';
 import { getLocalDate } from '@client/app/utils/dateUtils';
 import { AnalyticsSubTab } from '../components/admin/Analytics/types';
 import { useAnalyticsStore } from '../components/admin/Analytics/store';
@@ -14,8 +19,7 @@ interface UseAnalyticsDataParams {
 
 export interface AnalyticsData {
   logs: CounterLogRow[];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  reports: any[];
+  reports: AnalyticsReport[];
   total: number;
 }
 
@@ -76,8 +80,7 @@ export function useAnalyticsData(params?: UseAnalyticsDataParams) {
       const effectiveStartDate = params?.startDate || dateFilters.startDate || getLocalDate(-7);
       const effectiveEndDate = params?.endDate || dateFilters.endDate || getLocalDate();
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const apiParams: any = {
+      const apiParams: Partial<FetchCounterLogsParams> = {
         startDate: effectiveStartDate,
         endDate: effectiveEndDate,
       };

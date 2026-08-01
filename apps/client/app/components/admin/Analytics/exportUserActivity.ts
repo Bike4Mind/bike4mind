@@ -1,7 +1,11 @@
 import type { CounterLogRow } from '@client/app/utils/userAPICalls';
 
-/** Per-request page size. Kept well under Lambda's 6MB response cap. */
-export const EXPORT_PAGE_SIZE = 2000;
+/**
+ * Per-request page size, at the endpoint's own MAX_PAGE_SIZE. Every page re-runs the full
+ * aggregation before $skip/$limit trims it, so the request count is what an export costs the
+ * database: 5000 turns a 50k export into 10 round trips instead of 25.
+ */
+export const EXPORT_PAGE_SIZE = 5000;
 /** Hard ceiling on an export, so a broad filter can't page indefinitely. */
 export const MAX_EXPORT_ROWS = 50000;
 
@@ -28,17 +32,19 @@ export async function collectUserActivityRows(
   let page = 1;
 
   for (;;) {
-    const limit = Math.min(pageSize, maxRows - rows.length);
-    if (limit <= 0) break;
+    if (rows.length >= maxRows) break;
 
-    const result = await fetchPage(page, limit);
+    // `limit` is deliberately constant across the whole walk: the server derives its $skip from
+    // (page - 1) * limit, so shrinking the last request to fit `maxRows` would move the window
+    // and silently re-fetch rows already collected while skipping the tail. Over-fetch, then trim.
+    const result = await fetchPage(page, pageSize);
     total = result.total ?? 0;
-    // Trim rather than trust the page size: the cap has to hold even if a server returns more.
-    rows.push(...(result.logs ?? []).slice(0, limit));
+    const batch = result.logs ?? [];
+    rows.push(...batch.slice(0, maxRows - rows.length));
     onProgress?.(rows.length, total);
 
     // A short page means the server has nothing left to give.
-    if ((result.logs?.length ?? 0) < limit) break;
+    if (batch.length < pageSize) break;
     page += 1;
   }
 

@@ -126,11 +126,20 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, l
         metadataFilters,
       });
 
-      const { rows: allRows, truncated } = await collectUserActivityRows((pageNumber, pageSize) =>
-        fetchCounterLogs({ ...request, page: pageNumber, limit: pageSize }).then(response => ({
-          logs: response.logs ?? [],
-          total: response.total ?? 0,
-        }))
+      const {
+        rows: allRows,
+        total: walkedTotal,
+        truncated,
+      } = await collectUserActivityRows(
+        (pageNumber, pageSize) =>
+          fetchCounterLogs({ ...request, page: pageNumber, limit: pageSize }).then(response => ({
+            logs: response.logs ?? [],
+            total: response.total ?? 0,
+          })),
+        {
+          onProgress: (collected, exportTotal) =>
+            setExportNote(`Exporting ${collected.toLocaleString()} of ${exportTotal.toLocaleString()} rows...`),
+        }
       );
 
       exportToCSV(
@@ -144,15 +153,19 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, l
         { filename: 'user_activity', customHeaders: ['date', 'counterName', 'userEmail', 'metadata', 'count'] }
       );
 
-      if (truncated) {
-        setExportNote(`Exported the first ${MAX_EXPORT_ROWS.toLocaleString()} of ${total.toLocaleString()} rows.`);
-      }
+      // walkedTotal, not the grid's `total` prop: the export re-queries, so this is the count
+      // the truncation was measured against.
+      setExportNote(
+        truncated
+          ? `Exported the first ${MAX_EXPORT_ROWS.toLocaleString()} of ${walkedTotal.toLocaleString()} rows.`
+          : null
+      );
     } catch (exportError) {
       setExportNote(exportError instanceof Error ? `Export failed: ${exportError.message}` : 'Export failed.');
     } finally {
       setIsExporting(false);
     }
-  }, [dateFilters, excludedOrgs, selectedOrganizations, userActivityFilters, metadataFilters, exportToCSV, total]);
+  }, [dateFilters, excludedOrgs, selectedOrganizations, userActivityFilters, metadataFilters, exportToCSV]);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
@@ -338,25 +351,29 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, l
           title="Could not load user activity"
           testId="user-activity-error"
         />
-      ) : rows.length === 0 ? (
-        <Card variant="outlined" sx={{ p: 4, textAlign: 'center' }} data-testid="user-activity-empty">
-          <Stack alignItems="center" spacing={2}>
-            <SearchOffIcon sx={{ fontSize: 48, color: 'neutral.500' }} />
-            <Typography level="body-lg">No data found</Typography>
-          </Stack>
-        </Card>
       ) : (
         <>
-          <SharedPaginationControls
-            currentPage={page}
-            totalPages={totalPages}
-            itemsPerPage={limit}
-            totalItems={total}
-            onPageChange={setPage}
-            onItemsPerPageChange={setLimit}
-            pageLimitOptions={[25, 50, 100]}
-          />
-          {isMobile ? (
+          {/* Keyed on `total`, not on this page's rows: a page past the end of a shrunken result
+              set has no rows, and hiding the controls there would leave no way back to page 1. */}
+          {total > 0 && (
+            <SharedPaginationControls
+              currentPage={page}
+              totalPages={totalPages}
+              itemsPerPage={limit}
+              totalItems={total}
+              onPageChange={setPage}
+              onItemsPerPageChange={setLimit}
+              pageLimitOptions={[25, 50, 100]}
+            />
+          )}
+          {rows.length === 0 ? (
+            <Card variant="outlined" sx={{ p: 4, textAlign: 'center' }} data-testid="user-activity-empty">
+              <Stack alignItems="center" spacing={2}>
+                <SearchOffIcon sx={{ fontSize: 48, color: 'neutral.500' }} />
+                <Typography level="body-lg">No data found</Typography>
+              </Stack>
+            </Card>
+          ) : isMobile ? (
             /* Mobile: card-per-row layout */
             <Stack spacing={1}>
               {rows.map((item, index) => {

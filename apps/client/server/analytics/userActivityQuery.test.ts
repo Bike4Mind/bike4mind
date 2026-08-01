@@ -54,6 +54,18 @@ describe('buildUserActivityPipeline - pagination', () => {
     // date desc + count desc can tie; without a tiebreak the same row can appear on two pages.
     expect(Object.keys(pipeline[sortIndex].$sort).length).toBeGreaterThan(2);
   });
+
+  it('orders by the whole group key so no two rows can tie', () => {
+    const { pipeline } = buildUserActivityPipeline(baseQuery);
+
+    // The group key is unique per output row, so covering all of it is what makes the order
+    // total. userEmail cannot do it alone: every row whose join missed shares the '' fallback.
+    const group = stage(pipeline, '$group');
+    const sortKeys = Object.keys(pipeline.find(s => Object.keys(s)[0] === '$sort').$sort);
+    for (const keyField of Object.keys(group.$group._id)) {
+      expect(sortKeys).toContain(`_id.${keyField}`);
+    }
+  });
 });
 
 describe('buildUserActivityPipeline - filters', () => {
@@ -159,6 +171,42 @@ describe('parseMetadataFilters', () => {
 
   it('rejects an unknown operator', () => {
     expect(() => parseMetadataFilters(JSON.stringify([{ field: 'a', operator: 'drop' }]))).toThrow();
+  });
+
+  it.each([
+    // Has neither a callable toString nor valueOf, so String(value) throws inside the pipeline
+    // builder - past the ZodError branch, i.e. a 500 for what is a malformed request.
+    { toString: 1, valueOf: 2 },
+    ['a', 'b'],
+  ])('rejects a non-scalar filter value %j at the boundary', value => {
+    expect(() => parseMetadataFilters(JSON.stringify([{ field: 'a', operator: 'equals', value }]))).toThrow();
+  });
+
+  it('accepts the scalar value types the UI can produce', () => {
+    for (const value of ['web', 3, true]) {
+      expect(parseMetadataFilters(JSON.stringify([{ field: 'a', operator: 'equals', value }]))[0].value).toBe(value);
+    }
+  });
+});
+
+/** NUL: the driver rejects a regex pattern containing it, so the source must strip it first. */
+const NUL = String.fromCharCode(0);
+
+describe('metadata filter values that would break the driver', () => {
+  const metadataMatch = (filter: Record<string, unknown>) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    buildUserActivityPipeline({ ...baseQuery, metadataFilters: [filter as any] }).pipeline[0].$match.$and;
+
+  it('drops control characters from a contains pattern that BSON would reject', () => {
+    const [condition] = metadataMatch({ field: 'title', operator: 'contains', value: `a${NUL}b` });
+
+    expect(condition['metadata.title'].$regex).toBe('ab');
+  });
+
+  it('drops control characters from an in pattern too', () => {
+    const [condition] = metadataMatch({ field: 'source', operator: 'in', value: `we${NUL}b` });
+
+    expect(condition['metadata.source'].$in).toEqual([/^web$/i]);
   });
 
   it('treats an absent filter list as no filters', () => {

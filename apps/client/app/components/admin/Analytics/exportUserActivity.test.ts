@@ -45,12 +45,17 @@ describe('collectUserActivityRows', () => {
     expect(fetchPage.mock.calls.length).toBeLessThanOrEqual(3);
   });
 
-  it('never asks for more rows per request than the cap allows', async () => {
-    const fetchPage = vi.fn(async () => ({ logs: rows(2), total: 2 }));
+  it('holds the page size constant so the server skips to the right offset', async () => {
+    // The server derives $skip from (page - 1) * limit. Shrinking the last request to land
+    // exactly on maxRows would move that window: with pageSize 100 and maxRows 250, a final
+    // limit of 50 makes the server skip 100 - re-sending rows 101-150 and losing 201-250.
+    const fetchPage = vi.fn(async () => ({ logs: rows(100), total: 1000 }));
 
-    await collectUserActivityRows(fetchPage, { pageSize: 10, maxRows: 5 });
+    const result = await collectUserActivityRows(fetchPage, { pageSize: 100, maxRows: 250 });
 
-    expect(fetchPage).toHaveBeenCalledWith(1, 5);
+    expect(fetchPage.mock.calls.map(([, limit]) => limit)).toEqual([100, 100, 100]);
+    expect(fetchPage.mock.calls.map(([page]) => page)).toEqual([1, 2, 3]);
+    expect(result.rows).toHaveLength(250);
   });
 
   it('reports progress so a long export can show where it is', async () => {

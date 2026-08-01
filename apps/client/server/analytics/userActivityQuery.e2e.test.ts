@@ -48,9 +48,10 @@ beforeAll(async () => {
   ]);
 
   await counterLogs.insertMany([
-    // Two same-day Logins for user A collapse into a single row with count 2.
-    log({}),
-    log({ datetime: new Date('2026-07-24T11:00:00.000Z') }),
+    // Two same-day Logins for user A collapse into a single row with count 2. Unequal
+    // counterValues so `count` (rows) and `totalValue` (summed value) cannot be confused.
+    log({ counterValue: 1 }),
+    log({ counterValue: 5, datetime: new Date('2026-07-24T11:00:00.000Z') }),
     log({ counterName: 'Logout', datetime: new Date('2026-07-25T10:00:00.000Z') }),
     log({ userId: USER_B.toString(), counterName: 'Login', datetime: new Date('2026-07-26T10:00:00.000Z') }),
     log({ counterName: 'Model Started', metadata: { source: 'cli' }, datetime: new Date('2026-07-23T10:00:00.000Z') }),
@@ -71,7 +72,7 @@ describe('user activity pipeline against MongoDB', () => {
 
     expect(total).toBe(5);
     const login = rows.find((r: any) => r.counterName === 'Login' && r.userEmail === 'ada@example.com');
-    expect(login).toMatchObject({ date: '2026-07-24', count: 2, totalValue: 2 });
+    expect(login).toMatchObject({ date: '2026-07-24', count: 2, totalValue: 6 });
   });
 
   it('resolves the email through the user join', async () => {

@@ -52,7 +52,7 @@ export interface CounterLogMetadataFilter {
   value?: unknown;
 }
 
-interface FetchCounterLogsParams {
+export interface FetchCounterLogsParams {
   startDate?: string;
   endDate?: string;
   events?: string[];
@@ -70,8 +70,15 @@ interface FetchCounterLogsParams {
   metadataFilters?: CounterLogMetadataFilter[];
 }
 
-interface DailyReport {
-  date: string;
+/**
+ * Both report modes answer on the same `reports` key with different envelopes: the daily one
+ * carries `date`, the weekly one the week's bounds. Hence the optional keys rather than a
+ * discriminated union - which key is set follows the request flag, not anything in the payload.
+ */
+export interface AnalyticsReport {
+  date?: string;
+  startDate?: string;
+  endDate?: string;
   report: string;
   aiInsights?: string | null;
 }
@@ -90,7 +97,7 @@ export interface CounterLogRow {
 
 interface CounterLogsResponse {
   logs?: CounterLogRow[];
-  reports?: DailyReport[];
+  reports?: AnalyticsReport[];
   total?: number;
 }
 

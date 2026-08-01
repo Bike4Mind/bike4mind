@@ -18,6 +18,8 @@ const mockRefs = vi.hoisted(() => ({
   facetStages: undefined as any,
   cacheKeys: [] as string[],
   cached: null as any,
+  facetResult: null as any,
+  cacheWriteError: null as null | Error,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -43,12 +45,16 @@ vi.mock('@bike4mind/database', () => ({
       mockRefs.cacheKeys.push(key);
       return mockRefs.cached;
     }),
-    createOrUpdate: vi.fn(),
+    createOrUpdate: vi.fn(async () => {
+      if (mockRefs.cacheWriteError) throw mockRefs.cacheWriteError;
+    }),
   },
   convertPipelineForDocumentDB: (p: any) => p,
   executeFacetCompatible: (_model: any, _pipeline: any, facetStages: any) => {
     mockRefs.facetStages = facetStages;
-    return Promise.resolve([{ rows: [{ date: '2026-07-28', counterName: 'Login' }], total: [{ value: 42 }] }]);
+    return Promise.resolve([
+      mockRefs.facetResult ?? { rows: [{ date: '2026-07-28', counterName: 'Login' }], total: [{ value: 42 }] },
+    ]);
   },
 }));
 
@@ -81,6 +87,8 @@ describe('GET /api/users/counterLogs - user activity paging', () => {
     mockRefs.facetStages = undefined;
     mockRefs.cacheKeys = [];
     mockRefs.cached = null;
+    mockRefs.facetResult = null;
+    mockRefs.cacheWriteError = null;
   });
 
   it('returns one page plus the total instead of every matching row', async () => {
@@ -96,13 +104,33 @@ describe('GET /api/users/counterLogs - user activity paging', () => {
     });
   });
 
-  it('reports a zero total when the facet matched nothing', async () => {
+  it('defaults to the first page, skipping nothing', async () => {
     const { req, res } = mocks(DATES);
 
     await mockRefs.getHandler!(req, res);
 
-    expect(res._getJSONData().total).toBe(42);
+    expect(res._getJSONData()).toMatchObject({ page: 1, total: 42 });
     expect(stageValue('$skip')).toBe(0);
+  });
+
+  it('reports a zero total when the facet matched nothing', async () => {
+    mockRefs.facetResult = { rows: [], total: [] };
+    const { req, res } = mocks(DATES);
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getJSONData()).toMatchObject({ logs: [], total: 0 });
+  });
+
+  it('still answers when the cache write fails', async () => {
+    // The pre-pagination 17.8MB result exceeded Mongo's 16MB BSON limit, so this write threw on
+    // every single request. A caching failure must never become a failed response.
+    mockRefs.cacheWriteError = new Error('BSONObjectTooLarge');
+    const { req, res } = mocks(DATES);
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getJSONData()).toMatchObject({ total: 42 });
   });
 
   it('clamps an oversized page request so one page can never exceed the Lambda cap', async () => {
@@ -136,6 +164,35 @@ describe('GET /api/users/counterLogs - user activity paging', () => {
     await mockRefs.getHandler!(second.req, second.res);
 
     expect(mockRefs.cacheKeys[0]).not.toBe(mockRefs.cacheKeys[1]);
+  });
+
+  it('keeps two filter sets apart when a search term contains the key delimiter', async () => {
+    // Unencoded, ':' in free text shifts the boundary: counterName='a:b' + userEmail='c' and
+    // counterName='a' + userEmail='b:c' built the same key, so one admin was served the other's
+    // rows and total for the full hour.
+    const first = mocks({ ...DATES, counterName: 'a:b', userEmail: 'c' });
+    await mockRefs.getHandler!(first.req, first.res);
+    const second = mocks({ ...DATES, counterName: 'a', userEmail: 'b:c' });
+    await mockRefs.getHandler!(second.req, second.res);
+
+    expect(mockRefs.cacheKeys[0]).not.toBe(mockRefs.cacheKeys[1]);
+  });
+
+  it('rejects a page number too large to skip to', async () => {
+    const { req, res } = mocks({ ...DATES, page: '1e20' });
+
+    await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('surfaces which parameter was rejected instead of a bare message', async () => {
+    // errorHandler spreads additionalInfo and then writes its own `error`, so the detail has to
+    // travel under a different key or the admin never learns which filter was refused.
+    const { req, res } = mocks({ ...DATES, metadataFilters: JSON.stringify([{ field: '', operator: 'exists' }]) });
+
+    await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({
+      statusCode: 400,
+      additionalInfo: { issues: expect.any(Array) },
+    });
   });
 
   it('keeps the cached envelope shape when it serves a cache hit', async () => {

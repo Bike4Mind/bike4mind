@@ -21,7 +21,15 @@ export const AnalyticsErrorCard: React.FC<AnalyticsErrorCardProps> = ({
   title = 'Could not load analytics',
   testId = 'analytics-error',
 }) => (
-  <Card variant="outlined" sx={{ p: 4, textAlign: 'center' }} data-testid={testId}>
+  <Card
+    variant="outlined"
+    // The whole point of this card is that a failure does not read as an empty result. A screen
+    // reader gets that only from the live region: the tab swaps content in place, no focus move.
+    role="alert"
+    aria-live="assertive"
+    sx={{ p: 4, textAlign: 'center' }}
+    data-testid={testId}
+  >
     <Stack alignItems="center" spacing={2}>
       <ErrorOutlineIcon sx={{ fontSize: 48, color: 'danger.500' }} />
       <Typography level="body-lg">{title}</Typography>

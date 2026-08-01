@@ -49,4 +49,25 @@ describe('buildUserActivityRequest', () => {
   it('omits an empty metadata filter list', () => {
     expect(buildUserActivityRequest(state).metadataFilters).toBeUndefined();
   });
+
+  it('drops an unfinished filter row rather than 400ing the whole grid', () => {
+    // "Add Filter" seeds a blank field whenever the visible page carries no metadata to suggest
+    // from. The server's field allowlist rejects '', which would error the entire tab.
+    const request = buildUserActivityRequest({
+      ...state,
+      metadataFilters: [
+        { field: '', operator: 'equals', value: '' },
+        { field: '   ', operator: 'exists' },
+        { field: 'source', operator: 'equals', value: 'cli' },
+      ],
+    });
+
+    expect(request.metadataFilters).toEqual([{ field: 'source', operator: 'equals', value: 'cli' }]);
+  });
+
+  it('sends no filters at all when every row is still blank', () => {
+    const request = buildUserActivityRequest({ ...state, metadataFilters: [{ field: '', operator: 'equals' }] });
+
+    expect(request.metadataFilters).toBeUndefined();
+  });
 });
