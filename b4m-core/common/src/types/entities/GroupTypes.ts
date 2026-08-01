@@ -24,8 +24,18 @@ export interface IGroup {
 export interface IGroupDocument extends IGroup, IMongoDocument {}
 
 export interface IGroupRepository extends IBaseRepository<IGroupDocument> {
-  /** Live (non-soft-deleted) group instances owned by an organization. */
-  findByOrganization(organizationId: string): Promise<IGroupDocument[]>;
-  /** Soft-delete the given group instances (used when a group type is revoked). */
-  softDeleteByIds(groupIds: string[]): Promise<void>;
+  /**
+   * Group instances owned by an organization. Live-only by default; `includeDeleted` also returns
+   * soft-deleted rows (org deletion must purge membership for every group the org EVER owned - a
+   * stale id can still linger in `user.groups` from a lost prior revoke; org-groups #1230).
+   */
+  findByOrganization(organizationId: string, options?: { includeDeleted?: boolean }): Promise<IGroupDocument[]>;
+  /**
+   * Provision a group instance, treating a concurrent create for the same (organizationId, type)
+   * as success rather than a 500 (org-groups #1222). Two overlapping grant PUTs can both pass the
+   * caller's "does a live instance already exist" check and both call this; only one wins the
+   * `group_org_type_live` unique index - the loser gets back the winner's document instead of an
+   * E11000 propagating to a 500.
+   */
+  createIfMissing(data: Pick<IGroup, 'name' | 'description' | 'type' | 'organizationId'>): Promise<IGroupDocument>;
 }

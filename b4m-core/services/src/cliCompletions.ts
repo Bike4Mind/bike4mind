@@ -460,6 +460,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         feature: 'completion_api',
         provider: modelInfo!.backend,
         model,
+        // Denormalized origin, kept in lockstep with this call's ledger write
+        // (subtractCredits above). apiKeyId is present for API-key auth, undefined for JWT.
+        source,
+        apiKeyId: apiKeyInfo?.keyId,
         inputTokens: finalInputTokens,
         outputTokens: finalOutputTokens,
         cachedInputTokens: finalCacheReadTokens,

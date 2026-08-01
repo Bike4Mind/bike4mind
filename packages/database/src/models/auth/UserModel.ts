@@ -271,11 +271,15 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   /** Member ids per group id in one aggregation (keyed by group id; absent = no members). */
   async findUserIdsByGroupIds(groupIds: string[]): Promise<Record<string, string[]>> {
     if (groupIds.length === 0) return {};
+    // $addToSet, not $push: a user whose user.groups array holds a duplicate entry for the same
+    // group (e.g. a pre-#1224 double-accept via the legacy group-invite path) would otherwise be
+    // counted twice for that group. $addToSet makes memberCount correct by construction rather
+    // than relying on every writer to dedupe user.groups itself.
     const rows = await this.model.aggregate<{ _id: string; userIds: string[] }>([
       { $match: { groups: { $in: groupIds } } },
       { $unwind: '$groups' },
       { $match: { groups: { $in: groupIds } } },
-      { $group: { _id: '$groups', userIds: { $push: { $toString: '$_id' } } } },
+      { $group: { _id: '$groups', userIds: { $addToSet: { $toString: '$_id' } } } },
     ]);
     const membersByGroup: Record<string, string[]> = {};
     for (const row of rows) membersByGroup[row._id] = row.userIds;

@@ -1,6 +1,11 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { BatchPresignedUrlRequestInput, KnowledgeType, type IDataLakeBatchFile } from '@bike4mind/common';
+import {
+  BatchPresignedUrlRequestInput,
+  DATALAKE_TAG_PREFIX,
+  KnowledgeType,
+  type IDataLakeBatchFile,
+} from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createFabFile } from '@server/managers/fabFileManager';
 import { adminSettingsRepository, dataLakeBatchRepository, dataLakeRepository } from '@bike4mind/database';
@@ -95,16 +100,50 @@ const handler = baseApi().post(async (req: Request, res) => {
   const totalBatchSize = data.files.reduce((sum, f) => sum + (f.fileSize || 0), 0);
   await checkStorageLimit(req.user, totalBatchSize);
 
+  // One tagger for the whole request: it memoizes the lake lookup per meta-tag, so a batch of
+  // hundreds of files into one lake costs a single read.
+  const applyFallbackTags = dataLakeService.createDataLakeFallbackTagger({
+    db: { dataLakes: dataLakeRepository },
+    logger: req.logger,
+  });
+
+  // Resolve the lake BEFORE the per-file loop. The loop below runs under Promise.all, so a
+  // rejection there lands after some files have already been created, and those FabFiles are
+  // invisible to the client's rollback because it never received their ids. Doing the one
+  // lake-dependent read up front means a lookup failure aborts with nothing persisted; the
+  // memo makes this free for the files that follow.
+  if (datalakeTag) {
+    await applyFallbackTags([{ name: datalakeTag, strength: 1.0 }]);
+  }
+
   const results = await Promise.all(
     resolvedFiles.map(async ({ item: fileItem, mimeType }) => {
       const ext = mime.extension(mimeType);
       const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
 
-      // Merge data lake meta-tag with file-specific tags
-      const tags = [...(fileItem.tags || [])];
-      if (datalakeTag) {
-        tags.push({ name: datalakeTag, strength: 1.0 });
-      }
+      // Merge data lake meta-tag with file-specific tags, then guarantee the file also lands
+      // under the lake's content prefix. Reconciling AFTER the injection is load-bearing: the
+      // meta-tag is resolved server-side from `dataLakeSlug` and never appears in the client
+      // payload, so a reconcile over `fileItem.tags` alone would see no lake at all.
+      //
+      // This is the flat-upload path. The wizard derives content tags from folder structure, so
+      // a file picked through "Upload Files..." (relativePath with no separator) contributes
+      // none, and append mode has no taxonomy step to supply them either.
+      // Deduped by name: a client may smuggle the same meta-tag the server injects, and there is
+      // no reason to persist it twice. The server's copy is spread FIRST and first occurrence
+      // wins, so a client-supplied strength on the meta-tag cannot override it.
+      //
+      // Folded for the meta namespace only, because that is the one namespace whose consumers
+      // fold: the write gate and the reconciler both lowercase, so `DataLake:acme` and
+      // `datalake:acme` are one tag to them, and persisting both leaves a case-variant ghost that
+      // removal (an exact-match pull) would not clear. Content tags stay case-sensitive - the
+      // read arms and counters build unflagged regexes, so `Acme:x` and `acme:x` really are two.
+      const dedupeKey = (name: string) =>
+        name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX) ? name.toLowerCase() : name;
+      const merged = [...(datalakeTag ? [{ name: datalakeTag, strength: 1.0 }] : []), ...(fileItem.tags || [])].filter(
+        (tag, i, all) => all.findIndex(other => dedupeKey(other.name) === dedupeKey(tag.name)) === i
+      );
+      const tags = await applyFallbackTags(merged);
 
       // Stamp batchId so the existing pipeline (objectCreated -> chunk -> vectorize)
       // correlates the file to its batch and updates batch progress. Without this the

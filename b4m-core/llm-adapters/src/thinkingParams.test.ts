@@ -15,6 +15,26 @@ const baseModelInfo: ModelInfo = {
 };
 
 const legacyModel: ModelInfo = { ...baseModelInfo };
+
+/** GPT-5.6 Sol: a hardcoded OpenAI reasoning model, so REASONING_SUPPORTED_MODELS knows it. */
+const openAiReasoningModel: ModelInfo = {
+  ...baseModelInfo,
+  id: ChatModels.GPT5_6_SOL,
+  name: 'GPT-5.6 Sol',
+  backend: ModelBackend.OpenAI,
+  thinkingStyle: undefined,
+};
+
+/** The same shape, but an id no hardcoded set lists - only the dispatch profile identifies it. */
+const catalogOnlyReasoningModel: ModelInfo = {
+  ...baseModelInfo,
+  id: 'some-unlisted-reasoning-model' as ModelInfo['id'],
+  name: 'Unlisted reasoning model',
+  backend: ModelBackend.OpenAI,
+  thinkingStyle: undefined,
+  can_think: true,
+  dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'chat' },
+};
 const adaptiveModel: ModelInfo = {
   ...baseModelInfo,
   id: ChatModels.CLAUDE_4_7_OPUS,
@@ -92,7 +112,7 @@ describe('resolveOutputMaxTokens', () => {
     resolveOutputMaxTokens({
       requested,
       fallback: 4096,
-      thinkingStyle: modelInfo.thinkingStyle,
+      modelInfo,
       modelMaxOutputTokens: modelInfo.max_tokens,
     });
 
@@ -111,6 +131,10 @@ describe('resolveOutputMaxTokens', () => {
     it('honors a budget on a legacy model', () => {
       expect(resolve(16_000, legacyModel)).toBe(16_000);
     });
+
+    it('honors a budget on an OpenAI reasoning model', () => {
+      expect(resolve(16_000, openAiReasoningModel)).toBe(16_000);
+    });
   });
 
   describe('absence is sized for the model', () => {
@@ -120,6 +144,24 @@ describe('resolveOutputMaxTokens', () => {
 
     it('defaults a legacy model to the caller-supplied fallback', () => {
       expect(resolve(undefined, legacyModel)).toBe(4096);
+    });
+
+    // The starvation this fixes: OpenAI spends reasoning inside max_completion_tokens,
+    // so a 4096 default was consumed entirely by reasoning and the turn came back empty.
+    it('defaults an OpenAI reasoning model to the shared floor', () => {
+      expect(resolve(undefined, openAiReasoningModel)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    // Catalog-only reasoning models are not in any hardcoded set, so the reasoning-shaped
+    // max-tokens param plus can_think has to carry them.
+    it('defaults an unlisted but reasoning-shaped catalog model to the shared floor', () => {
+      expect(resolve(undefined, catalogOnlyReasoningModel)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    // can_think alone must not trigger headroom: legacy thinking is opt-in and
+    // separately budgeted, so these models would pay for room they never use.
+    it('does not give a non-reasoning-shaped model the floor merely for can_think', () => {
+      expect(resolve(undefined, { ...legacyModel, can_think: true })).toBe(4096);
     });
   });
 

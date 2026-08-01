@@ -66,4 +66,8 @@ export enum AdminOrgAuditEvents {
   ORG_ADMINS_UPDATED = 'ORG_ADMINS_UPDATED',
   ORG_GROUP_MEMBER_ASSIGNED = 'ORG_GROUP_MEMBER_ASSIGNED',
   ORG_GROUP_MEMBER_UNASSIGNED = 'ORG_GROUP_MEMBER_UNASSIGNED',
+  // A group invite is a deferred ORG_GROUP_MEMBER_ASSIGNED: whoever mints it decides who may join
+  // the group, but the membership write lands later in sharingService/accept.ts under the
+  // recipient's id. Without this event the grant side of that pair has no actor recorded.
+  ORG_GROUP_INVITE_CREATED = 'ORG_GROUP_INVITE_CREATED',
 }

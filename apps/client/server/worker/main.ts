@@ -9,6 +9,7 @@ import { sendToQueue } from '@server/utils/sqs';
 import { dispatch as researchEngineDispatch } from '@server/queueHandlers/researchEngineQueue';
 import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
+import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { SelfHostWorker } from './selfHostWorker';
@@ -66,6 +67,18 @@ async function main() {
   worker.registerQueueHandler('fabFileVectorizeQueue', Resource.fabFileVectorizeQueue.url, fabFileVectorizeDispatch, {
     visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
   });
+
+  // Background AI-tag suggestion, opted into per-batch on the create wizard. Optional
+  // in the self-host manifest - a basic install that never set the env var simply never runs
+  // it (the stuck-job reconciler is what keeps the review UI from spinning forever on that).
+  const taxonomyQueueUrl = Resource.dataLakeTaxonomyQueue?.url;
+  if (taxonomyQueueUrl) {
+    worker.registerQueueHandler('dataLakeTaxonomyQueue', taxonomyQueueUrl, dataLakeTaxonomyAnalysisDispatch, {
+      visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+    });
+  } else {
+    bootLogger.warn('dataLakeTaxonomyQueue not configured; background AI tag suggestion will not run');
+  }
 
   // Enrichment events (naming, summaries, tags, memento embedding) arrive here from
   // eventBus.publishSelfHost as { detailType, detail }. Read straight from env (not the

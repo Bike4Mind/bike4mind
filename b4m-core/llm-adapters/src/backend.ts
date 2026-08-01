@@ -285,7 +285,7 @@ export type CompletionInfo = {
    * 'stop' as a first-class clean-finish value alongside Anthropic's 'end_turn'.
    * 'max_tokens' means the output was truncated against the token ceiling - used
    * downstream to flag truncated artifacts and surface a recovery UI. The client's
-   * CLEAN_FINISH_REASONS (apps/client/.../PromptReplies.tsx) is the authoritative set
+   * CLEAN_FINISH_REASONS (apps/client/app/utils/replyTruncation.ts) is the authoritative set
    * of values treated as a clean finish; anything else - including an unrecognized
    * provider value passed through unchanged - falls through to the truncation heuristic.
    */

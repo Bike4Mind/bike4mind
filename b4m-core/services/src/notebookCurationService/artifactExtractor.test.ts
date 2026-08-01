@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { CurationArtifactType } from '@bike4mind/common';
-import { extractArtifactsFromMessage, mapMimeTypeToArtifactType } from './artifactExtractor';
+import { CurationArtifactType, type CurationOptions } from '@bike4mind/common';
+import { extractArtifactsFromMessage, mapMimeTypeToArtifactType, type CurationMessage } from './artifactExtractor';
 
 // The curation extractor used to carry its own copy of the MIME-to-type table. It now
 // delegates parsing to the shared @bike4mind/common mapper and only bridges the shared
@@ -49,14 +49,14 @@ describe('extractArtifactsFromMessage - attribute values containing quotes', () 
     includeCode: true,
     includeDiagrams: true,
     includeDataViz: true,
-  } as Parameters<typeof extractArtifactsFromMessage>[1];
+  } as CurationOptions;
 
   it('keeps an apostrophe inside a double-quoted title', () => {
     const artifacts = extractArtifactsFromMessage(
       {
         id: 'm1',
         reply: `<artifact identifier="bobs-app" type="text/html" title="Bob's App"><p>hi</p></artifact>`,
-      },
+      } as CurationMessage,
       options
     );
     const html = artifacts.find(a => a.type === CurationArtifactType.HTML);

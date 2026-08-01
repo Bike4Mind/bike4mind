@@ -70,7 +70,13 @@ export interface LLMContextProps {
   updateLLMParams: () => void;
   isQuestMasterEnabled: boolean;
   isMementosEnabled: boolean;
-  isArtifactsEnabled: boolean;
+  /**
+   * `undefined` until admin settings and user prefs have both hydrated. The server reads an
+   * explicit `false` on the request as "this caller has no artifact surface" and drops the
+   * artifact prompt and extraction for the turn, so a pre-hydration `false` would silently
+   * cost the first prompt of a cold load its artifacts. Absent means "no preference".
+   */
+  isArtifactsEnabled: boolean | undefined;
   isAgentsEnabled: boolean;
   isLatticeEnabled: boolean;
   toolMode: 'fast' | 'smart';
@@ -152,7 +158,7 @@ const DEFAULTS = {
   organizationId: null,
   isQuestMasterEnabled: false,
   isMementosEnabled: false,
-  isArtifactsEnabled: false,
+  isArtifactsEnabled: undefined,
   isAgentsEnabled: false, // Default controlled by user settings
   isLatticeEnabled: false, // Default controlled by user settings
   toolMode: 'smart' as const,
@@ -358,7 +364,7 @@ export function getDefaultMaxTokens(modelInfo: ModelInfo): number {
 export const LLMProvider: React.FC = () => {
   const { setState } = useLLM;
   const { settings } = useUserSettings();
-  const { isFeatureEnabled } = useFeatureEnabled();
+  const { isFeatureEnabled, isLoading: areFeaturesLoading } = useFeatureEnabled();
   const { accessibleModels, isModelAccessible, getFallbackModel } = useAccessibleModels();
   const { data: modelInfoRepo } = useModelInfo();
   const activeModel = useLLM(s => s.model);
@@ -372,7 +378,8 @@ export const LLMProvider: React.FC = () => {
   // Extract primitive booleans so the effect dep array contains stable values
   // rather than the experimentalFeatures object reference (recreated on every settings update)
   const enableMementos = settings.experimentalFeatures?.enableMementos ?? false;
-  const enableArtifacts = isFeatureEnabled('enableArtifacts');
+  // Left undefined until both signals resolve - see isArtifactsEnabled on the state type.
+  const enableArtifacts = areFeaturesLoading ? undefined : isFeatureEnabled('enableArtifacts');
   const enableAgents = isFeatureEnabled('enableAgents');
   const enableLattice = settings.experimentalFeatures?.enableLattice ?? false;
 

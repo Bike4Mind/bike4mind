@@ -8,6 +8,7 @@ import { BasePage } from './BasePage';
  * lake viewer. Selectors mirror the data-testid attributes in
  * `app/components/datalake/*` and `app/components/DataLakeWizard/*`.
  */
+// TODO(datalake-in-chat): /data-lakes route retired; rewrite against the in-chat Data Lake header toggle once the Phase 3 surface settles.
 export class DataLakePage extends BasePage {
   constructor(page: Page) {
     super(page);
@@ -83,7 +84,7 @@ export class DataLakePage extends BasePage {
     // is the real readiness gate, so we don't need to block navigation on full 'load'.
     await this.page.goto('/data-lakes', { waitUntil: 'domcontentloaded' });
     await this.dismissModals();
-    await expect(this.page.getByTestId('opti-datalake-explorer')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+    await expect(this.page.getByTestId('datalake-explorer')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
   }
 
   /** From the explorer, open the management panel (list of lakes + lifecycle). */

@@ -37,6 +37,8 @@ import {
   questExportQueue,
   dataLakeCleanupQueue,
   dataLakeCleanupQueueDLQ,
+  dataLakeTaxonomyQueue,
+  dataLakeTaxonomyQueueDLQ,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -120,6 +122,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'optihashi-run-completion': optihashiRunCompletionQueueDLQ.url,
     'bob-run': bobRunQueueDLQ.url,
     'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
+    'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
   },
 });
 
@@ -172,6 +175,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     optihashiRunCompletionQueue: optihashiRunCompletionQueue.url,
     bobRunQueue: bobRunQueue.url,
     dataLakeCleanupQueue: dataLakeCleanupQueue.url,
+    dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
   },
 });
 
@@ -219,6 +223,11 @@ export const web = new sst.aws.Nextjs(
       // Wildcard SQS permission (below) already grants access to all queues.
       dlqUrls,
       sourceQueueUrls,
+      // Directly linked (not folded into sourceQueueUrls) so the cron reconciler's
+      // stuck-batch backstop can link the same queue via a plain import from './queues'
+      // without a web.ts <-> cron.ts circular import (web.ts already imports cron.ts
+      // exports). Resource.dataLakeTaxonomyQueue.url resolves in both Lambdas this way.
+      dataLakeTaxonomyQueue,
       ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
       ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
     ],

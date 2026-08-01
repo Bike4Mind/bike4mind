@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { Group, groupRepository } from './GroupModel';
@@ -86,11 +86,23 @@ describe('GroupRepository', () => {
     await Group.create({ name: 'C', description: 'd', type: 'sales', organizationId: 'org-2' });
 
     // soft-delete one of org-1's groups; it must drop out of findByOrganization
-    await groupRepository.softDeleteByIds([a.id]);
+    await groupRepository.delete(a.id);
 
     const org1Groups = await groupRepository.findByOrganization('org-1');
     expect(org1Groups.map(g => g.type).sort()).toEqual(['research']);
     expect(org1Groups.every(g => typeof g.id === 'string')).toBe(true);
+  });
+
+  it('findByOrganization({ includeDeleted }) also returns soft-deleted groups (org-delete purge, #1230)', async () => {
+    const a = await Group.create({ name: 'A', description: 'd', type: 'sales', organizationId: 'org-inc' });
+    await Group.create({ name: 'B', description: 'd', type: 'research', organizationId: 'org-inc' });
+    await groupRepository.delete(a.id); // soft-delete one
+
+    // Default drops the soft-deleted row; includeDeleted brings it back so the purge covers it.
+    expect((await groupRepository.findByOrganization('org-inc')).map(g => g.type).sort()).toEqual(['research']);
+    expect(
+      (await groupRepository.findByOrganization('org-inc', { includeDeleted: true })).map(g => g.type).sort()
+    ).toEqual(['research', 'sales']);
   });
 
   it('enforces one LIVE group per (organizationId, type), but allows revoke-then-regrant', async () => {
@@ -103,19 +115,83 @@ describe('GroupRepository', () => {
 
     // ...but soft-deleting the first frees the partial-unique slot, so re-granting succeeds
     const [live] = await groupRepository.findByOrganization('org-live');
-    await groupRepository.softDeleteByIds([live.id]);
+    await groupRepository.delete(live.id);
     await expect(Group.create({ name: 'Sales 3', type: 'sales', organizationId: 'org-live' })).resolves.toBeTruthy();
   });
 
-  it('softDeleteByIds is a soft delete (row survives with deletedAt set) and is a no-op on []', async () => {
+  it('delete() is a soft delete (row survives with deletedAt set)', async () => {
     const g = await Group.create({ name: 'G', description: 'd', type: 'customer', organizationId: 'org-3' });
 
-    await groupRepository.softDeleteByIds([]); // no-op, must not throw
-    await groupRepository.softDeleteByIds([g.id]);
+    await groupRepository.delete(g.id);
 
     expect(await groupRepository.findByOrganization('org-3')).toEqual([]);
     // the document still exists (soft, not hard delete) - visible when bypassing the find hook
     const raw = await mongoose.connection.collection('groups').findOne({ _id: g._id });
     expect(raw?.deletedAt).toBeInstanceOf(Date);
+  });
+
+  describe('createIfMissing (org-groups #1222)', () => {
+    it('creates normally when nothing exists yet', async () => {
+      const group = await groupRepository.createIfMissing({
+        name: 'Sales',
+        description: 'd',
+        type: 'sales',
+        organizationId: 'org-race',
+      });
+
+      expect(group.type).toBe('sales');
+      const [stored] = await groupRepository.findByOrganization('org-race');
+      expect(stored.id).toBe(group.id);
+    });
+
+    // The actual race: simulate two overlapping grant PUTs both calling createIfMissing for the
+    // same (org, type) after both observed no live instance. Real concurrent requests would race
+    // at the driver level; issuing them back-to-back here still exercises the E11000 catch,
+    // since the second call's create() genuinely collides with the first's already-committed row.
+    it('returns the WINNING row instead of throwing when a concurrent create collides', async () => {
+      const first = await groupRepository.createIfMissing({
+        name: 'Sales',
+        description: 'd',
+        type: 'sales',
+        organizationId: 'org-race-2',
+      });
+
+      const second = await groupRepository.createIfMissing({
+        name: 'Sales (loser)',
+        description: 'd',
+        type: 'sales',
+        organizationId: 'org-race-2',
+      });
+
+      // Same row, not a second one - proves this resolved via the E11000 catch, not a silent
+      // second insert (which the unique index would reject anyway).
+      expect(second.id).toBe(first.id);
+      expect(second.name).toBe('Sales');
+      const live = await groupRepository.findByOrganization('org-race-2');
+      expect(live).toHaveLength(1);
+    });
+
+    it('re-throws a genuine E11000 if the winning row cannot be found (e.g. deleted mid-race)', async () => {
+      // Prove the fallback path does not silently swallow every duplicate-key error: force a
+      // simulated E11000 out of create(), then look for a row (org-race-4/research) that does
+      // NOT actually exist. createIfMissing's post-catch findOne must find nothing and re-throw,
+      // not return undefined as if the row were there.
+      const spy = vi.spyOn(groupRepository, 'create').mockImplementationOnce(async () => {
+        const err = new Error('E11000 duplicate key error simulated') as Error & { code: number };
+        err.code = 11000;
+        throw err;
+      });
+
+      await expect(
+        groupRepository.createIfMissing({
+          name: 'Research',
+          description: 'd',
+          type: 'research',
+          organizationId: 'org-race-4',
+        })
+      ).rejects.toThrow(/E11000/);
+
+      spy.mockRestore();
+    });
   });
 });

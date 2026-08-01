@@ -15,8 +15,14 @@
  * (An owner's own gated lake used to be a third difference - the retrieval resolver now
  * restores it, so both surfaces agree.)
  */
-import { DATA_LAKES, getAccessibleDataLakes, hasDeveloperUserTag, isImageServeable } from '@bike4mind/common';
-import type { DataLakeConfig, ManageableDataLakeConfig } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  getAccessibleDataLakes,
+  hasDeveloperUserTag,
+  isImageServeable,
+  normalizeTagPrefix,
+} from '@bike4mind/common';
+import type { DataLakeConfig, IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -67,6 +73,41 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<M
   return [...dynamic, ...staticLakes.filter(s => !dynamicIds.has(s.id))];
 }
 
+/**
+ * Pure gate: is `file` accessible via any of `lakes`? Access = the file carries an accessible
+ * lake's unique meta-tag (covers dynamic lakes safely - membership IS the meta-tag) OR a
+ * static-registry (open) prefix. A dynamic lake's user-controlled prefix is deliberately NOT a
+ * grant here - that was the cross-tenant hole; dynamic-lake files are reached via the meta-tag.
+ * This is the single source of truth for single-file lake authorization (used by the browse
+ * deep-link branch and the /api/files/:id lake-aware fallback). (#836)
+ */
+export function isFileInAccessibleLake(lakes: DataLakeConfig[], file: IFabFileDocument): boolean {
+  const dataLakeTags = lakes.map(dl => dl.datalakeTag);
+  const { openTagPrefixes } = splitTagPrefixes(lakes);
+  const fileTagNames = file.tags?.map(t => t.name) ?? [];
+  const hasMetaTagAccess = dataLakeTags.some(t => fileTagNames.includes(t));
+  const hasOpenPrefixAccess = openTagPrefixes.some(p => fileTagNames.some(t => t.startsWith(p)));
+  return hasMetaTagAccess || hasOpenPrefixAccess;
+}
+
+/**
+ * Resolve + authorize a single FabFile by id against the caller's accessible lakes. Returns the
+ * FabFile doc when it belongs to a lake the caller can access, else null. Used as the fallback
+ * for GET /api/files/:id so curated/shared lake files (which are authorized by lake tag/prefix,
+ * NOT by per-file ACL) open in the shared file viewer. Does NOT itself mint a signed URL - the
+ * caller passes the returned doc through fabFilesService.generateSignedUrl. (#836)
+ */
+export async function findLakeAccessibleFabFile(
+  req: EntitlementRequest,
+  fileId: string
+): Promise<IFabFileDocument | null> {
+  const lakes = await resolveAccessibleLakes(req);
+  if (lakes.length === 0) return null;
+  const file = await fabFileRepository.findById(fileId);
+  if (!file || file.deletedAt) return null;
+  return isFileInAccessibleLake(lakes, file) ? file : null;
+}
+
 export interface DataLakeArticlesQuery {
   id?: string;
   tags?: string | string[];
@@ -86,12 +127,21 @@ const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
  *    matched only within owner/org access (see buildOwnershipConditions). Mixing them
  *    is the cross-tenant leak this guards against.
  * The unique `datalakeTag` (exact match, never a prefix) safely covers every lake.
+ *
+ * Normalized through `normalizeTagPrefix` - the same predicate `buildOwnershipConditions`
+ * applies - because the tag-count aggregates build their regex straight from what we return
+ * here. Handing them the raw field let the two disagree: a lake stored with a padded prefix
+ * (` a:` passes create validation, which never trims) matched `^(a:)` in the ownership arm
+ * but `^( a:)` in the counter, so its files were browsable yet counted zero. An unusable
+ * prefix drops out entirely rather than reaching a regex as an empty alternation.
  */
 function splitTagPrefixes(lakes: DataLakeConfig[]): { openTagPrefixes: string[]; scopedTagPrefixes: string[] } {
   const openTagPrefixes: string[] = [];
   const scopedTagPrefixes: string[] = [];
   for (const lake of lakes) {
-    (STATIC_LAKE_IDS.has(lake.id) ? openTagPrefixes : scopedTagPrefixes).push(lake.fileTagPrefix);
+    const prefix = normalizeTagPrefix(lake.fileTagPrefix);
+    if (!prefix) continue;
+    (STATIC_LAKE_IDS.has(lake.id) ? openTagPrefixes : scopedTagPrefixes).push(prefix);
   }
   return { openTagPrefixes, scopedTagPrefixes };
 }
@@ -118,11 +168,9 @@ export async function queryDataLakeArticles(
   // was the cross-tenant hole; dynamic-lake files are reached via the meta-tag.
   if (query.id) {
     const file = await fabFileRepository.findById(query.id);
-    if (!file || file.deletedAt) return { data: [], total: 0, hasMore: false };
-    const fileTagNames = file.tags?.map(t => t.name) ?? [];
-    const hasMetaTagAccess = dataLakeTags.some(t => fileTagNames.includes(t));
-    const hasOpenPrefixAccess = openTagPrefixes.some(p => fileTagNames.some(t => t.startsWith(p)));
-    if (!hasMetaTagAccess && !hasOpenPrefixAccess) return { data: [], total: 0, hasMore: false };
+    if (!file || file.deletedAt || !isFileInAccessibleLake(lakes, file)) {
+      return { data: [], total: 0, hasMore: false };
+    }
     const { content, chunks, vector, ...metadata } = file as unknown as Record<string, unknown>;
     // A held/blocked uploaded image must not hand out its cached URL via the
     // deep-link/single-id branch. Keep the metadata (so the client can render a
@@ -152,11 +200,6 @@ export async function queryDataLakeArticles(
       order: { by: sortBy, direction: sortDir },
       options: {
         textSearch: !!search,
-        includeShared: true,
-        userGroups: user.groups ?? [],
-        dataLakeTags,
-        dataLakeTagPrefixes: openTagPrefixes,
-        scopedTagPrefixes,
         excludeContent: true,
       },
     },
@@ -176,6 +219,15 @@ export async function queryDataLakeArticles(
           }
         },
       },
+    },
+    // Resolved from the lakes this caller can actually reach, never from the query string
+    // (see SearchFabFilesServerOptions).
+    {
+      includeShared: true,
+      userGroups: user.groups ?? [],
+      dataLakeTags,
+      dataLakeTagPrefixes: openTagPrefixes,
+      scopedTagPrefixes,
     }
   );
 
@@ -192,9 +244,10 @@ export async function queryDataLakeTagCounts(
 ): Promise<{
   tagCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeTagsByPrefix>>;
   uniqueArticleCounts: Awaited<ReturnType<typeof fabFileRepository.countDataLakeUniqueFilesByPrefix>>;
+  lakeFileCounts: Record<string, number>;
 }> {
   if (lakes.length === 0) {
-    return { tagCounts: [], uniqueArticleCounts: { total: 0, byPrefix: {} } };
+    return { tagCounts: [], uniqueArticleCounts: { total: 0, byPrefix: {} }, lakeFileCounts: {} };
   }
   const dataLakeTags = lakes.map(dl => dl.datalakeTag);
   const { openTagPrefixes, scopedTagPrefixes } = splitTagPrefixes(lakes);
@@ -211,10 +264,25 @@ export async function queryDataLakeTagCounts(
     scopedTagPrefixes,
   };
 
-  const [tagCounts, uniqueArticleCounts] = await Promise.all([
+  // Per-lake sizes come from the membership predicate, not from `<prefix>:` tag matches: a lake
+  // whose files carry only the meta-tag (what the upload wizard produces) counts 0 under the
+  // prefix rule, and a file carrying several taxonomy tags counts several times. The lake docs
+  // are fetched because the predicate's prefix arm has to be anchored to the lake's CREATOR -
+  // the config the browse surfaces receive deliberately carries no owner id. A static registry
+  // lake has no doc and no creator, so it falls back to meta-tag-only matching, which is the
+  // safe direction (see buildDataLakeMembershipFilter).
+  const lakeDocs = await Promise.all(dataLakeTags.map(tag => dataLakeRepository.findByDatalakeTag(tag)));
+  const membershipScopes = lakes.map((lake, i) => ({
+    datalakeTag: lake.datalakeTag,
+    fileTagPrefix: lakeDocs[i]?.fileTagPrefix ?? lake.fileTagPrefix,
+    creatorUserId: lakeDocs[i]?.createdByUserId,
+  }));
+
+  const [tagCounts, uniqueArticleCounts, lakeFileCounts] = await Promise.all([
     fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),
     fabFileRepository.countDataLakeUniqueFilesByPrefix(user.id, allPrefixes, countOptions),
+    fabFileRepository.countDataLakeFilesByMembership(membershipScopes),
   ]);
 
-  return { tagCounts, uniqueArticleCounts };
+  return { tagCounts, uniqueArticleCounts, lakeFileCounts };
 }
