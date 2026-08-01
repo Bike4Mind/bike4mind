@@ -3611,7 +3611,7 @@ export const settingsMap = {
     name: 'Model Discovery Price Band (%)',
     defaultValue: 50,
     description:
-      'The largest price move discovery applies without a human, in either direction, measured against the rate in the row it would supersede - so 200 passes anything up to a 3x change. A bigger move is flagged with both sources shown and the existing price keeps billing. 0 flags every move.',
+      'The largest price move discovery applies without a human, measured as the ratio between the new rate and the rate in the row it would supersede - so 200 passes anything up to a 3x change, and 500, the highest this accepts, passes up to 6x. Both read the same in either direction: a 3x cut is the same 200% as a 3x rise. A bigger move is flagged with both sources shown and the existing price keeps billing. 0 flags every move.',
     min: 0,
     max: 500,
     category: 'AI',
