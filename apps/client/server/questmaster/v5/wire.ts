@@ -51,6 +51,13 @@ export const QuestNodeRunWireSchema = z.object({
   errorMessage: z.string().nullable(),
 });
 
+/** Enough to render an artifact chip and open it; never the body. */
+export const QuestNodeArtifactWireSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  title: z.string(),
+});
+
 export const QuestNodeWireSchema = z.object({
   id: z.string(),
   graphId: z.string(),
@@ -67,6 +74,8 @@ export const QuestNodeWireSchema = z.object({
   reviewVerdict: z.enum(REVIEW_VERDICT_VALUES).nullable().optional(),
   enabledTools: z.array(z.string()),
   artifactIds: z.array(z.string()),
+  /** Resolved from artifactIds for display - empty until the run persists them. */
+  artifacts: z.array(QuestNodeArtifactWireSchema),
   isReady: z.boolean(),
   /** Dependencies met AND the status allows a manual dispatch (includes `failed`, which is retryable). */
   isRunnable: z.boolean(),
@@ -90,6 +99,7 @@ export const QuestNodeRunResponseSchema = z.object({
 export type QuestGraphWire = z.infer<typeof QuestGraphWireSchema>;
 export type QuestNodeWire = z.infer<typeof QuestNodeWireSchema>;
 export type QuestNodeRunWire = z.infer<typeof QuestNodeRunWireSchema>;
+export type QuestNodeArtifact = z.infer<typeof QuestNodeArtifactWireSchema>;
 
 export function toQuestGraphWire(graph: IQuestGraphDocument): QuestGraphWire {
   return {
@@ -113,7 +123,7 @@ export function toQuestGraphWire(graph: IQuestGraphDocument): QuestGraphWire {
 
 export function toQuestNodeWire(
   node: IQuestNodeDocument,
-  extras: { isReady: boolean; isRunnable: boolean; run: QuestNodeRunWire | null }
+  extras: { isReady: boolean; isRunnable: boolean; run: QuestNodeRunWire | null; artifacts?: QuestNodeArtifact[] }
 ): QuestNodeWire {
   return {
     id: node.id,
@@ -131,6 +141,7 @@ export function toQuestNodeWire(
     reviewVerdict: node.reviewVerdict,
     enabledTools: node.enabledTools,
     artifactIds: node.artifactIds,
+    artifacts: extras.artifacts ?? [],
     isReady: extras.isReady,
     isRunnable: extras.isRunnable,
     run: extras.run,

@@ -26,6 +26,12 @@ type QuestGraphList = z.infer<typeof QuestGraphListResponseSchema>;
  */
 const RUNNING_POLL_MS = 3_000;
 
+/**
+ * How long after a node completes we keep re-reading to pick up artifacts the
+ * terminal write had not landed yet. See the refetchInterval comment.
+ */
+const ARTIFACT_SETTLE_WINDOW_MS = 30_000;
+
 export const questGraphKeys = {
   all: ['questGraphs'] as const,
   detail: (id: string) => ['questGraphs', id] as const,
@@ -52,7 +58,23 @@ export function useQuestGraph(graphId: string | null) {
     enabled: Boolean(graphId),
     refetchInterval: query => {
       const nodes = query.state.data?.nodes;
-      return nodes?.some(n => n.status === 'in_progress') ? RUNNING_POLL_MS : false;
+      if (!nodes) return false;
+      if (nodes.some(n => n.status === 'in_progress')) return RUNNING_POLL_MS;
+      // Keep polling briefly after a run finishes. The executor calls
+      // markComplete BEFORE persistRunAsQuest writes the artifacts, so the very
+      // poll that first sees `completed` can legitimately precede them - stop
+      // there and the node looks artifact-less until something else refetches.
+      // Bounded by completedAt so a run that genuinely emits no artifacts stops
+      // polling once the window passes, rather than spinning forever.
+      const settling = nodes.some(
+        n =>
+          n.status === 'completed' &&
+          n.run?.answer &&
+          n.artifacts.length === 0 &&
+          n.completedAt &&
+          Date.now() - new Date(n.completedAt).getTime() < ARTIFACT_SETTLE_WINDOW_MS
+      );
+      return settling ? RUNNING_POLL_MS : false;
     },
   });
 }

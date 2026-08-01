@@ -112,7 +112,6 @@ const ArtifactSchema = new Schema(
     // Relationships
     sourceQuestId: {
       type: String,
-      index: true,
     },
     sessionId: {
       type: String,
@@ -183,6 +182,12 @@ ArtifactSchema.index({ createdAt: -1, status: 1 }); // Recent artifacts
 ArtifactSchema.index({ updatedAt: -1, status: 1 }); // Recently updated
 ArtifactSchema.index({ contentHash: 1 }); // Content deduplication
 ArtifactSchema.index({ deletedAt: 1 }); // Soft delete queries
+// Artifacts produced by one agent run, looked up by the Quest that run wrote.
+// Read by QuestMaster v5 to attach a run's artifacts to its node, and by
+// persistAgentArtifacts' quest-level idempotency gate. Moved off the field's
+// `index: true` (see CLAUDE.md) - declaring it in both places is what produced
+// a duplicate-index warning at model load.
+ArtifactSchema.index({ sourceQuestId: 1 });
 
 // Text search index for title and description
 ArtifactSchema.index(
@@ -346,6 +351,25 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
 
   async findDeleted(filter: Record<string, unknown> = {}) {
     return this.find({ ...filter, deletedAt: { $ne: null } });
+  }
+
+  /**
+   * The artifacts a set of agent runs produced, keyed by the Quest each run
+   * wrote. Projected and batched: QuestMaster v5 calls this once per graph read
+   * to attach a node's artifacts, so it must not be an N+1 and must not drag
+   * `content` (which is the whole artifact body) across for a chip label.
+   */
+  async findByQuestIds(
+    questIds: string[]
+  ): Promise<Array<{ id: string; type: string; title: string; sourceQuestId: string }>> {
+    if (!questIds.length) return [];
+    return this.model
+      .find(
+        { sourceQuestId: { $in: questIds }, deletedAt: null },
+        { _id: 0, id: 1, type: 1, title: 1, sourceQuestId: 1 }
+      )
+      .sort({ createdAt: 1 })
+      .lean<Array<{ id: string; type: string; title: string; sourceQuestId: string }>>();
   }
 }
 
