@@ -173,6 +173,8 @@ export interface IAdminSupportSessionResponse {
   session: IAdminSupportSession;
   /** Files attached to the session via `knowledgeIds`. */
   knowledge: IAdminSupportFileSummary[];
+  /** True when `knowledge` hit the row cap and is not the whole list. */
+  knowledgeTruncated: boolean;
   /** Files uploaded into the session (`fabFiles.sessionId`). */
   sessionFiles: IAdminSupportFileSummary[];
   /** True when `sessionFiles` hit the row cap and is not the whole list. */

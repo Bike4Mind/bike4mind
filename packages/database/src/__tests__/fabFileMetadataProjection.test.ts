@@ -31,7 +31,7 @@ describe('fabFileRepository metadata reads', () => {
     const doc = await FabFile.create({ ...heavyFile, sessionId: SESSION });
 
     for (const file of [
-      (await fabFileRepository.findMetadataByIds([doc.id]))[0],
+      (await fabFileRepository.findMetadataByIds([doc.id])).data[0],
       (await fabFileRepository.findMetadataBySessionId(SESSION)).data[0],
     ]) {
       expect(file.fileName).toBe('scan.pdf');
@@ -45,8 +45,8 @@ describe('fabFileRepository metadata reads', () => {
   it('drops ids that are not ObjectIds instead of throwing', async () => {
     const doc = await FabFile.create(heavyFile);
     const found = await fabFileRepository.findMetadataByIds(['not-an-id', doc.id]);
-    expect(found.map(f => f.id)).toEqual([doc.id]);
-    await expect(fabFileRepository.findMetadataByIds([])).resolves.toEqual([]);
+    expect(found.data.map(f => f.id)).toEqual([doc.id]);
+    await expect(fabFileRepository.findMetadataByIds([])).resolves.toEqual({ data: [], hasMore: false });
   });
 
   it('keeps a soft-deleted file visible by id, but out of the session listing', async () => {
@@ -58,8 +58,8 @@ describe('fabFileRepository metadata reads', () => {
     await FabFile.updateOne({ _id: doc.id }, { $set: { deletedAt } });
 
     const byId = await fabFileRepository.findMetadataByIds([doc.id]);
-    expect(byId.map(f => f.id)).toEqual([doc.id]);
-    expect(byId[0].deletedAt).toEqual(deletedAt);
+    expect(byId.data.map(f => f.id)).toEqual([doc.id]);
+    expect(byId.data[0].deletedAt).toEqual(deletedAt);
     expect((await fabFileRepository.findMetadataBySessionId(SESSION)).data).toEqual([]);
   });
 
@@ -73,6 +73,24 @@ describe('fabFileRepository metadata reads', () => {
     expect(capped.hasMore).toBe(true);
 
     const whole = await fabFileRepository.findMetadataBySessionId(SESSION, 10);
+    expect(whole.data).toHaveLength(3);
+    expect(whole.hasMore).toBe(false);
+  });
+
+  // The id list is caller-supplied, so this one is bounded by the SAME cap rather
+  // than by however long a session's knowledgeIds grew.
+  it('caps the by-id read and reports the truncation', async () => {
+    const docs = [];
+    for (const n of [0, 1, 2]) {
+      docs.push(await FabFile.create({ ...heavyFile, fileName: `k${n}.pdf` }));
+    }
+    const ids = docs.map(d => d.id);
+
+    const capped = await fabFileRepository.findMetadataByIds(ids, 2);
+    expect(capped.data).toHaveLength(2);
+    expect(capped.hasMore).toBe(true);
+
+    const whole = await fabFileRepository.findMetadataByIds(ids, 10);
     expect(whole.data).toHaveLength(3);
     expect(whole.hasMore).toBe(false);
   });

@@ -274,14 +274,26 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * look identical to the file never having existed. Callers should surface
    * `deletedAt`. This deliberately differs from `findMetadataBySessionId` below,
    * which lists what a session currently holds; do not "fix" one to match the other.
+   *
+   * Bounded like its sibling: the id list is caller-supplied and a session can
+   * accumulate knowledge references without limit, so an uncapped `$in` would size
+   * both the query and the response off whatever that array grew to. `hasMore`
+   * reports the truncation so a caller can say the list is partial rather than
+   * under-reporting it as complete.
    */
-  async findMetadataByIds(ids: string[]): Promise<IFabFileDocument[]> {
+  async findMetadataByIds(
+    ids: string[],
+    cap = METADATA_PAGE_CAP
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }> {
     const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
-    if (validIds.length === 0) return [];
+    if (validIds.length === 0) return { data: [], hasMore: false };
     const result = await this.fabFileModel
-      .find({ _id: { $in: convertIds(validIds) } }, METADATA_ONLY_PROJECTION)
-      .setOptions({ includeDeleted: true });
-    return result.map(d => d.toJSON());
+      .find({ _id: { $in: convertIds(validIds.slice(0, cap + 1)) } }, METADATA_ONLY_PROJECTION)
+      .setOptions({ includeDeleted: true })
+      .limit(cap + 1);
+    const hasMore = result.length > cap;
+    const rows = hasMore ? result.slice(0, cap) : result;
+    return { data: rows.map(d => d.toJSON()), hasMore };
   }
 
   /**

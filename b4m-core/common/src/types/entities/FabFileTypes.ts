@@ -306,10 +306,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Find files by ID with the heavy and URL-bearing fields projected out, for
    * callers that need to know what a file IS without loading or linking to it.
    * Includes soft-deleted files, so a still-referenced deleted attachment stays
-   * visible as such.
+   * visible as such. Capped; `hasMore` reports truncation rather than hiding it.
    * @param ids - The IDs of the files.
+   * @param cap - Maximum rows to return.
    */
-  findMetadataByIds(ids: string[]): Promise<IFabFileDocument[]>;
+  findMetadataByIds(ids: string[], cap?: number): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
 
   /**
    * As `findMetadataByIds`, for the files a session currently holds (excludes

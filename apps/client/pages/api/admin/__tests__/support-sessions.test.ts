@@ -104,7 +104,7 @@ const fileDoc = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockFindSessionById.mockResolvedValue(session);
-  mockFindMetadataByIds.mockResolvedValue([fileDoc]);
+  mockFindMetadataByIds.mockResolvedValue({ data: [fileDoc], hasMore: false });
   mockFindMetadataBySessionId.mockResolvedValue({ data: [], hasMore: false });
   mockFindPageBySessionId.mockResolvedValue({ data: [], hasMore: false });
   mockRecordAudit.mockResolvedValue({ id: 'audit-1' });
@@ -171,6 +171,7 @@ describe('GET /api/admin/sessions/[id] - support read gate', () => {
       details: {
         knowledgeIdCount: 1,
         knowledgeFound: 1,
+        knowledgeTruncated: false,
         sessionFileCount: 0,
         sessionFilesTruncated: false,
       },

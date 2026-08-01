@@ -125,14 +125,16 @@ const handler = baseApi().get(async (req, res) => {
   // Awaited before responding: an unauditable support read is not served.
   await recordSupportRead(ctx, AdminSupportAccessAction.SessionRead, {
     knowledgeIdCount: knowledgeIds.length,
-    knowledgeFound: knowledge.length,
+    knowledgeFound: knowledge.data.length,
+    knowledgeTruncated: knowledge.hasMore,
     sessionFileCount: sessionFiles.data.length,
     sessionFilesTruncated: sessionFiles.hasMore,
   });
 
   const response: IAdminSupportSessionResponse = {
     session: toSupportSession(ctx.session),
-    knowledge: knowledge.map(toFileSummary),
+    knowledge: knowledge.data.map(toFileSummary),
+    knowledgeTruncated: knowledge.hasMore,
     sessionFiles: sessionFiles.data.map(toFileSummary),
     sessionFilesTruncated: sessionFiles.hasMore,
   };
