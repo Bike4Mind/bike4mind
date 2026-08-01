@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ModelBackend, ModelInfo } from '../../models';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
+import { MODEL_PRICE_UNITS } from './ModelPriceTypes';
 
 /**
  * Stamped on every ModelCatalog append. Bump ONLY when the record shape grows,
@@ -585,10 +586,14 @@ export const DISCOVERY_RUN_TRIGGERS = ['cron', 'startup', 'manual'] as const;
 export const DISCOVERY_RUN_HOSTS = ['hosted', 'selfhost'] as const;
 /** 'partial' commits what it verified and does not advance lastSuccessfulRun. */
 export const DISCOVERY_RUN_STATUSES = ['ok', 'partial', 'failed'] as const;
+/** 'report' computes the whole plan and writes nothing but the run document. */
+export const DISCOVERY_RUN_MODES = ['report', 'write'] as const;
 
 export type DiscoveryRunTrigger = (typeof DISCOVERY_RUN_TRIGGERS)[number];
 export type DiscoveryRunHost = (typeof DISCOVERY_RUN_HOSTS)[number];
 export type DiscoveryRunStatus = (typeof DISCOVERY_RUN_STATUSES)[number];
+/** DiscoveryMode in b4m-core/services/src/modelDiscoveryService/types.ts aliases this. */
+export type DiscoveryRunMode = (typeof DISCOVERY_RUN_MODES)[number];
 
 export const DiscoverySourceReport = z.object({
   name: z.string().min(1),
@@ -628,6 +633,13 @@ export const DiscoveryRunChanges = z.object({
   repriced: z.array(z.string()).optional(),
   flagged: z.array(z.string()).optional(),
   /**
+   * The operator overlaps `flagged` merges in with the price flags. Kept apart
+   * because the two want different verdicts from the operator, and `flagged`
+   * itself may not change shape: the status card counts it and every run already
+   * persisted holds the merged array.
+   */
+  operatorConflicts: z.array(z.string()).optional(),
+  /**
    * Rows the run PLANNED against rows that actually landed. Everything above is
    * the plan, deliberately, so report and write mode report identically - which
    * leaves a write-mode run whose appends all threw indistinguishable from a
@@ -646,10 +658,105 @@ export const DiscoveryDroppedRecord = z.object({
   reason: z.string(),
 });
 
+/**
+ * The five blocks below are the per-model detail behind the counts in
+ * DiscoveryRunChanges, and MUST STAY IN SYNC with the service shapes the runner
+ * persists verbatim: PriceFlag, PlannedPriceRow, PriceSkip, LifecycleTransition
+ * and CatalogDiffEntry in
+ * b4m-core/services/src/modelDiscoveryService/types.ts.
+ *
+ * Every union the SERVICE owns is read here as a free string (`kind`, `reason`,
+ * `signal`, `blockedBy`). Adding a value there is normal, and a stored run that
+ * stopped parsing over one would take the whole report down with it - the same
+ * read-compat rule the catalog rows above follow.
+ */
+const PerMTokRates = z.object({ inputPerMTok: z.number(), outputPerMTok: z.number() });
+
+export const DiscoveryPriceFlag = z.object({
+  modelId: z.string().min(1),
+  kind: z.string(),
+  /** Per-MTok, the readable unit; the row it would have written is per token. */
+  proposed: PerMTokRates,
+  /** The row in force, when there was one. */
+  current: PerMTokRates.optional(),
+  /** Every source that priced this model, so a disagreement names both sides. */
+  sources: z.array(z.string()),
+  /**
+   * The sentence that explains the flag, and the whole reason the flags are
+   * persisted: it used to reach only logger.warn, leaving the admin card with a
+   * flag count and nowhere to learn what it stood for.
+   */
+  detail: z.string(),
+});
+
+export const DiscoveryPlannedPriceRow = z.object({
+  modelId: z.string().min(1),
+  unit: z.enum(MODEL_PRICE_UNITS),
+  inputPerMTok: z.number(),
+  outputPerMTok: z.number(),
+  effectiveFrom: z.date(),
+  /** The sources whose observations produced the value. */
+  sources: z.array(z.string()),
+  note: z.string(),
+});
+
+/** A usable observation that produced neither a row nor a flag, and why. */
+export const DiscoveryPriceSkip = z.object({
+  modelId: z.string().min(1),
+  reason: z.string(),
+});
+
+export const DiscoveryLifecycleTransition = z.object({
+  modelId: z.string().min(1),
+  /** Absent when no row in force carried a lifecycle for this model. */
+  from: z.string().optional(),
+  to: z.string(),
+  signal: z.string(),
+  deprecationDate: z.string().optional(),
+  retirementDate: z.string().optional(),
+  /** Present only when auto-remap applied it; otherwise the successor is a suggestion. */
+  replacedBy: z.string().optional(),
+  autoApplied: z.boolean(),
+});
+
+export const DiscoveryCatalogDiffEntry = z.object({
+  modelId: z.string().min(1),
+  /** 'added' is a model with no catalog row at all; 'updated' is a changed merged view. */
+  kind: z.string(),
+  ownedGroups: z.array(z.string()),
+  changedKeys: z.array(z.string()),
+  lifecycleStatus: z.string(),
+  promoted: z.boolean(),
+  /** Promotion denials, one per failed clause; empty on a promoted model. */
+  blockedBy: z.array(z.string()),
+  operatorOwned: z.boolean(),
+});
+
+/**
+ * Totals behind the capped detail arrays (MAX_PERSISTED_RUN_DETAIL in the
+ * runner). Written only when a slice was actually truncated, so a reader can say
+ * "the first 200 of 260" instead of passing the cap off as the whole set: the
+ * `changes.*` id arrays these explain are NOT capped, so a wide run otherwise
+ * reports 260 flagged in the header and 200 in the section with no marker.
+ */
+export const DiscoveryRunDetailTotals = z.object({
+  priceFlags: z.number().int().nonnegative().optional(),
+  priceRows: z.number().int().nonnegative().optional(),
+  priceSkips: z.number().int().nonnegative().optional(),
+  lifecycleTransitions: z.number().int().nonnegative().optional(),
+  catalogDiff: z.number().int().nonnegative().optional(),
+});
+
 export type IDiscoverySourceReport = z.infer<typeof DiscoverySourceReport>;
 export type IDiscoveryJoinCoverage = z.infer<typeof DiscoveryJoinCoverage>;
 export type IDiscoveryRunChanges = z.infer<typeof DiscoveryRunChanges>;
 export type IDiscoveryDroppedRecord = z.infer<typeof DiscoveryDroppedRecord>;
+export type IDiscoveryPriceFlag = z.infer<typeof DiscoveryPriceFlag>;
+export type IDiscoveryPlannedPriceRow = z.infer<typeof DiscoveryPlannedPriceRow>;
+export type IDiscoveryPriceSkip = z.infer<typeof DiscoveryPriceSkip>;
+export type IDiscoveryLifecycleTransition = z.infer<typeof DiscoveryLifecycleTransition>;
+export type IDiscoveryCatalogDiffEntry = z.infer<typeof DiscoveryCatalogDiffEntry>;
+export type IDiscoveryRunDetailTotals = z.infer<typeof DiscoveryRunDetailTotals>;
 
 export const ModelDiscoveryRun = z.object({
   id: z.string().optional(),
@@ -658,6 +765,15 @@ export const ModelDiscoveryRun = z.object({
   trigger: z.enum(DISCOVERY_RUN_TRIGGERS),
   host: z.enum(DISCOVERY_RUN_HOSTS),
   status: z.enum(DISCOVERY_RUN_STATUSES),
+  /**
+   * What this run was allowed to do, recorded as it ran. A reader may NOT
+   * substitute the modelDiscoveryMode setting for it: the setting can change
+   * between the run and the read, and a 'report' run plans writes and lands none
+   * BY DESIGN - without this, that is indistinguishable from a write run whose
+   * appends all threw, which is the case the plan-vs-appended counters exist for.
+   * Optional: runs written before it existed carry none.
+   */
+  mode: z.enum(DISCOVERY_RUN_MODES).optional(),
   sources: z.array(DiscoverySourceReport).optional(),
   joinCoverage: z.array(DiscoveryJoinCoverage).optional(),
   /** Ids no aggregator matched: a work item, not a log line. */
@@ -667,6 +783,19 @@ export const ModelDiscoveryRun = z.object({
   passes: z.number().int().nonnegative().optional(),
   /** Bounded: the whole point is a trace, and a pathological run can drop thousands. */
   droppedRecords: z.array(DiscoveryDroppedRecord).optional(),
+  /**
+   * The run's own detail, bounded the same way droppedRecords is (see
+   * MAX_PERSISTED_RUN_DETAIL). Optional throughout: every run written before
+   * these existed has to keep parsing, and a run that never reached its final
+   * update has none of them.
+   */
+  priceFlags: DiscoveryPriceFlag.array().optional(),
+  priceRows: DiscoveryPlannedPriceRow.array().optional(),
+  priceSkips: DiscoveryPriceSkip.array().optional(),
+  lifecycleTransitions: DiscoveryLifecycleTransition.array().optional(),
+  catalogDiff: DiscoveryCatalogDiffEntry.array().optional(),
+  /** Present only when one of the arrays above was truncated. */
+  detailTotals: DiscoveryRunDetailTotals.optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -688,4 +817,16 @@ export interface IModelDiscoveryRunRepository extends IBaseRepository<IModelDisc
    * is the exact condition for the "FALLBACK SEED" catalog banner.
    */
   lastSuccessfulRun(host?: DiscoveryRunHost): Promise<IModelDiscoveryRun | null>;
+
+  /**
+   * Newest runs first, for the admin run list. Without it the 6h cron erases
+   * whatever the operator was reading, since only the newest run is reachable.
+   *
+   * A LIST view: the implementation projects the per-model detail arrays out, so
+   * read a run's detail with runById rather than from here.
+   */
+  recentRuns(limit: number, host?: DiscoveryRunHost): Promise<IModelDiscoveryRun[]>;
+
+  /** One run in full (the report). Null for an unknown or malformed id. */
+  runById(id: string): Promise<IModelDiscoveryRun | null>;
 }
