@@ -14,6 +14,7 @@ import type {
   PlannedPriceRow,
   PriceFlag,
   PriceFlagKind,
+  PriceOverride,
   PriceSkip,
   PriceSkipReason,
   SourceContribution,
@@ -110,6 +111,12 @@ export interface PricePlanInput {
 export interface PricePlan {
   rows: IModelPriceInput[];
   flags: PriceFlag[];
+  /**
+   * Models whose price came from a provider over a mirror that disagreed. One
+   * per model, and NOT a subset of `rows`: the provider's value standing
+   * unchanged is the steady state, and the stale mirror is the news either way.
+   */
+  overrides: PriceOverride[];
   /** Usable observations that produced neither a row nor a flag, and why. */
   skipped: PriceSkip[];
 }
@@ -134,6 +141,7 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
 
   const rows: IModelPriceInput[] = [];
   const flags: PriceFlag[] = [];
+  const overrides: PriceOverride[] = [];
   const skipped: PriceSkip[] = [];
   const skip = (modelId: string, reason: PriceSkipReason) => skipped.push({ modelId, reason });
 
@@ -149,19 +157,16 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
       continue;
     }
 
-    const disagreeing = firstDisagreement(observations);
-    if (disagreeing) {
+    const consensus = reachConsensus(observations);
+    if (consensus.kind === 'conflict') {
       flags.push({
         modelId,
         kind: 'source-disagreement',
         // One of the two sides the detail names: a third source's value would be
         // a number the operator cannot find anywhere in the sentence.
-        proposed: perMTokOf(disagreeing[0].price),
+        proposed: perMTokOf(consensus.proposed),
         sources,
-        detail:
-          `sources disagree beyond ${pct(PRICE_AGREEMENT_TOLERANCE)}: ` +
-          `${disagreeing[0].source} ${describe(disagreeing[0].price)} vs ${disagreeing[1].source} ` +
-          `${describe(disagreeing[1].price)}; applied neither`,
+        detail: consensus.detail,
       });
       continue;
     }
@@ -174,13 +179,10 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
     const flag = (kind: PriceFlagKind, price: DiscoveredPrice, detail: string) =>
       flags.push({ modelId, kind, proposed: perMTokOf(price), current: currentPrice, sources, detail });
 
-    const provider = observations.find(observation => observation.kind === 'provider');
-    const aggregators = observations.filter(observation => observation.kind === 'aggregator');
-
     // A lone aggregator is corroboration-free, so it never writes. It is worth
     // an operator's attention only when it contradicts what we already bill.
-    if (!provider && aggregators.length < 2) {
-      const lone = aggregators[0];
+    if (consensus.kind === 'lone') {
+      const lone = consensus.observation;
       if (!currentTier) {
         flag(
           'single-source-untrusted',
@@ -201,11 +203,10 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
       continue;
     }
 
-    // Trusted: a provider's own API, or aggregators that already passed the
-    // agreement check above. The provider value wins; models.dev leads the
-    // aggregators by registration order, not by name.
-    const trusted = provider ?? aggregators[0];
-    const valueSources = provider ? [provider.source] : aggregators.map(observation => observation.source);
+    // Trusted: a provider's own published price, or aggregators that already
+    // passed the agreement check above. models.dev leads the aggregators by
+    // registration order, not by name.
+    const { observation: trusted, valueSources, corroborating, dissenting } = consensus;
     const proposed = trusted.price;
 
     if (current && classifyPriceRow(current) === 'operator') {
@@ -228,6 +229,30 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
     // unpriced at run start falls back to the row in force, which is one this run
     // wrote - its first write had nothing to band against either.
     const bandRow = atRunStart.get(modelId) ?? current;
+
+    // A ladder needs a corroborator that publishes a ladder, not just one that
+    // agrees on the short-prompt price. diverges() is deliberately silent when
+    // only ONE side carries brackets, so a mirror that went flat would otherwise
+    // corroborate the base rates and let the upper bracket be written on a single
+    // scrape's word. Checked here rather than in reachConsensus because a flat row
+    // in force discards the brackets anyway - refusing there would block writes
+    // whose ladder was never going to be used.
+    const ladderUncorroborated =
+      proposed.brackets !== undefined &&
+      current !== undefined &&
+      isTiered(current) &&
+      corroborating.length > 0 &&
+      !corroborating.some(observation => observation.price.brackets !== undefined);
+    if (ladderUncorroborated) {
+      flag(
+        'tiered-pricing-manual',
+        proposed,
+        `${trusted.source} publishes ${describe(proposed)} but ` +
+          `${corroborating.map(observation => observation.source).join(', ')} publish no long-context rates to ` +
+          'corroborate its brackets; repricing a tiered row needs a second source that carries the same ladder'
+      );
+      continue;
+    }
 
     // The read path REPLACES the whole pricing map, so a tiered row may only be
     // superseded by a write that reproduces every tier. That needs a ladder the
@@ -273,6 +298,27 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
       continue;
     }
 
+    // Recorded wherever the provider's value STANDS - both when it is written and
+    // when the row in force already says it. Every refusal above is reported as
+    // its own flag, so this cannot double-report one; but 'unchanged' is the
+    // STEADY STATE once the catalog converges, and that is exactly when "which
+    // mirror has gone stale" is the only fact left to learn.
+    if (dissenting.length > 0) {
+      overrides.push({
+        modelId,
+        source: trusted.source,
+        dissenting: dissenting.map(observation => observation.source),
+        applied: perMTokOf(proposed),
+        // Present tense, like every flag detail: this planner runs identically in
+        // report mode, where nothing is written, so a sentence claiming a write
+        // would be false on the default run.
+        detail:
+          `${trusted.source} publishes ${describe(proposed)} and ` +
+          `${dissenting.map(observation => `${observation.source} ${describe(observation.price)}`).join(', ')} ` +
+          `disagree beyond ${pct(PRICE_AGREEMENT_TOLERANCE)}; the provider value wins`,
+      });
+    }
+
     // Carried forward per tier: the cache and audio rates no feed publishes come
     // from the tier under the SAME threshold, never from the row's lowest one.
     const tiers = planned.map(({ key, price }) => [key, buildTier(price, current?.pricing[key])] as const);
@@ -300,7 +346,7 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
     });
   }
 
-  return { rows, flags, skipped };
+  return { rows, flags, overrides, skipped };
 }
 
 /** One model's comparable cost: the lowest tier's rates, in USD per single token. */
@@ -422,6 +468,101 @@ function usableBrackets(brackets: readonly DiscoveredPriceBracket[] | undefined)
     usable.push({ aboveTokens, ...usableRates(bracket) });
   }
   return usable;
+}
+
+/**
+ * What this run's sources add up to for one model.
+ *
+ * 'conflict' carries the sentence rather than the pair, because the two ways to
+ * reach it read differently to an operator: mirrors that contradict each other,
+ * and mirrors that all contradict the provider.
+ */
+type Consensus =
+  | { kind: 'conflict'; proposed: DiscoveredPrice; detail: string }
+  | { kind: 'lone'; observation: PriceObservation }
+  | {
+      kind: 'trusted';
+      observation: PriceObservation;
+      /** Credited in the row's note: the sources whose value it is. */
+      valueSources: string[];
+      /** Aggregators that agree with a provider; empty in every other case. */
+      corroborating: PriceObservation[];
+      /** Sources overruled by a provider, empty in every other case. */
+      dissenting: PriceObservation[];
+    };
+
+/**
+ * A PROVIDER'S OWN PUBLISHED PRICE IS PRIMARY. WHERE MIRRORS EXIST, one of them
+ * has to agree with it - but not all of them, and the ones that disagree are
+ * recorded and overruled rather than allowed to veto. A provider no aggregator
+ * prices at all still writes alone, which is what it has always done; that is a
+ * standing property of a provider source, not something this rule grants.
+ *
+ * That asymmetry is the whole point. The two aggregators are mirrors of the
+ * provider, and a mirror goes stale on its own schedule: litellm publishes from a
+ * git ref that lags, models.dev re-scrapes on its own cadence. Requiring all of
+ * them to agree hands any one of them a veto over a price the provider itself
+ * publishes, which is how an 80% price cut can keep billing at the old rate until
+ * the slowest mirror catches up.
+ *
+ * With no provider price, nothing here changed: the aggregators are all we have,
+ * so they must agree with each other and there must be at least two of them.
+ */
+function reachConsensus(observations: readonly PriceObservation[]): Consensus {
+  const providers = observations.filter(observation => observation.kind === 'provider');
+  const aggregators = observations.filter(observation => observation.kind === 'aggregator');
+
+  // No provider outranks another, so two of them pricing one model must agree.
+  // Nothing registers two providers for one id today; this is what happens if
+  // something ever does, rather than an arbitrary first-one-wins.
+  const providerConflict = firstDisagreement(providers);
+  if (providerConflict) return conflict(providerConflict, 'mutual');
+
+  const provider = providers[0];
+  if (!provider) {
+    const aggregatorConflict = firstDisagreement(aggregators);
+    if (aggregatorConflict) return conflict(aggregatorConflict, 'mutual');
+    if (aggregators.length < 2) return { kind: 'lone', observation: aggregators[0] };
+    return {
+      kind: 'trusted',
+      observation: aggregators[0],
+      valueSources: aggregators.map(observation => observation.source),
+      corroborating: [],
+      dissenting: [],
+    };
+  }
+
+  const agrees = (observation: PriceObservation) =>
+    !diverges(provider.price, observation.price, PRICE_AGREEMENT_TOLERANCE);
+  const corroborating = aggregators.filter(agrees);
+  const dissenting = aggregators.filter(observation => !agrees(observation));
+  // Primary, not unaccountable: where mirrors exist, one of them has to back the
+  // provider up. All of them dissenting is the shape of a parser that broke
+  // against a docs restructure, which is exactly what must not reprice anything.
+  if (aggregators.length > 0 && corroborating.length === 0) {
+    return conflict([provider, dissenting[0]], 'uncorroborated');
+  }
+  return { kind: 'trusted', observation: provider, valueSources: [provider.source], corroborating, dissenting };
+}
+
+/**
+ * The refusal, in the operator's terms. 'mutual' is two sources of equal standing
+ * contradicting each other; 'uncorroborated' is a provider price that nothing
+ * backs up. Passed in rather than inferred from the pair, because two providers
+ * disagreeing is 'mutual' even though both sides are providers.
+ */
+function conflict([left, right]: [PriceObservation, PriceObservation], reason: 'mutual' | 'uncorroborated'): Consensus {
+  const opening =
+    reason === 'uncorroborated'
+      ? `no source corroborates the provider within ${pct(PRICE_AGREEMENT_TOLERANCE)}`
+      : `sources disagree beyond ${pct(PRICE_AGREEMENT_TOLERANCE)}`;
+  return {
+    kind: 'conflict',
+    proposed: left.price,
+    detail:
+      `${opening}: ${left.source} ${describe(left.price)} vs ${right.source} ${describe(right.price)}; ` +
+      'applied neither',
+  };
 }
 
 /** The first pair that disagrees, so the flag can name both sides. */

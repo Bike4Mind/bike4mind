@@ -107,6 +107,15 @@ const DETAILED_RUN = {
       detail: 'sources disagree beyond 10%: models.dev in 0.2/out 1.2 vs litellm in 1/out 6; applied neither',
     },
   ],
+  priceOverrides: [
+    {
+      modelId: 'gpt-5.6-terra',
+      source: 'openai',
+      dissenting: ['litellm'],
+      applied: { inputPerMTok: 2, outputPerMTok: 12 },
+      detail: 'openai publishes in 2/out 12 $/MTok and litellm in 8/out 24 $/MTok disagree beyond 10%',
+    },
+  ],
   priceSkips: [{ modelId: 'm1', reason: 'unchanged' }],
   lifecycleTransitions: [{ modelId: 'm4', from: 'active', to: 'deprecated', signal: 'absence', autoApplied: false }],
   droppedRecords: [{ source: 'litellm', modelId: 'ghost-1', reason: 'unknown backend' }],
@@ -256,6 +265,15 @@ describe('/api/admin/model-discovery', () => {
         // Absent on the document, defaulted here: the client never guards for
         // undefined.
         priceRows: [],
+        priceOverrides: [
+          {
+            modelId: 'gpt-5.6-terra',
+            source: 'openai',
+            dissenting: ['litellm'],
+            applied: { inputPerMTok: 2, outputPerMTok: 12 },
+            detail: 'openai publishes in 2/out 12 $/MTok and litellm in 8/out 24 $/MTok disagree beyond 10%',
+          },
+        ],
         priceSkips: [{ modelId: 'm1', reason: 'unchanged' }],
         lifecycleTransitions: [
           { modelId: 'm4', from: 'active', to: 'deprecated', signal: 'absence', autoApplied: false },

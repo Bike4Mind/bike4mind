@@ -659,10 +659,10 @@ export const DiscoveryDroppedRecord = z.object({
 });
 
 /**
- * The five blocks below are the per-model detail behind the counts in
+ * The six blocks below are the per-model detail behind the counts in
  * DiscoveryRunChanges, and MUST STAY IN SYNC with the service shapes the runner
- * persists verbatim: PriceFlag, PlannedPriceRow, PriceSkip, LifecycleTransition
- * and CatalogDiffEntry in
+ * persists verbatim: PriceFlag, PlannedPriceRow, PriceOverride, PriceSkip,
+ * LifecycleTransition and CatalogDiffEntry in
  * b4m-core/services/src/modelDiscoveryService/types.ts.
  *
  * Every union the SERVICE owns is read here as a free string (`kind`, `reason`,
@@ -698,6 +698,22 @@ export const DiscoveryPlannedPriceRow = z.object({
   /** The sources whose observations produced the value. */
   sources: z.array(z.string()),
   note: z.string(),
+});
+
+/**
+ * A row written over a source that disagreed with it, which only a provider's own
+ * published price can do. The inverse of a flag: that is a value discovery
+ * declined to apply, this is one it applied anyway, and the dissenting source is
+ * the operator's cue that a mirror has gone stale.
+ */
+export const DiscoveryPriceOverride = z.object({
+  modelId: z.string().min(1),
+  /** The provider source whose value was written. */
+  source: z.string(),
+  /** Sources that disagreed with it and were not applied. */
+  dissenting: z.array(z.string()),
+  applied: PerMTokRates,
+  detail: z.string(),
 });
 
 /** A usable observation that produced neither a row nor a flag, and why. */
@@ -742,6 +758,7 @@ export const DiscoveryCatalogDiffEntry = z.object({
 export const DiscoveryRunDetailTotals = z.object({
   priceFlags: z.number().int().nonnegative().optional(),
   priceRows: z.number().int().nonnegative().optional(),
+  priceOverrides: z.number().int().nonnegative().optional(),
   priceSkips: z.number().int().nonnegative().optional(),
   lifecycleTransitions: z.number().int().nonnegative().optional(),
   catalogDiff: z.number().int().nonnegative().optional(),
@@ -753,6 +770,7 @@ export type IDiscoveryRunChanges = z.infer<typeof DiscoveryRunChanges>;
 export type IDiscoveryDroppedRecord = z.infer<typeof DiscoveryDroppedRecord>;
 export type IDiscoveryPriceFlag = z.infer<typeof DiscoveryPriceFlag>;
 export type IDiscoveryPlannedPriceRow = z.infer<typeof DiscoveryPlannedPriceRow>;
+export type IDiscoveryPriceOverride = z.infer<typeof DiscoveryPriceOverride>;
 export type IDiscoveryPriceSkip = z.infer<typeof DiscoveryPriceSkip>;
 export type IDiscoveryLifecycleTransition = z.infer<typeof DiscoveryLifecycleTransition>;
 export type IDiscoveryCatalogDiffEntry = z.infer<typeof DiscoveryCatalogDiffEntry>;
@@ -791,6 +809,7 @@ export const ModelDiscoveryRun = z.object({
    */
   priceFlags: DiscoveryPriceFlag.array().optional(),
   priceRows: DiscoveryPlannedPriceRow.array().optional(),
+  priceOverrides: DiscoveryPriceOverride.array().optional(),
   priceSkips: DiscoveryPriceSkip.array().optional(),
   lifecycleTransitions: DiscoveryLifecycleTransition.array().optional(),
   catalogDiff: DiscoveryCatalogDiffEntry.array().optional(),
