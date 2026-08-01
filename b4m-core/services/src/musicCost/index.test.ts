@@ -37,8 +37,24 @@ describe('estimateMusicCredits', () => {
     expect(usdCost).toBeCloseTo(10 * (0.15 / 60), 6);
   });
 
+  it('rounds a fractional credit cost UP rather than down or to nearest', () => {
+    // 3050ms -> $0.0076250 -> 15.25 raw credits. The only nearby length whose raw
+    // value discriminates ceil (16) from round/floor (15), so it is what actually
+    // pins the rounding mode - every whole-second length looks identical.
+    expect(estimateMusicCredits('elevenlabs', { lengthMs: 3050 }).requiredCredits).toBe(16);
+  });
+
   it('never charges below 1 credit', () => {
+    // The shortest accepted clip must still cost something, or a caller can drive
+    // real provider spend for free.
     const { requiredCredits } = estimateMusicCredits('elevenlabs', { lengthMs: 3000 });
+    expect(requiredCredits).toBe(15);
     expect(requiredCredits).toBeGreaterThanOrEqual(1);
+  });
+
+  it('throws for an unknown vendor rather than estimating zero', () => {
+    expect(() => estimateMusicCredits('nope' as 'elevenlabs', { lengthMs: 30000 })).toThrow(
+      UnsupportedMusicVendorError
+    );
   });
 });

@@ -169,6 +169,8 @@ describe('POST /api/ai/music', () => {
         feature: 'music_generation',
         provider: 'elevenlabs',
         model: 'music_v1',
+        // Must match the ledger write's source or the two analytics surfaces disagree.
+        source: 'api',
         ownerId: 'u1',
         ownerType: CreditHolderType.User,
         creditsCharged: 150,
@@ -177,6 +179,40 @@ describe('POST /api/ai/music', () => {
         status: 'ok',
       })
     );
+  });
+
+  it('forwards caller-supplied forceInstrumental and format to the provider and to persistence', async () => {
+    getSettingsValue.mockReturnValue(false);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 30 });
+    generate.mockResolvedValue({ audio: Buffer.from('pcm'), contentType: 'audio/L16' });
+    persistGeneratedAudio.mockResolvedValue({ saved: true, fabFileId: 'fab1', fileName: 'music-x.pcm_44100' });
+
+    const { res, promise } = run({
+      prompt: 'instrumental study loop',
+      lengthMs: 30000,
+      forceInstrumental: true,
+      format: 'pcm_44100',
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    // Real values, not `undefined`: toHaveBeenCalledWith uses toEqual semantics, so
+    // asserting `undefined` can't tell "forwarded" from "silently dropped". Dropping
+    // either field here means a caller asking for an instrumental PCM track quietly
+    // gets vocals in mp3.
+    expect(generate).toHaveBeenCalledWith('instrumental study loop', {
+      lengthMs: 30000,
+      forceInstrumental: true,
+      modelId: 'music_v1',
+      format: 'pcm_44100',
+    });
+    // format is also the persisted file's extension fallback when the content type
+    // is unmapped, so it must survive the hand-off to persistence too.
+    expect(persistGeneratedAudio).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'music', format: 'pcm_44100', contentType: 'audio/L16' })
+    );
+    expect(res.getHeader('Content-Type')).toBe('audio/L16');
+    expect(res.getHeader('Content-Length')).toBe(3);
   });
 
   it('does NOT reserve or charge when enforceCredits is off, but still records analytics (COGS, 0 credits)', async () => {

@@ -141,6 +141,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
         feature: 'music_generation',
         provider,
         model: modelId,
+        // Matches this call's ledger write (deductCreditsWithOrgSupport, source: 'api').
+        source: 'api',
         inputTokens: 0,
         outputTokens: 0,
         cachedInputTokens: 0,
