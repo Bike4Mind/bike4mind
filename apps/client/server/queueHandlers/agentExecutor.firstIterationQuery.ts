@@ -30,7 +30,7 @@ export const MAX_PREAMBLE_FILES = 25;
  * agent path does not union `session.enabledTools`, so the omission is invisible from here
  * without the caller passing its resolved tool names in.
  */
-const CONTENT_READ_TOOL = 'retrieve_knowledge_content';
+export const CONTENT_READ_TOOL = 'retrieve_knowledge_content';
 
 /** Discovery tool for files trimmed by `MAX_PREAMBLE_FILES`; also optional in a profile. */
 const CONTENT_SEARCH_TOOL = 'search_knowledge_base';
