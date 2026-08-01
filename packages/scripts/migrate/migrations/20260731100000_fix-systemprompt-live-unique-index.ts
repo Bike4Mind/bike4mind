@@ -10,8 +10,8 @@ export interface LiveSystemPromptRow {
 
 /**
  * Of the live rows sharing a promptId, keep the most recently touched one and return the `_id`s of
- * the rest (the ones to soft-delete). Ties resolve to the first row in input order, so the caller's
- * sort decides; rows with a unique promptId are never returned.
+ * the rest (the ones to soft-delete). Ties resolve to whichever row came first in `rows`; rows with
+ * a unique promptId are never returned.
  */
 export function selectSupersededDuplicates(rows: LiveSystemPromptRow[]): unknown[] {
   const byPromptId = new Map<string, LiveSystemPromptRow[]>();
@@ -54,7 +54,7 @@ const migration: MigrationFile = {
         { _id: { $in: superseded } as never },
         { $set: { deletedAt: new Date() } }
       );
-      console.log(`✓ Soft-deleted ${result.modifiedCount} duplicate live system prompt(s)`);
+      console.log(`Soft-deleted ${result.modifiedCount} duplicate live system prompt(s)`);
     }
 
     // Same name as the schema declaration: a differently-named index on the same key pattern
@@ -64,7 +64,7 @@ const migration: MigrationFile = {
       { promptId: 1 },
       { unique: true, partialFilterExpression: { deletedAt: null }, name: 'promptId_1' }
     );
-    console.log('✓ Rebuilt promptId_1 as a live-only partial unique index');
+    console.log('Rebuilt promptId_1 as a live-only partial unique index');
   },
 
   down: async () => {
