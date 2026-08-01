@@ -74,6 +74,53 @@ describe('openai pricing parser', () => {
     expect(rows.has('gpt-4-0613')).toBe(true);
   });
 
+  it('drops a row whose cell count does not match the header', () => {
+    // Columns are located by name but read by POSITION, so one unescaped pipe in
+    // one rate cell shifts every rate on that row one column over - and the row
+    // count does not move, so no shift guard sees it. Before the arity check this
+    // read gpt-5.6-sol as out $6.25 (real: $30) with a fabricated ladder.
+    const strayPipe = pricingMarkdown.replace(
+      '| gpt-5.6-sol | $5.00 | $0.50 | $6.25 | $30.00 |',
+      '| gpt-5.6-sol | $5.00 | $2.50 | $0.50 | $6.25 | $30.00 |'
+    );
+    const parsed = parseOpenAiPricing(strayPipe);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.rows.some(row => row.modelId === 'gpt-5.6-sol')).toBe(false);
+    // Only that row: the cells still line up for every other one.
+    expect(parsed.rows.find(row => row.modelId === 'gpt-5.6-luna')).toMatchObject({ outputPerMTok: 1.2 });
+  });
+
+  it('fails outright when the header grows a column, because every row then mismatches', () => {
+    const widened = pricingMarkdown.replace(
+      '| Model | Short context input |',
+      '| Model | Service tier | Short context input |'
+    );
+    expect(parseOpenAiPricing(widened).ok).toBe(false);
+  });
+
+  it('refuses two tables headed "Standard pricing" instead of taking the first', () => {
+    // Batch is exactly half of Standard. Resolving by document order would halve
+    // every OpenAI price and still report ok.
+    const ambiguous = pricingMarkdown.replace('### Batch pricing data', '### Standard pricing data (batch)');
+    const parsed = parseOpenAiPricing(ambiguous);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.error).toContain('2 tables');
+  });
+
+  it('refuses a table that lists one model id twice', () => {
+    // The model cell strips every parenthetical, so a modality annotation moving
+    // into this table collapses two rates onto one id with no reading to prefer.
+    const luna = '| gpt-5.6-luna | $0.20 | $0.02 | $0.25 | $1.20 | $0.40 | $0.04 | $0.50 | $1.80 |';
+    expect(pricingMarkdown).toContain(luna);
+    const duplicated = pricingMarkdown.replace(
+      luna,
+      `${luna}\n| gpt-5.6-luna (audio) | $9.00 | $0.90 | $1.00 | $18.00 | $18.00 | $1.80 | $2.00 | $27.00 |`
+    );
+    expect(parseOpenAiPricing(duplicated).ok).toBe(false);
+  });
+
   it('fails on a restructured page rather than returning a partial table', () => {
     expect(parseOpenAiPricing(read('parser-broke-pricing.md')).ok).toBe(false);
   });
@@ -140,6 +187,12 @@ describe('openai token counts', () => {
     expect(parseTokenCount('0K')).toBeUndefined();
     expect(parseTokenCount('none')).toBeUndefined();
     expect(parseTokenCount('0.5')).toBeUndefined();
+  });
+
+  it('is anchored, so it cannot mine a number out of surrounding text', () => {
+    expect(parseTokenCount('abc 123K')).toBeUndefined();
+    expect(parseTokenCount('1,05M')).toBeUndefined();
+    expect(parseTokenCount('272K tokens')).toBeUndefined();
   });
 });
 

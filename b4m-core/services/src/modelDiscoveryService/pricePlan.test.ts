@@ -426,6 +426,10 @@ describe('planPriceWrites provider primacy', () => {
     // The whole point of recording it: the operator learns WHICH mirror is stale.
     expect(result.overrides[0].detail).toContain('litellm');
     expect(result.overrides[0].detail).toContain('in 1/out 6');
+    // Present tense: this planner runs identically in report mode, where nothing
+    // is written, so the sentence may not claim a write.
+    expect(result.overrides[0].detail).toContain('the provider value wins');
+    expect(result.overrides[0].detail).not.toContain('was applied');
   });
 
   it('records nothing when every source agreed', () => {
@@ -513,6 +517,63 @@ describe('planPriceWrites provider primacy', () => {
     // though both sides of the pair are providers.
     expect(result.flags[0].detail).toContain('sources disagree beyond');
     expect(result.flags[0].detail).not.toContain('corroborates');
+  });
+
+  it('reports a stale mirror on a model whose row already carries the right price', () => {
+    // The steady state: the provider's value is already in force, so there is no
+    // row to write - and that is exactly when "which mirror is stale" is the only
+    // fact left. Recording this only against a write would hide it forever.
+    const result = plan({
+      contributions: [provider(CUT), modelsDev(CUT), litellm(STALE)],
+      // Exactly what buildTier produces from these rates, which is what a prior
+      // run would have written; 0.2e-6 is a DIFFERENT float from 0.2 / 1e6.
+      rowsInForce: [inForce({ '0': { input: 0.2 / 1_000_000, output: 1.2 / 1_000_000 } })],
+      bandPct: 500,
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.skipped).toEqual([{ modelId: 'gpt-6', reason: 'unchanged' }]);
+    expect(result.overrides).toHaveLength(1);
+    expect(result.overrides[0]).toMatchObject({ source: 'openai', dissenting: ['litellm'] });
+  });
+
+  it('refuses a provider ladder no mirror corroborates, rather than writing the upper rung alone', () => {
+    // diverges() is silent when only one side publishes brackets, so a mirror
+    // that went flat still "agrees" on the base rates. Without this the upper
+    // bracket would be written on one scrape's word.
+    const ladder: DiscoveredPrice = {
+      inputPerMTok: 0.2,
+      outputPerMTok: 1.2,
+      brackets: [{ aboveTokens: 272_000, inputPerMTok: 0.4, outputPerMTok: 1.8 }],
+    };
+    const flat: DiscoveredPrice = { inputPerMTok: 0.2, outputPerMTok: 1.2 };
+    const result = plan({
+      contributions: [provider(ladder), modelsDev(flat), litellm(flat)],
+      rowsInForce: [inForce({ '272000': { input: 1e-6, output: 6e-6 }, '1050000': { input: 2e-6, output: 9e-6 } })],
+      bandPct: 500,
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'tiered-pricing-manual' });
+    expect(result.flags[0].detail).toContain('no long-context rates');
+  });
+
+  it('still lets a flat row take a provider price no mirror carries a ladder for', () => {
+    // A flat row discards the brackets anyway, so refusing there would block a
+    // write whose ladder was never going to be used.
+    const ladder: DiscoveredPrice = {
+      inputPerMTok: 0.2,
+      outputPerMTok: 1.2,
+      brackets: [{ aboveTokens: 272_000, inputPerMTok: 0.4, outputPerMTok: 1.8 }],
+    };
+    const result = plan({
+      contributions: [provider(ladder), modelsDev({ inputPerMTok: 0.2, outputPerMTok: 1.2 })],
+      rowsInForce: [inForce({ '0': CUT_IN_FORCE })],
+      bandPct: 500,
+    });
+
+    expect(result.flags).toEqual([]);
+    expect(perMTok(result.rows[0].pricing)).toEqual({ '0': { input: 0.2, output: 1.2 } });
   });
 
   it('lets a provider ladder reprice a tiered row over a stale flat mirror', () => {

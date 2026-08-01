@@ -187,7 +187,7 @@ describe('DiscoveryRunDetailModal', () => {
               applied: { inputPerMTok: 0.2, outputPerMTok: 1.2 },
               detail:
                 'openai publishes in 0.2/out 1.2 $/MTok and litellm in 1/out 6 $/MTok disagree beyond 10%; ' +
-                'the provider value was applied',
+                'the provider value wins',
             },
           ],
         }),
@@ -195,13 +195,44 @@ describe('DiscoveryRunDetailModal', () => {
     });
     renderModal();
 
-    const row = await screen.findByTestId('discovery-run-price-override-gpt-5.6-luna');
+    const row = await screen.findByTestId('discovery-run-price-override-row-gpt-5.6-luna');
     expect(row).toHaveTextContent('$0.2 in / $1.2 out');
     expect(row).toHaveTextContent('openai');
     expect(row).toHaveTextContent('litellm');
-    expect(screen.getByTestId('discovery-run-override-detail-gpt-5.6-luna')).toHaveTextContent(
-      'the provider value was applied'
+    expect(screen.getByTestId('discovery-run-price-override-detail-gpt-5.6-luna')).toHaveTextContent(
+      'the provider value wins'
     );
+    expect(screen.getByTestId('discovery-run-modal')).toHaveTextContent('Overruled a disagreeing source (1)');
+  });
+
+  it('does not claim an override was applied on a run that wrote nothing', async () => {
+    // Report mode is the fail-safe default, so this section sits directly under
+    // the "wrote nothing" banner on most runs; a past-tense title there is how
+    // that banner stops being believed. Overrides are also raised for an
+    // unchanged row, where nothing was written in either mode.
+    mockGet.mockResolvedValue({
+      data: {
+        run: runWith({
+          mode: 'report',
+          priceFlags: [],
+          priceOverrides: [
+            {
+              modelId: 'gpt-5.6-luna',
+              source: 'openai',
+              dissenting: ['litellm'],
+              applied: { inputPerMTok: 0.2, outputPerMTok: 1.2 },
+              detail: 'openai publishes in 0.2/out 1.2 $/MTok and litellm in 1/out 6 $/MTok disagree beyond 10%',
+            },
+          ],
+        }),
+      },
+    });
+    renderModal();
+
+    await screen.findByTestId('discovery-run-price-overrides-table');
+    const modal = screen.getByTestId('discovery-run-modal');
+    expect(modal).toHaveTextContent('Overruled a disagreeing source (1)');
+    expect(modal).not.toHaveTextContent('Applied');
   });
 
   it('renders a run document written before overrides existed', async () => {

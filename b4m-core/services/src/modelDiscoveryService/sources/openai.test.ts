@@ -8,7 +8,13 @@ import models from './__fixtures__/openai/models.json';
 import expected from './__fixtures__/openai/expected.json';
 import unknownEnum from './__fixtures__/openai/unknown-enum.json';
 import { expectDegradesOnFailure, makeContext, stubFetch, type StubResponse } from './__fixtures__/testSupport';
-import { createOpenAiSource, mergeOpenAiPricing, normalizeOpenAiModels, OPENAI_MODELS_URL } from './openai';
+import {
+  createOpenAiSource,
+  mergeOpenAiPricing,
+  normalizeOpenAiModels,
+  OPENAI_MAX_MODEL_DOC_FETCHES,
+  OPENAI_MODELS_URL,
+} from './openai';
 import { OPENAI_PRICING_URL, openAiModelDocUrl } from './openaiDocs';
 import type { DiscoveredModel, SourceResult } from '../types';
 
@@ -99,14 +105,18 @@ describe('openai source fetch', () => {
   });
 
   it('sends the bearer credential to the models endpoint, and no credential to the docs', async () => {
-    const seen: Array<{ url: string; auth: string | null }> = [];
-    const restore = stubFetch(url => {
-      seen.push({ url, auth: null });
+    const seen: Array<{ url: string; auth: unknown }> = [];
+    const restore = stubFetch((url, init) => {
+      seen.push({ url, auth: (init?.headers as Record<string, string> | undefined)?.authorization });
       return url === OPENAI_MODELS_URL ? { body: listing(['gpt-5']) } : { raw: pricingMarkdown };
     });
     try {
       await createOpenAiSource().fetch(makeContext());
       expect(seen.map(entry => entry.url)).toEqual([OPENAI_MODELS_URL, OPENAI_PRICING_URL]);
+      expect(seen[0].auth).toBe('Bearer test-openai');
+      // platform.openai.com is a third-party-shaped read that also follows
+      // redirects, so it must never carry the key.
+      expect(seen[1].auth).toBeUndefined();
     } finally {
       restore();
     }
@@ -210,6 +220,55 @@ describe('openai source pricing', () => {
       const result = await createOpenAiSource().fetch(makeContext());
       expect(result.ok).toBe(true);
       expect(pricedBy(result, 'gpt-5.6-luna')).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it('refuses a breakpoint from a page that is not the model it asked for', async () => {
+    // The docs request follows redirects, so a soft 404 answers 200 with somebody
+    // else's document - and the breakpoint parser takes the first match in
+    // whatever it is handed. Serving sol's page for luna must yield no price.
+    const { route } = routes({
+      list: listing(['gpt-5.6-luna']),
+      modelPages: { 'gpt-5.6-luna': { raw: read('model-gpt-5.6-sol.md') } },
+    });
+    const restore = stubFetch(route);
+    try {
+      const result = await createOpenAiSource().fetch(makeContext());
+      expect(result.ok).toBe(true);
+      expect(pricedBy(result, 'gpt-5.6-luna')).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it('bounds the model-page fan-out at the cap, whatever the page asks for', async () => {
+    // The guard against a restructure that made every row look like it needs a
+    // breakpoint. Build a Standard table of long-context rows with no inline
+    // annotation, one per listed model, and count the pages actually fetched.
+    const many = Array.from({ length: OPENAI_MAX_MODEL_DOC_FETCHES + 8 }, (_unused, index) => `gpt-many-${index}`);
+    const table = [
+      '### Standard pricing data',
+      '',
+      '| Model | Short context input | Short context cached input | Short context cache writes |' +
+        ' Short context output | Long context input | Long context cached input | Long context cache writes |' +
+        ' Long context output |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      ...many.map(id => `| ${id} | $1.00 | - | - | $2.00 | $2.00 | - | - | $4.00 |`),
+      '',
+    ].join('\n');
+
+    const { seen, route } = routes({
+      list: listing(many),
+      pricing: { raw: table },
+      modelPages: Object.fromEntries(many.map(id => [id, { raw: read('model-gpt-5.6-luna.md') }])),
+    });
+    const restore = stubFetch(route);
+    try {
+      await createOpenAiSource().fetch(makeContext());
+      const modelPages = seen.filter(url => url !== OPENAI_MODELS_URL && url !== OPENAI_PRICING_URL);
+      expect(modelPages).toHaveLength(OPENAI_MAX_MODEL_DOC_FETCHES);
     } finally {
       restore();
     }

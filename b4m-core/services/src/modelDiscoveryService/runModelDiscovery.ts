@@ -710,8 +710,9 @@ function aggregate(passes: readonly CompletedPass[]): RunAggregate {
       plans.flatMap(plan => plan.prices.flags),
       flag => `${flag.modelId} ${flag.kind}`
     ),
-    // One per model: an override is tied to a row, and no model is repriced by
-    // more than one pass.
+    // One per model, newest kept. A pass whose append threw leaves the row out
+    // of force, so the next pass re-plans that model and produces the same
+    // override again - and two identical entries would read as two mirrors.
     priceOverrides: lastPerKey(
       plans.flatMap(plan => plan.prices.overrides),
       override => override.modelId

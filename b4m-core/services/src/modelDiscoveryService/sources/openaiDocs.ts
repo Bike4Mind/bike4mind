@@ -13,11 +13,13 @@ export const openAiModelDocUrl = (modelId: string): string =>
   `https://platform.openai.com/docs/models/${encodeURIComponent(modelId)}.md`;
 
 /**
- * The heading over the pay-as-you-go table. The page carries four tables with
- * BYTE-IDENTICAL headers - Standard, Batch, Flex and Fast - and Batch is exactly
- * half of Standard, so a selector that fell through to the next matching table
- * would halve every OpenAI price with nothing to show for it. Selection is by
- * heading and fails closed.
+ * The heading over the pay-as-you-go table. Batch and Flex carry headers
+ * byte-identical to Standard's (Fast carries the four short-context ones), and
+ * Batch is exactly half of Standard, so a selector that fell through to another
+ * matching table would halve every OpenAI price with nothing to show for it.
+ * Selection is by heading, and MORE than one match is refused rather than
+ * resolved by document order - "the first table that matched" is not a reading
+ * anyone can check.
  */
 const STANDARD_HEADING = /^standard pricing/i;
 
@@ -58,9 +60,16 @@ export interface OpenAiPriceRow extends OpenAiRates {
   longContextAboveTokens?: number;
 }
 
-/** "272K" -> 272000, "1.05M" -> 1050000, "272,000" -> 272000. Integers only. */
+/**
+ * "272K" -> 272000, "1.05M" -> 1050000, "272,000" -> 272000. Integers only.
+ *
+ * Anchored, and commas must be thousands separators: both callers hand it an
+ * already-constrained capture group, but an unanchored match would read
+ * "abc 123K" as 123000, and a loose comma would read the European "1,05M" as
+ * 105000000 - a 100x breakpoint - for whoever calls it next.
+ */
 export function parseTokenCount(value: string): number | undefined {
-  const match = /([\d,]+(?:\.\d+)?)\s*([km])?/i.exec(value.trim());
+  const match = /^(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*([km])?$/i.exec(value.trim());
   if (!match) return undefined;
   const digits = Number(match[1]?.replace(/,/g, ''));
   if (!Number.isFinite(digits) || digits <= 0) return undefined;
@@ -88,16 +97,24 @@ export function parseOpenAiModelCell(cell: string): { modelId: string; longConte
 }
 
 /**
- * The Standard pricing table. Rates a row leaves as "-" are absent rather than
- * zero: pricePlan reads a published 0 as free and an absent rate as "carry the
- * one in force forward", and only the second is true here.
+ * The Standard pricing table.
+ *
+ * A rate cell of "-" is absent rather than zero: pricePlan reads a published 0
+ * as free and an absent rate as "carry the one in force forward", and only the
+ * second is true here. That applies to the individual CACHE rates; losing both
+ * long-context columns instead drops the whole ladder, which is a different
+ * outcome (see OpenAiPriceRow.longContext and toPrice in openai.ts).
  */
 export function parseOpenAiPricing(markdown: string): ParseResult<OpenAiPriceRow> {
   const all = tables(markdown);
   if (all.length === 0) return { ok: false, error: 'pricing.md contained no tables' };
 
-  const table = all.find(candidate => STANDARD_HEADING.test(candidate.heading));
-  if (!table) return { ok: false, error: 'pricing.md has no "Standard pricing" table' };
+  const matching = all.filter(candidate => STANDARD_HEADING.test(candidate.heading));
+  if (matching.length === 0) return { ok: false, error: 'pricing.md has no "Standard pricing" table' };
+  if (matching.length > 1) {
+    return { ok: false, error: `pricing.md has ${matching.length} tables headed "Standard pricing"` };
+  }
+  const table = matching[0];
 
   const column = (pattern: RegExp) => table.headers.findIndex(header => pattern.test(plain(header)));
   const at = {
@@ -119,10 +136,29 @@ export function parseOpenAiPricing(markdown: string): ParseResult<OpenAiPriceRow
   }
 
   const rows: OpenAiPriceRow[] = [];
+  const seen = new Set<string>();
   for (const row of table.rows) {
+    // Columns are located by NAME, then read by POSITION, so a row whose cell
+    // count does not match the header's reads every rate one column over -
+    // silently, and with the row count unchanged. One unescaped pipe in one rate
+    // cell is enough. The cells still line up for every other row, so the row is
+    // dropped rather than the table: a header that grew a column mismatches every
+    // row and falls through to the zero-row failure below.
+    if (row.length !== table.headers.length) continue;
+
     const parsed = parseOpenAiModelCell(row[0] ?? '');
     const rates = ratesAt(row, at.shortInput, at.shortOutput, at.shortCacheRead, at.shortCacheWrite);
     if (!parsed || !rates) continue;
+
+    // Two rows for one id is a price with no reading to prefer - the same
+    // situation usableBrackets refuses a whole ladder for. The model cell strips
+    // every parenthetical, so a modality annotation moving into this table
+    // ("gpt-realtime (audio)" / "(text)") would otherwise pick whichever came
+    // last, across an 8x spread on the page's own grouped tables.
+    if (seen.has(parsed.modelId)) {
+      return { ok: false, error: `pricing.md Standard table lists ${parsed.modelId} more than once` };
+    }
+    seen.add(parsed.modelId);
 
     const longContext = ratesAt(row, at.longInput, at.longOutput, at.longCacheRead, at.longCacheWrite);
     rows.push({ ...parsed, ...rates, ...(longContext ? { longContext } : {}) });

@@ -188,6 +188,14 @@ describe('ModelDiscoveryRunRepository', () => {
             effectiveFrom: new Date('2026-07-01T00:00:00Z'),
           },
         ],
+        priceOverrides: [
+          {
+            modelId: 'gpt-bare',
+            source: 'openai',
+            applied: { inputPerMTok: 1, outputPerMTok: 2 },
+            detail: 'the provider value wins',
+          },
+        ],
         lifecycleTransitions: [{ modelId: 'gpt-bare', to: 'deprecated', signal: 'absence' }],
         catalogDiff: [{ modelId: 'gpt-bare', kind: 'updated' }],
       })
@@ -197,6 +205,7 @@ describe('ModelDiscoveryRunRepository', () => {
 
     expect(stored?.priceFlags?.[0].sources).toEqual([]);
     expect(stored?.priceRows?.[0]).toMatchObject({ sources: [], note: '' });
+    expect(stored?.priceOverrides?.[0].dissenting).toEqual([]);
     expect(stored?.lifecycleTransitions?.[0].autoApplied).toBe(false);
     expect(stored?.catalogDiff?.[0]).toMatchObject({
       ownedGroups: [],
@@ -214,6 +223,7 @@ describe('ModelDiscoveryRunRepository', () => {
     const stored = await modelDiscoveryRunRepository.runById(created.id);
 
     expect(stored?.priceFlags ?? []).toEqual([]);
+    expect(stored?.priceOverrides ?? []).toEqual([]);
     expect(stored?.catalogDiff ?? []).toEqual([]);
   });
 

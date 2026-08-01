@@ -30,6 +30,17 @@ export const OPENAI_MODELS_URL = 'https://api.openai.com/v1/models';
 export const OPENAI_MAX_MODEL_DOC_FETCHES = 12;
 
 /**
+ * Budget for the docs leg, separate from the source deadline.
+ *
+ * The listing is already in hand by the time these run, and the runner races the
+ * whole `fetch()` against the source deadline: a docs host that HANGS would take
+ * the successful api.openai.com listing down with it, costing this backend its
+ * availability signal and its absence bookkeeping for the run. Prices are the
+ * optional half of this source and must not be able to do that.
+ */
+export const OPENAI_DOCS_BUDGET_MS = 20_000;
+
+/**
  * OpenAI's list is four fields wide (id, object, created, owned_by) and no richer
  * endpoint exists, so the API half of this source is an availability signal and
  * nothing else: context and capabilities still come from the aggregators.
@@ -160,15 +171,21 @@ export function createOpenAiSource(): DiscoverySource {
       // "OpenAI retired everything". Failing here keeps absence bookkeeping frozen.
       if (records.length === 0) return { ok: false, error: 'model list was empty', httpStatus: response.status };
 
-      const pricing = await readPricing(records, ctx);
+      const pricing = await readPricing(records, docsContext(ctx));
 
       return compact<DiscoverySourceOk>({
         ok: true,
         records: mergeOpenAiPricing(records, pricing),
         authoritativeFor: [ModelBackend.OpenAI],
         httpStatus: response.status,
-        // Only when the parser ran: a page that failed to fetch has no count, and
-        // comparing against a missing one would read as a 100% move.
+        // Set only when the parser ran, because comparing against a missing count
+        // would read as a 100% move. OBSERVABILITY ONLY: a detected shift logs and
+        // raises DocsParserRowShift, and the runner feeds droppedDocsSources to
+        // planLifecycleSignals alone - it never suppresses a price, from this
+        // source or from anthropic. This source emits no lifecycle at all, so a
+        // shift here changes nothing about what the run writes. What actually
+        // protects the rates is the table and column selection below, the
+        // corroboration rule, and the price band.
         parserRows: pricing ? { pricing: pricing.length } : undefined,
       });
     },
@@ -184,8 +201,8 @@ async function readPricing(
   models: readonly DiscoveredModel[],
   ctx: DiscoveryFetchContext
 ): Promise<OpenAiPriceRow[] | undefined> {
-  // The docs host redirects and this request carries no credential, so following
-  // is safe here and only here (see HttpRequest.followRedirects).
+  // The docs host redirects, and following is safe on a request that carries no
+  // credential (see HttpRequest.followRedirects for what a redirect would replay).
   const response = await fetchText(
     { url: OPENAI_PRICING_URL, headers: { accept: 'text/markdown, text/plain' }, followRedirects: true },
     ctx
@@ -240,9 +257,28 @@ async function readBreakpoint(modelId: string, ctx: DiscoveryFetchContext): Prom
     ctx.logger.warn(`[model-discovery] openai docs ${url} unavailable`);
     return undefined;
   }
+  // This request follows redirects, so a soft 404 or an index page answers 200
+  // with somebody else's document - and the breakpoint parser takes the first
+  // match in whatever it is handed. Every model page states its own id, so
+  // require it rather than trusting the URL we asked for.
+  if (!response.text.includes(`Model ID: \`${modelId}\``)) {
+    ctx.logger.warn(`[model-discovery] openai docs: ${url} did not answer with ${modelId}'s page`);
+    return undefined;
+  }
   const breakpoint = parseOpenAiLongContextBreakpoint(response.text);
   if (breakpoint === undefined) {
     ctx.logger.warn(`[model-discovery] openai docs: ${modelId} publishes long-context rates but no breakpoint`);
   }
   return breakpoint;
+}
+
+/**
+ * The context the docs leg runs under: the run's signal, plus a budget of its
+ * own so a hung docs host cannot consume the source deadline and take the
+ * listing down with it (see OPENAI_DOCS_BUDGET_MS).
+ */
+function docsContext(ctx: DiscoveryFetchContext): DiscoveryFetchContext {
+  const deadlineAt = new Date(Math.min(ctx.deadlineAt.getTime(), Date.now() + OPENAI_DOCS_BUDGET_MS));
+  const budget = AbortSignal.timeout(Math.max(0, deadlineAt.getTime() - Date.now()));
+  return { ...ctx, deadlineAt, signal: AbortSignal.any([ctx.signal, budget]) };
 }
