@@ -33,6 +33,42 @@ describe('OverwatchProduct.postingChannels', () => {
     expect(saved.postingChannels).toEqual([]);
   });
 
+  describe('documents stored before the field existed', () => {
+    // Insert through the driver so schema defaults never run - this is exactly what a
+    // product written before `postingChannels` existed looks like on disk. Schema defaults
+    // do not apply to `.lean()` reads, so without repository normalization every one of
+    // these reads hands back `undefined` and breaks the iterate-unconditionally contract.
+    beforeEach(async () => {
+      await OverwatchProduct.collection.insertOne({
+        productId: 'legacy',
+        name: 'Legacy Product',
+        socialLinks: [],
+        customEvents: [],
+        campaignLinks: [],
+        status: 'active',
+      } as never);
+    });
+
+    it('reads back an empty array from getByProductId', async () => {
+      const found = await overwatchProductRepository.getByProductId('legacy');
+      expect(found?.postingChannels).toEqual([]);
+    });
+
+    it('reads back an empty array from the list queries', async () => {
+      expect((await overwatchProductRepository.getAllProducts())[0].postingChannels).toEqual([]);
+      expect((await overwatchProductRepository.getActiveProducts())[0].postingChannels).toEqual([]);
+    });
+
+    it('reads back an empty array from an upsert that omits the field', async () => {
+      const saved = await overwatchProductRepository.upsertProduct({
+        ...base,
+        productId: 'legacy',
+        name: 'Legacy Renamed',
+      });
+      expect(saved.postingChannels).toEqual([]);
+    });
+  });
+
   it('round-trips label, url, platform and notes', async () => {
     await overwatchProductRepository.upsertProduct({ ...base, postingChannels: [channel()] });
 
@@ -65,7 +101,7 @@ describe('OverwatchProduct.postingChannels', () => {
 
   it('leaves stored channels untouched when a caller omits the field', async () => {
     // The compatibility guarantee: `postingChannels` is optional on the write path, and
-    // omitting it must not wipe what is already there — a caller that predates the field
+    // omitting it must not wipe what is already there - a caller that predates the field
     // (or simply doesn't manage it) can still update a product safely.
     await overwatchProductRepository.upsertProduct({ ...base, postingChannels: [channel()] });
 
