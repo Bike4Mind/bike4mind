@@ -44,9 +44,12 @@ const isMetaTag = (name: string): boolean => name.toLowerCase().startsWith(DATAL
  * canonical meta-tag. Only a LEAVE does, because clearing the lake's prefixed content tags cannot
  * be expressed as an absence in that array.
  *
- * These writes are NOT covered by any surrounding transaction (the repository primitives take no
- * session), so a failure part-way through `commit()` leaves the file's membership half-changed.
- * Stats are recomputed from source afterwards, so they converge; the tag state does not roll back.
+ * Both callers today (`PUT /api/files/:id` and session summarization) wrap the array write and
+ * `commit()` in one `withTransaction`, and the membership write reaches Mongoose as a query, so
+ * `transactionAsyncLocalStorage` joins it to that session without it being threaded through: a
+ * failure part-way through `commit()` rolls the whole thing back. Keep that wrapper. Called
+ * WITHOUT one - the shape the tag-toggle door uses - the phases are separate writes, and a
+ * failure between them leaves membership half-changed until the next recompute heals the stats.
  *
  * A meta-tag that resolves to no lake is refused when the caller is trying to APPLY it, matching
  * the route gate; the same string being dropped is let through as a plain tag removal, since an
