@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { humanSessionActorName, reasonForHookEvent, type HearthEvent } from '@bike4mind/hearth';
+import { humanSessionActorName, sanitizeSessionLabel, reasonForHookEvent, type HearthEvent } from '@bike4mind/hearth';
 import {
   hearthRepository,
   MAX_PRESENCE_FIELD_LENGTH,
@@ -222,7 +222,12 @@ export async function resolveRequestActor(
 
   const base = user.username ?? user.email ?? 'user';
   const identity = humanSessionActorName(base, session?.id);
-  const displayLabel = session?.label ? humanSessionActorName(base, session.id, session.label) : undefined;
+  // Sanitize BEFORE deciding whether to set a label. Keying off the raw label's
+  // truthiness would let one that sanitizes away entirely ('()', control chars)
+  // still resolve to the slug form and overwrite a friendly label already
+  // stored for this session; omitting it leaves that stored value alone.
+  const safeLabel = sanitizeSessionLabel(session?.label);
+  const displayLabel = safeLabel ? humanSessionActorName(base, session?.id, safeLabel) : undefined;
 
   // Omit the options argument entirely when there is no label, rather than
   // passing an explicit undefined: ensureActor treats a missing label as "leave

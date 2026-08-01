@@ -161,6 +161,19 @@ describe('resolveRequestActor', () => {
     expect(label.startsWith('erik ')).toBe(true);
   });
 
+  /**
+   * A label that sanitizes to nothing must not overwrite a friendly label
+   * already stored for this session. Omitting the options argument is what
+   * makes ensureActor leave the stored value alone; setting it would resolve to
+   * the slug form and clobber a good name with a worse one.
+   */
+  it('omits displayLabel entirely when nothing survives sanitization', async () => {
+    await resolveRequestActor(USER, undefined, { id: 'session-a', label: '()' });
+
+    expect(identityArgs()).toEqual(['u1', 'human', `erik (${sessionSlug('session-a')})`]);
+    expect(identityArgs()).toHaveLength(3);
+  });
+
   it('lets a machine name itself and ignores any session for it', async () => {
     await resolveRequestActor(USER, { kind: 'agent', displayName: 'Claude Code (teal-lynx)' }, { id: 'session-a' });
     expect(identityArgs()).toEqual(['u1', 'agent', 'Claude Code (teal-lynx)']);
