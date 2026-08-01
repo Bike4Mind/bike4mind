@@ -18,9 +18,22 @@ interface MinimalLogger {
  * each line is ~100-150 chars, and the preamble lands inside the user's
  * first message where the LLM has to read it on every iteration's context
  * replay. The agent can still discover trimmed files via
- * `search_knowledge_base`.
+ * `search_knowledge_base` when that tool is in the run's toolbelt.
  */
 export const MAX_PREAMBLE_FILES = 25;
+
+/**
+ * The tool that turns a `fabFileId` from the preamble into content. A run whose toolbelt omits
+ * it cannot read an attached file at all, because this module injects metadata only - so the
+ * preamble must not tell the agent to use a tool it was never given. An orchestration profile
+ * may legitimately omit it to keep a loop on task (see `agentExecutor.optiProfile.ts`), and the
+ * agent path does not union `session.enabledTools`, so the omission is invisible from here
+ * without the caller passing its resolved tool names in.
+ */
+const CONTENT_READ_TOOL = 'retrieve_knowledge_content';
+
+/** Discovery tool for files trimmed by `MAX_PREAMBLE_FILES`; also optional in a profile. */
+const CONTENT_SEARCH_TOOL = 'search_knowledge_base';
 
 /**
  * Sanitize a filename for safe interpolation inside the `[ATTACHED FILES ...]`
@@ -47,6 +60,12 @@ interface FabFileAccessibleRepo {
  * preamble listing each file's name, mime type, and fabFileId so the agent is
  * aware of them and can pull content on demand via `retrieve_knowledge_content`.
  *
+ * `availableToolNames` is the run's RESOLVED toolbelt. When it lacks
+ * `retrieve_knowledge_content` the preamble flips to telling the agent the files cannot be
+ * read in this run, because metadata-only injection plus a missing reader is what made an
+ * agent claim it "couldn't access the attached file" and ask the user to paste the contents
+ * (the file itself was complete, chunked, and vectorized).
+ *
  * Mirrors the pattern in `ServerSubagentOrchestrator` (`taskWithFiles`) - we
  * inject metadata, not content, so the agent decides what to read instead of
  * burning context on files it may not need. Content materialization (parity
@@ -72,7 +91,8 @@ export async function buildFirstIterationQuery(
   sessionKnowledgeIds: string[],
   logger: MinimalLogger,
   repo: FabFileAccessibleRepo,
-  scope: Record<string, unknown>
+  scope: Record<string, unknown>,
+  availableToolNames: readonly string[]
 ): Promise<string> {
   // `sessionFabFileIds` + `messageFileIds` are client-snapshotted at dispatch
   // (stable across Lambda handoffs), while `sessionKnowledgeIds` is re-read
@@ -118,13 +138,34 @@ export async function buildFirstIterationQuery(
   const fileLines = listed.map(
     f => `  - "${escapePreambleFilename(f.fileName)}" (${f.mimeType || 'unknown'}) -> fabFileId: ${f.id}`
   );
-  const trailer = truncated
-    ? `\n  ...(${files.length - MAX_PREAMBLE_FILES} more — use search_knowledge_base to discover them)`
-    : '';
-  return (
-    `${baseQuery}\n\n[ATTACHED FILES — Use these fabFileId values with retrieve_knowledge_content ` +
-    `to access content. Use the exact filename and fabFileId provided.]\n${fileLines.join('\n')}${trailer}`
-  );
+  const canRead = availableToolNames.includes(CONTENT_READ_TOOL);
+  const canSearch = availableToolNames.includes(CONTENT_SEARCH_TOOL);
+
+  const hiddenCount = files.length - MAX_PREAMBLE_FILES;
+  const trailer = !truncated
+    ? ''
+    : canSearch
+      ? `\n  ...(${hiddenCount} more - use ${CONTENT_SEARCH_TOOL} to discover them)`
+      : `\n  ...(${hiddenCount} more, not listed and not reachable in this run)`;
+
+  // Loud on purpose: an attachment the run cannot open is a silent dead end for the user, and
+  // the cause is always a profile tool list rather than anything wrong with the file.
+  if (!canRead) {
+    logger.warn('[FileContext] Files are attached but this run has no content-reading tool', {
+      resolved: files.length,
+      contentReadTool: CONTENT_READ_TOOL,
+    });
+  }
+
+  const header = canRead
+    ? `[ATTACHED FILES - Use these fabFileId values with ${CONTENT_READ_TOOL} to access content. ` +
+      'Use the exact filename and fabFileId provided.]'
+    : '[ATTACHED FILES - METADATA ONLY. This run has no file-reading tool, so their contents are ' +
+      'NOT available to you. Do not claim to have read or analyzed them, and do not offer an ' +
+      'analysis as though you had. Name the files, state plainly that you cannot open them in ' +
+      'this run, and ask the user to paste the contents or retry with file access enabled.]';
+
+  return `${baseQuery}\n\n${header}\n${fileLines.join('\n')}${trailer}`;
 }
 
 /**
@@ -147,10 +188,20 @@ export async function maybeBuildFirstIterationQuery(
     execution: { userId: string; messageFileIds?: string[]; sessionFabFileIds?: string[] };
     sessionKnowledgeIds: string[];
     scope: Record<string, unknown>;
+    /** The run's resolved toolbelt - see `buildFirstIterationQuery`. */
+    availableToolNames: readonly string[];
   },
   logger: MinimalLogger,
   repo: FabFileAccessibleRepo
 ): Promise<string | undefined> {
   if (!args.isNewExecution || args.iterationIndex !== 0) return undefined;
-  return buildFirstIterationQuery(args.baseQuery, args.execution, args.sessionKnowledgeIds, logger, repo, args.scope);
+  return buildFirstIterationQuery(
+    args.baseQuery,
+    args.execution,
+    args.sessionKnowledgeIds,
+    logger,
+    repo,
+    args.scope,
+    args.availableToolNames
+  );
 }

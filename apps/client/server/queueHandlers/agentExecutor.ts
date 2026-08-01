@@ -1290,10 +1290,17 @@ async function processExecution(
       )
     );
 
+    // Dedupe: a caller may already have enabled create_mission/mission_status;
+    // a raw append would make buildSharedTools wrap the same tool twice.
+    // Named rather than inlined because the `[ATTACHED FILES]` preamble below has to know
+    // whether this run can actually read a file - buildSharedTools only surfaces tools named
+    // here, so this array IS the run's toolbelt.
+    const resolvedToolNames = [
+      ...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools]),
+    ];
+
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
-      // Dedupe: a caller may already have enabled create_mission/mission_status;
-      // a raw append would make buildSharedTools wrap the same tool twice.
-      enabledTools: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
+      enabledTools: resolvedToolNames,
       externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
       config: subagentToolConfig,
       mcpToolsByServer,
@@ -1819,6 +1826,7 @@ async function processExecution(
           execution,
           sessionKnowledgeIds: session.knowledgeIds ?? [],
           scope: fabFileReadScope,
+          availableToolNames: resolvedToolNames,
         },
         logger,
         fabFileRepository
