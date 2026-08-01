@@ -60,6 +60,8 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   getAccessibleFiles: vi.fn(),
   findByIdAndUserId: vi.fn(),
   findAllInIds: vi.fn(),
+  findMetadataByIds: vi.fn(),
+  findMetadataBySessionId: vi.fn(),
   deleteManyInIds: vi.fn(),
   findAllByIds: vi.fn(),
   findByBatchId: vi.fn(),
