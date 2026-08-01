@@ -17,19 +17,19 @@ import type { AgentStep } from '@bike4mind/agents';
  * Nothing is lost by windowing: the complete step trace is committed to
  * session.messages when the turn ends and rendered once through <Static>,
  * which is what actually lands in terminal scrollback.
+ *
+ * Heights here are exact rather than estimated, and that is load-bearing:
+ * MessageItem renders every live trace line with `wrap="truncate-end"` and
+ * collapses whitespace, so a step occupies a fixed number of rows no matter how
+ * long its text or how narrow the terminal. Estimating wrapped rows instead
+ * looks reasonable and is wrong - Ink wraps with `wrapAnsi(trim: false, hard:
+ * true)`, whose word-boundary waste compounds per line, so any chars/width
+ * estimate runs short exactly when the terminal is narrow. If the truncation in
+ * MessageItem is ever relaxed, this module has to go back to measuring.
  */
 
-/** Floor for the trace budget so a very short terminal still shows something. */
-export const MIN_TRACE_ROWS = 4;
-
-/** paddingLeft on the trace Box (2) plus the nested result Box (2). */
-const TRACE_INDENT = 4;
-
-/** Columns the thought bubble glyph plus its trailing space occupy. */
-const THOUGHT_PREFIX_COLS = 3;
-
-/** Row held back for the "N earlier steps" hint so the total stays within `rows`. */
-const HINT_ROWS = 1;
+/** Rows the trace Box spends on the "N earlier steps" hint and its bottom margin. */
+const TRACE_BOX_CHROME_ROWS = 2;
 
 /** Character caps MessageItem applies to tool args and tool results. */
 export const ACTION_ARG_LIMIT = 100;
@@ -47,54 +47,34 @@ export function truncateValue(value: unknown, maxLength: number): string {
   return str.slice(0, maxLength) + '...';
 }
 
-const wrappedRows = (text: string, width: number): number =>
-  text.split('\n').reduce((rows, line) => rows + Math.max(1, Math.ceil(line.length / width)), 0);
-
 const isRenderable = (step: AgentStep, showThoughts: boolean): boolean =>
   step.type === 'action' || (step.type === 'thought' && showThoughts);
 
 /**
- * Rows `MessageItem` will spend on `steps[index]`, including the blank
- * marginTop row and - for actions - the trailing observation rendered as the
- * "Result:" line. Steps that render nothing cost 0.
+ * Rows `MessageItem` spends on `steps[index]` in the live frame: a blank
+ * marginTop row, one truncated line, and - for an action - one more line for the
+ * observation that follows it. Steps that render nothing cost 0.
  */
-function stepRows(steps: AgentStep[], index: number, width: number, showThoughts: boolean): number {
+function stepRows(steps: AgentStep[], index: number, showThoughts: boolean): number {
   const step = steps[index];
-
   if (step.type === 'thought') {
-    return showThoughts ? 1 + wrappedRows(step.content, Math.max(1, width - THOUGHT_PREFIX_COLS)) : 0;
+    return showThoughts ? 2 : 0;
   }
-
   if (step.type !== 'action') {
     return 0;
   }
+  return steps[index + 1]?.type === 'observation' ? 3 : 2;
+}
 
-  const toolName = step.metadata?.toolName || 'unknown';
-  const args = step.metadata?.toolInput ? ` - ${truncateValue(step.metadata.toolInput, ACTION_ARG_LIMIT)}` : '';
-  let rows = 1 + wrappedRows(`${toolName}${args}`, width);
-
-  const observation = steps[index + 1];
-  if (observation?.type === 'observation') {
-    rows += wrappedRows(`Result: ${truncateValue(observation.content, OBSERVATION_LIMIT)}`, width);
-  }
-
+/** Rows a whole window occupies, excluding the trace Box chrome. */
+export function measureTraceRows(steps: AgentStep[], { showThoughts = true }: { showThoughts?: boolean } = {}): number {
+  let rows = 0;
+  for (let i = 0; i < steps.length; i++) rows += stepRows(steps, i, showThoughts);
   return rows;
 }
 
 const countRenderable = (steps: AgentStep[], showThoughts: boolean): number =>
   steps.filter(step => isRenderable(step, showThoughts)).length;
-
-/** Shortens an oversized step so it alone cannot overflow the row budget. */
-function clampContent(step: AgentStep, rows: number, traceWidth: number): AgentStep {
-  // Must match the width stepRows() charges this step type, or the clamped copy
-  // wraps to more rows than the budget allows.
-  const width = step.type === 'thought' ? Math.max(1, traceWidth - THOUGHT_PREFIX_COLS) : traceWidth;
-  const maxChars = Math.max(width, (rows - 1) * width);
-  if (step.content.length <= maxChars) {
-    return step;
-  }
-  return { ...step, content: step.content.slice(0, Math.max(0, maxChars - 3)) + '...' };
-}
 
 export interface LiveTraceWindow {
   /** Contiguous tail of the trace that fits the budget. */
@@ -103,21 +83,27 @@ export interface LiveTraceWindow {
   hiddenSteps: number;
 }
 
+const EMPTY_WINDOW: LiveTraceWindow = { steps: [], hiddenSteps: 0 };
+
 /**
- * Picks the newest slice of `steps` that renders within `rows`. The slice stays
- * contiguous so each action keeps the observation that follows it.
+ * Picks the newest slice of `steps` that renders within `rows`, which is the
+ * total height the trace Box may occupy - the hint line and bottom margin are
+ * charged against it. The slice stays contiguous so each action keeps the
+ * observation that follows it.
  */
 export function windowLiveTrace(
   steps: AgentStep[],
-  { rows, columns, showThoughts = true }: { rows: number; columns: number; showThoughts?: boolean }
+  { rows, showThoughts = true }: { rows: number; showThoughts?: boolean }
 ): LiveTraceWindow {
-  const budget = Math.max(MIN_TRACE_ROWS, Math.floor(rows) - HINT_ROWS);
-  const width = Math.max(1, columns - TRACE_INDENT);
+  const budget = Math.floor(rows) - TRACE_BOX_CHROME_ROWS;
+  if (budget <= 0 || steps.length === 0) {
+    return EMPTY_WINDOW;
+  }
 
   let used = 0;
   let start = steps.length;
   for (let i = steps.length - 1; i >= 0; i--) {
-    const height = stepRows(steps, i, width, showThoughts);
+    const height = stepRows(steps, i, showThoughts);
     if (height > 0 && used + height > budget) break;
     used += height;
     start = i;
@@ -126,12 +112,14 @@ export function windowLiveTrace(
   if (start < steps.length) {
     // Zero-height steps are free, so the walk can stop on an observation whose
     // action fell outside the window. It renders nothing - drop it.
-    while (start < steps.length && stepRows(steps, start, width, showThoughts) === 0) start++;
-    return { steps: steps.slice(start), hiddenSteps: countRenderable(steps.slice(0, start), showThoughts) };
+    while (start < steps.length && stepRows(steps, start, showThoughts) === 0) start++;
+    if (start < steps.length) {
+      return { steps: steps.slice(start), hiddenSteps: countRenderable(steps.slice(0, start), showThoughts) };
+    }
   }
 
-  // The newest step alone overflows the budget (a long thought). Show a
-  // clamped copy rather than an empty trace.
+  // Nothing fit whole. Only an action can be trimmed further, by dropping the
+  // "Result:" line that its observation renders (3 rows down to 2).
   let newest = -1;
   for (let i = steps.length - 1; i >= 0; i--) {
     if (isRenderable(steps[i], showThoughts)) {
@@ -139,12 +127,9 @@ export function windowLiveTrace(
       break;
     }
   }
-  if (newest < 0) {
-    return { steps: [], hiddenSteps: 0 };
+  if (newest < 0 || budget < 2) {
+    return EMPTY_WINDOW;
   }
 
-  return {
-    steps: steps.slice(newest).map((step, idx) => (idx === 0 ? clampContent(step, budget, width) : step)),
-    hiddenSteps: countRenderable(steps.slice(0, newest), showThoughts),
-  };
+  return { steps: [steps[newest]], hiddenSteps: countRenderable(steps.slice(0, newest), showThoughts) };
 }

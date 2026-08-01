@@ -38,12 +38,19 @@ export const MessageItem = React.memo(function MessageItem({
   const isUser = message.role === 'user';
   const [terminalCols] = useStdoutDimensions();
 
+  // Live frame: every trace line is truncated to one row and whitespace-collapsed
+  // so the window's row budget is exact. See liveStepWindow.ts - the height bound
+  // depends on this, and relaxing it reintroduces the scrollback wipe.
+  const isLive = liveTraceRows !== undefined;
+  const traceWrap = isLive ? 'truncate-end' : 'wrap';
+  const oneLine = (text: string) => (isLive ? text.replace(/\s+/g, ' ') : text);
+
   const allSteps = message.metadata?.steps;
   const { steps: traceSteps, hiddenSteps }: LiveTraceWindow = React.useMemo(() => {
     if (!allSteps) return { steps: [], hiddenSteps: 0 };
     if (liveTraceRows === undefined) return { steps: allSteps, hiddenSteps: 0 };
-    return windowLiveTrace(allSteps, { rows: liveTraceRows, columns: terminalCols, showThoughts });
-  }, [allSteps, liveTraceRows, terminalCols, showThoughts]);
+    return windowLiveTrace(allSteps, { rows: liveTraceRows, showThoughts });
+  }, [allSteps, liveTraceRows, showThoughts]);
 
   const visibleTraceSteps = traceSteps.filter(
     s => (showThoughts && s.type === 'thought') || s.type === 'action'
@@ -74,8 +81,10 @@ export const MessageItem = React.memo(function MessageItem({
       {!isUser && (visibleTraceSteps > 0 || hiddenSteps > 0) && (
         <Box paddingLeft={2} flexDirection="column" marginBottom={1}>
           {hiddenSteps > 0 && (
-            <Text dimColor>
-              {`... ${hiddenSteps} earlier ${hiddenSteps === 1 ? 'step' : 'steps'} - full trace prints when the turn ends`}
+            <Text dimColor wrap="truncate-end">
+              {/* Deliberately does not promise the trace later: a turn the user
+                  aborts with ESC discards its steps instead of printing them. */}
+              {`... ${hiddenSteps} earlier ${hiddenSteps === 1 ? 'step' : 'steps'} hidden`}
             </Text>
           )}
           {traceSteps
@@ -84,7 +93,7 @@ export const MessageItem = React.memo(function MessageItem({
                 if (!showThoughts) return null;
                 return (
                   <Box key={idx} marginTop={1} flexDirection="column">
-                    <Text dimColor>{`💭 ${step.content}`}</Text>
+                    <Text dimColor wrap={traceWrap}>{`💭 ${oneLine(step.content)}`}</Text>
                   </Box>
                 );
               }
@@ -103,15 +112,20 @@ export const MessageItem = React.memo(function MessageItem({
 
                 return (
                   <Box key={idx} marginTop={1} flexDirection="column">
-                    <Box>
+                    {/* Name and args share one <Text> so the live frame can hold
+                        the pair to a single row; nested <Text> keeps the colours. */}
+                    <Text wrap={traceWrap}>
                       <Text color="yellow">{formattedToolName}</Text>
                       {toolInput && !hideArgs && (
-                        <Text dimColor>{` • ${truncateValue(toolInput, ACTION_ARG_LIMIT)}`}</Text>
+                        <Text dimColor>{` • ${oneLine(truncateValue(toolInput, ACTION_ARG_LIMIT))}`}</Text>
                       )}
-                    </Box>
+                    </Text>
                     {result && (
                       <Box paddingLeft={2}>
-                        <Text dimColor>{`Result: ${truncateValue(result, OBSERVATION_LIMIT)}`}</Text>
+                        <Text
+                          dimColor
+                          wrap={traceWrap}
+                        >{`Result: ${oneLine(truncateValue(result, OBSERVATION_LIMIT))}`}</Text>
                       </Box>
                     )}
                   </Box>

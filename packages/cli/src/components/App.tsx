@@ -24,10 +24,12 @@ import type { McpManager } from '../utils/mcpAdapter';
 import { processFileReferences, hasFileReferences } from '../utils/processFileReferences.js';
 import type { CommandDefinition } from '../config/commands.js';
 import { useStdoutDimensions } from '../hooks/useStdoutDimensions.js';
-import { MIN_TRACE_ROWS } from './liveStepWindow.js';
-
-/** Live-frame rows reserved for chrome below the step trace. Deliberately generous. */
-const LIVE_CHROME_ROWS = 12;
+/**
+ * Live-frame rows reserved for everything outside the step trace: the thinking
+ * line and its margin, the bordered input box and the status bar come to six,
+ * and the rest is headroom for the background agent/shell status blocks.
+ */
+const LIVE_CHROME_ROWS = 10;
 
 interface AppProps {
   onMessage: (message: string) => Promise<void>;
@@ -130,12 +132,11 @@ export function App({
   // repaints at the new width instead of keeping the stale startup width.
   const [terminalCols, terminalRows] = useStdoutDimensions();
 
-  // Rows the live frame spends on everything other than the step trace: the
-  // thinking line, background agent/shell status, the queued rows, the bordered
-  // input box and the status bar. Ink wipes and rebuilds scrollback on every
-  // frame taller than the viewport (see liveStepWindow.ts), so the trace only
-  // gets what is left over.
-  const liveTraceRows = Math.max(MIN_TRACE_ROWS, terminalRows - LIVE_CHROME_ROWS - messageQueue.length);
+  // Ink wipes and rebuilds scrollback on every frame taller than the viewport
+  // (see liveStepWindow.ts), so the trace only gets the rows left over. On a
+  // terminal too short to have any left over it drops out entirely - keeping
+  // scrollback usable matters more than a two-line trace.
+  const liveTraceRows = Math.max(0, terminalRows - LIVE_CHROME_ROWS - messageQueue.length);
 
   const handleSubmit = React.useCallback(
     async (input: string) => {
