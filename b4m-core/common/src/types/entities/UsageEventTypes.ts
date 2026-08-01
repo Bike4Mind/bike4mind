@@ -17,6 +17,7 @@ export const USAGE_EVENT_FEATURES = [
   'transcription',
   'text_to_speech',
   'sound_effects',
+  'music_generation',
   'agent_execution',
   'completion_api',
   'tool',

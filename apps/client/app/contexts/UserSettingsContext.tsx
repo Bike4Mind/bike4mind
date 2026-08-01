@@ -54,7 +54,7 @@ export interface UserSettings {
   /** Layer-2 Agent-mode preference. Default `'off'` per `IUserPreferences`. */
   agentModeDefault: 'off' | 'auto' | 'on';
   showFunTools: boolean;
-  /** Whether generated TTS / sound-effect audio is saved as a browsable FabFile. Default: true. */
+  /** Whether generated audio (TTS, sound-effect, music) is saved as a browsable FabFile. Default: true. */
   saveGeneratedAudio: boolean;
 }
 

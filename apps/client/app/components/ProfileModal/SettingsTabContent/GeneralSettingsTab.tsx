@@ -681,8 +681,8 @@ const GeneralSettingsTab = () => {
                   Save Generated Audio
                 </Typography>
                 <Typography level="body-sm" sx={{ mt: 0.5 }}>
-                  Keep text-to-speech and sound-effect audio in your files so you can browse and replay it. Counts
-                  toward your storage limit.
+                  Keep text-to-speech, sound-effect, and music audio in your files so you can browse and replay it.
+                  Counts toward your storage limit.
                 </Typography>
               </Box>
               <Switch
