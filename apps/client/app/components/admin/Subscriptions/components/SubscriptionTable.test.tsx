@@ -1,12 +1,20 @@
+/**
+ * Locks the User column onto the API's `owner` field. Both layouts are covered
+ * because the mobile card and desktop table read the owner independently.
+ */
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { CssVarsProvider } from '@mui/joy/styles';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
 import SubscriptionTable from './SubscriptionTable';
 import { SubscriptionData } from '../types';
 
-// Force the desktop table branch (deterministic; avoids matchMedia in jsdom).
-vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
+// Pick the layout branch directly; jsdom has no matchMedia for the real hook.
+const mocks = vi.hoisted(() => ({ isMobile: false }));
+vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => mocks.isMobile }));
+
+const appTheme = extendTheme({ ...getThemeConfig() });
 
 const baseSub = (over: Partial<SubscriptionData>): SubscriptionData => ({
   id: 'sub_1',
@@ -23,13 +31,20 @@ const baseSub = (over: Partial<SubscriptionData>): SubscriptionData => ({
 
 const renderTable = (subscriptions: SubscriptionData[]) =>
   render(
-    <CssVarsProvider>
+    <CssVarsProvider theme={appTheme}>
       <SubscriptionTable subscriptions={subscriptions} planMap={{}} />
     </CssVarsProvider>
   );
 
-describe('SubscriptionTable — user column (regression for #1264)', () => {
-  it("renders the owner's username/email from the API `owner` field", () => {
+describe.each([
+  { layout: 'desktop table', isMobile: false },
+  { layout: 'mobile card', isMobile: true },
+])('SubscriptionTable user column ($layout)', ({ isMobile }) => {
+  beforeEach(() => {
+    mocks.isMobile = isMobile;
+  });
+
+  it("renders the owner's username and email from the API `owner` field", () => {
     renderTable([
       baseSub({
         id: 'sub_a',
@@ -37,14 +52,14 @@ describe('SubscriptionTable — user column (regression for #1264)', () => {
       }),
     ]);
 
-    expect(screen.getByText('alice')).toBeInTheDocument();
-    expect(screen.getByText('alice@example.com')).toBeInTheDocument();
-    expect(screen.queryByText('Unknown User')).not.toBeInTheDocument();
+    expect(screen.getByTestId('subscription-owner-username')).toHaveTextContent('alice');
+    expect(screen.getByTestId('subscription-owner-email')).toHaveTextContent('alice@example.com');
   });
 
   it('falls back to "Unknown User" only when the owner is absent', () => {
     renderTable([baseSub({ id: 'sub_b', owner: undefined })]);
 
-    expect(screen.getByText('Unknown User')).toBeInTheDocument();
+    expect(screen.getByTestId('subscription-owner-username')).toHaveTextContent('Unknown User');
+    expect(screen.getByTestId('subscription-owner-email')).toBeEmptyDOMElement();
   });
 });

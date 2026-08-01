@@ -23,10 +23,16 @@ const SubscriptionTable = ({ subscriptions, planMap }: SubscriptionTableProps) =
               <CardContent sx={{ p: 1.5 }}>
                 <Stack spacing={0.75}>
                   <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
-                    <Typography fontWeight="bold">{subscription.owner?.username || 'Unknown User'}</Typography>
+                    <Typography fontWeight="bold" data-testid="subscription-owner-username">
+                      {subscription.owner?.username || 'Unknown User'}
+                    </Typography>
                     <SubscriptionStatusChip subscription={subscription} />
                   </Stack>
-                  <Typography level="body-xs" sx={{ wordBreak: 'break-word', color: 'text.secondary' }}>
+                  <Typography
+                    level="body-xs"
+                    data-testid="subscription-owner-email"
+                    sx={{ wordBreak: 'break-word', color: 'text.secondary' }}
+                  >
                     {subscription.owner?.email}
                   </Typography>
                   <Divider />
@@ -73,8 +79,10 @@ const SubscriptionTable = ({ subscriptions, planMap }: SubscriptionTableProps) =
               <tr key={subscription.id || subscription.subscriptionId}>
                 <td>
                   <Stack>
-                    <Typography>{subscription.owner?.username || 'Unknown User'}</Typography>
-                    <Typography level="body-xs" sx={{ wordBreak: 'break-word' }}>
+                    <Typography data-testid="subscription-owner-username">
+                      {subscription.owner?.username || 'Unknown User'}
+                    </Typography>
+                    <Typography level="body-xs" data-testid="subscription-owner-email" sx={{ wordBreak: 'break-word' }}>
                       {subscription.owner?.email}
                     </Typography>
                   </Stack>
