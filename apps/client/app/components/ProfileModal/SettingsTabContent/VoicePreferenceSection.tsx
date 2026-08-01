@@ -9,17 +9,7 @@ import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyle
 import GraphicEqIcon from '@mui/icons-material/GraphicEq';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
-
-// Available voices from OpenAI realtime API
-// The real-time API has a more limited selection than TTS API
-// Only alloy, echo, and shimmer are available in both APIs
-const AVAILABLE_VOICES = [
-  { value: 'alloy', label: 'Alloy', description: 'Professional and balanced (Female)' },
-  { value: 'cedar', label: 'Cedar', description: 'Warm and grounded (Male)' },
-  { value: 'echo', label: 'Echo', description: 'Clear and articulate (Male)' },
-  { value: 'marin', label: 'Marin', description: 'Natural and expressive (Female)' },
-  { value: 'shimmer', label: 'Shimmer', description: 'Energetic and vibrant (Female)' },
-] as const;
+import { AVAILABLE_TTS_VOICES } from '@bike4mind/common';
 
 const DEFAULT_SAMPLE_TEXT = "Hello! This is how my voice sounds. I'm ready to help you with anything you need.";
 
@@ -54,7 +44,7 @@ const VoicePreferenceSection = () => {
       setCurrentUser(response.data);
 
       if (newValue) {
-        toast.success(`Voice preference updated to ${AVAILABLE_VOICES.find(v => v.value === newValue)?.label}`);
+        toast.success(`Voice preference updated to ${AVAILABLE_TTS_VOICES.find(v => v.value === newValue)?.label}`);
       } else {
         toast.success('Voice preference cleared (will use system default)');
       }
@@ -229,7 +219,7 @@ const VoicePreferenceSection = () => {
   };
 
   const selectedVoice = currentUser?.preferredVoice || '';
-  const selectedVoiceInfo = AVAILABLE_VOICES.find(voice => voice.value === selectedVoice);
+  const selectedVoiceInfo = AVAILABLE_TTS_VOICES.find(voice => voice.value === selectedVoice);
 
   return (
     <SectionContainer title="Voice Preferences" subtitle="Customize your preferred voice for voice sessions">
@@ -267,7 +257,7 @@ const VoicePreferenceSection = () => {
                   startDecorator={isLoading && <CircularProgress size="sm" />}
                 >
                   <Option value="">Use system default</Option>
-                  {AVAILABLE_VOICES.map(voice => (
+                  {AVAILABLE_TTS_VOICES.map(voice => (
                     <Option key={voice.value} value={voice.value}>
                       {voice.label}
                     </Option>
