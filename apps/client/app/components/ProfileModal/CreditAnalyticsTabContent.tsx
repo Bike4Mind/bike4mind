@@ -471,7 +471,10 @@ const CreditAnalyticsTabContent: React.FC = () => {
         lines.push({
           id: 'music_generation_usage',
           data: musicUsageDataPoints,
-          color: theme.palette.success[400],
+          // Adjacent to sound_effects_usage (both audio) and unused elsewhere in
+          // this chart - success[400] already belongs to the subscriptions series,
+          // and the chart has no legend to disambiguate a collision.
+          color: theme.palette.warning[300],
         });
       }
 

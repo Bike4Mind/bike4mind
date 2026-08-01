@@ -24,7 +24,9 @@ export type PersistGeneratedAudioResult =
   | { saved: false; reason: 'storage_limit' | 'file_too_large' | 'error' };
 
 /**
- * Persist generated TTS / sound-effect audio as a browsable `AUDIO` FabFile.
+ * Persist generated audio (TTS, sound-effect, or music) as a browsable `AUDIO`
+ * FabFile. `source` only varies the file-name prefix and the `generated` tag;
+ * every source takes the identical storage path.
  *
  * Routes through `fabFilesService.createFabFile`, which enforces the per-user
  * storage quota (`checkStorageLimitForFile`) and the `MaxFileSize` admin
