@@ -530,45 +530,52 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         cacheReadTokens = chunk?.choices[0].usage?.cache_read_input_tokens || 0;
         cacheWriteTokens = chunk?.choices[0].usage?.cache_creation_input_tokens || 0;
 
-        // Check if there's a tool use in the response
-        const toolChoice = chunk?.choices.find(choice => choice.statusEndReason === ChoiceEndReason.TOOL_USE) as
-          IChoiceEndToolUse | undefined;
+        // Collect EVERY tool call, not just the first. A provider that emits
+        // parallel calls returns one TOOL_USE choice per call, and the old
+        // `.find()` silently dropped all but the first with no result message.
+        const toolChoices = (chunk?.choices ?? []).filter(
+          choice => choice.statusEndReason === ChoiceEndReason.TOOL_USE && (choice as IChoiceEndToolUse).tool
+        ) as IChoiceEndToolUse[];
 
-        if (toolChoice?.tool) {
-          const { id, name, parameters } = toolChoice.tool;
-
+        if (toolChoices.length > 0) {
           // Track tool usage (including ID for history reconstruction, allow empty parameters)
-          if (name) {
-            toolsUsed.push({ name, arguments: parameters || '{}', id });
+          for (const { tool } of toolChoices) {
+            if (tool.name) toolsUsed.push({ name: tool.name, arguments: tool.parameters || '{}', id: tool.id });
           }
 
           // Check if we should execute tools or just report them
           if (options.executeTools !== false) {
-            // Default behavior: execute tools and recurse
-            const toolFn = options.tools?.find(tool => tool.toolSchema.name === name)?.toolFn;
-            // Allow empty parameters (some tools don't require input)
-            const safeParameters = parameters || '{}';
+            const executable = toolChoices
+              .map(tc => tc.tool)
+              .filter(tool => tool.id && tool.name && options.tools?.some(o => o.toolSchema.name === tool.name));
 
-            if (id && name && toolFn) {
-              let result: { toString(): string };
-              try {
-                result = await toolFn(JSON.parse(safeParameters));
-              } catch (err) {
-                if (err instanceof PermissionDeniedError) throw err;
-                if (isAbortError(err)) throw err;
-                Logger.globalInstance.error(
-                  `[BaseBedrockBackend] Tool ${name} failed:`,
-                  err instanceof Error ? err.message : String(err)
-                );
-                result = `Error processing ${name} tool: ${err instanceof Error ? err.message : 'Unknown error'}`;
+            if (executable.length > 0) {
+              // Execute each resolved call and push its result, so the model sees
+              // every tool it invoked on the recursive turn, then recurse once.
+              for (const { id, name, parameters } of executable) {
+                const toolFn = options.tools?.find(o => o.toolSchema.name === name)?.toolFn;
+                if (!toolFn) continue;
+                const safeParameters = parameters || '{}';
+                let result: { toString(): string };
+                try {
+                  result = await toolFn(JSON.parse(safeParameters));
+                } catch (err) {
+                  if (err instanceof PermissionDeniedError) throw err;
+                  if (isAbortError(err)) throw err;
+                  Logger.globalInstance.error(
+                    `[BaseBedrockBackend] Tool ${name} failed:`,
+                    err instanceof Error ? err.message : String(err)
+                  );
+                  result = `Error processing ${name} tool: ${err instanceof Error ? err.message : 'Unknown error'}`;
+                }
+
+                // For tools that return artifacts (like recharts), stream the result directly
+                await handleToolResultStreaming(name, result, async results => {
+                  await callback(results, buildCompletionInfo());
+                });
+
+                this.pushToolMessages(messages, { id, name, parameters }, result.toString());
               }
-
-              // For tools that return artifacts (like recharts), stream the result directly
-              await handleToolResultStreaming(name, result, async results => {
-                await callback(results, buildCompletionInfo());
-              });
-
-              this.pushToolMessages(messages, { id, name, parameters }, result.toString());
 
               // Add newline separator before recursive call to ensure proper markdown rendering
               await callback(['\n\n'], buildCompletionInfo());

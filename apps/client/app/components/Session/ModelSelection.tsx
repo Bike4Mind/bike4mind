@@ -243,6 +243,12 @@ export const getModelBackend = (model: ModelInfo): string => {
     return 'Black Forest Labs';
   }
 
+  // Moonshot models. Matches the Bedrock-served ids (moonshot./moonshotai.) too,
+  // so the direct and Bedrock copies group together under one maker.
+  if (modelName.includes('kimi') || modelId.includes('kimi') || modelId.startsWith('moonshot')) {
+    return 'Moonshot';
+  }
+
   // Default to "Other" if no match found
   return 'Other';
 };

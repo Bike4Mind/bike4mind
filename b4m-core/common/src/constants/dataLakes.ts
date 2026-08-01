@@ -11,10 +11,15 @@ export const DATALAKE_TAG_PREFIX = 'datalake:';
  * (non-empty, ends with ':'), else null. An empty prefix would match every tag, so it is
  * rejected rather than honored.
  *
- * Shared by `buildOwnershipConditions`' prefix arms and the single-file removal write, which
- * is what keeps a removal clearing the same prefixed tags the lake read scope matches. Other
- * prefix readers (the tag-count aggregates) still build their own regexes, so this is a
- * guarantee about those two, not about every prefix match in the codebase.
+ * The one gate on "is this prefix usable at all", so everything that builds a prefix arm or
+ * writes a prefixed tag agrees: the read arms in `buildOwnershipConditions`, the membership
+ * predicate, the single-file removal write, the browse surface's `splitTagPrefixes`, the
+ * collision checks, and the fallback tag stamper. What the read scope matches, what a removal
+ * clears, what the tag-count aggregates count, and what the stamper writes therefore line up.
+ *
+ * The aggregates still build their own regexes from whatever list they are handed, so a
+ * caller that reaches them without going through `splitTagPrefixes` is outside this
+ * guarantee - they defend themselves by dropping unusable entries.
  */
 export const normalizeTagPrefix = (prefix: string | undefined | null): string | null => {
   const trimmed = typeof prefix === 'string' ? prefix.trim() : '';
@@ -29,6 +34,48 @@ export const normalizeTagPrefix = (prefix: string | undefined | null): string | 
  */
 export const isReservedTagPrefix = (prefix: string | undefined | null): boolean =>
   typeof prefix === 'string' && prefix.trim().startsWith(DATALAKE_TAG_PREFIX);
+
+/**
+ * True when two `fileTagPrefix` values would match each other's tags, so two lakes carrying them
+ * cannot safely coexist in one scope: they would share their prefix-tagged files, and permanently
+ * deleting either would take files the other holds.
+ *
+ * BIDIRECTIONAL, because a `docs:` lake matches a `docs:legal:foo` tag - so `docs:` and
+ * `docs:legal:` conflict whichever way round they are declared. Unusable prefixes (empty, or
+ * missing the trailing colon) never overlap: no query arm is built from them.
+ *
+ * Case-SENSITIVE, matching the membership predicate it guards: that builds an unflagged
+ * `new RegExp('^' + prefix)`, so a `Docs:` lake and a `docs:` lake genuinely cannot reach each
+ * other's tags and refusing the pair would be a false alarm. Comparing case-insensitively here
+ * would make the guard a different rule from the thing it protects.
+ *
+ * Shared by the create/visibility guards, the teardown warning, and the wizard's form-level
+ * mirror, so all of them agree on what counts as a conflict.
+ */
+export const tagPrefixesOverlap = (a: string | undefined | null, b: string | undefined | null): boolean => {
+  const left = normalizeTagPrefix(a);
+  const right = normalizeTagPrefix(b);
+  if (!left || !right) return false;
+  return left === right || left.startsWith(right) || right.startsWith(left);
+};
+
+/**
+ * The reason a `fileTagPrefix` is unusable, as user-facing copy, or null when it is fine. Shared
+ * by the wizard steps that can both edit a prefix so their wording cannot drift apart; the server
+ * rejects both cases at create.
+ */
+export const tagPrefixIssue = (
+  prefix: string | undefined | null,
+  overlapping?: { name: string; fileTagPrefix: string } | null
+): string | null => {
+  if (isReservedTagPrefix(prefix)) {
+    return `"${DATALAKE_TAG_PREFIX}" is reserved for lake membership. Pick another prefix, such as legal:`;
+  }
+  if (overlapping) {
+    return `This prefix overlaps the data lake "${overlapping.name}" (${overlapping.fileTagPrefix}). They would share files, so deleting either one would take the other's.`;
+  }
+  return null;
+};
 
 export interface DataLakeConfig {
   id: string;
@@ -68,6 +115,27 @@ export interface DataLakeConfig {
    * this. Absent on projections that don't resolve an actor (e.g. tag-only lookups).
    */
   canManage?: boolean;
+}
+
+/**
+ * DataLakeConfig plus the fields only a lake's EDITORS may read. Returned exclusively by the
+ * actor-aware list projections (listDataLakes / listAllDataLakes), which populate the extra
+ * fields per lake and only when `canManage` holds for the requesting caller.
+ *
+ * This is a separate type on purpose: DataLakeConfig is the shared shape the access filters and
+ * the tag/registry projections all operate on, and several of those have no actor to gate on.
+ * `toDataLakeConfig` is therefore structurally unable to carry an editor-only field - the
+ * invariant that keeps the prompt text out of every actor-less projection (see
+ * getAccessibleDataLakePrompts, which reads it off the raw documents for the same reason).
+ */
+export interface ManageableDataLakeConfig extends DataLakeConfig {
+  /**
+   * Per-lake system prompt (see IDataLake.systemPrompt). EDITOR-ONLY: a user who can merely
+   * read the lake must never receive the wording, only its effect on answers. Present only
+   * when the caller can manage this lake; `undefined` otherwise (never an empty-string stand-in,
+   * so "not yours to see" and "set to blank" stay distinguishable).
+   */
+  systemPrompt?: string;
 }
 
 /**

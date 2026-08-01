@@ -12,7 +12,7 @@ import {
   MEMENTO_MIN_SIMILARITY,
   toMementoVector,
 } from '@bike4mind/common';
-import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
+import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { createKeyProvider } from './factCipher';
@@ -59,14 +59,8 @@ async function embedQuery(userId: string, query: string): Promise<{ vector: numb
   });
 
   const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
-  const config: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
-  if (provider === 'openai') {
-    if (!apiKeyTable?.openai) return none;
-    config.openaiApiKey = apiKeyTable.openai;
-  } else if (provider === 'voyageai') {
-    if (!apiKeyTable?.voyageai) return none;
-    config.voyageApiKey = apiKeyTable.voyageai;
-  }
+  const { config, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
+  if (missing) return none;
 
   const embeddingService = new EmbeddingFactory(config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
   return { vector: toMementoVector(await embeddingService.generateEmbedding(query)), model: MEMENTO_EMBEDDING_ID };

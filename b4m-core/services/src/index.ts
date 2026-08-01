@@ -1,5 +1,6 @@
 export * as referService from './referService';
 export * as userService from './userService';
+export * as authSessionService from './authSessionService';
 export * as userApiKeyService from './userApiKeyService';
 export * as counterService from './countersService';
 export * as importHistoryService from './importHistoryService';

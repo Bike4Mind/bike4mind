@@ -14,9 +14,17 @@ type ManageActor = Pick<AccessContext, 'userId' | 'isAdmin'>;
  * Deliberately narrower than `canAccessLake` (read): a tag/entitlement/org grant lets a member
  * READ a lake but NOT write into it. Injecting a file (applying the lake's meta-tag) is a write,
  * so it must clear this gate, closing the read-can-write asymmetry.
+ *
+ * The truthiness guard makes the owner arm fail closed on a blank identity: without it, a lake with
+ * no `createdByUserId` (the synthetic fallback document) would match an actor with no `userId`, since
+ * `undefined === undefined` and `'' === ''`. Unreachable today - the schema requires the field and
+ * `AccessContext.userId` is a required string - but this predicate now gates prompt DISCLOSURE as
+ * well as writes, so it should not depend on those invariants holding elsewhere. Mirrors the same
+ * guard in `getDataLakePrompts.ts`.
  */
 export function canManageLake(lake: Pick<IDataLakeDocument, 'createdByUserId'>, actor: ManageActor): boolean {
-  return actor.isAdmin || lake.createdByUserId === actor.userId;
+  if (actor.isAdmin) return true;
+  return !!actor.userId && !!lake.createdByUserId && lake.createdByUserId === actor.userId;
 }
 
 /**
@@ -42,6 +50,29 @@ export const assertLakeWriteAccess = async (
 };
 
 /**
+ * The distinct `datalake:*` meta-tags in a raw tag-name list, lowercased for lookup
+ * (`datalakeTag` values are canonically lowercase, so a mixed-case meta-tag still resolves to
+ * its real lake).
+ *
+ * `readonly unknown[]`: some callers (e.g. PUT /api/files/{id}) pass raw, un-validated tag
+ * names, so a malformed entry (`{ name: null }`) can reach here. Narrowing to string here makes
+ * a bad payload fail closed at the caller, never a TypeError -> 500.
+ *
+ * Shared by the write GATE below and the fallback stamper (see `fallbackLakeTags`) so the two
+ * cannot disagree about what counts as a meta-tag: a name one recognizes and the other does not
+ * is either an ungated write or an unenforced invariant.
+ */
+export const extractDataLakeMetaTags = (tagNames: readonly unknown[]): string[] =>
+  Array.from(
+    new Set(
+      tagNames
+        .filter((name): name is string => typeof name === 'string')
+        .map(name => name.toLowerCase())
+        .filter(name => name.startsWith(DATALAKE_TAG_PREFIX))
+    )
+  );
+
+/**
  * Gate the file-tag write paths (Send-to-Data-Lake, direct create/update, tag toggle): given the
  * `datalake:*` meta-tags a caller is applying to a file, assert they may write into EVERY
  * referenced lake. Non-meta tags are ignored. A meta-tag that resolves to no lake, or to a lake
@@ -50,22 +81,10 @@ export const assertLakeWriteAccess = async (
  */
 export const assertCanWriteDataLakeTags = async (
   actor: ManageActor,
-  // `readonly unknown[]`: some callers (e.g. PUT /api/files/{id}) pass raw, un-validated tag
-  // names, so a malformed entry (`{ name: null }`) can reach here. Narrowing to string BELOW
-  // makes a bad payload fail closed as a 400, never a TypeError -> 500.
   tagNames: readonly unknown[],
   { db }: { db: { dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'> } }
 ): Promise<void> => {
-  // `datalakeTag` values are canonically lowercase (slug + hex org id), so normalize the lookup
-  // key - a mixed-case meta-tag still resolves to (and is authorized against) its real lake.
-  const metaTags = Array.from(
-    new Set(
-      tagNames
-        .filter((name): name is string => typeof name === 'string')
-        .map(name => name.toLowerCase())
-        .filter(name => name.startsWith(DATALAKE_TAG_PREFIX))
-    )
-  );
+  const metaTags = extractDataLakeMetaTags(tagNames);
   for (const tag of metaTags) {
     const lake = await db.dataLakes.findByDatalakeTag(tag);
     if (!lake || !canManageLake(lake, actor)) {

@@ -6,14 +6,13 @@ import type { WizardStep } from '@client/app/stores/useDataLakeWizardStore';
 const STEPS: { key: WizardStep; label: string }[] = [
   { key: 'source', label: 'Select Source' },
   { key: 'preview', label: 'Preview' },
-  { key: 'taxonomy', label: 'AI Taxonomy' },
   { key: 'config', label: 'Configure' },
   { key: 'upload', label: 'Upload' },
 ];
 
 interface WizardStepIndicatorProps {
   currentStep: WizardStep;
-  /** Optional subset/order of step keys to display (e.g. append mode skips taxonomy). */
+  /** Optional subset/order of step keys to display (e.g. Preview is opt-in). */
   stepKeys?: WizardStep[];
 }
 
@@ -78,6 +77,7 @@ export default function WizardStepIndicator({ currentStep, stepKeys }: WizardSte
               </Box>
               <Typography
                 level="body-xs"
+                data-testid="wizard-step-label"
                 sx={{
                   mt: 0.5,
                   fontWeight: isCurrent ? 'bold' : 'normal',

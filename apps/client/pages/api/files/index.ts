@@ -20,6 +20,10 @@ const handler = baseApi()
   .get(async (req, res) => {
     const userId = req.user.id;
 
+    // No server scope argument, so the default view lists only files this user owns. The query
+    // string cannot widen that: every scope option now lives outside the parsed params (see
+    // SearchFabFilesServerOptions). The shared and curated views still work - they come from
+    // `filters`, not `options`, and each carries its own ownership predicate.
     const results = await fabFilesService.search(userId, qs.parse(req.query as Record<string, any>), {
       db: {
         fabFiles: fabFileRepository,
@@ -72,7 +76,7 @@ const handler = baseApi()
 
           user.currentStorageSize = 0;
 
-          await Promise.all([user.save({ session }), FabFile.deleteMany(accessible).session(session)]);
+          await Promise.all([user.save({ session }), FabFile.deleteMany(accessible, { session })]);
 
           await Promise.all(
             filePaths.map(async filePath => {

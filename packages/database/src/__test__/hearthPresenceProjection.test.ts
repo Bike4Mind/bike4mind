@@ -3,7 +3,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { connectTestDB, disconnectTestDB, cleanupTestDB } from './utils';
 import { CcAgentStatus } from '@bike4mind/common';
 import { HearthPresence, presenceStateForReason, PRESENCE_STATE_RANK } from '../models/hearth/HearthPresenceModel';
-import { hearthRepository } from '../models/hearth/MongoHearthStore';
+import { hearthRepository, MAX_ROSTER_ROWS } from '../models/hearth/MongoHearthStore';
 
 describe('Hearth presence projection', () => {
   let mongoServer: MongoMemoryServer;
@@ -213,5 +213,132 @@ describe('Hearth presence projection', () => {
 
     expect(await hearthRepository.presenceForChannel(USER, channelId)).toHaveLength(1);
     expect(await hearthRepository.presenceForChannel(OTHER_USER, channelId)).toHaveLength(0);
+  });
+
+  describe('prototype-named reasons', () => {
+    /**
+     * `reason` reaches here from any hearth:write caller via activity.reason and
+     * is only length-clamped, so the lookup table must not expose
+     * Object.prototype. Before the null-prototype table: 'constructor' returned
+     * the Object function (truthy, so it beat the 'running' default) and
+     * persisted a state outside the declared enum, because findOneAndUpdate does
+     * not run validators; '__proto__' threw a CastError that upsertPresence did
+     * not swallow, dropping the roster update entirely.
+     */
+    it('falls back to running instead of reading through the prototype', () => {
+      for (const reason of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf']) {
+        expect(presenceStateForReason(reason)).toBe('running');
+      }
+    });
+
+    it('still writes a valid enum state for a prototype-named reason', async () => {
+      const { channelId, actorId } = await setup();
+
+      const row = await hearthRepository.upsertPresence(
+        presence(channelId, actorId, new Date('2026-07-29T00:00:00Z'), 'constructor')
+      );
+
+      expect(row?.state).toBe('running');
+      expect(Object.keys(PRESENCE_STATE_RANK)).toContain(row?.state);
+    });
+
+    it('does not drop the roster update for a __proto__ reason', async () => {
+      const { channelId, actorId } = await setup();
+
+      const row = await hearthRepository.upsertPresence(
+        presence(channelId, actorId, new Date('2026-07-29T00:00:00Z'), '__proto__')
+      );
+
+      // Previously a CastError propagated out of upsertPresence and the caller
+      // logged a failed projection, so the actor never appeared in the roster.
+      expect(row).not.toBeNull();
+      expect(await hearthRepository.presenceForChannel(USER, channelId)).toHaveLength(1);
+    });
+  });
+
+  describe('concurrent first write', () => {
+    /**
+     * With no row yet, two in-flight events both miss the $lt filter and both try
+     * to insert; the loser used to be read as "too old" and discarded. When the
+     * loser was the NEWER event, the row kept the older state - so a session that
+     * became blocked in the same instant it first appeared showed as working.
+     */
+    it('keeps the newer state when two first-events race', async () => {
+      const { channelId, actorId } = await setup();
+      const older = new Date('2026-07-29T00:00:00Z');
+      const newer = new Date('2026-07-29T00:00:05Z');
+
+      const results = await Promise.all([
+        hearthRepository.upsertPresence(presence(channelId, actorId, older, 'tool_use')),
+        hearthRepository.upsertPresence(presence(channelId, actorId, newer, 'permission_prompt')),
+      ]);
+
+      // Exactly one row, and it reflects the newer event regardless of who won.
+      const roster = await hearthRepository.presenceForChannel(USER, channelId);
+      expect(roster).toHaveLength(1);
+      expect(roster[0].state).toBe('awaiting_permission');
+      expect(roster[0].lastSeen.toISOString()).toBe(newer.toISOString());
+      // Both calls resolve; the genuinely-stale one returns null rather than throwing.
+      expect(results.some(r => r !== null)).toBe(true);
+    });
+
+    it('still reports a genuinely stale event as stale', async () => {
+      const { channelId, actorId } = await setup();
+      await hearthRepository.upsertPresence(
+        presence(channelId, actorId, new Date('2026-07-29T00:00:05Z'), 'permission_prompt')
+      );
+
+      const stale = await hearthRepository.upsertPresence(
+        presence(channelId, actorId, new Date('2026-07-29T00:00:00Z'), 'tool_use')
+      );
+
+      expect(stale).toBeNull();
+      expect((await hearthRepository.presenceForChannel(USER, channelId))[0].state).toBe('awaiting_permission');
+    });
+  });
+
+  describe('roster bound', () => {
+    /**
+     * Actors are minted one per session by design and nothing deletes a presence
+     * row (the retention TTL covers events, not this projection), so an aged
+     * account accretes rows in the one shared default channel forever. The sort
+     * runs on an $addFields key no index can serve, so without a cap every read
+     * is an in-memory sort proportional to lifetime session count.
+     */
+    it('caps returned rows and keeps the most urgent ones', async () => {
+      const channel = await hearthRepository.createChannel(USER, 'agents');
+      const channelId = channel._id.toString();
+
+      // One more than the cap, all idle except a single blocked actor created LAST
+      // (so insertion order cannot be what puts it first).
+      for (let i = 0; i < MAX_ROSTER_ROWS; i++) {
+        const actor = await hearthRepository.ensureActor(USER, 'agent', `filler-${i}`);
+        await hearthRepository.upsertPresence(
+          presence(channelId, actor._id.toString(), new Date('2026-07-29T00:00:00Z'), 'turn_finished')
+        );
+      }
+      const blocked = await hearthRepository.ensureActor(USER, 'agent', 'blocked');
+      await hearthRepository.upsertPresence(
+        presence(channelId, blocked._id.toString(), new Date('2026-07-29T00:00:01Z'), 'permission_prompt')
+      );
+
+      const roster = await hearthRepository.presenceForChannel(USER, channelId);
+
+      expect(roster).toHaveLength(MAX_ROSTER_ROWS);
+      // Ranking happens BEFORE the limit, so truncation drops the least urgent
+      // rows rather than whichever the scan reached last.
+      expect(roster[0].actorId.toString()).toBe(blocked._id.toString());
+      expect(roster[0].state).toBe('awaiting_permission');
+    }, 60000);
+
+    it('clamps a caller-supplied limit to the ceiling', async () => {
+      const { channelId, actorId } = await setup();
+      await hearthRepository.upsertPresence(presence(channelId, actorId, new Date(), 'tool_use'));
+
+      expect(await hearthRepository.presenceForChannel(USER, channelId, { limit: 10_000 })).toHaveLength(1);
+      // Mongo rejects a non-positive $limit, so these must not reach it verbatim.
+      expect(await hearthRepository.presenceForChannel(USER, channelId, { limit: 0 })).toHaveLength(1);
+      expect(await hearthRepository.presenceForChannel(USER, channelId, { limit: -5 })).toHaveLength(1);
+    });
   });
 });

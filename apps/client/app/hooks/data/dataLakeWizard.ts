@@ -1,12 +1,6 @@
 import { useEffect, useRef } from 'react';
-import type {
-  InferTaxonomyResponse,
-  InferTaxonomyRequestInputType,
-  IMessageDataToClient,
-  IFabFileDocument,
-  TaxonomyFileAssignment,
-} from '@bike4mind/common';
-import { isSupportedFabFileMimeType } from '@bike4mind/common';
+import type { IMessageDataToClient, IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
+import { isSupportedFabFileMimeType, folderTagForFile } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
@@ -14,203 +8,29 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   useDataLakeWizardStore,
-  type TaxonomyTag,
   type UploadProgress,
   type UploadErrorKind,
 } from '@client/app/stores/useDataLakeWizardStore';
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';
 import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
-import type { WizardFile } from '@client/app/utils/folderTreeParser';
 import { computeFileHash } from '@client/app/utils/folderTreeParser';
-import { appliedTagsForBatch, tagsForFile } from '@client/app/utils/dataLakeTaxonomy';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import axios from 'axios';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 
-/**
- * Stratified sampling: pick up to `maxPerFolder` files from each unique folder path,
- * capped at `maxTotal` files overall.
- */
-function sampleFiles(files: WizardFile[], maxPerFolder = 5, maxTotal = 50): WizardFile[] {
-  const byFolder = new Map<string, WizardFile[]>();
-
+/** Union of every file's folder tag, for the batch record's appliedTags summary. AI-suggested
+ * category tags are no longer part of this - they're applied later, post-upload. */
+function foldersTagsForBatch(
+  files: { relativePath: string }[],
+  tagPrefix: string
+): { name: string; strength: number }[] {
+  const byName = new Map<string, number>();
   for (const f of files) {
-    const parts = f.relativePath.split('/');
-    const folderPath = parts.slice(0, -1).join('/') || '/';
-    const group = byFolder.get(folderPath) || [];
-    group.push(f);
-    byFolder.set(folderPath, group);
+    for (const tag of folderTagForFile(f.relativePath, tagPrefix)) {
+      byName.set(tag.name, tag.strength);
+    }
   }
-
-  const sampled: WizardFile[] = [];
-  for (const [, group] of byFolder) {
-    const take = group.slice(0, maxPerFolder);
-    sampled.push(...take);
-    if (sampled.length >= maxTotal) break;
-  }
-
-  return sampled.slice(0, maxTotal);
-}
-
-/**
- * Read first N bytes of a File as text for content sampling.
- */
-async function readContentSample(file: File, maxBytes = 500): Promise<string> {
-  const blob = file.slice(0, maxBytes);
-  try {
-    return await blob.text();
-  } catch {
-    return '';
-  }
-}
-
-const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
-
-const clampStrength = (value: unknown, fallback: number): number =>
-  typeof value === 'number' && Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : fallback;
-
-/**
- * The editable suffix is the tag name with its inferred prefix stripped, so the prefix is
- * never stored per-tag (it lives once in taxonomy.prefix). A name that does not carry the
- * inferred prefix keeps its whole text as the suffix.
- */
-const deriveSuffix = (fullName: string, sourcePrefix: string): string => {
-  const trimmed = fullName.trim();
-  if (!sourcePrefix) return trimmed;
-  const p = sourcePrefix.endsWith(':') ? sourcePrefix : `${sourcePrefix}:`;
-  return trimmed.toLowerCase().startsWith(p.toLowerCase()) ? trimmed.slice(p.length) : trimmed;
-};
-
-/**
- * Split each inferred category into its stable full name (originalName, the join key for
- * per-file assignments) and its editable suffix. Drops entries the model returned without a
- * usable tag name, or that reduce to an empty suffix (the tag was nothing but the prefix).
- */
-function sanitizeCategories(categories: InferTaxonomyResponse['categories'], sourcePrefix: string): TaxonomyTag[] {
-  if (!Array.isArray(categories)) return [];
-  // originalName is the React key and the sole key for update/delete/merge, so it must be
-  // unique: a model that repeats a tagName would otherwise make one card's edit hit both.
-  const seen = new Set<string>();
-  return categories
-    .filter(cat => cat && isNonEmptyString(cat.tagName))
-    .map(cat => {
-      const originalName = cat.tagName.trim();
-      return {
-        suffix: deriveSuffix(originalName, sourcePrefix),
-        originalName,
-        strength: clampStrength(cat.confidence, 0.7),
-        source: 'ai' as const,
-        matchingFolders: Array.isArray(cat.matchingFolders) ? cat.matchingFolders.filter(isNonEmptyString) : [],
-        deleted: false,
-      };
-    })
-    .filter(t => {
-      if (t.suffix.length === 0) return false;
-      const key = t.originalName.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-}
-
-function sanitizeFileAssignments(assignments: InferTaxonomyResponse['fileAssignments']): TaxonomyFileAssignment[] {
-  if (!Array.isArray(assignments)) return [];
-  return assignments
-    .filter(entry => entry && isNonEmptyString(entry.relativePath))
-    .map(entry => ({
-      // Trim on write to match how categories are stored: tagsForFile matches assignments by
-      // strict path equality, so a padded path would otherwise miss its per-file suggestions.
-      relativePath: entry.relativePath.trim(),
-      suggestedTags: Array.isArray(entry.suggestedTags)
-        ? entry.suggestedTags
-            .filter(tag => tag && isNonEmptyString(tag.name))
-            .map(tag => ({ name: tag.name.trim(), strength: clampStrength(tag.strength, 0.7) }))
-        : [],
-    }));
-}
-
-/**
- * Hook: Infer taxonomy from folder structure using AI.
- */
-export function useInferTaxonomy() {
-  const folderTree = useDataLakeWizardStore(s => s.folderTree);
-  const allFiles = useDataLakeWizardStore(s => s.allFiles);
-  const setTaxonomy = useDataLakeWizardStore(s => s.setTaxonomy);
-  const setTaxonomyAnalyzing = useDataLakeWizardStore(s => s.setTaxonomyAnalyzing);
-  const markTaxonomyAttempted = useDataLakeWizardStore(s => s.markTaxonomyAttempted);
-
-  return useMutation({
-    mutationFn: async (options?: { context?: string; existingPrefix?: string }) => {
-      if (!folderTree) throw new Error('No folder tree loaded');
-
-      const included = allFiles.filter(f => !f.excluded);
-      if (included.length === 0) throw new Error('No files included');
-
-      // Set BEFORE the content-sampling await below: that read can take hundreds of ms, and
-      // until analyzing flips true the step's Next/Skip gate (`!taxonomy.analyzing`) stays
-      // open, letting the user advance mid-inference and have onSuccess clobber their config.
-      setTaxonomyAnalyzing(true);
-
-      const sampled = sampleFiles(included);
-
-      // Build folder entries with optional content samples
-      const folderEntries: InferTaxonomyRequestInputType['folderTree'] = await Promise.all(
-        sampled.map(async f => {
-          // Only sample text-like files for content preview
-          const isTextLike =
-            /^(text\/|application\/json|application\/xml)/.test(f.type) ||
-            /\.(txt|md|csv|json|html|xml|log|yaml|yml|toml|ini|cfg)$/i.test(f.file.name);
-
-          const contentSample = isTextLike ? await readContentSample(f.file) : undefined;
-
-          return {
-            relativePath: f.relativePath,
-            fileName: f.file.name,
-            fileSize: f.size,
-            mimeType: f.type || undefined,
-            contentSample: contentSample || undefined,
-          };
-        })
-      );
-
-      const response = await api.post<InferTaxonomyResponse>('/api/data-lakes/infer-taxonomy', {
-        folderTree: folderEntries,
-        existingPrefix: options?.existingPrefix,
-        context: options?.context,
-      });
-
-      return response.data;
-    },
-    onSuccess: data => {
-      const previous = useDataLakeWizardStore.getState().taxonomy;
-      // The endpoint validates only suggestedPrefix + categories-is-an-array and otherwise
-      // returns the model's raw JSON, so everything below is sanitized HERE, at the single
-      // boundary where inference enters the store. Downstream (tagsForFile) runs mid-upload,
-      // after the lake exists - a TypeError there would roll back a real upload.
-      // Strip the inferred prefix off each tag into its suffix so the prefix is stored only
-      // once (in `prefix`); the cards render `prefix + suffix`.
-      const tags = sanitizeCategories(data.categories, data.suggestedPrefix || '');
-      // An empty response (no API key configured) must not blank a prefix the user already
-      // has: config.tagPrefix keeps its old value regardless.
-      const prefix = data.suggestedPrefix || previous.prefix;
-
-      setTaxonomy({
-        prefix,
-        suggestedName: typeof data.suggestedName === 'string' ? data.suggestedName : '',
-        tags,
-        fileAssignments: sanitizeFileAssignments(data.fileAssignments),
-        attempted: true,
-        analyzing: false,
-      });
-      if (tags.length > 0) {
-        toast.success(`AI suggested ${tags.length} tag categories`);
-      }
-    },
-    onError: (error: Error) => {
-      markTaxonomyAttempted();
-      toast.error(error.message || 'Failed to infer taxonomy');
-    },
-  });
+  return Array.from(byName, ([name, strength]) => ({ name, strength }));
 }
 
 // ── Hashing & Deduplication ──────────────────────────────────────────────────
@@ -461,7 +281,7 @@ export function useBatchUpload() {
 
       // Read from store at mutation time to avoid stale closure
       // (same pattern as useComputeHashes)
-      const { config, allFiles, targetLake, taxonomy } = useDataLakeWizardStore.getState();
+      const { config, allFiles, targetLake, optionalSteps } = useDataLakeWizardStore.getState();
       let included = allFiles.filter(f => !f.excluded);
       if (included.length === 0) throw new Error('No files to upload');
 
@@ -541,10 +361,11 @@ export function useBatchUpload() {
       try {
         const totalSizeBytes = included.reduce((sum, f) => sum + f.size, 0);
 
-        // Per-file tags: each file's source folder plus the taxonomy categories the
-        // user reviewed (append mode has no taxonomy step, so it stays folder-only).
-        // The lake meta-tag is added server-side.
-        const appliedTags = appliedTagsForBatch(included, taxonomy, tagPrefix);
+        // Per-file tags: each file's source folder. AI-suggested categories are no
+        // longer applied at upload time - they run as a background job afterward and get
+        // applied later, from the Data Lakes list, once reviewed. The lake meta-tag is
+        // added server-side.
+        const appliedTags = foldersTagsForBatch(included, tagPrefix);
 
         // Step 2: Create batch record
         const batchRes = await api.post<{ id: string }>('/api/data-lakes/batches', {
@@ -552,6 +373,8 @@ export function useBatchUpload() {
           totalFiles: included.length,
           totalSizeBytes,
           appliedTags,
+          // Never true in append mode - the source step doesn't offer the toggle there.
+          wantsTaxonomy: optionalSteps.taxonomy,
         });
 
         batchId = batchRes.data.id;
@@ -591,9 +414,9 @@ export function useBatchUpload() {
                 fileSize: f.size,
                 relativePath: f.relativePath,
                 ...(f.contentHash && { contentHash: f.contentHash }),
-                // Each file's source folder plus the reviewed taxonomy categories covering
-                // it (append mode has an empty taxonomy, so this stays folder-only).
-                tags: tagsForFile(f.relativePath, taxonomy, tagPrefix),
+                // Just the source-folder tag - AI-suggested categories are applied
+                // later, post-upload, once the background job's suggestions are reviewed.
+                tags: folderTagForFile(f.relativePath, tagPrefix),
               })),
               dataLakeSlug: slug,
               // Correlate every uploaded file to its batch so the pipeline
@@ -823,6 +646,9 @@ export function useBatchProgressListener() {
       if (message.status === 'completed' || message.status === 'completed_with_errors') {
         updates.status = 'complete';
       }
+      if (message.taxonomyStatus !== undefined) {
+        updates.taxonomyStatus = message.taxonomyStatus;
+      }
 
       if (Object.keys(updates).length > 0) {
         updateUploadProgress(updates);
@@ -867,25 +693,11 @@ export function useDataLakes(enabled = true) {
     enabled,
     retry: false,
     queryFn: async () => {
-      const response = await api.get<{
-        data: Array<{
-          id: string;
-          name: string;
-          slug: string;
-          description?: string;
-          fileTagPrefix: string;
-          requiredUserTag?: string;
-          requiredEntitlement?: string;
-          organizationId?: string;
-          isPublic?: boolean;
-          datalakeTag: string;
-          fileCount?: number;
-          createdAt: string;
-          // Server-computed (admin or creator). Management affordances gate on this: the
-          // list includes other users' read-only public lakes. See DataLakeConfig.canManage.
-          canManage?: boolean;
-        }>;
-      }>('/api/data-lakes');
+      // The server's own shape, not a hand-maintained twin: `canManage` and the editor-only
+      // `systemPrompt` are attached per lake by listDataLakes, and the latter only when the
+      // caller may manage that lake. The former inline type also declared `createdAt` and
+      // `fileCount`, neither of which this projection returns.
+      const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
       return response.data.data;
     },
     refetchOnWindowFocus: false,
@@ -936,11 +748,14 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       // the list without moving the count.
       queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
       // Removal also drops the file's tags under the lake's prefix, so every tag-derived view
-      // is stale. Invalidate on the bare key prefixes: these are keyed by an opti/datalakes
-      // source discriminator, and a fully-specified key would refresh only one surface.
+      // is stale (incl. the manager's count-chip fallback). Invalidate on the bare key
+      // prefixes: these are keyed by an opti/datalakes source discriminator, and a
+      // fully-specified key would refresh only one surface.
       queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
       queryClient.invalidateQueries({ queryKey: ['dataLakeArticles'] });
-      queryClient.invalidateQueries({ queryKey: ['file-tags', 'counts'] });
+      // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
+      // so dropping tags here staled the list too, not only the counts endpoint.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to remove file from data lake');

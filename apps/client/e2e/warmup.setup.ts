@@ -1,6 +1,14 @@
 import { test as setup } from '@playwright/test';
+import { TIMEOUTS, MONITORED_MODELS } from './constants';
+import { BasePage } from './pages/BasePage';
+import { ChatPage } from './pages/ChatPage';
+import { ModelSelectorPage } from './pages/ModelSelectorPage';
 
-const WARMUP_TIMEOUT = 90_000;
+// The AI-completion warm (Tier 3) can pay a full ChatCompletion Fargate cold start per
+// model, so the overall budget must cover that - not the 90s that only Tier 1/2 needed.
+// Sized so warmAiModel's own fail-soft handles a dead backend; this ceiling only trips if
+// every model warm hangs, and warmup failing would skip every dependent project.
+const WARMUP_TIMEOUT = 600_000;
 const RETRY_DELAY = 2_000;
 const MAX_RETRIES = 3;
 
@@ -65,5 +73,48 @@ setup('warm up server endpoints', async ({ request, page }) => {
     }, `GET ${route} (SSR)`);
   }
 
+  // Tier 3: AI completion path - the ChatCompletion Fargate container + each provider
+  // connection. This is the most expensive cold start in the system and the one the
+  // credits/timing specs gate on within AI_RESPONSE (120s); a freshly deployed staging
+  // serves the first completion cold and blows that budget. Drive one real round-trip per
+  // monitored model here so the container/provider are warm before the measured runs - the
+  // first model boots the container (slow), later models reuse it (fast). Fail-soft like the
+  // rest of warmup: a slow/broken backend must never block the suite (the specs still assert).
+  const basePage = new BasePage(page);
+  const chatPage = new ChatPage(page);
+  const modelSelector = new ModelSelectorPage(page);
+  for (const model of MONITORED_MODELS) {
+    // Two attempts, each with a full AI_RESPONSE window: if attempt 1 times out because the
+    // Fargate task is still booting, that boot completes during it, so attempt 2 lands warm.
+    // Two 120s windows cover a ~4-min cold boot - enough headroom without letting a truly
+    // dead backend burn the whole WARMUP_TIMEOUT.
+    await warmAiModel(async () => {
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await basePage.dismissModals();
+      await modelSelector.selectTextModel(model);
+      const response = await chatPage.sendMessageAndWaitForResponse('Warmup ping - reply OK.', TIMEOUTS.AI_RESPONSE);
+      return response.length > 0;
+    }, model);
+  }
+
   console.log('Warmup complete.');
 });
+
+/**
+ * Warm a single AI model with up to two real completion round-trips. Separate from
+ * warmEndpoint (3 quick REST retries): AI warms are minutes-long, so the attempt count is
+ * kept low and explicit to stay within WARMUP_TIMEOUT. Fail-soft - logs and returns.
+ */
+async function warmAiModel(fn: () => Promise<boolean>, model: string) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      if (await fn()) {
+        console.log(`  ✓ AI completion (${model})`);
+        return;
+      }
+    } catch {
+      /* retry: attempt 1 likely timed out booting the container */
+    }
+  }
+  console.warn(`  ⚠ AI completion (${model}) — did not warm (continuing anyway)`);
+}

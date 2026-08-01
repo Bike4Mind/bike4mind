@@ -138,6 +138,9 @@ const VENDOR_BY_BACKEND: Record<ModelBackend, string> = {
   [ModelBackend.Anthropic]: 'anthropic',
   [ModelBackend.Gemini]: 'google',
   [ModelBackend.XAI]: 'xai',
+  // Vendor, not backend: Bedrock-served Kimi carries the same 'moonshotai'
+  // vendor while routing through ModelBackend.Bedrock.
+  [ModelBackend.Kimi]: 'moonshotai',
   [ModelBackend.BFL]: 'black-forest-labs',
   [ModelBackend.AWS]: 'amazon',
   [ModelBackend.VoyageAI]: 'voyageai',
@@ -152,11 +155,25 @@ const VENDOR_BY_BACKEND: Record<ModelBackend, string> = {
  * this catalog replaces), so the inverse adapter derives it: the backend answers
  * it for direct providers, and for Bedrock the id namespace does.
  */
+/**
+ * Bedrock id prefixes that name the same maker as a different string. AWS spells
+ * Kimi K2.5 `moonshotai.` and K2 Thinking `moonshot.`, so the raw prefix would
+ * file one vendor's two models under two vendors and split them in the admin
+ * dashboard. Canonicalized to the spelling the direct backend and the models.dev
+ * provider both use.
+ */
+const BEDROCK_VENDOR_ALIASES: Readonly<Record<string, string>> = {
+  moonshot: 'moonshotai',
+};
+
 export function inferVendor(info: Pick<ModelInfo, 'id' | 'backend'>): string {
   if (info.backend === ModelBackend.Bedrock) {
     const withoutRegion = String(info.id).replace(BEDROCK_REGION_PREFIX, '');
     const dot = withoutRegion.indexOf('.');
-    if (dot > 0) return withoutRegion.slice(0, dot);
+    if (dot > 0) {
+      const prefix = withoutRegion.slice(0, dot);
+      return BEDROCK_VENDOR_ALIASES[prefix] ?? prefix;
+    }
   }
   return VENDOR_BY_BACKEND[info.backend] ?? String(info.backend);
 }

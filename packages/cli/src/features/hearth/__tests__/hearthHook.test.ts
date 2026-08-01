@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { homedir } from 'node:os';
+import { basename } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -177,12 +179,20 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
   it('clamps an out-of-range or malformed tier into range, never wider than the max', async () => {
     const TIER_2 = ['activity', 'hook_event_name', 'session_id', 'slug', 'workspace'];
     const TIER_0 = ['hook_event_name', 'session_id', 'slug'];
-    // Above the max clamps to the max; below zero clamps to the MINIMUM (the safe
-    // direction); unparseable falls back to the documented default.
+    // Above the max clamps to the max; below zero clamps to the minimum;
+    // unparseable resolves to the MINIMUM, because a broken privacy setting must
+    // fail closed. Only genuinely unset gets the default (asserted separately).
     const cases: Array<[string, string[]]> = [
       ['99', TIER_2],
       ['-5', TIER_0],
-      ['banana', TIER_2],
+      // Unparseable means MINIMUM, not default. This case previously asserted
+      // TIER_2 and so pinned the fail-open in place: `none`, `off`, `min`,
+      // `zero`, `"0"`, and an unexpanded `$LEVEL` all land here, and every one
+      // of them is somebody reaching for less disclosure.
+      ['banana', TIER_0],
+      ['none', TIER_0],
+      ['off', TIER_0],
+      ['$UNEXPANDED', TIER_0],
     ];
 
     for (const [raw, keys] of cases) {
@@ -229,6 +239,121 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
       expect(text).toContain('needs permission: Bash');
       expect(text).not.toContain('deploy.sh');
       expect(JSON.stringify(body)).not.toContain('secret-project');
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('never sends the home directory as a workspace, because its basename is the username', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      // Starting a session in $HOME is ordinary, and `/Users/<user>` or
+      // `/home/<user>` basenames to the OS USERNAME - so this fired on real
+      // sessions at the DEFAULT tier while the header promised "the repo name".
+      await runHook(HOOK_ENV(port), {
+        hook_event_name: 'Stop',
+        session_id: 'sess-123',
+        cwd: homedir(),
+      });
+
+      const body = captured.current!.body;
+      const payload = (body.machine as { payload: Record<string, unknown> }).payload;
+      expect(payload.workspace).toBeUndefined();
+      // And the username must not have reached the human line either.
+      expect(JSON.stringify(body)).not.toContain(basename(homedir()));
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('still sends a real workspace basename', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      await runHook(HOOK_ENV(port), {
+        hook_event_name: 'Stop',
+        session_id: 'sess-123',
+        cwd: '/Users/someone/parent/my-repo',
+      });
+
+      const payload = (captured.current!.body.machine as { payload: Record<string, unknown> }).payload;
+      expect(payload.workspace).toBe('my-repo');
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('reduces an MCP tool to a bare kind, so server names stay local', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      // mcp__<server>__<tool> disclosed every configured MCP SERVER at the
+      // default tier through a field documented as a closed set.
+      await runHook(HOOK_ENV(port), {
+        hook_event_name: 'PreToolUse',
+        session_id: 'sess-123',
+        tool_name: 'mcp__acme_internal_crm__create_ticket',
+      });
+
+      const body = captured.current!.body;
+      const activity = (body.machine as { payload: { activity: Record<string, unknown> } }).payload.activity;
+      expect(activity.tool).toBe('mcp');
+      expect(JSON.stringify(body)).not.toContain('acme_internal_crm');
+      expect(JSON.stringify(body)).not.toContain('create_ticket');
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('drops a tool name that is not a plain identifier', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      await runHook(HOOK_ENV(port), {
+        hook_event_name: 'PreToolUse',
+        session_id: 'sess-123',
+        tool_name: 'Bash /Users/someone/secret-project/deploy.sh',
+      });
+
+      const body = captured.current!.body;
+      const activity = (body.machine as { payload: { activity: Record<string, unknown> } }).payload.activity;
+      expect(activity.tool).toBeUndefined();
+      expect(JSON.stringify(body)).not.toContain('secret-project');
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('ignores an unrecognized notification_type instead of forwarding it', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      // The field was documented as a closed set but was forwarded unchecked, so
+      // an upstream addition (or anything else) passed straight through.
+      await runHook(HOOK_ENV(port), {
+        hook_event_name: 'Stop',
+        session_id: 'sess-123',
+        notification_type: 'BAIT-unknown-classifier',
+      });
+
+      const body = captured.current!.body;
+      const activity = (body.machine as { payload: { activity: Record<string, unknown> } }).payload.activity;
+      // Falls back to the event-derived code for Stop.
+      expect(activity.reason).toBe('turn_finished');
+      expect(JSON.stringify(body)).not.toContain('BAIT-unknown-classifier');
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('does not treat a prototype key as a known notification_type', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      await runHook(HOOK_ENV(port), {
+        hook_event_name: 'Stop',
+        session_id: 'sess-123',
+        notification_type: 'constructor',
+      });
+
+      const activity = (captured.current!.body.machine as { payload: { activity: Record<string, unknown> } }).payload
+        .activity;
+      expect(activity.reason).toBe('turn_finished');
     } finally {
       close();
     }

@@ -34,7 +34,17 @@ let root: string;
 
 function runCodegen(): { ok: boolean; output: string } {
   try {
-    return { ok: true, output: execFileSync('node', [join(root, 'apps/client/scripts/generate-premium-glue.mjs')], { cwd: root, encoding: 'utf8', stdio: 'pipe' }) };
+    // CI forced off: this suite's overlays are hydrated but never linked, the
+    // state the script hard-fails when CI === 'true' (ambient on CI runners).
+    return {
+      ok: true,
+      output: execFileSync('node', [join(root, 'apps/client/scripts/generate-premium-glue.mjs')], {
+        cwd: root,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: { ...process.env, CI: '' },
+      }),
+    };
   } catch (e) {
     const err = e as { stdout?: string; stderr?: string };
     return { ok: false, output: `${err.stdout ?? ''}${err.stderr ?? ''}` };

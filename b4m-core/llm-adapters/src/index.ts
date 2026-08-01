@@ -4,6 +4,7 @@ import {
   IModelPrice,
   ModelBackend,
   ModelInfo,
+  SupersededModelInfo,
   applyModelPriceCatalog,
   isModelDeprecated,
 } from '@bike4mind/common';
@@ -17,15 +18,17 @@ import type { ApiKeyTable, BackendGateContext } from './backendGate';
 import { catalogLifecycles } from './deprecationHorizon';
 import { toProviderEndUserId } from './endUserId';
 import { mergeCatalog } from './mergeCatalog';
-import { catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
+import { buildSupersededIndex, catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
 import LlamaBedrockBackend from './bedrockBackend/llama';
+import MoonshotBedrockBackend from './bedrockBackend/moonshot';
 import TitanBedrockBackend from './bedrockBackend/titan';
 import { UndifferentiatedBedrockBackend } from './bedrockBackend/undifferentiated';
 import { BFLBackend } from './bflBackend';
 import { GeminiBackend } from './geminiBackend';
+import { KimiBackend } from './kimiBackend';
 import { LocalImageBackend } from './localImageBackend';
 import { OllamaBackend } from './ollamaBackend';
 import { OpenAIBackend } from './openaiBackend';
@@ -128,6 +131,10 @@ export function getLlmByModel(
         case ChatModels.DEEPSEEK_V3_1:
           backend = new DeepSeekBedrockBackend();
           break;
+        case ChatModels.KIMI_K2_5_BEDROCK:
+        case ChatModels.KIMI_K2_THINKING_BEDROCK:
+          backend = new MoonshotBedrockBackend();
+          break;
         default:
           backend = null;
       }
@@ -151,6 +158,10 @@ export function getLlmByModel(
     case 'xai':
       if (apiKeyTable.xai === 'expired') throw new Error('xAI API key is expired');
       backend = apiKeyTable.xai ? new XAIBackend(apiKeyTable.xai) : null;
+      break;
+    case 'kimi':
+      if (apiKeyTable.kimi === 'expired') throw new Error('Moonshot API key is expired');
+      backend = apiKeyTable.kimi ? new KimiBackend(apiKeyTable.kimi, logger) : null;
       break;
     case 'aws':
       backend = new AWSBackend();
@@ -177,7 +188,15 @@ const MODEL_CACHE_TTL_MS = 5 * 60_000;
 // briefly: a transient DB blip should cost seconds of superseded prices, not
 // a full TTL window.
 const MODEL_CACHE_RETRY_TTL_MS = 30_000;
-let _modelCache: { key: string; models: ModelInfo[]; expiresAt: number } | null = null;
+// preFilterModels keeps the merged list from before the deprecation filter. It is
+// never returned to a caller; getSupersededModels reads it to put a display name
+// on a pin the filter has already hidden.
+let _modelCache: {
+  key: string;
+  models: ModelInfo[];
+  preFilterModels: ModelInfo[];
+  expiresAt: number;
+} | null = null;
 
 /**
  * Optional versioned-price-catalog hook. This package cannot depend on the
@@ -325,6 +344,7 @@ export const getAvailableModels = async (
   const ollamaKey = resolveListingKey(ModelBackend.Ollama, gateCtx);
   const bflKey = resolveListingKey(ModelBackend.BFL, gateCtx);
   const xaiKey = resolveListingKey(ModelBackend.XAI, gateCtx);
+  const kimiKey = resolveListingKey(ModelBackend.Kimi, gateCtx);
   const localImageBaseUrl = resolveListingKey(ModelBackend.LocalImage, gateCtx);
 
   const backends = {
@@ -340,6 +360,7 @@ export const getAvailableModels = async (
     [ModelBackend.Ollama]: ollamaKey ? new OllamaBackend(ollamaKey) : null,
     [ModelBackend.BFL]: bflKey ? new BFLBackend(bflKey) : null,
     [ModelBackend.XAI]: xaiKey ? new XAIBackend(xaiKey) : null,
+    [ModelBackend.Kimi]: kimiKey ? new KimiBackend(kimiKey) : null,
     [ModelBackend.AWS]: isBackendUsable(ModelBackend.AWS, gateCtx) ? new AWSBackend() : null,
     [ModelBackend.LocalImage]: localImageBaseUrl
       ? new LocalImageBackend(localImageBaseUrl, Logger.globalInstance)
@@ -422,20 +443,27 @@ export const getAvailableModels = async (
   // has to run after the merge for catalog lifecycle to drive it; the filter is
   // a subset operation over an independent field, so moving it past the price
   // overlay leaves the output set identical.
-  const today = new Date(new Date().toISOString().slice(0, 10));
-  const filtered = priced.filter(m => {
-    if (!m.deprecationDate) return true;
-    const cutoff = new Date(m.deprecationDate + 'T00:00:00Z');
-    return today.getTime() < cutoff.getTime();
-  });
+  const filtered = priced.filter(m => !isModelDeprecated(m));
 
   // Store in module-level cache (short-lived when a catalog fetch failed). The
   // cached list is always private-inclusive; see getModelCacheKey.
   const ttl = catalogFetchFailed ? MODEL_CACHE_RETRY_TTL_MS : MODEL_CACHE_TTL_MS;
-  _modelCache = { key: cacheKey, models: filtered, expiresAt: Date.now() + ttl };
+  _modelCache = { key: cacheKey, models: filtered, preFilterModels: priced, expiresAt: Date.now() + ttl };
 
   return applyPrivateVisibility(filtered, includePrivate);
 };
+
+/**
+ * Superseded pins the given caller can be upgraded off, for clients that must
+ * recognize a session pinned to a model the picker no longer lists.
+ *
+ * Call it AFTER getAvailableModels with that call's result: the display names for
+ * hidden pins come from the pre-filter list the fan-out cached, and the catalog
+ * successor overlay is refreshed by the same call. Before any fan-out has run in
+ * this process, hidden pins degrade to their raw ids.
+ */
+export const getSupersededModels = (currentModels: ModelInfo[]): SupersededModelInfo[] =>
+  buildSupersededIndex(_modelCache?.preFilterModels ?? currentModels, currentModels);
 
 // Types and core utils:
 export * from './adapterFamilyDispatch';
@@ -454,6 +482,8 @@ export * from './bedrockBackend/base';
 export * from './bedrockBackend/undifferentiated';
 export * from './bflBackend';
 export * from './geminiBackend';
+export * from './kimiBackend';
+export * from './kimiParams';
 export * from './localImageBackend';
 export * from './ollamaBackend';
 export * from './openaiBackend';
@@ -464,6 +494,7 @@ export {
   DeepSeekBedrockBackend,
   JurassicTwoBedrockBackend,
   LlamaBedrockBackend,
+  MoonshotBedrockBackend,
   TitanBedrockBackend,
 };
 
@@ -472,4 +503,5 @@ export * from './realtimeVoicePricing';
 export * from './resolveDeprecatedModel';
 export * from './deprecationHorizon';
 export * from './staleReferences';
+export * from './thinkingParams';
 export * from './toolPairingUtils';

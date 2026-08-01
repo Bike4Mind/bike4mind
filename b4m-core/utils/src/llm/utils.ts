@@ -48,6 +48,19 @@ const RECENT_IMAGE_PROMPT_PREVIEW_CHARS = 120;
 const EDITABLE_IMAGE_KEY_RE = /\.(jpe?g|png|webp|gif)$/i;
 const PREVIEW_CHUNK = 700;
 const CHARS_PER_TOKEN = 3.5;
+/**
+ * Chunks per attached file that cosine retrieval feeds to the model. Three starved small embedders: a
+ * chunk is the embedding model's context window less a 20% buffer (see SmartChunker), so three chunks
+ * is roughly 69k chars on an 8192-token embedder but only 4.3k on a 512-token one, which answers a
+ * question about a 200-row table from 43 rows without saying so.
+ *
+ * 10 is borrowed from rankChunksForFiles' topK default, but note the two caps differ in shape: that
+ * one is global across every file in the search, this one is PER FILE, so a multi-file attachment can
+ * yield more chunks here. What bounds the payload is the per-file character budget applied to these
+ * results (maxChars in processFabFilesServer), not this count - though that budget is derived from
+ * the model's OUTPUT token limit, which is its own separate defect.
+ */
+const COSINE_SEARCH_TOP_K = 10;
 
 // Emergency token limits for embedding generation
 const EMBEDDING_TOKEN_LIMITS = {
@@ -73,13 +86,183 @@ const TOKEN_BUFFER_PERCENTAGE = 0.05;
 /**
  * Share of the token budget given to knowledge/fab files when history + files overflow: 70% files,
  * 30% history. Users attach files expecting them used; history can be pruned more aggressively.
+ * Applies only when history is unlimited; a windowed historyCount uses the floor below.
  */
 const KNOWLEDGE_FILE_TOKEN_ALLOCATION = 0.7;
+
+/**
+ * Smallest share of the token budget an explicitly attached file is guaranteed when a finite
+ * historyCount is set. History used to have absolute priority here, so a long conversation silently
+ * pushed the file the user just attached out of context entirely and the model answered as though no
+ * file existed.
+ *
+ * 0.35 is the largest share that still leaves history the clear majority, which the user did not ask
+ * to give up, while sitting at or above the per-file budget attachments effectively got already on
+ * every model class of 8k context and up - so it raises the floor without cutting what a file
+ * receives today. A fraction rather than a token count, so the reserve can never exceed the budget on
+ * a small context window. The exact figure is not load-bearing: unused reserve flows back to history,
+ * so over-reserving costs nothing and this only binds when content genuinely wants more.
+ */
+const MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION = 0.35;
+
+/**
+ * Appended to attached-file content that had to be cut to fit. Without it a CSV sliced mid-row reads
+ * as a complete file: the model treats the last surviving row as the final row and answers about it
+ * confidently, which is indistinguishable from a correct answer unless you already hold the file.
+ * Counted against the budget like any other content, because it is really sent. This text is for the
+ * model only - what later steps read to know a message was cut is processMessages' truncatedMessages.
+ */
+const CONTENT_TRUNCATION_NOTICE =
+  '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was not sent.]';
+
+/**
+ * Below this many tokens of a file, a slice is not worth sending. A few dozen characters of a CSV does
+ * not read as a truncated file - it reads as no file, and the model says so confidently, which is the
+ * silent wrong answer this whole area exists to prevent. Replacing the slice with a plain statement is
+ * both smaller and honest.
+ */
+const MIN_USEFUL_ATTACHED_CONTENT_TOKENS = 200;
+
+/**
+ * Content is cut in three places, and only the assembly cut is this file's own budget arithmetic.
+ * Extraction head-slices a file that exceeds its per-file budget, and vectorized retrieval hands back
+ * the top-scoring chunks rather than the document. Both used to arrive at assembly looking complete,
+ * so nothing marked them and the model described a fragment as the whole file - the same silent
+ * retrieval failure this module exists to prevent, one stage earlier.
+ *
+ * Separate wordings because the shapes differ and saying the wrong one is its own defect: a head slice
+ * really does stop partway, whereas excerpts are non-contiguous, so "later content was not sent" would
+ * invite exactly the wrong inference about what is missing.
+ */
+const EXCERPT_NOTICE_PREFIX = '\n\n[The above are the most relevant excerpts from ';
+
+const EXCERPT_NOTICE_TAIL =
+  `, selected by similarity. They are in file ` +
+  `order but are NOT the whole file and NOT contiguous - parts between them were not sent, and content after ` +
+  `the last excerpt may exist. Do not describe this as the complete file, and do not infer a total row or ` +
+  `section count, or a final row, from it.]`;
+
+/**
+ * Filenames are user-controlled and get interpolated into the app's own bracketed directive, so a
+ * crafted name could close the bracket and append instructions to the one signal that stops the model
+ * claiming it holds a complete file. Brackets, quotes and newlines go, and the length is bounded so
+ * the assembled notice stays within the span upstreamNoticeIn will recognise.
+ */
+const MAX_NOTICE_FILENAME_CHARS = 100;
+const sanitizeNoticeFileName = (fileName: string): string =>
+  fileName
+    .replace(/[[\]"\r\n]/g, ' ')
+    .trim()
+    .slice(0, MAX_NOTICE_FILENAME_CHARS);
+
+const excerptNotice = (fileName: string): string =>
+  `${EXCERPT_NOTICE_PREFIX}"${sanitizeNoticeFileName(fileName)}"${EXCERPT_NOTICE_TAIL}`;
+
+const URL_TRUNCATION_NOTICE =
+  '\n\n[Fetched page content truncated to fit the context window. This is NOT the end of the page - later ' +
+  'content was not sent.]';
+
+/**
+ * The notice an upstream stage already attached, if any. Assembly's own cut slices the tail off and
+ * would append the generic head-slice wording in its place - which is FALSE for excerpts: it would
+ * tell the model the content simply stops here, the very inference the excerpt notice exists to block.
+ * Every claim in an upstream notice survives a further cut, so the right move is to put the same one
+ * back rather than overwrite it.
+ *
+ * Matched by prefix because the excerpt notice carries a filename. A file whose own text ends with
+ * this sentence would be misread, but the only consequence is which true-either-way notice is
+ * appended, so an exact-match guard is not worth the code.
+ *
+ * The content notice is recognised for the same reason, though no visible fragment of it is
+ * reachable today: extraction appends it before assembly ever sees the message, so assembly can
+ * re-cut an already-annotated message, but `truncateMessageContent` keeps at most 0.9 of the length
+ * and a fragment long enough to read as a notice needs more than that. Holding it out makes the
+ * invariant structural instead of a consequence of that 0.9.
+ */
+const externalNoticeIn = (text: string): string | null => {
+  if (text.endsWith(URL_TRUNCATION_NOTICE)) return URL_TRUNCATION_NOTICE;
+  if (!text.endsWith(EXCERPT_NOTICE_TAIL)) return null;
+  const start = text.lastIndexOf(EXCERPT_NOTICE_PREFIX);
+  if (start === -1) return null;
+  const span = text.slice(start);
+  // Bounded to prefix + a quoted, length-capped filename + the constant tail. A longer span means the
+  // prefix matched inside the content itself - a pasted transcript of a previous answer, or a crafted
+  // file - and holding that out of the cut would exempt most of the payload from truncation.
+  const maxSpan = EXCERPT_NOTICE_PREFIX.length + MAX_NOTICE_FILENAME_CHARS + 2 + EXCERPT_NOTICE_TAIL.length;
+  return span.length <= maxSpan ? span : null;
+};
+
+const upstreamNoticeIn = (text: string): string | null =>
+  text.endsWith(CONTENT_TRUNCATION_NOTICE) ? CONTENT_TRUNCATION_NOTICE : externalNoticeIn(text);
+
+/**
+ * Messages built from a URL in the prompt rather than from an attached file. They reach assembly in
+ * the same block as file content, so without this they get counted as attachments and the undelivered
+ * note tells the model a file could not be included when no file was lost - or when none was attached
+ * at all. Keyed by identity for the same reason cutContentMessages is: content cannot spoof it, and
+ * the caller spreads these objects through without cloning them.
+ */
+const urlDerivedMessages = new WeakSet<IMessage>();
+
+/**
+ * Flat per-image token charge. Exact cost needs decoding the image (Anthropic ~ width*height/750;
+ * OpenAI varies by detail level, low=85), so both the estimator and the real counter assume ~1600
+ * ("normal"). They must use the same figure or converting an overage between the two units skews.
+ */
+const IMAGE_TOKEN_ESTIMATE = 1600;
+
+/** Bounded so building a log label never walks a multi-MB attachment. */
+const ATTACHMENT_LABEL_SCAN_CHARS = 400;
+
+/**
+ * The attachment headers that carry a filename, anchored to a line start. Must stay in sync with the
+ * message builders in processFabFilesServer: the single-file header, the multi-file `--- File N:`
+ * blocks, and a vectorized file's `Data for` header. Anything else - notably URL-derived content,
+ * which opens with the fetched page body - has no name to read and is labelled positionally.
+ */
+const ATTACHMENT_NAME_HEADERS = [
+  /^Here is the content from the attached file "(.{1,120})" for context:$/gm,
+  /^--- File \d+: (.{1,120}) ---$/gm,
+  /^Data for (.{1,120}):$/gm,
+];
 
 const estimateTokenLength = (text: string): number => {
   // Rough estimate: ~3.5 chars per token for English text
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 };
+
+const isImageBlock = (obj: { type?: string }): boolean => obj.type === 'image' || obj.type === 'image_url';
+
+/**
+ * Flattens a message's content to its text, skipping image blocks - their base64 payload is not text
+ * and stringifying it would both mis-measure the message and put megabytes of data into any log line
+ * built from this. Images are charged separately by estimateMessageTokens.
+ *
+ * Differs from calculateTotalTokenLength only in omitting the role string, so the two are still NOT
+ * interchangeable: the squeeze check in buildAndSortMessages has to use this estimator on both sides
+ * or the role overhead alone would report every attachment as squeezed.
+ */
+const messageContentText = (message: IMessage): string =>
+  Array.isArray(message.content)
+    ? message.content
+        .filter(obj => !isImageBlock(obj))
+        .map(obj => JSON.stringify(obj))
+        .join('')
+    : ((message.content as string) ?? '');
+
+/**
+ * Must charge images the same flat rate as calculateTotalTokenLength, so the two measures stay
+ * comparable: stringifying base64 as text here would make an image-carrying turn read as millions of
+ * tokens against a real count that charges a flat rate. Nothing at present divides one by the other -
+ * the rework in #1164 reintroduces that conversion, and depends on this rate matching.
+ */
+const estimateMessageTokens = (message: IMessage): number => {
+  const imageCount = Array.isArray(message.content) ? message.content.filter(isImageBlock).length : 0;
+  return estimateTokenLength(messageContentText(message)) + imageCount * IMAGE_TOKEN_ESTIMATE;
+};
+
+const estimateMessagesTokens = (messages: IMessage[]): number =>
+  messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
 
 /**
  * Rough per-quest token size, used only to choose the verbatim-window boundary
@@ -94,6 +277,7 @@ function estimateQuestTokenLength(item: {
   replies?: string[];
   structuredReplies?: unknown[];
   toolResults?: unknown[];
+  promptMeta?: { functionCalls?: RecordedFunctionCall[] };
 }): number {
   const parts: string[] = [item.prompt ?? ''];
   if (item.structuredReplies?.length) {
@@ -104,7 +288,53 @@ function estimateQuestTokenLength(item: {
   if (item.toolResults?.length) {
     parts.push(JSON.stringify(item.toolResults));
   }
+  // Priority 2 replays these as tool_use/tool_result blocks, and the serialized parameters can
+  // dwarf the text reply. Only counted when it will actually be taken (structuredReplies wins).
+  if (!item.structuredReplies?.length) {
+    const toolCalls = replayableToolCalls(item.promptMeta?.functionCalls);
+    if (toolCalls.length) parts.push(JSON.stringify(toolCalls));
+  }
   return estimateTokenLength(parts.join('\n'));
+}
+
+/** Stands in for a tool_result whose returnValue was never recorded; must not be empty. */
+export const TOOL_RESULT_NOT_RECORDED = '[tool result not recorded]';
+
+type RecordedFunctionCall = {
+  id?: string;
+  name?: string;
+  parameters?: unknown;
+  returnValue?: string;
+  success?: boolean;
+};
+
+/** A recorded call complete enough to replay as a tool_use/tool_result pair. */
+type ReplayableToolCall = RecordedFunctionCall & { id: string; name: string };
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The recorded tool calls that can be replayed into Anthropic-valid message blocks, or an empty
+ * list if this turn should fall back to its plain text reply instead.
+ *
+ * Both filters are load-bearing. An entry missing an id or name cannot form a valid pair, and
+ * repeated ids are rejected outright, so those are dropped rather than emitted. Beyond that the
+ * turn is only worth replaying if SOME call recorded a returnValue - see the call site for why
+ * replaying result-less calls is worse than not replaying at all.
+ */
+function replayableToolCalls(functionCalls: RecordedFunctionCall[] | undefined): ReplayableToolCall[] {
+  if (!functionCalls?.length) return [];
+
+  const seenIds = new Set<string>();
+  const replayable = functionCalls.filter((fc): fc is ReplayableToolCall => {
+    if (!fc.id || !fc.name || seenIds.has(fc.id)) return false;
+    seenIds.add(fc.id);
+    return true;
+  });
+
+  return replayable.some(fc => fc.returnValue) ? replayable : [];
 }
 
 /**
@@ -293,6 +523,8 @@ export async function fetchAndProcessPreviousMessages(
   const convertedMessages = chatHistoryItems.reduce((acc, cur) => {
     if (cur.prompt) acc.push({ role: 'user', content: cur.prompt });
 
+    const toolCalls = replayableToolCalls(cur.promptMeta?.functionCalls);
+
     // Priority 1: Use structuredReplies if available (new field for complete tool context)
     if (cur.structuredReplies && cur.structuredReplies.length > 0) {
       for (const structuredReply of cur.structuredReplies) {
@@ -313,12 +545,14 @@ export async function fetchAndProcessPreviousMessages(
         });
       }
     }
-    // Priority 2: Reconstruct from promptMeta.functionCalls if tool IDs exist (fallback)
-    else if (
-      cur.promptMeta?.functionCalls &&
-      cur.promptMeta.functionCalls.length > 0 &&
-      cur.promptMeta.functionCalls.some(fc => fc.id)
-    ) {
+    // Priority 2: reconstruct tool_use/tool_result pairs from promptMeta.functionCalls when
+    // structuredReplies is absent (older turns, and any writer that does not populate it).
+    //
+    // Requires at least one recorded returnValue. A call with an id but no result carries no
+    // information the model can use, and replaying it would cost the turn its real text reply:
+    // this branch and Priority 3 are mutually exclusive, so entering here on result-less calls
+    // replaces a genuine answer with a list of tool invocations and empty outcomes.
+    else if (toolCalls.length > 0) {
       // Get text reply (excluding thinking blocks)
       const textReply = cur.replies?.find((reply: string) => !reply.trim().startsWith('<think>')) || '';
 
@@ -329,37 +563,30 @@ export async function fetchAndProcessPreviousMessages(
         assistantContent.push({ type: 'text', text: textReply } as MessageContentText);
       }
 
-      for (const fc of cur.promptMeta.functionCalls) {
-        if (fc.id && fc.name) {
-          assistantContent.push({
-            type: 'tool_use',
-            id: fc.id,
-            name: fc.name,
-            input: (fc.parameters as Record<string, unknown>) || {},
-          } as MessageContentToolUse);
-        }
+      for (const fc of toolCalls) {
+        assistantContent.push({
+          type: 'tool_use',
+          id: fc.id,
+          name: fc.name,
+          // Anthropic requires an object here; parameters is Mixed, so a scalar can reach us.
+          input: isPlainObject(fc.parameters) ? fc.parameters : {},
+        } as MessageContentToolUse);
       }
 
-      if (assistantContent.length > 0) {
-        acc.push({ role: 'assistant', content: assistantContent });
+      acc.push({ role: 'assistant', content: assistantContent });
 
-        // Add a tool_result for each function call that had a tool_use block. returnValue is
-        // often unpopulated during completion saving, so we generate a tool_result for every
-        // tool_use to maintain Anthropic's required pairing. Filter matches the tool_use
-        // generation above (fc.id && fc.name) to keep pairs consistent.
-        const toolResults = cur.promptMeta.functionCalls
-          .filter(fc => fc.id && fc.name)
-          .map(fc => ({
-            type: 'tool_result' as const,
-            tool_use_id: fc.id!,
-            content: fc.returnValue ?? (fc.success === false ? 'Tool execution failed' : ''),
-            is_error: fc.success === false,
-          }));
-
-        if (toolResults.length > 0) {
-          acc.push({ role: 'user', content: toolResults });
-        }
-      }
+      // One tool_result per tool_use, same order, ids 1:1 - Anthropic rejects an unpaired block.
+      // returnValue is not always recorded, so fall back to a marker rather than an empty
+      // string, which the API rejects outright.
+      acc.push({
+        role: 'user',
+        content: toolCalls.map(fc => ({
+          type: 'tool_result' as const,
+          tool_use_id: fc.id,
+          content: fc.returnValue || (fc.success === false ? 'Tool execution failed' : TOOL_RESULT_NOT_RECORDED),
+          is_error: fc.success === false,
+        })),
+      });
     }
     // Priority 3: Legacy fallback - text-only replies
     else if (cur.replies && Array.isArray(cur.replies)) {
@@ -516,13 +743,11 @@ export async function calculateTotalTokenLength(
 
     if (Array.isArray(message.content)) {
       message.content.forEach((obj: any) => {
-        if (obj.type === 'image' || obj.type === 'image_url') {
-          // Both Anthropic ('image') and OpenAI ('image_url'): exact token cost needs decoding
-          // the image (Anthropic ~ width*height/750; OpenAI varies by detail level, low=85). We
-          // can't compute that here, so assume ~1600 ("normal"). CRITICAL: without this branch,
-          // base64 image data would be JSON.stringify'd and counted as text, causing massive
-          // overflow (e.g. 2.7M tokens).
-          imageTokenCount += 1600;
+        if (isImageBlock(obj)) {
+          // Both Anthropic ('image') and OpenAI ('image_url'). CRITICAL: without this branch, base64
+          // image data would be JSON.stringify'd and counted as text, causing massive overflow (e.g.
+          // 2.7M tokens). estimateMessageTokens charges the same rate for the same reason.
+          imageTokenCount += IMAGE_TOKEN_ESTIMATE;
         } else {
           concatenatedContent += JSON.stringify(obj);
         }
@@ -671,10 +896,20 @@ export async function processUrlsFromPrompt(
         urlContentCache.set(url, textContent);
       }
 
+      const urlContentTruncated = textContent.length > maxContentBuffer!;
+      if (urlContentTruncated) {
+        logger.warn(
+          `[processUrlsFromPrompt] Truncated fetched content for ${sanitizeUrlForLogging(url)} from ` +
+            `${textContent.length} to ${maxContentBuffer} chars to fit the context window.`
+        );
+      }
       const message: IMessage = {
         role: 'user',
-        content: `For context: ${textContent.substring(0, maxContentBuffer!)}`,
+        content:
+          `For context: ${textContent.substring(0, maxContentBuffer!)}` +
+          (urlContentTruncated ? URL_TRUNCATION_NOTICE : ''),
       };
+      urlDerivedMessages.add(message);
       processedUrls.push(url);
       return message;
     } catch (error) {
@@ -725,18 +960,28 @@ async function cosineSearch(
     };
     logger: Logger;
   }
-): Promise<Array<{ chunkId: string; content: string; score: number }>> {
+): Promise<{ results: Array<{ chunkId: string; content: string; score: number }>; totalChunks: number }> {
   const chunks = await db.fabfilechunks.findByFabFileId(file.id);
 
   const searchResults = chunks
-    .map((chunk: any) => {
+    .map((chunk: any, position: number) => {
       const score = computeCosineSimilarity(userPromptVector, chunk.vector!);
-      return { chunkId: chunk.id, content: chunk.text, score };
+      return { chunkId: chunk.id, content: chunk.text, score, position };
     })
     .filter((result: any) => result !== null);
 
-  // Sort the results based on similarity scores and return top 3
-  return searchResults.sort((a: any, b: any) => b.score - a.score).slice(0, 3);
+  // Similarity decides WHICH chunks; document order decides how they are PRESENTED. Returning them in
+  // score order handed the model a scrambled file - even when every chunk was delivered - which is one
+  // of the ways it ends up naming a mid-file row as the last. `position` is the repository's order,
+  // which is ascending _id, i.e. the order the chunks were written.
+  //
+  // totalChunks lets the caller tell the model when it is holding a subset. Without it the top-K slice
+  // is indistinguishable from "this is the whole file".
+  const selected = [...searchResults].sort((a: any, b: any) => b.score - a.score).slice(0, COSINE_SEARCH_TOP_K);
+  return {
+    results: selected.sort((a, b) => a.position - b.position).map(({ position, ...rest }) => rest),
+    totalChunks: searchResults.length,
+  };
 }
 
 /**
@@ -818,12 +1063,23 @@ export async function processFabFilesServer(
   const userVectorPrompt: { [embeddingModel: string]: number[] } = {};
   const selectedEmbeddingModel = embeddingFactory.getDefaultEmbeddingModel();
 
-  if (!userVectorPrompt[selectedEmbeddingModel]) {
-    // TODO: Optimize this. Currently taking 1-2 seconds to vectorize user prompt
+  // Embedding the query powers semantic chunk selection over vectorized files, but it is an
+  // OPTIMIZATION, not a prerequisite for answering. A failure here - provider down, key revoked or
+  // scoped out of the embeddings endpoint, rate limited - must not abort the whole turn: without
+  // this guard a single 401 surfaced as "OpenAI rejected the embedding request" and no file reached
+  // the model at all. On failure we leave userVectorPrompt empty and every file falls through to the
+  // raw-content path below, so the attachment still reaches the model.
+  try {
     userVectorPrompt[selectedEmbeddingModel] = await generateSafeEmbedding(
       embeddingFactory.createEmbeddingService(selectedEmbeddingModel),
       userPrompt,
       logger
+    );
+  } catch (error) {
+    logger.warn(
+      `[processFabFilesServer] Query embedding failed (${selectedEmbeddingModel}); ` +
+        'falling back to raw file content for this turn.',
+      error
     );
   }
 
@@ -874,7 +1130,12 @@ export async function processFabFilesServer(
 
         switch (modelInfo?.backend) {
           case ModelBackend.OpenAI:
-          case ModelBackend.XAI: {
+          case ModelBackend.XAI:
+          // Moonshot takes OpenAI's base64 `image_url` block verbatim. Grouped
+          // here rather than given its own case because the payload is identical;
+          // without it every Kimi model advertising supportsVision would accept
+          // an attachment, drop it at `default`, and answer as if blind.
+          case ModelBackend.Kimi: {
             // Download image from S3 and send as base64 data URL.
             // Presigned S3 URLs cause timeouts when OpenAI/XAI servers try to fetch them.
             const openaiImageBuffer = await storage.download(file.filePath!);
@@ -945,6 +1206,42 @@ export async function processFabFilesServer(
                 type: 'text',
                 text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
               });
+            } else if (modelInfo.id.startsWith('moonshot')) {
+              // Bedrock-served Kimi speaks OpenAI on the Invoke path, so it takes
+              // the base64 `image_url` block rather than the Anthropic `source`
+              // block the branch above builds. Without this it would fall to the
+              // warn below while still advertising supportsVision.
+              const moonshotBuffer = await resizeImageForModel(
+                await storage.download(file.filePath!),
+                undefined,
+                logger
+              );
+              const { mime: moonshotMimeType } = await getFileType(moonshotBuffer, file.fileName, file.mimeType);
+              const moonshotBase64 = moonshotBuffer.toString('base64');
+
+              // Bedrock caps the Invoke body around 3 MB. If even the resized image
+              // still exceeds it, skip with the same friendly re-upload guidance the
+              // Anthropic branch gives rather than letting Bedrock reject the whole
+              // request with a raw ValidationException. Checked post-resize so we only
+              // reject images that are genuinely too large.
+              const MOONSHOT_MAX_BASE64_BYTES = 3_000_000;
+              if (moonshotBase64.length > MOONSHOT_MAX_BASE64_BYTES) {
+                const encodedMB = (moonshotBase64.length / (1024 * 1024)).toFixed(1);
+                const errorMsg = `⚠️ Image "${file.fileName}" (${encodedMB}MB encoded) is too large for ${modelInfo.name}. Max ~3MB. Please delete this file and re-upload a smaller image.`;
+                logger.warn(errorMsg);
+                await sendStatusUpdate(errorMsg);
+                errorMessages.push({ role: 'error', content: errorMsg });
+                return;
+              }
+
+              imageContent.push({
+                type: 'image_url',
+                image_url: { url: `data:${moonshotMimeType};base64,${moonshotBase64}` },
+              });
+              imageContent.push({
+                type: 'text',
+                text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
+              });
             } else {
               logger.warn(
                 `Vision support for the model ${modelInfo.id} is not implemented. Skipping image processing.`
@@ -998,35 +1295,34 @@ export async function processFabFilesServer(
       } else if (!supportsVision && isImageAttachment(file.mimeType)) {
         logger.warn(`File ${file.fileName} is an image but model does not support vision. Skipping...`);
       } else {
-        if (file.vectorized) {
+        // Files without embeddingModel are old files that were vectorized with the default embedding
+        // model, which is text-embedding-ada-002.
+        const embeddingModel =
+          (file.embeddingModel as SupportedEmbeddingModel) ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+        const userVector = userVectorPrompt[embeddingModel];
+
+        // Cosine chunk selection needs BOTH a vectorized file and a query vector in the same space.
+        // A vectorized file with no usable query vector (the query embedding failed above, or the
+        // file was stored under a different embedding model than this turn's default) must NOT be
+        // dropped - fall through to the raw-content path so the attachment still reaches the model.
+        const canCosineSearch = file.vectorized && !!userVector && userVector.length > 0;
+
+        if (canCosineSearch) {
           // Perform cosine search for vectorized content
           sendStatusUpdate('Now doing retrieval augmented search');
-
-          // Files without embeddingModel are old files that were vectorized with the default embedding model
-          // which is text-embedding-ada-002
-          const embeddingModel =
-            (file.embeddingModel as SupportedEmbeddingModel) ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
-
-          const userVector = userVectorPrompt[embeddingModel];
-
-          if (!userVector || userVector.length === 0) {
-            logger.warn(
-              `No user vector found for embedding model ${embeddingModel}, skipping cosine search for file ${file.fileName}`
-            );
-            return;
-          }
 
           // clear error message if the file has been vectorized
           if (file.error?.startsWith('Knowledge in the workbench with the fileName')) {
             await db.fabfiles.update({ id: file.id, error: null });
           }
 
-          const searchResults = await cosineSearch(file, userVector, { db, logger });
+          const { results: searchResults, totalChunks } = await cosineSearch(file, userVector, { db, logger });
 
           // Truncate search results to fit within the token budget
           const maxChars = maxTokens > 0 ? maxTokens * CHARS_PER_TOKEN : MAX_FILE_SIZE;
           const truncatedResults: Array<{ chunkId: string; content: string; score: number }> = [];
           let totalChars = 0;
+          let anyChunkCut = false;
 
           for (const result of searchResults) {
             const contentLength = result.content?.length ?? 0;
@@ -1037,6 +1333,7 @@ export async function processFabFilesServer(
               const content = result.content.substring(0, maxChars - totalChars);
               truncatedResults.push({ ...result, content });
               totalChars = maxChars;
+              anyChunkCut = true;
               logger.warn(
                 `[processFabFilesServer] Truncated vectorized chunk for "${file.fileName}" to fit token budget (${maxChars}) from ${result.content.length} to ${content.length}`
               );
@@ -1047,15 +1344,35 @@ export async function processFabFilesServer(
           }
 
           if (truncatedResults.length > 0) {
-            userMessages.push({
-              role: 'user',
-              content: `Data for ${file.fileName}:\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`,
-            });
+            // Results arrive in file order, so every chunk with none cut is the whole file and needs
+            // no notice. Every chunk WITH a cut is still contiguous, and the excerpt wording ("parts
+            // between them were not sent") would misdescribe it - that is a head slice reached by
+            // another route, so it takes the truncation wording. The loop only ever cuts a chunk when
+            // the first one alone exceeds the budget (any later overflow breaks instead), so today
+            // that means a single-chunk file; the condition is written on the invariant rather than
+            // on the chunk count so it stays correct if the loop learns to cut a tail.
+            const deliveredEveryChunk = totalChunks === truncatedResults.length;
+            let notice = '';
+            if (!deliveredEveryChunk) notice = excerptNotice(file.fileName);
+            else if (anyChunkCut) notice = CONTENT_TRUNCATION_NOTICE;
+
+            const body = `Data for ${file.fileName}:\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`;
+            userMessages.push({ role: 'user', content: body + notice });
+
+            if (notice) {
+              logger.warn(
+                `[processFabFilesServer] Delivered ${truncatedResults.length}/${totalChunks} chunk(s) of "${file.fileName}"` +
+                  (deliveredEveryChunk
+                    ? ', with the last cut to fit the character budget.'
+                    : ' as similarity-ranked excerpts; the model is told not to read them as the whole file.')
+              );
+            }
           }
         } else {
           try {
             logger.info(
-              `[processFabFilesServer] File "${file.fileName}" is NOT vectorized — using raw content path (maxTokens=${maxTokens})`
+              `[processFabFilesServer] Using raw content path for "${file.fileName}" ` +
+                `(vectorized=${!!file.vectorized}, haveQueryVector=${!!userVector}, maxTokens=${maxTokens})`
             );
             let errorMsg = null;
 
@@ -1077,7 +1394,10 @@ export async function processFabFilesServer(
             if (fabContent.length > finalMaxFileSize) {
               await sendStatusUpdate('File is too large, truncating...');
               const originalFileSize = fabContent.length;
-              fabContent = fabContent.substring(0, finalMaxFileSize ?? PREVIEW_CHUNK);
+              // In band, at the site that knows: assembly cannot tell a head-sliced file from a whole one,
+              // so without this the model presents the slice as the complete file and names a mid-file
+              // row as the last.
+              fabContent = fabContent.substring(0, finalMaxFileSize ?? PREVIEW_CHUNK) + CONTENT_TRUNCATION_NOTICE;
               errorMsg = `Knowledge in the workbench with the fileName ${file.fileName} is ${originalFileSize} long which exceeds ${finalMaxFileSize}. Vectorize your large file or select a model with higher context window.`;
               errorMessages.push({
                 role: 'error',
@@ -1241,14 +1561,16 @@ const MESSAGE_PRIORITY = {
 const truncateMessageContent = (message: IMessage, tokenLimit: number): IMessage => {
   let content: MessageContent = message.content || '';
 
-  const contentText = Array.isArray(content) ? content.map(obj => JSON.stringify(obj)).join('') : (content as string);
-  const estimatedTokens = estimateTokenLength(contentText);
+  const estimatedTokens = estimateTokenLength(messageContentText(message));
 
   if (estimatedTokens > tokenLimit) {
     const ratio = (0.9 * tokenLimit) / estimatedTokens;
 
     if (Array.isArray(content)) {
-      const truncatedLength = Math.floor(content.length * ratio);
+      // Array content truncates by whole blocks, so keep at least one: flooring to zero yields an
+      // empty content array, which providers reject. A single oversized block cannot be shrunk this
+      // way at all - the caller's budget check is what catches that.
+      const truncatedLength = Math.max(1, Math.floor(content.length * ratio));
       content = content.slice(0, truncatedLength);
     } else {
       const truncatedLength = Math.floor((content as string).length * ratio);
@@ -1259,50 +1581,84 @@ const truncateMessageContent = (message: IMessage, tokenLimit: number): IMessage
 };
 
 // Process messages, keeping complete ones over truncation to avoid mid-content cuts that cause
-// hallucinations.
+// hallucinations. Never returns more than `tokenBudget` worth of messages, except in the truncation
+// fallback at the bottom: that stays under 90% of the budget, plus the truncation notice when one is
+// passed - which on a very small budget can put the total over it. The caller's final safety pass
+// absorbs that.
 const processMessages = (
   messages: IMessage[],
-  tokenBudget: number
+  tokenBudget: number,
+  // Appended to any message this call actually shortens. Passed only for attached-file content, and
+  // applied here because this is the only place that knows a message was cut: inferring it afterwards
+  // by comparing against the originals cannot distinguish a cut file from a whole one whose bytes
+  // happen to match a sibling attachment, in either direction.
+  { truncationNotice }: { truncationNotice?: string } = {}
 ): {
   messages: IMessage[];
   removedMessages: Array<{ role: string; tokens: number; priority: number }>;
+  // The returned objects this call shortened. Identity is the only reliable signal a message was cut:
+  // comparing bytes against the originals cannot tell a cut file from a whole one that happens to
+  // match a sibling, and sniffing for the appended notice mistakes a file ending in that text for a
+  // cut one. Callers surface mid-message loss from this, since removedMessages stays empty for it.
+  truncatedMessages: IMessage[];
 } => {
-  if (tokenBudget <= 0) {
-    return { messages: [], removedMessages: [] };
-  }
-
-  const messagesWithTokens = messages.map((message, index) => {
-    const contentText = Array.isArray(message.content)
-      ? message.content.map(obj => JSON.stringify(obj)).join('')
-      : (message.content as string);
-    const tokens = estimateTokenLength(contentText);
-    const priority = MESSAGE_PRIORITY[message.role as keyof typeof MESSAGE_PRIORITY] ?? 999;
-    return { message, tokens, priority, originalIndex: index };
+  const describeRemoved = (message: IMessage) => ({
+    role: message.role,
+    tokens: estimateMessageTokens(message),
+    priority: MESSAGE_PRIORITY[message.role as keyof typeof MESSAGE_PRIORITY] ?? 999,
   });
 
-  // Protect the last N user+assistant exchange pairs from being dropped.
-  // These represent the most recent conversation context and are critical for coherence.
+  // Negated rather than `tokenBudget <= 0` so NaN lands here too: every `x > NaN` comparison below is
+  // false, so a NaN budget would otherwise reserve everything and silently defeat the whole cap.
+  if (!(tokenBudget > 0)) {
+    // Only messages that carry content count as a loss. An empty-content message is not a truncation
+    // event, and reporting it as one would flip truncationMethod to 'token-budget' on a healthy turn.
+    return {
+      messages: [],
+      removedMessages: messages.filter(m => estimateMessageTokens(m) > 0).map(describeRemoved),
+      truncatedMessages: [],
+    };
+  }
+
+  const messagesWithTokens = messages.map((message, index) => ({
+    message,
+    tokens: estimateMessageTokens(message),
+    priority: MESSAGE_PRIORITY[message.role as keyof typeof MESSAGE_PRIORITY] ?? 999,
+    originalIndex: index,
+  }));
+
+  // The last N user+assistant exchange pairs are the most recent conversation context and matter
+  // most for coherence, so they get first claim on the budget - but only as far as it stretches
+  // (see the reservation below). Collected newest-first so the oldest lose out first.
   const PROTECTED_RECENT_PAIRS = 3;
-  const protectedMessages = new Set<number>();
+  const protectedIndices: number[] = [];
   let pairsFound = 0;
   for (let i = messagesWithTokens.length - 1; i >= 0 && pairsFound < PROTECTED_RECENT_PAIRS; i--) {
     const role = messagesWithTokens[i].message.role;
     if (role === 'user' || role === 'assistant') {
-      protectedMessages.add(i);
+      protectedIndices.push(i);
       // Count a pair when we find a user message (user comes before assistant in history)
       if (role === 'user') pairsFound++;
     }
   }
 
-  // Pre-reserve protected messages and deduct their tokens from the budget
+  // Reserve protected messages only while they fit, so the reservation can never overshoot the
+  // budget. `continue` rather than `break`: one oversized recent message must not block the
+  // smaller ones behind it.
+  const reservedIndices = new Set<number>();
   const reservedMessages: typeof messagesWithTokens = [];
   let reservedTokens = 0;
-  for (const idx of protectedMessages) {
-    reservedMessages.push(messagesWithTokens[idx]);
-    reservedTokens += messagesWithTokens[idx].tokens;
+  for (const idx of protectedIndices) {
+    const item = messagesWithTokens[idx];
+    if (reservedTokens + item.tokens > tokenBudget) continue;
+    reservedIndices.add(idx);
+    reservedMessages.push(item);
+    reservedTokens += item.tokens;
   }
 
-  const unreservedMessages = messagesWithTokens.filter((_, idx) => !protectedMessages.has(idx));
+  // Keyed on what was actually reserved, so a protected message that missed out rejoins the
+  // candidate pool below instead of becoming unselectable.
+  const unreservedMessages = messagesWithTokens.filter((_, idx) => !reservedIndices.has(idx));
 
   // Sort by priority (keep high priority messages)
   // Within same priority, prefer newer messages (higher originalIndex) so oldest get dropped first
@@ -1336,10 +1692,32 @@ const processMessages = (
   // If we couldn't fit any messages but have budget, fall back to truncation
   if (selectedMessages.length === 0 && messages.length > 0) {
     const tokensPerMessage = Math.floor(tokenBudget / messages.length);
-    return {
-      messages: messages.map(message => truncateMessageContent(message, tokensPerMessage)),
-      removedMessages: [],
-    };
+    // Under 1 token each, truncation yields empty content that providers reject, so drop the
+    // messages instead and let the removal reporting below stand.
+    if (tokensPerMessage >= 1) {
+      const truncatedMessages = messages.map(message => {
+        // Held out of the slice so the cut cannot leave a fragment of it behind, then put back after.
+        const upstream =
+          truncationNotice && typeof message.content === 'string' ? upstreamNoticeIn(message.content) : null;
+        const source = upstream
+          ? { ...message, content: (message.content as string).slice(0, -upstream.length) }
+          : message;
+        const truncated = truncateMessageContent(source, tokensPerMessage);
+        // Every message reaching this branch gets shortened - it only runs when none of them fit,
+        // and the per-message share is at most the budget each one already exceeded. The type check
+        // is the real guard: array content truncates by whole blocks and takes no text notice.
+        if (!truncationNotice || typeof truncated.content !== 'string') return truncated;
+        return { ...truncated, content: truncated.content + (upstream ?? truncationNotice) };
+      });
+      return {
+        messages: truncatedMessages,
+        // Under-reports on purpose: content was cut mid-message but no message was dropped.
+        // Reporting these as removed would make truncationRate read 0% next to a truncation flag,
+        // so callers surface mid-message loss through truncatedMessages instead.
+        removedMessages: [],
+        truncatedMessages,
+      };
+    }
   }
 
   // Restore original chronological order
@@ -1348,6 +1726,7 @@ const processMessages = (
   return {
     messages: selectedMessages.map(item => item.message),
     removedMessages,
+    truncatedMessages: [],
   };
 };
 
@@ -1389,7 +1768,9 @@ export async function buildAndSortMessages(
   tokenizer: ITokenizer,
   options: { verbose: boolean } = { verbose: false }
 ): Promise<IMessage[]> {
-  if (maxInputTokens <= 0) {
+  // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
+  // comparison below.
+  if (!(maxInputTokens > 0)) {
     logger.error(`Invalid maxInputTokens: ${maxInputTokens}. Must be greater than 0.`);
     return [];
   }
@@ -1476,73 +1857,198 @@ export async function buildAndSortMessages(
 
   // TODO: also weight previousMessages by cosine score (not just fabMessages) - blocked on not
   // having vectors for previousMessages yet.
+  // The historyCount > 0 guard matters: slice(-0) is slice(0), which returns the WHOLE array, so
+  // asking for no history used to send all of it. Image models set historyCount to 0 precisely to
+  // keep history out of their small context windows.
   const historyMessages = isUnlimitedHistory(historyCount)
     ? previousMessages
-    : previousMessages.slice(-historyCount * 2);
+    : historyCount > 0
+      ? previousMessages.slice(-historyCount * 2)
+      : [];
   const totalContentTokens = await calculateTotalTokenLength(nonImageMessages, { estimateOnly: true, tokenizer });
   const totalPreviousTokens = await calculateTotalTokenLength(historyMessages, { estimateOnly: true, tokenizer });
   let processedContentMessages: IMessage[] = [];
   let processedPreviousMessages: IMessage[] = [];
 
-  // Track removed messages for truncation visibility
+  // Track removed messages for truncation visibility. `contentSqueezed` covers the loss that
+  // `allRemovedMessages` structurally cannot: content cut mid-message rather than dropped.
   const allRemovedMessages: Array<{ role: string; tokens: number; priority: number }> = [];
+  let contentSqueezed = false;
   const originalTotalMessageCount = historyMessages.length + nonImageMessages.length;
 
-  // A windowed request gives history absolute priority; an unwindowed one splits the budget
-  // between files and history (see KNOWLEDGE_FILE_TOKEN_ALLOCATION in the else branch).
-  if (!isUnlimitedHistory(historyCount)) {
-    // If the history fits within the budget, process it and allocate remaining tokens to content
-    if (totalPreviousTokens <= tokenBudget) {
-      const historyResult = processMessages(historyMessages, totalPreviousTokens);
-      processedPreviousMessages = historyResult.messages;
-      allRemovedMessages.push(...historyResult.removedMessages);
-      tokenBudget -= totalPreviousTokens;
+  // Attached-content messages this run shortened, by identity. Every content allocation funnels
+  // through recordContentResult so a cut made anywhere - either allocation branch or the final safety
+  // pass - is reported, and so `contentSqueezed` reads the structural signal rather than comparing
+  // token totals: the appended notice can leave a squeezed message measuring larger than the original.
+  const cutContentMessages = new Set<IMessage>();
+  // History cut mid-message is a budget loss too. Tracked apart from contentSqueezed so it feeds
+  // truncationMethod without firing the attached-content warning, which is about the file only.
+  let historyCutMidMessage = false;
+  const recordHistoryResult = (result: ReturnType<typeof processMessages>): IMessage[] => {
+    allRemovedMessages.push(...result.removedMessages);
+    if (result.truncatedMessages.length > 0) historyCutMidMessage = true;
+    return result.messages;
+  };
+  const recordContentResult = (result: ReturnType<typeof processMessages>): IMessage[] => {
+    allRemovedMessages.push(...result.removedMessages);
+    result.truncatedMessages.forEach(message => cutContentMessages.add(message));
+    if (result.removedMessages.length > 0 || result.truncatedMessages.length > 0) contentSqueezed = true;
+    return result.messages;
+  };
 
-      const contentResult = processMessages(nonImageMessages, tokenBudget);
-      processedContentMessages = contentResult.messages;
-      allRemovedMessages.push(...contentResult.removedMessages);
-    } else {
-      // If the history itself exceeds the budget, then we need to truncate and prioritize history
-      const historyResult = processMessages(historyMessages, tokenBudget);
-      processedPreviousMessages = historyResult.messages;
-      allRemovedMessages.push(...historyResult.removedMessages);
-      processedContentMessages = []; // No tokens left for contentMessages
-      // Mark all content messages as removed
-      allRemovedMessages.push(
-        ...nonImageMessages.map(msg => ({
-          role: msg.role,
-          tokens: estimateTokenLength(
-            Array.isArray(msg.content) ? msg.content.map(obj => JSON.stringify(obj)).join('') : (msg.content as string)
-          ),
-          priority: MESSAGE_PRIORITY[msg.role as keyof typeof MESSAGE_PRIORITY] ?? 999,
-        }))
+  // Content-free descriptor for logs. Names are read only from the three headers that carry one
+  // (see the message builders above), each anchored to a line start so a quoted or bracketed span
+  // inside the file's own text cannot be mistaken for a header - a CSV field is quoted as often as
+  // not. URL-derived content opens with the fetched page body and has no header at all, so it is
+  // labelled positionally rather than by echoing what it contains.
+  const attachmentLabel = (message: IMessage, index: number): string => {
+    const head = messageContentText(message).slice(0, ATTACHMENT_LABEL_SCAN_CHARS);
+    const named: string[] = [];
+    for (const pattern of ATTACHMENT_NAME_HEADERS) {
+      // Shared /g regexes carry lastIndex between calls, so reset before each scan.
+      pattern.lastIndex = 0;
+      for (let match = pattern.exec(head); match; match = pattern.exec(head)) named.push(`"${match[1]}"`);
+    }
+    return `${named.length ? named.join(', ') : `attachment ${index + 1}`} (~${estimateMessageTokens(message)} est. tokens)`;
+  };
+
+  // A windowed request allocates content a floor and gives history the rest; an unwindowed one splits
+  // the budget (see KNOWLEDGE_FILE_TOKEN_ALLOCATION in the else branch).
+  if (!isUnlimitedHistory(historyCount)) {
+    // Content gets whatever history does not need, but never less than the floor. Both the fits and
+    // the overflow case run through this one expression: splitting them would put a cliff on the
+    // `totalPreviousTokens <= tokenBudget` boundary, where one more token of history flipped content
+    // between everything and nothing. Over-reserving here is harmless because history is sized from
+    // what content actually consumed, not from this figure.
+    const attachedContentTokens = estimateMessagesTokens(nonImageMessages);
+    // Negated like the guards at the two layers above, so NaN lands in the zero branch here too. A
+    // NaN cannot currently reach this line, but the two idioms sitting side by side invited someone
+    // to loosen the ones that are load-bearing.
+    const contentBudget = !(tokenBudget > 0)
+      ? 0
+      : Math.max(Math.floor(tokenBudget * MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION), tokenBudget - totalPreviousTokens);
+
+    // Content first: history's budget depends on what content actually used.
+    processedContentMessages = recordContentResult(
+      processMessages(nonImageMessages, contentBudget, { truncationNotice: CONTENT_TRUNCATION_NOTICE })
+    );
+
+    // Unused reserve flows back, so a small attachment costs history nothing.
+    const contentTokensUsed = estimateMessagesTokens(processedContentMessages);
+
+    processedPreviousMessages = recordHistoryResult(processMessages(historyMessages, tokenBudget - contentTokensUsed));
+
+    if (contentSqueezed) {
+      // Warned rather than logged because the symptom is a missing answer, not an error: the model
+      // says it cannot see the file and the user has no way to tell why.
+      logger.warn(
+        `Attached content squeezed to fit the token budget: kept ${processedContentMessages.length}/${nonImageMessages.length} message(s), ` +
+          `${contentTokensUsed}/${attachedContentTokens} est. tokens (reserved ${contentBudget} of ${tokenBudget}, floor ` +
+          `${Math.round(MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION * 100)}%). Affected: ` +
+          nonImageMessages.map(attachmentLabel).join(' | ')
       );
+    }
+    if (totalPreviousTokens > tokenBudget) {
       logger.log(`History exceeds token budget. Truncating history to ${processedPreviousMessages.length} messages.`);
     }
   } else {
     // Check if both fit within the remaining token budget
     if (totalContentTokens + totalPreviousTokens <= tokenBudget) {
-      const contentResult = processMessages(nonImageMessages, tokenBudget);
-      processedContentMessages = contentResult.messages;
-      allRemovedMessages.push(...contentResult.removedMessages);
+      processedContentMessages = recordContentResult(
+        processMessages(nonImageMessages, tokenBudget, { truncationNotice: CONTENT_TRUNCATION_NOTICE })
+      );
 
-      const historyResult = processMessages(historyMessages, tokenBudget);
-      processedPreviousMessages = historyResult.messages;
-      allRemovedMessages.push(...historyResult.removedMessages);
+      processedPreviousMessages = recordHistoryResult(processMessages(historyMessages, tokenBudget));
     } else {
       // Both exceed the budget: trim proportionally. See KNOWLEDGE_FILE_TOKEN_ALLOCATION for the split.
       const nonImageTokenBudget = Math.min(tokenBudget * KNOWLEDGE_FILE_TOKEN_ALLOCATION, totalContentTokens);
       const previousMessageTokenBudget = tokenBudget - nonImageTokenBudget;
 
-      const contentResult = processMessages(nonImageMessages, nonImageTokenBudget);
-      processedContentMessages = contentResult.messages;
-      allRemovedMessages.push(...contentResult.removedMessages);
+      processedContentMessages = recordContentResult(
+        processMessages(nonImageMessages, nonImageTokenBudget, { truncationNotice: CONTENT_TRUNCATION_NOTICE })
+      );
 
-      const historyResult = processMessages(historyMessages, previousMessageTokenBudget);
-      processedPreviousMessages = historyResult.messages;
-      allRemovedMessages.push(...historyResult.removedMessages);
+      processedPreviousMessages = recordHistoryResult(processMessages(historyMessages, previousMessageTokenBudget));
     }
   }
+
+  // A sliver of a file is worse than none: the model does not recognise it as file content and answers
+  // as though nothing was attached. Judged per message rather than on the total, so two attachments
+  // each cut to an unusable fragment are both caught - summing them hides exactly that case.
+  //
+  // Per message is not yet per file: processFabFilesServer combines all plain files into a single
+  // message, so three CSVs sharing one message are judged, counted and reported as one. Vectorized
+  // and URL content each get their own message and so are judged separately. Real per-file accounting
+  // needs block-level bookkeeping through extraction and is tracked separately.
+  const fileTokens = (message: IMessage): number => {
+    const text = messageContentText(message);
+    // No notice is the file's own content, and either kind pushes a sliver over the threshold - the
+    // excerpt notice weighs ~101 estimate tokens by itself, half the usability floor. Ours is matched
+    // by identity so a file whose text happens to end with that sentence cannot spoof a cut; an
+    // upstream notice is structurally ours already, so recognising it by text is enough.
+    const notice =
+      cutContentMessages.has(message) && text.endsWith(CONTENT_TRUNCATION_NOTICE)
+        ? CONTENT_TRUNCATION_NOTICE
+        : externalNoticeIn(text);
+    return estimateTokenLength(notice ? text.slice(0, -notice.length) : text);
+  };
+  // Attachments that carried no extractable text are excluded - losing nothing is not a loss, and
+  // counting it would report a truncation on a completely healthy turn. URL-derived content is
+  // excluded on the same grounds: it rides in this block but is not an attachment, and counting it
+  // made the note claim a file was lost on turns where the file arrived whole, or where the prompt
+  // carried only a link and no file existed at all.
+  const isAttachment = (message: IMessage): boolean => !urlDerivedMessages.has(message) && fileTokens(message) > 0;
+  const attachmentsWithContent = nonImageMessages.filter(isAttachment);
+  let undeliveredNote: IMessage | null = null;
+
+  /**
+   * Replaces attachments that arrived too small to be recognised as file content, and declares any
+   * dropped whole, with one message saying so. Runs after the allocation below, the only stage that
+   * currently shrinks content. The final safety pass can also drop an attachment the allocation had
+   * delivered, and does not re-run this - so on that path the file reaches the model undeclared. That
+   * gap is tracked in #1164 along with the rest of the safety pass rework.
+   *
+   * Idempotent by design, so a second call is safe to add there: its own note is excluded by identity,
+   * so it re-judges only real attachments and replaces the note rather than stacking another. It keeps
+   * the note in the payload it measures, so the ~100 tokens it costs are counted, not hidden.
+   */
+  const declareUndeliveredAttachments = (contentMessages: IMessage[]): IMessage[] => {
+    if (attachmentsWithContent.length === 0) return contentMessages;
+
+    // Counted on the same footing as attachmentsWithContent - same isAttachment predicate on both
+    // sides. An attachment carrying no extractable text, or a URL-derived message, is absent from
+    // both: counting either as delivered let it stand in for a sibling that was dropped, and the drop
+    // then went undeclared.
+    const delivered = contentMessages.filter(message => message !== undeliveredNote && isAttachment(message));
+    const isUnusableSliver = (message: IMessage): boolean =>
+      cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS;
+    const usable = delivered.filter(message => !isUnusableSliver(message));
+    const droppedCount = Math.max(0, attachmentsWithContent.length - delivered.length);
+    const sliverCount = delivered.length - usable.length;
+    if (droppedCount === 0 && sliverCount === 0) return contentMessages;
+
+    logger.warn(
+      `Attached content could not be delivered usefully: ${droppedCount} file(s) dropped whole and ` +
+        `${sliverCount} reduced below the ${MIN_USEFUL_ATTACHED_CONTENT_TOKENS}-token minimum worth sending. ` +
+        `Context window is too small after system instructions and history. Affected: ` +
+        attachmentsWithContent.map(attachmentLabel).join(' | ')
+    );
+    contentSqueezed = true;
+    // Deliberately names no files. Which attachment was lost is not knowable here once processMessages
+    // has replaced the objects, and listing all of them let the model disclaim one it did receive.
+    undeliveredNote = {
+      role: 'user',
+      content:
+        `${droppedCount + sliverCount} attached file(s) could not be included in this request. After system ` +
+        `instructions and conversation history there was too little room left to send a usable amount of their ` +
+        `content. The file(s) ARE attached - do not tell the user that no file was provided. Tell them the file ` +
+        `could not be read within this model's context window, and suggest a model with a larger context window, ` +
+        `a smaller file, or a shorter conversation.`,
+    };
+    return [...usable, undeliveredNote];
+  };
+
+  processedContentMessages = declareUndeliveredAttachments(processedContentMessages);
 
   // Separate image and non-image messages
   const imageMessages: IMessage[] = fabMessages.filter(
@@ -1592,6 +2098,27 @@ export async function buildAndSortMessages(
     ];
   }
 
+  // Budget loss outranks history windowing: reporting 'history-limit' whenever historyCount was
+  // finite - which is nearly always - made a file the budget had silently zeroed look identical in
+  // telemetry to history being windowed exactly as configured, which is why that bug went unnoticed
+  // for so long. `contentSqueezed` is needed alongside allRemovedMessages because content cut
+  // mid-message is a budget loss that drops no message and so leaves allRemovedMessages empty.
+  // Called on BOTH return paths: the overflow path below returns early, so assigning this only at
+  // the end left the worst-loss turn reporting the previous call's numbers from a warm container.
+  const recordDebugInfo = (finalContentMessages: IMessage[]) => {
+    const historyWindowed = previousMessages.length > historyMessages.length;
+    const budgetTruncated = allRemovedMessages.length > 0 || contentSqueezed || historyCutMidMessage;
+    (buildAndSortMessages as any).lastDebugInfo = {
+      messageTruncation: {
+        wasTruncated: budgetTruncated,
+        originalMessageCount: originalTotalMessageCount,
+        truncatedMessageCount: processedPreviousMessages.length + finalContentMessages.length,
+        truncationMethod: budgetTruncated ? 'token-budget' : historyWindowed ? 'history-limit' : undefined,
+        removedMessages: allRemovedMessages.length > 0 ? allRemovedMessages : undefined,
+      },
+    };
+  };
+
   // Final safety check - validate that messages don't exceed the safe token limit
   // Use actual tokenizer here for accurate count (not estimates) to prevent overflow
   const finalTokenCount = await calculateTotalTokenLength(messages, { estimateOnly: false, tokenizer });
@@ -1599,13 +2126,25 @@ export async function buildAndSortMessages(
     logger.warn(
       `⚠️ Final message token count (${finalTokenCount}) exceeds maxInputTokens (${maxInputTokens}). Truncating messages.`
     );
-    // If we still exceed limits, remove some processed content messages as last resort
+    // If we still exceed limits, remove some processed content messages as last resort.
+    //
+    // The notice is threaded and the result recorded for the same reason: this pass can now actually
+    // cut. Before the reservation cap above, protected messages were reserved unconditionally, so the
+    // selection was never empty, the truncation fallback never fired from here, and an overflow went
+    // to the caller's hard throw instead. With the cap it shrinks - and without these two arguments it
+    // would head-slice a file with nothing appended (the fallback's hold-out for an existing upstream
+    // notice is gated on truncationNotice), then drop the cut from telemetry, so the turn that lost
+    // the most content would report wasTruncated: false. A silent truncated file presented as complete
+    // is the failure this module exists to prevent.
     const excessTokens = finalTokenCount - maxInputTokens;
-    const reducedContentMessagesResult = processMessages(
-      processedContentMessages,
-      Math.max(
-        0,
-        (await calculateTotalTokenLength(processedContentMessages, { estimateOnly: false, tokenizer })) - excessTokens
+    const reducedContentMessages = recordContentResult(
+      processMessages(
+        processedContentMessages,
+        Math.max(
+          0,
+          (await calculateTotalTokenLength(processedContentMessages, { estimateOnly: false, tokenizer })) - excessTokens
+        ),
+        { truncationNotice: CONTENT_TRUNCATION_NOTICE }
       )
     );
 
@@ -1616,17 +2155,18 @@ export async function buildAndSortMessages(
         ...processedPreviousMessages,
         ...userPrompt,
         ...imageMessages,
-        ...reducedContentMessagesResult.messages,
+        ...reducedContentMessages,
       ];
     } else {
       truncatedMessages = [
         ...systemMessages,
         ...processedPreviousMessages,
         ...imageMessages,
-        ...reducedContentMessagesResult.messages,
+        ...reducedContentMessages,
         ...userPrompt,
       ];
     }
+    recordDebugInfo(reducedContentMessages);
     // Ensure tool_use/tool_result pairing integrity after truncation
     return ensureToolPairingIntegrity(truncatedMessages, logger);
   }
@@ -1651,22 +2191,7 @@ export async function buildAndSortMessages(
     logger.log('=== End of Verbose Message Building Log ===');
   }
 
-  // Store debug info for external access
-  const truncationMethod: 'priority' | 'token-budget' | 'history-limit' | undefined = !isUnlimitedHistory(historyCount)
-    ? 'history-limit'
-    : allRemovedMessages.length > 0
-      ? 'token-budget'
-      : undefined;
-
-  (buildAndSortMessages as any).lastDebugInfo = {
-    messageTruncation: {
-      wasTruncated: allRemovedMessages.length > 0,
-      originalMessageCount: originalTotalMessageCount,
-      truncatedMessageCount: processedPreviousMessages.length + processedContentMessages.length,
-      truncationMethod,
-      removedMessages: allRemovedMessages.length > 0 ? allRemovedMessages : undefined,
-    },
-  };
+  recordDebugInfo(processedContentMessages);
 
   // Ensure tool_use/tool_result pairing integrity after any truncation
   return ensureToolPairingIntegrity(messages, logger);

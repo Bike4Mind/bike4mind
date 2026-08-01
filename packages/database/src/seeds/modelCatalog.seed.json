@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-07-27T23:40:30.881Z",
-  "notice": "Fallback defaults last maintained on 2026-07-27. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-07-29T13:51:57.149Z",
+  "notice": "Fallback defaults last maintained on 2026-07-29. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -1725,7 +1725,7 @@
         "type": "text",
         "name": "GPT-4",
         "contextWindow": 8192,
-        "maxOutputTokens": 8192,
+        "maxOutputTokens": 4096,
         "canStream": true,
         "supportsVision": false,
         "supportsTools": false,
@@ -2927,6 +2927,170 @@
       }
     },
     {
+      "modelId": "kimi-k2.5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "kimi-k2.5",
+        "vendor": "moonshotai",
+        "backend": "kimi",
+        "type": "text",
+        "name": "Kimi K2.5",
+        "contextWindow": 262144,
+        "maxOutputTokens": 262144,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "The previous-generation Kimi, still the cheapest of the family. Superseded by K2.6 on quality at a modest price increase.",
+        "trainingCutoff": "2025-01-01",
+        "releaseDate": "2026-01-01"
+      }
+    },
+    {
+      "modelId": "kimi-k2.6",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "kimi-k2.6",
+        "vendor": "moonshotai",
+        "backend": "kimi",
+        "type": "text",
+        "name": "Kimi K2.6",
+        "contextWindow": 262144,
+        "maxOutputTokens": 262144,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Moonshot's multimodal workhorse for agent loops, coding, and visual context. Thinking can be turned off on this one, unlike the K2.7 code models.",
+        "trainingCutoff": "2025-01-01",
+        "releaseDate": "2026-04-21"
+      }
+    },
+    {
+      "modelId": "kimi-k2.7-code",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "kimi-k2.7-code",
+        "vendor": "moonshotai",
+        "backend": "kimi",
+        "type": "text",
+        "name": "Kimi K2.7 Code",
+        "contextWindow": 262144,
+        "maxOutputTokens": 262144,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Moonshot's coding-focused Kimi, tuned for long-horizon repository work with less overthinking. Thinking cannot be disabled.",
+        "trainingCutoff": "2025-01-01",
+        "releaseDate": "2026-06-12"
+      }
+    },
+    {
+      "modelId": "kimi-k2.7-code-highspeed",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "kimi-k2.7-code-highspeed",
+        "vendor": "moonshotai",
+        "backend": "kimi",
+        "type": "text",
+        "name": "Kimi K2.7 Code (High Speed)",
+        "contextWindow": 262144,
+        "maxOutputTokens": 262144,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Kimi K2.7 Code served at 180-260 tokens/s for latency-sensitive work. Identical capabilities to K2.7 Code at twice the price.",
+        "trainingCutoff": "2025-01-01",
+        "releaseDate": "2026-06-12"
+      }
+    },
+    {
+      "modelId": "kimi-k3",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "kimi-k3",
+        "vendor": "moonshotai",
+        "backend": "kimi",
+        "type": "text",
+        "name": "Kimi K3",
+        "contextWindow": 1048576,
+        "maxOutputTokens": 131072,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Moonshot's Kimi K3 flagship. 1M context with native vision, tool use, and selectable reasoning effort (low/high/max). Always reasons - effort sets depth, not whether.",
+        "releaseDate": "2026-07-16"
+      }
+    },
+    {
       "modelId": "meta.llama3-70b-instruct-v1:0",
       "ownedGroups": [
         "identity",
@@ -2980,6 +3144,72 @@
         "description": "Meta's open-source Llama 3 model with 8B parameters. Optimized for high-volume tasks requiring good reasoning capabilities.",
         "logoFile": "512px-Meta-Logo.svg",
         "rank": 5
+      }
+    },
+    {
+      "modelId": "moonshot.kimi-k2-thinking",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "moonshot.kimi-k2-thinking",
+        "vendor": "moonshotai",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Kimi K2 Thinking (Bedrock)",
+        "contextWindow": 262144,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": false,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Moonshot's Kimi K2 Thinking via AWS Bedrock - chain-of-thought reasoning for math, coding and logic. Text only; 256K context with a 16K output ceiling.",
+        "rank": 10,
+        "releaseDate": "2025-11-06"
+      }
+    },
+    {
+      "modelId": "moonshotai.kimi-k2.5",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "reasoning",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "moonshotai.kimi-k2.5",
+        "vendor": "moonshotai",
+        "backend": "bedrock",
+        "type": "text",
+        "name": "Kimi K2.5 (Bedrock)",
+        "contextWindow": 262144,
+        "maxOutputTokens": 16384,
+        "canStream": true,
+        "reasoning": {
+          "supported": true
+        },
+        "supportsVision": true,
+        "supportsTools": true,
+        "supportsImageVariation": false,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "Moonshot's Kimi K2.5 via AWS Bedrock - multimodal, 256K context, no provider key required. Output is capped at 16K here against 262K on Moonshot's own API.",
+        "rank": 10,
+        "releaseDate": "2026-01-27"
       }
     },
     {

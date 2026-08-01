@@ -11,10 +11,10 @@ import { type MigrationFile } from './index';
  * boot of whichever Lambda touches the collection first - on a collection this size that belongs
  * in a migration, not on a request path.
  *
- * Idempotent: createIndexes is a no-op for indexes that already exist. It does build EVERY index
- * declared on the schema, not just this one, which is fine today because the others are already in
- * place - but a future schema addition will be built by this migration too. Plain compound index,
- * so nothing here depends on DocumentDB-specific index support. `down` is intentionally one-way.
+ * Idempotent: createIndexes is a no-op for indexes that already exist. It builds EVERY index the
+ * schema declares, which today is only this one - a future schema addition would be built here too.
+ * Plain compound index, so nothing here depends on DocumentDB-specific index support. `down` is
+ * intentionally one-way.
  */
 const migration: MigrationFile = {
   id: 20260728000000,

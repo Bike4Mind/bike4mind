@@ -1,4 +1,11 @@
-import type { BrowsePublicDataLakesResult, DataLakeConfig } from '@bike4mind/common';
+import type {
+  BrowsePublicDataLakesResult,
+  DataLakeConfig,
+  IDataLakeBatchDocument,
+  ManageableDataLakeConfig,
+  TaxonomyTag,
+} from '@bike4mind/common';
+import { normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -20,16 +27,44 @@ export function activeOrgId(): string | undefined {
 }
 
 /**
- * Fetches all data lakes accessible to the current user.
+ * Fetches all data lakes accessible to the current user. Manage-gated shape: the server attaches
+ * the editor-only fields (systemPrompt) per lake, and only where `canManage` holds - so a lake the
+ * caller can merely read arrives without them. Keep this in sync with the twin inline type on
+ * `useDataLakes` (hooks/data/dataLakeWizard.ts), which reads the same endpoint.
  */
 export function useGetDataLakes() {
   return useQuery({
     queryKey: DATA_LAKES_KEY,
     queryFn: async () => {
-      const response = await api.get<{ data: DataLakeConfig[] }>('/api/data-lakes');
+      const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
       return response.data.data;
     },
   });
+}
+
+/**
+ * The data lake in the current create scope whose `fileTagPrefix` would overlap `prefix`, if any.
+ *
+ * Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting one would
+ * take files the other holds. The server refuses such a create; this is the form-level mirror so
+ * the wizard blocks before submit. Best-effort only - the lake list cannot show an org peer's
+ * gated lake, so the server stays the authority.
+ *
+ * Overlap is bidirectional: `docs:` matches a `docs:legal:foo` tag, so `docs:` and `docs:legal:`
+ * conflict either way round.
+ */
+export function useDuplicatePrefixLake(prefix: string, skip = false): DataLakeConfig | undefined {
+  const { data: allLakes } = useGetDataLakes();
+  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
+  const scopeOrgId = selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
+
+  if (skip || !normalizeTagPrefix(prefix)) return undefined;
+
+  return allLakes?.find(
+    // Same scope as the server guard: same org, or - in the Personal context - the lakes this
+    // list shows the user, which are the ones they could collide with.
+    lake => (lake.organizationId || undefined) === scopeOrgId && tagPrefixesOverlap(prefix, lake.fileTagPrefix)
+  );
 }
 
 /**
@@ -224,6 +259,80 @@ export function useGetDeletedDataLakes(enabled = true) {
     queryFn: async () => {
       const response = await api.get<{ data: DataLakeConfig[] }>('/api/data-lakes/deleted');
       return response.data.data;
+    },
+  });
+}
+
+// ── Batch progress / background AI tagging ──────────────────────────────────
+
+const ACTIVE_BATCHES_KEY = ['data-lake-batches', 'active'];
+/** Polling cadence for the list's ingest/AI-tagging badges - no per-batch WebSocket wiring
+ * needed for a list view; a short poll is simple and good enough for background progress. */
+const ACTIVE_BATCHES_POLL_MS = 10_000;
+
+/**
+ * Batches the Data Lakes list needs to show a badge for: still uploading/chunking/
+ * vectorizing, OR the background AI-tagging phase is running/ready/failed. These are
+ * independent clocks (a batch can be fully 'completed' while 'analyzing'), reconciled
+ * server-side on every call - see GET /api/data-lakes/batches.
+ */
+export function useActiveDataLakeBatches(enabled = true) {
+  return useQuery({
+    queryKey: ACTIVE_BATCHES_KEY,
+    enabled,
+    queryFn: async () => {
+      const response = await api.get<{ data: IDataLakeBatchDocument[] }>('/api/data-lakes/batches');
+      return response.data.data;
+    },
+    refetchInterval: enabled ? ACTIVE_BATCHES_POLL_MS : false,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Applies the reviewed/edited AI tag suggestions to every matching file in a batch.
+ * `tags` is the review panel's full edited list (including any the reviewer deleted - the
+ * server filters those out, mirroring the shape the old wizard step's TagCard produced).
+ */
+export function useApplyTaxonomySuggestions(batchId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (tags: TaxonomyTag[]) => {
+      const res = await api.post<{ success: true; filesUpdated: number }>(
+        `/api/data-lakes/batches/${batchId}/apply-taxonomy`,
+        { tags }
+      );
+      return res.data;
+    },
+    onSuccess: result => {
+      toast.success(
+        `Tags applied to ${result.filesUpdated.toLocaleString()} file${result.filesUpdated === 1 ? '' : 's'}`
+      );
+      queryClient.invalidateQueries({ queryKey: ACTIVE_BATCHES_KEY });
+      queryClient.invalidateQueries({ queryKey: ['dataLakeFiles'] });
+      queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to apply tag suggestions');
+    },
+  });
+}
+
+/** Manually re-runs AI tag inference for an already-analyzed (or failed) batch. */
+export function useReanalyzeTaxonomy(batchId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (context?: string) => {
+      const res = await api.post<IDataLakeBatchDocument>(`/api/data-lakes/batches/${batchId}/reanalyze-taxonomy`, {
+        context,
+      });
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ACTIVE_BATCHES_KEY });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to re-analyze tags');
     },
   });
 }

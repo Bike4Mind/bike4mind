@@ -340,11 +340,27 @@ ${promptMeta.promptErrors?.length ? promptMeta.promptErrors.map((e: string) => `
                       <Typography level="body-sm" startDecorator={<Warning color="warning" />}>
                         Warnings
                       </Typography>
+                      {/* Not a Chip: these are full sentences (a knowledge-base partial-results
+                          notice names the model to re-embed and a file count), and a Chip is a
+                          single-line control that ellipsizes, cutting the message off mid-sentence
+                          in a fixed-width panel. */}
                       <Stack spacing={1}>
                         {promptMeta.warnings.map((warning, index) => (
-                          <Chip key={index} variant="soft" color="warning">
-                            {warning}
-                          </Chip>
+                          <Box
+                            key={index}
+                            data-testid="prompt-meta-warning-item"
+                            sx={{
+                              bgcolor: 'warning.softBg',
+                              color: 'warning.softColor',
+                              borderRadius: 'sm',
+                              px: 1,
+                              py: 0.5,
+                            }}
+                          >
+                            <Typography level="body-xs" sx={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                              {warning}
+                            </Typography>
+                          </Box>
                         ))}
                       </Stack>
                     </Box>
@@ -356,11 +372,24 @@ ${promptMeta.promptErrors?.length ? promptMeta.promptErrors.map((e: string) => `
                       <Typography level="body-sm" startDecorator={<Warning color="error" />}>
                         Errors
                       </Typography>
+                      {/* Same reasoning as Warnings above: an error message is a sentence, not a tag. */}
                       <Stack spacing={1}>
                         {promptMeta.promptErrors.map((error, index) => (
-                          <Chip key={index} variant="soft" color="danger">
-                            {error}
-                          </Chip>
+                          <Box
+                            key={index}
+                            data-testid="prompt-meta-error-item"
+                            sx={{
+                              bgcolor: 'danger.softBg',
+                              color: 'danger.softColor',
+                              borderRadius: 'sm',
+                              px: 1,
+                              py: 0.5,
+                            }}
+                          >
+                            <Typography level="body-xs" sx={{ whiteSpace: 'normal', wordBreak: 'break-word' }}>
+                              {error}
+                            </Typography>
+                          </Box>
                         ))}
                       </Stack>
                     </Box>

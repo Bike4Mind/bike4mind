@@ -36,6 +36,7 @@ export default function DataLakeIngestPickerModal({ open, files, onClose }: Data
   const manageableLakes = lakes?.filter(l => l.canManage);
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const setFiles = useDataLakeWizardStore(s => s.setFiles);
+  const setOptionalStep = useDataLakeWizardStore(s => s.setOptionalStep);
   const setStep = useDataLakeWizardStore(s => s.setStep);
 
   const handlePick = (lake: NonNullable<typeof lakes>[number]) => {
@@ -48,6 +49,10 @@ export default function DataLakeIngestPickerModal({ open, files, onClose }: Data
       requiredEntitlement: lake.requiredEntitlement,
     });
     setFiles(files);
+    // Preview is opt-in elsewhere, but a drop can carry a whole traversed folder the user
+    // never itemized, so this entry point turns it on and lands there - skipping straight to
+    // config would ingest hundreds of unreviewed files.
+    setOptionalStep('preview', true);
     // Skip source selection - files are already in hand from the drop.
     setStep('preview');
     onClose();

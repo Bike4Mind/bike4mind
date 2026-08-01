@@ -197,4 +197,97 @@ describe('HearthPresencePanel', () => {
     expect(panel).toHaveStyle({ overflowY: 'auto' });
     expect(getComputedStyle(panel).maxHeight).toBe('30dvh');
   });
+  it('announces only the sessions that need a human, not the busy ones', async () => {
+    apiGetMock.mockResolvedValue(
+      respondWith([
+        row('blocked', 'awaiting_permission'),
+        row('asking', 'awaiting_input'),
+        row('busy', 'running'),
+        row('done', 'idle'),
+      ])
+    );
+    renderPanel();
+
+    const announcer = await screen.findByTestId('hearth-presence-announcer');
+    await waitFor(() => expect(announcer).toHaveTextContent('2 sessions need attention'));
+    expect(announcer).toHaveTextContent('blocked needs permission');
+    expect(announcer).toHaveTextContent('asking needs you');
+    // A roster of several sessions each reporting per tool call would otherwise
+    // bury the one actionable line in a stream of "is working".
+    expect(announcer).not.toHaveTextContent('busy');
+    expect(announcer).not.toHaveTextContent('done');
+  });
+
+  it('says nothing when nobody needs attention', async () => {
+    apiGetMock.mockResolvedValue(respondWith([row('busy', 'running')]));
+    renderPanel();
+
+    await screen.findByText('Working');
+    expect(screen.getByTestId('hearth-presence-announcer')).toHaveTextContent('');
+  });
+
+  it('uses singular phrasing for one session', async () => {
+    apiGetMock.mockResolvedValue(respondWith([row('blocked', 'awaiting_permission')]));
+    renderPanel();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('hearth-presence-announcer')).toHaveTextContent('1 session needs attention')
+    );
+  });
+
+  it('exposes the roster as a labelled list with a real heading', async () => {
+    apiGetMock.mockResolvedValue(respondWith([row('busy', 'running'), row('done', 'idle')]));
+    renderPanel();
+
+    // The heading renders in every state including loading, so wait for the rows
+    // before asserting the list - otherwise this races the query.
+    await waitFor(() => expect(screen.getAllByTestId('hearth-presence-row')).toHaveLength(2));
+    // Joy's title-sm maps to <p>, so the panel had no landmark to navigate to.
+    const heading = screen.getByRole('heading', { name: 'Who is here' });
+    const list = screen.getByRole('list');
+    expect(list).toHaveAttribute('aria-labelledby', heading.id);
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  // The timer leak. Arming a refresh on one channel and switching before the
+  // coalesce window closes used to invalidate the OLD key, swallowing one refresh
+  // for the channel just switched to.
+  it('does not let a pending refresh fire against the previous channel', async () => {
+    vi.useFakeTimers();
+    try {
+      apiGetMock.mockResolvedValue(respondWith([row('busy', 'running')]));
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+      const view = render(
+        <CssVarsProvider theme={appTheme}>
+          <QueryClientProvider client={queryClient}>
+            <HearthPresencePanel channelId="ch-1" />
+          </QueryClientProvider>
+        </CssVarsProvider>
+      );
+
+      // Two events inside the window: the first refreshes on the leading edge,
+      // the second arms the trailing timer.
+      await pushWs({ action: 'hearth_event', event: { channelId: 'ch-1', kind: 'presence' } });
+      await pushWs({ action: 'hearth_event', event: { channelId: 'ch-1', kind: 'presence' } });
+
+      invalidateSpy.mockClear();
+      view.rerender(
+        <CssVarsProvider theme={appTheme}>
+          <QueryClientProvider client={queryClient}>
+            <HearthPresencePanel channelId="ch-2" />
+          </QueryClientProvider>
+        </CssVarsProvider>
+      );
+      vi.advanceTimersByTime(2000);
+
+      const staleInvalidations = invalidateSpy.mock.calls.filter(
+        ([arg]) =>
+          JSON.stringify((arg as { queryKey: unknown }).queryKey) === JSON.stringify(['hearth', 'presence', 'ch-1'])
+      );
+      expect(staleInvalidations).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

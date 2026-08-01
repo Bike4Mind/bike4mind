@@ -4,6 +4,7 @@ import {
   IShareableDocument,
   KnowledgeType,
   UpdateFabFileRequestInputType,
+  normalizeTagPrefix,
   type IFabFileDocument,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
@@ -20,7 +21,7 @@ import {
 import { getContentFromFabfile as getContentFromFabfileInString } from '@client/app/utils/fabFileUtils';
 import { isOptimisticId } from '@client/app/utils/llm';
 import { getErrorMessage } from '@client/app/utils/error';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import { ActualFileObject } from 'filepond';
 import { toast } from 'sonner';
@@ -141,6 +142,10 @@ export function useCreateFabFileWithUpload(options?: {
       });
 
       queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
+      // A created file can carry tags, and per-tag counts are derived from the files holding each
+      // tag. This hook has no callers today; the invalidation is here so wiring it up later cannot
+      // silently reintroduce the stale-count bug the other write paths were fixed for.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       options?.onSuccess?.(newFabFile);
       return newFabFile;
     } catch (err) {
@@ -558,6 +563,11 @@ export function usePaginatedSearchFabFiles(parameters?: ISearchFabFilesParams & 
     },
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5, // Cache results for 5 minutes
+    // Search text and page number are part of the query key, so without this every
+    // keystroke or page change would drop `data` to undefined and unmount every row.
+    // That flickers the list and destroys per-row local state mid-interaction (an
+    // in-progress inline rename loses its edit mode - see Browser/Item.tsx ToggleRename).
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -578,6 +588,9 @@ export function useUpdateFabFile(callback?: { onSuccess?: () => void }) {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
       // Invalidate and force refetch system prompt files (they have long staleTime)
       queryClient.invalidateQueries({ queryKey: ['system-prompt-files'], exact: false, refetchType: 'all' });
+      // This route replaces the whole tags array, so any tag surface showing a per-tag file count
+      // is stale afterwards. The bare prefix also covers ['file-tags','counts'].
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       callback?.onSuccess?.();
     },
   });
@@ -735,6 +748,13 @@ export interface DataLakeTagCountsResponse {
   tagCounts: { tag: string; count: number }[];
   /** Distinct-file counts: combined total + per-prefix breakdown (keyed by lake tag prefix, e.g. 'opti:'). */
   uniqueArticleCounts: { total: number; byPrefix: Record<string, number> };
+  /**
+   * Distinct live files per lake, keyed by `datalakeTag`. This is the number to show for a
+   * LAKE: it counts membership, so it stays truthful for files that carry no taxonomy tag and
+   * counts a multi-tagged file once. The prefix/occurrence counts above still drive the tag
+   * tree's branches.
+   */
+  lakeFileCounts: Record<string, number>;
 }
 
 /**
@@ -775,9 +795,13 @@ export function useDataLakeArticleCounts(): { total: number; sales: number; opti
   const unique = data?.uniqueArticleCounts;
   // The premium lake (if any) is whatever the overlay contributes beyond the base opti lake.
   const premiumLake = DATA_LAKES.find(l => l.id !== 'opti-knowledge');
+  // `byPrefix` is keyed by the NORMALIZED prefix, and the premium lake's comes from a JSON env
+  // var that is only checked for truthiness - so index it through the same predicate or a
+  // padded value silently reads 0.
+  const premiumPrefix = premiumLake ? normalizeTagPrefix(premiumLake.fileTagPrefix) : null;
   return {
     total: unique?.total ?? 0,
-    sales: premiumLake ? (unique?.byPrefix[premiumLake.fileTagPrefix] ?? 0) : 0,
+    sales: premiumPrefix ? (unique?.byPrefix[premiumPrefix] ?? 0) : 0,
     opti: unique?.byPrefix['opti:'] ?? 0,
   };
 }

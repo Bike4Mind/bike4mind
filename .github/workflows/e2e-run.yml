@@ -206,13 +206,43 @@ jobs:
           echo "Deployment did not become healthy within 300s"
           exit 1
 
+      - name: Resolve E2E test ID
+        id: testid
+        env:
+          E2E_TEST_ID_INPUT: ${{ inputs.e2e_test_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # NEVER let this be empty. An empty E2E_TEST_ID makes global-setup fall back to the
+          # unscoped sweep, which hard-deletes every -<digits>-e2e@test.com user on the target
+          # stage - including the live users of any suite running concurrently against it, which
+          # then 401s and dies mid-test with unrelated-looking timeouts.
+          # See apps/client/e2e/global-setup.ts + pages/api/test/cleanup.ts.
+
+          # Same alphanumeric strip the TS side applies (e2e/helpers/test-users.ts
+          # getE2ETestId); also stops a dispatch value smuggling a newline into GITHUB_OUTPUT.
+          SAFE_INPUT=$(printf '%s' "$E2E_TEST_ID_INPUT" | tr -cd 'a-zA-Z0-9')
+
+          # Unique per Actions run and traceable straight back to it. A re-run reuses the id
+          # deliberately, so its pre-run cleanup collects its own earlier attempt's leftovers.
+          TEST_ID="gh${RUN_ID}"
+          if [ -n "$SAFE_INPUT" ]; then
+            TEST_ID="${SAFE_INPUT}-${TEST_ID}"
+          fi
+          echo "test_id=$TEST_ID" >> "$GITHUB_OUTPUT"
+          echo "Scoping e2e users and cleanup to testId=$TEST_ID"
+
       - name: Run E2E tests
         id: e2e
         env:
           API_URL: ${{ steps.config.outputs.api_url }}
-          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
-          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
-          E2E_TEST_ID: ${{ inputs.e2e_test_id }}
+          # dev/staging read E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper
+          # below (same-account). Preview stacks live in a SEPARATE AWS account the
+          # dev role can't `sst shell` into, so for pr<N> runs we inject the secret
+          # directly from this repo secret instead. It must match the stable value the
+          # deployer seeds onto every stage (bike4mind-deployer _tier-deploy.yml).
+          # E2E_CLEANUP_SECRET is the ONLY SST value the suite needs.
+          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+          E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
           # Only wire the credits webhook for suites that report credits (show_credits).
           # Core runs the notebook project too, but must NOT post the in-process AI
           # Credits report (global-teardown -> notifyCreditsReport) to the slow-responses
@@ -226,7 +256,17 @@ jobs:
         run: |
           set -o pipefail
           [ -n "$PLAYWRIGHT_ARGS" ] && echo "Running: playwright test $PLAYWRIGHT_ARGS" || echo "Running full suite"
-          pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
+          if [ -n "${{ inputs.pr_number }}" ]; then
+            # Preview (cross-account): E2E_CLEANUP_SECRET is injected from the repo secret above.
+            if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
+              echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
+              exit 1
+            fi
+            pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
+          else
+            # dev/staging (same account): resolve the secret from SST.
+            pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
+          fi
 
       - name: Upload Playwright report
         if: always()

@@ -69,6 +69,7 @@ vi.mock('@bike4mind/database', () => ({
   registrationInviteRepository: {},
   subscriberRepository: {},
   creditTransactionRepository: {},
+  authSessionRepository: {},
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -77,6 +78,9 @@ vi.mock('@bike4mind/services', () => ({
     registerViaOTC: (...a: unknown[]) => mockRegisterViaOTC(...a),
   },
   mfaService: { userHasMFAConfigured: (...a: unknown[]) => mockUserHasMFA(...a) },
+  authSessionService: {
+    issueSession: vi.fn().mockResolvedValue({ accessToken: 'access', refreshToken: 'refresh', sid: 'sid' }),
+  },
 }));
 
 vi.mock('@bike4mind/utils', () => ({
