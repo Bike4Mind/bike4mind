@@ -46,7 +46,13 @@ export const fetchUsers = async (params: IGetUsersParams & { downloadAll?: boole
   }
 };
 
-interface FetchCounterLogsParams {
+export interface CounterLogMetadataFilter {
+  field: string;
+  operator: 'equals' | 'contains' | 'in' | 'exists' | 'not_exists';
+  value?: unknown;
+}
+
+export interface FetchCounterLogsParams {
   startDate?: string;
   endDate?: string;
   events?: string[];
@@ -57,17 +63,42 @@ interface FetchCounterLogsParams {
   isGated?: boolean;
   isHero?: boolean;
   weeklyReport?: boolean;
+  page?: number;
+  limit?: number;
+  counterName?: string;
+  userEmail?: string;
+  metadataFilters?: CounterLogMetadataFilter[];
 }
 
-interface DailyReport {
-  date: string;
+/**
+ * Both report modes answer on the same `reports` key with different envelopes: the daily one
+ * carries `date`, the weekly one the week's bounds. Hence the optional keys rather than a
+ * discriminated union - which key is set follows the request flag, not anything in the payload.
+ */
+export interface AnalyticsReport {
+  date?: string;
+  startDate?: string;
+  endDate?: string;
   report: string;
   aiInsights?: string | null;
 }
 
+/** One rendered User Activity row: the server groups per day/counter/user/metadata. */
+export interface CounterLogRow {
+  date: string;
+  counterName: string;
+  userId?: string;
+  userEmail?: string;
+  userOrganization?: string;
+  metadata?: Record<string, unknown>;
+  count: number;
+  totalValue: number;
+}
+
 interface CounterLogsResponse {
-  logs?: any[];
-  reports?: DailyReport[];
+  logs?: CounterLogRow[];
+  reports?: AnalyticsReport[];
+  total?: number;
 }
 
 export const fetchCounterLogs = async ({
@@ -81,35 +112,42 @@ export const fetchCounterLogs = async ({
   isGated,
   isHero,
   weeklyReport = false,
+  page,
+  limit,
+  counterName,
+  userEmail,
+  metadataFilters,
 }: FetchCounterLogsParams): Promise<CounterLogsResponse> => {
-  try {
-    const queryParams: Record<string, string> = {
-      startDate: startDate || '',
-      endDate: endDate || '',
-    };
+  const queryParams: Record<string, string> = {
+    startDate: startDate || '',
+    endDate: endDate || '',
+  };
 
-    // Handle arrays by joining with commas and encoding each value
-    if (events?.length) {
-      queryParams.events = events.map(e => encodeURIComponent(e)).join(',');
-    }
-    if (report) queryParams.report = 'true';
-    if (weeklyReport) queryParams.weeklyReport = 'true';
-    if (includeInsights) queryParams.includeInsights = 'true';
-    if (orgs?.length) {
-      queryParams.orgs = orgs.map(org => encodeURIComponent(org)).join(',');
-    }
-    if (excludeOrgs?.length) {
-      queryParams.excludeOrgs = excludeOrgs.map(org => encodeURIComponent(org)).join(',');
-    }
-    if (isGated !== undefined) queryParams.isGated = String(isGated);
-    if (isHero !== undefined) queryParams.isHero = String(isHero);
-
-    const response = await api.get('/api/users/counterLogs', { params: queryParams });
-    return response.data;
-  } catch (error) {
-    console.error('Error fetching counter logs:', error);
-    return { logs: [], reports: [] };
+  // Handle arrays by joining with commas and encoding each value
+  if (events?.length) {
+    queryParams.events = events.map(e => encodeURIComponent(e)).join(',');
   }
+  if (report) queryParams.report = 'true';
+  if (weeklyReport) queryParams.weeklyReport = 'true';
+  if (includeInsights) queryParams.includeInsights = 'true';
+  if (orgs?.length) {
+    queryParams.orgs = orgs.map(org => encodeURIComponent(org)).join(',');
+  }
+  if (excludeOrgs?.length) {
+    queryParams.excludeOrgs = excludeOrgs.map(org => encodeURIComponent(org)).join(',');
+  }
+  if (isGated !== undefined) queryParams.isGated = String(isGated);
+  if (isHero !== undefined) queryParams.isHero = String(isHero);
+  if (page !== undefined) queryParams.page = String(page);
+  if (limit !== undefined) queryParams.limit = String(limit);
+  if (counterName) queryParams.counterName = counterName;
+  if (userEmail) queryParams.userEmail = userEmail;
+  if (metadataFilters?.length) queryParams.metadataFilters = JSON.stringify(metadataFilters);
+
+  // Deliberately unguarded: a failure here (e.g. the 502 an oversized response used to
+  // produce) must reach react-query so the UI can say "failed" instead of "no data".
+  const response = await api.get('/api/users/counterLogs', { params: queryParams });
+  return response.data;
 };
 
 export function useMigrateUsers() {
