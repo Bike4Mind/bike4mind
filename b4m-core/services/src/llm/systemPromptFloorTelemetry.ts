@@ -7,7 +7,7 @@ import type { SystemPromptDetail } from '@bike4mind/common';
  * assembly sends is what gets measured - no re-derivation, no drift.
  */
 export type AlwaysOnFloorInput = {
-  /** getSettingsValue('EnableArtifacts'); artifact-emission guidance is gated on it. */
+  /** The effective artifact gate (admin setting AND request flag) - see resolveArtifactsEnabled. */
   artifactEmissionEnabled: boolean;
   /** Resolved ArtifactEmissionPrompt (or its default). */
   artifactEmissionContent: string;

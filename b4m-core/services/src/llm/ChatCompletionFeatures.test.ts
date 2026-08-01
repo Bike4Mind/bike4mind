@@ -712,8 +712,12 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     const ctx = makeCtx({
       rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'x', vector: [1, 0, 0] }],
     });
-    const { quest, messages } = await run(ctx);
-    expect(messages).toEqual([]);
+    const { quest, messages, content } = await run(ctx);
+    expect(messages).toHaveLength(1);
+    // Nothing was ever scored against the query, so the abstention block must NOT tell the user
+    // the library lacks coverage - that is a claim this turn did not earn.
+    expect(content).toContain('could not be searched');
+    expect(content).not.toContain('does not cover this');
     const warn = (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn;
     // Reported through the SAME path as every other coverage gap - previously this call site sat
     // before reportCoverage ever ran, so a fully-mismatched library warned to the operator log
@@ -725,13 +729,39 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(logs).not.toContain('no vectorized chunks');
   });
 
-  it('genuinely unvectorized files keep the original message and do not warn', async () => {
+  it('genuinely unvectorized files abstain as unsearchable and do not warn', async () => {
     const ctx = makeCtx({ rows: () => [] });
-    const { messages } = await run(ctx);
-    expect(messages).toEqual([]);
+    const { messages, content } = await run(ctx);
+    expect(messages).toHaveLength(1);
+    expect(content).toContain('could not be searched');
     const logs = (ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.flat().join(' ');
     expect(logs).toContain('no vectorized chunks');
     expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).not.toHaveBeenCalled();
+  });
+
+  it('a real search that matches nothing says the library does not cover it', async () => {
+    // Orthogonal to the [1,0] query, so the chunk IS scored and simply falls under the floor -
+    // the production-dominant abstention path, and the only one where a flat "not covered" is honest.
+    const ctx = makeCtx({ rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'off topic', vector: [0, 1] }] });
+    const { quest, content } = await run(ctx);
+    expect(content).toContain('does not cover this');
+    expect(content).not.toContain('the search was incomplete');
+    const logs = (ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log.mock.calls.flat().join(' ');
+    expect(logs).toContain('no chunk cleared the similarity floor');
+    expect((quest.promptMeta as { warnings?: string[] } | undefined)?.warnings).toBeUndefined();
+  });
+
+  it('a no-match over a PARTIALLY scanned library must not harden into "no coverage"', async () => {
+    // Same miss, but the candidate cap cut the search short. Claiming the library has nothing on
+    // the topic here is the misleading outcome reportCoverage exists to prevent.
+    const ctx = makeCtx({
+      hasMore: true,
+      rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'off topic', vector: [0, 1] }],
+    });
+    const { quest, content } = await run(ctx);
+    expect(content).toContain('the search was incomplete');
+    expect(content).not.toContain('does not cover this');
+    expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
   });
 
   it('citation [N] numbering is stable when the reader returns rows in a different order', async () => {
@@ -835,8 +865,12 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
   it('grounds nothing when the projected reader is missing, rather than falling back', async () => {
     const ctx = makeCtx({});
     (ctx.db.fabfilechunks as { findVectorsByFabFileIds?: unknown }).findVectorsByFabFileIds = undefined;
-    const { messages } = await run(ctx);
-    expect(messages).toEqual([]);
+    const { messages, content } = await run(ctx);
+    // Ungrounded, but not silent: the abstention block stands in for the retrieved context. A
+    // missing repository is an outage, so it must read as "could not consult", not "not covered".
+    expect(messages).toHaveLength(1);
+    expect(content).toContain('could not be searched');
+    expect(content).not.toContain('does not cover this');
     expect(ctx.db.fabfilechunks.findByFabFileId).not.toHaveBeenCalled();
   });
 
@@ -932,8 +966,9 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       // any content the mock can return, so the run below still forces the partition to load them.
       rows: () => [{ id: 'c1', fabFileId: 'foreign', text: 'cross-space noise', vector: [1, 0] }],
     });
-    const { quest, messages } = await run(ctx);
-    expect(messages).toEqual([]);
+    const { quest, messages, content } = await run(ctx);
+    expect(messages).toHaveLength(1);
+    expect(content).toContain('could not be searched');
     // The foreign file's id must never reach the chunk query at all.
     const calledIds = (ctx.db.fabfilechunks.findVectorsByFabFileIds as ReturnType<typeof vi.fn>).mock.calls.flatMap(
       c => c[0] as string[]
@@ -949,6 +984,74 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     });
     const { content } = await run(ctx);
     expect((content.match(/z/g) ?? []).length).toBe(12000);
+  });
+});
+
+/**
+ * A forced-retrieval turn that grounds nothing must SAY so. Returning an empty array leaves the
+ * model answering from parametric knowledge with no notice, which on a citation-enforced surface
+ * reads to the user as a library-backed answer.
+ */
+describe('KnowledgeRetrievalFeature abstention when nothing is retrieved', () => {
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  const makeCtx = (overrides: { search?: unknown } = {}) => ({
+    logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+    user: { id: 'u1', tags: [], groups: [] },
+    db: {
+      fabfiles: {
+        search: overrides.search ?? vi.fn().mockResolvedValue({ data: [], hasMore: false, total: 0 }),
+      },
+      fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds: vi.fn().mockResolvedValue([]) },
+      adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+    },
+    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+  });
+
+  const run = async (ctx: ReturnType<typeof makeCtx>, quest = makeQuest()) => {
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what does the library say about X'
+    );
+    return { messages, content: messages[0]?.content ?? '' };
+  };
+
+  it('a lake with no readable documents gets the abstention block, not silence', async () => {
+    const { messages, content } = await run(makeCtx());
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe('system');
+    // Nothing to search is an access/config state, so it must not be reported as a coverage gap.
+    expect(content).toContain('could not be searched');
+    expect(content).not.toContain('does not cover this');
+    expect(content).toContain('never invent sources, citations, or figures');
+  });
+
+  it('a thrown search reads as an outage, never as the library lacking coverage', async () => {
+    const ctx = makeCtx({ search: vi.fn().mockRejectedValue(new Error('search backend down')) });
+    const { content } = await run(ctx);
+    expect(content).toContain('could not be searched');
+    // The regression this guards: an outage relayed to the user as "that document is not in here".
+    expect(content).not.toContain('does not cover this');
+    expect((ctx.logger as unknown as { error: ReturnType<typeof vi.fn> }).error).toHaveBeenCalled();
+  });
+
+  it('stays silent on the two non-failures: an empty prompt and a turn with attached files', async () => {
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const factory = embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1];
+    expect(await feature.getContextMessages(makeQuest(), factory, '   ')).toEqual([]);
+    // An attachment IS the source for this turn; skipping lake retrieval is intended, not a gap.
+    const withFiles = makeQuest({ fabFileIds: ['f1'] } as Partial<IChatHistoryItemDocument>);
+    expect(await feature.getContextMessages(withFiles, factory, 'summarize the attached figure')).toEqual([]);
   });
 });
 

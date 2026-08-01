@@ -128,6 +128,7 @@ import {
 } from '../telemetry';
 import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail } from '@bike4mind/common';
 import { buildAlwaysOnFloorDetails } from './systemPromptFloorTelemetry';
+import { resolveArtifactsEnabled } from './artifactGating';
 import {
   ContextTelemetryAlertsSchema,
   detectAgentMentions,
@@ -1947,7 +1948,14 @@ export class ChatCompletionProcess {
       // Always-on system-prompt floor. Resolved once here (pure settings reads with
       // built-in fallbacks) so the assembly below and the telemetry itemization further
       // down measure the exact same content - see buildAlwaysOnFloorDetails.
-      const artifactEmissionEnabled = Boolean(getSettingsValue('EnableArtifacts', defaultAdminSettings));
+      //
+      // Admin setting AND the caller's request flag - see resolveArtifactsEnabled for why
+      // `undefined` leaves the admin setting as the only gate. Gates the emission prompt here and
+      // the extraction pass after streaming, so the two can never disagree.
+      const artifactsEnabled = resolveArtifactsEnabled(
+        Boolean(getSettingsValue('EnableArtifacts', defaultAdminSettings)),
+        parsedBody.enableArtifacts
+      );
       // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings); falls back
       // to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared, so a blank value can
       // never strip artifact guidance from completions.
@@ -1967,8 +1975,9 @@ export class ChatCompletionProcess {
         ...extraContextMessages, // Add extra context messages from external sources at the top
         // Artifact emission guidance. Without this, correct <artifact> usage
         // is left to the model's defaults and large HTML/code can leak into the chat
-        // body as raw markup. Gated on the same EnableArtifacts flag as extraction.
-        ...(artifactEmissionEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : []),
+        // body as raw markup. Gated on the same effective flag as extraction, so a turn is
+        // never told to emit artifacts that the post-processing below will not extract.
+        ...(artifactsEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : []),
         // Help-center awareness. Makes the model aware of the in-app
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
         // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).
@@ -2333,7 +2342,7 @@ export class ChatCompletionProcess {
           // the fixed prompt cost is auditable in the Context Inspector (#810).
           systemPromptDetails.push(
             ...(await buildAlwaysOnFloorDetails(
-              { artifactEmissionEnabled, artifactEmissionContent, isLocalModel, helpCenterContent },
+              { artifactEmissionEnabled: artifactsEnabled, artifactEmissionContent, isLocalModel, helpCenterContent },
               content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
             ))
           );
@@ -3332,8 +3341,11 @@ export class ChatCompletionProcess {
 
         timer.phase('post_process');
 
-        // Process artifacts if enabled
-        if (getSettingsValue('EnableArtifacts', defaultAdminSettings)) {
+        // Process artifacts if enabled. Same effective gate as the guidance prompt above:
+        // convertCodeBlocksToArtifacts REWRITES the reply, so a caller that passed
+        // enableArtifacts:false previously got <artifact> markup spliced into a response it had
+        // explicitly asked to keep artifact-free.
+        if (artifactsEnabled) {
           // The barrel is the only export path for these two; there is no artifactParser subpath
           // that carries them, so this import stays as-is.
           const { parseArtifacts, convertCodeBlocksToArtifacts } = await import('@bike4mind/utils');
