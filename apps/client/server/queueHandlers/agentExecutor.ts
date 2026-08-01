@@ -558,6 +558,30 @@ async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMc
   }
 }
 
+/**
+ * `loadMcpToolsSafe` gated on the session's integration-isolation contract.
+ *
+ * A session with `disableUserIntegrations` promises "no user MCP servers, no agent delegation";
+ * the chat path keeps it by emptying `mcpServers`. EVERY agent-path entry point that loads MCP
+ * tools must go through here, not `loadMcpToolsSafe` directly - the top level and the subagent
+ * re-dispatch each run in their own Lambda and load independently, so a guard on only one of them
+ * lets an isolated session regain every personal MCP server through the other.
+ *
+ * Skipping beats emptying afterwards: it also drops the settings read and the server round-trip.
+ * The returned shape matches the failure path above, so downstream consumers are unchanged.
+ */
+async function loadMcpToolsForSession(
+  session: { disableUserIntegrations?: boolean | null },
+  userId: string,
+  logger: Logger
+): Promise<AgentMcpTools> {
+  if (session.disableUserIntegrations) {
+    logger.info('[AgentExecutor][MCP] Session suppresses user integrations - skipping MCP tool load', { userId });
+    return { mcpToolsByServer: {}, serverAgentConfig: {} };
+  }
+  return loadMcpToolsSafe(userId, logger);
+}
+
 async function processExecution(
   executionId: string,
   connectionId: string,
@@ -835,23 +859,19 @@ async function processExecution(
     // NO MCP wiring, so exclusive-MCP subagents spawned with 0 tools and the
     // model fabricated results. Mirrors ChatCompletionProcess's buildMcpTools.
     //
-    // A session that suppresses user integrations skips the load entirely: the chat path empties
-    // `mcpServers` for such a session, and without this the same curated surface silently
-    // regained every personal MCP server the moment the routing classifier upgraded a send to
-    // Agent mode. Skipping rather than emptying afterwards also avoids the network round-trip.
-    // The empty shape matches what `loadMcpToolsSafe` already returns when a load fails, so
-    // every downstream consumer is on a supported path.
-    const { mcpToolsByServer, serverAgentConfig } = session.disableUserIntegrations
-      ? { mcpToolsByServer: {}, serverAgentConfig: {} }
-      : await loadMcpToolsSafe(execution.userId, logger);
-    if (session.disableUserIntegrations) {
-      logger.info('[AgentExecutor][MCP] Session suppresses user integrations - skipping MCP tool load');
-    }
+    // Gated on the session's isolation contract - see `loadMcpToolsForSession`.
+    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsForSession(session, execution.userId, logger);
     const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
     // MCP servers claimed exclusively by an agent (e.g. atlassian by
     // project_manager). Withheld from the parent LLM's tool list; reach the
     // delegated subagent via buildSharedTools' internal parentTools closure.
-    const agentOnlyMcpServers = agentStore.getExclusiveMcpServers();
+    //
+    // An isolated session has no MCP at all, so there is nothing to claim exclusively. Empty here
+    // rather than downstream: a built-in agent claims a server unconditionally, so carrying its
+    // claim into a run with no loaded tools would make the `missingExclusive` check below warn
+    // "spawned empty-handed" on every isolated run - reporting a deliberate skip as the load
+    // failure that check exists to catch.
+    const agentOnlyMcpServers = session.disableUserIntegrations ? [] : agentStore.getExclusiveMcpServers();
     // An agent that EXCLUSIVELY claims a server spawns with 0 tools if that server produced none
     // (disabled / no cached schemas / load failed) - the exact failure this fix targets. Surface it
     // by server name so it is not a silent fabrication again.
@@ -2462,7 +2482,10 @@ async function processSubagentDispatch(
     }
     // Rebuild MCP tools on THIS invocation - a re-dispatched subagent runs in its
     // own Lambda, so the top-level path's load does not carry over. See Task 3.
-    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsSafe(child.userId, logger);
+    // Gated on the same session isolation contract as the top-level load: this dispatch runs in
+    // its own Lambda, so an unguarded load here would hand a subagent every personal MCP server
+    // in a session whose whole point is not having them.
+    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsForSession(session, child.userId, logger);
     const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
     const agentDef = agentStore.getAgent(agentName);
     if (!agentDef) {
