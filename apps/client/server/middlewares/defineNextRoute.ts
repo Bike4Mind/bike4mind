@@ -1,65 +1,44 @@
 import { baseApi } from './baseApi';
-import { isApiKeyAuth } from './apiKeyAuth';
-import { UnauthorizedError } from '@server/utils/errors';
 import type { EndpointContract, RequestBodyOf } from '@bike4mind/common';
-import type { Request, Response, RequestHandler } from 'express';
+import type { NextFunction, Request, Response } from 'express';
+
+/** Every method next-connect can register a route for; each gets the contract prelude. */
+const METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
 
 /**
  * Next.js transport adapter for an {@link EndpointContract}.
  *
- * Derives the route's auth mode + required scopes from the contract, enforces the
- * auth mode, and validates the body against the contract schema - exposing it to
- * the handler as the typed `req.validated`. Returns the usual `baseApi` router, so
- * callers chain `.post(...)` as before.
+ * Derives the route's auth mode + required scopes from the contract and validates
+ * the body against the contract schema, exposing it to the handler as the typed
+ * `req.validated`. Returns the usual `baseApi` router, so callers chain
+ * `.use(...)` / `.post(...)` exactly as before.
  *
- * Rate limiting is passed as `options.rateLimit` (rather than the caller chaining
- * its own `.use(...)`) so this adapter can order it correctly: auth -> rate limit
- * -> validation. If validation ran first, a flood of malformed bodies would 422
- * without ever touching the limiter.
- *
- * The SAME contract drives the OpenAPI spec and the Lambda adapter
- * (server/cli/defineLambdaRoute.ts): define once, derive every transport.
+ * The SAME contract drives the OpenAPI spec (openapi/registerContract.ts):
+ * define once, derive both.
  */
 export function nextRouteForContract<C extends EndpointContract>(
   contract: C,
-  options: { maxBodySize?: number; exemptReadsFromDailyRateLimit?: boolean; rateLimit?: RequestHandler } = {}
+  options: { maxBodySize?: number; exemptReadsFromDailyRateLimit?: boolean } = {}
 ) {
   type ValidatedReq = Request & { validated: RequestBodyOf<C> };
-
-  const { rateLimit, ...baseOptions } = options;
+  type Handler = (req: ValidatedReq, res: Response, next: NextFunction) => unknown;
 
   const router = baseApi<ValidatedReq, Response>({
-    auth: contract.auth !== 'public',
+    // 'jwtOnly' is enforced in baseApi by not installing the api-key chain at all,
+    // so a key is never validated/metered/billed before being rejected.
+    auth: contract.auth === 'public' ? false : contract.auth === 'jwtOnly' ? 'jwtOnly' : true,
     // Empty `scopes: []` means "no scope requirement", not "requires nothing" - an
     // empty `requiredScopes.some(...)` in apiKeyAuth is always false and would 403
     // every key. Collapse it to undefined.
     requiredScopes: contract.scopes?.length ? [...contract.scopes] : undefined,
-    ...baseOptions,
+    ...options,
   });
 
-  // A `jwtOnly` contract must REJECT API keys. baseApi always installs apiKeyAuth
-  // (there is no key-less mode), so enforce it here: a request authenticated via an
-  // API key (req.apiKeyInfo set by apiKeyAuth) is rejected. Without this, a jwtOnly
-  // contract would silently accept any valid key while the spec publishes jwtAuth /
-  // "API keys are NOT accepted" - the opposite of actual behaviour.
-  if (contract.auth === 'jwtOnly') {
-    router.use((req, _res, next) => {
-      if (isApiKeyAuth(req)) {
-        throw new UnauthorizedError('This endpoint accepts a JWT access token only; API keys are not accepted.');
-      }
-      next();
-    });
-  }
-
-  // Rate limit runs BEFORE validation so a malformed body still counts against the
-  // limiter (see the function-doc note on ordering).
-  if (rateLimit) {
-    router.use(rateLimit);
-  }
+  const prelude: Handler[] = [];
 
   const requestSchema = contract.request;
   if (requestSchema) {
-    router.use((req, _res, next) => {
+    prelude.push((req, _res, next) => {
       req.validated = requestSchema.parse(req.body) as RequestBodyOf<C>;
       next();
     });
@@ -70,7 +49,7 @@ export function nextRouteForContract<C extends EndpointContract>(
   // responses in tests/dev; compiled out of the hot path in production, warn-only,
   // and wrapped so it can never affect the actual response.
   if (process.env.NODE_ENV !== 'production' && Object.keys(contract.responses).length > 0) {
-    router.use((req, res, next) => {
+    prelude.push((req, res, next) => {
       const originalJson = res.json.bind(res);
       res.json = ((body: unknown) => {
         try {
@@ -88,6 +67,29 @@ export function nextRouteForContract<C extends EndpointContract>(
       }) as typeof res.json;
       next();
     });
+  }
+
+  // The prelude is prepended to each METHOD REGISTRATION rather than installed with
+  // `router.use(...)`, which makes the wrong ordering unrepresentable for callers:
+  //
+  //  1. A construction-time `use` always runs ahead of the caller's own
+  //     `.use(rateLimit(...))`, so a flood of malformed bodies would 422 without ever
+  //     touching the limiter. Registering per method puts validation after everything
+  //     the caller mounted, so `.use(rateLimit(...)).post(handler)` orders correctly
+  //     with no special option to remember.
+  //  2. next-connect only falls through to its 404 when no non-`USE` handler matches
+  //     the method. A `use`-mounted validator matches every method, so GET on a
+  //     POST-only contract would 422 instead of 404.
+  for (const method of METHODS) {
+    const register = router[method].bind(router) as (...handlers: unknown[]) => typeof router;
+    // any: next-connect's registrars are overloaded on an optional leading path
+    // pattern, which no single non-any signature can express for a generic
+    // passthrough wrapper. Argument shape is preserved exactly.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (router as any)[method] = (...args: unknown[]) => {
+      const hasPattern = typeof args[0] === 'string' || args[0] instanceof RegExp;
+      return hasPattern ? register(args[0], ...prelude, ...args.slice(1)) : register(...prelude, ...args);
+    };
   }
 
   return router;

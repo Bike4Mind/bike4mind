@@ -3,12 +3,14 @@
 A **contract** is the single source of truth for a public API endpoint. It is pure
 data - method, path, `operationId`, auth mode, scopes, request/response Zod schemas,
 and doc metadata - with no coupling to any transport. One contract is derived into
-three things so they can never drift:
+two things so they can never drift:
 
 1. the **OpenAPI spec** (`/api/v1/openapi.json` + Scalar UI at `/api/v1/docs`),
-2. the **Next.js route** (`nextRouteForContract`),
-3. the **Lambda Function-URL route** (`defineLambdaRoute`), for endpoints that can't
-   be served by Next.js.
+2. the **Next.js route** (`nextRouteForContract`).
+
+Contracts stay transport-agnostic on purpose: the endpoints that can't be served by
+Next.js (Function URLs; see `cli/tools.ts`) get their own adapter when the first one
+migrates. Nothing in a contract file may assume a transport.
 
 Reference example: `contracts/chat.contract.ts` + `apps/client/pages/api/chat.ts`.
 
@@ -19,8 +21,19 @@ Reference example: `contracts/chat.contract.ts` + `apps/client/pages/api/chat.ts
 2. **Write the contract** in `src/api-contract/contracts/<name>.contract.ts` with
    `defineEndpoint({...})`. Add it to `contracts/index.ts` (`CONTRACTS`).
 3. **Wire the handler:** `nextRouteForContract(contract).post((req, res) => { ... })`.
-   The body is validated and available as `req.validated`; scopes come from the
-   contract. (Lambda transport: `defineLambdaRoute(contract, handler)`.)
+   The body is validated and available as `req.validated`; scopes and auth mode come
+   from the contract. Mount any extra middleware the usual way - the adapter binds
+   validation to the *method registration*, so anything you `.use(...)` runs first:
+
+   ```ts
+   nextRouteForContract(contract)
+     .use(rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60_000 }))
+     .post(async (req, res) => { /* req.validated is typed + parsed */ });
+   ```
+
+   Per-user rate limiting is not automatic - add it for any endpoint that does real
+   work. It must count malformed requests too, which is exactly why validation is
+   bound to the method rather than installed ahead of your middleware.
 4. **Regenerate the spec:** `pnpm turbo:openapi:generate` and commit
    `apps/client/public/openapi.json`. CI drift-gates it.
 5. **Delete the endpoint's section** from the hand-written reference

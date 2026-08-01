@@ -30,6 +30,8 @@ const {
   mockGetSettingsMap,
   mockResolveDefaultChatModel,
   mockIsChatModelUsable,
+  mockTryIncrement,
+  mockResolveUserRateLimitPerMin,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -39,6 +41,8 @@ const {
   mockGetSettingsMap: vi.fn(),
   mockResolveDefaultChatModel: vi.fn(),
   mockIsChatModelUsable: vi.fn(),
+  mockTryIncrement: vi.fn(),
+  mockResolveUserRateLimitPerMin: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -62,13 +66,16 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
 // Keep fire-and-forget analytics writes from touching the DB.
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
-// The per-user tier rate-limit middleware runs before the handler and
-// resolves the caller's limit from their active subscriptions (a Mongo read via
-// subscriptionRepository). This test stubs connectDB, so that read would buffer
-// forever - return Infinity ("no limit") so the middleware skips enforcement and
-// the test stays focused on apiKeyAuth scope enforcement.
+// The per-user tier rate-limit middleware resolves the caller's limit from their
+// active subscriptions (a Mongo read via subscriptionRepository). This test stubs
+// connectDB, so that read would buffer forever - stub it instead.
+//
+// It resolves to a FINITE limit by default. An earlier `Infinity` here meant the
+// limiter short-circuited before its counter, so no chat test - happy path included -
+// ever exercised the increment, and the whole rate-limit-vs-validation ordering was
+// untested. Individual tests override it.
 vi.mock('@server/utils/userRateTier', () => ({
-  resolveUserRateLimitPerMin: vi.fn().mockResolvedValue(Infinity),
+  resolveUserRateLimitPerMin: (...a: unknown[]) => mockResolveUserRateLimitPerMin(...a),
 }));
 
 // Chat's own in-memory rateLimit + the settings load both reach the DB - stub
@@ -128,9 +135,9 @@ vi.mock('@bike4mind/database', async orig => {
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindById(...a) }),
     cacheRepository: {
       ...(actual.cacheRepository as object),
-      tryIncrementWithinLimitFixedWindow: vi
-        .fn()
-        .mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) }),
+      // Hoisted so tests can assert the per-user limiter actually ran, and drive
+      // the over-limit path.
+      tryIncrementWithinLimitFixedWindow: (...a: unknown[]) => mockTryIncrement(...a),
     },
   };
 });
@@ -207,6 +214,8 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       })
     );
     mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
+    mockResolveUserRateLimitPerMin.mockResolvedValue(60);
+    mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
     // Hosted-path shape: no apiKeys/models, so chat.ts skips the self-host usability guard.
     mockResolveDefaultChatModel.mockImplementation(
       async ({ configuredModel }: { configuredModel?: string | null }) => ({
@@ -289,6 +298,81 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(res._getStatusCode()).toBe(200);
     // The api-key validator never ran - this was a JWT.
     expect(mockValidate).not.toHaveBeenCalled();
+  });
+
+  // The 200 above is NOT load-bearing on its own: this file's JWT stub authenticates
+  // any caller, so a completely broken Bearer key path would still answer 200. These
+  // assert the api-key ERROR paths, which only a real Bearer extraction can produce.
+  it('403s an under-scoped key presented as Bearer', async () => {
+    validateWithScopes([ApiKeyScope.READ_FILES]);
+    const { req, res } = fire({ apiKey: null, bearer: 'b4m_live_testkey' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error).toMatch(/insufficient/i);
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('401s an invalid key presented as Bearer', async () => {
+    mockValidate.mockResolvedValue({ isValid: false, reason: 'revoked' });
+    const { req, res } = fire({ apiKey: null, bearer: 'b4m_live_revoked' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(401);
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  // Only a `b4m_`-prefixed Bearer token is an API key. Anything else must fall
+  // through to JWT auth rather than being sent to the key validator.
+  it.each(['not_b4m_live_x', 'Bearerb4m_live_x', 'eyJhbGciOi.b4m_live.token'])(
+    'does not treat Bearer %s as an api key',
+    async token => {
+      const { req, res } = fire({ apiKey: null, bearer: token });
+      await handler(req, res);
+      expect(mockValidate).not.toHaveBeenCalled();
+    }
+  );
+
+  // Rate limiting must run BEFORE contract validation, or a flood of malformed
+  // bodies costs a caller nothing. The discriminator is the limiter's own counter:
+  // a 422 alone is returned by either ordering.
+  describe('rate limit runs before validation', () => {
+    const badBody = { message: 'hi', sessionId: 'sess-1', historyCount: -5 };
+
+    it('counts a malformed body from an api-key caller against the limiter', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: badBody });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockTryIncrement).toHaveBeenCalledTimes(1);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('counts a malformed body from a JWT caller against the limiter', async () => {
+      const { req, res } = fire({ apiKey: null, body: badBody });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockTryIncrement).toHaveBeenCalledTimes(1);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('429s an over-limit caller instead of 422ing their malformed body', async () => {
+      // The sharpest pre-fix/post-fix discriminator: if validation ran first, this
+      // request would never reach the limiter and would answer 422.
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      mockTryIncrement.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 30_000) });
+      const { req, res } = fire({ body: badBody });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('skips enforcement entirely for an unlimited (admin/dev) caller', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      mockResolveUserRateLimitPerMin.mockResolvedValue(Infinity);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockTryIncrement).not.toHaveBeenCalled();
+    });
   });
 
   it('returns 400 when the resolved default chat model is unusable (self-host, no key, no local model)', async () => {
