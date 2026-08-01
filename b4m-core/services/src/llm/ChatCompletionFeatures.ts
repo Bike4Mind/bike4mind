@@ -1303,8 +1303,56 @@ const FORCED_RETRIEVAL_MAX_SCORED_CHUNKS = 256;
 // Total characters of retrieved chunk text injected into the prompt.
 const FORCED_RETRIEVAL_CHAR_BUDGET = 12000;
 // Minimum cosine similarity (ada-002) for a chunk to count as relevant. Below this,
-// nothing is injected so the model refuses rather than grounding in off-topic content.
+// no chunk is injected and the turn falls back to forcedRetrievalNoContextPrompt.
 const FORCED_RETRIEVAL_MIN_SIMILARITY = 0.75;
+
+/**
+ * Common to all three findings below. Every instruction here and in the finding bodies is
+ * conditional on the request actually depending on the library - forced retrieval is a per-session
+ * toggle on ordinary chats, so a greeting or a "make that shorter" must not become a refusal.
+ */
+const FORCED_RETRIEVAL_NO_CONTEXT_RULES =
+  'For any part of the answer that depends on that library, do not fill the gap from general knowledge or ' +
+  'from assumptions about the user, their organization, or their data, and never invent sources, citations, ' +
+  'or figures. If answering needs information you do not have, say what is missing and ask for it - here ' +
+  'that is a correct and useful answer, not a failure to deliver.';
+
+/**
+ * The abstention block that replaces retrieved context when a forced-retrieval turn grounds nothing.
+ * Returning an empty array used to be read as "the model will refuse", but nothing ever told it to:
+ * with no context and no instruction, a grounded surface answers from parametric knowledge and
+ * fills the gaps with assumptions about the caller - the worst outcome a citation-enforced product
+ * has.
+ *
+ * Three findings, because the model relays this to the user as fact and only one of the three
+ * supports "the library does not cover this":
+ * - `unavailable` - nothing was searchable (repo missing, search threw, no readable documents, no
+ *   vectorized chunks). Saying the library lacks coverage here is a claim the turn never earned;
+ *   an outage would read to the user as a missing document.
+ * - `no_match_partial` - a real search ran but coverage was cut short (candidate cap, chunk budget,
+ *   embedding-model mismatch), so "nothing matched" must not harden into "nothing exists". Mirrors
+ *   the coverageNote hedge on the success path.
+ * - `no_match` - the whole accessible library was searched and nothing cleared the relevance floor.
+ *   Only here is a flat "not covered" honest.
+ *
+ * Deliberately NOT emitted for the two non-failures: an empty prompt, and a turn carrying attached
+ * files (where skipping lake retrieval is the intended behaviour and the attachment is the source).
+ */
+function forcedRetrievalNoContextPrompt(finding: 'unavailable' | 'no_match_partial' | 'no_match'): string {
+  const body =
+    finding === 'unavailable'
+      ? 'The curated library could not be searched for this question - it is unavailable, or it holds no ' +
+        'documents that could be searched for you on this turn. If the request depends on that library, say ' +
+        'it could not be consulted. Do NOT say or imply the library lacks coverage of the topic; this turn ' +
+        'established no such thing.'
+      : finding === 'no_match_partial'
+        ? 'Only part of the curated library could be searched for this question, and nothing in the part that ' +
+          'was searched matched. If the request depends on that library, say the search turned up nothing. Do ' +
+          'NOT state or imply the library has no coverage of the topic - the search was incomplete.'
+        : 'The curated library was searched for this question and returned nothing relevant. If the request ' +
+          'depends on that library, say plainly that it does not cover this.';
+  return `[Knowledge Base - No Retrieved Context]\n${body} ${FORCED_RETRIEVAL_NO_CONTEXT_RULES}`;
+}
 
 /** An above-floor candidate. The vector is dropped so each batch can be freed after scoring. */
 interface ForcedRetrievalCandidate {
@@ -1498,6 +1546,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     return factoryDefault;
   }
 
+  private noContextMessages(finding: 'unavailable' | 'no_match_partial' | 'no_match'): IMessage[] {
+    return [{ role: 'system' as const, content: forcedRetrievalNoContextPrompt(finding) }];
+  }
+
   async getContextMessages(
     quest: IChatHistoryItemDocument,
     embeddingFactory: EmbeddingFactory,
@@ -1521,7 +1573,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // a host missing it should ground nothing, not quietly reintroduce the corpus-sized load.
     if (!db.fabfiles || !db.fabfilechunks || typeof db.fabfilechunks.findVectorsByFabFileIds !== 'function') {
       this.logger.warn('🔒 Forced retrieval: fabfiles/fabfilechunks repository unavailable — skipping');
-      return [];
+      return this.noContextMessages('unavailable');
     }
 
     try {
@@ -1557,8 +1609,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // exclusion in memory so correctness never depends on the DB regex engine or fileNameLower.
       const files = filterRetrievalExcluded(fileResults.data, this.retrievalFilter);
       if (files.length === 0) {
+        // No readable documents is an access/config state, not evidence about the topic.
         this.logger.log('🔒 Forced retrieval: no accessible data-lake files');
-        return [];
+        return this.noContextMessages('unavailable');
       }
       const fileById = new Map(files.map(f => [f.id, f]));
       // Fixed scan order so batching, the model pick, and any truncation are all reproducible;
@@ -1708,13 +1761,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         if (!reported) {
           this.logger.log('🔒 Forced retrieval: candidate files have no vectorized chunks');
         }
-        return [];
+        // Zero chunks SCORED, so no comparison against the query ever happened - whether the cause
+        // is an unvectorized corpus or a wholly mismatched one, the library was not searched.
+        return this.noContextMessages('unavailable');
       }
       const scored = pool.sort(compareForcedRetrievalCandidates);
 
       // 4. Inject the most-similar chunks (above the relevance floor) up to the budget.
-      //    If nothing clears the floor, inject nothing so the model refuses rather than
-      //    grounding in off-topic content.
+      //    If nothing clears the floor, inject the abstention block instead of off-topic
+      //    content, hedged by whether the scan was complete.
       let used = 0;
       const sections: string[] = [];
       const sourceFileIds: string[] = [];
@@ -1742,10 +1797,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
       if (sections.length === 0) {
         // Report coverage first: a refusal grounded on a partially-scanned library is the most
-        // misleading outcome there is, because it reads as "the library has nothing on this".
-        this.reportCoverage(quest, coverage, embeddingModel);
+        // misleading outcome there is, because it reads as "the library has nothing on this". The
+        // return value is what keeps the abstention block from making exactly that claim.
+        const partial = this.reportCoverage(quest, coverage, embeddingModel);
         this.logger.log(`🔒 Forced retrieval: no chunk cleared the similarity floor (top=${topScore.toFixed(3)})`);
-        return [];
+        return this.noContextMessages(partial ? 'no_match_partial' : 'no_match');
       }
       const partialCoverage = this.reportCoverage(quest, coverage, embeddingModel);
 
@@ -1834,8 +1890,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             'cite documents by name. If it does not address the question, say so rather than relying on outside knowledge.\n\n';
       return [{ role: 'system' as const, content: header + coverageNote + sections.join('\n\n---\n\n') }];
     } catch (error) {
+      // A failed search still leaves the turn ungrounded, so it gets the abstention block for the
+      // same reason an empty one does - silently answering from parametric knowledge is the failure.
+      // 'unavailable', not 'no_match': an outage must never be reported to the user as a gap in the
+      // library's coverage.
       this.logger.error('🔒 Forced retrieval failed:', error);
-      return [];
+      return this.noContextMessages('unavailable');
     }
   }
 
