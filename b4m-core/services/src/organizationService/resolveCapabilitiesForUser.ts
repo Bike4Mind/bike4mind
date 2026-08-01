@@ -5,16 +5,22 @@ import {
   getGroupType,
   isKnownGroupType,
 } from '@bike4mind/common';
-import { resolveGroupTypesForUser } from './resolveGroupTypesForUser';
+import {
+  resolveGroupTypesForUser,
+  isGroupTypeOverrideActive,
+  type GroupTypeResolutionOverride,
+} from './resolveGroupTypesForUser';
 
 interface CapabilityAdapters {
   db: {
     organizations: Pick<IOrganizationRepository, 'findById'>;
     groups: Pick<IGroupRepository, 'findByOrganization'>;
   };
+  /** Forwarded to the type resolver, which logs an applied override (#1236). */
+  logger?: { info: (message: string) => void };
 }
 
-type CapabilityUser = Pick<IUserDocument, 'id' | 'groups'>;
+type CapabilityUser = Pick<IUserDocument, 'id' | 'groups'> & { isAdmin?: boolean };
 
 /**
  * Resolve the CAPABILITY set a user holds within an organization (org-groups #1234).
@@ -34,23 +40,39 @@ type CapabilityUser = Pick<IUserDocument, 'id' | 'groups'>;
  * would otherwise be locked out of their own org's capabilities. `organization.userId === user.id`
  * implicitly holds every type the org is GRANTED (`allowedGroupTypes`) - not the whole catalog. This
  * is a resolution-layer read only; it does NOT relax `groupMembership.ts` invariant (2) (#1227/#1231).
+ * It does not apply under an active resolution override (#1236) - see the branch comment below.
  *
  * Keys stay generic (never a customer name) per GROUP_TYPE_CATALOG - product-specific keys live in
  * the consuming overlay. Returns a sorted, de-duplicated array (a serialisable shape for a client seam).
  */
 export async function resolveCapabilitiesForUser(
-  { user, organizationId }: { user: CapabilityUser; organizationId: string },
+  {
+    user,
+    organizationId,
+    override,
+  }: { user: CapabilityUser; organizationId: string; override?: GroupTypeResolutionOverride },
   adapters: CapabilityAdapters
 ): Promise<string[]> {
   const organization = await adapters.db.organizations.findById(organizationId);
   if (!organization) return [];
 
+  // Forward the platform-admin override (#1236) so capabilities reflect the persona being operated as.
+  const overridden = isGroupTypeOverrideActive(override, user, organizationId);
   const effectiveTypes = new Set(
-    await resolveGroupTypesForUser({ user, organizationId }, { db: { groups: adapters.db.groups } })
+    await resolveGroupTypesForUser(
+      { user, organizationId, override },
+      { db: { groups: adapters.db.groups }, logger: adapters.logger }
+    )
   );
 
   // Billing-owner implicit hold: every GRANTED type (allowedGroupTypes), not the whole catalog.
-  if (organization.userId === user.id) {
+  // SKIPPED under an active override: `isAdmin` (the override gate) and `organization.userId ===
+  // user.id` (this branch) are independent, and an admin who created the demo org IS its userId - the
+  // likely shape for this affordance. Unioned, the preview would report capabilities the persona does
+  // not hold, a false positive in exactly the "does this persona see X?" check the override exists to
+  // answer. The admin loses nothing: their own capabilities are what they resolve to without an
+  // override, and the override is opt-in per call.
+  if (!overridden && organization.userId === user.id) {
     for (const type of organization.allowedGroupTypes ?? []) {
       if (isKnownGroupType(type)) effectiveTypes.add(type);
     }
@@ -71,9 +93,14 @@ export async function resolveCapabilitiesForUser(
  * authorization check rather than an array-membership test.
  */
 export async function userHasCapability(
-  { user, organizationId, capability }: { user: CapabilityUser; organizationId: string; capability: string },
+  {
+    user,
+    organizationId,
+    capability,
+    override,
+  }: { user: CapabilityUser; organizationId: string; capability: string; override?: GroupTypeResolutionOverride },
   adapters: CapabilityAdapters
 ): Promise<boolean> {
-  const capabilities = await resolveCapabilitiesForUser({ user, organizationId }, adapters);
+  const capabilities = await resolveCapabilitiesForUser({ user, organizationId, override }, adapters);
   return capabilities.includes(capability);
 }

@@ -22,6 +22,7 @@ import {
   listOrganizationGroups,
 } from './groupMembership';
 import { resolveGroupTypesForUser } from './resolveGroupTypesForUser';
+import type { GroupTypeResolutionOverride } from './resolveGroupTypesForUser';
 import { resolveCapabilitiesForUser, userHasCapability } from './resolveCapabilitiesForUser';
 
 export {
@@ -53,3 +54,4 @@ export {
 };
 
 export type { SearchParameters };
+export type { GroupTypeResolutionOverride };

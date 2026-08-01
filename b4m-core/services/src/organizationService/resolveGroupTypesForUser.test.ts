@@ -9,6 +9,10 @@ const group = (id: string, type: string, organizationId = ORG): IGroupDocument =
   ({ id, type, organizationId, name: type, description: '' }) as unknown as IGroupDocument;
 
 const user = (groups: string[] | null): Pick<IUserDocument, 'groups'> => ({ groups });
+const admin = (groups: string[] | null): Pick<IUserDocument, 'groups'> & { isAdmin: boolean } => ({
+  groups,
+  isAdmin: true,
+});
 
 function makeAdapters(orgGroups: IGroupDocument[]) {
   const findByOrganization = vi.fn().mockResolvedValue(orgGroups);
@@ -59,5 +63,97 @@ describe('resolveGroupTypesForUser (#1235)', () => {
     await expect(
       resolveGroupTypesForUser({ user: user(['g-research']), organizationId: ORG }, adapters)
     ).resolves.toEqual(['research']);
+  });
+
+  describe('platform-admin override (#1236)', () => {
+    it('resolves AS the override types without a membership read when an admin overrides their own target org', async () => {
+      // Admin holds no groups; the override alone confers the types, and priority sort still applies.
+      const { adapters, findByOrganization } = makeAdapters([]);
+      await expect(
+        resolveGroupTypesForUser(
+          {
+            user: admin([]),
+            organizationId: ORG,
+            override: { organizationId: ORG, groupTypes: ['customer', 'sales'] },
+          },
+          adapters
+        )
+      ).resolves.toEqual(['sales', 'customer']);
+      expect(findByOrganization).not.toHaveBeenCalled();
+    });
+
+    it('drops unknown override keys and de-duplicates', async () => {
+      const { adapters } = makeAdapters([]);
+      await expect(
+        resolveGroupTypesForUser(
+          {
+            user: admin([]),
+            organizationId: ORG,
+            override: { organizationId: ORG, groupTypes: ['sales', 'sales', 'not-a-real-type'] },
+          },
+          adapters
+        )
+      ).resolves.toEqual(['sales']);
+    });
+
+    it('ignores the override for a non-admin, falling back to real membership', async () => {
+      const { adapters } = makeAdapters([group('g-research', 'research')]);
+      await expect(
+        resolveGroupTypesForUser(
+          { user: user(['g-research']), organizationId: ORG, override: { organizationId: ORG, groupTypes: ['sales'] } },
+          adapters
+        )
+      ).resolves.toEqual(['research']);
+    });
+
+    it('logs the applied override, naming the org and the resolved types', async () => {
+      // The return type is a bare string[], so the log line is the only downstream evidence that a
+      // resolution came from an override rather than from real membership.
+      const { adapters } = makeAdapters([]);
+      const info = vi.fn();
+      await resolveGroupTypesForUser(
+        { user: admin([]), organizationId: ORG, override: { organizationId: ORG, groupTypes: ['sales'] } },
+        { ...adapters, logger: { info } }
+      );
+      expect(info).toHaveBeenCalledTimes(1);
+      expect(info.mock.calls[0][0]).toContain(ORG);
+      expect(info.mock.calls[0][0]).toContain('[sales]');
+    });
+
+    it('names dropped unknown keys in the log line so a typo is not silent', async () => {
+      const { adapters } = makeAdapters([]);
+      const info = vi.fn();
+      await expect(
+        resolveGroupTypesForUser(
+          { user: admin([]), organizationId: ORG, override: { organizationId: ORG, groupTypes: ['saels'] } },
+          { ...adapters, logger: { info } }
+        )
+      ).resolves.toEqual([]);
+      expect(info.mock.calls[0][0]).toContain('saels');
+    });
+
+    it('logs nothing when the override is ignored', async () => {
+      const { adapters } = makeAdapters([group('g-research', 'research')]);
+      const info = vi.fn();
+      await resolveGroupTypesForUser(
+        { user: user(['g-research']), organizationId: ORG, override: { organizationId: ORG, groupTypes: ['sales'] } },
+        { ...adapters, logger: { info } }
+      );
+      expect(info).not.toHaveBeenCalled();
+    });
+
+    it('ignores an override scoped to a different org, falling back to real membership', async () => {
+      const { adapters } = makeAdapters([group('g-research', 'research')]);
+      await expect(
+        resolveGroupTypesForUser(
+          {
+            user: admin(['g-research']),
+            organizationId: ORG,
+            override: { organizationId: 'org-other', groupTypes: ['sales'] },
+          },
+          adapters
+        )
+      ).resolves.toEqual(['research']);
+    });
   });
 });
