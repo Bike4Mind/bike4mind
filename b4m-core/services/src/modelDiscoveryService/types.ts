@@ -308,6 +308,23 @@ export interface PriceFlag {
   detail: string;
 }
 
+/**
+ * A price that was WRITTEN over a source that disagreed with it, which only a
+ * provider's own published price can do. The counterpart to a PriceFlag: a flag
+ * is a value discovery declined to apply, this is one it applied anyway, and the
+ * dissenting source named here is the operator's cue that a mirror has gone stale.
+ */
+export interface PriceOverride {
+  modelId: string;
+  /** The provider source whose value was written. */
+  source: string;
+  /** Sources that disagreed with it and were not applied. */
+  dissenting: string[];
+  /** Per-MTok, the readable unit; the row it wrote is per token. */
+  applied: { inputPerMTok: number; outputPerMTok: number };
+  detail: string;
+}
+
 /** Why a usable observation produced neither a row nor a flag. */
 export type PriceSkipReason = 'unknown-model' | 'operator-owned' | 'tiered-pricing' | 'untrusted' | 'unchanged';
 
@@ -426,6 +443,8 @@ export interface ModelDiscoveryRunResult {
   prices: {
     rows: PlannedPriceRow[];
     flags: PriceFlag[];
+    /** Rows written over a source that disagreed; a subset of `rows` by model. */
+    overrides: PriceOverride[];
   };
   /** The lifecycle plan, likewise: report mode declines to persist it, nothing more. */
   lifecycle: {

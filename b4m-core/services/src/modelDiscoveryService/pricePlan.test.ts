@@ -22,6 +22,9 @@ const provider = (price: DiscoveredPrice, modelId?: string) => from('openai', 'p
 const modelsDev = (price: DiscoveredPrice, modelId?: string) =>
   from('models.dev', 'aggregator', priced(price, modelId));
 const litellm = (price: DiscoveredPrice, modelId?: string) => from('litellm', 'aggregator', priced(price, modelId));
+/** A third mirror; the repo registers two, and some rules only show up past that. */
+const openRouter = (price: DiscoveredPrice, modelId?: string) =>
+  from('openrouter', 'aggregator', priced(price, modelId));
 
 const inForce = (pricing: Record<string, IModelPriceTier>, note = 'adapter-seed', modelId = 'gpt-6'): IModelPrice => ({
   modelId,
@@ -206,11 +209,11 @@ describe('planPriceWrites guardrails', () => {
   });
 
   it('proposes one of the two values it names as disagreeing', () => {
-    // The provider agrees with both aggregators inside the tolerance while they
-    // disagree with each other, so the first disagreeing pair excludes it.
+    // Three aggregators where the outer two disagree with each other and the
+    // middle one agrees with both, so the first disagreeing pair excludes it.
     const result = plan({
       contributions: [
-        provider({ inputPerMTok: 5, outputPerMTok: 25 }),
+        openRouter({ inputPerMTok: 5, outputPerMTok: 25 }),
         modelsDev({ inputPerMTok: 4.6, outputPerMTok: 25 }),
         litellm({ inputPerMTok: 5.4, outputPerMTok: 25 }),
       ],
@@ -224,7 +227,7 @@ describe('planPriceWrites guardrails', () => {
     expect(result.flags[0].detail).toContain('litellm');
   });
 
-  it('applies neither side when a provider and an aggregator disagree', () => {
+  it('applies neither side when the only aggregator disagrees with the provider', () => {
     const result = plan({
       contributions: [
         modelsDev({ inputPerMTok: 5, outputPerMTok: 25 }),
@@ -234,6 +237,9 @@ describe('planPriceWrites guardrails', () => {
 
     expect(result.rows).toEqual([]);
     expect(result.flags[0].kind).toBe('source-disagreement');
+    // A different sentence from mirrors contradicting each other: what is wrong
+    // here is that nothing backs the provider up.
+    expect(result.flags[0].detail).toContain('no source corroborates the provider');
   });
 
   it('flags a move beyond the band and keeps the row in force', () => {
@@ -374,7 +380,161 @@ describe('planPriceWrites guardrails', () => {
   it('drops an all-zero observation rather than writing a free row', () => {
     const result = plan({ contributions: [provider({ inputPerMTok: 0, outputPerMTok: 0 })] });
 
-    expect(result).toEqual({ rows: [], flags: [], skipped: [] });
+    expect(result).toEqual({ rows: [], flags: [], overrides: [], skipped: [] });
+  });
+});
+
+/**
+ * A provider's own published price is primary: it needs ONE mirror to agree, not
+ * all of them. The mirrors go stale on their own schedules (litellm publishes off
+ * a git ref, models.dev re-scrapes on its own cadence), so a unanimity rule hands
+ * any one of them a veto over a price the provider itself publishes.
+ */
+describe('planPriceWrites provider primacy', () => {
+  const CUT: DiscoveredPrice = { inputPerMTok: 0.2, outputPerMTok: 1.2 };
+  const STALE: DiscoveredPrice = { inputPerMTok: 1, outputPerMTok: 6 };
+  const CUT_IN_FORCE: IModelPriceTier = { input: 1e-6, output: 6e-6 };
+
+  it('writes the provider price when one mirror agrees and another is stale', () => {
+    const result = plan({
+      contributions: [provider(CUT), modelsDev(CUT), litellm(STALE)],
+      rowsInForce: [inForce({ '0': CUT_IN_FORCE })],
+      bandPct: 500,
+    });
+
+    expect(result.flags).toEqual([]);
+    expect(perMTok(result.rows[0].pricing)).toEqual({ '0': { input: 0.2, output: 1.2 } });
+    // Credited to the provider alone: the agreeing mirror corroborated the value,
+    // it did not supply it.
+    expect(result.rows[0].note).toBe(`discovery:openai@${RUN_AT.toISOString()}`);
+  });
+
+  it('records the overruled source rather than swallowing it', () => {
+    const result = plan({
+      contributions: [provider(CUT), modelsDev(CUT), litellm(STALE)],
+      rowsInForce: [inForce({ '0': CUT_IN_FORCE })],
+      bandPct: 500,
+    });
+
+    expect(result.overrides).toHaveLength(1);
+    expect(result.overrides[0]).toMatchObject({
+      modelId: 'gpt-6',
+      source: 'openai',
+      dissenting: ['litellm'],
+      applied: { inputPerMTok: 0.2, outputPerMTok: 1.2 },
+    });
+    // The whole point of recording it: the operator learns WHICH mirror is stale.
+    expect(result.overrides[0].detail).toContain('litellm');
+    expect(result.overrides[0].detail).toContain('in 1/out 6');
+  });
+
+  it('records nothing when every source agreed', () => {
+    const result = plan({ contributions: [provider(CUT), modelsDev(CUT), litellm(CUT)] });
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.overrides).toEqual([]);
+  });
+
+  it('writes the provider price when the mirrors disagree with each other but not with it', () => {
+    const result = plan({
+      contributions: [
+        provider({ inputPerMTok: 5, outputPerMTok: 25 }),
+        modelsDev({ inputPerMTok: 4.6, outputPerMTok: 25 }),
+        litellm({ inputPerMTok: 5.4, outputPerMTok: 25 }),
+      ],
+    });
+
+    expect(result.flags).toEqual([]);
+    expect(result.rows[0].pricing['0'].input).toBe(5e-6);
+    expect(result.overrides).toEqual([]);
+  });
+
+  it('refuses when every mirror disagrees with the provider', () => {
+    // Primary, not unaccountable. All of them dissenting is the shape of a parser
+    // that broke against a docs restructure, which must reprice nothing.
+    const result = plan({
+      contributions: [provider(CUT), modelsDev(STALE), litellm(STALE)],
+      rowsInForce: [inForce({ '0': CUT_IN_FORCE })],
+      bandPct: 500,
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.overrides).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'source-disagreement' });
+  });
+
+  it('still writes a provider price no mirror carries at all', () => {
+    const result = plan({ contributions: [provider(CUT)] });
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.overrides).toEqual([]);
+  });
+
+  it('does not record an override for a price it declined to write', () => {
+    // The band refuses this move, so nothing was applied over anything.
+    const result = plan({
+      contributions: [provider(CUT), modelsDev(CUT), litellm(STALE)],
+      rowsInForce: [inForce({ '0': CUT_IN_FORCE })],
+      bandPct: 50,
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.overrides).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'band-exceeded' });
+  });
+
+  it('leaves the aggregator-only rules exactly as they were', () => {
+    const disagreeing = plan({
+      contributions: [
+        modelsDev({ inputPerMTok: 5, outputPerMTok: 25 }),
+        litellm({ inputPerMTok: 9, outputPerMTok: 25 }),
+      ],
+    });
+    expect(disagreeing.rows).toEqual([]);
+    expect(disagreeing.flags[0]).toMatchObject({ kind: 'source-disagreement' });
+
+    const lone = plan({ contributions: [litellm({ inputPerMTok: 5, outputPerMTok: 25 })] });
+    expect(lone.rows).toEqual([]);
+    expect(lone.flags[0]).toMatchObject({ kind: 'single-source-untrusted' });
+  });
+
+  it('makes two providers that disagree with each other refuse, with neither outranking', () => {
+    const result = plan({
+      contributions: [
+        provider({ inputPerMTok: 5, outputPerMTok: 25 }),
+        from('bedrock', 'provider', priced({ inputPerMTok: 15, outputPerMTok: 25 })),
+        modelsDev({ inputPerMTok: 5, outputPerMTok: 25 }),
+      ],
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'source-disagreement' });
+    // Two providers is a mutual contradiction, not an uncorroborated one, even
+    // though both sides of the pair are providers.
+    expect(result.flags[0].detail).toContain('sources disagree beyond');
+    expect(result.flags[0].detail).not.toContain('corroborates');
+  });
+
+  it('lets a provider ladder reprice a tiered row over a stale flat mirror', () => {
+    // The case this whole change exists for: the provider publishes the ladder,
+    // one mirror agrees, and the other still has last quarter's price.
+    const ladder: DiscoveredPrice = {
+      inputPerMTok: 0.2,
+      outputPerMTok: 1.2,
+      brackets: [{ aboveTokens: 272_000, inputPerMTok: 0.4, outputPerMTok: 1.8 }],
+    };
+    const result = plan({
+      contributions: [provider(ladder), modelsDev(ladder), litellm(STALE)],
+      rowsInForce: [inForce({ '272000': { input: 1e-6, output: 6e-6 }, '1050000': { input: 2e-6, output: 9e-6 } })],
+      bandPct: 500,
+    });
+
+    expect(result.flags).toEqual([]);
+    expect(perMTok(result.rows[0].pricing)).toEqual({
+      '272000': { input: 0.2, output: 1.2 },
+      '1050000': { input: 0.4, output: 1.8 },
+    });
+    expect(result.overrides[0].dissenting).toEqual(['litellm']);
   });
 });
 

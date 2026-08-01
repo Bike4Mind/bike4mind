@@ -45,6 +45,7 @@ import type {
   ModelDiscoveryMetrics,
   ModelDiscoveryRunResult,
   PriceFlag,
+  PriceOverride,
   PriceSkip,
   RunModelDiscoveryOptions,
   SourceResult,
@@ -434,6 +435,7 @@ async function executeRun(
     // admin reads a flag count with no way to learn which models or why.
     priceFlags: merged.priceFlags.slice(0, MAX_PERSISTED_RUN_DETAIL),
     priceRows: plannedPrices.slice(0, MAX_PERSISTED_RUN_DETAIL),
+    priceOverrides: merged.priceOverrides.slice(0, MAX_PERSISTED_RUN_DETAIL),
     priceSkips: merged.priceSkips.slice(0, MAX_PERSISTED_RUN_DETAIL),
     lifecycleTransitions: merged.transitions.slice(0, MAX_PERSISTED_RUN_DETAIL),
     catalogDiff: merged.diff.slice(0, MAX_PERSISTED_RUN_DETAIL),
@@ -443,6 +445,7 @@ async function executeRun(
     ...truncatedTotals({
       priceFlags: merged.priceFlags.length,
       priceRows: plannedPrices.length,
+      priceOverrides: merged.priceOverrides.length,
       priceSkips: merged.priceSkips.length,
       lifecycleTransitions: merged.transitions.length,
       catalogDiff: merged.diff.length,
@@ -467,7 +470,7 @@ async function executeRun(
     diff: merged.diff,
     droppedRecords: merged.droppedRecords,
     absence: passes[0].plan.absence,
-    prices: { rows: plannedPrices, flags: merged.priceFlags },
+    prices: { rows: plannedPrices, flags: merged.priceFlags, overrides: merged.priceOverrides },
     lifecycle: {
       transitions: merged.transitions,
       dateChanges: merged.dateChanges,
@@ -663,6 +666,7 @@ interface RunAggregate {
   droppedRecords: DroppedSourceRecord[];
   priceRows: IModelPriceInput[];
   priceFlags: PriceFlag[];
+  priceOverrides: PriceOverride[];
   priceSkips: PriceSkip[];
   transitions: LifecycleTransition[];
   dateChanges: LifecycleDateChange[];
@@ -705,6 +709,12 @@ function aggregate(passes: readonly CompletedPass[]): RunAggregate {
     priceFlags: lastPerKey(
       plans.flatMap(plan => plan.prices.flags),
       flag => `${flag.modelId} ${flag.kind}`
+    ),
+    // One per model: an override is tied to a row, and no model is repriced by
+    // more than one pass.
+    priceOverrides: lastPerKey(
+      plans.flatMap(plan => plan.prices.overrides),
+      override => override.modelId
     ),
     priceSkips: lastPerKey(
       plans.flatMap(plan => plan.prices.skipped),
@@ -1192,7 +1202,7 @@ function skippedResult(
     diff: [],
     droppedRecords: [],
     absence: { sighted: [], missed: [], frozenBackends: [] },
-    prices: { rows: [], flags: [] },
+    prices: { rows: [], flags: [], overrides: [] },
     lifecycle: { transitions: [], dateChanges: [], suggestions: [], wouldDeprecate: [] },
     metrics: emptyMetrics(),
     passes: 1,

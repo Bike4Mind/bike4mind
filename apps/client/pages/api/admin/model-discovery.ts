@@ -97,6 +97,7 @@ const fullRun = (run: IModelDiscoveryRun) => ({
   },
   priceFlags: run.priceFlags ?? [],
   priceRows: run.priceRows ?? [],
+  priceOverrides: run.priceOverrides ?? [],
   priceSkips: run.priceSkips ?? [],
   lifecycleTransitions: run.lifecycleTransitions ?? [],
   catalogDiff: run.catalogDiff ?? [],

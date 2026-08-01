@@ -77,6 +77,15 @@ describe('ModelDiscoveryRunRepository', () => {
             note: 'discovery:anthropic@2026-07-01T00:00:00.000Z',
           },
         ],
+        priceOverrides: [
+          {
+            modelId: 'claude-y',
+            source: 'anthropic',
+            dissenting: ['litellm'],
+            applied: { inputPerMTok: 3, outputPerMTok: 15 },
+            detail: 'anthropic publishes in 3/out 15 $/MTok and litellm in 8/out 24 $/MTok disagree beyond 10%',
+          },
+        ],
         priceSkips: [{ modelId: 'claude-x', reason: 'unchanged' }],
         lifecycleTransitions: [
           { modelId: 'claude-x', from: 'active', to: 'deprecated', signal: 'absence', autoApplied: false },
@@ -109,6 +118,12 @@ describe('ModelDiscoveryRunRepository', () => {
     });
     expect(stored?.priceRows?.[0]).toMatchObject({ modelId: 'claude-y', unit: 'per_token', inputPerMTok: 3 });
     expect(stored?.priceRows?.[0].effectiveFrom).toEqual(new Date('2026-07-01T00:00:00Z'));
+    expect(stored?.priceOverrides?.[0]).toMatchObject({
+      modelId: 'claude-y',
+      source: 'anthropic',
+      dissenting: ['litellm'],
+      applied: { inputPerMTok: 3, outputPerMTok: 15 },
+    });
     expect(stored?.priceSkips).toMatchObject([{ modelId: 'claude-x', reason: 'unchanged' }]);
     expect(stored?.lifecycleTransitions?.[0]).toMatchObject({ modelId: 'claude-x', to: 'deprecated' });
     expect(stored?.catalogDiff?.[0]).toMatchObject({ modelId: 'claude-y', kind: 'added', promoted: true });
@@ -117,10 +132,11 @@ describe('ModelDiscoveryRunRepository', () => {
     expect(stored?.changes?.flagged).toEqual(['gpt-5.6-luna', 'claude-y']);
     expect(stored?.changes?.operatorConflicts).toEqual(['claude-y']);
     expect(stored?.id).toBe(created.id);
-    // The list carries counts, not bodies: five bounded detail arrays per run
-    // over twenty runs is megabytes on an endpoint the status card polls.
+    // The list carries counts, not bodies: six bounded detail arrays per run over
+    // twenty runs is megabytes on an endpoint the status card polls.
     const listed = (await modelDiscoveryRunRepository.recentRuns(1))[0];
     expect(listed.priceFlags).toBeUndefined();
+    expect(listed.priceOverrides).toBeUndefined();
     expect(listed.catalogDiff).toBeUndefined();
     expect(listed.changes?.flagged).toEqual(['gpt-5.6-luna', 'claude-y']);
   });

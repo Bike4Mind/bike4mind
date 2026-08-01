@@ -60,6 +60,15 @@ interface PlannedPriceRow {
   note: string;
 }
 
+/** A row written over a source that disagreed with it; the inverse of a flag. */
+interface PriceOverride {
+  modelId: string;
+  source: string;
+  dissenting: string[];
+  applied: PerMTokRates;
+  detail: string;
+}
+
 interface LifecycleTransition {
   modelId: string;
   from?: string;
@@ -91,6 +100,7 @@ interface CatalogDiffEntry {
 interface DetailTotals {
   priceFlags?: number;
   priceRows?: number;
+  priceOverrides?: number;
   priceSkips?: number;
   lifecycleTransitions?: number;
   catalogDiff?: number;
@@ -125,6 +135,8 @@ interface RunDetail {
   };
   priceFlags: PriceFlag[];
   priceRows: PlannedPriceRow[];
+  /** Optional: runs written before provider prices could overrule a mirror carry none. */
+  priceOverrides?: PriceOverride[];
   priceSkips: Array<{ modelId: string; reason: string }>;
   lifecycleTransitions: LifecycleTransition[];
   catalogDiff: CatalogDiffEntry[];
@@ -429,6 +441,41 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
                           <td>{usdPerMTok(row.outputPerMTok)}</td>
                           <td>{list(row.sources)}</td>
                           <td>{row.note}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Table>
+                </Section>
+              )}
+
+              {/* A subset of the rows above, called out because the interesting
+                  fact is not the price but the mirror: a source that disagreed
+                  with the provider is one that has gone stale. */}
+              {(run.priceOverrides?.length ?? 0) > 0 && (
+                <Section
+                  title={`Applied over a disagreeing source (${countLabel(
+                    run.priceOverrides?.length ?? 0,
+                    run.detailTotals?.priceOverrides
+                  )})`}
+                >
+                  <Table size="sm" data-testid="discovery-run-price-overrides-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: '18%' }}>Model</th>
+                        <th style={{ width: '13%' }}>Applied $/M</th>
+                        <th style={{ width: '13%' }}>From</th>
+                        <th style={{ width: '13%' }}>Overruled</th>
+                        <th>Why</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(run.priceOverrides ?? []).map(override => (
+                        <tr key={override.modelId} data-testid={`discovery-run-price-override-${override.modelId}`}>
+                          <td>{override.modelId}</td>
+                          <td>{inOut(override.applied)}</td>
+                          <td>{override.source}</td>
+                          <td>{list(override.dissenting)}</td>
+                          <td data-testid={`discovery-run-override-detail-${override.modelId}`}>{override.detail}</td>
                         </tr>
                       ))}
                     </tbody>

@@ -1164,6 +1164,38 @@ describe('runModelDiscovery', () => {
       expect(persisted.priceRows?.[0].effectiveFrom).toEqual(START);
     });
 
+    it('records the mirror a provider price was written over', async () => {
+      const stale = harness([
+        openaiSource(),
+        stubSource({
+          name: 'models.dev',
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: 2, outputPerMTok: 8 } }],
+        }),
+        stubSource({
+          name: 'litellm',
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: 8, outputPerMTok: 32 } }],
+        }),
+      ]);
+
+      const result = await runModelDiscovery(stale.adapters, stale.options);
+      const persisted = stale.runs.docs[0];
+
+      expect(persisted.priceRows).toHaveLength(1);
+      expect(persisted.priceFlags).toEqual([]);
+      // "litellm is 4x off for gpt-6" is the operational fact here, and it would
+      // be invisible if the write simply succeeded quietly.
+      expect(persisted.priceOverrides).toHaveLength(1);
+      expect(persisted.priceOverrides?.[0]).toMatchObject({
+        modelId: 'gpt-6',
+        source: 'openai',
+        dissenting: ['litellm'],
+        applied: { inputPerMTok: 2, outputPerMTok: 8 },
+      });
+      expect(persisted.priceOverrides?.[0].detail).toBe(result.prices.overrides[0].detail);
+    });
+
     it('records the skips a rerun produces in place of a row', async () => {
       await runModelDiscovery(bench.adapters, bench.options);
       bench.advance(60_000);
