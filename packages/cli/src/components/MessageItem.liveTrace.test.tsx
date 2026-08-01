@@ -67,6 +67,10 @@ function renderedHeight(node: React.ReactElement, columns: number): number {
     stdout: activeStdout as any, // any: fake stream, only the bits Ink touches
     patchConsole: false,
     exitOnCtrlC: false,
+    // Pinned so the frame is written the same way locally and under CI=true;
+    // Ink's automatic detection keys off is-in-ci. Non-interactive writes the
+    // final frame at unmount, which is exactly what these helpers read.
+    interactive: false,
   });
   instance.unmount();
 
@@ -97,6 +101,10 @@ const frameText = (node: React.ReactElement, columns: number): string => {
     stdout: activeStdout as any, // any: fake stream, only the bits Ink touches
     patchConsole: false,
     exitOnCtrlC: false,
+    // Pinned so the frame is written the same way locally and under CI=true;
+    // Ink's automatic detection keys off is-in-ci. Non-interactive writes the
+    // final frame at unmount, which is exactly what these helpers read.
+    interactive: false,
   });
   instance.unmount();
   return stripAnsi(activeStdout.writes.join(''));

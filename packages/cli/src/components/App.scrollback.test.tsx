@@ -79,6 +79,13 @@ const renderWithFakeTty = (node: React.ReactElement) =>
     stdin: stdin as any, // any: same, for the stdin side
     exitOnCtrlC: false,
     patchConsole: false,
+    // Required, not a nicety: Ink resolves interactive mode as
+    // `!isInCi && stdout.isTTY`, and a non-interactive run "disables ANSI erase
+    // sequences... writing only the final frame at unmount". Under CI=true these
+    // tests would then observe no repaints at all and could never see the erase
+    // they exist to forbid. Forcing it keeps them measuring the same path a real
+    // terminal takes.
+    interactive: true,
   });
 
 /** Waits for Ink to write at least one more frame than it had. */
