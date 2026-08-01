@@ -1,9 +1,11 @@
 import { Box, Button, Chip, Skeleton, Typography, useTheme } from '@mui/joy';
 import { alpha } from '@mui/system';
+import AddIcon from '@mui/icons-material/Add';
 import ChatIcon from '@mui/icons-material/Chat';
-import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
-import { HUES, REDUCED_MOTION_OFF, driftFloat, inkFor, sonarPing } from '@client/app/components/datalake/deckChrome';
+import { REDUCED_MOTION_OFF, driftFloat, inkFor, ringPing } from '@client/app/components/datalake/surfaceChrome';
+import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
+import type { DataLakeSurfaceCopy, DataLakeSurfaceTheme } from '@client/app/components/datalake/surfaceTokens';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import type { IFabFileDocument } from '@bike4mind/common';
 
@@ -19,6 +21,9 @@ interface DataLakeArticleProps {
   /** Richest categories, surfaced as one-click dives in the empty state. */
   quickDives?: QuickDive[];
   onDive?: (path: string[]) => void;
+  /** When set, the empty state offers a create-first CTA (zero-lake bootstrap, #837).
+   *  The caller only passes this in the true zero-state, so its presence is the signal. */
+  onCreate?: () => void;
 }
 
 function cleanFileName(fileName: string): string {
@@ -36,27 +41,40 @@ function humanizeDive(segment: string): string {
   return segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
 }
 
-/* Drifting "bioluminescent" motes for the sonar empty state */
-const MOTES: { left: string; top: string; size: number; hue: 'cyan' | 'violet'; duration: number; delay: number }[] = [
-  { left: '22%', top: '30%', size: 5, hue: 'cyan', duration: 9, delay: 0 },
-  { left: '70%', top: '24%', size: 4, hue: 'violet', duration: 11, delay: 1.2 },
-  { left: '34%', top: '68%', size: 6, hue: 'cyan', duration: 10, delay: 0.6 },
-  { left: '78%', top: '62%', size: 4, hue: 'cyan', duration: 12, delay: 2 },
-  { left: '14%', top: '52%', size: 3, hue: 'violet', duration: 8, delay: 1.6 },
-  { left: '58%', top: '78%', size: 5, hue: 'violet', duration: 13, delay: 0.3 },
-  { left: '48%', top: '18%', size: 3, hue: 'cyan', duration: 9.5, delay: 2.4 },
+/* Drifting motes behind the empty state; `hue` picks which token ink each one takes. */
+const MOTES: {
+  left: string;
+  top: string;
+  size: number;
+  hue: 'accent' | 'secondary';
+  duration: number;
+  delay: number;
+}[] = [
+  { left: '22%', top: '30%', size: 5, hue: 'accent', duration: 9, delay: 0 },
+  { left: '70%', top: '24%', size: 4, hue: 'secondary', duration: 11, delay: 1.2 },
+  { left: '34%', top: '68%', size: 6, hue: 'accent', duration: 10, delay: 0.6 },
+  { left: '78%', top: '62%', size: 4, hue: 'accent', duration: 12, delay: 2 },
+  { left: '14%', top: '52%', size: 3, hue: 'secondary', duration: 8, delay: 1.6 },
+  { left: '58%', top: '78%', size: 5, hue: 'secondary', duration: 13, delay: 0.3 },
+  { left: '48%', top: '18%', size: 3, hue: 'accent', duration: 9.5, delay: 2.4 },
 ];
 
-function SonarEmptyState({
+function EmptyState({
   isDark,
   quickDives,
   onDive,
+  onCreate,
+  theme,
+  copy,
 }: {
   isDark: boolean;
   quickDives: QuickDive[];
   onDive?: (path: string[]) => void;
+  onCreate?: () => void;
+  theme: DataLakeSurfaceTheme;
+  copy: DataLakeSurfaceCopy;
 }) {
-  const cyan = inkFor(HUES.cyan, isDark);
+  const accent = inkFor(theme.accent, isDark);
   return (
     <Box
       data-testid="datalake-article-empty"
@@ -74,7 +92,7 @@ function SonarEmptyState({
     >
       {/* Drifting motes */}
       {MOTES.map((mote, i) => {
-        const glow = inkFor(HUES[mote.hue], isDark);
+        const glow = inkFor(theme[mote.hue], isDark);
         return (
           <Box
             key={i}
@@ -95,7 +113,7 @@ function SonarEmptyState({
         );
       })}
 
-      {/* Sonar emitter */}
+      {/* Pinging emitter */}
       <Box sx={{ position: 'relative', width: 120, height: 120, flexShrink: 0 }}>
         {[0, 1, 2].map(ring => (
           <Box
@@ -106,8 +124,8 @@ function SonarEmptyState({
               inset: 0,
               borderRadius: '50%',
               border: '1.5px solid',
-              borderColor: alpha(cyan, 0.6),
-              animation: `${sonarPing} 3.6s cubic-bezier(0.2, 0.6, 0.4, 1) ${ring * 1.2}s infinite`,
+              borderColor: alpha(accent, 0.6),
+              animation: `${ringPing} 3.6s cubic-bezier(0.2, 0.6, 0.4, 1) ${ring * 1.2}s infinite`,
               ...REDUCED_MOTION_OFF,
             }}
           />
@@ -121,8 +139,8 @@ function SonarEmptyState({
             width: 14,
             height: 14,
             borderRadius: '50%',
-            background: `radial-gradient(circle at 35% 35%, #FFFFFF, ${cyan})`,
-            boxShadow: `0 0 18px 4px ${alpha(cyan, 0.55)}`,
+            background: `radial-gradient(circle at 35% 35%, #FFFFFF, ${accent})`,
+            boxShadow: `0 0 18px 4px ${alpha(accent, 0.55)}`,
           }}
         />
       </Box>
@@ -132,12 +150,26 @@ function SonarEmptyState({
           level="title-lg"
           sx={{ fontWeight: 700, letterSpacing: '0.02em', color: 'text.secondary', mb: 0.5 }}
         >
-          Sonar idle — nothing on the scope
+          {onCreate ? copy.zeroTitle : copy.emptyTitle}
         </Typography>
         <Typography level="body-sm" sx={{ color: 'text.tertiary', maxWidth: 380 }}>
-          Pick a branch from the tree, or drop into one of the richest currents below.
+          {onCreate ? copy.zeroHint : copy.emptyHint}
         </Typography>
       </Box>
+
+      {/* Create-first CTA: only shown in the true zero-lake state (caller passes onCreate). */}
+      {onCreate && (
+        <Button
+          data-testid="datalake-empty-create-btn"
+          variant="solid"
+          color="primary"
+          startDecorator={<AddIcon />}
+          onClick={onCreate}
+          sx={{ zIndex: 1 }}
+        >
+          {copy.createLabel}
+        </Button>
+      )}
 
       {/* Quick dives */}
       {quickDives.length > 0 && onDive && (
@@ -159,8 +191,8 @@ function SonarEmptyState({
                 transition: 'transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease',
                 '&:hover': {
                   transform: 'translateY(-2px)',
-                  borderColor: cyan,
-                  boxShadow: `0 4px 14px -4px ${alpha(cyan, 0.4)}`,
+                  borderColor: accent,
+                  boxShadow: `0 4px 14px -4px ${alpha(accent, 0.4)}`,
                 },
               }}
             >
@@ -173,19 +205,31 @@ function SonarEmptyState({
   );
 }
 
-export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onDive }: DataLakeArticleProps) {
-  const theme = useTheme();
-  const isDark = theme.palette.mode === 'dark';
+export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onDive, onCreate }: DataLakeArticleProps) {
+  const muiTheme = useTheme();
+  const isDark = muiTheme.palette.mode === 'dark';
+  const { theme, copy, icons } = useDataLakeSurface();
+  const { secondaryActionLabel, secondaryActionPrompt } = copy;
+  const SecondaryActionIcon = icons.secondaryAction;
   const { data: content, isLoading } = useGetFabFileContent(file);
 
   if (!file) {
-    return <SonarEmptyState isDark={isDark} quickDives={quickDives} onDive={onDive} />;
+    return (
+      <EmptyState
+        isDark={isDark}
+        quickDives={quickDives}
+        onDive={onDive}
+        onCreate={onCreate}
+        theme={theme}
+        copy={copy}
+      />
+    );
   }
 
   const title = cleanFileName(file.fileName);
   const tags = getMeaningfulTags(file);
-  const cyan = inkFor(HUES.cyan, isDark);
-  const violet = inkFor(HUES.violet, isDark);
+  const accent = inkFor(theme.accent, isDark);
+  const secondary = inkFor(theme.secondary, isDark);
 
   return (
     <Box
@@ -206,7 +250,7 @@ export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onD
           pb: 1.5,
           borderBottom: '1px solid',
           borderColor: 'divider',
-          background: `linear-gradient(180deg, ${alpha(cyan, isDark ? 0.05 : 0.035)}, transparent)`,
+          background: `linear-gradient(180deg, ${alpha(accent, isDark ? 0.05 : 0.035)}, transparent)`,
         }}
       >
         <Box
@@ -215,7 +259,7 @@ export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onD
             height: 3,
             borderRadius: 2,
             mb: 1,
-            background: `linear-gradient(90deg, ${cyan}, ${violet})`,
+            background: `linear-gradient(90deg, ${accent}, ${secondary})`,
           }}
         />
         <Typography level="h4" sx={{ mb: 1 }}>
@@ -231,8 +275,8 @@ export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onD
                 sx={{
                   fontSize: '11px',
                   fontFamily: 'monospace',
-                  color: alpha(cyan, 0.9),
-                  borderColor: alpha(cyan, 0.35),
+                  color: alpha(accent, 0.9),
+                  borderColor: alpha(accent, 0.35),
                 }}
               >
                 {tag}
@@ -268,30 +312,28 @@ export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onD
           variant="soft"
           color="primary"
           startDecorator={<ChatIcon sx={{ fontSize: 16 }} />}
-          onClick={() => onAskAbout(`Tell me about this article: ${title}`)}
+          onClick={() => onAskAbout(copy.askAboutPrompt(title))}
           data-testid="datalake-ask-about"
           sx={{ fontSize: '13px' }}
         >
-          Ask about this article
+          {copy.askAboutLabel}
         </Button>
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          startDecorator={<RecordVoiceOverIcon sx={{ fontSize: 16 }} />}
-          onClick={() =>
-            onAskAbout(
-              `Turn the article "${title}" into a customer-ready talking track: the three points that matter most, one analogy a non-physicist will get, and a closing question that moves the conversation forward.`
-            )
-          }
-          data-testid="datalake-talking-track"
-          sx={{
-            fontSize: '13px',
-            '&:hover': { borderColor: violet, color: violet },
-          }}
-        >
-          Turn into a talking track
-        </Button>
+        {secondaryActionLabel && secondaryActionPrompt && (
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            startDecorator={<SecondaryActionIcon sx={{ fontSize: 16 }} />}
+            onClick={() => onAskAbout(secondaryActionPrompt(title))}
+            data-testid="datalake-secondary-action"
+            sx={{
+              fontSize: '13px',
+              '&:hover': { borderColor: secondary, color: secondary },
+            }}
+          >
+            {secondaryActionLabel}
+          </Button>
+        )}
       </Box>
     </Box>
   );

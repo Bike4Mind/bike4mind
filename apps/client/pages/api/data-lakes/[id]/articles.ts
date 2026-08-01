@@ -53,11 +53,25 @@ const handler = baseApi()
     const sortBy = req.query.sortBy === 'createdAt' ? ('createdAt' as const) : ('fileName' as const);
     const sortDir = req.query.sortDir === 'desc' ? ('desc' as const) : ('asc' as const);
 
-    // User-provided tags are an additional AND filter. Lake scoping is handled by the
-    // ownership conditions (dataLakeTags + scopedTagPrefixes) - NOT mixed into the tag
-    // filter with OR semantics - and `restrictToDataLake` drops the broad owner/shared
-    // arms so this view returns ONLY this lake's files, not every file the user owns
-    // (other lakes' files were bleeding into every lake's "Uncategorized").
+    // A built-in registry lake has a different membership model and needs the OPEN prefix arm:
+    // its files carry only prefixed content tags (no write path can stamp its meta-tag -
+    // assertLakeWritable refuses writes to fallbacks wholesale), and it has no creator to anchor
+    // an ownership arm to. That prefix comes from the hardcoded registry, not from user input,
+    // which is what makes the ownership bypass safe here. Nothing else needs to agree with this
+    // arm: archive, delete and stats all resolve the lake through the DB and so can never run
+    // against a fallback at all.
+    const isFallback = dataLakeService.isFallbackLake(dataLake);
+
+    // For a DB lake, membership is ONE predicate shared with the whole-lake writes, so this browse
+    // lists exactly what archiving or permanently deleting the lake would act on. It names the
+    // creator whose OWNED files the prefix arm matches, which is why it - like the rest of the
+    // scope below - goes in the server-options argument (see SearchFabFilesServerOptions).
+    const lakeMembership = isFallback ? undefined : dataLakeService.lakeMembershipScope(dataLake);
+
+    // User-provided tags are an additional AND filter, never mixed into lake scoping with OR
+    // semantics, and `restrictToDataLake` drops the broad owner/shared arms so this view returns
+    // ONLY this lake's files rather than every file the viewer owns (other lakes' files were
+    // bleeding into every lake's "Uncategorized").
     const result = await fabFilesService.search(
       userId,
       {
@@ -67,16 +81,6 @@ const handler = baseApi()
         order: { by: sortBy, direction: sortDir },
         options: {
           textSearch: !!search,
-          includeShared: true,
-          userGroups: req.user.groups ?? [],
-          dataLakeTags: [datalakeTag],
-          // This is a single DYNAMIC lake, so its user-controlled prefix is SCOPED -
-          // matched only within owner/org access so a colliding prefix can't leak
-          // another tenant's files. The unique datalakeTag above safely covers
-          // membership; the scoped prefix additionally catches prefixed content tags.
-          scopedTagPrefixes: [dataLake.fileTagPrefix],
-          // Single-lake browser: only this lake's files.
-          restrictToDataLake: true,
           excludeContent: true,
         },
       },
@@ -96,6 +100,14 @@ const handler = baseApi()
             }
           },
         },
+      },
+      {
+        lakeMembership,
+        includeShared: true,
+        userGroups: req.user.groups ?? [],
+        ...(isFallback ? { dataLakeTags: [datalakeTag], dataLakeTagPrefixes: [dataLake.fileTagPrefix] } : {}),
+        // Single-lake browser: only this lake's files.
+        restrictToDataLake: true,
       }
     );
 

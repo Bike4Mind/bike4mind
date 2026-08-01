@@ -7,6 +7,8 @@ vi.mock('./anthropicBackend', () => ({
   AnthropicBackend: vi.fn(function (this: any, key: string) {
     this._mock = 'anthropic';
     this.key = key;
+    // The one mock that implements the optional hook, so the hand-off is assertable.
+    this.setDispatchModel = vi.fn();
   }),
 }));
 vi.mock('./openaiBackend', () => ({
@@ -70,7 +72,13 @@ vi.mock('./bedrockBackend/deepseek', () => ({
   }),
 }));
 
-import { getLlmByModel, type ApiKeyTable } from './index';
+import {
+  getLlmByModel,
+  resetReplacedByOverlay,
+  updateReplacedByOverlay,
+  UnsupportedAdapterFamilyError,
+  type ApiKeyTable,
+} from './index';
 
 function makeModelInfo(overrides: Partial<ModelInfo> & { backend: ModelInfo['backend'] }): ModelInfo {
   return {
@@ -273,6 +281,109 @@ describe('getLlmByModel', () => {
     it('returns null for an unrecognized backend', () => {
       const modelInfo = makeModelInfo({ backend: 'voyageai' as ModelInfo['backend'] });
       expect(getLlmByModel({}, { modelInfo, logger })).toBeNull();
+    });
+  });
+
+  describe('adapterFamily dispatch', () => {
+    // Every currently-dispatched id reaches its backend through the legacy
+    // switch above; these cases only fire for a record the catalog resolved.
+    it.each([
+      ['anthropic-messages', 'anthropic'],
+      ['openai-chat', 'openai'],
+      ['openai-responses', 'openai'],
+      ['gemini', 'gemini'],
+      ['ollama', 'ollama'],
+      ['xai', 'xai'],
+      ['bfl', 'bfl'],
+      ['aws', 'aws'],
+      ['bedrock-anthropic', 'bedrock-anthropic'],
+      ['bedrock-llama', 'bedrock-llama'],
+      ['bedrock-deepseek', 'bedrock-deepseek'],
+      ['bedrock-jurassic', 'bedrock-jurassic'],
+      ['bedrock-titan', 'bedrock-titan'],
+    ])('routes adapterFamily %s to the %s backend', (adapterFamily, expected) => {
+      const modelInfo = makeModelInfo({
+        backend: 'voyageai' as ModelInfo['backend'],
+        adapterFamily: adapterFamily as ModelInfo['adapterFamily'],
+      });
+      expect((getLlmByModel(fullApiKeys, { modelInfo, logger }) as any)._mock).toBe(expected);
+    });
+
+    it('beats the backend field: the family is the routing decision', () => {
+      // A Bedrock-hosted Claude whose record says bedrock-anthropic must not be
+      // re-derived from the id switch, which would not know this id.
+      const modelInfo = makeModelInfo({
+        backend: 'bedrock',
+        id: 'global.anthropic.claude-sonnet-9' as ModelInfo['id'],
+        adapterFamily: 'bedrock-anthropic',
+      });
+      expect((getLlmByModel({}, { modelInfo, logger }) as any)._mock).toBe('bedrock-anthropic');
+    });
+
+    it('returns null when the family needs a key this caller does not have', () => {
+      const modelInfo = makeModelInfo({ backend: 'openai', adapterFamily: 'openai-chat' });
+      expect(getLlmByModel({}, { modelInfo, logger })).toBeNull();
+    });
+
+    it('throws on an expired key like the legacy switch does', () => {
+      const modelInfo = makeModelInfo({ backend: 'anthropic', adapterFamily: 'anthropic-messages' });
+      expect(() => getLlmByModel({ anthropic: 'expired' }, { modelInfo, logger })).toThrow(
+        'Anthropic API key is expired'
+      );
+    });
+
+    it('throws a named error for a family this build cannot construct', () => {
+      const modelInfo = makeModelInfo({
+        backend: 'voyageai' as ModelInfo['backend'],
+        id: 'voyage-4' as ModelInfo['id'],
+        adapterFamily: 'voyageai',
+      });
+      expect(() => getLlmByModel(fullApiKeys, { modelInfo, logger })).toThrow(UnsupportedAdapterFamilyError);
+      expect(() => getLlmByModel(fullApiKeys, { modelInfo, logger })).toThrow(/voyageai.*voyage-4/);
+    });
+  });
+
+  describe('dispatch record hand-off', () => {
+    it('hands the resolved record to the backend on the legacy path', () => {
+      const modelInfo = makeModelInfo({ backend: 'anthropic' });
+      const backend = getLlmByModel(fullApiKeys, { modelInfo, logger }) as any;
+      expect(backend.setDispatchModel).toHaveBeenCalledWith(modelInfo);
+    });
+
+    it('hands it over on the family path too', () => {
+      const modelInfo = makeModelInfo({ backend: 'anthropic', adapterFamily: 'anthropic-messages' });
+      const backend = getLlmByModel(fullApiKeys, { modelInfo, logger }) as any;
+      expect(backend.setDispatchModel).toHaveBeenCalledWith(modelInfo);
+    });
+
+    it('does not require the hook: a backend without it still dispatches', () => {
+      const modelInfo = makeModelInfo({ backend: 'openai' });
+      expect((getLlmByModel(fullApiKeys, { modelInfo, logger }) as any)._mock).toBe('openai');
+    });
+  });
+
+  describe('deprecated ids at the entry point', () => {
+    afterEach(() => resetReplacedByOverlay());
+
+    it('does not resolve a retired bedrock id: the null probe is the legacy behavior', () => {
+      // The static map sends this id to an Opus the switch does know, so
+      // resolving here would turn a null every caller handles into a constructed
+      // backend. Resolution belongs at the call sites.
+      const modelInfo = makeModelInfo({
+        backend: 'bedrock',
+        id: 'anthropic.claude-3-opus-20240229-v1:0' as ModelInfo['id'],
+      });
+      expect(getLlmByModel({}, { modelInfo, logger })).toBeNull();
+    });
+
+    it('hands the backend the record it was called with even when an overlay names a successor', () => {
+      // DispatchModel.for() is keyed by the id the caller completes with, so a
+      // swapped record would silently drop the catalog dispatch profile.
+      updateReplacedByOverlay({ 'claude-retired-9': 'claude-sonnet-4-6' });
+      const modelInfo = makeModelInfo({ backend: 'anthropic', id: 'claude-retired-9' as ModelInfo['id'] });
+      const backend = getLlmByModel(fullApiKeys, { modelInfo, logger }) as any;
+      expect(backend.setDispatchModel).toHaveBeenCalledWith(modelInfo);
+      expect(backend.setDispatchModel.mock.calls[0][0]).toBe(modelInfo);
     });
   });
 

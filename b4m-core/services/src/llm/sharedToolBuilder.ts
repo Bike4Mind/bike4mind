@@ -42,6 +42,13 @@ export interface ToolBuilderDeps {
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Agent-scoped KB restriction, forwarded to the tool context (see ToolContext.kbScope). */
   kbScope?: ToolContext['kbScope'];
+  /**
+   * Sink for tool-internal LLM spend, forwarded to the tool context. The agent
+   * executor wires this to fold nested tool generation into iteration billing (#630);
+   * omit on hosts that don't bill nested tool spend to the customer (e.g. the chat
+   * path). See ToolContext.onToolLlmUsage.
+   */
+  onToolLlmUsage?: ToolContext['onToolLlmUsage'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
   imageProcessorLambdaName?: string;
@@ -198,7 +205,15 @@ export interface BuildSharedToolsOptions {
 // payload is dispatched via onUiSideEffect (and the terse displayMessage replaces
 // the model-visible result) rather than echoed back to the model.
 // `populateDecomposition` loads a decomposed multi-step plan's first sub-problem.
-const VALID_SIDE_EFFECT_TYPES = new Set(['populateProblem', 'populateFamilyProblem', 'populateDecomposition']);
+// `populateScheduleRace` carries a solve tool's scheduling problem + its bounded race under a
+// type distinct from `populateProblem`, so a client predating it ignores the race rather than
+// persisting the wrapper as the brief (allowlisting it here is what lets the frame through).
+const VALID_SIDE_EFFECT_TYPES = new Set([
+  'populateProblem',
+  'populateScheduleRace',
+  'populateFamilyProblem',
+  'populateDecomposition',
+]);
 const TOOL_ARTIFACT_RE = /<artifact\s+([^>]*)>([\s\S]*?)<\/artifact>/gi;
 // Value is anchored to its own quote kind so a double-quoted value can contain
 // apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
@@ -272,7 +287,8 @@ export function buildSharedTools(
     entitlementKeys ?? [],
     callbacks.sessionId,
     undefined, // codeMinifier - CLI-only (web-tree-sitter); server path has no minifier
-    deps.precomputed?.models
+    deps.precomputed?.models,
+    deps.onToolLlmUsage
   );
 
   // Filter to enabled tools only

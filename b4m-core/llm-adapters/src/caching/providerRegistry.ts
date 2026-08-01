@@ -69,6 +69,19 @@ export const CACHING_CAPABILITIES: Record<ModelBackend, ProviderCachingCapabilit
     maxTTL: '5m',
     costSavings: 60,
   },
+  [ModelBackend.Kimi]: {
+    backend: ModelBackend.Kimi,
+    supported: true,
+    automatic: true,
+    explicitControl: false,
+    // Moonshot documents a hard floor: a prompt under 256 tokens is never cached.
+    minTokens: 256,
+    // Not published. Left as 'auto' rather than invented.
+    maxTTL: 'auto',
+    // A cache read is ~10% of the input rate across the family ($0.30 against
+    // $3.00 on K3), so the saving on the cached portion is ~90%.
+    costSavings: 90,
+  },
   [ModelBackend.Ollama]: {
     backend: ModelBackend.Ollama,
     supported: false,

@@ -14,6 +14,7 @@ type UsageOverrides = {
   actualInputTokens?: number;
   overflowDetected?: boolean;
   cacheReadInputTokens?: number;
+  verbatimTurnsExcluded?: number;
 };
 
 function quest(id: string, overrides: UsageOverrides = {}) {
@@ -31,6 +32,7 @@ function quest(id: string, overrides: UsageOverrides = {}) {
           bufferTokens: 1000,
           utilizationPercentage: overrides.utilizationPercentage ?? (actualInputTokens / SAFE_MAX) * 100,
           overflowDetected: overrides.overflowDetected,
+          verbatimTurnsExcluded: overrides.verbatimTurnsExcluded,
         },
       },
     },
@@ -98,5 +100,13 @@ describe('useSessionContextUsage', () => {
 
     mockPages([quest('q1', { actualInputTokens: 10_000, cacheReadInputTokens: 0 })]);
     expect(renderHook(() => useSessionContextUsage('s1')).result.current?.cachingIneffective).toBe(false);
+  });
+
+  it('surfaces compactedTurns from the latest turn (0 when absent)', () => {
+    mockPages([quest('q1', { verbatimTurnsExcluded: 3 })]);
+    expect(renderHook(() => useSessionContextUsage('s1')).result.current?.compactedTurns).toBe(3);
+
+    mockPages([quest('q1', {})]);
+    expect(renderHook(() => useSessionContextUsage('s1')).result.current?.compactedTurns).toBe(0);
   });
 });

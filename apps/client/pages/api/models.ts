@@ -1,20 +1,8 @@
-import {
-  AnthropicBackend,
-  UndifferentiatedBedrockBackend,
-  GeminiBackend,
-  OllamaBackend,
-  OpenAIBackend,
-  BFLBackend,
-  XAIBackend,
-  AWSBackend,
-  LocalImageBackend,
-} from '@bike4mind/llm-adapters';
-import { ModelBackend } from '@bike4mind/common';
+import { buildApiKeyTable, getAvailableModels, getSupersededModels } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bike4mind/database';
 import { CacheKeys } from '@server/utils/cacheKeys';
-import type { Logger } from '@bike4mind/observability';
 import { getSettingsByNames } from '@bike4mind/utils';
 
 const BACKEND_TIMEOUT_MS = 2_000;
@@ -24,90 +12,37 @@ const BACKEND_TIMEOUT_MS = 2_000;
 // often the multi-backend fan-out runs server-side.
 const MODELS_CACHE_TTL_MS = 60_000;
 
-const withTimeout = <T>(p: Promise<T>, ms: number, label: string): Promise<T> => {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<T>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-  });
-  return Promise.race([p, timeout]).finally(() => {
-    if (timer) clearTimeout(timer);
-  });
-};
+// Cache identity for a caller with no session. Distinct from any real user id and
+// from the ids system callers use, so an anonymous page load can never be served
+// a list assembled from someone else's keys.
+const ANONYMOUS_CACHE_ID = 'anonymous';
 
-async function buildModelsResponse(userId: string, logger: Logger) {
+async function buildModelsResponse(userId: string | null) {
   const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
   const coreKeys = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
 
-  // Convert to ApiKeyTable format for backward compatibility
-  const apiKeys = {
-    openai: coreKeys.openai || undefined,
-    anthropic: coreKeys.anthropic || undefined,
-    gemini: coreKeys.gemini || undefined,
-    bfl: coreKeys.bfl || undefined,
-    ollama: coreKeys.ollama || undefined,
-    xai: coreKeys.xai || undefined,
-    imageGen: coreKeys.imageGen || undefined,
-  };
+  // Keyed by ModelBackend, which is what the shared listing gate reads. Built by
+  // the shared helper rather than a literal here: this route is the picker, so a
+  // provider missing from the table is a provider no user can select.
+  const apiKeys = buildApiKeyTable(coreKeys);
 
-  const isSelfHost = process.env.B4M_SELF_HOST === 'true';
-
-  const backends = {
-    [ModelBackend.OpenAI]: apiKeys.openai ? new OpenAIBackend(apiKeys.openai, logger) : null,
-    [ModelBackend.Anthropic]: apiKeys.anthropic ? new AnthropicBackend(apiKeys.anthropic, logger) : null,
-    // Bedrock and AWS need real AWS credentials, which a self-host install does not have
-    // (its AWS_ACCESS_KEY_ID is the local MinIO credential); listing their models there
-    // would offer choices that can only fail at dispatch.
-    [ModelBackend.Bedrock]: isSelfHost ? null : new UndifferentiatedBedrockBackend(),
-    [ModelBackend.Gemini]: apiKeys.gemini ? new GeminiBackend(apiKeys.gemini) : null,
-    [ModelBackend.Ollama]: apiKeys.ollama ? new OllamaBackend(apiKeys.ollama) : null,
-    [ModelBackend.BFL]: apiKeys.bfl ? new BFLBackend(apiKeys.bfl) : new BFLBackend('demo-key'), // Always create BFL backend for testing
-    [ModelBackend.XAI]: apiKeys.xai ? new XAIBackend(apiKeys.xai, logger) : null,
-    [ModelBackend.AWS]: isSelfHost ? null : new AWSBackend(),
-    // Self-hosted Stable-Diffusion image backend, enabled by IMAGE_GEN_BASE_URL.
-    [ModelBackend.LocalImage]: apiKeys.imageGen ? new LocalImageBackend(apiKeys.imageGen, logger) : null,
-  } as const;
-
-  const backendPromises = Object.entries(backends).map(async ([backendName, backend]) => {
-    if (!backend) return { backendName, models: [] };
-
-    try {
-      const models = (await withTimeout(backend.getModelInfo(), BACKEND_TIMEOUT_MS, backendName)).filter(
-        m => !m.private
-      );
-      return { backendName, models };
-    } catch (error: any) {
-      logger.warn(`[/api/models] ${backendName}: ${error?.message || error}`);
-      return { backendName, models: [], error };
-    }
+  const models = await getAvailableModels(apiKeys, {
+    perBackendTimeoutMs: BACKEND_TIMEOUT_MS,
+    // The picker is the one consumer that must not see private models; every
+    // other getAvailableModels caller resolves pinned private models by id.
+    includePrivate: false,
+    isSelfHost: process.env.B4M_SELF_HOST === 'true',
   });
 
-  const results = await Promise.allSettled(backendPromises);
-
-  const models = results
-    .map((result, index) => {
-      if (result.status === 'fulfilled') {
-        return result.value.models;
-      } else {
-        const backendName = Object.keys(backends)[index];
-        logger.error('[/api/models] Failed to get models from %s:', backendName, result.reason);
-        return [];
-      }
-    })
-    .flat()
-    // Filter out models that are deprecated as of today (inclusive)
-    .filter(m => {
-      if (!m.deprecationDate) return true;
-      const today = new Date(new Date().toISOString().slice(0, 10));
-      const cutoff = new Date(m.deprecationDate + 'T00:00:00Z');
-      return today.getTime() < cutoff.getTime();
-    });
-
-  return { models };
+  // Superseded pins the client can offer to upgrade, resolved by llm-adapters
+  // through the same catalog-overlay-then-static-map chain a pinned request takes.
+  // Reads the fan-out getAvailableModels just did, so it costs no extra work.
+  return { models, supersededModels: getSupersededModels(models) };
 }
 
 const handler = baseApi().get(async (req, res) => {
-  const userId = req.user?.id || 'system';
-  const cacheKey = CacheKeys.modelList(userId);
+  const userId = req.user?.id ?? null;
+  const cacheKey = CacheKeys.modelList(userId ?? ANONYMOUS_CACHE_ID);
 
   const cached = await cacheRepository.findOne({ key: cacheKey });
   if (cached) {
@@ -116,11 +51,15 @@ const handler = baseApi().get(async (req, res) => {
   }
 
   req.logger.log(`Cache miss for key: ${cacheKey}`);
-  const payload = await buildModelsResponse(userId, req.logger);
+  const payload = await buildModelsResponse(userId);
 
   // Don't cache an empty result. If every backend timed out (network blip, all
   // providers slow at once), caching `{ models: [] }` for 60s would hide healthy
   // backends from the next request until expiry.
+  //
+  // INVARIANT: this request path is the only writer of `model-list:*`. The entries
+  // are per-caller views built from that caller's keys, so background jobs (model
+  // discovery included) must bust these keys, never populate them.
   if (payload.models.length > 0) {
     await cacheRepository.createOrUpdate({
       key: cacheKey,

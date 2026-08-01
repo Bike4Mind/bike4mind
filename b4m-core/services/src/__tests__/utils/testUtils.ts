@@ -13,6 +13,8 @@ import {
   IOrganizationDocument,
   ICreditTransactionRepository,
   ICreditTransactionDocument,
+  IAuthSessionRepository,
+  IAuthSessionDocument,
 } from '@bike4mind/common';
 import {
   IResearchTask,
@@ -62,6 +64,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findMetadataBySessionId: vi.fn(),
   deleteManyInIds: vi.fn(),
   findAllByIds: vi.fn(),
+  findByBatchId: vi.fn(),
   search: vi.fn(),
   executeSearch: vi.fn(),
   countByUserIdAndTag: vi.fn(),
@@ -71,11 +74,13 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   countUniqueFilesByNamespaceForUser: vi.fn(),
   removeTagByUserId: vi.fn(),
   updateTagsByUserId: vi.fn(),
-  pullTagByFabFileId: vi.fn(),
+  pullTagsByFabFileId: vi.fn(),
+  bulkUpdateTags: vi.fn(),
   findByContentHashes: vi.fn(),
   findByContentHashesInDataLake: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
   computeDataLakeStats: vi.fn(),
+  countDataLakeFilesByMembership: vi.fn(),
   archiveByDataLakeTag: vi.fn(),
   unarchiveByDataLakeTag: vi.fn(),
   findArchivedByDataLakeTag: vi.fn(),
@@ -126,10 +131,25 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     countActiveVoiceSessionsByUserId: vi.fn(),
   });
 
+export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepository> =>
+  vi.mocked({
+    ...createMockRepository<IAuthSessionDocument>(),
+    findBySid: vi.fn(),
+    findActiveByUserId: vi.fn(),
+    rotateHash: vi.fn(),
+    revokeBySid: vi.fn(),
+    revokeAllByUserId: vi.fn(),
+  });
+
 export const createMockUserRepository = (): MockedObject<IUserRepository> =>
   vi.mocked({
     ...createMockRepository<IUserDocument>(),
     findByEmail: vi.fn(),
+    removeGroupsFromAllUsers: vi.fn(),
+    addGroupToUser: vi.fn(),
+    removeGroupFromUser: vi.fn(),
+    removeGroupsFromUser: vi.fn(),
+    findUserIdsByGroupIds: vi.fn(),
     findByIds: vi.fn(),
     findByUsernameOrEmail: vi.fn(),
     findByIdWithPassword: vi.fn(),
@@ -140,6 +160,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     findByStripeCustomerId: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),
+    incrementTokenVersion: vi.fn(),
     findBySlackUserId: vi.fn(),
     findByIdWithNotionToken: vi.fn(),
     findByIdWithMfaSecrets: vi.fn(),

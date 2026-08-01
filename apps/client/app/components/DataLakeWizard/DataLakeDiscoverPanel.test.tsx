@@ -137,12 +137,13 @@ describe('DataLakeDiscoverPanel', () => {
     expect(useBrowsePublicDataLakes).toHaveBeenLastCalledWith('sales');
   });
 
-  it('fetches the next page on Load more only while there is one, and never grows the request', async () => {
+  it('calls fetchNextPage once when Load more is clicked, passing only the search term to the hook', async () => {
     mockHook({ hasNextPage: true });
     render(<DataLakeDiscoverPanel />, { wrapper: TestWrapper });
 
-    // The hook is always called with just the search term - Load more advances offset internally,
-    // so a deep load-more can never push `limit` past the route cap (the bug this guards against).
+    // The browse hook is mocked in this file, so limit/offset are not observable here - this
+    // asserts only the panel's half of the contract: search term in, one fetchNextPage out.
+    // The fixed-limit offset paging itself is guarded in app/hooks/data/dataLakes.test.ts.
     expect(useBrowsePublicDataLakes).toHaveBeenLastCalledWith('');
     await userEvent.click(screen.getByTestId('datalake-discover-load-more'));
     expect(fetchNextPage).toHaveBeenCalledTimes(1);

@@ -2,22 +2,31 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   markTerminalIfActive: vi.fn(),
+  setTaxonomyStatusIfActive: vi.fn(),
   findById: vi.fn(),
   recomputeLakeStats: vi.fn(),
   recordBatchCompletion: vi.fn(),
+  sendToQueue: vi.fn(),
+  tryIncrementWithinLimitFixedWindow: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  dataLakeBatchRepository: { markTerminalIfActive: h.markTerminalIfActive },
+  dataLakeBatchRepository: {
+    markTerminalIfActive: h.markTerminalIfActive,
+    setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive,
+  },
   dataLakeRepository: { findById: h.findById },
   fabFileRepository: {},
+  cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrementWithinLimitFixedWindow },
 }));
 vi.mock('@bike4mind/services', () => ({ dataLakeService: { recomputeLakeStats: h.recomputeLakeStats } }));
 vi.mock('@server/utils/cloudwatch', () => ({
   recordBatchCompletion: (...a: unknown[]) => h.recordBatchCompletion(...a),
 }));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
+vi.mock('sst', () => ({ Resource: { dataLakeTaxonomyQueue: { url: 'http://sqs.example/taxonomy' } } }));
 
-import { finalizeBatchIfComplete } from './dataLakeBatchProgress';
+import { finalizeBatchIfComplete, enqueueTaxonomyAnalysisIfWanted } from './dataLakeBatchProgress';
 
 const logger = { error: vi.fn() };
 // A batch at its completion threshold (vectorized+failed+skipped >= total).
@@ -64,5 +73,81 @@ describe('finalizeBatchIfComplete - batch-completion metric parity', () => {
     h.markTerminalIfActive.mockResolvedValue(null);
     await finalizeBatchIfComplete(batch(), logger as never);
     expect(h.recordBatchCompletion).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Deliberately NOT gated on ingest completion - called from upload-complete.ts right
+ * after the browser upload phase ends, and as a reconciler backstop, neither of which cares
+ * whether chunk/vectorize have finished.
+ */
+describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.setTaxonomyStatusIfActive.mockResolvedValue(batch({ taxonomyStatus: 'queued' }));
+    h.sendToQueue.mockResolvedValue('msg-id');
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
+  });
+
+  it('no-ops for a null batch or one that never opted in', async () => {
+    await enqueueTaxonomyAnalysisIfWanted(null, logger as never);
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: false }), logger as never);
+    expect(h.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('claims the taxonomy phase and enqueues, regardless of chunk/vectorize progress', async () => {
+    // vectorizedFiles is nowhere near totalFiles - would never pass finalizeBatchIfComplete's
+    // own threshold, proving this function truly does not depend on it.
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, vectorizedFiles: 0 }), logger as never);
+
+    expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledWith('b1', ['none'], 'queued', {
+      taxonomyStartedAt: expect.any(Date),
+    });
+    expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs.example/taxonomy', {
+      batchId: 'b1',
+      dataLakeId: 'lake1',
+      userId: undefined,
+    });
+  });
+
+  it('does not enqueue when the guarded claim is lost (already queued/analyzing/etc.)', async () => {
+    h.setTaxonomyStatusIfActive.mockResolvedValue(null);
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true }), logger as never);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('logs rather than throws when the queue send fails (never blocks the caller)', async () => {
+    h.sendToQueue.mockRejectedValue(new Error('sqs down'));
+    await expect(
+      enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true }), logger as never)
+    ).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalled();
+  });
+
+  // The automatic path is the primary OpenAI-cost driver (fires once per opted-in upload),
+  // unlike the manual re-analyze endpoint which was already capped - this closes that gap.
+  it('checks a per-user daily cap before claiming, and skips enqueue entirely when exceeded', async () => {
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: false, count: 50, expiresAt: new Date() });
+
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u1' }), logger as never);
+
+    expect(h.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u1:data-lakes/reanalyze-taxonomy',
+      50,
+      24 * 60 * 60 * 1000
+    );
+    expect(h.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('shares its rate-limit bucket with the manual reanalyze endpoint (same key format)', async () => {
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u2' }), logger as never);
+
+    expect(h.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u2:data-lakes/reanalyze-taxonomy',
+      expect.any(Number),
+      expect.any(Number)
+    );
   });
 });

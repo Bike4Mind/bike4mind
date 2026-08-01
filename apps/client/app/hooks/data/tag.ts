@@ -35,7 +35,10 @@ export const useCreateFileTag = () => {
     },
     onSuccess: data => {
       queryClient.setQueryData(['file-tags'], (prev: IFileTag[]) => [...prev, data]);
-      queryClient.invalidateQueries({ queryKey: ['file-tags', 'counts'] });
+      // The create response carries the seeded fileCount of 0, which is wrong the moment the name
+      // matches files that already exist - tag documents are auto-created by name elsewhere, and
+      // deleting one never untags the files. Invalidate the list, not just the counts endpoint.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       toast.success('Tag created successfully');
     },
     onError: () => {
@@ -53,8 +56,16 @@ export const useUpdateFileTag = () => {
       return result.data;
     },
     onSuccess: data => {
-      queryClient.setQueryData(['file-tags'], (prev: IFileTag[]) => prev.map(t => (t.id === data.id ? data : t)));
-      queryClient.invalidateQueries({ queryKey: ['file-tags', 'counts'] });
+      // Merge rather than replace so the edited fields show immediately: PUT /api/files/tags/[id]
+      // echoes back only what tagUpdateSchema accepted, and a wholesale swap would blank the rest
+      // of the row. This is optimistic only - fileCount is derived from the files that carry the
+      // tag, and a rename does not retag them, so the invalidation below is what settles it.
+      queryClient.setQueryData(['file-tags'], (prev: IFileTag[]) =>
+        prev.map(t => (t.id === data.id ? { ...t, ...data } : t))
+      );
+      // The bare prefix: invalidating ['file-tags','counts'] alone leaves the longer key matched
+      // and the list itself - which is what carries fileCount - stale.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       toast.success('Tag updated successfully');
     },
     onError: () => {

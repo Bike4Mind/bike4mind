@@ -40,7 +40,7 @@ export const GEAR_PRESENTATION: Record<string, GearPresentation> = {
     intro:
       'Ground the AI in your own material. Upload documents once; every answer can retrieve and cite your sources first.',
     cta: 'Create your first data lake',
-    ctaAction: 'navigate:/data-lakes',
+    ctaAction: 'navigate:/new',
   },
   files: {
     title: 'Files',
@@ -56,6 +56,14 @@ export const GEAR_PRESENTATION: Record<string, GearPresentation> = {
       'Turn any artifact into a shareable web page - public, passphrase-protected, or restricted to email domains you choose.',
     cta: 'See how publishing works',
     ctaAction: 'navigate:/profile?tab=published',
+  },
+  hearth: {
+    title: 'Hearth',
+    tagline: 'One log, every actor',
+    intro:
+      'A shared append-only event log. You, your agents, and your devices all post to the same channel as named actors and catch up from where each left off.',
+    cta: 'Open your first channel',
+    ctaAction: 'navigate:/hearth',
   },
   // --- Skills ---
   image: {

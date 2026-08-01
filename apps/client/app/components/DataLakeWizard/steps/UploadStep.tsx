@@ -1,9 +1,45 @@
-import { Alert, Box, Button, LinearProgress, Stack, Typography } from '@mui/joy';
+import { Alert, Box, Button, Chip, CircularProgress, LinearProgress, Stack, Typography } from '@mui/joy';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useBatchProgressListener } from '@client/app/hooks/data/dataLakeWizard';
+
+/**
+ * Background AI-tag suggestion status, shown only while the wizard's Complete screen
+ * is still open - closing it (or clicking Done) stops watching; from then on the Data Lakes
+ * list is the source of truth, via the same taxonomyStatus polled there. `undefined` (no
+ * WebSocket message yet, right after upload) reads the same as 'queued'/'analyzing': the job
+ * was requested but hasn't reported in yet.
+ */
+function TaxonomyStatusRow({ status }: { status: string | undefined }) {
+  if (status === 'ready') {
+    return (
+      <Chip size="sm" variant="soft" color="success" startDecorator={<AutoAwesomeIcon sx={{ fontSize: 14 }} />}>
+        Tags ready - review from the Data Lakes list
+      </Chip>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <Typography level="body-xs" color="neutral">
+        AI tagging didn&apos;t complete - files still have their folder tags.
+      </Typography>
+    );
+  }
+  // undefined | 'none' | 'queued' | 'analyzing' | 'applying' | 'applied'
+  return (
+    <Chip
+      size="sm"
+      variant="soft"
+      color="neutral"
+      startDecorator={<CircularProgress size="sm" sx={{ '--CircularProgress-size': '14px' }} />}
+    >
+      Suggesting tags with AI&hellip;
+    </Chip>
+  );
+}
 
 function ProgressRow({ label, current, total }: { label: string; current: number; total: number }) {
   const pct = total > 0 ? Math.round((current / total) * 100) : 0;
@@ -27,6 +63,8 @@ export default function UploadStep() {
   // Append mode locks the Config fields to the existing lake, so a "fix your Name /
   // Tag Prefix" hint would point at inputs the user can't edit.
   const isAppendMode = useDataLakeWizardStore(s => s.targetLake !== null);
+  // AI tagging is never offered in append mode (the source step hides the toggle there too).
+  const wantsTaxonomy = useDataLakeWizardStore(s => s.optionalSteps.taxonomy) && !isAppendMode;
 
   // Subscribe to real-time chunk/vectorize progress from WebSocket
   useBatchProgressListener();
@@ -115,6 +153,7 @@ export default function UploadStep() {
           <Typography level="body-sm" color="neutral" textAlign="center">
             {completionSummary}
           </Typography>
+          {wantsTaxonomy && <TaxonomyStatusRow status={progress.taxonomyStatus} />}
           <Button variant="solid" color="primary" onClick={resetWizard}>
             Done
           </Button>

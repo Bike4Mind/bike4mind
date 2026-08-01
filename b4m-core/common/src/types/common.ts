@@ -124,6 +124,47 @@ export function isSupportedFabFileMimeType(mimeType: string | null | undefined):
 }
 
 /**
+ * Known MIME types emitted by the generated-audio endpoints (TTS + sound
+ * effects). Deliberately SEPARATE from SupportedFabFileMimeTypes: that set is
+ * the ingest pipeline's chunk+vectorize allowlist, and audio is intentionally
+ * NOT vectorizable and NOT attachable to a chat completion (no model accepts
+ * audio input). Kept only for extension mapping / documentation; the runtime
+ * guard below matches any `audio/*` so unusual provider subtypes are still
+ * treated as audio (i.e. still excluded from every LLM path).
+ */
+export enum AudioMimeType {
+  MP3 = 'audio/mpeg',
+  WAV = 'audio/wav',
+  OPUS = 'audio/opus',
+  AAC = 'audio/aac',
+  FLAC = 'audio/flac',
+  PCM = 'audio/pcm',
+  OGG = 'audio/ogg',
+  WEBM = 'audio/webm',
+}
+
+/**
+ * Is this an audio MIME type? Matches any `audio/*` (not just the known set)
+ * so the LLM-exclusion and vectorization-skip guards fail safe for any audio
+ * subtype a provider might emit.
+ */
+export function isAudioMimeType(mimeType: string | null | undefined): boolean {
+  if (!mimeType) return false;
+  return mimeType.split(';')[0].trim().toLowerCase().startsWith('audio/');
+}
+
+/**
+ * Is this MIME type allowed to be STORED as a FabFile? Storable is a superset
+ * of ingestable: a file may be kept and browsed (audio) without being
+ * chunk/vectorize-able. This is the gate `createFabFile` uses so audio can be
+ * persisted without being (mis)classified as vectorizable by
+ * `isSupportedFabFileMimeType`.
+ */
+export function isStorableFabFileMimeType(mimeType: string | null | undefined): boolean {
+  return isSupportedFabFileMimeType(mimeType) || isAudioMimeType(mimeType);
+}
+
+/**
  * Reasoning effort levels for OpenAI reasoning models (O1, O3, GPT-5 series)
  * Controls the tradeoff between response speed and reasoning depth/quality
  *

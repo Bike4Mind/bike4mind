@@ -1,5 +1,6 @@
 import React from 'react';
 import { Slider, styled } from '@mui/joy';
+import { CLIENT_UNLIMITED_HISTORY_VALUE } from '@bike4mind/common';
 import { gray, grayAlpha } from '@client/app/utils/themes/colors';
 
 const StyledSlider = styled(Slider)({
@@ -38,7 +39,11 @@ const StyledSlider = styled(Slider)({
   },
 });
 
-export const INFINITE_VALUE = 14;
+/**
+ * Top mark on the slider, and the value the send path puts on the wire for "unlimited history".
+ * Sourced from core so the slider and the server's ingress translation cannot drift apart.
+ */
+export const INFINITE_VALUE = CLIENT_UNLIMITED_HISTORY_VALUE;
 
 interface FibonacciSliderProps {
   onChange: (newValue: number | number[]) => void;

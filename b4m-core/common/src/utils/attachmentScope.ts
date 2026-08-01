@@ -9,9 +9,8 @@
  * message forever; a document's cost is bounded by chunk retrieval. Users can still
  * override either way.
  *
- * `resolveAttachScope` has no callers yet. The upload paths still decide scope from a
- * default-off toggle, which is why an uploaded file currently drops out of context after
- * one turn; switching them over is a separate change.
+ * Resolved once when an upload starts and frozen onto the pending file, so a later
+ * change to the control - or a notebook switch - cannot re-scope something in flight.
  */
 export type AttachScopeMode = 'auto' | 'notebook' | 'message';
 export type AttachScope = 'notebook' | 'message';

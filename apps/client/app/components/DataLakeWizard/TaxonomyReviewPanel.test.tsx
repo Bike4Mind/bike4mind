@@ -1,0 +1,100 @@
+import type { ReactNode } from 'react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
+import type { IDataLakeBatchDocument } from '@bike4mind/common';
+import TaxonomyReviewPanel from './TaxonomyReviewPanel';
+
+const { applyMutate, reanalyzeMutate } = vi.hoisted(() => ({
+  applyMutate: vi.fn(),
+  reanalyzeMutate: vi.fn(),
+}));
+
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  useApplyTaxonomySuggestions: () => ({ mutate: applyMutate, isPending: false }),
+  useReanalyzeTaxonomy: () => ({ mutate: reanalyzeMutate, isPending: false }),
+}));
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+const Wrapper = ({ children }: { children: ReactNode }) => (
+  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+);
+
+const readyBatch = (): IDataLakeBatchDocument =>
+  ({
+    id: 'b1',
+    dataLakeId: 'lake1',
+    taxonomyStatus: 'ready',
+    taxonomySuggestions: {
+      tags: [
+        {
+          suffix: 'type:contract',
+          originalName: 'acme:type:contract',
+          strength: 0.95,
+          source: 'ai',
+          matchingFolders: ['legal'],
+          deleted: false,
+        },
+        {
+          suffix: 'topic:hr',
+          originalName: 'acme:topic:hr',
+          strength: 0.8,
+          source: 'ai',
+          matchingFolders: ['hr'],
+          deleted: false,
+        },
+      ],
+      fileAssignments: [],
+    },
+  }) as unknown as IDataLakeBatchDocument;
+
+describe('TaxonomyReviewPanel', () => {
+  beforeEach(() => {
+    applyMutate.mockClear();
+    reanalyzeMutate.mockClear();
+  });
+
+  it('renders both suggested tags grouped by confidence tier', () => {
+    render(
+      <Wrapper>
+        <TaxonomyReviewPanel batch={readyBatch()} prefix="acme:" onClose={() => {}} />
+      </Wrapper>
+    );
+
+    expect(screen.getAllByTestId('taxonomy-tag-card')).toHaveLength(2);
+    expect(screen.getByText(/High Confidence/i)).toBeInTheDocument();
+    expect(screen.getByText(/Medium Confidence/i)).toBeInTheDocument();
+  });
+
+  it('deleting a tag removes it from what gets applied', () => {
+    render(
+      <Wrapper>
+        <TaxonomyReviewPanel batch={readyBatch()} prefix="acme:" onClose={() => {}} />
+      </Wrapper>
+    );
+
+    fireEvent.click(screen.getAllByTestId('taxonomy-tag-delete')[0]);
+    fireEvent.click(screen.getByTestId('taxonomy-apply-btn'));
+
+    expect(applyMutate).toHaveBeenCalledTimes(1);
+    const [sentTags] = applyMutate.mock.calls[0];
+    const active = sentTags.filter((t: { deleted: boolean }) => !t.deleted);
+    expect(active).toHaveLength(1);
+    expect(active[0].originalName).toBe('acme:topic:hr');
+  });
+
+  it('shows the failure message and offers only Re-analyze when the batch failed', () => {
+    const failed = { ...readyBatch(), taxonomyStatus: 'failed', taxonomyError: 'No OpenAI API key configured' };
+    render(
+      <Wrapper>
+        <TaxonomyReviewPanel batch={failed as unknown as IDataLakeBatchDocument} prefix="acme:" onClose={() => {}} />
+      </Wrapper>
+    );
+
+    expect(screen.getByText(/No OpenAI API key configured/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('taxonomy-apply-btn')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('taxonomy-reanalyze-btn'));
+    expect(reanalyzeMutate).toHaveBeenCalledTimes(1);
+  });
+});

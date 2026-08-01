@@ -36,6 +36,8 @@ import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import RestoreIcon from '@mui/icons-material/Restore';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
 import {
   useArchiveDataLake,
@@ -47,9 +49,11 @@ import {
   useSetLakeVisibility,
   useGetArchivedDataLakes,
   useGetDeletedDataLakes,
+  useActiveDataLakeBatches,
 } from '@client/app/hooks/data/dataLakes';
 import { useDataLakeWizardStore, type ManagerTab } from '@client/app/stores/useDataLakeWizardStore';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
+import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeViewer from './DataLakeViewer';
@@ -58,6 +62,15 @@ import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 
 export default function DataLakeListPanel() {
   const { data: dataLakes, isLoading } = useDataLakes();
+  const { data: activeBatches } = useActiveDataLakeBatches();
+  // Id only, not the batch object - `reviewingBatch` below is derived from the live, polled
+  // `activeBatches` list (mirroring `editingLake`'s pattern) so a re-analyze's cache refresh
+  // flows into the open review panel instead of leaving it stuck showing pre-refresh suggestions.
+  const [reviewingBatchId, setReviewingBatchId] = useState<string | null>(null);
+  const reviewingBatch = useMemo(
+    () => activeBatches?.find(b => b.id === reviewingBatchId) ?? null,
+    [activeBatches, reviewingBatchId]
+  );
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   // Follow the store's target tab so a deep-link (openManager('discover')) always lands on the
@@ -92,6 +105,9 @@ export default function DataLakeListPanel() {
           requiredEntitlement: l.requiredEntitlement ?? '',
           organizationId: l.organizationId ?? '',
           isPublic: l.isPublic ?? false,
+          // Absent for a lake the caller can only read - the server withholds it (editor-only).
+          systemPrompt: l.systemPrompt ?? '',
+          canManage: !!l.canManage,
         }
       : null;
   }, [dataLakes, editingLakeId]);
@@ -180,97 +196,156 @@ export default function DataLakeListPanel() {
               </Box>
             ) : (
               <Stack gap={1}>
-                {dataLakes.map(lake => (
-                  <Card
-                    key={lake.id}
-                    variant="outlined"
-                    data-testid={`datalake-card-${lake.id}`}
-                    sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: 'primary.300' } }}
-                    onClick={() =>
-                      setViewingLake({
-                        id: lake.id,
-                        name: lake.name,
-                        tagPrefix: lake.fileTagPrefix,
-                        canManage: !!lake.canManage,
-                      })
-                    }
-                  >
-                    <Stack direction="row" alignItems="center" gap={1.5}>
-                      <DataLakeIcon sx={{ fontSize: 20, color: 'primary.400' }} />
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography level="title-sm" noWrap>
-                          {lake.name}
-                        </Typography>
-                        <Stack direction="row" gap={0.5} sx={{ mt: 0.25 }}>
-                          <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '10px' }}>
-                            {lake.fileTagPrefix}
-                          </Chip>
-                          {lake.requiredUserTag && (
-                            <Chip size="sm" variant="soft" color="primary" sx={{ fontSize: '10px' }}>
-                              {lake.requiredUserTag}
+                {dataLakes.map(lake => {
+                  // A lake can have more than one attention-worthy batch at once now that
+                  // taxonomy analysis is decoupled from ingest (e.g. a completed batch awaiting
+                  // taxonomy review alongside a new in-progress append upload) - prefer the one
+                  // with a non-'none' taxonomyStatus so a ready-to-review batch's chip doesn't
+                  // get hidden behind an unrelated ingest-only batch.
+                  const lakeBatches = activeBatches?.filter(b => b.dataLakeId === lake.id);
+                  const batch =
+                    lakeBatches?.find(b => b.taxonomyStatus && b.taxonomyStatus !== 'none') ?? lakeBatches?.[0];
+                  return (
+                    <Card
+                      key={lake.id}
+                      variant="outlined"
+                      data-testid={`datalake-card-${lake.id}`}
+                      sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: 'primary.300' } }}
+                      onClick={() =>
+                        setViewingLake({
+                          id: lake.id,
+                          name: lake.name,
+                          tagPrefix: lake.fileTagPrefix,
+                          canManage: !!lake.canManage,
+                        })
+                      }
+                    >
+                      <Stack direction="row" alignItems="center" gap={1.5}>
+                        <DataLakeIcon sx={{ fontSize: 20, color: 'primary.400' }} />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography level="title-sm" noWrap>
+                            {lake.name}
+                          </Typography>
+                          <Stack direction="row" gap={0.5} sx={{ mt: 0.25 }}>
+                            <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '10px' }}>
+                              {lake.fileTagPrefix}
                             </Chip>
-                          )}
-                        </Stack>
-                      </Box>
-                      {/* Add files / Settings / Archive are owner-or-admin only (the backend
+                            {lake.requiredUserTag && (
+                              <Chip size="sm" variant="soft" color="primary" sx={{ fontSize: '10px' }}>
+                                {lake.requiredUserTag}
+                              </Chip>
+                            )}
+                            {/* Background AI-tag suggestion progress - an independent
+                              clock from ingest, so this can appear well after the lake's
+                              files are already fully uploaded/searchable. */}
+                            {(batch?.taxonomyStatus === 'queued' || batch?.taxonomyStatus === 'analyzing') && (
+                              <Tooltip title="Usually ready in under a minute" size="sm">
+                                <Chip
+                                  size="sm"
+                                  variant="soft"
+                                  color="primary"
+                                  startDecorator={<AutoAwesomeIcon sx={{ fontSize: 12 }} />}
+                                  sx={{ fontSize: '10px' }}
+                                  data-testid={`datalake-taxonomy-progress-${lake.id}`}
+                                >
+                                  AI tagging&hellip;
+                                </Chip>
+                              </Tooltip>
+                            )}
+                            {batch?.taxonomyStatus === 'ready' && (
+                              <Chip
+                                size="sm"
+                                variant="solid"
+                                color="success"
+                                startDecorator={<AutoAwesomeIcon sx={{ fontSize: 12 }} />}
+                                sx={{ fontSize: '10px', cursor: 'pointer' }}
+                                data-testid={`datalake-taxonomy-review-${lake.id}`}
+                                onClick={e => {
+                                  stop(e);
+                                  setReviewingBatchId(batch.id);
+                                }}
+                              >
+                                Review AI tags
+                              </Chip>
+                            )}
+                            {batch?.taxonomyStatus === 'failed' && (
+                              <Chip
+                                size="sm"
+                                variant="soft"
+                                color="warning"
+                                startDecorator={<ErrorOutlineIcon sx={{ fontSize: 12 }} />}
+                                sx={{ fontSize: '10px', cursor: 'pointer' }}
+                                data-testid={`datalake-taxonomy-failed-${lake.id}`}
+                                onClick={e => {
+                                  stop(e);
+                                  setReviewingBatchId(batch.id);
+                                }}
+                              >
+                                AI tagging failed
+                              </Chip>
+                            )}
+                          </Stack>
+                        </Box>
+                        {/* Add files / Settings / Archive are owner-or-admin only (the backend
                       enforces the same rule). The list surfaces other users' read-only public
                       lakes, so render these only when the caller may manage this lake. */}
-                      {lake.canManage && (
-                        <>
-                          <Tooltip title="Add files" size="sm">
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="primary"
-                              data-testid={`datalake-addfiles-btn-${lake.id}`}
-                              onClick={e => {
-                                stop(e);
-                                openWizardForLake({
-                                  id: lake.id,
-                                  slug: lake.slug,
-                                  name: lake.name,
-                                  fileTagPrefix: lake.fileTagPrefix,
-                                  requiredUserTag: lake.requiredUserTag,
-                                  requiredEntitlement: lake.requiredEntitlement,
-                                });
-                              }}
-                            >
-                              <AddIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Settings" size="sm">
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="neutral"
-                              data-testid={`datalake-settings-btn-${lake.id}`}
-                              onClick={e => {
-                                stop(e);
-                                setEditingLakeId(lake.id);
-                              }}
-                            >
-                              <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Archive" size="sm">
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="warning"
-                              data-testid={`datalake-archive-btn-${lake.id}`}
-                              onClick={e => {
-                                stop(e);
-                                archiveLake.mutate(lake.id);
-                              }}
-                            >
-                              <ArchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                            </IconButton>
-                          </Tooltip>
-                        </>
-                      )}
-                    </Stack>
-                  </Card>
-                ))}
+                        {lake.canManage && (
+                          <>
+                            <Tooltip title="Add files" size="sm">
+                              <IconButton
+                                size="sm"
+                                variant="plain"
+                                color="primary"
+                                data-testid={`datalake-addfiles-btn-${lake.id}`}
+                                onClick={e => {
+                                  stop(e);
+                                  openWizardForLake({
+                                    id: lake.id,
+                                    slug: lake.slug,
+                                    name: lake.name,
+                                    fileTagPrefix: lake.fileTagPrefix,
+                                    requiredUserTag: lake.requiredUserTag,
+                                    requiredEntitlement: lake.requiredEntitlement,
+                                  });
+                                }}
+                              >
+                                <AddIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Settings" size="sm">
+                              <IconButton
+                                size="sm"
+                                variant="plain"
+                                color="neutral"
+                                data-testid={`datalake-settings-btn-${lake.id}`}
+                                onClick={e => {
+                                  stop(e);
+                                  setEditingLakeId(lake.id);
+                                }}
+                              >
+                                <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Archive" size="sm">
+                              <IconButton
+                                size="sm"
+                                variant="plain"
+                                color="warning"
+                                data-testid={`datalake-archive-btn-${lake.id}`}
+                                onClick={e => {
+                                  stop(e);
+                                  archiveLake.mutate(lake.id);
+                                }}
+                              >
+                                <ArchiveOutlinedIcon sx={{ fontSize: 16 }} />
+                              </IconButton>
+                            </Tooltip>
+                          </>
+                        )}
+                      </Stack>
+                    </Card>
+                  );
+                })}
               </Stack>
             )}
 
@@ -405,6 +480,15 @@ export default function DataLakeListPanel() {
           </DialogActions>
         </ModalDialog>
       </Modal>
+
+      {/* Review/apply the background AI tag suggestions for a batch */}
+      {reviewingBatch && (
+        <TaxonomyReviewPanel
+          batch={reviewingBatch}
+          prefix={dataLakes?.find(l => l.id === reviewingBatch.dataLakeId)?.fileTagPrefix ?? ''}
+          onClose={() => setReviewingBatchId(null)}
+        />
+      )}
     </>
   );
 }
@@ -419,6 +503,16 @@ interface EditableLake {
   organizationId: string;
   /** Public opt-in. With organizationId, derives the tri-state Visibility control. */
   isPublic: boolean;
+  /**
+   * Per-lake system prompt. '' both when unset AND when the caller may not read it (the server
+   * sends it only to a lake's editors), so the field renders off `canManage`, never off this.
+   */
+  systemPrompt: string;
+  /**
+   * Whether the caller may manage this lake - server-computed, see DataLakeConfig.canManage.
+   * Gates the editor-only System prompt field.
+   */
+  canManage: boolean;
 }
 
 /**
@@ -457,6 +551,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [description, setDescription] = useState('');
   const [requiredUserTag, setRequiredUserTag] = useState('');
   const [requiredEntitlement, setRequiredEntitlement] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState('');
 
   // Seed the form once per opened lake, keyed on id (NOT the object): `lake` is now derived
   // from the live list, so it changes identity on every refetch - keying on id keeps a
@@ -467,6 +562,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setDescription(lake.description);
       setRequiredUserTag(lake.requiredUserTag);
       setRequiredEntitlement(lake.requiredEntitlement);
+      setSystemPrompt(lake.systemPrompt);
     }
     // Intentional id-keying: seed once per lake, not on every live-object refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -498,6 +594,12 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // Sent even when blank - '' is the backend's "remove this gate" sentinel.
         requiredUserTag: requiredUserTag.trim(),
         requiredEntitlement: requiredEntitlement.trim(),
+        // Only when the field was actually shown. Defense in depth for a state that should be
+        // unreachable: the gear button is gated on canManage too, and updateDataLake rejects a
+        // non-manager's whole request with a 400 rather than applying part of it - so this branch
+        // guards a path no user can currently take. Blank from an EDITOR is a deliberate clear,
+        // and '' is what unsets it.
+        ...(lake.canManage ? { systemPrompt: systemPrompt.trim() } : {}),
       },
       { onSuccess: onClose }
     );
@@ -527,6 +629,29 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   data-testid="datalake-settings-description"
                 />
               </FormControl>
+              {/* Editor-only: the wording steers every answer drawn from this lake, but a user
+                  who can merely read the lake must never see it - so this renders off the
+                  server-computed manage flag, and the server withholds the text from everyone
+                  else regardless of what the client does with it. */}
+              {lake?.canManage && (
+                <FormControl>
+                  <FormLabel>System prompt</FormLabel>
+                  <Textarea
+                    minRows={3}
+                    maxRows={10}
+                    value={systemPrompt}
+                    onChange={e => setSystemPrompt(e.target.value)}
+                    placeholder="e.g. Answer only from this lake's documents, and always cite the source file."
+                    data-testid="datalake-systemprompt-input"
+                  />
+                  <FormHelperText data-testid="datalake-systemprompt-help">
+                    {`Extra instructions applied to your chats, and to your organization's chats, while this lake is accessible - not only when the lake is used. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+                      // Count what SAVE will persist (trimmed), not the raw field contents.
+                      systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
+                    }`}
+                  </FormHelperText>
+                </FormControl>
+              )}
               <FormControl>
                 <FormLabel>Visibility</FormLabel>
                 <RadioGroup

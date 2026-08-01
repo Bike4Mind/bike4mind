@@ -58,6 +58,29 @@ export const ttsRequestSchema = z.object({
   // that mispronounces short, isolated tokens (a bare "2", acronyms, names).
   // Best-effort: ignored by providers/models that don't support it.
   languageCode: z.string().optional(),
+  // When true, the result is a throwaway audition (e.g. the Settings voice
+  // preview) and is never saved to the File Browser, regardless of the user's
+  // saveGeneratedAudio preference.
+  preview: z.boolean().optional(),
 });
 
 export type TTSRequest = z.infer<typeof ttsRequestSchema>;
+
+export type TtsVoiceOption = {
+  value: string;
+  label: string;
+  description: string;
+};
+
+// Voices selectable for OpenAI TTS synthesis. Single source of truth reused by
+// the Settings voice audition and the in-app audio generator. These are the
+// realtime-API voices, a subset shared with the TTS API (both accept them).
+// ElevenLabs resolves its voice server-side from the user's stored voiceId, so
+// this list is OpenAI-only.
+export const AVAILABLE_TTS_VOICES: readonly TtsVoiceOption[] = [
+  { value: 'alloy', label: 'Alloy', description: 'Professional and balanced (Female)' },
+  { value: 'cedar', label: 'Cedar', description: 'Warm and grounded (Male)' },
+  { value: 'echo', label: 'Echo', description: 'Clear and articulate (Male)' },
+  { value: 'marin', label: 'Marin', description: 'Natural and expressive (Female)' },
+  { value: 'shimmer', label: 'Shimmer', description: 'Energetic and vibrant (Female)' },
+] as const;

@@ -1,0 +1,10 @@
+{
+  "data": [
+    { "type": "model", "id": "claude-opus-5", "display_name": "Claude Opus 5", "max_input_tokens": 200000, "max_tokens": 64000 },
+    { "type": "model", "display_name": "No Id" },
+    { "type": "model", "id": "", "display_name": "Blank Id" },
+    { "type": "model", "id": "claude-bad-limits", "max_input_tokens": null, "max_tokens": "lots", "capabilities": "yes" },
+    null
+  ],
+  "has_more": false
+}

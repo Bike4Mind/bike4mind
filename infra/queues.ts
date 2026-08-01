@@ -639,6 +639,36 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Data Lake Taxonomy Analysis Queue
+// Triggered once per batch (from finalizeBatchIfComplete) when the wizard opted into
+// background AI tag suggestion. A single bounded OpenAI call over already-uploaded
+// FabFiles - no buckets needed (metadata-only sampling in v1), but links websocketApi
+// so the handler can push `data_lake_batch_progress` taxonomyStatus updates live.
+const dataLakeTaxonomyQueueDLQ = new sst.aws.Queue('dataLakeTaxonomyQueueDLQ', {});
+const dataLakeTaxonomyQueue = new sst.aws.Queue('dataLakeTaxonomyQueue', {
+  visibilityTimeout: '6 minutes',
+  dlq: {
+    queue: dataLakeTaxonomyQueueDLQ.arn,
+    retry: 2, // LLM calls cost money; the stuck-job reconciler is the backstop for the rest.
+  },
+});
+const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/dataLakeTaxonomyAnalysis.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // What's New Highlights Queue
 // Generates weekly highlights summary from What's New modals and posts to Slack
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
@@ -907,7 +937,10 @@ const sreFixQueueSubscription = sreFixQueue.subscribe(
     handler: 'apps/client/server/queueHandlers/sreFix.dispatch',
     runtime: 'nodejs24.x',
     timeout: '2 minutes',
-    memory: '256 MB',
+    // 1024 MB, not 256: at 256 the handler died in INIT (module graph is the full
+    // @bike4mind/database model set + GitHubService + Slack) and never logged a line.
+    // Sized off sreJobQueue, which loads a comparable graph and peaks under 500 MB.
+    memory: '1024 MB',
     vpc: lambdaVpc,
     link: [...allSecrets],
     logging: {
@@ -1243,6 +1276,7 @@ export {
   webhookDeliveryQueue,
   questExportQueue,
   dataLakeCleanupQueue,
+  dataLakeTaxonomyQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1269,6 +1303,7 @@ export {
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
   dataLakeCleanupQueueDLQ,
+  dataLakeTaxonomyQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1297,6 +1332,7 @@ export {
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
   dataLakeCleanupQueueSubscription,
+  dataLakeTaxonomyQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,

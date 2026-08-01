@@ -22,6 +22,7 @@ import { apiKeyService, creditService, estimateSoundCredits } from '@bike4mind/s
 import { aiSoundService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@server/utils/errors';
+import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
 
 // The stored key type each vendor needs. Resolved per-user first, then falling
 // back to the admin-configured key (getEffectiveApiKey), so the feature works
@@ -49,7 +50,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
   );
 
   if (!apiKey) {
-    return res.status(401).json({ error: `No ${provider} API key configured` });
+    // 503, not 401: the caller IS authenticated - the provider key is a server-side
+    // capability gap. A 401 would tell an API-key caller to re-authenticate, which
+    // never fixes a missing ElevenLabs key. The message survives to the CLI via the
+    // arraybuffer error decode + mapApiError's server-message fallback.
+    return res.status(503).json({ error: `No ${provider} API key configured` });
   }
 
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
@@ -134,6 +139,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
         feature: 'sound_effects',
         provider,
         model: provider,
+        // Matches this call's ledger write (deductCreditsWithOrgSupport, source: 'api').
+        source: 'api',
         inputTokens: 0,
         outputTokens: 0,
         cachedInputTokens: 0,
@@ -202,6 +209,32 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
   }
 
   recordUsage('ok', creditsCharged, usdCost);
+
+  // Persist a browsable copy of the generated audio (on by default; opt out via
+  // the saveGeneratedAudio preference). Best-effort: a save failure (e.g. over
+  // quota) never blocks returning the audio the caller was already charged for.
+  if (userId && (req.user?.preferences?.saveGeneratedAudio ?? true)) {
+    const save = await persistGeneratedAudio({
+      userId,
+      audio,
+      contentType,
+      format,
+      source: 'sound-effect',
+      text,
+      logger: req.logger,
+    });
+    res.setHeader('X-B4M-Audio-Saved', String(save.saved));
+    if (save.saved) {
+      res.setHeader('X-B4M-Audio-Fab-File-Id', save.fabFileId);
+      res.setHeader('X-B4M-Audio-File-Name', save.fileName);
+      // Forward the signed URL minted at creation. Non-image audio gets a working URL
+      // immediately (createFabFile), whereas re-resolving it via GET /api/files/:id
+      // fails closed until the async moderation scan flips moderationStatus to 'clean'
+      // (isImageServeable gates every mime type) - so callers must use this URL, not
+      // re-fetch one. Absent only in the rare case createFabFile minted no URL.
+      if (save.fileUrl) res.setHeader('X-B4M-Audio-File-Url', save.fileUrl);
+    }
+  }
 
   res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Length', audio.length);

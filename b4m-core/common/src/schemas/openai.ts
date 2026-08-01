@@ -11,7 +11,14 @@ export const ChatCompletionCreateInputSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   top_p: z.number().min(0).max(1).optional(),
   n: z.number().min(1).max(10).optional(),
-  max_tokens: z.number(),
+  /**
+   * Optional so "the caller expressed no output budget" stays distinguishable from
+   * "the caller asked for exactly N". ChatCompletionProcess resolves the absent case
+   * against the resolved model, which is the only layer that knows whether it reasons
+   * inside the output budget (those need a larger default - see
+   * reasonsWithinOutputBudget). A number here is treated as deliberate.
+   */
+  max_tokens: z.number().optional(),
   presence_penalty: z.number().min(-2).max(2).optional(),
   frequency_penalty: z.number().min(-2).max(2).optional(),
   logit_bias: z.record(z.string(), z.number()).nullable().optional(),

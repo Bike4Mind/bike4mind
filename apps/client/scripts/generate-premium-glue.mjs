@@ -16,8 +16,21 @@
  *   SPA/nav   -> emit the file with an empty exported array
  *   API/handler stubs -> emit ZERO files (no file = no import of absent package)
  *
+ * A package that is hydrated but NOT resolvable from apps/client (no node_modules
+ * link) gets the ABSENT form for all bare-specifier glue, with a warning. Emitting
+ * real imports for an unlinked package fails typecheck/build repo-wide, which is
+ * worse than the overlay's features being un-wired until it is linked.
+ *
+ * Relative-import glue (infra + migrations) is exempt: it imports overlay source by
+ * relative path and needs no link. Note: infra glue itself is link-independent, but
+ * the handler stubs it references (from generateServerHandlerStubs) are bare-specifier
+ * and therefore omitted in the unlinked case. This is caught at deploy/bundle time
+ * rather than silently, and CI builds are always linked.
+ *
  * Run by: pnpm codegen (or automatically via predev/prebuild scripts)
- * Turbo cache key: packages/premium/*\/package.json
+ * The turbo codegen task is cache:false - output depends on node_modules link state,
+ * which no turbo input glob can capture. codegen itself always re-runs; dependents
+ * are unaffected because both link states typecheck clean.
  */
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, renameSync } from 'node:fs';
@@ -51,6 +64,19 @@ function discoverPremiumPackages() {
     }
   }
   return packages;
+}
+
+// Node resolves a bare specifier from apps/client by walking node_modules up the
+// tree, so the package must be linked at one of these roots. Being hydrated under
+// packages/premium/ is not enough: pnpm only links workspace packages somewhere a
+// package.json declares them.
+function isLinkedIntoClient(pkgName) {
+  const segments = pkgName.split('/');
+  // Check for package.json, not just the dir: an empty/broken dir would satisfy
+  // existsSync while still failing real module resolution.
+  return [CLIENT_ROOT, REPO_ROOT].some(root =>
+    existsSync(join(root, 'node_modules', ...segments, 'package.json'))
+  );
 }
 
 // --- Generate helpers ---
@@ -229,7 +255,18 @@ export const premiumNotebookSidenav: PremiumNotebookSidenav = dynamic(
 // `exports` map in its package.json - so we can inspect the source without executing it.
 // Returns null (never throws) for any shape this doesn't confidently recognize;
 // callers treat null as "no config to re-export", which is the pre-existing behavior.
-function resolveExportFromToSourceFile(pkg, exportFrom) {
+// Resolve a validated bare specifier to the path its package.json DECLARES for it,
+// without requiring that path to exist on disk yet.
+//
+// That distinction is load-bearing during the Docker image build. Dockerfile.chatcompletion
+// copies `**/package.json` and apps/client/scripts, runs `pnpm install` (whose postinstall
+// runs THIS script), and only then does `COPY . .` bring in the sources. So at codegen time
+// inside the image every overlay's package.json is present but none of its .ts source is.
+// A generator that only needs to WRITE a path must therefore not probe the filesystem;
+// one that needs to READ the source (extractConfigLiteral) legitimately must.
+//
+// Returns null (never throws) for any shape this doesn't confidently recognize.
+function resolveExportToDeclaredPath(pkg, exportFrom) {
   let subpath;
   if (exportFrom === pkg.name) subpath = '.';
   else if (exportFrom.startsWith(`${pkg.name}/`)) subpath = `.${exportFrom.slice(pkg.name.length)}`;
@@ -266,7 +303,14 @@ function resolveExportFromToSourceFile(pkg, exportFrom) {
   const resolved = resolve(join(PREMIUM_DIR, pkg.dir, target));
   if (resolved !== pkgRoot && !resolved.startsWith(pkgRoot + sep)) return null;
 
-  return existsSync(resolved) ? resolved : null;
+  return resolved;
+}
+
+// As above, but additionally requires the source file to be present, because every
+// caller of this one goes on to READ it. Unchanged behaviour for those callers.
+function resolveExportFromToSourceFile(pkg, exportFrom) {
+  const resolved = resolveExportToDeclaredPath(pkg, exportFrom);
+  return resolved !== null && existsSync(resolved) ? resolved : null;
 }
 
 // Next.js's Pages Router requires `export const config = {...}` to be a literal,
@@ -490,14 +534,24 @@ function generateMigrations(packages) {
   contributors.forEach(p => assertModuleSpecifier(p.contributions.migrationsExport, p.name, 'migrationsExport'));
 
   // Resolve each overlay's declared migrationsExport subpath (via its own exports map) to the
-  // real source file, then rewrite it as a relative import from this generated file's dir.
+  // path that package.json DECLARES, then rewrite it as a relative import from this generated
+  // file's dir.
+  //
+  // Declared path, NOT an on-disk one: this must not require the overlay source to exist yet.
+  // Dockerfile.chatcompletion copies `**/package.json` and apps/client/scripts, runs
+  // `pnpm install` - whose postinstall runs this script - and only then `COPY . .`. Probing the
+  // filesystem here made the image build die with "cannot resolve migrationsExport" the moment
+  // an overlay declared one, even though the very same import resolves fine at build time, once
+  // the sources are in place. The generated path is identical either way.
   const relSpecs = contributors.map(p => {
-    const sourceFile = resolveExportFromToSourceFile(p, p.contributions.migrationsExport);
+    const sourceFile = resolveExportToDeclaredPath(p, p.contributions.migrationsExport);
     if (!sourceFile) {
       throw new Error(
         `[codegen] cannot resolve migrationsExport ${JSON.stringify(p.contributions.migrationsExport)} ` +
-          `from package "${p.name}" to a source file (check its package.json "exports" map). ` +
-          `A bare specifier can't be used here - see generateMigrations().`
+          `from package "${p.name}" to a declared path - its package.json "exports" map has no ` +
+          `plain-string entry for that subpath. A bare specifier can't be used here - see ` +
+          `generateMigrations(). Note this checks only what package.json DECLARES; the source ` +
+          `file itself is deliberately not required to exist yet.`
       );
     }
     // Strip the .ts extension and normalise to a forward-slash relative specifier.
@@ -610,13 +664,39 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
 const packages = discoverPremiumPackages();
 console.log(`[codegen] found ${packages.length} premium package(s): ${packages.map(p => p.name).join(', ') || '(none)'}`);
 
+// Bare-specifier glue only for packages that will actually resolve. Unlinked
+// packages get the absent form so a hydrated-but-unlinked tree still typechecks,
+// instead of failing every build with cannot-find-module errors.
+const linkedPackages = [];
+for (const pkg of packages) {
+  if (isLinkedIntoClient(pkg.name)) { linkedPackages.push(pkg); continue; }
+  console.warn(
+    `[codegen] WARNING: packages/premium/${pkg.dir} is hydrated but "${pkg.name}" is not ` +
+      `resolvable from apps/client (no node_modules link). Emitting the ABSENT form for its ` +
+      `route/nav/API/tool glue so typecheck and builds stay green - its features will NOT be ` +
+      `wired. Link it (declare it in apps/client dependencies, or symlink packages/premium/` +
+      `${pkg.dir} to node_modules/${pkg.name}) and re-run: pnpm codegen`
+  );
+}
+
+// In CI, a hydrated-but-unlinked overlay means the pipeline would ship with features
+// silently un-wired (console.warn inside a turbo/Actions log is not a control).
+// Fail hard so the link breakage surfaces as a red pipeline, not a quiet regression.
+if (linkedPackages.length < packages.length && process.env.CI === 'true') {
+  console.error('[codegen] refusing to emit absent glue for a hydrated-but-unlinked overlay in CI');
+  process.exit(1);
+}
+
 ensureDir(GENERATED_DIR);
-generateSpaRoutes(packages);
-generateNavItems(packages);
-generateNotebookSidenav(packages);
-generateApiStubs(packages);
-generateServerHandlerStubs(packages);
-generateLlmTools(packages);
+// Bare-specifier glue: linked packages only (an unresolvable import fails every build).
+generateSpaRoutes(linkedPackages);
+generateNavItems(linkedPackages);
+generateNotebookSidenav(linkedPackages);
+generateApiStubs(linkedPackages);
+generateServerHandlerStubs(linkedPackages);
+generateLlmTools(linkedPackages);
+// Relative-import glue: needs no node_modules link, so it gets the full list.
+// Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
 generateInfraGlue(packages);
 

@@ -13,14 +13,17 @@ import {
   subscriberRepository,
   creditTransactionRepository,
   pendingOtcTokenRepository,
+  organizationRepository,
+  authSessionRepository,
 } from '@bike4mind/database';
-import { creditService, userService } from '@bike4mind/services';
+import { creditService, userService, organizationService, authSessionService } from '@bike4mind/services';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { Config } from '@server/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
@@ -170,7 +173,16 @@ const handler = baseApi({ auth: false })
       }
 
       // --- DIRECT LOGIN ---
-      const tokens = authTokenGenerator.createAccessToken(existingUser.id, existingUser.tokenVersion ?? 0);
+      const { accessToken, refreshToken } = await authSessionService.issueSession(
+        existingUser.id,
+        { createdVia: 'otc', tokenVersion: existingUser.tokenVersion ?? 0, device: buildSessionDevice(req) },
+        {
+          db: { authSessions: authSessionRepository },
+          signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
+          logger: req.logger,
+        }
+      );
+      const tokens = { accessToken, refreshToken };
       const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
 
       // Analytics + device history are best-effort for the same post-rotation reason as
@@ -331,8 +343,10 @@ const handler = baseApi({ auth: false })
     // Wrapped whole (resolve + grant) so a failure can't 500 a completed registration: the
     // account exists and the client already holds a token, the same post-rotation invariant as
     // the analytics call below. The stable transactionId makes an admin/maintenance retry safe.
+    let partnerOrganizationId: string | null = null;
     try {
       const partnerGrant = await partnerSignupGrantForEmail(normalizedEmail, true);
+      partnerOrganizationId = partnerGrant.matched ? partnerGrant.organizationId : null;
       const signupCredits = partnerGrant.matched
         ? partnerGrant.signupCredits
         : signupCreditsForKeys(entitlementsForEmail(normalizedEmail, true));
@@ -362,6 +376,35 @@ const handler = baseApi({ auth: false })
       );
     }
 
+    // Partner-rule org auto-add (mirrors /api/email/verify Phase 2c). registerViaOTC set
+    // emailVerified=true, so a DB rule may place this signup into an org. Idempotent, additive,
+    // and never removes anyone. Wrapped so a failure can't 500 a completed registration; the
+    // membership write is safe to retry. Reflect the join on the returned user so the client
+    // sees the org immediately.
+    if (partnerOrganizationId) {
+      try {
+        const result = await organizationService.applyPartnerRuleMembership(
+          { userId: newUser.id, organizationId: partnerOrganizationId },
+          { db: { users: userRepository, organizations: organizationRepository }, logger: req.logger }
+        );
+        if (result.added) {
+          newUser.organizationId = partnerOrganizationId;
+          req.logger.info(`Partner-rule org membership: added OTC user ${newUser.id} to org ${partnerOrganizationId}`);
+        } else if (result.reason === 'org-missing' || result.reason === 'at-capacity') {
+          req.logger.warn(
+            `Partner-rule org membership not applied for OTC user ${newUser.id} ` +
+              `(org ${partnerOrganizationId}): ${result.reason}`
+          );
+        }
+      } catch (membershipError) {
+        req.logger.error(
+          `OTC registration succeeded for user ${newUser.id} but partner-rule org auto-add failed ` +
+            `(org ${partnerOrganizationId}); membership is idempotent so a retry is safe`,
+          membershipError
+        );
+      }
+    }
+
     // Analytics only - the account already exists, so a counter-write failure must not 500 a
     // completed registration (post-rotation, that would strand the client on a success).
     await logEvent({
@@ -370,9 +413,19 @@ const handler = baseApi({ auth: false })
       metadata: { strategy: 'otc' },
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
 
+    const registrationSession = await authSessionService.issueSession(
+      newUser.id,
+      { createdVia: 'otc-registration', tokenVersion: newUser.tokenVersion ?? 0, device: buildSessionDevice(req) },
+      {
+        db: { authSessions: authSessionRepository },
+        signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
+        logger: req.logger,
+      }
+    );
     return res.status(200).json({
       user: redactUserSecretsForSelf(newUser),
-      ...authTokenGenerator.createAccessToken(newUser.id, newUser.tokenVersion ?? 0),
+      accessToken: registrationSession.accessToken,
+      refreshToken: registrationSession.refreshToken,
     });
   });
 

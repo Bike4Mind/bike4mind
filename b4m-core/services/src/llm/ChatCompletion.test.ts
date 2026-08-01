@@ -3,6 +3,8 @@ import {
   ChatCompletionProcess,
   addPairedTool,
   computeSettlementDelta,
+  clampFraction,
+  dropOldestHistoryTurn,
   isAbortError,
   isRequestTimeoutError,
   isStreamIdleTimeoutError,
@@ -22,9 +24,11 @@ import {
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
+  ImageModels,
   ModelBackend,
   usdToCredits as realUsdToCredits,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
+  type IMessage,
 } from '@bike4mind/common';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
@@ -326,6 +330,88 @@ describe('ChatCompletionProcess', () => {
           status: 'done',
           type: 'message',
         })
+      );
+    });
+
+    // An empty message array means the input budget was non-positive - e.g. a model configured with
+    // max output equal to its whole context window. The old guard was `if (!messages)`, which is
+    // false for `[]`, so the empty prompt reached the model and it answered confidently from nothing.
+    it('refuses to send an empty prompt when there is no input budget', async () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn(),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      // Fails loudly with an actionable message naming the cause, rather than sending an empty prompt.
+      await expect(service.process({ body, logger: mockLogger })).rejects.toThrow(/no input budget/);
+    });
+
+    // Image and video entries set max_tokens equal to contextWindow across every backend in the repo -
+    // both are the prompt-length limit, since these models return media rather than tokens. Reserving
+    // that as output left no input room, so the guard above rejected a request that fits fine.
+    it('does not reserve text output on an image model, whose max_tokens is not an output budget', async () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['done']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ImageModels.GPT_IMAGE_1,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ImageModels.GPT_IMAGE_1,
+          type: 'image',
+          name: 'GPT Image 1',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 10000,
+          contextWindow: 10000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'a duck on a bicycle' }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'a duck on a bicycle' });
+
+      const body = {
+        ...startQuestParams,
+        params: { model: ImageModels.GPT_IMAGE_1, temperature: 0.5, top_p: 1, max_tokens: 9000 },
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+
+      await expect(service.process({ body, logger: mockLogger })).resolves.not.toThrow();
+      // 10000 context - 1000 reserve, with no output subtracted.
+      expect(mockedBuildAndSortMessages).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        9000,
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.anything()
       );
     });
 
@@ -1907,5 +1993,70 @@ describe('computeSettlementDelta (zero-balance shortfall clamp)', () => {
 
   it('treats a negative balance snapshot as zero', () => {
     expect(computeSettlementDelta(100, 130, -50)).toEqual({ delta: 0, writtenOffCredits: 30 });
+  });
+});
+
+describe('clampFraction (verbatim window fraction admin setting)', () => {
+  it('passes through a valid numeric fraction', () => {
+    expect(clampFraction(0.3, 0.55)).toBe(0.3);
+    expect(clampFraction(1, 0.55)).toBe(1);
+  });
+
+  it('parses a numeric string (admin settings persist as strings)', () => {
+    expect(clampFraction('0.9', 0.55)).toBe(0.9);
+  });
+
+  it('falls back on out-of-range, zero, negative, or non-finite input', () => {
+    expect(clampFraction(0, 0.55)).toBe(0.55);
+    expect(clampFraction(-0.2, 0.55)).toBe(0.55);
+    expect(clampFraction(1.5, 0.55)).toBe(0.55);
+    expect(clampFraction('not-a-number', 0.55)).toBe(0.55);
+    expect(clampFraction(undefined, 0.55)).toBe(0.55);
+  });
+});
+
+describe('dropOldestHistoryTurn (overflow-recovery shed)', () => {
+  // A human turn starts at a user message with STRING content; tool results are
+  // user messages with ARRAY content and must never be treated as a boundary.
+  const user = (text: string): IMessage => ({ role: 'user', content: text });
+  const assistant = (text: string): IMessage => ({ role: 'assistant', content: text });
+  const toolResult = (): IMessage => ({
+    role: 'user',
+    content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }],
+  });
+
+  it('drops the oldest whole turn, leaving the remainder on a clean boundary', () => {
+    const history = [user('q1'), assistant('a1'), user('q2'), assistant('a2')];
+    expect(dropOldestHistoryTurn(history)).toEqual([user('q2'), assistant('a2')]);
+  });
+
+  it('never splits a tool_use/tool_result pair (array-content user msg is not a boundary)', () => {
+    const history = [user('q1'), assistant('a1'), toolResult(), user('q2'), assistant('a2')];
+    // The oldest turn is q1 + a1 + its tool_result; the next boundary is q2.
+    expect(dropOldestHistoryTurn(history)).toEqual([user('q2'), assistant('a2')]);
+  });
+
+  it('returns null when only one turn remains (nothing safe to shed)', () => {
+    expect(dropOldestHistoryTurn([user('q1'), assistant('a1'), toolResult()])).toBeNull();
+  });
+
+  it('returns null on empty history', () => {
+    expect(dropOldestHistoryTurn([])).toBeNull();
+  });
+
+  it('sheds turn-by-turn down to the most recent when called repeatedly', () => {
+    let history: IMessage[] | null = [
+      user('q1'),
+      assistant('a1'),
+      user('q2'),
+      assistant('a2'),
+      user('q3'),
+      assistant('a3'),
+    ];
+    history = dropOldestHistoryTurn(history);
+    expect(history).toEqual([user('q2'), assistant('a2'), user('q3'), assistant('a3')]);
+    history = dropOldestHistoryTurn(history!);
+    expect(history).toEqual([user('q3'), assistant('a3')]);
+    expect(dropOldestHistoryTurn(history!)).toBeNull();
   });
 });

@@ -100,6 +100,11 @@ const nextConfig = {
     // loaders so the bundler (Turbopack in Next 16) emits the worker chunk.
     // Retained through M1a.
     '@bike4mind/premium-optihashi',
+    // interactive-meetings: same reason as optihashi. Its /meetings route is a client
+    // component and it spawns a solver-race web worker via new Worker(new URL(...)),
+    // both of which must run through the Next.js loaders for the bundler to emit the
+    // worker chunk.
+    '@bike4mind/premium-interactive-meetings',
   ],
 
   serverExternalPackages: [

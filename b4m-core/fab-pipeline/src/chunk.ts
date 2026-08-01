@@ -2,6 +2,7 @@ import {
   BedrockEmbeddingModel,
   IFabFile,
   OllamaEmbeddingModel,
+  isAudioMimeType,
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
   SupportedFabFileMimeTypes,
@@ -143,6 +144,15 @@ export class SmartChunker {
 
     this.logger.updateMetadata({ mimeType });
     this.logger.log(`Chunking file with type: ${mimeType}`);
+
+    // Audio (generated TTS / sound effects) is intentionally not vectorizable -
+    // there is nothing to chunk. Short-circuit quietly so reprocess/on-demand
+    // paths don't log it as an "Unsupported file type" error. The normal ingest
+    // path already skips the chunk-queue enqueue for audio (objectCreated.ts).
+    if (isAudioMimeType(mimeType)) {
+      this.logger.log(`Skipping chunking for audio file type: ${mimeType}`);
+      return [];
+    }
 
     let chunks: Chunk[];
 

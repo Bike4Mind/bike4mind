@@ -54,7 +54,8 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
-    "generate:model-price-seed": "tsx src/seeds/regenerateModelPriceSeed.ts"
+    "generate:model-price-seed": "tsx src/seeds/regenerateModelPriceSeed.ts",
+    "generate:model-catalog-seed": "tsx src/seeds/regenerateModelCatalogSeed.ts"
   },
   "dependencies": {
     "@bike4mind/common": "workspace:*",
@@ -77,6 +78,7 @@
     "tsdown": "^0.22.3",
     "tsx": "^4.23.0",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "zod": "^4.4.3"
   }
 }

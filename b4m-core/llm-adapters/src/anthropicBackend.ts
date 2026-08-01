@@ -33,7 +33,8 @@ import { handleToolResultStreaming } from './toolStreamingHelper';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
-import { buildThinkingParams, type ThinkingConfig } from './thinkingParams';
+import { buildThinkingParams, THINKING_ANSWER_HEADROOM_TOKENS, type ThinkingConfig } from './thinkingParams';
+import { DispatchModel } from './dispatchModel';
 import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
 
 type ExtendedMessageCreateParams = MessageCreateParamsBase &
@@ -65,6 +66,14 @@ const REQUEST_TIMEOUT_MS = 60000; // 60s timeout for the initial API request bef
 const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models that need longer to begin streaming
 
 /**
+ * Largest max_tokens the SDK will accept without streaming. It derives a projected
+ * duration of 60min * max_tokens / 128000 and throws outright once that exceeds its
+ * 10-minute non-streaming ceiling, so the real limit is 128000 * 10 / 60 = 21333.
+ * Floored to a round number for headroom against that formula being retuned.
+ */
+const ANTHROPIC_NONSTREAMING_MAX_TOKENS = 21_000;
+
+/**
  * Accumulated multi-turn cache token total. Undefined when zero so turns
  * without cache activity keep the pre-cache callback shape.
  */
@@ -83,6 +92,12 @@ export class AnthropicBackend implements ICompletionBackend {
   // Anthropic can attribute abuse to an individual user and scope enforcement
   // to them rather than the whole shared platform key. See `toProviderEndUserId`.
   private readonly _endUserId?: string;
+  /** Catalog view of the model being completed; see DispatchModel. */
+  private readonly _dispatch = new DispatchModel();
+
+  setDispatchModel(info: ModelInfo): void {
+    this._dispatch.set(info);
+  }
 
   constructor(apiKey: string, logger?: Logger, endUserId?: string) {
     // Increase maxRetries from default (2) to 5 for better rate limit handling.
@@ -206,7 +221,8 @@ export class AnthropicBackend implements ICompletionBackend {
     return blocks.length > 0 ? blocks : undefined;
   }
 
-  async getModelInfo(): Promise<ModelInfo[]> {
+  /** Static model table; the sync twin exists so request shaping can read it. */
+  private getModelInfoList(): ModelInfo[] {
     return [
       {
         id: ChatModels.CLAUDE_3_OPUS,
@@ -616,6 +632,44 @@ export class AnthropicBackend implements ICompletionBackend {
     ];
   }
 
+  async getModelInfo(): Promise<ModelInfo[]> {
+    return this.getModelInfoList();
+  }
+
+  /**
+   * The record this request is shaped from: the adapter table first, then the
+   * catalog for a model the table never listed. Table-first is what keeps every
+   * currently-dispatched id on exactly today's behavior.
+   */
+  private modelRecordFor(model: string): ModelInfo | undefined {
+    return this.getModelInfoList().find(m => m.id === model) ?? this._dispatch.for(model);
+  }
+
+  /** True when only the catalog knows this model - the adapter table does not list it. */
+  private isCatalogOnly(model: string): boolean {
+    return !this.getModelInfoList().some(m => m.id === model) && this._dispatch.for(model) !== undefined;
+  }
+
+  /**
+   * The adaptive-thinking surface has no sampling knobs at all: Opus 4.7+,
+   * Sonnet 5 and Fable 5 reject temperature, top_p and top_k outright.
+   * NO_TEMPERATURE_MODELS lists the ids this build ships; for a model only the
+   * catalog knows, `thinkingStyle: 'adaptive'` is the same statement in record
+   * form (the two agree on every model in the table today).
+   */
+  private omitsSamplingParams(model: string): boolean {
+    if (NO_TEMPERATURE_MODELS.has(model)) return true;
+    return this.isCatalogOnly(model) && this._dispatch.for(model)?.thinkingStyle === 'adaptive';
+  }
+
+  /** claude-3-7 rejects top_k while still taking temperature and top_p. */
+  private omitsTopK(model: string): boolean {
+    if (model.includes('claude-3-7') || this.omitsSamplingParams(model)) return true;
+    // A model only the catalog knows carries no top_k gate (supportsTopP is the
+    // sampling group, Phase 5), so drop the optional knob rather than 400.
+    return this.isCatalogOnly(model);
+  }
+
   // Request a chat-based completion from the LLM.  The response is delivered
   // by calling the caller-provided `cb()`.  It may be called once if the reply
   // is delivered as a single response, or may come in chunks, if streaming, with
@@ -823,9 +877,9 @@ export class AnthropicBackend implements ICompletionBackend {
         content: m.content as unknown as MessageParam['content'],
       })),
       // Claude 4.7 Opus does not accept temperature at all
-      ...(NO_TEMPERATURE_MODELS.has(model) ? {} : { temperature: options.temperature }),
+      ...(this.omitsSamplingParams(model) ? {} : { temperature: options.temperature }),
       // top_p and temperature together is not supported for claude-4-5-sonnet and claude-opus-4-1, use temp only
-      ...(TEMPERATURE_ONLY_MODELS.includes(model as ChatModels) || NO_TEMPERATURE_MODELS.has(model)
+      ...(TEMPERATURE_ONLY_MODELS.includes(model as ChatModels) || this.omitsSamplingParams(model)
         ? {}
         : { top_p: options.topP }),
       stop_sequences: options.stop_sequences,
@@ -833,8 +887,7 @@ export class AnthropicBackend implements ICompletionBackend {
       // Cast: SDK's `system` accepts both string and array-of-blocks; TS narrows
       // to one or the other depending on input type, so widen here.
       system: system as ExtendedMessageCreateParams['system'],
-      // claude-3-7 and the no-sampling-param models (Opus 4.7+, Fable 5) reject top_k - return 400
-      ...(model.includes('claude-3-7') || NO_TEMPERATURE_MODELS.has(model) ? {} : { top_k: options.topK }),
+      ...(this.omitsTopK(model) ? {} : { top_k: options.topK }),
       ...(options.tools?.length ? { tools: this.formatTools(options.tools) } : {}),
       // Attribute the request to the end user (opaque, non-PII) so Anthropic can
       // scope abuse enforcement to them instead of the shared platform key.
@@ -890,9 +943,10 @@ export class AnthropicBackend implements ICompletionBackend {
       ? { 'anthropic-beta': 'prompt-caching-2024-07-31' }
       : undefined;
 
-    // Add thinking parameters for models that support it
-    const modelInfo = await this.getModelInfo();
-    const currentModelInfo = modelInfo.find(m => m.id === model);
+    // Add thinking parameters for models that support it. A catalog-only model
+    // brings its own record, so a new Claude gets the right thinking shape
+    // (buildThinkingParams reads thinkingStyle) instead of none at all.
+    const currentModelInfo = this.modelRecordFor(model);
 
     if (currentModelInfo?.can_think) {
       // questMaster / thinking are Anthropic-specific extras layered onto the generic
@@ -953,6 +1007,33 @@ export class AnthropicBackend implements ICompletionBackend {
         cacheHistory: cacheStrategy.cacheConversationHistory,
         cacheTTL: cacheStrategy.cacheTTL,
       });
+    }
+
+    // The SDK refuses a non-streaming request whose max_tokens implies it could run
+    // past its 10-minute ceiling, throwing before any HTTP call is made (see
+    // Anthropic.calculateNonstreamingTimeout: 60min * max_tokens / 128000 > 10min).
+    // Clamping is strictly better than the alternative, which is not a shorter answer
+    // but no answer at all. Reachable from any caller that pairs a large budget with
+    // stream:false - notably an adaptive model, where both the no-budget default and
+    // buildThinkingParams size max_tokens at ADAPTIVE_THINKING_MAX_TOKENS_FLOOR (64K).
+    if (!options.stream && apiParams.max_tokens > ANTHROPIC_NONSTREAMING_MAX_TOKENS) {
+      this.logger.warn(
+        `[AnthropicBackend] max_tokens ${apiParams.max_tokens} exceeds the non-streaming ceiling; clamping to ${ANTHROPIC_NONSTREAMING_MAX_TOKENS}. Stream this request to use the full budget.`,
+        { model }
+      );
+      apiParams.max_tokens = ANTHROPIC_NONSTREAMING_MAX_TOKENS;
+
+      // A legacy thinking budget is spent inside max_tokens, so lowering the ceiling has
+      // to bring the budget down with it. Keyed on the headroom rather than on max_tokens
+      // itself: a budget merely below the ceiling (20_999 against 21_000) satisfies the
+      // API yet leaves a single token for the visible answer, which is the same empty
+      // reply this whole clamp exists to avoid. The ceiling keeps the result well above
+      // Anthropic's 1024 minimum budget.
+      const maxThinkingBudget = apiParams.max_tokens - THINKING_ANSWER_HEADROOM_TOKENS;
+      const thinking = apiParams.thinking;
+      if (thinking?.type === 'enabled' && thinking.budget_tokens > maxThinkingBudget) {
+        thinking.budget_tokens = maxThinkingBudget;
+      }
     }
 
     // Setup the actual API call with API-specific options

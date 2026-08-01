@@ -12,7 +12,7 @@ import {
   toMementoVector,
 } from '@bike4mind/common';
 import { createKeyProvider, decryptFact, decryptVector, encryptVector } from './factCipher';
-import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
+import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
 
@@ -38,13 +38,13 @@ async function createMementoEmbeddingService(userId: string) {
   });
 
   const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
-  const config: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
-  if (provider === 'openai') {
-    if (!apiKeyTable?.openai) throw new Error('OpenAI API key required to re-embed memory, but none is available');
-    config.openaiApiKey = apiKeyTable.openai;
-  } else if (provider === 'voyageai') {
-    if (!apiKeyTable?.voyageai) throw new Error('VoyageAI API key required to re-embed memory, but none is available');
-    config.voyageApiKey = apiKeyTable.voyageai;
+  const { config, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
+  if (missing) {
+    throw new Error(
+      `${missing === 'openai' ? 'OpenAI' : missing === 'voyageai' ? 'VoyageAI' : 'Ollama'} ${
+        missing === 'ollama' ? 'base URL' : 'API key'
+      } required to re-embed memory, but none is available`
+    );
   }
 
   return new EmbeddingFactory(config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);

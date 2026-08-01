@@ -15,6 +15,8 @@ import {
   useWorkBenchFiles,
 } from '@client/app/contexts/SessionsContext';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
+import { useNotebookContextFiles } from '@client/app/hooks/useNotebookContextFiles';
+import type { AttachScopeMode } from '@bike4mind/common';
 import { useEmbeddingMismatchStatus } from '@client/app/hooks/useEmbeddingMismatchStatus';
 
 import HighlanderFocus from '@client/app/components/HighlanderFocus';
@@ -50,6 +52,7 @@ import {
   type ContextUsageBand,
 } from '@client/app/hooks/useSessionContextUsage';
 import { ContextUsageWarning } from '../ContextUsageWarning';
+import { ContextCompactionNote } from '../ContextCompactionNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
@@ -89,13 +92,17 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
   const workBenchFiles = useWorkBenchFiles(currentSessionId || undefined);
   const { setWorkBenchFiles } = useWorkBenchActions();
+  const { addToNotebookContext, removeFromNotebookContext } = useNotebookContextFiles();
   const { systemFiles } = useSystemPromptFiles();
   const hasEmbeddingMismatches = useEmbeddingMismatchStatus(currentSessionId);
 
   // Use custom hook to fetch message files (files attached to individual messages)
   const messageFiles = useMessageFiles(effectiveSessionId);
 
-  const totalFilesCount = workBenchFiles.length + systemFiles.length;
+  // Includes messageFiles: a notebook whose only files are message-scoped would
+  // otherwise render no Files button and no panel - which is exactly the case the
+  // promote action in that panel exists to rescue.
+  const totalFilesCount = workBenchFiles.length + systemFiles.length + messageFiles.length;
   const queryClient = useQueryClient();
   const theme = useTheme();
   const mode = theme.palette.mode;
@@ -183,10 +190,20 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const showContextWarning =
     !!contextUsage && contextUsage.band !== 'normal' && contextUsage.band !== contextWarningDismissedBand;
 
-  // Reset the dismissal when switching notebooks so a heavy session doesn't
+  // Compaction note: show when the latest turn folded older history into working
+  // memory, until dismissed. Re-surfaces when a later turn compacts again.
+  const compactedTurns = contextUsage?.compactedTurns ?? 0;
+  const [compactionNoteDismissed, setCompactionNoteDismissed] = useState(false);
+  const showCompactionNote = compactedTurns > 0 && !compactionNoteDismissed;
+  useEffect(() => {
+    setCompactionNoteDismissed(false);
+  }, [compactedTurns]);
+
+  // Reset both dismissals when switching notebooks so a heavy session doesn't
   // inherit a prior notebook's dismissed state.
   useEffect(() => {
     setContextWarningDismissedBand(null);
+    setCompactionNoteDismissed(false);
   }, [currentSessionId]);
 
   // Corner readout for the composer. Prefer the real assembled-context size from
@@ -222,7 +239,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const isPWA = useIsPWA();
 
   // Toggle state for file upload mode (false = message files, true = session files)
-  const [isSessionFileMode, setIsSessionFileMode] = useState(false);
+  const [attachScopeMode, setAttachScopeMode] = useState<AttachScopeMode>('auto');
 
   // Track message-specific files pending send - now stored in session layout store
   const pendingMessageFilesRaw = useSessionLayout(s => s.pendingMessageFiles);
@@ -242,6 +259,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // The floating chat window frames the input itself, so like docked it drops the
   // outer spacing and rounded card look; unlike docked it keeps a top separator.
   const isFloatingLayout = useSessionLayout(s => s.layout === 'floatingChat');
+  // The Data Lake chat is embedded edge-to-edge in the Explorer (#836), so it drops
+  // the outer bottom gutter like the docked/floating layouts do.
+  const isDataLakeSurface = currentSession?.surface === 'datalake';
 
   // Determine if the stop button should be shown
   const shouldShowStopButton = useMemo(() => {
@@ -378,6 +398,22 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           // (File Manager / message stream) self-heals by refetching a valid fileUrl.
         }
         recordModerationStatus(msg.fabFileId, 'clean', fileUrl);
+
+        // An image the user explicitly scoped to the notebook is held back at upload
+        // time and promoted only here, once the scan clears. A knowledgeIds entry
+        // survives into clones, exports and (when propagation is on) projects, so a
+        // blocked image must never acquire one. Read from the store rather than a
+        // closure: this effect is subscribed once and would capture a stale list.
+        const promoted = useSessionLayout
+          .getState()
+          .pendingMessageFiles.find(item => item.fabFile.id === msg.fabFileId);
+        if (promoted?.scope === 'notebook') {
+          void addToNotebookContext(promoted.uploadSessionId, promoted.fabFile, { propagateToProjects: false }).catch(
+            () => {
+              // Already rolled back and surfaced by the hook.
+            }
+          );
+        }
       } else {
         recordModerationStatus(msg.fabFileId, msg.moderationStatus);
       }
@@ -386,7 +422,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     return () => {
       unsubscribe();
     };
-  }, [subscribeToAction]);
+  }, [subscribeToAction, addToNotebookContext]);
 
   const { setOpen: setFileBrowserOpen } = useFileBrowser();
 
@@ -395,7 +431,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       ref={ref}
       className="session-bottom"
       sx={{
-        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? '0' : '1.25rem',
+        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout || isDataLakeSurface ? '0' : '1.25rem',
         paddingTop: isDockedLayout || isFloatingLayout ? 0 : '20px',
         position: 'relative',
       }}
@@ -460,6 +496,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                     onDismiss={() => setContextWarningDismissedBand(contextUsage.band)}
                   />
                 )}
+                <ContextCompactionNote
+                  show={showCompactionNote}
+                  turns={compactedTurns}
+                  onDismiss={() => setCompactionNoteDismissed(true)}
+                />
                 <Stack
                   className="session-bottom-input-row"
                   direction="row"
@@ -553,7 +594,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         sx={{
                           position: 'absolute',
                           mr: 20,
-                          zIndex: 2000,
+                          // Passive readout: must stay below composer popovers (attach
+                          // menu zIndex 1000 in AttachFileButton.tsx, slash/mention
+                          // suggestions), or it intercepts their clicks.
+                          zIndex: 1,
                           backgroundColor: 'background.surface',
                           borderRadius: '6px',
                           padding: '4px 8px',
@@ -600,14 +644,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
             files={files}
             setFiles={setFiles}
             maxFileSizeForFilePond={maxFileSizeForFilePond}
-            isSessionFileMode={isSessionFileMode}
+            attachScopeMode={attachScopeMode}
             currentSessionId={currentSessionId}
-            currentSession={currentSession}
-            setWorkBenchFiles={setWorkBenchFiles}
-            setCurrentSession={setCurrentSession}
-            lexicalInputRef={lexicalInputRef}
-            chatInputValue={chatInputValue}
-            setChatInputValue={setChatInputValue}
+            addToNotebookContext={addToNotebookContext}
           />
         )}
 
@@ -619,19 +658,21 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
               setPendingMessageFiles(prev => prev.filter(item => item.fabFile.id !== fileId));
               setFiles(prevFiles => prevFiles.filter(f => f.serverId !== fileId));
 
-              // If session mode, also remove from workBenchFiles
-              if (isSessionFileMode) {
-                setWorkBenchFiles(currentSessionId ?? '', prev => prev.filter(f => f.id !== fileId));
-                if (currentSession) {
-                  const updatedKnowledgeIds = (currentSession.knowledgeIds || []).filter(id => id !== fileId);
-                  setCurrentSession({ ...currentSession, knowledgeIds: updatedKnowledgeIds });
-                }
-              }
+              // Strip knowledgeIds BEFORE the hard delete. If the delete succeeded and
+              // this failed, knowledgeIds would keep a dead id that every later hydration
+              // tries and fails to resolve. Keyed off the item's own frozen scope rather
+              // than the current control value, which the user may have changed since.
+              const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
+              const stripped =
+                removed?.scope === 'notebook'
+                  ? removeFromNotebookContext(currentSessionId, fileId).catch(() => {})
+                  : Promise.resolve();
 
-              // Delete FabFile from server
-              deleteFileUtility(fileId).catch(err => {
-                console.error('Failed to delete file:', err);
-              });
+              void stripped.then(() =>
+                deleteFileUtility(fileId).catch(err => {
+                  console.error('Failed to delete file:', err);
+                })
+              );
             }}
             onClick={file => {
               // First ensure the KnowledgeViewer is open by setting layout to vertical
@@ -667,8 +708,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           toggleFileUpload={toggleFileUpload}
           setFileBrowserOpen={setFileBrowserOpen}
           rollRandomDice={rollRandomDice}
-          isSessionFileMode={isSessionFileMode}
-          setIsSessionFileMode={setIsSessionFileMode}
+          attachScopeMode={attachScopeMode}
+          setAttachScopeMode={setAttachScopeMode}
           totalFilesCount={totalFilesCount}
           hasEmbeddingMismatches={hasEmbeddingMismatches}
           model={model}

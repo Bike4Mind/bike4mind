@@ -64,12 +64,15 @@ export const updateUserSchema = z.object({
       toolsCatalogCollapsed: z.boolean().optional(),
       docxTemplateFileId: z.string().nullable().optional(),
       contextTelemetryLevel: z.enum(['none', 'basic', 'enhanced']).optional(),
-      contextTelemetryConsentedAt: z.date().optional(),
+      // coerce: the settings UI echoes this back as an ISO string from GET /users/{id},
+      // so a strict z.date() 422s on every write after the first (which mints a real Date).
+      contextTelemetryConsentedAt: z.coerce.date().optional(),
       // Layer-2 Agent-mode preference. The Mongoose schema accepts it now
       // (UserModel.ts) but unknown keys never reach repo.update without being
       // listed here.
       agentModeDefault: z.enum(['off', 'auto', 'on']).optional(),
       showFunTools: z.boolean().optional(),
+      saveGeneratedAudio: z.boolean().optional(),
     })
     .nullable()
     .optional(),

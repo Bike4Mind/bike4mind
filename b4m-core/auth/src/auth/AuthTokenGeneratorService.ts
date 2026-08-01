@@ -37,14 +37,13 @@ export class AuthTokenGeneratorService {
     }
   ) {}
 
-  createAccessToken(
-    id: string,
-    tokenVersion: number,
-    additionalPayload?: Record<string, unknown>
-  ): {
-    accessToken: string;
-    refreshToken: string;
-  } {
+  /**
+   * Mint a standalone access token (JWT). `additionalPayload` carries optional claims such as
+   * `sid` (the AuthSession id, see the session store) and `impersonatedBy`. This is the access
+   * half of a session: the session service pairs it with an opaque, server-stored refresh token
+   * instead of the JWT refresh token that `createAccessToken` mints.
+   */
+  signAccessToken(id: string, tokenVersion: number, additionalPayload?: Record<string, unknown>): string {
     const payload = {
       id,
       tokenVersion,
@@ -55,21 +54,40 @@ export class AuthTokenGeneratorService {
       // last so access and refresh tokens are never interchangeable.
       typ: 'access' as const,
     };
-    const accessToken = jwt.sign(payload, this.options.accessTokenSecret, {
+    return jwt.sign(payload, this.options.accessTokenSecret, {
       algorithm: 'HS256',
       expiresIn: this.options.accessTokenExpiresIn,
     } as jwt.SignOptions);
+  }
 
-    const refreshToken = this.createRefreshToken(id, tokenVersion);
+  createAccessToken(
+    id: string,
+    tokenVersion: number,
+    additionalPayload?: Record<string, unknown>
+  ): {
+    accessToken: string;
+    refreshToken: string;
+  } {
+    const accessToken = this.signAccessToken(id, tokenVersion, additionalPayload);
+
+    // Carry the same additionalPayload (e.g. impersonatedBy) into the refresh token too, so a
+    // token refresh mid-impersonation re-mints an access token that still carries the marker -
+    // otherwise the impersonation guard in logout.ts silently stops applying after one refresh.
+    const refreshToken = this.createRefreshToken(id, tokenVersion, additionalPayload);
 
     return { accessToken, refreshToken };
   }
 
-  createRefreshToken(id: string, tokenVersion: number): string {
-    return jwt.sign({ id, tokenVersion, typ: 'refresh' }, this.options.refreshTokenSecret, {
-      algorithm: 'HS256',
-      expiresIn: this.options.refreshTokenExpiresIn,
-    } as jwt.SignOptions);
+  createRefreshToken(id: string, tokenVersion: number, additionalPayload?: Record<string, unknown>): string {
+    // typ set after the spread (authoritative), same ordering rule as createAccessToken's payload.
+    return jwt.sign(
+      { id, tokenVersion, ...additionalPayload, typ: 'refresh' as const },
+      this.options.refreshTokenSecret,
+      {
+        algorithm: 'HS256',
+        expiresIn: this.options.refreshTokenExpiresIn,
+      } as jwt.SignOptions
+    );
   }
 
   verifyToken(token: string, previousSecret?: string): JwtPayload {
@@ -87,18 +105,21 @@ export class AuthTokenGeneratorService {
     }
   }
 
-  verifyRefreshToken(token: string, previousSecret?: string): { userId: string; tokenVersion?: number } | null {
+  verifyRefreshToken(
+    token: string,
+    previousSecret?: string
+  ): { userId: string; tokenVersion?: number; impersonatedBy?: string } | null {
     // Pin HS256 (matches verifyToken) and reject any token carrying the mfaPending marker.
     // The mfaPending access token (issued after the first factor, before MFA) is signed with
     // the SAME secret as refresh tokens, so without this guard it could be POSTed to the
     // refresh endpoints and exchanged for a full session - bypassing MFA entirely.
-    const decode = (secret: string): { userId: string; tokenVersion?: number } | null => {
+    const decode = (secret: string): { userId: string; tokenVersion?: number; impersonatedBy?: string } | null => {
       const payload = jwt.verify(token, secret, { algorithms: ['HS256'] }) as JwtPayload;
       if (payload.mfaPending) return null;
       // Reject a token minted for a different path (e.g. an access token replayed here).
       // Missing typ = legacy pre-claim token, accepted (self-expiring grace). See helper.
       if (!isTokenTypeAcceptable(payload.typ, 'refresh')) return null;
-      return { userId: payload.id, tokenVersion: payload.tokenVersion };
+      return { userId: payload.id, tokenVersion: payload.tokenVersion, impersonatedBy: payload.impersonatedBy };
     };
     try {
       return decode(this.options.refreshTokenSecret);

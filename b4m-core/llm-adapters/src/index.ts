@@ -1,32 +1,38 @@
 import {
   ChatModels,
+  IModelCatalogRow,
   IModelPrice,
   ModelBackend,
   ModelInfo,
+  SupersededModelInfo,
   applyModelPriceCatalog,
   isModelDeprecated,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { backendForAdapterFamily } from './adapterFamilyDispatch';
 import { AnthropicBackend } from './anthropicBackend';
 import { AWSBackend } from './awsBackend';
 import { ICompletionBackend } from './backend';
+import { isBackendUsable, resolveListingKey } from './backendGate';
+import type { ApiKeyTable, BackendGateContext } from './backendGate';
+import { catalogLifecycles } from './deprecationHorizon';
 import { toProviderEndUserId } from './endUserId';
+import { mergeCatalog } from './mergeCatalog';
+import { buildSupersededIndex, catalogSuccessors, updateReplacedByOverlay } from './resolveDeprecatedModel';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
 import LlamaBedrockBackend from './bedrockBackend/llama';
+import MoonshotBedrockBackend from './bedrockBackend/moonshot';
 import TitanBedrockBackend from './bedrockBackend/titan';
 import { UndifferentiatedBedrockBackend } from './bedrockBackend/undifferentiated';
 import { BFLBackend } from './bflBackend';
 import { GeminiBackend } from './geminiBackend';
+import { KimiBackend } from './kimiBackend';
 import { LocalImageBackend } from './localImageBackend';
 import { OllamaBackend } from './ollamaBackend';
 import { OpenAIBackend } from './openaiBackend';
 import { XAIBackend } from './xaiBackend';
-
-export type ApiKeyTable = {
-  [key in ModelBackend]?: string | null;
-};
 
 export function getLlmByModel(
   apiKeyTable: ApiKeyTable,
@@ -54,6 +60,10 @@ export function getLlmByModel(
     return null;
   }
 
+  // No id resolution here: callers complete() with the id they passed, so a
+  // record swapped in at this point would drop the catalog dispatch profile for
+  // the id actually sent. Resolution belongs at the call sites, which already do
+  // it through resolveDeprecatedModelId (now catalog-backed).
   if (isModelDeprecated(modelInfo)) {
     Logger.globalInstance.warn(
       `[model-sunset] getLlmByModel invoked with deprecated model: ${modelInfo.id} (deprecationDate: ${modelInfo.deprecationDate})`
@@ -61,6 +71,22 @@ export function getLlmByModel(
   }
 
   let backend: ICompletionBackend | null = null;
+
+  // A record the catalog resolved routes on its family; everything else falls
+  // through to the id switch below, which is why no currently-dispatched id
+  // changes behavior. The family path is the only one that can fail loudly:
+  // an unknown family throws instead of returning the null that would be
+  // indistinguishable from a missing credential (sec 9 item 3).
+  if (modelInfo.adapterFamily) {
+    backend = backendForAdapterFamily(modelInfo.adapterFamily, {
+      apiKeyTable,
+      modelId: String(modelInfo.id),
+      logger,
+      providerEndUserId,
+    });
+    backend?.setDispatchModel?.(modelInfo);
+    return backend;
+  }
 
   switch (modelInfo.backend) {
     case 'openai':
@@ -85,7 +111,8 @@ export function getLlmByModel(
         case ChatModels.CLAUDE_4_6_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_7_OPUS_BEDROCK:
         case ChatModels.CLAUDE_4_8_OPUS_BEDROCK:
-          return new AnthropicBedrockBackend();
+          backend = new AnthropicBedrockBackend();
+          break;
         case ChatModels.LLAMA3_INSTRUCT_8B_V1:
         case ChatModels.LLAMA3_INSTRUCT_70B_V1:
         case ChatModels.LLAMA4_MAVERICK_17B_INSTRUCT_BEDROCK:
@@ -103,6 +130,10 @@ export function getLlmByModel(
         case ChatModels.DEEPSEEK_R1_BEDROCK:
         case ChatModels.DEEPSEEK_V3_1:
           backend = new DeepSeekBedrockBackend();
+          break;
+        case ChatModels.KIMI_K2_5_BEDROCK:
+        case ChatModels.KIMI_K2_THINKING_BEDROCK:
+          backend = new MoonshotBedrockBackend();
           break;
         default:
           backend = null;
@@ -128,12 +159,21 @@ export function getLlmByModel(
       if (apiKeyTable.xai === 'expired') throw new Error('xAI API key is expired');
       backend = apiKeyTable.xai ? new XAIBackend(apiKeyTable.xai) : null;
       break;
+    case 'kimi':
+      if (apiKeyTable.kimi === 'expired') throw new Error('Moonshot API key is expired');
+      backend = apiKeyTable.kimi ? new KimiBackend(apiKeyTable.kimi, logger) : null;
+      break;
     case 'aws':
       backend = new AWSBackend();
       break;
     default:
       backend = null;
   }
+
+  // The seeded tier gets the record too: its thinking style and slow-model flag
+  // are catalog-owned once a row claims those groups, and a builder that finds
+  // the id in its own table still prefers the table (no behavior change).
+  backend?.setDispatchModel?.(modelInfo);
 
   return backend;
 }
@@ -148,7 +188,15 @@ const MODEL_CACHE_TTL_MS = 5 * 60_000;
 // briefly: a transient DB blip should cost seconds of superseded prices, not
 // a full TTL window.
 const MODEL_CACHE_RETRY_TTL_MS = 30_000;
-let _modelCache: { key: string; models: ModelInfo[]; expiresAt: number } | null = null;
+// preFilterModels keeps the merged list from before the deprecation filter. It is
+// never returned to a caller; getSupersededModels reads it to put a display name
+// on a pin the filter has already hidden.
+let _modelCache: {
+  key: string;
+  models: ModelInfo[];
+  preFilterModels: ModelInfo[];
+  expiresAt: number;
+} | null = null;
 
 /**
  * Optional versioned-price-catalog hook. This package cannot depend on the
@@ -166,41 +214,154 @@ export function setModelPriceRowsProvider(provider: ModelPriceRowsProvider | nul
   _modelCache = null;
 }
 
-function getModelCacheKey(apiKeys: ApiKeyTable | null): string {
-  if (!apiKeys) return 'null';
-  return Object.keys(apiKeys)
-    .sort()
-    .map(k => `${k}:${apiKeys[k as keyof ApiKeyTable] ? '1' : '0'}`)
-    .join(',');
+/**
+ * Optional model-catalog hook, the availability/capability twin of the price
+ * provider above: this package cannot depend on the database, so the app layer
+ * injects the rows-in-force reader. Unset provider or a failing fetch = the
+ * adapter tables alone, which is exactly today's behavior.
+ */
+export type ModelCatalogProvider = () => Promise<IModelCatalogRow[]>;
+let _catalogProvider: ModelCatalogProvider | null = null;
+
+export function setModelCatalogProvider(provider: ModelCatalogProvider | null): void {
+  _catalogProvider = provider;
+  // Both providers null the same cache. That is idempotent and intentional:
+  // whichever is wired second simply rebuilds again on the next call.
+  _modelCache = null;
 }
+
+/**
+ * Backends whose credential is a base URL. Presence is not identity for these:
+ * two self-host callers pointing at different Ollama hosts serve different model
+ * lists, so the key hashes the value instead of collapsing it to a bit.
+ */
+const URL_VALUED_BACKENDS: readonly string[] = [ModelBackend.Ollama, ModelBackend.LocalImage];
+
+/** FNV-1a, so a base URL that embeds basic-auth credentials never lands in the key verbatim. */
+function hashKeyValue(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/**
+ * Cache identity for one assembled model list. `includePrivate` is deliberately
+ * absent: the cache holds the private-inclusive list and the filter is applied on
+ * read, so the picker route and the private-model consumers share one entry
+ * instead of evicting each other's rebuild.
+ */
+function getModelCacheKey(
+  apiKeys: ApiKeyTable | null,
+  gate: { isSelfHost: boolean; perBackendTimeoutMs?: number }
+): string {
+  // isSelfHost decides which backends get constructed and perBackendTimeoutMs
+  // decides what a slow one contributes, so both are part of the identity.
+  const suffix = `|selfHost:${gate.isSelfHost ? '1' : '0'}|timeout:${gate.perBackendTimeoutMs ?? 0}`;
+  if (!apiKeys) return `null${suffix}`;
+  const keys = Object.keys(apiKeys)
+    .sort()
+    .map(k => {
+      const value = apiKeys[k as keyof ApiKeyTable];
+      if (value && URL_VALUED_BACKENDS.includes(k)) return `${k}:#${hashKeyValue(value)}`;
+      return `${k}:${value ? '1' : '0'}`;
+    })
+    .join(',');
+  return `${keys}${suffix}`;
+}
+
+export interface GetAvailableModelsOptions {
+  /**
+   * Deadline for one backend's listing call, in ms. A backend that misses it
+   * contributes nothing instead of holding up the whole fan-out. Omitted means no
+   * deadline, which is what every caller but the picker route wants.
+   */
+  perBackendTimeoutMs?: number;
+  /**
+   * Emit models flagged `private`. Defaults to true because the settlement and
+   * agent consumers resolve pinned private models by id and must keep seeing
+   * them; only /api/models, which feeds the picker, passes false.
+   */
+  includePrivate?: boolean;
+  /** Deployment self-host flag; defaults to B4M_SELF_HOST. See BackendGateContext. */
+  isSelfHost?: boolean;
+}
+
+/**
+ * Deadline for the catalog and price reads. Deliberately NOT tied to
+ * `perBackendTimeoutMs`: that option is opt-in and only the picker route passes
+ * it, while a stalled DB read hurts the callers that omit it (chat turns) most.
+ * Mongo's own socketTimeoutMS bounds a stall at ~45s, far past any caller's
+ * budget for a model list, so these reads carry their own deadline.
+ */
+const CATALOG_READ_TIMEOUT_MS = 5_000;
+
+/**
+ * Bound one backend's listing call. Rejects rather than resolving empty so the
+ * fan-out's existing catch performs the degradation and names the slow backend.
+ */
+function withListingTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+/** The caller's view of a cached list; the cache itself always holds every model. */
+const applyPrivateVisibility = (models: ModelInfo[], includePrivate: boolean): ModelInfo[] =>
+  includePrivate ? models : models.filter(m => !m.private);
 
 // Given Settings data, return a list of models that are available.  In the
 // future, we might consider using this to filter based on capability.
 // Only meant to be called from the server.
-export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<ModelInfo[]> => {
+export const getAvailableModels = async (
+  apiKeys: ApiKeyTable | null,
+  options: GetAvailableModelsOptions = {}
+): Promise<ModelInfo[]> => {
+  const { perBackendTimeoutMs } = options;
+  const includePrivate = options.includePrivate ?? true;
+  const isSelfHost = options.isSelfHost ?? process.env.B4M_SELF_HOST === 'true';
+
   // Check module-level cache first
-  const cacheKey = getModelCacheKey(apiKeys);
+  const cacheKey = getModelCacheKey(apiKeys, { isSelfHost, perBackendTimeoutMs });
   if (_modelCache && _modelCache.key === cacheKey && Date.now() < _modelCache.expiresAt) {
-    return _modelCache.models;
+    return applyPrivateVisibility(_modelCache.models, includePrivate);
   }
 
-  // Local self-hosted image backend: callers key the table by ModelBackend, but
-  // most don't map it, so fall back to the env gate the tool itself reads. The
-  // env fallback is honored ONLY under B4M_SELF_HOST (mirroring the envKey()
-  // convention in getEffective) so a hosted deploy that happens to set
-  // IMAGE_GEN_BASE_URL can never silently enumerate free local image models.
-  const selfHostImageGenUrl = process.env.B4M_SELF_HOST === 'true' ? process.env.IMAGE_GEN_BASE_URL : undefined;
-  const localImageBaseUrl = apiKeys?.[ModelBackend.LocalImage] || selfHostImageGenUrl;
+  // Every listing credential comes from resolveListingKey, the same predicate
+  // the catalog merge gates catalog-only records with, so the two tiers cannot
+  // disagree about which backends this caller can reach. The local-image env
+  // fallback and BFL's demo key live in that predicate for the same reason.
+  const gateCtx: BackendGateContext = { apiKeys, isSelfHost };
+  const openaiKey = resolveListingKey(ModelBackend.OpenAI, gateCtx);
+  const anthropicKey = resolveListingKey(ModelBackend.Anthropic, gateCtx);
+  const geminiKey = resolveListingKey(ModelBackend.Gemini, gateCtx);
+  const ollamaKey = resolveListingKey(ModelBackend.Ollama, gateCtx);
+  const bflKey = resolveListingKey(ModelBackend.BFL, gateCtx);
+  const xaiKey = resolveListingKey(ModelBackend.XAI, gateCtx);
+  const kimiKey = resolveListingKey(ModelBackend.Kimi, gateCtx);
+  const localImageBaseUrl = resolveListingKey(ModelBackend.LocalImage, gateCtx);
 
   const backends = {
-    [ModelBackend.OpenAI]: apiKeys?.openai ? new OpenAIBackend(apiKeys.openai) : null,
-    [ModelBackend.Anthropic]: apiKeys?.anthropic ? new AnthropicBackend(apiKeys.anthropic) : null,
-    [ModelBackend.Bedrock]: /* TODO: feature flag */ new UndifferentiatedBedrockBackend(),
-    [ModelBackend.Gemini]: apiKeys?.gemini ? new GeminiBackend(apiKeys.gemini) : null,
-    [ModelBackend.Ollama]: apiKeys?.ollama ? new OllamaBackend(apiKeys.ollama) : null,
-    [ModelBackend.BFL]: apiKeys?.bfl ? new BFLBackend(apiKeys.bfl) : new BFLBackend('demo-key'),
-    [ModelBackend.XAI]: apiKeys?.xai ? new XAIBackend(apiKeys.xai) : null,
-    [ModelBackend.AWS]: new AWSBackend(),
+    [ModelBackend.OpenAI]: openaiKey ? new OpenAIBackend(openaiKey) : null,
+    [ModelBackend.Anthropic]: anthropicKey ? new AnthropicBackend(anthropicKey) : null,
+    // The keyless AWS-credentialed pair goes through isBackendUsable so the
+    // self-host cutoff is stated once, in the same predicate the catalog tier
+    // reads, instead of once here and once in /api/models.
+    [ModelBackend.Bedrock]: isBackendUsable(ModelBackend.Bedrock, gateCtx)
+      ? new UndifferentiatedBedrockBackend()
+      : null,
+    [ModelBackend.Gemini]: geminiKey ? new GeminiBackend(geminiKey) : null,
+    [ModelBackend.Ollama]: ollamaKey ? new OllamaBackend(ollamaKey) : null,
+    [ModelBackend.BFL]: bflKey ? new BFLBackend(bflKey) : null,
+    [ModelBackend.XAI]: xaiKey ? new XAIBackend(xaiKey) : null,
+    [ModelBackend.Kimi]: kimiKey ? new KimiBackend(kimiKey) : null,
+    [ModelBackend.AWS]: isBackendUsable(ModelBackend.AWS, gateCtx) ? new AWSBackend() : null,
     [ModelBackend.LocalImage]: localImageBaseUrl
       ? new LocalImageBackend(localImageBaseUrl, Logger.globalInstance)
       : null,
@@ -210,7 +371,10 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
     if (!backend) return { backendName, models: [] };
 
     try {
-      const models = await backend.getModelInfo();
+      const listing = backend.getModelInfo();
+      const models = await (perBackendTimeoutMs
+        ? withListingTimeout(listing, perBackendTimeoutMs, backendName)
+        : listing);
       return { backendName, models };
     } catch (error) {
       Logger.globalInstance.error(`[getAvailableModels] Error fetching models from ${backendName}:`, error);
@@ -232,39 +396,83 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
     })
     .flat();
 
-  // Filter out models that have reached their deprecation date (inclusive)
-  const today = new Date(new Date().toISOString().slice(0, 10));
-  const filtered = backendModels.filter(m => {
-    if (!m.deprecationDate) return true;
-    const cutoff = new Date(m.deprecationDate + 'T00:00:00Z');
-    return today.getTime() < cutoff.getTime();
-  });
+  let catalogFetchFailed = false;
+
+  // Overlay the model catalog when the app wired a provider. An empty or absent
+  // catalog returns the assembled list unchanged - that is the no-behavior-change
+  // property this overlay is built on.
+  let merged = backendModels;
+  if (_catalogProvider) {
+    try {
+      const rows = await withListingTimeout(_catalogProvider(), CATALOG_READ_TIMEOUT_MS, 'model catalog read');
+      merged = mergeCatalog(backendModels, rows, gateCtx);
+      // Catalog successors take precedence over the static sunset map (sec
+      // 5.10). Refreshed here, so before the first catalog read - cold start,
+      // no provider wired - resolution falls back to the static map alone.
+      // Skipped on an empty read, mirroring mergeCatalog's early return: no rows
+      // is no information, and wiping the overlay would strand every
+      // catalog-sourced successor until the next non-empty read.
+      if (rows.length > 0) updateReplacedByOverlay(catalogSuccessors(catalogLifecycles(rows)));
+      Logger.globalInstance.info(
+        `[getAvailableModels] model catalog applied: ${rows.length} rows over ${backendModels.length} assembled models -> ${merged.length}`
+      );
+    } catch (error) {
+      catalogFetchFailed = true;
+      // The replacedBy overlay is deliberately left as it was: yesterday's
+      // successors beat none while the catalog is unreachable.
+      Logger.globalInstance.warn('[getAvailableModels] model catalog unavailable; using adapter tables', error);
+    }
+  }
 
   // Overlay versioned catalog prices when the app wired a provider.
-  let priced = filtered;
-  let catalogFetchFailed = false;
+  let priced = merged;
   if (_priceRowsProvider) {
     try {
-      const rows = await _priceRowsProvider();
-      priced = applyModelPriceCatalog(filtered, rows);
-      const overlaid = priced.filter((m, i) => m !== filtered[i]).length;
-      Logger.globalInstance.info(`[getAvailableModels] price catalog applied to ${overlaid}/${filtered.length} models`);
+      const rows = await withListingTimeout(_priceRowsProvider(), CATALOG_READ_TIMEOUT_MS, 'price catalog read');
+      priced = applyModelPriceCatalog(merged, rows);
+      const overlaid = priced.filter((m, i) => m !== merged[i]).length;
+      Logger.globalInstance.info(`[getAvailableModels] price catalog applied to ${overlaid}/${merged.length} models`);
     } catch (error) {
       catalogFetchFailed = true;
       Logger.globalInstance.warn('[getAvailableModels] price catalog unavailable; using adapter literals', error);
     }
   }
 
-  // Store in module-level cache (short-lived when the catalog fetch failed).
-  const ttl = catalogFetchFailed ? MODEL_CACHE_RETRY_TTL_MS : MODEL_CACHE_TTL_MS;
-  _modelCache = { key: cacheKey, models: priced, expiresAt: Date.now() + ttl };
+  // Filter out models that have reached their deprecation date (inclusive).
+  // RELOCATED: this ran before the price overlay until the catalog landed. It
+  // has to run after the merge for catalog lifecycle to drive it; the filter is
+  // a subset operation over an independent field, so moving it past the price
+  // overlay leaves the output set identical.
+  const filtered = priced.filter(m => !isModelDeprecated(m));
 
-  return priced;
+  // Store in module-level cache (short-lived when a catalog fetch failed). The
+  // cached list is always private-inclusive; see getModelCacheKey.
+  const ttl = catalogFetchFailed ? MODEL_CACHE_RETRY_TTL_MS : MODEL_CACHE_TTL_MS;
+  _modelCache = { key: cacheKey, models: filtered, preFilterModels: priced, expiresAt: Date.now() + ttl };
+
+  return applyPrivateVisibility(filtered, includePrivate);
 };
 
+/**
+ * Superseded pins the given caller can be upgraded off, for clients that must
+ * recognize a session pinned to a model the picker no longer lists.
+ *
+ * Call it AFTER getAvailableModels with that call's result: the display names for
+ * hidden pins come from the pre-filter list the fan-out cached, and the catalog
+ * successor overlay is refreshed by the same call. Before any fan-out has run in
+ * this process, hidden pins degrade to their raw ids.
+ */
+export const getSupersededModels = (currentModels: ModelInfo[]): SupersededModelInfo[] =>
+  buildSupersededIndex(_modelCache?.preFilterModels ?? currentModels, currentModels);
+
 // Types and core utils:
+export * from './adapterFamilyDispatch';
 export * from './backend';
+export * from './backendGate';
+export * from './dispatchModel';
+export * from './dispatchResolver';
 export * from './endUserId';
+export * from './mergeCatalog';
 
 // Implementations:
 export * from './anthropicBackend';
@@ -274,6 +482,8 @@ export * from './bedrockBackend/base';
 export * from './bedrockBackend/undifferentiated';
 export * from './bflBackend';
 export * from './geminiBackend';
+export * from './kimiBackend';
+export * from './kimiParams';
 export * from './localImageBackend';
 export * from './ollamaBackend';
 export * from './openaiBackend';
@@ -284,6 +494,7 @@ export {
   DeepSeekBedrockBackend,
   JurassicTwoBedrockBackend,
   LlamaBedrockBackend,
+  MoonshotBedrockBackend,
   TitanBedrockBackend,
 };
 
@@ -291,4 +502,6 @@ export * from './PipelineTimer';
 export * from './realtimeVoicePricing';
 export * from './resolveDeprecatedModel';
 export * from './deprecationHorizon';
+export * from './staleReferences';
+export * from './thinkingParams';
 export * from './toolPairingUtils';

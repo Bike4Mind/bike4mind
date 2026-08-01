@@ -37,6 +37,7 @@ import {
   getLatestToolCallIdOpenAI,
 } from './backend';
 import { handleToolResultStreaming } from './toolStreamingHelper';
+import { DispatchModel } from './dispatchModel';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
@@ -97,11 +98,40 @@ export class OpenAIBackend implements ICompletionBackend {
   // OpenAI can attribute abuse to an individual user and scope enforcement to
   // them rather than the whole shared platform key. See `toProviderEndUserId`.
   private readonly _endUserId?: string;
+  /** Catalog view of the model being completed; see DispatchModel. */
+  private readonly _dispatch = new DispatchModel();
 
   constructor(apiKey: string, logger?: Logger, endUserId?: string) {
     this._api = new OpenAI({ apiKey });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
+  }
+
+  setDispatchModel(info: ModelInfo): void {
+    this._dispatch.set(info);
+  }
+
+  /**
+   * Do this model's tool turns go to /v1/responses? The profile answers it for
+   * a model the id arrays never heard of; without one the arrays decide, which
+   * is exactly today's behavior.
+   *
+   * Keyed on the FIELD, not on the profile: the lenient read schema
+   * (ModelRecordPatchRead) makes every profile key optional, so a sparse row
+   * would otherwise read as a negative assertion and take a GPT-5 model off
+   * /v1/responses. An absent key is "not stated" and falls through.
+   */
+  private usesResponsesToolTransport(model: string): boolean {
+    const profile = this._dispatch.profileFor(model);
+    if (profile?.toolTransport !== undefined) return profile.toolTransport === 'responses';
+    return RESPONSES_API_TOOL_MODELS.has(model);
+  }
+
+  /** Which complexity->effort table applies (effortMap_GPT5_1_2 vs effortMap). */
+  private usesGPT5EffortMap(model: string): boolean {
+    const profile = this._dispatch.profileFor(model);
+    if (profile?.effortMapVariant !== undefined) return profile.effortMapVariant === 'gpt5_1_2';
+    return GPT5_1_MODELS.includes(model) || GPT5_2_MODELS.includes(model) || GPT5_4_MODELS.includes(model);
   }
 
   async getModelInfo(): Promise<ModelInfo[]> {
@@ -747,7 +777,10 @@ export class OpenAIBackend implements ICompletionBackend {
         name: 'GPT-4',
         backend: ModelBackend.OpenAI,
         contextWindow: 8192,
-        max_tokens: 8192,
+        // Half the context window, deliberately: this was listed as the full 8192, which left
+        // maxSafeInputTokens (context - output - buffer) negative and silently emptied the prompt.
+        // Whatever the provider's own output ceiling is, this entry has to keep that figure positive.
+        max_tokens: 4096,
         can_stream: true,
         pricing: {
           8000: { input: 30 / 1000000, output: 60.0 / 1000000 }, // $30 / 1M Input tokens, $60 / 1M Output tokens
@@ -967,21 +1000,26 @@ export class OpenAIBackend implements ICompletionBackend {
     // reasoning + tools work together and `reasoning_effort` is preserved. Only when
     // function tools are actually present; the terminal (no-tools) synthesis turn
     // falls through to the streaming chat path below.
-    if (options.tools?.length && RESPONSES_API_TOOL_MODELS.has(model)) {
+    if (options.tools?.length && this.usesResponsesToolTransport(model)) {
       return this.completeViaResponses(model, messages, options, callback, toolsUsed);
     }
 
-    const isO1Model = O1_MODELS.includes(model);
-    const isGPT5Model = GPT5_MODELS.includes(model);
-    const isGPT5_1Model = GPT5_1_MODELS.includes(model);
-    const isGPT5_2Model = GPT5_2_MODELS.includes(model);
-    const isGPT5_4Model = GPT5_4_MODELS.includes(model);
-    const isGPT5_5Model = GPT5_5_MODELS.includes(model);
-    const isGPT5_6Model = GPT5_6_MODELS.includes(model);
+    const profile = this._dispatch.profileFor(model);
+    // Per FIELD, not per profile: a sparse row must not read as a negative
+    // assertion. See usesResponsesToolTransport.
+    const isO1Model = profile?.messageFormat !== undefined ? profile.messageFormat === 'o1' : O1_MODELS.includes(model);
     const usesMaxCompletionTokens =
-      isO1Model || isGPT5Model || isGPT5_1Model || isGPT5_2Model || isGPT5_4Model || isGPT5_5Model || isGPT5_6Model;
+      profile?.maxTokensParam !== undefined
+        ? profile.maxTokensParam === 'max_completion_tokens'
+        : O1_MODELS.includes(model) ||
+          GPT5_MODELS.includes(model) ||
+          GPT5_1_MODELS.includes(model) ||
+          GPT5_2_MODELS.includes(model) ||
+          GPT5_4_MODELS.includes(model) ||
+          GPT5_5_MODELS.includes(model) ||
+          GPT5_6_MODELS.includes(model);
     // GPT-5.1/5.2/5.4 share the same complexity->reasoning-effort mapping (effortMap_GPT5_1_2).
-    const usesGPT5EffortMap = isGPT5_1Model || isGPT5_2Model || isGPT5_4Model;
+    const usesGPT5EffortMap = this.usesGPT5EffortMap(model);
 
     // Base parameters that work for all models
     const parameters: ChatCompletionCreateParams & ReasoningParameter = {
@@ -995,7 +1033,15 @@ export class OpenAIBackend implements ICompletionBackend {
 
     // Add parameters conditionally based on model type
     const supportsReasoning = REASONING_SUPPORTED_MODELS.has(model);
-    const requiresFixedTemp = FIXED_TEMPERATURE_MODELS.has(model);
+    // A reasoning model that is only known through the catalog is not in
+    // FIXED_TEMPERATURE_MODELS, and OpenAI rejects any temperature but 1 on one.
+    // Losing temperature control on a model that would have accepted it is
+    // recoverable; a 400 on every turn is not. Keyed on the profile STATING the
+    // reasoning-shaped max-tokens param rather than on a row merely existing, so
+    // a sparse patch cannot pin a seeded model's temperature as a side effect.
+    const requiresFixedTemp =
+      FIXED_TEMPERATURE_MODELS.has(model) ||
+      (profile?.maxTokensParam === 'max_completion_tokens' && this._dispatch.for(model)?.can_think === true);
     if (usesMaxCompletionTokens) {
       // Force temperature to 1.0 for models in FIXED_TEMPERATURE_MODELS
       // (reasoning models, chat-latest variants, and GPT-5.5).
@@ -1901,9 +1947,7 @@ export class OpenAIBackend implements ICompletionBackend {
     if (options.reasoningEffort) return options.reasoningEffort;
     const complexity = options.complexity as keyof typeof effortMap | undefined;
     if (complexity && effortMap[complexity]) {
-      const usesGPT5EffortMap =
-        GPT5_1_MODELS.includes(model) || GPT5_2_MODELS.includes(model) || GPT5_4_MODELS.includes(model);
-      return (usesGPT5EffortMap ? effortMap_GPT5_1_2 : effortMap)[complexity] as ReasoningEffort;
+      return (this.usesGPT5EffortMap(model) ? effortMap_GPT5_1_2 : effortMap)[complexity] as ReasoningEffort;
     }
     return undefined;
   }

@@ -1,7 +1,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isE2EEnabled } from '@server/utils/config';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { issueSessionForRequest } from '@server/auth/issueSession';
 import { userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { PREDEFINED_USER_TAGS, CURRENT_POLICY_VERSION } from '@bike4mind/common';
@@ -66,10 +66,11 @@ const handler = baseApi({ auth: false }).post(
       { db: { users: userRepository } }
     );
 
-    return res.status(201).json({
-      user: newUser,
-      ...authTokenGenerator.createAccessToken(newUser.id, newUser.tokenVersion ?? 0),
+    const { accessToken, refreshToken } = await issueSessionForRequest(req, newUser.id, {
+      createdVia: 'otc',
+      tokenVersion: newUser.tokenVersion ?? 0,
     });
+    return res.status(201).json({ user: newUser, accessToken, refreshToken });
   })
 );
 

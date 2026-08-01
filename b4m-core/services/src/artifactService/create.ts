@@ -2,6 +2,9 @@ import {
   IArtifactRepository,
   IArtifactContentRepository,
   IArtifactVersionRepository,
+  IArtifactDocument,
+  IArtifactContentDocument,
+  IArtifactVersionDocument,
   createArtifactId,
   calculateContentHash,
   calculateContentSize,
@@ -49,6 +52,12 @@ interface CreateArtifactAdapters {
   };
 }
 
+// Repo.create() input: the persisted doc minus fields absent from a create
+// payload -- the datastore-generated _id and timestamps, plus the caller-owned
+// id (supplied separately). Cast to the repo's create() param at the call site,
+// since IBaseRepository.create still lists _id as required.
+type CreateInput<T> = Omit<T, '_id' | 'id' | 'createdAt' | 'updatedAt'>;
+
 /**
  * Creates a new artifact with content and initial version
  */
@@ -92,7 +101,7 @@ export const create = async (
     contentSize,
     mimeType: getContentMimeType(type),
     encoding: 'utf8',
-  } as any);
+  } satisfies CreateInput<IArtifactContentDocument> as Parameters<IArtifactContentRepository['create']>[0]);
 
   // Create version record
   const artifactVersion = await db.artifactVersions.create({
@@ -103,13 +112,16 @@ export const create = async (
     changeDescription: 'Created artifact',
     createdBy: userId,
     isActive: true,
-  } as any);
+  } satisfies CreateInput<IArtifactVersionDocument> as Parameters<IArtifactVersionRepository['create']>[0]);
 
   // Set up permissions
   const artifactPermissions = permissions || createDefaultPermissions(userId);
 
-  // Create main artifact record
-  const artifact = {
+  // Create main artifact record. `id` is re-added because CreateInput strips it
+  // (it's caller-supplied and a distinct field from Mongo's _id). `contentId` is
+  // a denormalized pointer the Mongoose ArtifactModel persists but that isn't on
+  // the IArtifactDocument type yet, so it's typed on top of the create input.
+  const artifact: CreateInput<IArtifactDocument> & { id: string; contentId: string } = {
     id: artifactId,
     type,
     title,
@@ -117,7 +129,7 @@ export const create = async (
     version: 1,
     versionTag,
     currentVersionId: artifactVersion._id,
-    contentId: artifactContent._id, // required contentId field
+    contentId: artifactContent._id,
     userId,
     projectId,
     organizationId,
@@ -133,7 +145,11 @@ export const create = async (
     metadata,
   };
 
-  const createdArtifact = await db.artifacts.create(artifact as any);
+  // Object already validated by its annotation above; `as unknown as` just
+  // bridges the id/_id shape gap the create() param type can't express.
+  const createdArtifact = await db.artifacts.create(
+    artifact as unknown as Parameters<IArtifactRepository['create']>[0]
+  );
 
   return {
     artifact: createdArtifact,

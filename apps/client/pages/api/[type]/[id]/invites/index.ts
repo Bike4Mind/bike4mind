@@ -19,6 +19,7 @@ import { BadRequestError } from '@server/utils/errors';
 import { z } from 'zod';
 import { sharingService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
+import { AdminOrgAuditEvents, logAuditEvent } from '@server/utils/auditLog';
 import { ProjectEvents } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
 
@@ -129,6 +130,25 @@ const handler = baseApi()
         { ability: req.ability }
       );
 
+      // Group invites carry a membership grant, so they get the same audit trail as the members
+      // route's ORG_GROUP_MEMBER_ASSIGNED. Best-effort, never fails the write.
+      if (inviteType === InviteType.Group) {
+        await logAuditEvent(
+          {
+            userId: req.user.id,
+            action: AdminOrgAuditEvents.ORG_GROUP_INVITE_CREATED,
+            ip: req.ip,
+            userAgent: req.headers['user-agent'] || 'unknown',
+            metadata: {
+              groupId: id,
+              inviteId: created.id,
+              recipientCount: created.recipients?.pending?.length ?? 0,
+            },
+          },
+          req.logger
+        );
+      }
+
       // If this is a project invite, also log ADD_MEMBER event
       if (inviteType === InviteType.Project) {
         const project = await Project.findById(id);
@@ -187,9 +207,19 @@ const handler = baseApi()
    */
   .delete(
     asyncHandler<{}, unknown, unknown, IParams>(async (req, res) => {
+      // Take the document identity from the path and only `email` from the body. Spreading the
+      // whole body last let a caller override type and id, so the request's target was not the
+      // one in the URL. Note this route's :type segment carries the InviteType value itself
+      // (useCancelInvite posts `/api/${InviteType}/...`), NOT the .post/.get path aliases -
+      // do not map it through URL_PATH_TO_INVITE_TYPE. secureParameters' z.enum(InviteType)
+      // rejects anything that is not a real type.
+      const { type, id } = req.query;
+      if (!type || !id) throw new BadRequestError('Invalid cancel invite request');
+      const { email } = (req.body ?? {}) as { email?: string };
+
       const invites = await sharingService.cancelInvite(
         req.user,
-        { ...(req.query as any), ...(req.body as any) },
+        { type: type as InviteType, id, email },
         {
           db: {
             invites: inviteRepository,
@@ -197,6 +227,7 @@ const handler = baseApi()
             fabFiles: fabFileRepository,
             sessions: sessionRepository,
             organizations: organizationRepository,
+            projects: projectRepository,
             groups: Group,
           },
         }

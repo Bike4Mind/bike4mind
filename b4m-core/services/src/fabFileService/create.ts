@@ -5,7 +5,7 @@ import {
   IOrganizationDocument,
   KnowledgeType,
   SupportedFabFileMimeTypes,
-  isSupportedFabFileMimeType,
+  isStorableFabFileMimeType,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -92,7 +92,9 @@ export const createFabFile = async (
     mimeType = SupportedFabFileMimeTypes.TXT_PLAIN;
   }
 
-  if (!isSupportedFabFileMimeType(mimeType)) {
+  // Storable is a superset of ingestable: audio (TTS / sound effects) is kept
+  // and browsable but never chunked/vectorized or attached to an LLM.
+  if (!isStorableFabFileMimeType(mimeType)) {
     throw new BadRequestError(`File type ${mimeType || (ext ? `.${ext}` : 'unknown')} is not supported`);
   }
 

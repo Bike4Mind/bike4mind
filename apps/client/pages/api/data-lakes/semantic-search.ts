@@ -75,9 +75,60 @@ function getSharedTokenizer(logger: Logger): ITokenizer {
  * Returns:
  *   - results: Array<{ chunk_id, file_id, file_name, file_tags, chunk_text, score }>
  *   - total_chunks_searched: number
+ *   - files_in_scope: number
  *   - embedding_model: string
  *   - latency_ms: number
+ *   - scan: coverage accounting. When `scan.truncated` is true a budget stopped the walk, so the
+ *     results rank only part of the corpus - do not read an absence of hits as an absence of
+ *     content. `scan.budgets` echoes the limits in force so a caller can explain the truncation.
  */
+
+/**
+ * snake_case the scan accounting. Used by BOTH the no-lakes short-circuit and the success path so
+ * the response shape never varies between them - the RLM tool forwards this JSON verbatim.
+ */
+/**
+ * Snake_case the embedding-mismatch report. Distinct from `scan`: that says how much of the corpus
+ * was REACHED, this says whether what was reached could be COMPARED. Shared by both exits so the
+ * empty-scope path cannot drift from the success path.
+ *
+ * MUST STAY IN SYNC with EmbeddingMismatchReport in the services package.
+ */
+const toMismatchPayload = (report: dataLakeService.EmbeddingMismatchReport) => ({
+  excluded_files: {
+    count: report.excludedFiles.count,
+    models: report.excludedFiles.models,
+    estimated_chunks: report.excludedFiles.estimatedChunks,
+    sample: report.excludedFiles.sample.map(f => ({
+      file_id: f.fileId,
+      file_name: f.fileName,
+      embedding_model: f.embeddingModel,
+    })),
+  },
+  skipped_chunks: {
+    total: report.skippedChunks.total,
+    by_reason: {
+      unknown_file: report.skippedChunks.byReason.unknownFile,
+      model_mismatch: report.skippedChunks.byReason.modelMismatch,
+      missing_vector: report.skippedChunks.byReason.missingVector,
+      dimension_mismatch: report.skippedChunks.byReason.dimensionMismatch,
+    },
+  },
+  unlabeled: { chunks: report.unlabeled.chunks, files: report.unlabeled.files },
+  query_embedding_failed: report.queryEmbeddingFailed,
+});
+
+const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
+  truncated: scan.truncated,
+  file_budget_hit: scan.fileBudgetHit,
+  chunk_budget_hit: scan.chunkBudgetHit,
+  files_matching: scan.filesMatching,
+  files_scoped: scan.filesScoped,
+  files_scanned: scan.filesScanned,
+  chunks_scanned: scan.chunksScanned,
+  chunks_skipped_dimension_mismatch: scan.chunksSkippedDimensionMismatch,
+  budgets: { max_files: scan.budgets.maxFiles, max_chunks: scan.budgets.maxChunks },
+});
 
 const SemanticSearchInput = z.object({
   query: z.string().min(1).max(4000),
@@ -165,11 +216,20 @@ const handler = baseApi()
       // accessible lakes. Gating on the prefixes instead would be wrong: a caller can
       // legitimately hold only dynamic lakes, whose prefixes are all in the SCOPED bucket.
       if (dataLakeTags.length === 0) {
+        const budgets = await dataLakeService.resolveSearchBudgets(
+          { adminSettings: adminSettingsRepository },
+          req.logger
+        );
         return res.json({
           results: [],
           total_chunks_searched: 0,
+          files_in_scope: 0,
           embedding_model,
           latency_ms: Date.now() - t0,
+          chunks_scored: 0,
+          partial_results: false,
+          embedding_mismatch: toMismatchPayload(dataLakeService.emptyEmbeddingMismatchReport()),
+          scan: toScanPayload(dataLakeService.emptyScanAccounting(budgets)),
         });
       }
 
@@ -181,9 +241,13 @@ const handler = baseApi()
       const userIdForService = req.user?.id || 'system';
       const embeddingProvider = getProviderFromModel(embedding_model as SupportedEmbeddingModel);
 
-      // Ollama (self-host) is keyless: it needs a base URL, resolved via the effective
-      // LLM keys, not a stored secret. Other providers resolve a single API key.
-      let embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null };
+      // Branch POSITIVELY on the provider. A catch-all `else` here assumed every provider it
+      // did not recognise needed an OpenAI or VoyageAI key, so Bedrock - which authenticates
+      // through the AWS credential chain and has no key to find - resolved a credential it
+      // never needed and 500'd on environments without one, after ingesting the corpus fine.
+      // A keyless provider's ready state is an EMPTY table; semanticDataLakeSearch treats it
+      // as such via resolveEmbeddingConfig. Adding a provider means adding an arm here.
+      let embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } = {};
       if (embeddingProvider === ModelBackend.Ollama) {
         const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
           userIdForService,
@@ -196,7 +260,7 @@ const handler = baseApi()
           });
         }
         embeddingApiKeyTable = { ollama: effectiveKeys.ollama };
-      } else {
+      } else if (embeddingProvider === ModelBackend.OpenAI || embeddingProvider === ModelBackend.VoyageAI) {
         const embeddingKeyType = embeddingProvider === ModelBackend.VoyageAI ? ApiKeyType.voyageai : ApiKeyType.openai;
         const embeddingApiKey = await apiKeyService.getEffectiveApiKey(
           userIdForService,
@@ -230,6 +294,7 @@ const handler = baseApi()
           dataLakeTags,
           dataLakeTagPrefixes,
           scopedTagPrefixes, // dynamic-lake prefixes - matched only within owner/org access
+          budgets: await dataLakeService.resolveSearchBudgets({ adminSettings: adminSettingsRepository }, req.logger),
           logger: req.logger,
         },
         { db: { fabfiles: fabFileRepository, fabfilechunks: fabFileChunkRepository } }
@@ -272,6 +337,8 @@ const handler = baseApi()
 
       if (isAborted()) return res.end();
 
+      const warning = dataLakeService.describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+
       return res.json({
         results: search.results.map(r => ({
           chunk_id: r.chunkId,
@@ -285,6 +352,15 @@ const handler = baseApi()
         files_in_scope: search.filesInScope,
         embedding_model: search.embeddingModel,
         latency_ms: Date.now() - t0,
+        chunks_scored: search.chunksScored,
+        // The single flag a caller branches on to know the answer is incomplete for EMBEDDING
+        // reasons; scan.truncated is the separate "did we reach everything" signal.
+        partial_results: search.embeddingMismatch.partial,
+        embedding_mismatch: toMismatchPayload(search.embeddingMismatch),
+        // Spread rather than `warning: warning ?? undefined`, so the key is genuinely absent on a
+        // healthy search instead of present-and-undefined.
+        ...(warning ? { warning } : {}),
+        scan: toScanPayload(search.scan),
       });
     })
   );

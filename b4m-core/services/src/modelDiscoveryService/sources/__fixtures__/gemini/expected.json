@@ -1,0 +1,124 @@
+[
+  {
+    "modelId": "gemini-2.5-flash",
+    "patch": {
+      "id": "gemini-2.5-flash",
+      "vendor": "google",
+      "backend": "gemini",
+      "type": "text",
+      "name": "Gemini 2.5 Flash",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "canStream": false,
+      "reasoning": {
+        "supported": true
+      },
+      "temperatureMode": "free",
+      "supportsTopP": true
+    }
+  },
+  {
+    "modelId": "gemini-2.5-flash-preview-tts",
+    "patch": {
+      "id": "gemini-2.5-flash-preview-tts",
+      "vendor": "google",
+      "backend": "gemini",
+      "type": "tts",
+      "name": "Gemini 2.5 Flash Preview TTS",
+      "contextWindow": 8192,
+      "maxOutputTokens": 16384,
+      "canStream": false,
+      "temperatureMode": "free"
+    }
+  },
+  {
+    "modelId": "gemini-2.5-pro",
+    "patch": {
+      "id": "gemini-2.5-pro",
+      "vendor": "google",
+      "backend": "gemini",
+      "type": "text",
+      "name": "Gemini 2.5 Pro",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "canStream": false,
+      "reasoning": {
+        "supported": true
+      },
+      "temperatureMode": "free",
+      "supportsTopP": true
+    }
+  },
+  {
+    "modelId": "gemini-3-pro-preview",
+    "patch": {
+      "id": "gemini-3-pro-preview",
+      "vendor": "google",
+      "backend": "gemini",
+      "type": "text",
+      "name": "Gemini 3 Pro Preview",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "canStream": true,
+      "reasoning": {
+        "supported": true
+      },
+      "temperatureMode": "free",
+      "supportsTopP": true
+    }
+  },
+  {
+    "modelId": "gemini-3.1-flash-image",
+    "patch": {
+      "id": "gemini-3.1-flash-image",
+      "vendor": "google",
+      "backend": "gemini",
+      "type": "image",
+      "name": "Nano Banana 2",
+      "contextWindow": 32768,
+      "maxOutputTokens": 32768,
+      "canStream": false,
+      "temperatureMode": "free",
+      "supportsTopP": true
+    }
+  },
+  {
+    "modelId": "gemini-3.1-flash-live-preview",
+    "patch": {
+      "id": "gemini-3.1-flash-live-preview",
+      "vendor": "google",
+      "backend": "gemini",
+      "type": "realtime-voice",
+      "name": "Gemini 3.1 Flash Live Preview",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 8192,
+      "canStream": false
+    }
+  },
+  {
+    "modelId": "gemini-embedding-001",
+    "patch": {
+      "id": "gemini-embedding-001",
+      "vendor": "google",
+      "backend": "gemini",
+      "type": "embedding",
+      "name": "Gemini Embedding 001",
+      "contextWindow": 2048,
+      "maxOutputTokens": 1,
+      "canStream": false
+    }
+  },
+  {
+    "modelId": "veo-3.1-generate-preview",
+    "patch": {
+      "id": "veo-3.1-generate-preview",
+      "vendor": "google",
+      "backend": "gemini",
+      "type": "video",
+      "name": "Veo 3.1 Preview",
+      "contextWindow": 1024,
+      "maxOutputTokens": 1,
+      "canStream": false
+    }
+  }
+]

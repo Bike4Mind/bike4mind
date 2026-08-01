@@ -16,6 +16,10 @@ const BEDROCK_ID_PREFIXES = [
   'deepseek.',
   'mistral.',
   'stability.',
+  // Both spellings: AWS ships Kimi K2.5 as `moonshotai.` and K2 Thinking as
+  // `moonshot.` on bedrock-runtime.
+  'moonshot.',
+  'moonshotai.',
 ];
 
 /**
@@ -32,6 +36,9 @@ export function getModelProviderLabel(modelId: string | undefined): string | und
   if (id.startsWith('gpt') || id.startsWith('chatgpt') || /^o\d/.test(id)) return 'OpenAI';
   if (id.startsWith('gemini')) return 'Google';
   if (id.startsWith('grok')) return 'xAI';
+  // Direct Moonshot ids are bare `kimi-*`; the `moonshot*.` prefixed forms are
+  // Bedrock-hosted and already caught above.
+  if (id.startsWith('kimi')) return 'Moonshot direct';
   // Bare (non-Bedrock) ids for other direct providers. The `<vendor>.` prefixed forms are
   // Bedrock-hosted and already caught above; these dash-slug forms are the direct APIs.
   if (id.startsWith('deepseek')) return 'DeepSeek';

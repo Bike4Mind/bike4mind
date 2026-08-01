@@ -9,6 +9,9 @@ import { sendToQueue } from '@server/utils/sqs';
 import { dispatch as researchEngineDispatch } from '@server/queueHandlers/researchEngineQueue';
 import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
+import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
+import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
+import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { buildFabFileChunkScanFilter, CHUNK_SCAN_BATCH, CHUNK_SCAN_MIN_AGE_MS } from './chunkScan';
@@ -64,6 +67,18 @@ async function main() {
   worker.registerQueueHandler('fabFileVectorizeQueue', Resource.fabFileVectorizeQueue.url, fabFileVectorizeDispatch, {
     visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
   });
+
+  // Background AI-tag suggestion, opted into per-batch on the create wizard. Optional
+  // in the self-host manifest - a basic install that never set the env var simply never runs
+  // it (the stuck-job reconciler is what keeps the review UI from spinning forever on that).
+  const taxonomyQueueUrl = Resource.dataLakeTaxonomyQueue?.url;
+  if (taxonomyQueueUrl) {
+    worker.registerQueueHandler('dataLakeTaxonomyQueue', taxonomyQueueUrl, dataLakeTaxonomyAnalysisDispatch, {
+      visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+    });
+  } else {
+    bootLogger.warn('dataLakeTaxonomyQueue not configured; background AI tag suggestion will not run');
+  }
 
   // Enrichment events (naming, summaries, tags, memento embedding) arrive here from
   // eventBus.publishSelfHost as { detailType, detail }. Read straight from env (not the
@@ -124,11 +139,36 @@ async function main() {
     }
   });
 
+  // Remote-provider catalog freshness (sec 6.2). The enableModelDiscovery gate,
+  // the lease and the per-source minimum interval all live inside the service,
+  // so this closure is the same call the hosted cron makes.
+  //
+  // Gated on B4M_DISCOVERY_DRIVER, like the startup leg: the aggregator sources
+  // are configured on every install, so an unflagged self-host would reach the
+  // public internet every interval with no key set and nothing asked of it.
+  if (isDiscoveryDriver()) {
+    worker.registerScheduledTask('modelDiscovery', modelDiscoveryIntervalMs(), async () => {
+      await runScheduledDiscovery(bootLogger, 'selfhost');
+    });
+  } else {
+    bootLogger.info('[model-discovery] off: set B4M_DISCOVERY_DRIVER=true to let this worker refresh the catalog');
+  }
+
   worker.start();
+
+  // registerScheduledTask arms an interval and does not fire on registration,
+  // so without this a fresh container waits a full interval for its first run.
+  // Held (not fire-and-forget) so shutdown can wait for it: a run abandoned
+  // mid-flight strands its Mongo lease until the TTL expires.
+  const startupLeg = startDiscoveryOnStartup({ logger: bootLogger, host: 'selfhost' });
 
   const shutdown = async (signal: string) => {
     bootLogger.info(`${signal} received - draining selfHostWorker (up to ${DRAIN_GRACE_MS}ms)`);
-    await worker.stop(DRAIN_GRACE_MS);
+    // One budget for everything: worker.stop bounds itself, and this bounds the
+    // pair, so a startup leg that outlives the drain cannot delay the exit past
+    // the compose stop grace (compose.selfhost.yaml sets it above DRAIN_GRACE_MS).
+    const drainDeadline = new Promise<void>(resolve => setTimeout(resolve, DRAIN_GRACE_MS));
+    await Promise.race([Promise.all([worker.stop(DRAIN_GRACE_MS), startupLeg]), drainDeadline]);
     bootLogger.info('selfHostWorker drained; exiting');
     process.exit(0);
   };

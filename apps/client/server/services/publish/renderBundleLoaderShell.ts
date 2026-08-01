@@ -20,6 +20,11 @@
  * pre-PR 401 disclosed nothing), so the shell shows a constant title and the real title
  * only appears once the authenticated `?raw=1` srcdoc renders. The login URL is built
  * from `location.*` at runtime. No server interpolation -> no injection surface.
+ *
+ * Carries `noindex` unconditionally: this shell is only ever returned for a GATED
+ * artifact, so it is by definition not search-discoverable. It holds no artifact data,
+ * so an indexed copy would leak nothing - but a gated artifact's URL still has no
+ * business in a search index. Mirrors the header the serve route already sets.
  */
 import { HASH_BRIDGE_JS } from './fragmentNav';
 
@@ -82,6 +87,8 @@ export function renderBundleLoaderShell(): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
 <title>${sharedTitle}</title>
 <style>
   html,body{margin:0;padding:0;height:100%}

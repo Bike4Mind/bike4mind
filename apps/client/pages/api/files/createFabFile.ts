@@ -32,27 +32,38 @@ const handler = baseApi()
         { db: { dataLakes: dataLakeRepository } }
       );
 
+      // A file joining a lake must also land under that lake's content prefix, or it is
+      // invisible to tag-counts and to the Explorer's tag tree.
+      const tags = await dataLakeService.reconcileDataLakeFallbackTags(params.tags ?? [], {
+        db: { dataLakes: dataLakeRepository },
+        logger: req.logger,
+      });
+
       const result = await withTransaction(async () => {
-        return fabFilesService.createFabFile(user.id, params, {
-          db: {
-            adminSettings: adminSettingsRepository,
-            fabFiles: FabFile,
-            users: User,
-          },
-          storage: {
-            upload: async (filepath, content, option) => {
-              await getFilesStorage().upload(content, filepath, {
-                ContentType: option?.ContentType || 'text/plain',
-                ContentLength: option?.ContentLength || Buffer.byteLength(content, 'utf8'),
-              });
-              return filepath;
+        return fabFilesService.createFabFile(
+          user.id,
+          { ...params, ...(tags.length > 0 && { tags }) },
+          {
+            db: {
+              adminSettings: adminSettingsRepository,
+              fabFiles: FabFile,
+              users: User,
             },
-            generateSignedUrl: (filepath: string, expireInSeconds: number) =>
-              getFilesStorage().getSignedUrl(filepath, 'put', {
-                expiresIn: expireInSeconds,
-              }),
-          },
-        });
+            storage: {
+              upload: async (filepath, content, option) => {
+                await getFilesStorage().upload(content, filepath, {
+                  ContentType: option?.ContentType || 'text/plain',
+                  ContentLength: option?.ContentLength || Buffer.byteLength(content, 'utf8'),
+                });
+                return filepath;
+              },
+              generateSignedUrl: (filepath: string, expireInSeconds: number) =>
+                getFilesStorage().getSignedUrl(filepath, 'put', {
+                  expiresIn: expireInSeconds,
+                }),
+            },
+          }
+        );
       });
 
       await logEvent(

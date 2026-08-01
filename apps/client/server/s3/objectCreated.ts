@@ -8,6 +8,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { moderateImageOrThrow } from '@bike4mind/services';
+import { isAudioMimeType } from '@bike4mind/common';
 import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
@@ -195,7 +196,10 @@ export const func = withContext(async (event, context, logger) => {
 
     const enableKnowledgeAutoChunk = await adminSettingsRepository.getSettingsValue('enableAutoChunk');
 
-    if (enableKnowledgeAutoChunk) {
+    // Audio (generated TTS / sound effects) is never chunked/vectorized - it is
+    // not attachable to an LLM, and the chunker would only produce 0 chunks.
+    // Skip the enqueue so audio doesn't make a wasteful no-op queue round-trip.
+    if (enableKnowledgeAutoChunk && !isAudioMimeType(metadata.mimeType)) {
       try {
         const queueUrl = Resource.fabFileChunkQueue.url;
         if (!queueUrl) throw new Error('Chunk queue URL not found');

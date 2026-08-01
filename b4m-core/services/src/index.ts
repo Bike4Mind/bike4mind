@@ -1,5 +1,6 @@
 export * as referService from './referService';
 export * as userService from './userService';
+export * as authSessionService from './authSessionService';
 export * as userApiKeyService from './userApiKeyService';
 export * as counterService from './countersService';
 export * as importHistoryService from './importHistoryService';
@@ -19,6 +20,7 @@ export * as researchAgentService from './researchAgentService';
 export * as researchTaskService from './researchTaskService';
 export * as researchDataService from './researchData';
 export * as taskSchedulerService from './taskSchedulerService';
+export * as modelDiscoveryService from './modelDiscoveryService';
 export * as tagService from './tagService';
 export * as artifactService from './artifactService';
 export * as notebookExportService from './notebookExportService';

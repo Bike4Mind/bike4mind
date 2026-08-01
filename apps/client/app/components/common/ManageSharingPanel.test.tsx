@@ -56,3 +56,41 @@ describe('ManageSharingPanel', () => {
     await waitFor(() => expect(screen.getByTestId('manage-gate-needs-public')).not.toBeNull());
   });
 });
+
+describe('ManageSharingPanel — search-listing toggle', () => {
+  it('seeds the toggle ON from a listed artifact', async () => {
+    // Pins setInitialDiscoverable: without it the switch renders OFF for an artifact
+    // that is genuinely listed, and the owner sees a state that is not the truth.
+    await renderPanel({
+      visibility: 'public',
+      accessGate: null,
+      embedOrigins: [],
+      commentPolicy: 'none',
+      discoverable: true,
+    });
+    const toggle = screen.getByTestId('manage-discoverable-toggle') as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+  });
+
+  it('seeds the toggle OFF for an artifact that never opted in', async () => {
+    await renderPanel({ visibility: 'public', accessGate: null, embedOrigins: [], commentPolicy: 'none' });
+    const toggle = screen.getByTestId('manage-discoverable-toggle') as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+  });
+
+  it('hides the toggle for a gated artifact (it could never take effect)', async () => {
+    await renderPanel({
+      visibility: 'public',
+      accessGate: { kind: 'passphrase' },
+      embedOrigins: [],
+      commentPolicy: 'none',
+      discoverable: true,
+    });
+    expect(screen.queryByTestId('manage-discoverable-toggle')).toBeNull();
+  });
+
+  it('hides the toggle for a private artifact', async () => {
+    await renderPanel({ visibility: 'private', accessGate: null, embedOrigins: [], commentPolicy: 'none' }, 'private');
+    expect(screen.queryByTestId('manage-discoverable-toggle')).toBeNull();
+  });
+});

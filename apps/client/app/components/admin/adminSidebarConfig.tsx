@@ -34,6 +34,7 @@ import SchemaIcon from '@mui/icons-material/Schema';
 import InventoryIcon from '@mui/icons-material/Inventory';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import HandshakeIcon from '@mui/icons-material/Handshake';
+import EventBusyIcon from '@mui/icons-material/EventBusy';
 
 export enum AdminTab {
   Users = 0,
@@ -92,6 +93,7 @@ export enum AdminTab {
   PublishedPages = 54,
   PartnerSignupRules = 55,
   EmbedKeys = 57,
+  ModelLifecycle = 58,
 }
 
 /**
@@ -204,6 +206,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: PsychologyIcon, tab: AdminTab.LLMDashboard, label: 'LLM Dashboard' },
       { Icon: QueryStatsIcon, tab: AdminTab.ModelMetrics, label: 'Model Metrics' },
       {
+        Icon: EventBusyIcon,
+        tab: AdminTab.ModelLifecycle,
+        label: 'Model Lifecycle',
+        testid: 'admin-model-lifecycle-btn',
+      },
+      {
         Icon: MonitorHeartIcon,
         tab: AdminTab.ContextInspector,
         label: 'Context Inspector',
@@ -256,7 +264,12 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
     Icon: HandymanIcon,
     label: 'General Ops',
     items: [
-      { Icon: HandymanIcon, tab: AdminTab.AdminSettings, label: 'Admin Settings' },
+      {
+        Icon: HandymanIcon,
+        tab: AdminTab.AdminSettings,
+        label: 'Admin Settings',
+        testid: 'admin-settings-btn',
+      },
       { Icon: WidgetsIcon, tab: AdminTab.Modals, label: 'Modals' },
       { Icon: NewspaperIcon, tab: AdminTab.WhatsNewModals, label: "What's New" },
       { Icon: LanguageIcon, tab: AdminTab.WorldTime, label: 'World Time' },

@@ -285,7 +285,7 @@ export type CompletionInfo = {
    * 'stop' as a first-class clean-finish value alongside Anthropic's 'end_turn'.
    * 'max_tokens' means the output was truncated against the token ceiling - used
    * downstream to flag truncated artifacts and surface a recovery UI. The client's
-   * CLEAN_FINISH_REASONS (apps/client/.../PromptReplies.tsx) is the authoritative set
+   * CLEAN_FINISH_REASONS (apps/client/app/utils/replyTruncation.ts) is the authoritative set
    * of values treated as a clean finish; anything else - including an unrecognized
    * provider value passed through unchanged - falls through to the truncation heuristic.
    */
@@ -353,6 +353,16 @@ export interface ICompletionBackend {
    * Get the supported models' info for this backend
    */
   getModelInfo(): Promise<ModelInfo[]>;
+
+  /**
+   * Hand the backend the catalog view of the model it was just resolved for.
+   * Called once by getLlmByModel, before `complete()`. A builder that reads it
+   * prefers `dispatchProfile` over its hardcoded id tables, which is what lets a
+   * model this build has no id knowledge of get a correctly shaped request
+   * instead of a 400. Optional: a backend whose request shape is id-independent
+   * has nothing to read.
+   */
+  setDispatchModel?(info: ModelInfo): void;
 }
 
 /**

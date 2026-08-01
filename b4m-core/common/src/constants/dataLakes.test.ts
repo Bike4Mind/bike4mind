@@ -5,8 +5,11 @@ import {
   getAccessibleDataLakes,
   getDataLakeTags,
   lakeMatchesAccess,
+  isReservedTagPrefix,
   normalizeEntitlementKey,
+  normalizeTagPrefix,
   toDataLakeConfig,
+  tagPrefixesOverlap,
 } from './dataLakes';
 
 // A dynamic (DB-registered) lake config builder. Passing dynamicDataLakes bypasses the
@@ -162,10 +165,86 @@ describe('toDataLakeConfig', () => {
     });
     expect(config.description).toBeUndefined();
   });
+
+  // The invariant behind ManageableDataLakeConfig: this projection has no actor, so it must
+  // never carry an editor-only field. Every actor-less consumer (access filters, tag lookups,
+  // the static registry) goes through here, and systemPrompt is readable by a lake's editors
+  // only - it enters a response solely via the manage-gated list projection.
+  it('never carries systemPrompt, even when the source document has one', () => {
+    const config = toDataLakeConfig({
+      id: 'l',
+      slug: 'l',
+      name: 'L',
+      fileTagPrefix: 'l:',
+      datalakeTag: 'datalake:l',
+      systemPrompt: 'Only cite peer-reviewed sources.',
+    } as Parameters<typeof toDataLakeConfig>[0]);
+    expect('systemPrompt' in config).toBe(false);
+  });
 });
 
 describe('normalizeEntitlementKey', () => {
   it('trims and lowercases', () => {
     expect(normalizeEntitlementKey('  MedLib:Pro ')).toBe('medlib:pro');
+  });
+});
+
+describe('normalizeTagPrefix', () => {
+  it('returns the trimmed prefix when it ends with a colon', () => {
+    expect(normalizeTagPrefix('acme:')).toBe('acme:');
+    expect(normalizeTagPrefix('  acme:  ')).toBe('acme:');
+  });
+
+  // Read scoping and the removal write path share this, so anything rejected here is a
+  // prefix no query matches AND no removal clears.
+  it.each([
+    ['', 'empty would match every tag'],
+    ['   ', 'whitespace-only collapses to empty'],
+    ['acme', 'no trailing colon would match unrelated tags like acmex:'],
+    [undefined, 'absent'],
+    [null, 'null'],
+  ])('rejects %o (%s)', prefix => {
+    expect(normalizeTagPrefix(prefix as string | undefined | null)).toBeNull();
+  });
+});
+
+describe('isReservedTagPrefix', () => {
+  it.each(['datalake:', 'datalake:x:', '  datalake:'])('flags %o as reserved', prefix => {
+    expect(isReservedTagPrefix(prefix)).toBe(true);
+  });
+
+  it.each(['acme:', 'opti:', 'data:', undefined, null])('allows %o', prefix => {
+    expect(isReservedTagPrefix(prefix as string | undefined | null)).toBe(false);
+  });
+});
+
+describe('tagPrefixesOverlap', () => {
+  it.each([
+    ['identical prefixes', 'acme:', 'acme:'],
+    ['padded values', '  acme:  ', 'acme:'],
+    ['a nested prefix', 'docs:legal:', 'docs:'],
+    ['a nested prefix the other way round', 'docs:', 'docs:legal:'],
+  ])('reports %s as overlapping', (_label, a, b) => {
+    expect(tagPrefixesOverlap(a, b)).toBe(true);
+  });
+
+  it.each([
+    ['unrelated prefixes', 'globex:', 'acme:'],
+    ['a shared word that is not a prefix boundary', 'acme-docs:', 'acme:x:'],
+    // The predicate builds an unflagged ^regex, so these two cannot reach each other's tags.
+    ['prefixes differing only in case', 'ACME:', 'acme:'],
+  ])('reports %s as safe', (_label, a, b) => {
+    expect(tagPrefixesOverlap(a, b)).toBe(false);
+  });
+
+  it.each([
+    ['empty', '', 'acme:'],
+    ['whitespace only', '   ', 'acme:'],
+    ['missing the trailing colon', 'acme', 'acme:'],
+    ['null', null, 'acme:'],
+    ['undefined', undefined, 'acme:'],
+  ])('never overlaps when one side is %s, since no query arm is built from it', (_label, a, b) => {
+    expect(tagPrefixesOverlap(a, b)).toBe(false);
+    expect(tagPrefixesOverlap(b, a)).toBe(false);
   });
 });

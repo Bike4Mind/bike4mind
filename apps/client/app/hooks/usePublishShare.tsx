@@ -13,6 +13,9 @@ export interface ExistingPublication {
    *  one-click re-publish can't silently widen visibility or re-enable comments. */
   visibility: PublishVisibility;
   commentPolicy?: CommentPolicy;
+  /** Whether the prior publication opted into search-engine listing. Seeds the dialog's
+   *  switch, so it must stay in the list endpoint's $project to be non-null in practice. */
+  discoverable?: boolean;
 }
 
 interface ShareState {
@@ -27,6 +30,7 @@ interface ShareState {
   defaultVisibility: PublishVisibility;
   resolveExisting?: () => Promise<ExistingPublication | null>;
   orgOption?: { label: string; hint: string };
+  incompleteWarning?: string;
 }
 
 interface PublishAndShareOpts {
@@ -54,6 +58,12 @@ interface PublishAndShareOpts {
    * org-scoped page. Omit for personal scope.
    */
   orgOption?: { label: string; hint: string };
+  /**
+   * Set when the content looks abbreviated/non-functional (see `detectElidedContent`). The
+   * dialog shows it and requires an explicit acknowledgement before publishing - a /p/ link
+   * can be handed on before anyone notices the artifact's controls are inert.
+   */
+  incompleteWarning?: string;
 }
 
 /**
@@ -79,6 +89,7 @@ export function usePublishShare() {
       defaultVisibility: opts.defaultVisibility ?? 'public',
       resolveExisting: opts.resolveExisting,
       orgOption: opts.orgOption,
+      incompleteWarning: opts.incompleteWarning,
     });
   }, []);
 
@@ -94,6 +105,7 @@ export function usePublishShare() {
       defaultVisibility={state.defaultVisibility}
       resolveExisting={state.resolveExisting}
       orgOption={state.orgOption}
+      incompleteWarning={state.incompleteWarning}
     />
   );
 

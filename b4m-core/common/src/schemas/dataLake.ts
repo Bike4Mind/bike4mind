@@ -1,4 +1,5 @@
 import z from 'zod';
+import { DATALAKE_TAG_PREFIX, isReservedTagPrefix } from '../constants/dataLakes';
 
 // Slug validation
 
@@ -19,7 +20,8 @@ export const CreateDataLakeRequestInput = z.object({
     .string()
     .min(2)
     .max(30)
-    .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")'),
+    .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")')
+    .refine(s => !isReservedTagPrefix(s), `Tag prefix cannot use the reserved "${DATALAKE_TAG_PREFIX}" namespace`),
   requiredUserTag: z.string().min(1).max(100).optional(),
   // Entitlement keys are namespaced (must contain ":") so a bare user-tag value can never
   // be a requiredEntitlement - tags pass through 1:1 as entitlement keys, so an un-namespaced
@@ -92,6 +94,8 @@ export const CreateBatchRequestInput = z.object({
   totalSizeBytes: z.number().nonnegative(),
   conflictResolution: ConflictResolutionSchema.optional(),
   appliedTags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
+  /** Opt-in for background AI tag suggestion - never true in append mode. */
+  wantsTaxonomy: z.boolean().optional(),
 });
 export type CreateBatchRequestInputType = z.infer<typeof CreateBatchRequestInput>;
 
@@ -125,25 +129,36 @@ export const BatchPresignedUrlRequestInput = z.object({
 });
 export type BatchPresignedUrlRequestInputType = z.infer<typeof BatchPresignedUrlRequestInput>;
 
-// AI Taxonomy Inference
+// AI Taxonomy Application - the background job's inference call itself has no HTTP
+// request shape (triggered by the queue handler, not the client); these cover the review
+// panel's two actions against an already-analyzed batch.
 
-export const InferTaxonomyFolderEntry = z.object({
-  relativePath: z.string(),
-  fileName: z.string(),
-  fileSize: z.number(),
-  mimeType: z.string().optional(),
-  /** First ~500 chars of file content for AI analysis */
-  contentSample: z.string().max(1000).optional(),
+// Bounds are generous relative to real values (inference aims for 5-20 short hierarchical
+// tags like "type:contract") - they exist to cap worst-case request size/storage/CPU from a
+// crafted body, not to constrain legitimate use. applyTaxonomySuggestions also cross-checks
+// each originalName against the batch's actual stored suggestions, so these bounds are a
+// second, independent layer rather than the only protection.
+const TaxonomyTagInput = z.object({
+  suffix: z.string().min(1).max(100),
+  originalName: z.string().min(1).max(150),
+  strength: z.number().min(0).max(1),
+  source: z.enum(['folder', 'ai']),
+  matchingFolders: z.array(z.string().max(512)).max(100),
+  deleted: z.boolean(),
 });
 
-export const InferTaxonomyRequestInput = z.object({
-  folderTree: z.array(InferTaxonomyFolderEntry).min(1).max(500),
-  /** If re-running for an existing data lake, pass its prefix */
-  existingPrefix: z.string().optional(),
+export const ApplyTaxonomyRequestInput = z.object({
+  /** The reviewed/edited tag list to apply (already filtered to non-deleted by the caller, or
+   * filtered here - deleted entries are simply skipped since they carry no tag to write). */
+  tags: z.array(TaxonomyTagInput).max(100),
+});
+export type ApplyTaxonomyRequestInputType = z.infer<typeof ApplyTaxonomyRequestInput>;
+
+export const ReanalyzeTaxonomyRequestInput = z.object({
   /** User description of the data (helps the AI) */
   context: z.string().max(2000).optional(),
 });
-export type InferTaxonomyRequestInputType = z.infer<typeof InferTaxonomyRequestInput>;
+export type ReanalyzeTaxonomyRequestInputType = z.infer<typeof ReanalyzeTaxonomyRequestInput>;
 
 // Deduplication
 

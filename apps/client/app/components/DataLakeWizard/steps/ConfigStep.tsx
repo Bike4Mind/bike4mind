@@ -15,17 +15,15 @@ import {
   Typography,
 } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
-import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
-import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
-import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
-
-function normalizeName(name: string): string {
-  return name.trim().toLowerCase().replace(/\s+/g, ' ');
-}
+import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
+// The name, its slug rule, and the duplicate-name hint moved to the source step (#824), so
+// their imports live there now. tagPrefixIssue covers both prefix problems this step reports:
+// the reserved namespace and an overlap with another lake's prefix.
+import { tagPrefixIssue } from '@bike4mind/common';
+import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
 
 export default function ConfigStep() {
   const theme = useTheme();
@@ -33,46 +31,26 @@ export default function ConfigStep() {
   const setConfig = useDataLakeWizardStore(s => s.setConfig);
   const setTagPrefix = useDataLakeWizardStore(s => s.setTagPrefix);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
-  const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
+  const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const duplicateCheckResults = useDataLakeWizardStore(s => s.duplicateCheckResults);
+  // Append mode inherits the target lake's prefix, which by definition already coexists with it.
+  const duplicatePrefixLake = useDuplicatePrefixLake(config.tagPrefix, !!targetLake);
+  const prefixIssue = tagPrefixIssue(config.tagPrefix, duplicatePrefixLake);
   const hashingProgress = useDataLakeWizardStore(s => s.hashingProgress);
 
   const computeHashes = useComputeHashes();
   const checkDuplicates = useCheckDuplicates();
 
-  // Duplicate-name hint. The visible lake list spans every lake the user can read, but a
-  // create only ever collides inside its own org scope (the server disambiguates the slug
-  // per-org), so narrow it to the account-switcher scope the create will land in. Must stay
-  // in sync with activeOrgId() in hooks/data/dataLakes.ts, which the create path reads at
-  // mutation time - matching it on a null selection too is what keeps the hint from ever
-  // naming a scope the lake won't land in.
-  const { data: allLakes } = useGetDataLakes();
-  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
-  const scopeOrgId = selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
-  const duplicateNameLake =
-    targetLake || !config.name.trim()
-      ? undefined
-      : allLakes?.find(
-          lake =>
-            (lake.organizationId || undefined) === scopeOrgId && normalizeName(lake.name) === normalizeName(config.name)
-        );
-
-  // Client mirror of the server's slug.min(2) rule so a name that slugifies to
-  // empty/too-short is caught here instead of failing at the final upload step.
-  // Append mode reuses the target lake's real slug (which may be disambiguated,
-  // e.g. "niche-2"), so show that rather than what the locked name slugifies to,
-  // and only gate creates.
+  // Append mode reuses the target lake's real slug (which may be disambiguated, e.g.
+  // "niche-2"), so show that rather than what its name slugifies to. Name and slug are set
+  // on the source step; they appear here read-only in the summary.
   const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
-  const slugTooShort = !targetLake && config.name.trim().length > 0 && slug.length < MIN_DATA_LAKE_SLUG_LENGTH;
 
-  // Tag Prefix's editable home is the taxonomy step (#829). Config only shows it read-only,
-  // EXCEPT the empty-prefix dead-end: the taxonomy step is skippable and inference can yield
-  // an empty prefix (e.g. no API key), yet Start Upload still gates on tagPrefix >= 2 chars.
-  // When create mode lands here with no usable prefix, fall back to an editable field so the
-  // user isn't stranded. Captured once via lazy init so typing in the fallback can't flip it
-  // read-only mid-edit; navigating back to taxonomy remounts this step and re-evaluates.
-  const [prefixEditable] = useState(() => !targetLake && config.tagPrefix.trim().length < MIN_DATA_LAKE_SLUG_LENGTH);
+  // The Tag Prefix's only editable home is here (the taxonomy step, its former competing
+  // owner, was removed - AI tag suggestion now runs post-upload and never touches the prefix).
+  // Append mode always inherits the target lake's.
+  const prefixEditable = !targetLake;
 
   const autoTriggered = useRef(false);
 
@@ -132,33 +110,6 @@ export default function ConfigStep() {
           </Alert>
         )}
 
-        {/* Name */}
-        <FormControl required error={slugTooShort}>
-          <FormLabel>{DATA_LAKE} Name</FormLabel>
-          <Input
-            data-testid="config-name-input"
-            value={config.name}
-            onChange={e => setConfig({ name: e.target.value })}
-            placeholder="e.g. Legal Contracts Knowledge Base"
-            disabled={!!targetLake}
-          />
-          <FormHelperText>
-            Slug: <code>{slug || '...'}</code>
-          </FormHelperText>
-          {slugTooShort && (
-            <FormHelperText data-testid="config-name-slug-error">
-              This name needs at least {MIN_DATA_LAKE_SLUG_LENGTH} letters or numbers - it currently makes an invalid
-              URL slug.
-            </FormHelperText>
-          )}
-          {duplicateNameLake && (
-            <FormHelperText data-testid="config-name-duplicate-warning" sx={{ color: 'warning.plainColor' }}>
-              A data lake named &ldquo;{duplicateNameLake.name}&rdquo; already exists here. You can still continue -
-              both will appear under the same name, with different slugs.
-            </FormHelperText>
-          )}
-        </FormControl>
-
         {/* Description */}
         <FormControl>
           <FormLabel>Description</FormLabel>
@@ -171,9 +122,10 @@ export default function ConfigStep() {
           />
         </FormControl>
 
-        {/* Tag Prefix - read-only here (its editable home is the taxonomy step in create
-            mode, or the target lake in append mode), unless the empty-prefix fallback applies. */}
-        <FormControl required={prefixEditable}>
+        {/* Tag Prefix - editable only in create mode (see prefixEditable), locked in append
+            mode. Still reports a prefix problem even when locked, so an inherited value's
+            issue is visible here rather than only disabling Start Upload. */}
+        <FormControl required={prefixEditable} error={!!prefixIssue}>
           <FormLabel>Tag Prefix</FormLabel>
           <Input
             data-testid="config-tag-prefix-input"
@@ -189,12 +141,11 @@ export default function ConfigStep() {
             sx={{ fontFamily: 'monospace' }}
             disabled={!prefixEditable}
           />
-          <FormHelperText>
-            {prefixEditable
-              ? 'All tags will be prefixed with this (must end with ":"). No taxonomy prefix was set, so add one here.'
-              : targetLake
-                ? 'Inherited from the existing data lake.'
-                : 'Set on the AI Taxonomy step. Go back there to change it.'}
+          <FormHelperText data-testid="datalake-config-tagprefix-help">
+            {prefixIssue ??
+              (prefixEditable
+                ? 'All tags will be prefixed with this (must end with ":"). Derived from the name - change it if you like.'
+                : 'Inherited from the existing data lake.')}
           </FormHelperText>
         </FormControl>
 
@@ -261,6 +212,17 @@ export default function ConfigStep() {
             Upload Summary
           </Typography>
           <Stack gap={0.5}>
+            {/* Name is set on the source step; echo it here so the last screen before upload
+                still shows what is about to be created. */}
+            <Typography level="body-sm" data-testid="config-summary-name">
+              {targetLake ? 'Adding to' : 'Name'}: <strong>{config.name || '-'}</strong>
+              {slug && (
+                <Typography component="span" level="body-xs" color="neutral">
+                  {' '}
+                  (<code>{slug}</code>)
+                </Typography>
+              )}
+            </Typography>
             <Typography level="body-sm">
               Files to upload:{' '}
               <strong>
@@ -275,9 +237,11 @@ export default function ConfigStep() {
                 </Typography>
               )}
             </Typography>
-            <Typography level="body-sm">
-              Tag categories: <strong>{taxonomy.tags.filter(t => !t.deleted).length}</strong>
-            </Typography>
+            {optionalSteps.taxonomy && !targetLake && (
+              <Typography level="body-sm" color="neutral">
+                AI tag suggestions will run in the background after upload - review them from the Data Lakes list.
+              </Typography>
+            )}
             {duplicateCheckResults && (
               <Typography level="body-sm" color={duplicateCheckResults.duplicateCount > 0 ? 'warning' : 'success'}>
                 Duplicates: <strong>{duplicateCheckResults.duplicateCount}</strong>

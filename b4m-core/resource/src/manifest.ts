@@ -27,6 +27,7 @@ export const DEFAULT_MANIFEST = {
   MAIL_PORT: { kind: 'secret', optional: true },
   MAIL_USERNAME: { kind: 'secret', optional: true },
   MONGODB_URI: { kind: 'secret' },
+  MOONSHOT_API_KEY: { kind: 'secret', optional: true },
   OAUTH_RSA_PRIVATE_KEY: { kind: 'secret', optional: true },
   OKTA_AUDIENCE: { kind: 'secret', optional: true },
   OKTA_CLIENT_ID: { kind: 'secret', optional: true },
@@ -72,6 +73,7 @@ export const DEFAULT_MANIFEST = {
   // --- queue ---
   agentContinuationQueue: { kind: 'queue' },
   agentProactiveMessageQueue: { kind: 'queue' },
+  dataLakeTaxonomyQueue: { kind: 'queue', optional: true },
   deepAgentWakeQueue: { kind: 'queue' },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },
