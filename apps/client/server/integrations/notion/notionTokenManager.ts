@@ -187,12 +187,14 @@ export class NotionTokenManager {
     // Fetch and store available tools, retrying once on failure.
     // Without toolSchemas the ToolBuilder silently skips the server,
     // so the LLM never sees Notion tools despite a valid connection.
-    const { invokeMcpHandler } = await import('@server/utils/invokeMcpHandler');
     const MAX_TOOL_FETCH_ATTEMPTS = 2;
     let toolsFetched = false;
 
     for (let attempt = 1; attempt <= MAX_TOOL_FETCH_ATTEMPTS; attempt++) {
       try {
+        // Imported inside the try so a module-resolution failure degrades to "no tool schemas"
+        // rather than failing the whole OAuth flow. Repeat imports hit the module cache.
+        const { invokeMcpHandler } = await import('@server/utils/invokeMcpHandler');
         const result = await invokeMcpHandler<unknown>({
           envVariables: envVars,
           name: 'notion',
@@ -222,7 +224,7 @@ export class NotionTokenManager {
     if (!toolsFetched) {
       console.error(
         'Notion MCP tools could not be fetched after retries. ' +
-          'The server is saved but toolSchemas are empty — the LLM will not see Notion tools ' +
+          'The server is saved but toolSchemas are empty - the LLM will not see Notion tools ' +
           'until the next GET /api/mcp-servers request refreshes them.'
       );
     }

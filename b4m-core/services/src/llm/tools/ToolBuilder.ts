@@ -360,40 +360,45 @@ export class ToolBuilder {
     // Tool schemas are populated by the GET /api/mcp-servers endpoint and connect/OAuth flows.
     // callTool connects lazily via Lambda only when the LLM actually invokes a tool.
     for (const server of mcpServers) {
-      let schemas = server.toolSchemas;
+      // Isolate per server: a malformed cached schema must not drop tools for every other server.
+      try {
+        let schemas = server.toolSchemas;
 
-      // If cached schemas are missing, attempt a live fetch so the LLM still gets
-      // the tools for this request rather than silently ignoring the server.
-      if (!schemas?.length) {
-        try {
-          logger.info(`🛠️ [MCP] No cached tool schemas for ${server.name} — fetching live`);
-          const client = await this.deps.getMcpClient(server);
-          const liveTools = await client.getTools();
-          if (Array.isArray(liveTools) && liveTools.length > 0) {
-            schemas = liveTools;
-            // Persist so future requests don't need a live fetch
-            await this.deps.db.mcpServers.update({
-              id: server.id,
-              tools: liveTools.map((t: { name: string }) => t.name),
-              toolSchemas: liveTools,
-            });
-            logger.info(`🛠️ [MCP] Live-fetched and cached ${liveTools.length} tool schemas for ${server.name}`);
+        // If cached schemas are missing, attempt a live fetch so the LLM still gets
+        // the tools for this request rather than silently ignoring the server.
+        if (!schemas?.length) {
+          try {
+            logger.info(`🛠️ [MCP] No cached tool schemas for ${server.name} - fetching live`);
+            const client = await this.deps.getMcpClient(server);
+            const liveTools = await client.getTools();
+            if (Array.isArray(liveTools) && liveTools.length > 0) {
+              schemas = liveTools;
+              // Persist so future requests don't need a live fetch
+              await this.deps.db.mcpServers.update({
+                id: server.id,
+                tools: liveTools.map((t: { name: string }) => t.name),
+                toolSchemas: liveTools,
+              });
+              logger.info(`🛠️ [MCP] Live-fetched and cached ${liveTools.length} tool schemas for ${server.name}`);
+            }
+          } catch (fetchError) {
+            logger.warn(`🛠️ [MCP] Live tool fetch failed for ${server.name} - skipping:`, fetchError);
           }
-        } catch (fetchError) {
-          logger.warn(`🛠️ [MCP] Live tool fetch failed for ${server.name} — skipping:`, fetchError);
         }
-      }
 
-      if (schemas?.length) {
-        const callTool = async (toolName: string, toolArgs: unknown) => {
-          const client = await this.deps.getMcpClient(server);
-          const result = await client.callTool(toolName, toolArgs);
-          return result;
-        };
-        mcpToolsByServer[server.name] = generateMcpToolsFromCache(server.name, schemas, callTool);
-        logger.info(`🛠️ [MCP] Loaded ${schemas.length} tool schemas for ${server.name}`);
-      } else {
-        logger.warn(`🛠️ [MCP] No tool schemas found for ${server.name} — skipping (reconnect server to populate)`);
+        if (schemas?.length) {
+          const callTool = async (toolName: string, toolArgs: unknown) => {
+            const client = await this.deps.getMcpClient(server);
+            const result = await client.callTool(toolName, toolArgs);
+            return result;
+          };
+          mcpToolsByServer[server.name] = generateMcpToolsFromCache(server.name, schemas, callTool);
+          logger.info(`🛠️ [MCP] Loaded ${schemas.length} tool schemas for ${server.name}`);
+        } else {
+          logger.warn(`🛠️ [MCP] No tool schemas found for ${server.name} - skipping (reconnect server to populate)`);
+        }
+      } catch (serverError) {
+        logger.error(`🛠️ [MCP] Failed to build tools for ${server.name} - skipping this server:`, serverError);
       }
     }
 

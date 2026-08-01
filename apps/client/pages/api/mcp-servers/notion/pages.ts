@@ -116,7 +116,7 @@ const handler = baseApi().get(async (req, res) => {
       if (error.message.includes('Notion search failed')) {
         const status = error.message.match(/: (\d+)/)?.[1];
         return res.status(502).json({
-          error: `Notion API returned an error (HTTP ${status || 'unknown'}). This is usually temporary — please try again.`,
+          error: `Notion API returned an error (HTTP ${status || 'unknown'}). This is usually temporary - please try again.`,
           code: 'NOTION_API_ERROR',
         });
       }

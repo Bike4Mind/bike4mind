@@ -24,6 +24,21 @@ function redirectWithError(res: ExpressResponse, message: string) {
   return res.redirect('/profile?tab=integrations&notion=error');
 }
 
+/**
+ * Fixed messages for the RFC 6749 4.1.2.1 error codes. This route is unauthenticated, so the
+ * `error` query param is attacker-controllable via a crafted link: never echo it to the user,
+ * or an arbitrary string (e.g. a fake support phone number) can be phished into a toast.
+ */
+const OAUTH_ERROR_MESSAGES: Record<string, string> = {
+  access_denied: 'Notion authorization was declined. Please try connecting again and approve access.',
+  invalid_request: 'Notion rejected the authorization request. Please try connecting again.',
+  unauthorized_client: 'This app is not authorized to connect to Notion. Please contact your administrator.',
+  unsupported_response_type: 'Notion rejected the authorization request. Please contact your administrator.',
+  invalid_scope: 'Notion rejected the requested permissions. Please contact your administrator.',
+  server_error: 'Notion reported a server error during authorization. Please try again shortly.',
+  temporarily_unavailable: 'Notion is temporarily unavailable. Please try connecting again shortly.',
+};
+
 interface NotionTokenResponse {
   access_token: string;
   token_type: 'bearer';
@@ -74,8 +89,10 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   if (error) {
     console.error('[Notion Callback] OAuth error:', error);
     auditLogger.failure('oauth_error');
-    const errorMsg = typeof error === 'string' ? error : 'OAuth authorization failed';
-    return redirectWithError(res, `Notion authorization failed: ${errorMsg}`);
+    const message =
+      (typeof error === 'string' && OAUTH_ERROR_MESSAGES[error]) ||
+      'Notion authorization failed. Please try connecting again.';
+    return redirectWithError(res, message);
   }
 
   if (!code || typeof code !== 'string') {

@@ -41,12 +41,14 @@ vi.mock('@server/security/tokenEncryption', () => ({
 }));
 
 // Mock invokeMcpHandler
+const DEFAULT_MCP_TOOLS = [
+  { name: 'notion_search', description: 'Search Notion' },
+  { name: 'notion_create_page', description: 'Create a page' },
+  { name: 'notion_read_page', description: 'Read page content' },
+];
+const mockInvokeMcpHandler = vi.fn();
 vi.mock('@server/utils/invokeMcpHandler', () => ({
-  invokeMcpHandler: vi.fn().mockResolvedValue([
-    { name: 'notion_search', description: 'Search Notion' },
-    { name: 'notion_create_page', description: 'Create a page' },
-    { name: 'notion_read_page', description: 'Read page content' },
-  ]),
+  invokeMcpHandler: (...args: unknown[]) => mockInvokeMcpHandler(...args),
 }));
 
 // Mock fetch for token validation
@@ -59,6 +61,8 @@ describe('NotionTokenManager', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFetch.mockReset();
+    mockInvokeMcpHandler.mockReset();
+    mockInvokeMcpHandler.mockResolvedValue(DEFAULT_MCP_TOOLS);
   });
 
   describe('NotionReconnectRequiredError', () => {
@@ -328,6 +332,49 @@ describe('NotionTokenManager', () => {
           ]),
         })
       );
+    });
+
+    it('should retry the tool fetch once and store tools when the second attempt succeeds', async () => {
+      mockFindOne.mockResolvedValue({ id: 'mcp-123', name: 'notion' });
+      mockInvokeMcpHandler
+        .mockRejectedValueOnce(new Error('MCP handler timed out'))
+        .mockResolvedValue([{ name: 'notion_search', description: 'Search Notion' }]);
+
+      vi.useFakeTimers();
+      try {
+        const sync = NotionTokenManager.syncMcpServer('user-123', 'access-token', 'ws-123');
+        await vi.runAllTimersAsync(); // clear the 2s backoff between attempts
+        await sync;
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(mockInvokeMcpHandler).toHaveBeenCalledTimes(2);
+      expect(mockMcpUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'mcp-123',
+          tools: ['notion_search'],
+        })
+      );
+    });
+
+    it('should save the connection without tools when every tool-fetch attempt fails', async () => {
+      mockFindOne.mockResolvedValue({ id: 'mcp-123', name: 'notion' });
+      mockInvokeMcpHandler.mockRejectedValue(new Error('MCP handler unavailable'));
+
+      vi.useFakeTimers();
+      try {
+        const sync = NotionTokenManager.syncMcpServer('user-123', 'access-token', 'ws-123');
+        await vi.runAllTimersAsync();
+        await expect(sync).resolves.toBeUndefined(); // must not throw: the connection itself is still valid
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(mockInvokeMcpHandler).toHaveBeenCalledTimes(2);
+      // Only the envVariables update ran; no tools/toolSchemas write happened
+      expect(mockMcpUpdate).toHaveBeenCalledTimes(1);
+      expect(mockMcpUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ toolSchemas: expect.anything() }));
     });
   });
 });
