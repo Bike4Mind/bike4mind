@@ -590,10 +590,16 @@ function firstDisagreement(observations: readonly PriceObservation[]): [PriceObs
 function diverges(a: DiscoveredPrice, b: DiscoveredPrice, tolerance: number): boolean {
   if (ratesDiverge(a, b, tolerance)) return true;
 
-  const left = a.brackets ?? [];
-  const right = b.brackets ?? [];
-  // Brackets change the priced shape; a ladder observed by only one side is not corroborated.
-  if (left.length !== right.length) return left.length > 0 || right.length > 0;
+  const left = a.brackets;
+  const right = b.brackets;
+  // A ladder only one side publishes is silence, NOT divergence - deliberately, and it is
+  // load-bearing. An uncorroborated ladder is refused by the ladderUncorroborated check in
+  // planPriceWrites, which fires only when the row in force is already tiered. Repeating that
+  // judgement here would also block a FLAT row from taking the base rates, a write whose
+  // brackets get discarded anyway. Both are covered by tests; if a static analyzer suggests
+  // treating a one-sided ladder as divergence, that is the case it is missing.
+  if (!left || !right) return false;
+  if (left.length !== right.length) return true;
 
   return left.some(
     (bracket, index) => bracket.aboveTokens !== right[index].aboveTokens || ratesDiverge(bracket, right[index], tolerance)
