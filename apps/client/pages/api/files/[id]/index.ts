@@ -12,8 +12,10 @@ import {
   User,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
+import { NotFoundError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
+import { findLakeAccessibleFabFile } from '@server/dataLakes';
 import { getFilesStorage } from '@server/utils/storage';
 import { Request } from 'express';
 import { Types } from 'mongoose';
@@ -22,29 +24,39 @@ const handler = baseApi()
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     req.logger.updateMetadata({ userId: req.user.id, fileId: req.query.id });
 
-    const fabFile = await fabFilesService.getFabFile(
-      req.user.id,
-      { id: req.query.id },
-      {
-        db: {
-          fabFiles: fabFileRepository,
-          users: userRepository,
-          adminSettings: adminSettingsRepository,
+    const adapter = {
+      db: {
+        fabFiles: fabFileRepository,
+        users: userRepository,
+        adminSettings: adminSettingsRepository,
+      },
+      storage: {
+        generateSignedUrl: async (path: string, expireInSeconds: number) => {
+          try {
+            return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
+          } catch (error) {
+            req.logger.error('Error generating signed URL:', { error, path });
+            throw error;
+          }
         },
-        storage: {
-          generateSignedUrl: async (path: string, expireInSeconds: number) => {
-            try {
-              return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
-            } catch (error) {
-              req.logger.error('Error generating signed URL:', { error, path });
-              throw error;
-            }
-          },
-        },
-      }
-    );
+      },
+    };
 
-    return res.json(fabFile);
+    try {
+      const fabFile = await fabFilesService.getFabFile(req.user.id, { id: req.query.id }, adapter);
+      return res.json(fabFile);
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) throw error;
+      // Fallback: data-lake files are authorized by lake tag/prefix, NOT by per-file ACL.
+      // Curated/shared lake articles (e.g. OptiHashi's opti-knowledge) are owned by a curator,
+      // so getFabFile 404s for entitled non-owner users. Re-authorize via the SAME lake gate the
+      // browse endpoints use and, if granted, mint a fresh signed URL through the same path so
+      // the shared file viewer (KnowledgeModal) can render it. (#836)
+      const lakeFile = await findLakeAccessibleFabFile(req, req.query.id);
+      if (!lakeFile) throw error; // not lake-accessible either - preserve the original 404
+      const fabFile = await fabFilesService.generateSignedUrl(lakeFile, adapter);
+      return res.json(fabFile);
+    }
   })
   /**
    * Update FabFile by ID
@@ -88,6 +100,16 @@ const handler = baseApi()
           },
           {
             db: { fabFiles: fabFileRepository },
+            // `tags` only - deliberately NOT primaryTag, even though the gate above inspects it.
+            // primaryTag lives outside the tags array and no lake query reads it, so treating it
+            // as membership would stamp a prefix tag onto a file carrying no meta-tag: exactly
+            // the prefix-only shape this invariant exists to avoid, minted from nothing.
+            reconcileTags: (tags, previousTags) =>
+              dataLakeService.reconcileDataLakeFallbackTags(tags, {
+                db: { dataLakes: dataLakeRepository },
+                previousTags,
+                logger: req.logger,
+              }),
             storage: {
               upload: (filepath, content, option) => {
                 return getFilesStorage().upload(content, filepath, option);

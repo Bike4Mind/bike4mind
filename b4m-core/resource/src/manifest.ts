@@ -73,6 +73,7 @@ export const DEFAULT_MANIFEST = {
   // --- queue ---
   agentContinuationQueue: { kind: 'queue' },
   agentProactiveMessageQueue: { kind: 'queue' },
+  dataLakeTaxonomyQueue: { kind: 'queue', optional: true },
   deepAgentWakeQueue: { kind: 'queue' },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },

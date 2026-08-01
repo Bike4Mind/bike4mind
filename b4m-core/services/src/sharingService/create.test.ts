@@ -39,7 +39,7 @@ describe('sharingService - createInvite (group arm authority)', () => {
       users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
       fabFiles: { findByIdAndUserId: vi.fn(), shareable: { findShareAccessById: vi.fn() } },
       sessions: { findByIdAndUserId: vi.fn() },
-      projects: { findById: vi.fn() },
+      projects: { shareable: { findShareAccessById: vi.fn() } },
       organizations: { findById: vi.fn(async () => organization) },
       groups: { findById: vi.fn(async () => group) },
     };
@@ -117,5 +117,53 @@ describe('sharingService - createInvite (group arm authority)', () => {
     db.organizations.findById = vi.fn(async () => null);
 
     await expect(create(asUser(OWNER_ID))).rejects.toThrow(BadRequestError);
+  });
+});
+
+/**
+ * Authority tests for the InviteType.Project arm. Scoped to the caller's share access
+ * (shareable.findShareAccessById), matching the FabFile arm - previously an unscoped findById,
+ * so any authenticated caller who knew a project id could mint an invite for it.
+ */
+describe('sharingService - createInvite (project arm authority)', () => {
+  const PROJECT_ID = 'project-1';
+  const PROJECT_NAME = 'Confidential Project';
+
+  const asUser = (id: string) => ({ id, username: 'u', isAdmin: false }) as IUserDocument;
+
+  let db: any;
+  let findShareAccessById: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    findShareAccessById = vi.fn();
+    db = {
+      invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-2', ...(build as object) })) },
+      users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
+      projects: { shareable: { findShareAccessById } },
+    };
+  });
+
+  const create = (user: IUserDocument, id = PROJECT_ID) =>
+    createInvite(user, { id, type: InviteType.Project, permissions: [Permission.read] } as any, { db });
+
+  it('creates an invite when the caller has share access, scoped to that caller and id', async () => {
+    findShareAccessById.mockResolvedValue({ id: PROJECT_ID, name: PROJECT_NAME });
+    const user = asUser('owner-2');
+
+    const invite = await create(user);
+
+    expect(invite.name).toBe(PROJECT_NAME);
+    expect(findShareAccessById).toHaveBeenCalledWith(user, PROJECT_ID);
+  });
+
+  it('rejects when the scoped lookup finds nothing', async () => {
+    // Deliberately NOT named "indistinguishably from a missing project": with a single mock,
+    // "no access" and "does not exist" are the same input, so nothing here distinguishes them.
+    // That property is real (findShareAccessById returns null for both) but only the e2e test can
+    // demonstrate it - see projectInviteAuth.e2e.test.ts.
+    findShareAccessById.mockResolvedValue(null);
+
+    await expect(create(asUser('outsider-1'))).rejects.toThrow(BadRequestError);
+    expect(db.invites.create).not.toHaveBeenCalled();
   });
 });

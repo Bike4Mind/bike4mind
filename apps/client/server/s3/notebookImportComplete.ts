@@ -84,7 +84,7 @@ const processNotebookImport = async (
             return Quest.bulkWrite(bulkOps, { session });
           },
           deleteMany: async (filter: any) => {
-            return Quest.deleteMany(filter).session(session);
+            return Quest.deleteMany(filter, { session });
           },
         },
         knowledgeRepository: {

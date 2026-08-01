@@ -56,13 +56,25 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: {},
   userRepository: { findById: mockFindUserById },
 }));
-vi.mock('@bike4mind/services', () => ({
+// The report helpers are the REAL ones: the wording and snake_case mapping are what these tests
+// check, so a reimplementation here would prove nothing. Imported from source because the module
+// is pure, while pulling the whole services barrel into jsdom is not.
+vi.mock('@bike4mind/services', async () => ({
   apiKeyService: {
     getEffectiveApiKey: mockGetEffectiveApiKey,
     getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys,
   },
+  ...(await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch').then(m => ({
+    __mismatch: m,
+  }))),
   dataLakeService: {
     semanticDataLakeSearch: mockSemanticSearch,
+    describeEmbeddingMismatch: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
+    ).describeEmbeddingMismatch,
+    emptyEmbeddingMismatchReport: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
+    ).emptyEmbeddingMismatchReport,
     resolveSearchBudgets: mockResolveSearchBudgets,
     emptyScanAccounting: (b?: { maxFiles?: number; maxChunks?: number }) => ({
       truncated: false,
@@ -81,6 +93,7 @@ vi.mock('@bike4mind/services', () => ({
 
 import { BedrockEmbeddingModel, ModelBackend } from '@bike4mind/common';
 import handler from '@pages/api/data-lakes/semantic-search';
+import { emptyEmbeddingMismatchReport } from '../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch';
 
 const DYNAMIC_SCOPE = {
   dataLakeTags: ['datalake:acme-handbook'],
@@ -103,7 +116,9 @@ const EMPTY_RESULT = {
   results: [],
   totalChunksSearched: 0,
   filesInScope: 0,
+  chunksScored: 0,
   embeddingModel: 'text-embedding-ada-002',
+  embeddingMismatch: emptyEmbeddingMismatchReport(),
   scan: { ...FULL_SCAN, filesMatching: 0, filesScoped: 0, filesScanned: 0, chunksScanned: 0 },
 };
 
@@ -304,6 +319,8 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
         },
       ],
       totalChunksSearched: 12,
+      chunksScored: 12,
+      embeddingMismatch: emptyEmbeddingMismatchReport(),
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
       scan: FULL_SCAN,
@@ -345,6 +362,8 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
     mockSemanticSearch.mockResolvedValue({
       results: [],
       totalChunksSearched: 12,
+      chunksScored: 12,
+      embeddingMismatch: emptyEmbeddingMismatchReport(),
       filesInScope: 3,
       embeddingModel: 'text-embedding-ada-002',
       scan: FULL_SCAN,
@@ -364,6 +383,8 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
     mockSemanticSearch.mockResolvedValue({
       results: [],
       totalChunksSearched: 100000,
+      chunksScored: 12,
+      embeddingMismatch: emptyEmbeddingMismatchReport(),
       filesInScope: 2314,
       embeddingModel: 'text-embedding-ada-002',
       scan: {
@@ -404,6 +425,67 @@ describe('POST /api/data-lakes/semantic-search scan accounting', () => {
     await handler(makeReq({ query: 'pto' }), makeRes());
 
     expect(searchParams().budgets).toEqual({ maxFiles: 50, maxChunks: 100 });
+  });
+});
+
+describe('POST /api/data-lakes/semantic-search embedding-mismatch reporting', () => {
+  const SMALL_3 = 'text-embedding-3-small';
+
+  const mismatchReport = () => {
+    const report = emptyEmbeddingMismatchReport();
+    report.excludedFiles = {
+      count: 1,
+      models: [SMALL_3],
+      estimatedChunks: 4,
+      sample: [{ fileId: 'f9', fileName: 'foreign.md', embeddingModel: SMALL_3 }],
+    };
+    report.partial = true;
+    return report;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
+    mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
+    mockGetEffectiveApiKey.mockResolvedValue('test-openai-key');
+    mockGetSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    mockFindUserById.mockResolvedValue(null);
+  });
+
+  it('flags a partial result and names the model to re-embed', async () => {
+    mockSemanticSearch.mockResolvedValue({ ...EMPTY_RESULT, chunksScored: 3, embeddingMismatch: mismatchReport() });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.partial_results).toBe(true);
+    expect(body.chunks_scored).toBe(3);
+    expect(body.embedding_mismatch.excluded_files.models).toEqual([SMALL_3]);
+    expect(body.warning).toContain(SMALL_3);
+  });
+
+  it('adds no warning key at all to a healthy search', async () => {
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.partial_results).toBe(false);
+    expect('warning' in body).toBe(false);
+  });
+
+  it('reports mismatch independently of scan truncation - they are different facts', async () => {
+    // A lake can be fully scanned and still return content that could not be compared, and vice
+    // versa; a caller must be able to tell the two apart.
+    mockSemanticSearch.mockResolvedValue({ ...EMPTY_RESULT, embeddingMismatch: mismatchReport() });
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'onboarding' }), res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.partial_results).toBe(true);
+    expect(body.scan.truncated).toBe(false);
   });
 });
 

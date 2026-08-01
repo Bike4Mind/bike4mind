@@ -3,19 +3,27 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   findStuck: vi.fn(),
   reconcile: vi.fn(),
+  findStuckTaxonomy: vi.fn(),
+  reconcileTaxonomy: vi.fn(),
   recordForced: vi.fn(),
   recordGauge: vi.fn(),
   recordRun: vi.fn(),
+  enqueueTaxonomyAnalysisIfWanted: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
-  dataLakeBatchRepository: { findStuck: h.findStuck },
+  dataLakeBatchRepository: { findStuck: h.findStuck, findStuckTaxonomy: h.findStuckTaxonomy },
   dataLakeRepository: {},
   fabFileRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({
-  dataLakeService: { DEFAULT_STUCK_BATCH_TIMEOUT_MS: 30 * 60 * 1000, reconcileStuckBatches: h.reconcile },
+  dataLakeService: {
+    DEFAULT_STUCK_BATCH_TIMEOUT_MS: 30 * 60 * 1000,
+    reconcileStuckBatches: h.reconcile,
+    DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS: 10 * 60 * 1000,
+    reconcileStuckTaxonomy: h.reconcileTaxonomy,
+  },
 }));
 vi.mock('@bike4mind/observability', () => {
   const mockLogger: Record<string, unknown> = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
@@ -33,6 +41,9 @@ vi.mock('@server/utils/cloudwatch', () => ({
   recordStuckBatchGauge: (...a: unknown[]) => h.recordGauge(...a),
   recordReconcileRun: (...a: unknown[]) => h.recordRun(...a),
 }));
+vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
+  enqueueTaxonomyAnalysisIfWanted: (...a: unknown[]) => h.enqueueTaxonomyAnalysisIfWanted(...a),
+}));
 
 import { handler } from './dataLakeBatchReconcile';
 
@@ -44,6 +55,9 @@ describe('dataLakeBatchReconcile cron handler', () => {
     h.recordRun.mockResolvedValue(undefined);
     h.recordForced.mockResolvedValue(undefined);
     h.recordGauge.mockResolvedValue(undefined);
+    h.findStuckTaxonomy.mockResolvedValue([]);
+    h.reconcileTaxonomy.mockResolvedValue([]);
+    h.enqueueTaxonomyAnalysisIfWanted.mockResolvedValue(undefined);
   });
 
   it('scans with a cutoff ~ now-timeout and a bounded limit, reconciles, and heartbeats', async () => {
@@ -72,7 +86,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
     );
     expect(h.recordRun).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body)).toEqual({ candidates: 1, forced: 1 });
+    expect(JSON.parse(res.body)).toEqual({ candidates: 1, forced: 1, taxonomyCandidates: 0, taxonomyForced: 0 });
   });
 
   it('heartbeats even when nothing is stuck (zero-work run)', async () => {
@@ -80,7 +94,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
     h.reconcile.mockResolvedValue([]);
     const res = await handler();
     expect(h.recordRun).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(res.body)).toEqual({ candidates: 0, forced: 0 });
+    expect(JSON.parse(res.body)).toEqual({ candidates: 0, forced: 0, taxonomyCandidates: 0, taxonomyForced: 0 });
   });
 
   it('wires metric hooks that route to the CloudWatch helpers and swallow a rejecting helper', async () => {
@@ -92,16 +106,19 @@ describe('dataLakeBatchReconcile cron handler', () => {
     // them here to prove they route to the right helper and don't escape on a rejected emit.
     const { metrics } = (h.reconcile.mock.calls[0] as unknown[])[2] as {
       metrics: {
-        emitForcedTerminal: (b: string, l: string) => Promise<void>;
+        emitForcedTerminal: (batch: { id: string; dataLakeId: string }) => Promise<void>;
         emitStuckGauge: (n: number) => Promise<void>;
       };
     };
-    await metrics.emitForcedTerminal('b1', 'lake1');
+    const forcedBatch = { id: 'b1', dataLakeId: 'lake1', wantsTaxonomy: true };
+    await metrics.emitForcedTerminal(forcedBatch);
     await metrics.emitStuckGauge(3);
     expect(h.recordForced).toHaveBeenCalledTimes(1);
     expect(h.recordGauge).toHaveBeenCalledWith(3);
+    // Backstops the taxonomy enqueue for a batch that never reached upload-complete.
+    expect(h.enqueueTaxonomyAnalysisIfWanted).toHaveBeenCalledWith(forcedBatch, expect.anything());
 
     h.recordForced.mockRejectedValueOnce(new Error('cloudwatch down'));
-    await expect(metrics.emitForcedTerminal('b2', 'lake2')).resolves.toBeUndefined();
+    await expect(metrics.emitForcedTerminal({ id: 'b2', dataLakeId: 'lake2' })).resolves.toBeUndefined();
   });
 });

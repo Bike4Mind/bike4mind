@@ -205,13 +205,7 @@ function EmptyState({
   );
 }
 
-export default function DataLakeArticle({
-  file,
-  onAskAbout,
-  quickDives = [],
-  onDive,
-  onCreate,
-}: DataLakeArticleProps) {
+export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onDive, onCreate }: DataLakeArticleProps) {
   const muiTheme = useTheme();
   const isDark = muiTheme.palette.mode === 'dark';
   const { theme, copy, icons } = useDataLakeSurface();

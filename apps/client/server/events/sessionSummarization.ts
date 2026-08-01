@@ -198,6 +198,12 @@ export const handler = withEventContext(async (event, logger) => {
             db: {
               fabFiles: fabFileRepository,
             },
+            // Pass-through on purpose, for two reasons. This path writes `session.tags` with no
+            // assertCanWriteDataLakeTags gate, so stamping a lake's content prefix here would
+            // mint tags for a lake the session owner may not manage. And it would buy nothing
+            // anyway: this FabFile always carries a sessionId, which both tag counters exclude
+            // unless the file is a curated-notebook, so a stamp could never reach the tag tree.
+            reconcileTags: async tags => tags,
             storage: {
               upload: (filepath, content, options) => {
                 return getFilesStorage().upload(content, filepath, {

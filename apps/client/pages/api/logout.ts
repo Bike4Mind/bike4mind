@@ -1,5 +1,5 @@
 import { AuthEvents, IUserDocument } from '@bike4mind/common';
-import { userRepository } from '@bike4mind/database';
+import { userRepository, authSessionRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -24,7 +24,10 @@ const handler = baseApi().get(async (req, res) => {
   //    real customer out on every device. Impersonation ends via "Return to safety", not logout.
   if (userId && !isApiKeyAuth(req) && !user?.impersonatedBy) {
     try {
-      await userService.revokeUserSessions(userId, { db: { users: userRepository }, logger: req.logger });
+      await userService.revokeUserSessions(userId, {
+        db: { users: userRepository, authSessions: authSessionRepository },
+        logger: req.logger,
+      });
     } catch (error) {
       // Rare race: the account was deleted between JWT auth and this bump. Nothing is left to
       // revoke, so let logout still succeed instead of surfacing a confusing 404 to the client.

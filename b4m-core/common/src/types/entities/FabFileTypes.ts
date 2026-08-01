@@ -303,6 +303,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findAllInIds(ids: string[]): Promise<IFabFileDocument[]>;
 
   /**
+   * Find files by ID with the heavy and URL-bearing fields projected out, for
+   * callers that need to know what a file IS without loading or linking to it.
+   * Includes soft-deleted files, so a still-referenced deleted attachment stays
+   * visible as such. Capped; `hasMore` reports truncation rather than hiding it.
+   * @param ids - The IDs of the files.
+   * @param cap - Maximum rows to return.
+   */
+  findMetadataByIds(ids: string[], cap?: number): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+
+  /**
+   * As `findMetadataByIds`, for the files a session currently holds (excludes
+   * soft-deleted). Capped; `hasMore` reports truncation rather than hiding it.
+   * @param sessionId - The session whose files to list.
+   * @param cap - Maximum rows to return.
+   */
+  findMetadataBySessionId(sessionId: string, cap?: number): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+
+  /**
    * Delete many files in the given IDs.
    * @param ids - The IDs of the files.
    * @returns A promise that resolves to void.
@@ -315,6 +333,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @returns A promise that resolves to an array of files.
    */
   findAllByIds(ids: string[]): Promise<IFabFileDocument[]>;
+
+  /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
+  findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
 
   /**
    * Search for files.
@@ -434,9 +455,18 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ total: number; byPrefix: Record<string, number> }>;
 
   /**
-   * Count unique files per root tag namespace for a user.
+   * Count unique files per root tag namespace for a user. Takes the same optional scope as
+   * countFilesByTagForUser, which it is served beside; omitting it counts owned files only.
    */
-  countUniqueFilesByNamespaceForUser(userId: string): Promise<{ namespace: string; fileCount: number }[]>;
+  countUniqueFilesByNamespaceForUser(
+    userId: string,
+    options?: {
+      userGroups?: string[];
+      dataLakeTags?: string[];
+      dataLakeTagPrefixes?: string[];
+      scopedTagPrefixes?: string[];
+    }
+  ): Promise<{ namespace: string; fileCount: number }[]>;
 
   /**
    * Remove a tag from a user's files.
@@ -467,6 +497,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
 
   /**
+   * Bulk-writes each file's full tags array in a single round trip via bulkWrite, instead of
+   * one findOneAndUpdate per file. Used by applyTaxonomySuggestions, where a batch can hold
+   * thousands of files and one write per file risks exceeding the caller's request timeout.
+   * @param updates - Each file's id and its complete resolved tags array.
+   * @returns Number of documents modified.
+   */
+  bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number>;
+
+  /**
    * Find files by content hashes for a given user (deduplication).
    * @param userId - The ID of the user.
    * @param hashes - Array of SHA-256 content hashes to look up.
@@ -492,6 +531,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * find().length). Counts only live files (not archived, not deleted).
    */
   computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }>;
+  /**
+   * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
+   * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
+   * stored stats. Prefer this over counting `<prefix>:` tag matches, which misses files that
+   * carry only the membership tag and over-counts multi-tagged ones.
+   */
+  countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>>;
   /** Soft-archive (reversible) all live member files. Returns affected count. */
   archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
   /** Reverse archive for all archived member files. */
