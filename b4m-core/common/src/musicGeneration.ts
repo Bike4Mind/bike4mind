@@ -31,12 +31,13 @@ export const DEFAULT_MUSIC_LENGTH_MS = 10_000;
 /** ElevenLabs music length bounds, in milliseconds (`music_length_ms`). */
 export const MIN_MUSIC_LENGTH_MS = 3_000;
 /**
- * Capped well below the provider's own 600s ceiling because generation happens
- * inside a 60s-limited serving function whose provider fetch aborts at ~45s (see
- * ElevenLabsMusicGenerator). The abort makes over-budget requests fail safe
- * (reservation refunded), so this cap is purely to avoid accepting lengths that
- * would predictably time out. Conservative and provisional: raise it once real
- * ElevenLabs generation latency is measured against the fetch budget.
+ * Capped well below the provider's own 600s ceiling: generation happens inside a
+ * time-limited serving function whose provider fetch carries its own abort
+ * deadline (MUSIC_GENERATION_TIMEOUT_MS in ElevenLabsMusicGenerator). That abort
+ * is what makes an over-budget request fail safe (reservation refunded); this cap
+ * only avoids accepting lengths that would predictably hit it. Conservative and
+ * provisional: raise it once real ElevenLabs generation latency is measured.
+ * Note this bounds output length, which correlates with - but is not - wall time.
  */
 export const MAX_MUSIC_LENGTH_MS = 120_000;
 

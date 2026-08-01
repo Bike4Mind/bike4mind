@@ -5,12 +5,18 @@ import { GeneratedMusic, MusicGenerationOptions, MusicGenerator } from './types'
 const MUSIC_GENERATION_ENDPOINT = 'https://api.elevenlabs.io/v1/music';
 const DEFAULT_OUTPUT_FORMAT = 'mp3_44100_128';
 
-// The provider round-trip runs inside a 60s-capped serving function while a
-// credit reservation is already debited. Abort with headroom (leaving room for
-// the surrounding reserve/settle/persist work) so a slow provider surfaces as a
-// rejected fetch - which the route's catch refunds - instead of the process
-// being killed mid-call with the charge applied and no refund.
-const MUSIC_GENERATION_TIMEOUT_MS = 45_000;
+/**
+ * Default provider-fetch deadline. The round-trip runs inside a time-capped
+ * serving function (60s on hosted; see infra/web.ts) while a credit reservation
+ * is already debited. Aborting with headroom - leaving room for the surrounding
+ * reserve/settle/persist work - makes a slow provider surface as a rejected
+ * fetch, which the route's catch refunds, instead of the process being killed
+ * mid-call with the charge applied and no refund.
+ *
+ * Overridable per-instance via `timeoutMs` so a deployment without that cap
+ * (self-host) isn't bound by a hosted-infra number.
+ */
+export const MUSIC_GENERATION_TIMEOUT_MS = 45_000;
 
 /** Maps an ElevenLabs `output_format` token to its MIME type. */
 function contentTypeForFormat(format: string): string {
@@ -26,6 +32,8 @@ export interface ElevenLabsMusicGeneratorConfig {
   logger: Logger;
   /** Injectable HTTP client; defaults to the global `fetch`. Overridden in tests. */
   fetchImpl?: typeof fetch;
+  /** Provider-fetch deadline; defaults to MUSIC_GENERATION_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 /**
@@ -39,6 +47,7 @@ export class ElevenLabsMusicGenerator implements MusicGenerator {
   private readonly apiKey: string;
   private readonly logger: Logger;
   private readonly fetchImpl: typeof fetch;
+  private readonly timeoutMs: number;
 
   constructor(config: ElevenLabsMusicGeneratorConfig) {
     if (!config.apiKey) {
@@ -47,6 +56,7 @@ export class ElevenLabsMusicGenerator implements MusicGenerator {
     this.apiKey = config.apiKey;
     this.logger = config.logger;
     this.fetchImpl = config.fetchImpl ?? fetch;
+    this.timeoutMs = config.timeoutMs ?? MUSIC_GENERATION_TIMEOUT_MS;
   }
 
   async generate(prompt: string, options: MusicGenerationOptions = {}): Promise<GeneratedMusic> {
@@ -66,7 +76,7 @@ export class ElevenLabsMusicGenerator implements MusicGenerator {
         ...(options.lengthMs !== undefined ? { music_length_ms: options.lengthMs } : {}),
         ...(options.forceInstrumental !== undefined ? { force_instrumental: options.forceInstrumental } : {}),
       }),
-      signal: AbortSignal.timeout(MUSIC_GENERATION_TIMEOUT_MS),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!res.ok) {
@@ -76,6 +86,12 @@ export class ElevenLabsMusicGenerator implements MusicGenerator {
     }
 
     const audio = Buffer.from(await res.arrayBuffer());
+    // A truncated/empty 200 must fail here so the route refunds the reservation,
+    // rather than settling the full charge and persisting a 0-byte file.
+    if (audio.length === 0) {
+      this.logger.error('ElevenLabs music generation returned an empty body', { status: res.status });
+      throw new Error('ElevenLabs music generation returned no audio');
+    }
     return { audio, contentType: contentTypeForFormat(format) };
   }
 }
