@@ -34,6 +34,22 @@ const embeddingFactory = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal factory shape for this unit test
 } as any;
 
+// Models an embedding outage: the provider rejects every embed call (e.g. a 401 on a revoked or
+// endpoint-scoped key). The query embedding must degrade to raw content, not abort the whole turn.
+const throwingEmbeddingFactory = {
+  getDefaultEmbeddingModel: () => 'text-embedding-3-small',
+  createEmbeddingService: () => ({
+    getModelInfo: () => ({ model: 'text-embedding-3-small', contextWindow: 8191 }),
+    generateEmbedding: async () => {
+      throw new Error('OpenAI rejected the embedding request (401 Unauthorized)');
+    },
+  }),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal factory shape for this unit test
+} as any;
+
+const vectorizedTextFile = (id: string, embeddingModel = 'text-embedding-ada-002'): IFabFileDocument =>
+  ({ id, fileName: `${id}.txt`, mimeType: 'text/plain', vectorized: true, embeddingModel }) as IFabFileDocument;
+
 const deps = () => ({
   logger: logger as never,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- storage is unused on the raw-content path
@@ -129,6 +145,55 @@ describe('processFabFilesServer attached-content budget', () => {
     );
 
     expect(emittedChars(large.userMessages)).toBeGreaterThan(emittedChars(small.userMessages));
+  });
+
+  it('still emits raw content when the query embedding fails, instead of throwing', async () => {
+    // The E2E regression: a 401 on the up-front query embedding must not abort file processing.
+    // A non-vectorized file has always used the raw-content path, so the only thing that could
+    // sink it is the query embedding throwing before the file loop - which this guards against.
+    const { userMessages } = await processFabFilesServer(
+      throwingEmbeddingFactory,
+      [textFile('a')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    expect(emittedChars(userMessages)).toBeGreaterThan(0);
+  });
+
+  it('falls back to raw content for a vectorized file when the query embedding fails', async () => {
+    // Previously a vectorized file with no usable query vector was dropped outright (an early
+    // return), so an embedding outage silently removed the attachment. It must now raw-read.
+    const { userMessages } = await processFabFilesServer(
+      throwingEmbeddingFactory,
+      [vectorizedTextFile('a')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    expect(emittedChars(userMessages)).toBeGreaterThan(0);
+  });
+
+  it('raw-reads a vectorized file whose embedding model differs from this turn default', async () => {
+    // Even with a healthy embedder, a file stored under a different model than the turn's default
+    // has no matching query vector. That is not a reason to drop it - it raw-reads instead.
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory, // healthy: query embeds as 'text-embedding-3-small'
+      [vectorizedTextFile('a', 'text-embedding-ada-002')], // stored under a different model
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    expect(emittedChars(userMessages)).toBeGreaterThan(0);
   });
 
   it('does not restore the flat per-file cap when the budget is zero', async () => {
