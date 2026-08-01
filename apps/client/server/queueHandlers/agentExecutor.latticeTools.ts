@@ -87,8 +87,11 @@ export function buildSubagentLatticeToolPool(
   // plus full `delegate_to_agent` / `coordinate_task` instances — all thrown away
   // by the name filter below. The Lattice tools resolve purely from the
   // `enabledTools` / `externalTools` merge, which never touches `agentStore`.
+  // Also drop `onToolLlmUsage`: this pool is billed by the parent iteration, and no
+  // Lattice tool self-bills today, but stripping it keeps nested spend from ever
+  // folding into the parent's charge twice (defense-in-depth).
   const built =
-    buildSharedTools({ ...deps, agentStore: undefined }, callbacks, {
+    buildSharedTools({ ...deps, agentStore: undefined, onToolLlmUsage: undefined }, callbacks, {
       enabledTools: [...LATTICE_TOOL_NAMES],
       externalTools: latticeToolDefinitions,
       config,

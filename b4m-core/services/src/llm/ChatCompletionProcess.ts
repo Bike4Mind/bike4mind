@@ -126,7 +126,9 @@ import {
   AnomalyAlertService,
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
-import type { ToolTelemetry, ToolErrorCategory } from '@bike4mind/common';
+import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail } from '@bike4mind/common';
+import { buildAlwaysOnFloorDetails } from './systemPromptFloorTelemetry';
+import { resolveArtifactsEnabled } from './artifactGating';
 import {
   ContextTelemetryAlertsSchema,
   detectAgentMentions,
@@ -192,10 +194,11 @@ function assertNeverElisionSignal(signal: never): never {
 
 /**
  * Output budget used when a caller supplies no max_tokens. Within supported output
- * limits for every configured non-reasoning model; adaptive reasoning models default
- * to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since they spend thinking tokens
- * inside this budget. Distinct from the catalog's DEFAULT_MAX_OUTPUT_TOKENS, which
- * fills in a model's *capability* when its record omits one.
+ * limits for every configured non-reasoning model; models that reason inside the
+ * output budget default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since their
+ * reasoning would otherwise consume this whole budget. Distinct from the catalog's
+ * DEFAULT_MAX_OUTPUT_TOKENS, which fills in a model's *capability* when its record
+ * omits one.
  */
 const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
 
@@ -1538,7 +1541,19 @@ export class ChatCompletionProcess {
       // model (a context window smaller than its own reserved output). Clamping there would
       // silently restore the empty payload that guard exists to catch.
       const modelMaxOutput = modelInfo.max_tokens ?? 16384;
-      const safeInputTokens = Math.max(0, safeInputWindow(modelInfo, params.max_tokens ?? modelMaxOutput));
+      // Resolved here, above its first use, because BOTH safeInputWindow callers have to
+      // reserve the same output or the window drifts - which is exactly what the note
+      // above promises cannot happen. Falling back to the model's full output cap was
+      // that drift: once an absent max_tokens became representable, this reserved the
+      // whole cap while assembly reserved the resolved default, and verbatim history
+      // compacted far sooner than the turn actually required.
+      const safeMaxTokens = resolveOutputMaxTokens({
+        requested: params.max_tokens,
+        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+        modelInfo,
+        modelMaxOutputTokens: modelMaxOutput,
+      });
+      const safeInputTokens = Math.max(0, safeInputWindow(modelInfo, safeMaxTokens));
       // Reserve the non-history overhead that shares this budget before applying the
       // fraction, so heavier-payload turns (more tools, a longer running summary, a
       // large prompt) compact SOONER rather than overflowing first - this is the
@@ -1623,17 +1638,10 @@ export class ChatCompletionProcess {
       // Input-window limits, needed BEFORE building messages because the amount of
       // attached-file content we extract has to be derived from them.
       const contextLimit = modelInfo.contextWindow ?? 200000;
-      const modelMaxOutputTokens = modelInfo.max_tokens ?? 16384;
-
-      // An explicit caller budget is honored as-is; only its absence is sized for the
-      // model. See resolveOutputMaxTokens for why raising an explicit value is not a
-      // free action (it feeds the credit pre-reservation and maxSafeInputTokens below).
-      const safeMaxTokens = resolveOutputMaxTokens({
-        requested: maxTokens,
-        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
-        thinkingStyle: modelInfo.thinkingStyle,
-        modelMaxOutputTokens,
-      });
+      // safeMaxTokens is resolved once further up, where the verbatim-history window
+      // needs it too. An explicit caller budget is honored as-is; only its absence is
+      // sized for the model. See resolveOutputMaxTokens for why raising an explicit
+      // value is not free (it feeds the credit pre-reservation and the window below).
 
       // Fetch buffer for URL/file content. Deliberately NOT safeMaxTokens: this is a
       // *content* budget, unrelated to the output cap (same confusion called out for
@@ -1937,6 +1945,29 @@ export class ChatCompletionProcess {
         });
       }
 
+      // Always-on system-prompt floor. Resolved once here (pure settings reads with
+      // built-in fallbacks) so the assembly below and the telemetry itemization further
+      // down measure the exact same content - see buildAlwaysOnFloorDetails.
+      //
+      // Admin setting AND the caller's request flag - see resolveArtifactsEnabled for why
+      // `undefined` leaves the admin setting as the only gate. Gates the emission prompt here and
+      // the extraction pass after streaming, so the two can never disagree.
+      const artifactsEnabled = resolveArtifactsEnabled(
+        Boolean(getSettingsValue('EnableArtifacts', defaultAdminSettings)),
+        parsedBody.enableArtifacts
+      );
+      // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings); falls back
+      // to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared, so a blank value can
+      // never strip artifact guidance from completions.
+      const artifactEmissionContent = getSettingsValue(
+        'ArtifactEmissionPrompt',
+        defaultAdminSettings,
+        ARTIFACT_EMISSION_PROMPT
+      );
+      // Admin-editable via the `HelpCenterPrompt` setting; a blank value falls back to the built-in
+      // default so the nudge can never be silently stripped.
+      const helpCenterContent = getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT);
+
       // Extracted so the overflow-guard safety net below can rebuild with a trimmed
       // history without duplicating this (long, order-sensitive) system/context block.
       const contextAndSystemMessages: IMessage[] = [
@@ -1944,31 +1975,13 @@ export class ChatCompletionProcess {
         ...extraContextMessages, // Add extra context messages from external sources at the top
         // Artifact emission guidance. Without this, correct <artifact> usage
         // is left to the model's defaults and large HTML/code can leak into the chat
-        // body as raw markup. Gated on the same EnableArtifacts flag as extraction.
-        ...(getSettingsValue('EnableArtifacts', defaultAdminSettings)
-          ? [
-              {
-                role: 'system' as const,
-                // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings);
-                // falls back to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared,
-                // so a blank value can never strip artifact guidance from completions.
-                content: getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
-              },
-            ]
-          : []),
+        // body as raw markup. Gated on the same effective flag as extraction, so a turn is
+        // never told to emit artifacts that the post-processing below will not extract.
+        ...(artifactsEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : []),
         // Help-center awareness. Makes the model aware of the in-app
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
-        // gets pointed to it instead of an ungrounded guess. Admin-editable via the
-        // `HelpCenterPrompt` setting; a blank value falls back to the built-in default so the
-        // nudge can never be silently stripped. Skipped for local models (lean prompt).
-        ...(isLocalModel
-          ? []
-          : [
-              {
-                role: 'system' as const,
-                content: getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT),
-              },
-            ]),
+        // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).
+        ...(isLocalModel ? [] : [{ role: 'system' as const, content: helpCenterContent }]),
         // Inject view registry summary when navigate_view tool is enabled
         ...(enabledTools.includes('navigate_view')
           ? [
@@ -2238,12 +2251,6 @@ export class ChatCompletionProcess {
       if (telemetryBuilder) {
         try {
           // Build system prompt details for telemetry
-          type SystemPromptDetail = {
-            source: 'hardcoded' | 'admin' | 'user' | 'project' | 'session' | 'org';
-            name: string;
-            tokenCount: number;
-            wasIncluded: boolean;
-          };
           const systemPromptDetails: SystemPromptDetail[] = [];
 
           // Date/time context (hardcoded)
@@ -2329,6 +2336,16 @@ export class ChatCompletionProcess {
               wasIncluded: true,
             });
           }
+
+          // Always-on floor blocks (artifact-emission, help-center) billed on every basic
+          // turn. Previously invisible inside the systemPrompts residual; itemized here so
+          // the fixed prompt cost is auditable in the Context Inspector (#810).
+          systemPromptDetails.push(
+            ...(await buildAlwaysOnFloorDetails(
+              { artifactEmissionEnabled: artifactsEnabled, artifactEmissionContent, isLocalModel, helpCenterContent },
+              content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
+            ))
+          );
 
           // Calculate total system prompt tokens
           const systemPromptTokensTotal = systemPromptDetails.reduce((sum, p) => sum + p.tokenCount, 0);
@@ -3324,8 +3341,11 @@ export class ChatCompletionProcess {
 
         timer.phase('post_process');
 
-        // Process artifacts if enabled
-        if (getSettingsValue('EnableArtifacts', defaultAdminSettings)) {
+        // Process artifacts if enabled. Same effective gate as the guidance prompt above:
+        // convertCodeBlocksToArtifacts REWRITES the reply, so a caller that passed
+        // enableArtifacts:false previously got <artifact> markup spliced into a response it had
+        // explicitly asked to keep artifact-free.
+        if (artifactsEnabled) {
           // The barrel is the only export path for these two; there is no artifactParser subpath
           // that carries them, so this import stays as-is.
           const { parseArtifacts, convertCodeBlocksToArtifacts } = await import('@bike4mind/utils');
@@ -3776,6 +3796,9 @@ export class ChatCompletionProcess {
               feature: 'chat',
               provider: currentModel.backend,
               model: currentModel.id,
+              // 'web' covers all callers of ChatCompletionProcess today (matches
+              // the paired ledger writes below); no API-key auth on this path.
+              source: 'web',
               // inputTokens/outputTokens are ALWAYS the local estimate and the
               // provider* fields ALWAYS the provider counts, so drift and invoice
               // reconciliation stay comparable across rows; settledBasis says

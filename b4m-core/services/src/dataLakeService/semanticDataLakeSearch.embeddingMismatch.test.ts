@@ -109,8 +109,8 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
     // chunk that actually answers at 0.72. Both vectors are 1536 wide, so no length check can
     // achieve this. On main the foreign chunk ranks first.
     const findVectors = pagedRows([
-        chunk('c-legit', 'legit', 'the real answer', NEAR),
-        chunk('c-foreign', 'foreign', 'cross-space noise', EXACT),
+      chunk('c-legit', 'legit', 'the real answer', NEAR),
+      chunk('c-foreign', 'foreign', 'cross-space noise', EXACT),
     ]);
     const result = await semanticDataLakeSearch(
       params(),
@@ -280,8 +280,6 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
     expect(result.embeddingMismatch.queryEmbeddingFailed).toBe(true);
     expect(result.embeddingMismatch.partial).toBe(true);
   });
-
-
 });
 
 describe('fileScopedSemanticSearch embedding-model mismatch', () => {

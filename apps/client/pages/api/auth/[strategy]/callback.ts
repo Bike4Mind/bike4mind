@@ -3,7 +3,7 @@
 
 import { AuthStrategy } from '@bike4mind/common';
 import { authFailLogRepository, IUserObject } from '@bike4mind/database';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { issueSessionForRequest } from '@server/auth/issueSession';
 import { verifyStateToken, BaseStatePayload } from '@server/auth/jwtStateStore';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -90,7 +90,11 @@ const handler = baseApi({ auth: false })
           return res.redirect(`/login?error=${encodeURIComponent(oauthFailureRedirectMessage(reason))}`);
         }
 
-        const tokens = authTokenGenerator.createAccessToken(user.id, user.tokenVersion ?? 0);
+        const { accessToken, refreshToken } = await issueSessionForRequest(req, user.id, {
+          createdVia: 'oauth',
+          tokenVersion: user.tokenVersion ?? 0,
+        });
+        const tokens = { accessToken, refreshToken };
 
         try {
           await logEvent({
