@@ -47,6 +47,16 @@ describe('hearth CLI actor colors', () => {
     expect(colorizeActor('actor-1', 'erik')).toBe('erik');
   });
 
+  it("emits no escape codes when FORCE_COLOR is '0', even on a TTY", () => {
+    delete process.env.NO_COLOR;
+    process.env.FORCE_COLOR = '0';
+    setTty(true);
+    // '0' is the standard force-DISABLE signal and is truthy in JS, so this
+    // guards the ordering in colorEnabled. bashExecute sets it when capturing
+    // tool output.
+    expect(colorizeActor('actor-1', 'erik')).toBe('erik');
+  });
+
   it('emits no escape codes when stdout is not a TTY', () => {
     delete process.env.NO_COLOR;
     delete process.env.FORCE_COLOR;

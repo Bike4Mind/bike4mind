@@ -34,9 +34,15 @@ const RESET = '\x1b[0m';
  * Whether to emit escape codes at all. Honors NO_COLOR (the de-facto standard)
  * and skips a non-TTY stdout so piped or redirected `/hearth` output stays
  * greppable instead of carrying escape sequences into a file.
+ *
+ * FORCE_COLOR='0' is the standard force-DISABLE signal and must be checked
+ * before the truthiness test, since the string '0' is truthy in JS. This repo
+ * relies on that convention (bashExecute sets FORCE_COLOR: '0'), so treating
+ * any defined value as "on" would emit codes into captured tool output.
  */
 function colorEnabled(): boolean {
   if (process.env.NO_COLOR) return false;
+  if (process.env.FORCE_COLOR === '0') return false;
   if (process.env.FORCE_COLOR) return true;
   return Boolean(process.stdout.isTTY);
 }
