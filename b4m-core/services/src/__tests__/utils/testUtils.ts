@@ -13,6 +13,8 @@ import {
   IOrganizationDocument,
   ICreditTransactionRepository,
   ICreditTransactionDocument,
+  IAuthSessionRepository,
+  IAuthSessionDocument,
 } from '@bike4mind/common';
 import {
   IResearchTask,
@@ -125,6 +127,16 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     populateMessageCounts: vi.fn(),
     countByUserId: vi.fn(),
     countActiveVoiceSessionsByUserId: vi.fn(),
+  });
+
+export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepository> =>
+  vi.mocked({
+    ...createMockRepository<IAuthSessionDocument>(),
+    findBySid: vi.fn(),
+    findActiveByUserId: vi.fn(),
+    rotateHash: vi.fn(),
+    revokeBySid: vi.fn(),
+    revokeAllByUserId: vi.fn(),
   });
 
 export const createMockUserRepository = (): MockedObject<IUserRepository> =>

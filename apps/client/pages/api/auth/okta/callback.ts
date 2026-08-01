@@ -12,7 +12,7 @@
  * @see https://datatracker.ietf.org/doc/rfc7636/
  */
 import { Request, Response } from 'express';
-import { authFailLogRepository, User } from '@bike4mind/database';
+import { authFailLogRepository, User, authSessionRepository } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { IAuthProviders } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -22,7 +22,7 @@ import { getOktaConfigWithFallback, exchangeCodeForTokens, fetchUserInfo } from 
 import { verifyStateToken } from '@server/auth/jwtStateStore';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
 import { OKTA_STATE_AUDIENCE, OktaStatePayload } from '@server/auth/oktaConstants';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { issueSessionForRequest } from '@server/auth/issueSession';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy } from '@bike4mind/common';
@@ -311,6 +311,13 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       });
       await User.updateOne({ _id: user._id }, update);
       Object.assign(user, reflect);
+      // Invariant (mirrors verifyCallback.ts): the new-provider tokenVersion bump must also revoke
+      // AuthSessions, else an opaque refresh token -- never checked against tokenVersion -- rotates
+      // into a fresh access token stamped with the new version and survives the bump. Safe to revoke
+      // ALL: this login's session is minted below, after the revoke, so it is created fresh.
+      if (isNewProviderLink) {
+        await authSessionRepository.revokeAllByUserId(user.id);
+      }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);
     } else {
       // Create new user (no password needed for OAuth users)
@@ -339,8 +346,12 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       throw new ForbiddenError('User is banned');
     }
 
-    // Generate auth tokens
-    const tokens = authTokenGenerator.createAccessToken(user.id, user.tokenVersion ?? 0);
+    // Generate our session tokens (distinct from the Okta IdP accessToken/refreshToken above).
+    const session = await issueSessionForRequest(req, user.id, {
+      createdVia: 'okta',
+      tokenVersion: user.tokenVersion ?? 0,
+    });
+    const tokens = { accessToken: session.accessToken, refreshToken: session.refreshToken };
 
     // Log successful OAuth login
     await logEvent({
