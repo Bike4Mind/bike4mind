@@ -95,6 +95,7 @@ import type { DagHandoffSignal } from '@bike4mind/services';
 // (Mongo, AWS SDK, ReActAgent, etc.). `maybeBuildFirstIterationQuery` wraps
 // it with the new-execution/iteration-0 gate so the gate is testable too.
 import { maybeBuildFirstIterationQuery } from './agentExecutor.firstIterationQuery';
+import { applySessionToolPolicy, runHasAttachments } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
@@ -833,7 +834,19 @@ async function processExecution(
     // (e.g. project_manager -> atlassian) actually receive them. Agent Mode had
     // NO MCP wiring, so exclusive-MCP subagents spawned with 0 tools and the
     // model fabricated results. Mirrors ChatCompletionProcess's buildMcpTools.
-    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsSafe(execution.userId, logger);
+    //
+    // A session that suppresses user integrations skips the load entirely: the chat path empties
+    // `mcpServers` for such a session, and without this the same curated surface silently
+    // regained every personal MCP server the moment the routing classifier upgraded a send to
+    // Agent mode. Skipping rather than emptying afterwards also avoids the network round-trip.
+    // The empty shape matches what `loadMcpToolsSafe` already returns when a load fails, so
+    // every downstream consumer is on a supported path.
+    const { mcpToolsByServer, serverAgentConfig } = session.disableUserIntegrations
+      ? { mcpToolsByServer: {}, serverAgentConfig: {} }
+      : await loadMcpToolsSafe(execution.userId, logger);
+    if (session.disableUserIntegrations) {
+      logger.info('[AgentExecutor][MCP] Session suppresses user integrations - skipping MCP tool load');
+    }
     const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
     // MCP servers claimed exclusively by an agent (e.g. atlassian by
     // project_manager). Withheld from the parent LLM's tool list; reach the
@@ -1295,9 +1308,18 @@ async function processExecution(
     // Named rather than inlined because the `[ATTACHED FILES]` preamble below has to know
     // whether this run can actually read a file - buildSharedTools only surfaces tools named
     // here, so this array IS the run's toolbelt.
-    const resolvedToolNames = [
-      ...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools]),
-    ];
+    //
+    // The session's tool contract is applied LAST so it wins over the profile, the start payload,
+    // and the unconditional mission/lattice appends above - the same precedence
+    // `chat_completion` gives it. See `agentExecutor.sessionToolPolicy.ts` for why
+    // `session.enabledTools` is deliberately not unioned here.
+    const resolvedToolNames = applySessionToolPolicy({
+      toolNames: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
+      session,
+      profileDeniedTools: orchestrationProfile?.deniedTools,
+      hasAttachments: runHasAttachments(execution, session.knowledgeIds),
+      logger,
+    });
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       enabledTools: resolvedToolNames,
