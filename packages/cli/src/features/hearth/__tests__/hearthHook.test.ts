@@ -20,10 +20,19 @@ interface CapturedRequest {
   body: Record<string, unknown>;
 }
 
+/**
+ * process.env minus every B4M_HEARTH_* key. A developer who actually uses the
+ * hook has these set, and inheriting them makes the suite assert against their
+ * configuration rather than the tier defaults this file exists to pin.
+ */
+function ambientHookEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('B4M_HEARTH_')));
+}
+
 function runHook(env: Record<string, string>, stdinPayload: unknown) {
   return new Promise<number>((resolve, reject) => {
     const child = spawn(process.execPath, [HOOK_PATH], {
-      env: { ...process.env, ...env },
+      env: { ...ambientHookEnv(), ...env },
       stdio: ['pipe', 'ignore', 'ignore'],
     });
     child.on('error', reject);
@@ -445,7 +454,7 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
     try {
       const child = spawn(process.execPath, [HOOK_PATH], {
         env: {
-          ...process.env,
+          ...ambientHookEnv(),
           B4M_API_URL: `http://127.0.0.1:${port}`,
           B4M_API_KEY: 'k',
           B4M_HEARTH_CHANNEL: 'ch',
