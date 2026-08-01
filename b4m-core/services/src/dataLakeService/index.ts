@@ -16,6 +16,7 @@ export * from './archiveDataLake';
 export * from './unarchiveDataLake';
 export * from './restoreDeletedDataLake';
 export * from './deleteDataLake';
+export * from './lakeMembership';
 export * from './removeFileFromDataLake';
 export * from './cleanupDeletedDataLake';
 export * from './recomputeLakeStats';

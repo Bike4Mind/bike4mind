@@ -88,7 +88,10 @@ export const assertCanWriteDataLakeTags = async (
   for (const tag of metaTags) {
     const lake = await db.dataLakes.findByDatalakeTag(tag);
     if (!lake || !canManageLake(lake, actor)) {
-      throw new BadRequestError('Only the creator can add files to this data lake');
+      // Direction-neutral wording: this gate sees a tag payload, not an intent, so the same
+      // refusal covers adding a file to the lake and removing one from it. Saying "add" here
+      // told a caller their removal was refused for the wrong reason.
+      throw new BadRequestError("Only the creator can change this data lake's files");
     }
   }
 };

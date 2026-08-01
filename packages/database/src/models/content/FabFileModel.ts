@@ -814,6 +814,31 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
+  async pushTagsByFabFileId(fabFileId: string, tagNames: string[], strength = 0): Promise<number> {
+    // Skip the round trip: the batch caller hits this whenever a file has nothing to add.
+    if (tagNames.length === 0) return 0;
+    // Each filter below is evaluated against the STORED document, not against the other ops, so
+    // a name repeated within one call would otherwise pass its filter twice and insert twice.
+    const names = [...new Set(tagNames)];
+    // One filtered $push per name, the atomic counterpart to the $pull above. Not $addToSet:
+    // it dedupes on whole-element equality, so { name: 'x', strength: 1 } would land alongside
+    // an existing { name: 'x', strength: 0 }. Not a single $each push either - that has no
+    // per-element guard, so one already-present name either poisons the batch or duplicates.
+    const result = await this.fabFileModel.bulkWrite(
+      names.map(name => ({
+        updateOne: {
+          // Exact names, mirroring the $pull above and the read path, which matches a tag by
+          // exact `$in`. A case-insensitive guard here would be actively wrong: a file carrying
+          // some other casing of a data-lake meta-tag is NOT a member of that lake, so the
+          // canonical tag has to be insertable alongside it.
+          filter: { _id: fabFileId, 'tags.name': { $ne: name } },
+          update: { $push: { tags: { name, strength } } },
+        },
+      }))
+    );
+    return result.modifiedCount;
+  }
+
   async pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number> {
     // The schema has timestamps, so an empty $in would still rewrite updatedAt and report a
     // modification for a write that removes nothing.

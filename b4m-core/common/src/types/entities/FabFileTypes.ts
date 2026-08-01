@@ -489,12 +489,38 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * tags array, and clear `primaryTag` if it named one of them. Uses `$pull`, so concurrent
    * removals of DIFFERENT tags on the same file don't clobber each other the way a
    * read-filter-write `$set: { tags }` would. Absent names are a no-op (idempotent).
+   *
+   * Matching is case-SENSITIVE, unlike its `pushTagsByFabFileId` counterpart: names must be
+   * given exactly as stored, resolved from the loaded document rather than from user input.
+   * Passing a user's `foo` against a stored `Foo` removes nothing and reports no error.
    * @param fabFileId - The ID of the file.
    * @param tagNames - The exact tag names to remove. Empty is a no-op.
    * @returns Documents modified by the pull. The schema has timestamps, so this can be 1
    * even when no tag matched - do not read it as "a tag was removed".
    */
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
+
+  /**
+   * Atomically add each of `tagNames` to one file's tags array, skipping any already present.
+   * The add counterpart to `pullTagsByFabFileId`: one filtered `$push` per name, so concurrent
+   * adds of DIFFERENT tags on the same file don't clobber each other and a re-add is a no-op
+   * rather than a duplicate.
+   *
+   * Presence is compared by EXACT name, matching the pull half and the read path (which admits
+   * a tag by exact `$in`), and a new name is stored with the caller's casing, never lowercased.
+   * Case-insensitive matching here would be wrong, not merely stricter: a file carrying some
+   * other casing of a lake's meta-tag is not a member of that lake, so the canonical tag has to
+   * be insertable alongside it. Callers that want case-insensitive semantics resolve the stored
+   * spelling from the document first, as the tag-toggle path does. A filter is not a unique
+   * index, so two SIMULTANEOUS adds of one name can both pass; `pullTagsByFabFileId` removes both.
+   * @param fabFileId - The ID of the file.
+   * @param tagNames - Tag names to add, deduplicated. Empty is a no-op.
+   * @param strength - Relevance weight stored on each new tag. Defaults to 0; the data-lake
+   * membership meta-tag is written at 1.
+   * @returns The number of tags actually inserted. Unlike the pull half this IS meaningful: a
+   * name already present fails its filter, so it neither counts nor bumps updatedAt.
+   */
+  pushTagsByFabFileId(fabFileId: string, tagNames: string[], strength?: number): Promise<number>;
 
   /**
    * Bulk-writes each file's full tags array in a single round trip via bulkWrite, instead of

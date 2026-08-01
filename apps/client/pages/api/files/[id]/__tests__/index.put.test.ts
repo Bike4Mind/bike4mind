@@ -4,6 +4,15 @@ const h = vi.hoisted(() => ({
   findAccessibleById: vi.fn(),
   update: vi.fn(),
   findByDatalakeTag: vi.fn(),
+  // The membership write pair `reconcileLakeTags` now owns: `findById` backs the leave path's
+  // own membership check (removeFileFromLake) and update.ts's post-commit re-read; the mutable
+  // `store` keeps them consistent with each other and with what pullTagsByFabFileId removes.
+  findById: vi.fn(),
+  pullTagsByFabFileId: vi.fn(),
+  pushTagsByFabFileId: vi.fn(),
+  computeDataLakeStats: vi.fn(),
+  find: vi.fn(),
+  setStats: vi.fn(),
 }));
 
 // Callable chain routed by req.method, same shape as the batch/generate-presigned-urls-batch
@@ -37,9 +46,16 @@ vi.mock('@server/utils/storage', () => ({
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   changeStorageSize: vi.fn(),
-  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
+  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.find, setStats: h.setStats },
   fabFileChunkRepository: {},
-  fabFileRepository: { shareable: { findAccessibleById: h.findAccessibleById }, update: h.update },
+  fabFileRepository: {
+    shareable: { findAccessibleById: h.findAccessibleById },
+    update: h.update,
+    findById: h.findById,
+    pullTagsByFabFileId: h.pullTagsByFabFileId,
+    pushTagsByFabFileId: h.pushTagsByFabFileId,
+    computeDataLakeStats: h.computeDataLakeStats,
+  },
   fileTagRepository: {},
   adminSettingsRepository: {},
   sessionRepository: {},
@@ -95,20 +111,51 @@ const tagNamesOf = (callIndex = 0) => {
   return (persisted.tags ?? []).map(t => t.name).sort();
 };
 
+// A stateful double for the whole membership pipeline: the first `db.fabFiles.update()` is a
+// real whole-array $set in production, so it has to land in the SAME store the atomic pull/push
+// pair and the post-commit re-read operate on - otherwise the re-read sees a document that never
+// received that write, which is the mock lying about what Mongo would actually return.
+const makeStatefulFabFile = (initial: { id: string; userId: string; tags: { name: string; strength: number }[] }) => {
+  const store = { ...initial, tags: [...initial.tags] };
+  h.findById.mockImplementation(async () => ({ ...store, tags: [...store.tags] }));
+  h.update.mockImplementation(async (doc: { tags?: { name: string; strength: number }[] }) => {
+    if (doc.tags !== undefined) store.tags = [...doc.tags];
+  });
+  h.pullTagsByFabFileId.mockImplementation(async (_id: string, names: string[]) => {
+    store.tags = store.tags.filter(t => !names.includes(t.name));
+    return 1;
+  });
+  h.pushTagsByFabFileId.mockImplementation(async (_id: string, names: string[], strength = 0) => {
+    const toAdd = names.filter(name => !store.tags.some(t => t.name === name));
+    store.tags.push(...toAdd.map(name => ({ name, strength })));
+    return toAdd.length;
+  });
+  return store;
+};
+
 describe('PUT /api/files/[id] - data-lake tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.findByDatalakeTag.mockResolvedValue(LAKE);
     h.update.mockResolvedValue(undefined);
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 });
+    h.find.mockResolvedValue([]);
   });
 
   it('stamps the lake prefix when the update keeps the meta-tag with no tag under that prefix', async () => {
     h.findAccessibleById.mockResolvedValue(fabFile({ tags: [{ name: META, strength: 1 }] }));
-    const { res } = makeRes();
+    makeStatefulFabFile({ id: 'file-1', userId: 'u1', tags: [{ name: META, strength: 1 }] });
+    const { res, json } = makeRes();
 
     await run({ tags: [{ name: META, strength: 1 }] }, res);
 
+    // First write already carries the backfill: this lake is neither joining nor leaving, so
+    // nothing runs in commit() and the array persisted here is the final state.
     expect(tagNamesOf()).toEqual(['acme:uncategorized', META]);
+    expect((json.mock.calls[0][0].tags as { name: string }[]).map(t => t.name).sort()).toEqual([
+      'acme:uncategorized',
+      META,
+    ]);
   });
 
   it('retracts the stamp when the update drops the meta-tag from a file that carried both', async () => {
@@ -120,11 +167,24 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
         ],
       })
     );
-    const { res } = makeRes();
+    makeStatefulFabFile({
+      id: 'file-1',
+      userId: 'u1',
+      tags: [
+        { name: META, strength: 1 },
+        { name: 'acme:uncategorized', strength: 1 },
+      ],
+    });
+    const { res, json } = makeRes();
 
     await run({ tags: [] }, res);
 
-    expect(tagNamesOf()).toEqual([]);
+    // The first write keeps the meta-tag (and the fallback tagger re-backfills its content tag,
+    // since as far as tagsToPersist is concerned the lake is still current) so removeFileFromLake
+    // can still see the file as a member and pull BOTH atomically. The route's final response -
+    // what a client actually observes - is what matters here, not that intermediate array.
+    expect(h.pullTagsByFabFileId).toHaveBeenCalledWith('file-1', [META, 'acme:uncategorized']);
+    expect(json.mock.calls[0][0].tags).toEqual([]);
   });
 
   it('does not change tags and never looks a lake up when tags is omitted (a rename)', async () => {
