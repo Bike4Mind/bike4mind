@@ -22,9 +22,15 @@ export default function DataLakesHome() {
   const { article } = useSearch({ strict: false }) as { article?: string };
   // Shared manage-knowledge capability (#841) - the gate and the open-manager wiring
   // live in core, not here. No `requireAdmin`: these are the user's OWN lakes.
-  const { onManage } = useManageKnowledge();
+  const { canManage, onManage } = useManageKnowledge();
   const openManager = useDataLakeWizardStore(s => s.openManager);
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
+
+  // Discover shares Manage's gate rather than carrying none: it deep-links the SAME
+  // store-driven manager modal, whose panel renders nothing without EnableDataLakes (and
+  // whose /api/data-lakes/public read is flag-gated too). Ungated it opened a full-screen
+  // modal holding only a close button - the same dead end the manage button had.
+  const onDiscover = canManage ? () => openManager('discover') : undefined;
 
   // No docked chat on this surface - "Ask about this article" prefills the composer
   // and drops the user into a fresh chat to send it.
@@ -43,7 +49,7 @@ export default function DataLakesHome() {
       onBack={() => navigate({ to: '/new' })}
       onAskAbout={handleAskAbout}
       onManage={onManage}
-      onDiscover={() => openManager('discover')}
+      onDiscover={onDiscover}
       onCreate={openWizard}
     />
   );
