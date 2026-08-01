@@ -61,7 +61,13 @@ const NotionPagePicker = ({ allowedPages, excludedPageIds, onSave, saving }: Not
       setTopLevelPages(data.pages);
     } catch (err) {
       console.error('Failed to load Notion pages:', err);
-      toast.error('Failed to load Notion workspace pages');
+      const serverError =
+        err && typeof err === 'object' && 'response' in err
+          ? (err as { response?: { data?: { error?: string } } }).response?.data?.error
+          : undefined;
+      toast.error(serverError || 'Failed to load Notion workspace pages. Check your connection and try again.', {
+        duration: 6000,
+      });
     } finally {
       setLoadingRoot(false);
     }
@@ -85,6 +91,11 @@ const NotionPagePicker = ({ allowedPages, excludedPageIds, onSave, saving }: Not
       }));
     } catch (err) {
       console.error('Failed to load children:', err);
+      const serverError =
+        err && typeof err === 'object' && 'response' in err
+          ? (err as { response?: { data?: { error?: string } } }).response?.data?.error
+          : undefined;
+      toast.error(serverError || 'Failed to load child pages from Notion.', { duration: 6000 });
       setNodeStates(prev => ({
         ...prev,
         [parentId]: { ...prev[parentId], loading: false },
