@@ -115,6 +115,28 @@ describe('reconcileLakeTags', () => {
     expect(result.tagsToPersist).toEqual([tag('datalake:lake', 1), tag('lk:uncategorized', 1)]);
   });
 
+  // Membership is the canonical tag matched EXACTLY, because that is what the read arm matches.
+  // Relaxing this to a case-insensitive compare would let a legacy non-canonical meta-tag confer
+  // membership the read path never granted, and dropping that dead string would then count as a
+  // LEAVE - gated on manage rights. Re-summarization, which rewrites the whole array as a
+  // non-manager, would start failing on any file carrying one.
+  it('does not treat a non-canonically-cased stored meta-tag as membership', async () => {
+    const adapters = makeAdapters([tag('DataLake:Lake', 1)], lake({ createdByUserId: 'someone-else' }));
+
+    const result = await reconcileLakeTags(
+      { userId: 'not-the-owner', isAdmin: false },
+      'f1',
+      ['DataLake:Lake'],
+      [tag('note')],
+      adapters as any
+    );
+    await result.commit();
+
+    expect(result.tagsToPersist).toEqual([tag('note')]);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+  });
+
   it('refuses a meta-tag the caller applied that names no lake', async () => {
     const adapters = makeAdapters([], null);
 
