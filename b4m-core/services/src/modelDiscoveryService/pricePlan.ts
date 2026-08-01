@@ -589,13 +589,14 @@ function firstDisagreement(observations: readonly PriceObservation[]): [PriceObs
  */
 function diverges(a: DiscoveredPrice, b: DiscoveredPrice, tolerance: number): boolean {
   if (ratesDiverge(a, b, tolerance)) return true;
-  const left = a.brackets;
-  const right = b.brackets;
-  if (!left || !right) return false;
-  if (left.length !== right.length) return true;
+
+  const left = a.brackets ?? [];
+  const right = b.brackets ?? [];
+  // Brackets change the priced shape; a ladder observed by only one side is not corroborated.
+  if (left.length !== right.length) return left.length > 0 || right.length > 0;
+
   return left.some(
-    (bracket, index) =>
-      bracket.aboveTokens !== right[index].aboveTokens || ratesDiverge(bracket, right[index], tolerance)
+    (bracket, index) => bracket.aboveTokens !== right[index].aboveTokens || ratesDiverge(bracket, right[index], tolerance)
   );
 }
 
