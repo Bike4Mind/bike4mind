@@ -253,6 +253,33 @@ export const getModelBackend = (model: ModelInfo): string => {
   return 'Other';
 };
 
+// Display order of the provider sections. Anything absent sorts alphabetically after these.
+const BACKEND_PRIORITY = [
+  SELF_HOSTED_BACKEND,
+  'OpenAI',
+  'Anthropic',
+  'Google',
+  'Meta',
+  'xAI',
+  'Mistral',
+  'Black Forest Labs',
+  'Cohere',
+];
+
+// Non-mutating: callers pass a fresh Object.keys() array, but the copy keeps that a contract
+// of this function rather than of each call site.
+const sortBackendsByPriority = (backends: string[]): string[] =>
+  [...backends].sort((a, b) => {
+    const aIndex = BACKEND_PRIORITY.indexOf(a);
+    const bIndex = BACKEND_PRIORITY.indexOf(b);
+
+    if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+    if (aIndex !== -1) return -1;
+    if (bIndex !== -1) return 1;
+
+    return a.localeCompare(b);
+  });
+
 // Layout of the model list: roomy cards in a 2-up grid, or compact single-column rows.
 export type ModelViewMode = 'grid' | 'list';
 
@@ -923,37 +950,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       groupedByBackendAndType[backend].video = sortModelsForPicker(groupedByBackendAndType[backend].video);
     });
 
-    // Sort backends by priority (OpenAI, Anthropic, Google, Meta, etc.)
-    const backendPriority = [
-      SELF_HOSTED_BACKEND,
-      'OpenAI',
-      'Anthropic',
-      'Google',
-      'Meta',
-      'xAI',
-      'Mistral',
-      'Black Forest Labs',
-      'Cohere',
-    ];
-    const sortedBackends = Object.keys(grouped).sort((a, b) => {
-      const aIndex = backendPriority.indexOf(a);
-      const bIndex = backendPriority.indexOf(b);
-
-      // If both backends are in priority list, sort by priority
-      if (aIndex !== -1 && bIndex !== -1) {
-        return aIndex - bIndex;
-      }
-
-      // If only one is in priority list, prioritize it
-      if (aIndex !== -1) return -1;
-      if (bIndex !== -1) return 1;
-
-      // If neither is in priority list, sort alphabetically
-      return a.localeCompare(b);
-    });
-
     // Flatten the sorted models
-    const sorted = sortedBackends.flatMap(backend => grouped[backend]);
+    const sorted = sortBackendsByPriority(Object.keys(grouped)).flatMap(backend => grouped[backend]);
 
     // Find maximum values
     let maxCtx = 0;
@@ -996,6 +994,10 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
   // Compute favorite models from the already-filtered list (respects search, filter, access control)
   const favoriteModels = useMemo(() => filteredModels.filter(m => isFavorite(m.id)), [filteredModels, isFavorite]);
+
+  // Provider section order for display. Same ordering the memo above applies when flattening
+  // filteredModels, so the accordions and the flat list agree.
+  const sortedBackends = useMemo(() => sortBackendsByPriority(Object.keys(modelsByBackend)), [modelsByBackend]);
 
   // Derive effective expanded backends from user toggles and search state
   const expandedBackends = useMemo(() => {
@@ -1091,32 +1093,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       </Box>
     );
   if (error) return <div>Error loading models: {error.message}</div>;
-
-  // Group models by backend for display
-  const backendPriority = [
-    SELF_HOSTED_BACKEND,
-    'OpenAI',
-    'Anthropic',
-    'Google',
-    'Meta',
-    'xAI',
-    'Mistral',
-    'Black Forest Labs',
-    'Cohere',
-  ];
-  const sortedBackends = Object.keys(modelsByBackend).sort((a, b) => {
-    const aIndex = backendPriority.indexOf(a);
-    const bIndex = backendPriority.indexOf(b);
-
-    if (aIndex !== -1 && bIndex !== -1) {
-      return aIndex - bIndex;
-    }
-
-    if (aIndex !== -1) return -1;
-    if (bIndex !== -1) return 1;
-
-    return a.localeCompare(b);
-  });
 
   return (
     <Box
