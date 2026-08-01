@@ -6,6 +6,8 @@ import { nodeStatusFromExecution } from './nodeStatusFromExecution';
 /** The projected slice of an AgentExecution a node needs to reconcile and render. */
 export interface NodeRunSummary {
   id: string;
+  /** The Quest this run wrote; artifacts carry it as `sourceQuestId`. */
+  questId: string | null;
   status: AgentExecutionStatus;
   answer: string | null;
   totalIterations: number | null;

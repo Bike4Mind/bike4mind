@@ -1612,6 +1612,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   async findRunSummariesByIds(ids: string[]): Promise<
     Array<{
       id: string;
+      questId: string | null;
       status: AgentExecutionStatus;
       answer: string | null;
       totalIterations: number | null;
@@ -1628,6 +1629,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
         { _id: { $in: valid.map(id => new mongoose.Types.ObjectId(id)) } },
         {
           _id: 1,
+          questId: 1,
           status: 1,
           'result.answer': 1,
           'result.totalIterations': 1,
@@ -1639,6 +1641,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       .lean<
         Array<{
           _id: mongoose.Types.ObjectId;
+          questId?: string;
           status: AgentExecutionStatus;
           result?: { answer?: string; totalIterations?: number };
           totalCreditsUsed?: number;
@@ -1649,6 +1652,9 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
     return docs.map(doc => ({
       id: String(doc._id),
+      // The Quest this run wrote. QuestMaster v5 joins a node's artifacts on it -
+      // persistAgentArtifacts stamps `sourceQuestId` with the same value.
+      questId: doc.questId ?? null,
       status: doc.status,
       answer: typeof doc.result?.answer === 'string' ? doc.result.answer : null,
       totalIterations: typeof doc.result?.totalIterations === 'number' ? doc.result.totalIterations : null,

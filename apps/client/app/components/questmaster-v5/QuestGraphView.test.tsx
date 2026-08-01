@@ -46,6 +46,7 @@ const makeNode = (over: Partial<QuestNode> & { id: string }): QuestNode =>
     artifactIds: [],
     isReady: true,
     isRunnable: true,
+    artifacts: [],
     run: null,
     ...over,
   }) as QuestNode;
@@ -171,6 +172,41 @@ describe('QuestGraphView', () => {
     fireEvent.keyDown(screen.getByTestId('questmaster-v5-node-row'), { key: 'Enter' });
 
     expect(screen.getByTestId('questmaster-v5-result-panel')).toBeInTheDocument();
+  });
+
+  it('renders artifact chips produced by the node', () => {
+    nodes = [
+      makeNode({
+        id: 'n1',
+        status: 'completed',
+        artifactIds: ['art-1'],
+        artifacts: [{ id: 'art-1', type: 'react', title: 'Counter' }],
+        run: {
+          executionId: 'exec-1',
+          status: 'completed',
+          answer: 'done',
+          answerTruncated: false,
+          totalIterations: 1,
+          totalCreditsUsed: 1,
+          errorMessage: null,
+        },
+      }),
+    ];
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+
+    expect(screen.getByTestId('questmaster-v5-node-artifacts')).toBeInTheDocument();
+    expect(screen.getByTestId('questmaster-v5-artifact-chip')).toHaveTextContent('Counter');
+  });
+
+  it('shows no artifact section for a node that produced none', () => {
+    nodes = [makeNode({ id: 'n1', status: 'completed', artifacts: [] })];
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+
+    expect(screen.queryByTestId('questmaster-v5-node-artifacts')).not.toBeInTheDocument();
   });
 
   it('surfaces a failed run error message', () => {

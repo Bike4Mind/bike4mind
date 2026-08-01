@@ -2,6 +2,7 @@ import { agentExecutionRepository, isNodeReady, isNodeRunnable, questNodeReposit
 import type { IQuestGraphDocument, NodeStatus } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { reconcileQuestNodes, type NodeRunSummary } from './reconcileQuestNodes';
+import { linkNodeArtifacts } from './linkNodeArtifacts';
 import { toQuestGraphWire, toQuestNodeWire, type QuestNodeRunWire } from './wire';
 
 /**
@@ -31,6 +32,7 @@ export async function loadGraphDetail(graph: IQuestGraphDocument, logger: Logger
 
   const nodes = await reconcileQuestNodes(stored, runs, logger);
   const statusById = new Map<string, NodeStatus>(nodes.map(n => [n.id, n.status]));
+  const artifactsByNode = await linkNodeArtifacts(nodes, runs, logger);
 
   return {
     graph: toQuestGraphWire(graph),
@@ -41,6 +43,7 @@ export async function loadGraphDetail(graph: IQuestGraphDocument, logger: Logger
         isReady: isNodeReady(node, statusById),
         isRunnable: isNodeRunnable(node, statusById),
         run: run ? toRunWire(executionId!, run) : null,
+        artifacts: artifactsByNode.get(node.id) ?? [],
       });
     }),
   };

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import { Alert, Box, Button, Chip, Divider, Input, Sheet, Stack, Textarea, Typography } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy';
 import { api } from '@client/app/contexts/ApiContext';
@@ -211,7 +212,7 @@ export default function QuestGraphView() {
                 chips would still hold node ids from the previous graph. */}
             <AddNodeForm key={selectedGraphId} graphId={selectedGraphId} nodes={nodes} onError={setError} />
 
-            {selectedNode && <NodeResultPanel node={selectedNode} />}
+            {selectedNode && <NodeResultPanel node={selectedNode} sessionId={detail.data?.graph.sessionId} />}
           </Box>
         )}
       </Box>
@@ -317,7 +318,8 @@ function AddNodeForm({
   );
 }
 
-function NodeResultPanel({ node }: { node: QuestNode }) {
+function NodeResultPanel({ node, sessionId }: { node: QuestNode; sessionId?: string }) {
+  const navigate = useNavigate();
   return (
     <Sheet variant="soft" sx={{ mt: 2, p: 2, borderRadius: 'sm' }} data-testid="questmaster-v5-result-panel">
       <Typography level="title-sm">{node.title}</Typography>
@@ -347,6 +349,32 @@ function NodeResultPanel({ node }: { node: QuestNode }) {
         <Alert color="danger" size="sm" sx={{ mt: 1 }} data-testid="questmaster-v5-run-error">
           {node.run.errorMessage}
         </Alert>
+      )}
+
+      {node.artifacts.length > 0 && (
+        <Box sx={{ mt: 1.5 }} data-testid="questmaster-v5-node-artifacts">
+          <Typography level="body-xs" sx={{ mb: 0.5 }}>
+            Artifacts from this node
+          </Typography>
+          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+            {node.artifacts.map(artifact => (
+              <Chip
+                key={artifact.id}
+                size="sm"
+                variant="outlined"
+                // The notebook, not the artifact: there is no /artifacts/:id
+                // route - artifacts render inline in chat via ArtifactRenderer.
+                // Phase 5's graph view is where per-node inspection belongs;
+                // until then this at least lands you where the artifact is.
+                {...(sessionId ? { onClick: () => navigate({ to: '/notebooks/$id', params: { id: sessionId } }) } : {})}
+                sx={sessionId ? { cursor: 'pointer' } : undefined}
+                data-testid="questmaster-v5-artifact-chip"
+              >
+                {artifact.type}: {artifact.title}
+              </Chip>
+            ))}
+          </Stack>
+        </Box>
       )}
 
       {node.run?.answer && (

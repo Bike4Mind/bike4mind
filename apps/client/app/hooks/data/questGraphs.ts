@@ -26,6 +26,41 @@ type QuestGraphList = z.infer<typeof QuestGraphListResponseSchema>;
  */
 const RUNNING_POLL_MS = 3_000;
 
+/**
+ * How long after a node completes we keep re-reading to pick up artifacts the
+ * terminal write had not landed yet. See the refetchInterval comment.
+ */
+const ARTIFACT_SETTLE_WINDOW_MS = 30_000;
+
+/**
+ * Whether to keep polling after every node has stopped running.
+ *
+ * The executor calls `markComplete` BEFORE `persistRunAsQuest` writes the
+ * artifacts, so the poll that first observes `completed` can legitimately
+ * precede them. Stop there and the node looks artifact-less until something
+ * else happens to refetch.
+ *
+ * Deliberately does NOT gate on the run having an answer. An earlier version
+ * did, which meant a completed run with a null or empty answer stopped polling
+ * immediately and could never pick its artifacts up. Whether an answer exists
+ * says nothing about whether artifacts are still landing.
+ *
+ * Bounded by `completedAt` so a run that genuinely emits no artifacts stops
+ * once the window passes instead of polling forever.
+ */
+export function shouldPollForSettlingArtifacts(
+  nodes: Pick<QuestNodeWire, 'status' | 'artifacts' | 'completedAt'>[],
+  now = Date.now()
+): boolean {
+  return nodes.some(
+    n =>
+      n.status === 'completed' &&
+      n.artifacts.length === 0 &&
+      Boolean(n.completedAt) &&
+      now - new Date(n.completedAt as unknown as string).getTime() < ARTIFACT_SETTLE_WINDOW_MS
+  );
+}
+
 export const questGraphKeys = {
   all: ['questGraphs'] as const,
   detail: (id: string) => ['questGraphs', id] as const,
@@ -52,7 +87,9 @@ export function useQuestGraph(graphId: string | null) {
     enabled: Boolean(graphId),
     refetchInterval: query => {
       const nodes = query.state.data?.nodes;
-      return nodes?.some(n => n.status === 'in_progress') ? RUNNING_POLL_MS : false;
+      if (!nodes) return false;
+      if (nodes.some(n => n.status === 'in_progress')) return RUNNING_POLL_MS;
+      return shouldPollForSettlingArtifacts(nodes) ? RUNNING_POLL_MS : false;
     },
   });
 }
