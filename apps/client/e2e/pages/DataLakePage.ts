@@ -8,6 +8,7 @@ import { BasePage } from './BasePage';
  * lake viewer. Selectors mirror the data-testid attributes in
  * `app/components/datalake/*` and `app/components/DataLakeWizard/*`.
  */
+// TODO(datalake-in-chat): /data-lakes route retired; rewrite against the in-chat Data Lake header toggle once the Phase 3 surface settles.
 export class DataLakePage extends BasePage {
   constructor(page: Page) {
     super(page);

@@ -10,6 +10,10 @@ import {
 } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
 import { attackSimulationFunction, modelDiscoveryFunction } from './cron';
+// web -> agentExecutor -> websocket is acyclic: websocket.ts deliberately does
+// not import agentExecutor (the agent_execute route is declared the other way
+// round to break exactly that cycle).
+import { agentExecutor } from './agentExecutor';
 import { emailJobQueue, emailBatchQueue, emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
 import {
   emailIngestionQueue,
@@ -131,6 +135,12 @@ const lambdaFunctionNames = new sst.Linkable('lambdaFunctionNames', {
     // Admin "Run now" (pages/api/admin/model-discovery) invokes the same
     // function the discovery cron targets, with { trigger: 'manual' }.
     modelDiscovery: modelDiscoveryFunction.name,
+    // QuestMaster v5 dispatches a node run from an API route
+    // (pages/api/quest-nodes/[id]/run -> runQuestNode). The WebSocket
+    // `agent_execute` handler reaches the same function through its own link;
+    // the frontend cannot, so the name is surfaced here rather than linking the
+    // whole function into the web app.
+    agentExecutor: agentExecutor.name,
   },
 });
 

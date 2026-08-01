@@ -94,6 +94,9 @@ describe('artifactService - create', () => {
         version: 1,
         status: 'draft',
         visibility: 'private',
+        // _ids from the content/version writes must thread into the artifact record
+        contentId: 'content-id-123',
+        currentVersionId: 'version-id-123',
       })
     );
   });

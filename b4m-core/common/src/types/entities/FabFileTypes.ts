@@ -303,6 +303,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findAllInIds(ids: string[]): Promise<IFabFileDocument[]>;
 
   /**
+   * Find files by ID with the heavy and URL-bearing fields projected out, for
+   * callers that need to know what a file IS without loading or linking to it.
+   * Includes soft-deleted files, so a still-referenced deleted attachment stays
+   * visible as such. Capped; `hasMore` reports truncation rather than hiding it.
+   * @param ids - The IDs of the files.
+   * @param cap - Maximum rows to return.
+   */
+  findMetadataByIds(ids: string[], cap?: number): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+
+  /**
+   * As `findMetadataByIds`, for the files a session currently holds (excludes
+   * soft-deleted). Capped; `hasMore` reports truncation rather than hiding it.
+   * @param sessionId - The session whose files to list.
+   * @param cap - Maximum rows to return.
+   */
+  findMetadataBySessionId(sessionId: string, cap?: number): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+
+  /**
    * Delete many files in the given IDs.
    * @param ids - The IDs of the files.
    * @returns A promise that resolves to void.
@@ -539,6 +557,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * find().length). Counts only live files (not archived, not deleted).
    */
   computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }>;
+  /**
+   * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
+   * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
+   * stored stats. Prefer this over counting `<prefix>:` tag matches, which misses files that
+   * carry only the membership tag and over-counts multi-tagged ones.
+   */
+  countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>>;
   /** Soft-archive (reversible) all live member files. Returns affected count. */
   archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
   /** Reverse archive for all archived member files. */

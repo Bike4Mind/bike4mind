@@ -24,9 +24,23 @@ import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
  * nobody checks for; the reverse means the detector flags wording the prompt never warned against.
  * Because this text is live-editable per environment, that drift is silent - an admin edit cannot
  * update the detector. Prefer changing both in one commit.
+ *
+ * The SCOPE paragraph is load-bearing, not throat-clearing. This block lands as an undifferentiated
+ * system message alongside org/lake/session prompts, so without it the "never deliver less than the
+ * complete artifact" mandate below reads as a general instruction on turns where no artifact is
+ * possible - biasing the model against "I do not have enough to answer that" on exactly the
+ * retrieval-grounded questions where abstention is the correct answer. Keep any edit to the
+ * completeness rules bounded to artifact bodies.
+ *
+ * Live-editability cuts both ways: an environment whose `ArtifactEmissionPrompt` row holds a saved
+ * copy of an older default keeps that copy and silently misses every fix made here. Behavioural
+ * changes to this text therefore need the stored values checked (or cleared) per environment - the
+ * code change alone does not ship them.
  */
 export const ARTIFACT_EMISSION_PROMPT = `ARTIFACT OUTPUT:
-When asked to create something substantial and self-contained - a complete HTML page, an interactive visualization, a React component, an SVG, a Mermaid diagram, or a long code file/document - emit it inside an <artifact> tag, never as raw inline markup. The body between the opening and closing tags MUST be the complete file you generate - the entire document, top to bottom. NEVER put an ellipsis (...), a stand-in, or a "code here" comment as the body; write the real, full content and close the document before </artifact>. Shape (replace the body with your actual complete file):
+SCOPE: everything below is about artifacts - when to emit one, and what must go inside it once you do. The COMPLETENESS and NEVER ABBREVIATE rules bind the BODY of an artifact you have chosen to emit; they are not a general instruction to always produce a deliverable, and nothing below decides WHETHER to answer or how much of an answer you owe. When a question is underspecified, rests on a premise you cannot verify, or asks for something your sources do not cover, say so and name what is missing. "I do not have enough to answer that" and "that is not in the material I can see" are correct, high-value answers, and no completeness rule below outranks them. Never invent facts about the user, their business, or their data in order to have something complete to put in an artifact.
+
+When asked to create something substantial and self-contained - a complete HTML page, an interactive visualization, a React component, an SVG, a Mermaid diagram, or a long code file/document - emit it inside an <artifact> tag, never as raw inline markup - never paste large raw HTML or code into the chat body outside an <artifact> tag. The body between the opening and closing tags MUST be the complete file you generate - the entire document, top to bottom. NEVER put an ellipsis (...), a stand-in, or a "code here" comment as the body; write the real, full content and close the document before </artifact>. Shape (replace the body with your actual complete file):
 <artifact identifier="kebab-case-id" type="text/html" title="Short Title">THE FULL FILE, WRITTEN OUT IN FULL</artifact>
 Types: text/html, application/vnd.ant.react, image/svg+xml, application/vnd.ant.mermaid, application/vnd.ant.python, application/vnd.ant.code.
 
@@ -69,10 +83,10 @@ SHARING A REACT ARTIFACT (publishing to a /p/ link): the in-chat preview is perm
 - File downloads are sandbox-blocked on the published page (no allow-downloads) - \`XLSX.writeFile\`/save-to-disk buttons won't fire; render results in the page (a table, inline preview) instead of offering a download.
 - Only the importable packages above publish; importing anything else fails the publish with a clear "not publishable yet" error.
 
-COMPLETENESS: Deliver the full artifact - favor completeness over brevity; trim only genuine bloat (boilerplate, dead code, repetition), never requested scope. Only when a deliverable is genuinely too large for one response, build it incrementally: ship a complete first version, then expand under the SAME identifier rather than letting it get cut off mid-tag. Always emit the closing </artifact>. Never paste large raw HTML or code into the chat body outside an <artifact> tag.
+COMPLETENESS (artifact bodies only - see SCOPE): Deliver the full artifact - favor completeness over brevity; trim only genuine bloat (boilerplate, dead code, repetition), never requested scope. Only when a deliverable is genuinely too large for one response, build it incrementally: ship a complete first version, then expand under the SAME identifier rather than letting it get cut off mid-tag. Always emit the closing </artifact>.
 
 NEVER ABBREVIATE THE BODY - THIS IS THE MOST DAMAGING FAILURE YOU CAN PRODUCE HERE: every function the artifact needs must be written out in full, every time, even when you already wrote it in an earlier turn. An artifact whose logic is replaced by a summary comment still parses and still renders a complete-looking UI whose controls silently do nothing - the user cannot see the difference, ships it, and only finds out when a teammate clicks a dead button. That is far worse than an obviously unfinished artifact. Specifically FORBIDDEN as artifact body content, in any comment form: "same as above", "same as before", "identical to previous", "from the previous version", "for brevity" and any padded variant of it ("for the sake of brevity", "in the interest of brevity"), "omitted", "unchanged", "rest of the ...", "<rest of the code>", "code goes here", "implementation here", "[...]", or any comment that stands in for code you wrote previously or intend the reader to copy from elsewhere. Equally forbidden inside the artifact: anything addressed to the reader rather than to the runtime - asking them to reply "CONTINUE", pointing at a "next response", or promising in the first person what you are about to write ("I will include the remaining 84 entries"). The artifact is a standalone document; it has no next turn. Re-emitting the same 300 lines verbatim is CORRECT and expected; referring to them is not.
-If the full deliverable genuinely will not fit, do NOT stub the difference. REDUCE SCOPE EXPLICITLY: build fewer features, completely and working, then say in the chat body (outside the artifact) which features you left out and offer to add them in a follow-up under the same identifier. A working artifact with three of five features plus an honest note beats five features where two are hollow.`;
+If the full deliverable genuinely will not fit, do NOT stub the difference. REDUCE SCOPE EXPLICITLY: build fewer features, completely and working, then say in the chat body (outside the artifact) which features you left out and offer to add them in a follow-up under the same identifier. A working artifact with three of five features plus an honest note beats five features where two are hollow. And where the request itself is the thing that will not hold - too little given, a premise you cannot check, a corpus that does not cover it - saying so and asking for what is missing beats any artifact built on details you invented on the user's behalf.`;
 
 /**
  * Default text for the help-center nudge system prompt. Single source of truth used BOTH as the
@@ -1827,7 +1841,9 @@ export const settingsMap = {
   EnableArtifactsDefault: makeBooleanSetting({
     key: 'EnableArtifactsDefault',
     name: 'Artifacts: On by default for users',
-    defaultValue: false,
+    // The completion pipeline honors this flag, so false would withdraw artifacts from every
+    // never-toggled user rather than merely leaving them un-surfaced.
+    defaultValue: true,
     description: 'When enabled, the Artifacts feature is active for users who have never explicitly toggled it.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
@@ -1973,7 +1989,7 @@ export const settingsMap = {
     name: 'Artifact Emission Prompt',
     defaultValue: ARTIFACT_EMISSION_PROMPT,
     description:
-      'System prompt instructing the model how to emit <artifact> tags (HTML/React/SVG/Mermaid/etc.). Live-editable; clearing it reverts to the built-in default. Only injected when the Enable Artifacts feature is on. (The sandbox runtime that renders artifacts is intentionally NOT editable — it is a security boundary.)',
+      'System prompt instructing the model how to emit <artifact> tags (HTML/React/SVG/Mermaid/etc.). Injected only when the Enable Artifacts feature is on AND the request did not disable artifacts. Live-editable; clearing it reverts to the built-in default. After an upgrade, diff a saved copy against that default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since. (The sandbox runtime that renders artifacts is intentionally NOT editable — it is a security boundary.)',
     category: 'AI',
     order: 9,
   }),
@@ -2987,7 +3003,7 @@ export const settingsMap = {
     name: 'ElevenLabs Server API Key (Voice v2)',
     defaultValue: '',
     description:
-      'Server-side ElevenLabs API key. Mints Conversational AI signed URLs for /api/voice/v2/sessions and is the org-wide fallback key for ElevenLabs text-to-speech (/api/ai/tts) and sound-effects (/api/ai/sound-effects) when a user has no personal key. A per-user ElevenLabs key still takes precedence.',
+      'Server-side ElevenLabs API key. Mints Conversational AI signed URLs for /api/voice/v2/sessions and is the org-wide fallback key for ElevenLabs text-to-speech (/api/ai/tts), sound-effects (/api/ai/sound-effects), and music generation (/api/ai/music) when a user has no personal key. A per-user ElevenLabs key still takes precedence.',
     isSensitive: true,
     category: 'AI',
     group: API_SERVICE_GROUPS.VOICE_SESSION.id,
@@ -3611,7 +3627,7 @@ export const settingsMap = {
     name: 'Model Discovery Price Band (%)',
     defaultValue: 50,
     description:
-      'The largest price move discovery applies without a human, in either direction, measured against the rate in the row it would supersede - so 200 passes anything up to a 3x change. A bigger move is flagged with both sources shown and the existing price keeps billing. 0 flags every move.',
+      'The largest price move discovery applies without a human, measured as the ratio between the new rate and the rate in the row it would supersede - so 200 passes anything up to a 3x change, and 500, the highest this accepts, passes up to 6x. Both read the same in either direction: a 3x cut is the same 200% as a 3x rise. A bigger move is flagged with both sources shown and the existing price keeps billing. 0 flags every move.',
     min: 0,
     max: 500,
     category: 'AI',

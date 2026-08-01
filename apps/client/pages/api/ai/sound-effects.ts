@@ -139,6 +139,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
         feature: 'sound_effects',
         provider,
         model: provider,
+        // Matches this call's ledger write (deductCreditsWithOrgSupport, source: 'api').
+        source: 'api',
         inputTokens: 0,
         outputTokens: 0,
         cachedInputTokens: 0,

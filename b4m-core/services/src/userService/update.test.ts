@@ -388,4 +388,47 @@ describe('updateUser', () => {
     const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
     expect(persisted.tags).toEqual(['Customer']);
   });
+
+  it('coerces an ISO-string contextTelemetryConsentedAt on write (telemetry level is not write-once)', async () => {
+    // The settings UI echoes the whole `preferences` object back on each write, so
+    // `contextTelemetryConsentedAt` round-trips from GET /users/{id} as an ISO string.
+    // A strict z.date() rejected it with a 422 on every write after the first, stranding
+    // users on the level they first picked. z.coerce.date() must accept and coerce it.
+    const isoConsentedAt = '2026-07-31T04:40:29.874Z';
+    const user = {
+      id: 'user-telemetry',
+      username: 'telemetryuser',
+      name: 'Telemetry User',
+      email: 'telemetry@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as IUserDocument;
+
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(user),
+      update: vi.fn().mockImplementation((u: IUserDocument) => Promise.resolve(u)),
+    };
+
+    const result = await updateUser(
+      'user-telemetry',
+      {
+        preferences: {
+          contextTelemetryLevel: 'basic',
+          contextTelemetryConsentedAt: isoConsentedAt,
+        },
+      } as unknown as UpdateUserParameters,
+      { db: { users: mockUserRepository as any } }
+    );
+
+    const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted.preferences?.contextTelemetryLevel).toBe('basic');
+    expect(persisted.preferences?.contextTelemetryConsentedAt).toBeInstanceOf(Date);
+    expect((persisted.preferences?.contextTelemetryConsentedAt as Date).toISOString()).toBe(isoConsentedAt);
+    expect(result.preferences?.contextTelemetryLevel).toBe('basic');
+  });
 });

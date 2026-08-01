@@ -2,7 +2,7 @@ import { adminService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { issueSessionForRequest } from '@server/auth/issueSession';
 import { BadRequestError } from '@bike4mind/utils';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 
@@ -43,11 +43,11 @@ const handler = baseApi().post(
     // from an admin-driven one: /api/logout skips the tokenVersion revoke for these,
     // otherwise an admin clicking "Log Out" mid-impersonation would force-log-out the
     // real customer on every device.
-    const { accessToken, refreshToken } = authTokenGenerator.createAccessToken(
-      targetUser.id,
-      targetUser.tokenVersion ?? 0,
-      { impersonatedBy: adminUser.id }
-    );
+    const { accessToken, refreshToken } = await issueSessionForRequest(req, targetUser.id, {
+      createdVia: 'impersonation',
+      tokenVersion: targetUser.tokenVersion ?? 0,
+      impersonatedBy: adminUser.id,
+    });
 
     return res.json({ user: redactUserSecretsForSelf(targetUser), accessToken, refreshToken });
   })

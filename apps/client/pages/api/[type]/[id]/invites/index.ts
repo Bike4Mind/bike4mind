@@ -207,9 +207,19 @@ const handler = baseApi()
    */
   .delete(
     asyncHandler<{}, unknown, unknown, IParams>(async (req, res) => {
+      // Take the document identity from the path and only `email` from the body. Spreading the
+      // whole body last let a caller override type and id, so the request's target was not the
+      // one in the URL. Note this route's :type segment carries the InviteType value itself
+      // (useCancelInvite posts `/api/${InviteType}/...`), NOT the .post/.get path aliases -
+      // do not map it through URL_PATH_TO_INVITE_TYPE. secureParameters' z.enum(InviteType)
+      // rejects anything that is not a real type.
+      const { type, id } = req.query;
+      if (!type || !id) throw new BadRequestError('Invalid cancel invite request');
+      const { email } = (req.body ?? {}) as { email?: string };
+
       const invites = await sharingService.cancelInvite(
         req.user,
-        { ...(req.query as any), ...(req.body as any) },
+        { type: type as InviteType, id, email },
         {
           db: {
             invites: inviteRepository,
@@ -217,6 +227,7 @@ const handler = baseApi()
             fabFiles: fabFileRepository,
             sessions: sessionRepository,
             organizations: organizationRepository,
+            projects: projectRepository,
             groups: Group,
           },
         }

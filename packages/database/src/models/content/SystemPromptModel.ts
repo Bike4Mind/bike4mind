@@ -33,11 +33,13 @@ const SystemPromptModelSchema = new Schema<IAdminSystemPrompt, Model<IAdminSyste
   }
 );
 
-// Unique index that excludes soft-deleted records (deletedAt exists only on soft-deleted docs)
-SystemPromptModelSchema.index(
-  { promptId: 1 },
-  { unique: true, partialFilterExpression: { deletedAt: { $exists: false } } }
-);
+// One LIVE prompt per promptId. The filter MUST be `deletedAt: null`, not `$exists: false`:
+// softDeletePlugin declares `deletedAt` with `default: null`, so the field exists on every
+// document and an `$exists: false` filter matches nothing - the constraint enforced nothing.
+// Same form as PublishedArtifactModel/GroupModel. MUST stay identical to migration
+// 20260731100000, which drops and rebuilds promptId_1 (autoIndex cannot change the options of
+// an index that already exists).
+SystemPromptModelSchema.index({ promptId: 1 }, { unique: true, partialFilterExpression: { deletedAt: null } });
 
 // Indexes for efficient queries
 SystemPromptModelSchema.index({ enabled: 1, category: 1 });
