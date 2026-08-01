@@ -88,6 +88,7 @@ import { brand, grayAlpha, green, orange } from '@client/app/utils/themes/colors
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
+import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { isImageModel } from '@client/app/utils/commands';
 import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
@@ -1365,31 +1366,21 @@ const AISettingsTab: React.FC<{
         display: 'flex',
         flexDirection: 'column',
         overflowY: 'auto',
-        width: '100%',
+        // Widen past the modal's 24px padding so the scrollbar rides ~4px from the window
+        // edge instead of cutting through the header icons. The content inset comes from
+        // ModelSelection's own pr, not from here.
+        width: { xs: '100%', sm: 'calc(100% + 20px)' },
         height: '100%',
         ...scrollbarStyles,
+        // Start the bar 16px below the header icons (they end 36px from the modal top). A
+        // track margin is the only way to shorten a native scrollbar without moving content.
+        // With tabs, this container already begins below them, so no offset is needed.
+        '&::-webkit-scrollbar-track': {
+          background: 'transparent',
+          marginTop: isResearchModeFeatureEnabled ? 0 : '28px',
+        },
       }}
     >
-      {/* Title and Description - Desktop Only */}
-      {!isMobile && (
-        <Stack
-          direction="column"
-          alignItems="flex-start"
-          justifyContent="flex-start"
-          gap={1}
-          sx={{
-            width: 'auto',
-            mx: 0,
-            mb: { xs: 1, sm: 3 },
-          }}
-        >
-          <Typography sx={{ color: 'text.primary', fontSize: '24px', fontWeight: '500' }}>AI Settings</Typography>
-          <Typography sx={{ color: 'text.primary50', fontSize: '14px', pr: { sm: 4 }, lineHeight: '1.4' }}>
-            Welcome to model selection — choose from powerful text or images AI models, and personalize the settings to
-            fit your unique goals. Dive in and pick the right tool for your next project!
-          </Typography>
-        </Stack>
-      )}
       <ModelSelection
         model={model}
         setModel={handleModelSelection}
@@ -1400,6 +1391,25 @@ const AISettingsTab: React.FC<{
         onModelFilterChange={handleModelChange}
         onSettingsClick={onViewDetails}
         isResearchModeFeatureEnabled={isResearchModeFeatureEnabled}
+        stickyHeader={
+          !isMobile && (
+            <Stack
+              direction="column"
+              alignItems="flex-start"
+              gap="4px"
+              sx={{
+                width: 'auto',
+                // Only clears the tab bar; without tabs the modal padding is already enough.
+                mt: isResearchModeFeatureEnabled ? '20px' : 0,
+              }}
+            >
+              <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>AI Settings</Typography>
+              <Typography sx={{ color: 'text.primary50', fontSize: '14px', pr: { sm: 4 }, lineHeight: '1.4' }}>
+                Choose an AI model, then open its settings to tune it to your needs.
+              </Typography>
+            </Stack>
+          )
+        }
       />
     </Box>
   );
@@ -1900,8 +1910,9 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 gap: '0px',
                 width: '100%',
                 height: '100%',
-                px: { xs: 2, sm: 4 },
-                py: { xs: 0, sm: 4 },
+                // Mobile keeps zero vertical padding: the TabPanel heights below are calc'd
+                // against a full-height viewport.
+                padding: { xs: '0 16px', sm: '24px' },
               }}
             >
               {/* Close Button and Help */}
@@ -1911,34 +1922,31 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                   display: { xs: 'none', sm: 'flex' },
                   justifyContent: 'flex-end',
                   alignItems: 'center',
-                  gap: 0.5,
+                  gap: '8px',
                   p: 0,
-                  height: '24px',
+                  height: '28px',
                   position: { sm: 'absolute' },
-                  top: { sm: '12px' },
-                  right: { sm: '3px' },
+                  top: { sm: '8px' },
+                  right: { sm: '8px' },
+                  // Above the sticky model-list header (zIndex 10), which otherwise slides
+                  // over these on scroll.
+                  zIndex: 20,
                 }}
               >
-                <ContextHelpButton helpId="features/ai-models" tooltipText="Learn about AI Models" size="sm" />
+                <ContextHelpButton
+                  helpId="features/ai-models"
+                  tooltipText="Learn about AI Models"
+                  size="sm"
+                  sx={HEADER_ICON_BUTTON_SX}
+                />
                 <IconButton
                   variant="plain"
+                  size="sm"
                   data-testid="ai-settings-close-btn"
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    width: '24px',
-                    height: '24px',
-                    '& .MuiSvgIcon-root': {
-                      fontSize: '1rem',
-                    },
-                    '&:hover': {
-                      backgroundColor: 'transparent',
-                    },
-                  }}
+                  sx={HEADER_ICON_BUTTON_SX}
                   onClick={onClose}
                 >
-                  <CloseIcon />
+                  <CloseIcon sx={{ fontSize: '16px' }} />
                 </IconButton>
               </Box>
 
@@ -1959,22 +1967,27 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                   sx={{
                     backgroundColor: 'transparent',
                     borderBottom: theme => `1px solid ${theme.palette.divider}`,
-                    mb: { xs: 2, sm: 3 },
+                    // Desktop spacing lives on the title instead, so it scrolls away and the
+                    // sticky search row pins right under the tabs. Mobile has no title.
+                    mb: { xs: 2, sm: 0 },
                     p: 0,
                     boxShadow: 'none',
-                    maxHeight: '40px',
-                    height: { sm: '40px' },
+                    maxHeight: '32px',
+                    height: { sm: '32px' },
                     display: 'flex',
-                    gap: 0,
+                    gap: '4px',
+                    // Tabs inherit `min-block-size: var(--ListItem-minHeight)` (36px at sizeMd),
+                    // which would outgrow the 32px bar.
+                    '--ListItem-minHeight': '32px',
                     '& .MuiTab-root': {
-                      fontSize: { xs: '14px', sm: '16px' },
+                      fontSize: '14px',
                       fontWeight: 400,
-                      py: 0,
-                      px: { xs: 1.5, sm: 3 },
+                      p: 0,
                       color: 'text.primary50',
                       flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                      maxWidth: { xs: 'none', sm: 'unset' },
-                      minWidth: { xs: 0, sm: 'unset' },
+                      // Bounds must live here: this descendant selector outranks a Tab's own sx.
+                      maxWidth: { xs: 'none', sm: '200px' },
+                      minWidth: { xs: 0, sm: '140px' },
                       textAlign: 'center',
                       '&.Mui-selected': {
                         color: 'text.primary',
@@ -1985,7 +1998,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                   <Tab
                     value="ai-settings"
                     sx={{
-                      width: { xs: 'auto', sm: '200px' },
+                      width: 'auto',
                       flex: { xs: '1 1 0%', sm: '0 0 auto' },
                     }}
                   >
@@ -1996,7 +2009,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                     <Tab
                       value="research-mode"
                       sx={{
-                        width: { xs: 'auto', sm: '200px' },
+                        width: 'auto',
                         flex: { xs: '1 1 0%', sm: '0 0 auto' },
                       }}
                     >
@@ -2008,7 +2021,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                     value="audio"
                     data-testid="ai-settings-audio-tab"
                     sx={{
-                      width: { xs: 'auto', sm: '200px' },
+                      width: 'auto',
                       flex: { xs: '1 1 0%', sm: '0 0 auto' },
                     }}
                   >
