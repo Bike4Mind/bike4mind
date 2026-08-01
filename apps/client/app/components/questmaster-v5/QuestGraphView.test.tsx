@@ -10,6 +10,13 @@ let nodes: QuestNode[] = [];
 let currentModel = 'claude-opus-5';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn(), get: vi.fn() } }));
+// The real renderer drags in the whole artifact handler registry (mermaid, react
+// sandbox, chess...). This suite is about WHETHER v5 routes artifacts to it.
+vi.mock('@client/app/components/Session/artifacts/ArtifactRenderer', () => ({
+  default: ({ artifact }: { artifact: { type: string; identifier?: string } }) => (
+    <div data-testid="artifact-renderer-stub">{`${artifact.type}:${artifact.identifier ?? ''}`}</div>
+  ),
+}));
 vi.mock('@client/app/contexts/LLMContext', () => ({
   useLLM: (selector: (s: { model: string }) => unknown) => selector({ model: currentModel }),
 }));
@@ -207,6 +214,67 @@ describe('QuestGraphView', () => {
     fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
 
     expect(screen.queryByTestId('questmaster-v5-node-artifacts')).not.toBeInTheDocument();
+  });
+
+  // The gap this fixes: v5 was the one surface showing an artifact as raw
+  // source, while the notebook next door rendered the same reply properly.
+  it('renders an artifact in the reply instead of dumping its source', () => {
+    const reply = [
+      'Here is the plan.',
+      '',
+      '<artifact identifier="world-plan" type="application/vnd.ant.mermaid" title="Plan">',
+      'flowchart TD',
+      '  A --> B',
+      '</artifact>',
+    ].join('\n');
+    nodes = [
+      makeNode({
+        id: 'n1',
+        status: 'completed',
+        run: {
+          executionId: 'exec-1',
+          status: 'completed',
+          answer: reply,
+          answerTruncated: false,
+          totalIterations: 1,
+          totalCreditsUsed: 1,
+          errorMessage: null,
+        },
+      }),
+    ];
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+
+    expect(screen.getByTestId('questmaster-v5-rendered-artifacts')).toBeInTheDocument();
+    expect(screen.getByTestId('artifact-renderer-stub')).toHaveTextContent('mermaid');
+    // The prose survives; the artifact body does not leak into it.
+    expect(screen.getByTestId('questmaster-v5-answer')).toHaveTextContent('Here is the plan.');
+    expect(screen.getByTestId('questmaster-v5-answer')).not.toHaveTextContent('flowchart TD');
+  });
+
+  it('renders a plain reply as prose with no artifact section', () => {
+    nodes = [
+      makeNode({
+        id: 'n1',
+        status: 'completed',
+        run: {
+          executionId: 'exec-1',
+          status: 'completed',
+          answer: 'Just words, nothing to render.',
+          answerTruncated: false,
+          totalIterations: 1,
+          totalCreditsUsed: 1,
+          errorMessage: null,
+        },
+      }),
+    ];
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+
+    expect(screen.getByTestId('questmaster-v5-answer')).toHaveTextContent('Just words');
+    expect(screen.queryByTestId('questmaster-v5-rendered-artifacts')).not.toBeInTheDocument();
   });
 
   it('surfaces a failed run error message', () => {
