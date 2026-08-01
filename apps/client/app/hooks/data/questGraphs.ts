@@ -32,6 +32,35 @@ const RUNNING_POLL_MS = 3_000;
  */
 const ARTIFACT_SETTLE_WINDOW_MS = 30_000;
 
+/**
+ * Whether to keep polling after every node has stopped running.
+ *
+ * The executor calls `markComplete` BEFORE `persistRunAsQuest` writes the
+ * artifacts, so the poll that first observes `completed` can legitimately
+ * precede them. Stop there and the node looks artifact-less until something
+ * else happens to refetch.
+ *
+ * Deliberately does NOT gate on the run having an answer. An earlier version
+ * did, which meant a completed run with a null or empty answer stopped polling
+ * immediately and could never pick its artifacts up. Whether an answer exists
+ * says nothing about whether artifacts are still landing.
+ *
+ * Bounded by `completedAt` so a run that genuinely emits no artifacts stops
+ * once the window passes instead of polling forever.
+ */
+export function shouldPollForSettlingArtifacts(
+  nodes: Pick<QuestNodeWire, 'status' | 'artifacts' | 'completedAt'>[],
+  now = Date.now()
+): boolean {
+  return nodes.some(
+    n =>
+      n.status === 'completed' &&
+      n.artifacts.length === 0 &&
+      Boolean(n.completedAt) &&
+      now - new Date(n.completedAt as unknown as string).getTime() < ARTIFACT_SETTLE_WINDOW_MS
+  );
+}
+
 export const questGraphKeys = {
   all: ['questGraphs'] as const,
   detail: (id: string) => ['questGraphs', id] as const,
@@ -60,21 +89,7 @@ export function useQuestGraph(graphId: string | null) {
       const nodes = query.state.data?.nodes;
       if (!nodes) return false;
       if (nodes.some(n => n.status === 'in_progress')) return RUNNING_POLL_MS;
-      // Keep polling briefly after a run finishes. The executor calls
-      // markComplete BEFORE persistRunAsQuest writes the artifacts, so the very
-      // poll that first sees `completed` can legitimately precede them - stop
-      // there and the node looks artifact-less until something else refetches.
-      // Bounded by completedAt so a run that genuinely emits no artifacts stops
-      // polling once the window passes, rather than spinning forever.
-      const settling = nodes.some(
-        n =>
-          n.status === 'completed' &&
-          n.run?.answer &&
-          n.artifacts.length === 0 &&
-          n.completedAt &&
-          Date.now() - new Date(n.completedAt).getTime() < ARTIFACT_SETTLE_WINDOW_MS
-      );
-      return settling ? RUNNING_POLL_MS : false;
+      return shouldPollForSettlingArtifacts(nodes) ? RUNNING_POLL_MS : false;
     },
   });
 }

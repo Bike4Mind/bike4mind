@@ -74,7 +74,12 @@ export const QuestNodeWireSchema = z.object({
   reviewVerdict: z.enum(REVIEW_VERDICT_VALUES).nullable().optional(),
   enabledTools: z.array(z.string()),
   artifactIds: z.array(z.string()),
-  /** Resolved from artifactIds for display - empty until the run persists them. */
+  /**
+   * The artifacts this node's run produced, joined on
+   * `run.questId === artifact.sourceQuestId`. This is the source of truth for
+   * display; `artifactIds` above is a best-effort backfill written FROM this,
+   * not the other way round.
+   */
   artifacts: z.array(QuestNodeArtifactWireSchema),
   isReady: z.boolean(),
   /** Dependencies met AND the status allows a manual dispatch (includes `failed`, which is retryable). */
