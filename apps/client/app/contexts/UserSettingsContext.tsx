@@ -56,6 +56,7 @@ export interface UserSettings {
   showFunTools: boolean;
   /** Whether generated audio (TTS, sound-effect, music) is saved as a browsable FabFile. Default: true. */
   saveGeneratedAudio: boolean;
+  showSplashCards: boolean;
 }
 
 interface UserSettingsContextProps {
@@ -107,6 +108,7 @@ const defaultSettings: UserSettings = {
   agentModeDefault: 'off',
   showFunTools: false,
   saveGeneratedAudio: true,
+  showSplashCards: false,
 };
 
 /** Scalar keys shared between IUserPreferences and UserSettings. */
@@ -123,6 +125,7 @@ const SCALAR_PREF_KEYS = [
   'agentModeDefault',
   'showFunTools',
   'saveGeneratedAudio',
+  'showSplashCards',
 ] as const;
 
 /** Apply server preferences on top of defaults. Non-null server values win. */

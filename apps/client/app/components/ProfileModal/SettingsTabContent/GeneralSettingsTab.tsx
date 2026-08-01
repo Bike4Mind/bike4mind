@@ -562,6 +562,33 @@ const GeneralSettingsTab = () => {
                 ...cardSurfaceSx(theme),
                 display: 'flex',
                 alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '12px',
+                height: '100%',
+              })}
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography level="title-md" sx={{ fontSize: '16px', fontWeight: 500 }}>
+                  Splash Screen Cards
+                </Typography>
+                <Typography level="body-sm" sx={{ mt: 0.5 }}>
+                  Show prompt suggestion cards on the splash screen
+                </Typography>
+              </Box>
+              <Switch
+                checked={settings.showSplashCards}
+                onChange={e => updatePreferences({ showSplashCards: e.target.checked })}
+              />
+            </Box>
+          </Grid>
+
+          <Grid xs={12} md={6}>
+            <Box
+              sx={theme => ({
+                ...cardSurfaceSx(theme),
+                display: 'flex',
+                alignItems: 'center',
                 // wrap the trailing controls below the title when the row is too
                 // narrow, instead of squeezing them until their labels overlap.
                 justifyContent: 'space-between',

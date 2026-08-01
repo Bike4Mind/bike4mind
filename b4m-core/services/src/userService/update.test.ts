@@ -431,4 +431,41 @@ describe('updateUser', () => {
     expect((persisted.preferences?.contextTelemetryConsentedAt as Date).toISOString()).toBe(isoConsentedAt);
     expect(result.preferences?.contextTelemetryLevel).toBe('basic');
   });
+
+  it('preserves boolean display preferences that the client sends through', async () => {
+    // updateUserSchema is an allowlist: Zod strips any preference key not declared on
+    // it, so a pref added only to the client types silently never persists (the toggle
+    // reverts on reload). Remove showSplashCards from the schema and this fails.
+    const user = {
+      id: 'user-prefs',
+      username: 'prefsuser',
+      name: 'Prefs User',
+      email: 'prefs@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as IUserDocument;
+
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(user),
+      update: vi.fn().mockImplementation((u: IUserDocument) => Promise.resolve(u)),
+    };
+
+    await updateUser(
+      'user-prefs',
+      {
+        preferences: { showSplashCards: true, showFunTools: false, saveGeneratedAudio: true },
+      } as unknown as UpdateUserParameters,
+      { db: { users: mockUserRepository as any } }
+    );
+
+    const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted.preferences?.showSplashCards).toBe(true);
+    expect(persisted.preferences?.showFunTools).toBe(false);
+    expect(persisted.preferences?.saveGeneratedAudio).toBe(true);
+  });
 });

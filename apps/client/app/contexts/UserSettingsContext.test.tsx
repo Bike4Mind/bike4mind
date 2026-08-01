@@ -126,6 +126,48 @@ describe('UserSettingsContext — rawExperimentalPreferences optimistic update',
   });
 });
 
+describe('UserSettingsContext — scalar preference round-trip', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserState = defaultMockUserState();
+  });
+
+  it('defaults showSplashCards to false when the server has no value', () => {
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+    expect(result.current.settings.showSplashCards).toBe(false);
+  });
+
+  // A scalar pref only survives a reload if it is in SCALAR_PREF_KEYS *and* both
+  // server-side allowlists (the Zod updateUserSchema and the Mongoose
+  // UserPreferencesSchema). This covers the client half: drop the key from
+  // SCALAR_PREF_KEYS and the optimistic read below reverts to the default.
+  it('applies showSplashCards optimistically and persists it to the server', async () => {
+    const { updateUserToServer } = await import('@client/app/utils/userAPICalls');
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    act(() => {
+      result.current.updatePreferences({ showSplashCards: true });
+    });
+
+    expect(result.current.settings.showSplashCards).toBe(true);
+    expect(updateUserToServer).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ preferences: expect.objectContaining({ showSplashCards: true }) })
+    );
+    const stored = mockUserState.currentUser as { preferences: { showSplashCards?: boolean } };
+    expect(stored.preferences.showSplashCards).toBe(true);
+  });
+
+  it('merges a server-provided showSplashCards over the default', () => {
+    mockUserState.currentUser = {
+      id: 'u1',
+      preferences: { experimentalFeatures: {}, showSplashCards: true },
+    };
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+    expect(result.current.settings.showSplashCards).toBe(true);
+  });
+});
+
 describe('UserSettingsContext — isHydrated', () => {
   beforeEach(() => {
     vi.clearAllMocks();
