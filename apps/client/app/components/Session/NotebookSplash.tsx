@@ -552,6 +552,12 @@ const NotebookSplash: React.FC = () => {
   useEffect(() => {
     setHasMounted(true);
 
+    // Everything below only feeds the prompt cards (and the logo's shake-to-re-roll,
+    // which re-rolls those same cards), so skip the retry poll entirely when they're
+    // hidden - otherwise every default-configuration user pays 10 cache reads for
+    // output nothing renders. Toggling the pref back on re-runs this and populates.
+    if (!settings.showSplashCards) return;
+
     // Track if component unmounts to prevent memory leaks
     let cancelled = false;
     let timerId: ReturnType<typeof setTimeout> | null = null;
@@ -640,7 +646,7 @@ const NotebookSplash: React.FC = () => {
         clearTimeout(timerId);
       }
     };
-  }, [queryClient]);
+  }, [queryClient, settings.showSplashCards]);
 
   const { data: skyGreeting } = useQuery({
     queryKey: ['sky-greeting'],
