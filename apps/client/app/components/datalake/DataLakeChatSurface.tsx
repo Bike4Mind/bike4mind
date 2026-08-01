@@ -4,6 +4,7 @@ import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStor
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 import useCreateDataLakeSession from '@client/app/hooks/useCreateDataLakeSession';
 import DataLakeExplorer from './DataLakeExplorer';
+import { useManageKnowledge } from './manageKnowledge';
 
 /**
  * Wraps a chat node with the Data Lake tree (left) when Data Lake mode is on for the current
@@ -18,7 +19,9 @@ export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode })
   const { currentSession } = useSessions();
   const enabled = useDataLakeMode(s => s.enabled);
   const seedFromSession = useDataLakeMode(s => s.seedFromSession);
-  const openManager = useDataLakeWizardStore(s => s.openManager);
+  // Shared manage-knowledge capability (#841) - the gate and the open-manager wiring live in
+  // core. No `requireAdmin`: as on /data-lakes, these are the user's OWN lakes.
+  const { onManage } = useManageKnowledge();
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   const createDataLakeSession = useCreateDataLakeSession();
 
@@ -38,7 +41,7 @@ export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode })
       rootLabel="Data Lakes"
       chatSlot={chat}
       chatEmbedded
-      onManage={openManager}
+      onManage={onManage}
       onCreateLake={openWizard}
       createSessionForFile={createSessionForFile}
     />

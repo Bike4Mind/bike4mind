@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Button, Typography, useTheme } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
-import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { SurfaceBreadcrumb } from '@client/app/components/datalake/SurfaceBreadcrumb';
 import DataLakeTree from './DataLakeTree';
@@ -11,6 +10,7 @@ import DataLakeArticle from './DataLakeArticle';
 import { DataLakeNavProvider } from './dataLakeNavContext';
 import { StatTicker, surfaceBackground } from '@client/app/components/datalake/surfaceChrome';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
+import { ManageKnowledgeButton } from '@client/app/components/datalake/manageKnowledge';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
@@ -370,19 +370,10 @@ export default function DataLakeExplorer({
               {copy.createLabel}
             </Button>
           )}
-          {onManage && (
-            <Button
-              data-testid="datalake-manage-btn"
-              size="sm"
-              variant="outlined"
-              color="neutral"
-              startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
-              onClick={onManage}
-              sx={{ mb: 2, ml: 1 }}
-            >
-              Manage lakes
-            </Button>
-          )}
+          {/* Shared manage-knowledge affordance (#841) - the handler is passed through
+              because the caller's gate decided this surface offers it at all (a
+              browse-only surface omits `onManage` entirely). */}
+          {onManage && <ManageKnowledgeButton onManage={onManage} sx={{ mb: 2, ml: 1 }} />}
           {onDiscover && (
             <Button
               data-testid="datalake-discover-btn"
