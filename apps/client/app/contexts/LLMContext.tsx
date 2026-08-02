@@ -371,7 +371,7 @@ export function getDefaultMaxTokens(modelInfo: ModelInfo): number {
 
 export const LLMProvider: React.FC = () => {
   const { setState } = useLLM;
-  const { settings } = useUserSettings();
+  const { settings, isHydrated: settingsHydrated } = useUserSettings();
   const { isFeatureEnabled, isLoading: areFeaturesLoading } = useFeatureEnabled();
   const { accessibleModels, isModelAccessible, getFallbackModel } = useAccessibleModels();
   const { data: modelInfoRepo } = useModelInfo();
@@ -388,9 +388,12 @@ export const LLMProvider: React.FC = () => {
   // Tri-state (#1319): true = V1 toggle on; undefined = V2-only user (the server resolves
   // memory from the account opt-in; an explicit false would revoke it per-request);
   // false = no memory feature enabled, so requests opt out of both pipelines.
+  // Guarded on prefs hydration: settings.experimentalFeatures starts as merged defaults
+  // (both toggles false), so deriving before hydration would stamp an explicit false and
+  // opt a cold-load first send out of V2 - the same window isArtifactsEnabled guards.
   const enableMementosV1 = settings.experimentalFeatures?.enableMementos ?? false;
   const enableMementosV2 = settings.experimentalFeatures?.enableMementosV2 ?? false;
-  const enableMementos = enableMementosV1 ? true : enableMementosV2 ? undefined : false;
+  const enableMementos = !settingsHydrated ? undefined : enableMementosV1 ? true : enableMementosV2 ? undefined : false;
   // Left undefined until both signals resolve - see isArtifactsEnabled on the state type.
   const enableArtifacts = areFeaturesLoading ? undefined : isFeatureEnabled('enableArtifacts');
   const enableAgents = isFeatureEnabled('enableAgents');
