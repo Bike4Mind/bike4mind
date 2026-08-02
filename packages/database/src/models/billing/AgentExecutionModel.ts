@@ -1678,7 +1678,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       id: string;
       questId: string | null;
       status: AgentExecutionStatus;
-      answer: string | null;
+      /** Whether a reply exists - NOT the reply. See findAnswerByExecutionId. */
+      hasAnswer: boolean;
       totalIterations: number | null;
       totalCreditsUsed: number | null;
       errorMessage: string | null;
@@ -1688,31 +1689,35 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     const valid = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
     if (!valid.length) return [];
 
-    const docs = await this.model
-      .find(
-        { _id: { $in: valid.map(id => new mongoose.Types.ObjectId(id)) } },
-        {
-          _id: 1,
+    // Aggregation, not find(): `hasAnswer` has to be computed in the database.
+    // A projection can only include or exclude `result.answer`, so a find()
+    // would have to transfer every reply body just to learn whether one exists -
+    // exactly the cost this endpoint exists to avoid, since it is polled.
+    const docs = await this.model.aggregate<{
+      _id: mongoose.Types.ObjectId;
+      questId?: string;
+      status: AgentExecutionStatus;
+      hasAnswer?: boolean;
+      totalIterations?: number;
+      totalCreditsUsed?: number;
+      errorMessage?: string;
+      completedAt?: Date;
+    }>([
+      { $match: { _id: { $in: valid.map(id => new mongoose.Types.ObjectId(id)) } } },
+      {
+        $project: {
           questId: 1,
           status: 1,
-          'result.answer': 1,
-          'result.totalIterations': 1,
           totalCreditsUsed: 1,
-          'error.message': 1,
           completedAt: 1,
-        }
-      )
-      .lean<
-        Array<{
-          _id: mongoose.Types.ObjectId;
-          questId?: string;
-          status: AgentExecutionStatus;
-          result?: { answer?: string; totalIterations?: number };
-          totalCreditsUsed?: number;
-          error?: { message?: string };
-          completedAt?: Date;
-        }>
-      >();
+          totalIterations: '$result.totalIterations',
+          errorMessage: '$error.message',
+          hasAnswer: {
+            $gt: [{ $strLenCP: { $ifNull: [{ $toString: '$result.answer' }, ''] } }, 0],
+          },
+        },
+      },
+    ]);
 
     return docs.map(doc => ({
       id: String(doc._id),
@@ -1720,12 +1725,24 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       // persistAgentArtifacts stamps `sourceQuestId` with the same value.
       questId: doc.questId ?? null,
       status: doc.status,
-      answer: typeof doc.result?.answer === 'string' ? doc.result.answer : null,
-      totalIterations: typeof doc.result?.totalIterations === 'number' ? doc.result.totalIterations : null,
+      hasAnswer: doc.hasAnswer === true,
+      totalIterations: typeof doc.totalIterations === 'number' ? doc.totalIterations : null,
       totalCreditsUsed: typeof doc.totalCreditsUsed === 'number' ? doc.totalCreditsUsed : null,
-      errorMessage: doc.error?.message ?? null,
+      errorMessage: doc.errorMessage ?? null,
       completedAt: doc.completedAt ?? null,
     }));
+  }
+
+  /**
+   * One run's full reply, fetched on demand. Unbounded on purpose: exactly one
+   * of these is requested at a time (the node the user selected), so there is no
+   * N-replies-per-poll problem to cap against - and capping is what previously
+   * sliced a reply mid-`<artifact>` and left it unrenderable.
+   */
+  async findAnswerByExecutionId(id: string): Promise<string | null> {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const doc = await this.model.findById(id, { 'result.answer': 1 }).lean<{ result?: { answer?: unknown } } | null>();
+    return typeof doc?.result?.answer === 'string' ? doc.result.answer : null;
   }
 
   async findDagChildrenLean(parentExecutionId: string): Promise<

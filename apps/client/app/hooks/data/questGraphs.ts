@@ -94,6 +94,26 @@ export function useQuestGraph(graphId: string | null) {
   });
 }
 
+/**
+ * One node's full reply, fetched only when its panel is open.
+ *
+ * The graph-detail payload deliberately carries no answers - see
+ * QuestNodeRunWireSchema. Kept out of the polling query so a long reply is
+ * fetched once per node rather than on every tick.
+ */
+export function useQuestNodeAnswer(nodeId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['questNodeAnswer', nodeId],
+    queryFn: async (): Promise<{ answer: string | null }> => {
+      const { data } = await api.get<{ answer: string | null }>(`/api/quest-nodes/${nodeId}/answer`);
+      return data;
+    },
+    enabled: Boolean(nodeId) && enabled,
+    // A terminal run's reply never changes, so keep it cached across selection.
+    staleTime: Infinity,
+  });
+}
+
 export function useCreateQuestGraph() {
   const queryClient = useQueryClient();
   return useMutation({

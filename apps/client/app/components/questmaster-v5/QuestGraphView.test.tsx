@@ -8,6 +8,7 @@ const runMutate = vi.fn();
 const addMutate = vi.fn();
 let nodes: QuestNode[] = [];
 let currentModel = 'claude-opus-5';
+let nodeAnswer: string | null = null;
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn(), get: vi.fn() } }));
 // The real renderer drags in the whole artifact handler registry (mermaid, react
@@ -28,6 +29,8 @@ vi.mock('@client/app/hooks/data/questGraphs', () => ({
   useCreateQuestGraph: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useAddQuestNode: () => ({ mutateAsync: addMutate, isPending: false }),
   useRunQuestNode: () => ({ mutateAsync: runMutate, isPending: false }),
+  // The reply is fetched on demand now, not carried in the graph payload.
+  useQuestNodeAnswer: () => ({ data: { answer: nodeAnswer }, isLoading: false, isError: false }),
 }));
 
 const { default: QuestGraphView } = await import('./QuestGraphView');
@@ -67,6 +70,7 @@ describe('QuestGraphView', () => {
     runMutate.mockReset().mockResolvedValue({ executionId: 'exec-1' });
     addMutate.mockReset().mockResolvedValue({ node: makeNode({ id: 'n2' }) });
     currentModel = 'claude-opus-5';
+    nodeAnswer = null;
     nodes = [];
   });
 
@@ -127,6 +131,7 @@ describe('QuestGraphView', () => {
   });
 
   it('shows the run answer for a completed node', () => {
+    nodeAnswer = 'The logs show 42 errors.';
     nodes = [
       makeNode({
         id: 'n1',
@@ -134,8 +139,7 @@ describe('QuestGraphView', () => {
         run: {
           executionId: 'exec-1',
           status: 'completed',
-          answer: 'The logs show 42 errors.',
-          answerTruncated: false,
+          hasAnswer: true,
           totalIterations: 3,
           totalCreditsUsed: 12.5,
           errorMessage: null,
@@ -148,29 +152,6 @@ describe('QuestGraphView', () => {
 
     expect(screen.getByTestId('questmaster-v5-answer')).toHaveTextContent('The logs show 42 errors.');
     expect(screen.getByTestId('questmaster-v5-node-status-chip')).toHaveTextContent('completed');
-  });
-
-  it('says so when the displayed answer is a prefix', () => {
-    nodes = [
-      makeNode({
-        id: 'n1',
-        status: 'completed',
-        run: {
-          executionId: 'exec-1',
-          status: 'completed',
-          answer: 'a very long answer',
-          answerTruncated: true,
-          totalIterations: 1,
-          totalCreditsUsed: 1,
-          errorMessage: null,
-        },
-      }),
-    ];
-    renderView();
-    selectGraph();
-    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
-
-    expect(screen.getByTestId('questmaster-v5-answer-truncated')).toBeInTheDocument();
   });
 
   it('selects a node from the keyboard', () => {
@@ -193,8 +174,7 @@ describe('QuestGraphView', () => {
         run: {
           executionId: 'exec-1',
           status: 'completed',
-          answer: 'done',
-          answerTruncated: false,
+          hasAnswer: true,
           totalIterations: 1,
           totalCreditsUsed: 1,
           errorMessage: null,
@@ -236,14 +216,14 @@ describe('QuestGraphView', () => {
         run: {
           executionId: 'exec-1',
           status: 'completed',
-          answer: reply,
-          answerTruncated: false,
+          hasAnswer: true,
           totalIterations: 1,
           totalCreditsUsed: 1,
           errorMessage: null,
         },
       }),
     ];
+    nodeAnswer = reply;
     renderView();
     selectGraph();
     fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
@@ -263,14 +243,14 @@ describe('QuestGraphView', () => {
         run: {
           executionId: 'exec-1',
           status: 'completed',
-          answer: 'Just words, nothing to render.',
-          answerTruncated: false,
+          hasAnswer: true,
           totalIterations: 1,
           totalCreditsUsed: 1,
           errorMessage: null,
         },
       }),
     ];
+    nodeAnswer = 'Just words, nothing to render.';
     renderView();
     selectGraph();
     fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
@@ -295,8 +275,7 @@ describe('QuestGraphView', () => {
         run: {
           executionId: 'exec-1',
           status: 'completed',
-          answer: reply,
-          answerTruncated: false,
+          hasAnswer: true,
           totalIterations: 1,
           totalCreditsUsed: 1,
           errorMessage: null,
@@ -304,6 +283,7 @@ describe('QuestGraphView', () => {
       }),
     ];
     // React logs the caught error; keep the suite output readable.
+    nodeAnswer = reply;
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     renderView();
     selectGraph();
@@ -317,6 +297,39 @@ describe('QuestGraphView', () => {
     spy.mockRestore();
   });
 
+  // The bug this replaced: the graph payload capped each answer at 20k chars,
+  // which sliced a long reply mid-<artifact>. The closing tag was lost, the
+  // parser found nothing well-formed, and the panel dumped source instead of
+  // rendering - the failure mode seen on staging with a large React artifact.
+  it('renders an artifact far larger than the old 20k cap', () => {
+    const body = 'const x = 1;\n'.repeat(4000); // ~52k chars, well past the old cap
+    const reply = `Here it is.\n<artifact identifier="big" type="application/vnd.ant.react" title="Big">${body}</artifact>`;
+    nodes = [
+      makeNode({
+        id: 'n1',
+        status: 'completed',
+        run: {
+          executionId: 'exec-1',
+          status: 'completed',
+          hasAnswer: true,
+          totalIterations: 1,
+          totalCreditsUsed: 1,
+          errorMessage: null,
+        },
+      }),
+    ];
+    nodeAnswer = reply;
+    expect(reply.length).toBeGreaterThan(20_000);
+
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+
+    // Rendered as an artifact, not dumped as source.
+    expect(screen.getByTestId('artifact-renderer-stub')).toHaveTextContent('big');
+    expect(screen.getByTestId('questmaster-v5-answer')).not.toHaveTextContent('const x = 1;');
+  });
+
   it('surfaces a failed run error message', () => {
     nodes = [
       makeNode({
@@ -325,8 +338,7 @@ describe('QuestGraphView', () => {
         run: {
           executionId: 'exec-1',
           status: 'failed',
-          answer: null,
-          answerTruncated: false,
+          hasAnswer: false,
           totalIterations: null,
           totalCreditsUsed: null,
           errorMessage: 'model refused',

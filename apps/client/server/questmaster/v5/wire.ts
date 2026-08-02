@@ -43,9 +43,15 @@ export const QuestGraphWireSchema = z.object({
 export const QuestNodeRunWireSchema = z.object({
   executionId: z.string(),
   status: z.enum(AGENT_EXECUTION_STATUSES),
-  answer: z.string().nullable(),
-  /** True when `answer` is a prefix. Never truncate silently - the reader has to be able to tell. */
-  answerTruncated: z.boolean(),
+  /**
+   * Deliberately NO answer here. The graph view polls this endpoint every few
+   * seconds and renders exactly ONE node's answer - the selected one - so
+   * shipping every node's reply on every tick was pure waste, and the per-answer
+   * character cap that waste forced was itself a bug: it sliced replies
+   * mid-`<artifact>`, leaving an unclosed tag the parser could not render.
+   * Fetch a single answer from /api/quest-nodes/:id/answer instead.
+   */
+  hasAnswer: z.boolean(),
   totalIterations: z.number().nullable(),
   totalCreditsUsed: z.number().nullable(),
   errorMessage: z.string().nullable(),
@@ -96,6 +102,13 @@ export const QuestGraphDetailResponseSchema = z.object({
   nodes: z.array(QuestNodeWireSchema),
 });
 export const QuestNodeCreatedResponseSchema = z.object({ node: QuestNodeWireSchema });
+/** One node's full reply. Unbounded by design - see QuestNodeRunWireSchema. */
+export const QuestNodeAnswerResponseSchema = z.object({
+  nodeId: z.string(),
+  executionId: z.string().nullable(),
+  answer: z.string().nullable(),
+});
+
 export const QuestNodeRunResponseSchema = z.object({
   executionId: z.string(),
   node: QuestNodeWireSchema,

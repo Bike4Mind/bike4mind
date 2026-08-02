@@ -49,7 +49,7 @@ const runs = (questId: string | null): Map<string, NodeRunSummary> =>
         id: EXEC_ID,
         questId,
         status: 'completed',
-        answer: null, // deliberately null: the settle path must not depend on it
+        hasAnswer: false, // deliberately false: the link must not depend on a reply existing
         totalIterations: 1,
         totalCreditsUsed: 1,
         errorMessage: null,

@@ -6,13 +6,6 @@ import { linkNodeArtifacts } from './linkNodeArtifacts';
 import { toQuestGraphWire, toQuestNodeWire, type QuestNodeRunWire } from './wire';
 
 /**
- * Terminal answers can be long. The graph view only needs a readable excerpt,
- * and the wire reports when it truncated rather than silently handing back a
- * prefix that looks complete.
- */
-const MAX_ANSWER_CHARS = 20_000;
-
-/**
  * Load a graph with its nodes, reconciled against their runs and annotated
  * with DAG readiness and a run summary.
  *
@@ -50,12 +43,10 @@ export async function loadGraphDetail(graph: IQuestGraphDocument, logger: Logger
 }
 
 function toRunWire(executionId: string, run: NodeRunSummary): QuestNodeRunWire {
-  const truncated = run.answer !== null && run.answer.length > MAX_ANSWER_CHARS;
   return {
     executionId,
     status: run.status,
-    answer: truncated ? run.answer!.slice(0, MAX_ANSWER_CHARS) : run.answer,
-    answerTruncated: truncated,
+    hasAnswer: run.hasAnswer,
     totalIterations: run.totalIterations,
     totalCreditsUsed: run.totalCreditsUsed,
     errorMessage: run.errorMessage,
