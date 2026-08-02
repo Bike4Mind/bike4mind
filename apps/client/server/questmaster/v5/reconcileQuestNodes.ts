@@ -9,7 +9,7 @@ export interface NodeRunSummary {
   /** The Quest this run wrote; artifacts carry it as `sourceQuestId`. */
   questId: string | null;
   status: AgentExecutionStatus;
-  answer: string | null;
+  hasAnswer: boolean;
   totalIterations: number | null;
   totalCreditsUsed: number | null;
   errorMessage: string | null;

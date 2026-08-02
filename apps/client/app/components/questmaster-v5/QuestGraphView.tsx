@@ -12,6 +12,7 @@ import {
   useCreateQuestGraph,
   useQuestGraph,
   useQuestGraphs,
+  useQuestNodeAnswer,
   useRunQuestNode,
   type QuestNode,
 } from '@client/app/hooks/data/questGraphs';
@@ -380,7 +381,7 @@ function NodeResultPanel({ node, sessionId }: { node: QuestNode; sessionId?: str
         </Box>
       )}
 
-      {node.run?.answer && <NodeAnswer node={node} sessionId={sessionId} />}
+      {node.run?.hasAnswer && <NodeAnswer node={node} sessionId={sessionId} />}
 
       {!node.run && (
         <Typography level="body-xs" sx={{ mt: 1 }}>
@@ -407,7 +408,11 @@ function NodeResultPanel({ node, sessionId }: { node: QuestNode; sessionId?: str
  * minting a second id for the same content.
  */
 function NodeAnswer({ node, sessionId }: { node: QuestNode; sessionId?: string }) {
-  const answer = node.run?.answer ?? '';
+  // Fetched on demand: the polled graph payload carries no answers, so a long
+  // reply is never re-shipped on every tick and never has to be capped - the cap
+  // is what used to slice a reply mid-<artifact> and break rendering.
+  const { data, isLoading, isError } = useQuestNodeAnswer(node.id, Boolean(node.run?.hasAnswer));
+  const answer = data?.answer ?? '';
   // Parsing is pure and cheap, but this re-renders on every poll tick.
   const { artifacts, prose } = useMemo(() => {
     try {
@@ -459,10 +464,15 @@ function NodeAnswer({ node, sessionId }: { node: QuestNode; sessionId?: string }
         </Stack>
       )}
 
-      {node.run?.answerTruncated && (
-        <Typography level="body-xs" sx={{ mt: 1 }} data-testid="questmaster-v5-answer-truncated">
-          Answer truncated for display. Open the run in the notebook for the full reply.
+      {isLoading && (
+        <Typography level="body-xs" data-testid="questmaster-v5-answer-loading">
+          Loading the reply...
         </Typography>
+      )}
+      {isError && (
+        <Alert color="warning" size="sm" data-testid="questmaster-v5-answer-error">
+          Could not load this reply. The run itself is unaffected.
+        </Alert>
       )}
     </Box>
   );
