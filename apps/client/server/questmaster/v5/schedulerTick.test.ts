@@ -110,6 +110,24 @@ describe('planSchedulerTick', () => {
   });
 });
 
+describe('overlapping ticks', () => {
+  // The per-graph limit is a guide rail, not a lock: in-flight is read from the
+  // graph as it stands, so two overlapping polls can see the same free slots.
+  // Pinned as KNOWN behaviour - `claimForRun` still gives one dispatch per node
+  // and the per-user cap is the ceiling that actually holds.
+  it('two ticks against the same unchanged graph both dispatch', () => {
+    const nodes = [task('a'), task('b')];
+    expect(tick(nodes)).toEqual({ action: 'dispatch', nodeIds: ['a', 'b'] });
+    expect(tick(nodes)).toEqual({ action: 'dispatch', nodeIds: ['a', 'b'] });
+  });
+
+  it('stops dispatching once the graph reflects the work', () => {
+    expect(tick([task('a', 'in_progress'), task('b', 'in_progress')], { maxConcurrent: 2 })).toMatchObject({
+      action: 'idle',
+    });
+  });
+});
+
 describe('spineNodesToComplete', () => {
   const withParent = (id: string, status: string, parentId: string) =>
     ({ id, status, dependsOn: [], kind: 'task', parentId }) as SchedulableNode & { parentId: string };

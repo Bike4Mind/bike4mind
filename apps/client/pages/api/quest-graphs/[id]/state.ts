@@ -36,6 +36,15 @@ const handler = baseApi()
     const { state } = StateSchema.parse(req.body);
     const graph = await requireOwnedGraph(id, req.user.id);
 
+    // `completed` is the scheduler's to declare and `archived` is terminal, so
+    // neither may be reactivated here. Without this the docstring above was
+    // claiming a guarantee the code did not make: a direct call could restart a
+    // finished quest, and the scheduler would then find nothing to do and
+    // complete it again.
+    if (graph.state === 'completed' || graph.state === 'archived') {
+      throw new BadRequestError(`A ${graph.state} quest cannot be started or paused`);
+    }
+
     if (state === 'active') {
       // Starting an empty graph would immediately conclude there is nothing to
       // do and complete it, which reads as a bug rather than as an empty quest.

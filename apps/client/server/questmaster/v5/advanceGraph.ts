@@ -3,7 +3,7 @@ import type { IQuestGraphDocument, IQuestNodeDocument } from '@bike4mind/common'
 import type { Logger } from '@bike4mind/observability';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER } from '@server/utils/executionLimits';
 import { runQuestNode } from './runQuestNode';
-import { planSchedulerTick, spineNodesToComplete, type SchedulableNode } from './schedulerTick';
+import { planSchedulerTick, spineNodesToComplete } from './schedulerTick';
 import type { NodeRunSummary } from './reconcileQuestNodes';
 
 /**
@@ -28,12 +28,19 @@ const MAX_CONCURRENT_PER_GRAPH = Math.max(1, MAX_CONCURRENT_EXECUTIONS_PER_USER 
  *
  * Best-effort by contract: a graph read must still return a graph. Every failure
  * here logs and leaves the graph as it was.
+ *
+ * The per-graph concurrency limit is a GUIDE RAIL, not a lock. In-flight count
+ * is read from the graph as it stands, so two overlapping polls can each see the
+ * same free slots and dispatch into them. `claimForRun` still guarantees one
+ * dispatch per node, and the per-USER cap inside `runQuestNode` is the hard
+ * ceiling that actually holds - so the overshoot is bounded and self-correcting
+ * on the next tick, not a runaway.
  */
 export async function advanceGraph(args: {
   graph: IQuestGraphDocument;
   nodes: IQuestNodeDocument[];
   runs: Map<string, NodeRunSummary>;
-  model: string | null;
+  model: string;
   logger: Logger;
 }): Promise<{ dispatched: string[]; stateChangedTo: string | null }> {
   const { graph, nodes, runs, model, logger } = args;
@@ -44,7 +51,7 @@ export async function advanceGraph(args: {
   try {
     // Roll up finished phases first, so a spine that just finished reads as done
     // on this very response rather than one tick later.
-    const spineIds = spineNodesToComplete(nodes as unknown as (SchedulableNode & { parentId?: string | null })[]);
+    const spineIds = spineNodesToComplete(nodes);
     for (const id of spineIds) {
       await questNodeRepository.updateStatus(id, 'completed', { completedAt: new Date() });
     }
@@ -83,14 +90,6 @@ export async function advanceGraph(args: {
     }
 
     if (decision.action !== 'dispatch') return none;
-
-    // A rolling graph needs a model to run with. Without one it cannot proceed,
-    // and pausing says so instead of silently idling.
-    if (!model) {
-      await questGraphRepository.updateState(graph.id, 'paused');
-      logger.warn('[questmaster-v5] graph paused - no model to roll with', { graphId: graph.id });
-      return { dispatched: [], stateChangedTo: 'paused' };
-    }
 
     const dispatched: string[] = [];
     for (const nodeId of decision.nodeIds) {

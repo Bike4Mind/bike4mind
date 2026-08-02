@@ -40,7 +40,7 @@ export async function loadGraphDetail(
    * tick. Other callers (plan generation, a run dispatch) read the graph to
    * return it, and must not also start work as a side effect.
    */
-  advance?: { model: string | null }
+  advance?: { model: string }
 ) {
   let graph = graphArg;
   const stored = await questNodeRepository.getNodes(graph.id);

@@ -20,11 +20,13 @@ const handler = baseApi()
     if (typeof id !== 'string') throw new BadRequestError('Graph id required');
 
     const graph = await requireOwnedGraph(id, req.user.id);
-    // The model the scheduler rolls with, forwarded by the polling view. Reading
-    // a graph never starts work on its own - only an ACTIVE graph advances, and
-    // only when a model came with the request.
+    // The model the scheduler rolls with, forwarded by the polling view. A read
+    // WITHOUT one does not tick at all: a modelless GET is routine (first render
+    // before the model store hydrates, a background refetch, another tab), and
+    // ticking then would have paused the user's rolling quest for no visible
+    // reason.
     const model = typeof req.query.model === 'string' && req.query.model ? req.query.model : null;
-    const detail = await loadGraphDetail(graph, logger, { model });
+    const detail = await loadGraphDetail(graph, logger, model ? { model } : undefined);
 
     respond(res, QuestGraphDetailResponseSchema, detail);
   });
