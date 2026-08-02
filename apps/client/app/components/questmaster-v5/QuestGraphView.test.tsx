@@ -10,6 +10,15 @@ let nodes: QuestNode[] = [];
 let currentModel = 'claude-opus-5';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn(), get: vi.fn() } }));
+// The real renderer drags in the whole artifact handler registry (mermaid, react
+// sandbox, chess...). This suite is about WHETHER v5 routes artifacts to it.
+vi.mock('@client/app/components/Session/artifacts/ArtifactRenderer', () => ({
+  default: ({ artifact }: { artifact: { type: string; identifier?: string } }) => {
+    // Stands in for a per-type handler blowing up on model-generated content.
+    if (artifact.identifier === 'boom') throw new Error('handler exploded');
+    return <div data-testid="artifact-renderer-stub">{`${artifact.type}:${artifact.identifier ?? ''}`}</div>;
+  },
+}));
 vi.mock('@client/app/contexts/LLMContext', () => ({
   useLLM: (selector: (s: { model: string }) => unknown) => selector({ model: currentModel }),
 }));
@@ -207,6 +216,105 @@ describe('QuestGraphView', () => {
     fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
 
     expect(screen.queryByTestId('questmaster-v5-node-artifacts')).not.toBeInTheDocument();
+  });
+
+  // The gap this fixes: v5 was the one surface showing an artifact as raw
+  // source, while the notebook next door rendered the same reply properly.
+  it('renders an artifact in the reply instead of dumping its source', () => {
+    const reply = [
+      'Here is the plan.',
+      '',
+      '<artifact identifier="world-plan" type="application/vnd.ant.mermaid" title="Plan">',
+      'flowchart TD',
+      '  A --> B',
+      '</artifact>',
+    ].join('\n');
+    nodes = [
+      makeNode({
+        id: 'n1',
+        status: 'completed',
+        run: {
+          executionId: 'exec-1',
+          status: 'completed',
+          answer: reply,
+          answerTruncated: false,
+          totalIterations: 1,
+          totalCreditsUsed: 1,
+          errorMessage: null,
+        },
+      }),
+    ];
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+
+    expect(screen.getByTestId('questmaster-v5-rendered-artifacts')).toBeInTheDocument();
+    expect(screen.getByTestId('artifact-renderer-stub')).toHaveTextContent('mermaid');
+    // The prose survives; the artifact body does not leak into it.
+    expect(screen.getByTestId('questmaster-v5-answer')).toHaveTextContent('Here is the plan.');
+    expect(screen.getByTestId('questmaster-v5-answer')).not.toHaveTextContent('flowchart TD');
+  });
+
+  it('renders a plain reply as prose with no artifact section', () => {
+    nodes = [
+      makeNode({
+        id: 'n1',
+        status: 'completed',
+        run: {
+          executionId: 'exec-1',
+          status: 'completed',
+          answer: 'Just words, nothing to render.',
+          answerTruncated: false,
+          totalIterations: 1,
+          totalCreditsUsed: 1,
+          errorMessage: null,
+        },
+      }),
+    ];
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+
+    expect(screen.getByTestId('questmaster-v5-answer')).toHaveTextContent('Just words');
+    expect(screen.queryByTestId('questmaster-v5-rendered-artifacts')).not.toBeInTheDocument();
+  });
+
+  // Rendering runs per-type handlers over model-generated content. A throw
+  // there is a React render error no try/catch can catch, so without a boundary
+  // one malformed artifact takes down the whole node panel.
+  it('contains a handler that throws instead of losing the panel', () => {
+    const reply = [
+      'Prose survives.',
+      '<artifact identifier="boom" type="application/vnd.ant.mermaid" title="Bad">x</artifact>',
+      '<artifact identifier="fine" type="application/vnd.ant.mermaid" title="Good">y</artifact>',
+    ].join('\n');
+    nodes = [
+      makeNode({
+        id: 'n1',
+        status: 'completed',
+        run: {
+          executionId: 'exec-1',
+          status: 'completed',
+          answer: reply,
+          answerTruncated: false,
+          totalIterations: 1,
+          totalCreditsUsed: 1,
+          errorMessage: null,
+        },
+      }),
+    ];
+    // React logs the caught error; keep the suite output readable.
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+
+    // The panel is still standing, the good artifact still rendered, and the
+    // bad one degraded to a message rather than taking everything with it.
+    expect(screen.getByTestId('questmaster-v5-result-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('questmaster-v5-artifact-render-error')).toBeInTheDocument();
+    expect(screen.getByTestId('artifact-renderer-stub')).toHaveTextContent('fine');
+    spy.mockRestore();
   });
 
   it('surfaces a failed run error message', () => {

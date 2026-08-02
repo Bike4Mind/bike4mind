@@ -4,6 +4,9 @@ import { Alert, Box, Button, Chip, Divider, Input, Sheet, Stack, Textarea, Typog
 import type { ColorPaletteProp } from '@mui/joy';
 import { api } from '@client/app/contexts/ApiContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
+import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
+import ArtifactRenderer from '@client/app/components/Session/artifacts/ArtifactRenderer';
+import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import {
   useAddQuestNode,
   useCreateQuestGraph,
@@ -377,19 +380,7 @@ function NodeResultPanel({ node, sessionId }: { node: QuestNode; sessionId?: str
         </Box>
       )}
 
-      {node.run?.answer && (
-        <Box
-          sx={{ mt: 1, p: 1.5, borderRadius: 'sm', bgcolor: 'background.surface', whiteSpace: 'pre-wrap' }}
-          data-testid="questmaster-v5-answer"
-        >
-          <Typography level="body-sm">{node.run.answer}</Typography>
-          {node.run.answerTruncated && (
-            <Typography level="body-xs" sx={{ mt: 1 }} data-testid="questmaster-v5-answer-truncated">
-              Answer truncated for display. Open the run in the notebook for the full reply.
-            </Typography>
-          )}
-        </Box>
-      )}
+      {node.run?.answer && <NodeAnswer node={node} sessionId={sessionId} />}
 
       {!node.run && (
         <Typography level="body-xs" sx={{ mt: 1 }}>
@@ -397,6 +388,83 @@ function NodeResultPanel({ node, sessionId }: { node: QuestNode; sessionId?: str
         </Typography>
       )}
     </Sheet>
+  );
+}
+
+/**
+ * The run's reply, with any artifacts rendered rather than dumped as text.
+ *
+ * v5 was the one surface in the app that showed an artifact as raw source: a
+ * mermaid diagram arrived as a fenced block of mermaid syntax while the notebook
+ * next door rendered the same reply properly. It parses with the same
+ * `parseArtifactsWithFallback` the chat path uses and hands each artifact to the
+ * same `ArtifactRenderer`, so every type the app already knows how to draw is
+ * free here.
+ *
+ * `sessionId` matters more than it looks: the resolver tries
+ * `findExistingArtifactId(type, identifier, sessionId)` first, so a run whose
+ * artifacts were already persisted server-side adopts those rows instead of
+ * minting a second id for the same content.
+ */
+function NodeAnswer({ node, sessionId }: { node: QuestNode; sessionId?: string }) {
+  const answer = node.run?.answer ?? '';
+  // Parsing is pure and cheap, but this re-renders on every poll tick.
+  const { artifacts, prose } = useMemo(() => {
+    try {
+      const parsed = parseArtifactsWithFallback(answer);
+      return { artifacts: parsed.artifacts, prose: parsed.cleanedContent ?? answer };
+    } catch {
+      // A malformed reply must still be readable, so fall back to raw text.
+      return { artifacts: [], prose: answer };
+    }
+  }, [answer]);
+
+  return (
+    <Box sx={{ mt: 1 }} data-testid="questmaster-v5-answer">
+      {prose.trim() && (
+        <Box sx={{ p: 1.5, borderRadius: 'sm', bgcolor: 'background.surface', whiteSpace: 'pre-wrap' }}>
+          <Typography level="body-sm">{prose.trim()}</Typography>
+        </Box>
+      )}
+
+      {artifacts.length > 0 && (
+        <Stack spacing={2} sx={{ mt: 1.5 }} data-testid="questmaster-v5-rendered-artifacts">
+          {artifacts.map((artifact, index) => (
+            // Per artifact, not around the whole list: a handler that throws
+            // should cost you that one preview, not the others beside it.
+            //
+            // The try/catch above only guards PARSING. Rendering runs the
+            // per-type handlers - React sandbox, Mermaid, HTML/SVG - over
+            // model-generated content, and a throw there is a React render
+            // error that no try/catch can catch. Without this, one malformed
+            // artifact takes down the whole node panel.
+            <ErrorBoundary
+              key={`${artifact.type}_${artifact.identifier}_${index}`}
+              fallback={
+                <Alert color="warning" size="sm" data-testid="questmaster-v5-artifact-render-error">
+                  {`Could not render this ${artifact.type} artifact. The reply is intact - open the run in the notebook to see it.`}
+                </Alert>
+              }
+            >
+              <ArtifactRenderer
+                artifact={artifact}
+                index={index}
+                // Only a fallback for minting an id when nothing is persisted
+                // yet; the executionId is stable per run, unlike a chat message id.
+                messageId={node.run?.executionId ?? node.id}
+                sessionId={sessionId}
+              />
+            </ErrorBoundary>
+          ))}
+        </Stack>
+      )}
+
+      {node.run?.answerTruncated && (
+        <Typography level="body-xs" sx={{ mt: 1 }} data-testid="questmaster-v5-answer-truncated">
+          Answer truncated for display. Open the run in the notebook for the full reply.
+        </Typography>
+      )}
+    </Box>
   );
 }
 
