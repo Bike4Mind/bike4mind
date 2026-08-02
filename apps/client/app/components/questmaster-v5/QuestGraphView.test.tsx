@@ -8,6 +8,8 @@ const runMutate = vi.fn();
 const addMutate = vi.fn();
 let nodes: QuestNode[] = [];
 let currentModel = 'claude-opus-5';
+let graphState = 'draft';
+const stateMutate = vi.fn();
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn(), get: vi.fn() } }));
 // The real renderer drags in the whole artifact handler registry (mermaid, react
@@ -24,10 +26,11 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
 }));
 vi.mock('@client/app/hooks/data/questGraphs', () => ({
   useQuestGraphs: () => ({ data: { graphs: [{ id: 'g1', goal: 'Ship it' }] } }),
-  useQuestGraph: () => ({ data: { graph: { id: 'g1', goal: 'Ship it' }, nodes } }),
+  useQuestGraph: () => ({ data: { graph: { id: 'g1', goal: 'Ship it', state: graphState }, nodes } }),
   useCreateQuestGraph: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useAddQuestNode: () => ({ mutateAsync: addMutate, isPending: false }),
   useRunQuestNode: () => ({ mutateAsync: runMutate, isPending: false }),
+  useSetQuestGraphState: () => ({ mutateAsync: stateMutate, isPending: false }),
 }));
 
 const { default: QuestGraphView } = await import('./QuestGraphView');
@@ -67,6 +70,8 @@ describe('QuestGraphView', () => {
     runMutate.mockReset().mockResolvedValue({ executionId: 'exec-1' });
     addMutate.mockReset().mockResolvedValue({ node: makeNode({ id: 'n2' }) });
     currentModel = 'claude-opus-5';
+    graphState = 'draft';
+    stateMutate.mockReset().mockResolvedValue({ graph: { id: 'g1', goal: 'Ship it', state: 'active' }, nodes: [] });
     nodes = [];
   });
 
@@ -74,6 +79,49 @@ describe('QuestGraphView', () => {
     renderView();
     expect(screen.getByTestId('questmaster-v5-view')).toBeInTheDocument();
     expect(screen.getByTestId('questmaster-v5-graph-btn')).toHaveTextContent('Ship it');
+  });
+
+  it('starts the scheduler on a quest that has tasks', async () => {
+    nodes = [makeNode({ id: 'n1' })];
+    renderView();
+    selectGraph();
+
+    fireEvent.click(screen.getByTestId('questmaster-v5-toggle-rolling-btn'));
+
+    expect(stateMutate).toHaveBeenCalledWith({ state: 'active' });
+  });
+
+  it('offers Pause once the quest is rolling', async () => {
+    graphState = 'active';
+    nodes = [makeNode({ id: 'n1' })];
+    renderView();
+    selectGraph();
+
+    expect(screen.getByTestId('questmaster-v5-toggle-rolling-btn')).toHaveTextContent('Pause');
+    fireEvent.click(screen.getByTestId('questmaster-v5-toggle-rolling-btn'));
+    expect(stateMutate).toHaveBeenCalledWith({ state: 'paused' });
+  });
+
+  // Starting bills completions, so it must not fire against no model.
+  it('explains itself instead of starting when no model is selected', async () => {
+    currentModel = '';
+    nodes = [makeNode({ id: 'n1' })];
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-toggle-rolling-btn'));
+
+    expect(stateMutate).not.toHaveBeenCalled();
+    expect(await screen.findByTestId('questmaster-v5-error')).toHaveTextContent('Pick a model first');
+  });
+
+  it('shows the graph state and hides the control once completed', () => {
+    graphState = 'completed';
+    nodes = [makeNode({ id: 'n1', status: 'completed' })];
+    renderView();
+    selectGraph();
+
+    expect(screen.getByTestId('questmaster-v5-graph-state-chip')).toHaveTextContent('completed');
+    expect(screen.queryByTestId('questmaster-v5-toggle-rolling-btn')).not.toBeInTheDocument();
   });
 
   it('runs a ready node with the currently selected model', async () => {

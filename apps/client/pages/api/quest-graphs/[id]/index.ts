@@ -20,7 +20,11 @@ const handler = baseApi()
     if (typeof id !== 'string') throw new BadRequestError('Graph id required');
 
     const graph = await requireOwnedGraph(id, req.user.id);
-    const detail = await loadGraphDetail(graph, logger);
+    // The model the scheduler rolls with, forwarded by the polling view. Reading
+    // a graph never starts work on its own - only an ACTIVE graph advances, and
+    // only when a model came with the request.
+    const model = typeof req.query.model === 'string' && req.query.model ? req.query.model : null;
+    const detail = await loadGraphDetail(graph, logger, { model });
 
     respond(res, QuestGraphDetailResponseSchema, detail);
   });

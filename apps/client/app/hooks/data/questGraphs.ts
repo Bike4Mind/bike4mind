@@ -77,11 +77,15 @@ export function useQuestGraphs(enabled: boolean) {
   });
 }
 
-export function useQuestGraph(graphId: string | null) {
+export function useQuestGraph(graphId: string | null, model?: string) {
   return useQuery({
     queryKey: questGraphKeys.detail(graphId ?? ''),
     queryFn: async (): Promise<QuestGraphDetail> => {
-      const { data } = await api.get<QuestGraphDetail>(`/api/quest-graphs/${graphId}`);
+      // The model rides along so a rolling graph has something to dispatch with.
+      // A read never starts work by itself - only an ACTIVE graph advances.
+      const { data } = await api.get<QuestGraphDetail>(
+        `/api/quest-graphs/${graphId}${model ? `?model=${encodeURIComponent(model)}` : ''}`
+      );
       return data;
     },
     enabled: Boolean(graphId),
@@ -89,6 +93,9 @@ export function useQuestGraph(graphId: string | null) {
       const nodes = query.state.data?.nodes;
       if (!nodes) return false;
       if (nodes.some(n => n.status === 'in_progress')) return RUNNING_POLL_MS;
+      // An active graph keeps polling even with nothing in flight: each poll is
+      // a scheduler tick, and the tick is what dispatches the next ready node.
+      if (query.state.data?.graph.state === 'active') return RUNNING_POLL_MS;
       return shouldPollForSettlingArtifacts(nodes) ? RUNNING_POLL_MS : false;
     },
   });
@@ -120,6 +127,20 @@ export function useAddQuestNode(graphId: string | null) {
     },
     onSuccess: () => {
       if (graphId) queryClient.invalidateQueries({ queryKey: questGraphKeys.detail(graphId) });
+    },
+  });
+}
+
+/** Start or pause a quest's scheduler. */
+export function useSetQuestGraphState(graphId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { state: 'active' | 'paused' }): Promise<QuestGraphDetail> => {
+      const { data } = await api.put<QuestGraphDetail>(`/api/quest-graphs/${graphId}/state`, input);
+      return data;
+    },
+    onSuccess: detail => {
+      if (graphId) queryClient.setQueryData(questGraphKeys.detail(graphId), detail);
     },
   });
 }

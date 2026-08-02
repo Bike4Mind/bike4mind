@@ -1,8 +1,15 @@
-import { agentExecutionRepository, isNodeReady, isNodeRunnable, questNodeRepository } from '@bike4mind/database';
+import {
+  agentExecutionRepository,
+  isNodeReady,
+  isNodeRunnable,
+  questGraphRepository,
+  questNodeRepository,
+} from '@bike4mind/database';
 import type { IQuestGraphDocument, NodeStatus } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { reconcileQuestNodes, type NodeRunSummary } from './reconcileQuestNodes';
 import { linkNodeArtifacts } from './linkNodeArtifacts';
+import { advanceGraph } from './advanceGraph';
 import { toQuestGraphWire, toQuestNodeWire, type QuestNodeRunWire } from './wire';
 
 /**
@@ -24,13 +31,35 @@ const MAX_ANSWER_CHARS = 20_000;
  * (including the full iteration trace in `result.steps`) across the wire from
  * Mongo just to read an answer string off it.
  */
-export async function loadGraphDetail(graph: IQuestGraphDocument, logger: Logger) {
+export async function loadGraphDetail(
+  graphArg: IQuestGraphDocument,
+  logger: Logger,
+  /**
+   * Advance an active graph as part of this read. Only the graph GET passes
+   * this: the view polls while work is in flight, so each poll is a scheduler
+   * tick. Other callers (plan generation, a run dispatch) read the graph to
+   * return it, and must not also start work as a side effect.
+   */
+  advance?: { model: string | null }
+) {
+  let graph = graphArg;
   const stored = await questNodeRepository.getNodes(graph.id);
 
   const executionIds = stored.map(n => n.execution?.agentExecutionId).filter((id): id is string => Boolean(id));
   const runs = await loadRunSummaries(executionIds, logger);
 
-  const nodes = await reconcileQuestNodes(stored, runs, logger);
+  let nodes = await reconcileQuestNodes(stored, runs, logger);
+
+  if (advance) {
+    const result = await advanceGraph({ graph, nodes, runs, model: advance.model, logger });
+    // Re-read only when the tick actually changed something, so an idle tick
+    // costs nothing extra.
+    if (result.dispatched.length || result.stateChangedTo) {
+      nodes = await questNodeRepository.getNodes(graph.id);
+      const refreshed = await questGraphRepository.findById(graph.id);
+      if (refreshed) graph = refreshed;
+    }
+  }
   const statusById = new Map<string, NodeStatus>(nodes.map(n => [n.id, n.status]));
   const artifactsByNode = await linkNodeArtifacts(nodes, runs, logger);
 

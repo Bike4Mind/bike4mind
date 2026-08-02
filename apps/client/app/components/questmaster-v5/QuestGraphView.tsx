@@ -13,6 +13,7 @@ import {
   useQuestGraph,
   useQuestGraphs,
   useRunQuestNode,
+  useSetQuestGraphState,
   type QuestNode,
 } from '@client/app/hooks/data/questGraphs';
 
@@ -44,9 +45,10 @@ export default function QuestGraphView() {
 
   const model = useLLM(s => s.model);
   const graphs = useQuestGraphs(true);
-  const detail = useQuestGraph(selectedGraphId);
+  const detail = useQuestGraph(selectedGraphId, model);
   const createGraph = useCreateQuestGraph();
   const runNode = useRunQuestNode(selectedGraphId);
+  const setGraphState = useSetQuestGraphState(selectedGraphId);
 
   const nodes = detail.data?.nodes ?? [];
   const selectedNode = useMemo(() => nodes.find(n => n.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
@@ -68,6 +70,22 @@ export default function QuestGraphView() {
       setError(errorMessage(err, 'Could not create quest'));
     } finally {
       setCreating(false);
+    }
+  };
+
+  const graphState = detail.data?.graph.state;
+  const isRolling = graphState === 'active';
+
+  const handleToggleRolling = async () => {
+    setError(null);
+    if (!isRolling && !model) {
+      setError('Pick a model first - the scheduler runs nodes with your selected model.');
+      return;
+    }
+    try {
+      await setGraphState.mutateAsync({ state: isRolling ? 'paused' : 'active' });
+    } catch (err) {
+      setError(errorMessage(err, isRolling ? 'Could not pause the quest' : 'Could not start the quest'));
     }
   };
 
@@ -147,9 +165,32 @@ export default function QuestGraphView() {
 
         {selectedGraphId && (
           <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }}>
-            <Typography level="title-md" sx={{ mb: 1 }}>
-              {detail.data?.graph.goal}
-            </Typography>
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+              <Typography level="title-md" sx={{ flex: 1, minWidth: 0 }}>
+                {detail.data?.graph.goal}
+              </Typography>
+              {graphState && (
+                <Chip
+                  size="sm"
+                  variant="soft"
+                  color={isRolling ? 'primary' : graphState === 'completed' ? 'success' : 'neutral'}
+                  data-testid="questmaster-v5-graph-state-chip"
+                >
+                  {graphState}
+                </Chip>
+              )}
+              {nodes.some(n => n.kind === 'task') && graphState !== 'completed' && (
+                <Button
+                  size="sm"
+                  variant={isRolling ? 'outlined' : 'solid'}
+                  loading={setGraphState.isPending}
+                  onClick={handleToggleRolling}
+                  data-testid="questmaster-v5-toggle-rolling-btn"
+                >
+                  {isRolling ? 'Pause' : 'Run quest'}
+                </Button>
+              )}
+            </Stack>
 
             <Stack spacing={1} data-testid="questmaster-v5-node-list">
               {nodes.map(node => (
