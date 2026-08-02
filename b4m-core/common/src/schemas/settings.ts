@@ -1980,7 +1980,8 @@ export const settingsMap = {
     key: 'FormatPromptTemplate',
     name: 'Format Prompt Template',
     defaultValue: '',
-    description: 'The template to use for formatting prompts.',
+    description:
+      'System prompt fragment injected when Use Format Prompt is on. Scope it to FORMATTING ONLY - wording that reads as general compliance ("adhere to requests") measurably degrades refusal behavior on underspecified asks (#1320). Leave empty to use the built-in scoped default. After an upgrade, diff a saved copy against that default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
     category: 'AI',
     order: 4,
   }),
