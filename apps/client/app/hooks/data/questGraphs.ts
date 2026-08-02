@@ -101,14 +101,18 @@ export function useQuestGraph(graphId: string | null) {
  * QuestNodeRunWireSchema. Kept out of the polling query so a long reply is
  * fetched once per node rather than on every tick.
  */
-export function useQuestNodeAnswer(nodeId: string | null, enabled: boolean) {
+export function useQuestNodeAnswer(nodeId: string | null, executionId: string | null, enabled: boolean) {
   return useQuery({
-    queryKey: ['questNodeAnswer', nodeId],
+    // Keyed on the EXECUTION, not the node. A retry mints a new execution for
+    // the same node, and a node-keyed entry with staleTime: Infinity would go on
+    // serving the previous run's reply forever - on the retry path this module
+    // deliberately supports.
+    queryKey: ['questNodeAnswer', nodeId, executionId],
     queryFn: async (): Promise<{ answer: string | null }> => {
       const { data } = await api.get<{ answer: string | null }>(`/api/quest-nodes/${nodeId}/answer`);
       return data;
     },
-    enabled: Boolean(nodeId) && enabled,
+    enabled: Boolean(nodeId) && Boolean(executionId) && enabled,
     // A terminal run's reply never changes, so keep it cached across selection.
     staleTime: Infinity,
   });

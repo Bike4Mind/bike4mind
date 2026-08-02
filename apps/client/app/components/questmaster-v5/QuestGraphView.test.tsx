@@ -9,6 +9,7 @@ const addMutate = vi.fn();
 let nodes: QuestNode[] = [];
 let currentModel = 'claude-opus-5';
 let nodeAnswer: string | null = null;
+let answersByExecution: Record<string, string> = {};
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn(), get: vi.fn() } }));
 // The real renderer drags in the whole artifact handler registry (mermaid, react
@@ -30,7 +31,12 @@ vi.mock('@client/app/hooks/data/questGraphs', () => ({
   useAddQuestNode: () => ({ mutateAsync: addMutate, isPending: false }),
   useRunQuestNode: () => ({ mutateAsync: runMutate, isPending: false }),
   // The reply is fetched on demand now, not carried in the graph payload.
-  useQuestNodeAnswer: () => ({ data: { answer: nodeAnswer }, isLoading: false, isError: false }),
+  useQuestNodeAnswer: (_nodeId: string, executionId: string | null) => ({
+    // Mirrors the real key: a reply belongs to an execution, not a node.
+    data: { answer: executionId ? (answersByExecution[executionId] ?? nodeAnswer) : null },
+    isLoading: false,
+    isError: false,
+  }),
 }));
 
 const { default: QuestGraphView } = await import('./QuestGraphView');
@@ -71,6 +77,7 @@ describe('QuestGraphView', () => {
     addMutate.mockReset().mockResolvedValue({ node: makeNode({ id: 'n2' }) });
     currentModel = 'claude-opus-5';
     nodeAnswer = null;
+    answersByExecution = {};
     nodes = [];
   });
 
@@ -328,6 +335,36 @@ describe('QuestGraphView', () => {
     // Rendered as an artifact, not dumped as source.
     expect(screen.getByTestId('artifact-renderer-stub')).toHaveTextContent('big');
     expect(screen.getByTestId('questmaster-v5-answer')).not.toHaveTextContent('const x = 1;');
+  });
+
+  // A retry mints a new execution for the same node. A node-keyed cache with
+  // staleTime: Infinity would keep serving the previous run's reply forever.
+  it('shows the new run reply after a node is retried', () => {
+    answersByExecution = { 'exec-1': 'first attempt', 'exec-2': 'second attempt' };
+    const runFor = (executionId: string) => ({
+      executionId,
+      status: 'completed' as const,
+      hasAnswer: true,
+      totalIterations: 1,
+      totalCreditsUsed: 1,
+      errorMessage: null,
+    });
+
+    nodes = [makeNode({ id: 'n1', status: 'completed', run: runFor('exec-1') })];
+    const { rerender } = renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+    expect(screen.getByTestId('questmaster-v5-answer')).toHaveTextContent('first attempt');
+
+    // The retry lands: same node, new execution.
+    nodes = [makeNode({ id: 'n1', status: 'completed', run: runFor('exec-2') })];
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <QuestGraphView />
+      </CssVarsProvider>
+    );
+
+    expect(screen.getByTestId('questmaster-v5-answer')).toHaveTextContent('second attempt');
   });
 
   it('surfaces a failed run error message', () => {

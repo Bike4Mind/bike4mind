@@ -411,7 +411,11 @@ function NodeAnswer({ node, sessionId }: { node: QuestNode; sessionId?: string }
   // Fetched on demand: the polled graph payload carries no answers, so a long
   // reply is never re-shipped on every tick and never has to be capped - the cap
   // is what used to slice a reply mid-<artifact> and break rendering.
-  const { data, isLoading, isError } = useQuestNodeAnswer(node.id, Boolean(node.run?.hasAnswer));
+  const { data, isLoading, isError } = useQuestNodeAnswer(
+    node.id,
+    node.run?.executionId ?? null,
+    Boolean(node.run?.hasAnswer)
+  );
   const answer = data?.answer ?? '';
   // Parsing is pure and cheap, but this re-renders on every poll tick.
   const { artifacts, prose } = useMemo(() => {
