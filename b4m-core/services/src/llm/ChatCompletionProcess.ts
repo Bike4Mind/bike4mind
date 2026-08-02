@@ -128,6 +128,7 @@ import {
 import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail } from '@bike4mind/common';
 import { buildAlwaysOnFloorDetails } from './systemPromptFloorTelemetry';
 import { resolveArtifactsEnabled } from './artifactGating';
+import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
   detectAgentMentions,
@@ -1203,7 +1204,9 @@ export class ChatCompletionProcess {
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
         enableQuestMaster || false,
-        enableMementos || false,
+        // Tri-state, deliberately NOT coerced: explicit false is the caller's memory
+        // opt-out and must stay distinguishable from absence (#1319, resolveMementoGates).
+        enableMementos,
         enableAgents || false,
         projectId,
         optimizedFeatureList,
@@ -4740,7 +4743,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   private async buildOptimizedFeatures(
     adminSettings: Record<string, string>,
     enableQuestMaster: boolean,
-    enableMementos: boolean,
+    enableMementos: boolean | undefined,
     enableAgents: boolean,
     projectId?: string,
     optimizedFeatureList: featureNames[] = [],
@@ -4772,29 +4775,30 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.features.set('contextSummarization', new ContextSummarizationFeature(this));
     }
 
-    // Conditional features - only build if requested AND enabled. Mementos runs when V1 is on
-    // (admin + request flag) OR when the user has opted into V2, so V2 works independently of V1
-    // (the two are mutually exclusive at inject time - MementoFeature picks which).
+    // Conditional features - only build if requested AND enabled. Memento gating for BOTH
+    // pipelines lives in resolveMementoGates (#1319): V1 needs explicit request intent plus
+    // the admin setting; V2 rides the per-user opt-in but an explicit `enableMementos: false`
+    // from the caller now disables it too - on the read side (the feature is never registered,
+    // so nothing injects) and the write side (the flags below never fire). The two remain
+    // mutually exclusive at inject time - MementoFeature picks which.
     //
     // MUST go through isExperimentalFeatureEnabled: `preferences.experimentalFeatures` is a Mongoose
     // Map at runtime, so reading it with dot access silently yields undefined and the feature never
     // runs. That is exactly the bug this line used to have - V2 memory was never injected into a
     // prompt even for a user who had opted in.
     const enableMementosV2 = isExperimentalFeatureEnabled(this.user, 'enableMementosV2');
-    if (
-      optimizedFeatureList.includes('mementos') &&
-      ((enableMementos && adminSettingsEnableMementos) || enableMementosV2)
-    ) {
-      this.logger.log(`  - Enabling Mementos feature${enableMementosV2 ? ' (V2 opt-in)' : ''}`);
-      // Resolve the WRITE gates here, where both the admin setting and the per-user opt-in are in
-      // scope, and hand them to the feature. V1 writes only when it is fully on (request flag AND admin
-      // setting); V2 writes on the opt-in. Without this, the completion event carried no flags and the
-      // subscriber defaulted V1 on - so chat kept writing V1 mementos for a V2 user even with V1 off.
+    const mementoGates = resolveMementoGates(enableMementos, Boolean(adminSettingsEnableMementos), enableMementosV2);
+    if (optimizedFeatureList.includes('mementos') && (mementoGates.v1 || mementoGates.v2)) {
+      this.logger.log(`  - Enabling Mementos feature${mementoGates.v2 ? ' (V2 opt-in)' : ''}`);
+      // Resolve the WRITE gates here, where the request flag, admin setting, and per-user opt-in
+      // are all in scope, and hand them to the feature. Without explicit flags, the completion
+      // event carried none and the subscriber defaulted V1 on - so chat kept writing V1 mementos
+      // for a V2 user even with V1 off.
       this.features.set(
         'mementos',
         new MementoFeature(this, {
-          writeV1: Boolean(enableMementos && adminSettingsEnableMementos),
-          writeV2: enableMementosV2,
+          writeV1: mementoGates.v1,
+          writeV2: mementoGates.v2,
         })
       );
     }

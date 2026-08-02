@@ -69,7 +69,13 @@ export interface LLMContextProps {
   resetSettings: () => void;
   updateLLMParams: () => void;
   isQuestMasterEnabled: boolean;
-  isMementosEnabled: boolean;
+  /**
+   * Tri-state request flag for user memory (#1319). `true` = V1 mementos explicitly on;
+   * `undefined` = no V1 intent, defer to the server-side Mementos V2 account opt-in
+   * (an explicit `false` on the wire now revokes V2 for the request too, so a V2-only
+   * user must NOT send one); `false` = no memory feature enabled, requests opt out.
+   */
+  isMementosEnabled: boolean | undefined;
   /**
    * `undefined` until admin settings and user prefs have both hydrated. The server reads an
    * explicit `false` on the request as "this caller has no artifact surface" and drops the
@@ -157,7 +163,9 @@ const DEFAULTS = {
   },
   organizationId: null,
   isQuestMasterEnabled: false,
-  isMementosEnabled: false,
+  // undefined pre-hydration for the same reason as isArtifactsEnabled below: an explicit
+  // false would opt a cold-load first prompt out of V2 memory before prefs have loaded.
+  isMementosEnabled: undefined,
   isArtifactsEnabled: undefined,
   isAgentsEnabled: false, // Default controlled by user settings
   isLatticeEnabled: false, // Default controlled by user settings
@@ -377,7 +385,12 @@ export const LLMProvider: React.FC = () => {
 
   // Extract primitive booleans so the effect dep array contains stable values
   // rather than the experimentalFeatures object reference (recreated on every settings update)
-  const enableMementos = settings.experimentalFeatures?.enableMementos ?? false;
+  // Tri-state (#1319): true = V1 toggle on; undefined = V2-only user (the server resolves
+  // memory from the account opt-in; an explicit false would revoke it per-request);
+  // false = no memory feature enabled, so requests opt out of both pipelines.
+  const enableMementosV1 = settings.experimentalFeatures?.enableMementos ?? false;
+  const enableMementosV2 = settings.experimentalFeatures?.enableMementosV2 ?? false;
+  const enableMementos = enableMementosV1 ? true : enableMementosV2 ? undefined : false;
   // Left undefined until both signals resolve - see isArtifactsEnabled on the state type.
   const enableArtifacts = areFeaturesLoading ? undefined : isFeatureEnabled('enableArtifacts');
   const enableAgents = isFeatureEnabled('enableAgents');
