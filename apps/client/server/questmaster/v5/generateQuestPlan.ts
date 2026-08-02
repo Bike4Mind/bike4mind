@@ -59,6 +59,9 @@ export async function generateQuestPlan(args: {
   llm.currentModel = resolvedModelId;
 
   let reply = '';
+  // Held so it can be cleared: an uncleared timer keeps a serverless invocation
+  // alive after the completion returns, and bills for the wait.
+  let timeoutHandle: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
       llm.complete(
@@ -73,7 +76,9 @@ export async function generateQuestPlan(args: {
           }
         }
       ),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('plan generation timed out')), PLAN_TIMEOUT_MS)),
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error('plan generation timed out')), PLAN_TIMEOUT_MS);
+      }),
     ]);
   } catch (err) {
     logger.error('[questmaster-v5] plan generation failed', {
@@ -81,6 +86,8 @@ export async function generateQuestPlan(args: {
       error: err instanceof Error ? err.message : String(err),
     });
     throw new InternalServerError('Could not generate a plan for this quest');
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 
   const plan = extractPlan(reply);
@@ -98,21 +105,44 @@ export async function generateQuestPlan(args: {
 
   // Sequential: each node's dependencies and parent must already exist, and
   // `planToNodes` guarantees both point strictly backwards in this list.
+  //
+  // All-or-nothing. A half-written plan would be far worse than none: the
+  // empty-graph guard above would then refuse to re-plan it, and there is no
+  // node-delete surface, so the quest would be stuck with a partial plan and no
+  // way back. On any failure the nodes written so far are removed and the graph
+  // returns to empty, which is retryable.
   const createdIds: string[] = [];
-  for (const node of planned) {
-    const created = await questNodeRepository.addNode({
+  const rootIds: string[] = [];
+  try {
+    for (const node of planned) {
+      const created = await questNodeRepository.addNode({
+        graphId: graph.id,
+        title: node.title,
+        task: node.task,
+        acceptanceCriteria: node.acceptanceCriteria,
+        kind: node.kind,
+        parentId: node.parentIndex === null ? null : createdIds[node.parentIndex],
+        dependsOn: node.dependsOnIndices.map(i => createdIds[i]),
+        order: createdIds.length,
+      });
+      createdIds.push(created.id);
+      if (node.parentIndex === null) rootIds.push(created.id);
+    }
+  } catch (err) {
+    logger.error('[questmaster-v5] plan write failed - rolling back the partial plan', {
       graphId: graph.id,
-      title: node.title,
-      task: node.task,
-      acceptanceCriteria: node.acceptanceCriteria,
-      kind: node.kind,
-      parentId: node.parentIndex === null ? null : createdIds[node.parentIndex],
-      dependsOn: node.dependsOnIndices.map(i => createdIds[i]),
-      order: createdIds.length,
+      written: createdIds.length,
+      error: err instanceof Error ? err.message : String(err),
     });
-    createdIds.push(created.id);
-    if (node.parentIndex === null) await questGraphRepository.addRootNode(graph.id, created.id);
+    for (const id of createdIds) {
+      await questNodeRepository.delete(id).catch(() => {});
+    }
+    throw new InternalServerError('Could not write the plan for this quest');
   }
+
+  // Root ids are registered only once every node landed, so a rolled-back plan
+  // leaves no dangling references behind on the graph.
+  for (const id of rootIds) await questGraphRepository.addRootNode(graph.id, id);
 
   logger.info('[questmaster-v5] plan generated', {
     graphId: graph.id,
