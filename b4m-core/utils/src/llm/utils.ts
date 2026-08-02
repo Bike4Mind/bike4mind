@@ -1506,7 +1506,13 @@ export async function processFabFilesServer(
 }
 
 export function includeHardcodedSystemMessage(messages: IMessage[], formatPrompt: string): IMessage[] {
-  let format = `format replies to maintain the integrity of the requested style. Default to markdown for text-based responses. Ensure proper structuring for poems, songs, or haikus with appropriate line breaks and stanza divisions. Adhere to specific formatting requests such as TypeScript when specified by the user.`;
+  // Scoped to formatting ONLY. The previous wording ("Adhere to specific formatting
+  // requests...") read as a general compliance instruction and measurably degraded
+  // refusal behavior on underspecified asks (#1320: 81.1 -> 40.3 as the sole system
+  // content). Same failure shape as the artifact prompt's pre-SCOPE wording (#1296):
+  // any instruction that sounds like "comply with requests" bleeds into WHETHER to
+  // answer, not just how to format. Keep any future edit inside that boundary.
+  let format = `Formatting only - nothing here decides whether or how fully to answer. Format replies to maintain the integrity of the requested style; default to markdown for text. Preserve proper structure for poems, songs, or haikus. When the user specifies an output format (e.g. TypeScript), use that format for the parts you do answer.`;
   if (formatPrompt) {
     format = formatPrompt;
   }
