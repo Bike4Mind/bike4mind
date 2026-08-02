@@ -9,6 +9,7 @@ const addMutate = vi.fn();
 let nodes: QuestNode[] = [];
 let currentModel = 'claude-opus-5';
 let nodeAnswer: string | null = null;
+const planMutate = vi.fn();
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn(), get: vi.fn() } }));
 // The real renderer drags in the whole artifact handler registry (mermaid, react
@@ -31,6 +32,7 @@ vi.mock('@client/app/hooks/data/questGraphs', () => ({
   useRunQuestNode: () => ({ mutateAsync: runMutate, isPending: false }),
   // The reply is fetched on demand now, not carried in the graph payload.
   useQuestNodeAnswer: () => ({ data: { answer: nodeAnswer }, isLoading: false, isError: false }),
+  useGenerateQuestPlan: () => ({ mutateAsync: planMutate, isPending: false }),
 }));
 
 const { default: QuestGraphView } = await import('./QuestGraphView');
@@ -71,6 +73,7 @@ describe('QuestGraphView', () => {
     addMutate.mockReset().mockResolvedValue({ node: makeNode({ id: 'n2' }) });
     currentModel = 'claude-opus-5';
     nodeAnswer = null;
+    planMutate.mockReset().mockResolvedValue({ graph: { id: 'g1', goal: 'Ship it' }, nodes: [] });
     nodes = [];
   });
 
@@ -78,6 +81,37 @@ describe('QuestGraphView', () => {
     renderView();
     expect(screen.getByTestId('questmaster-v5-view')).toBeInTheDocument();
     expect(screen.getByTestId('questmaster-v5-graph-btn')).toHaveTextContent('Ship it');
+  });
+
+  it('offers plan generation on an empty quest', async () => {
+    nodes = [];
+    renderView();
+    selectGraph();
+
+    expect(screen.getByTestId('questmaster-v5-empty-graph')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('questmaster-v5-generate-plan-btn'));
+
+    expect(planMutate).toHaveBeenCalledWith({ model: 'claude-opus-5' });
+  });
+
+  it('hides the plan affordance once the quest has nodes', () => {
+    nodes = [makeNode({ id: 'n1' })];
+    renderView();
+    selectGraph();
+
+    expect(screen.queryByTestId('questmaster-v5-empty-graph')).not.toBeInTheDocument();
+  });
+
+  // Planning bills a completion, so it must not fire against no model at all.
+  it('explains itself instead of planning when no model is selected', async () => {
+    currentModel = '';
+    nodes = [];
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-generate-plan-btn'));
+
+    expect(planMutate).not.toHaveBeenCalled();
+    expect(await screen.findByTestId('questmaster-v5-error')).toHaveTextContent('Pick a model first');
   });
 
   it('runs a ready node with the currently selected model', async () => {

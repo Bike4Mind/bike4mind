@@ -144,6 +144,22 @@ export function useAddQuestNode(graphId: string | null) {
   });
 }
 
+/** Generate a spine of phases and their tasks for an empty quest. */
+export function useGenerateQuestPlan(graphId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { model: string }): Promise<QuestGraphDetail> => {
+      const { data } = await api.post<QuestGraphDetail>(`/api/quest-graphs/${graphId}/plan`, input);
+      return data;
+    },
+    onSuccess: detail => {
+      // The route returns the whole graph, so seed the cache rather than
+      // invalidating and paying for an immediate refetch.
+      if (graphId) queryClient.setQueryData(questGraphKeys.detail(graphId), detail);
+    },
+  });
+}
+
 export function useRunQuestNode(graphId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({

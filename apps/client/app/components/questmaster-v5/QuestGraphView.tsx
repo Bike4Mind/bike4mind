@@ -12,6 +12,7 @@ import {
   useCreateQuestGraph,
   useQuestGraph,
   useQuestGraphs,
+  useGenerateQuestPlan,
   useQuestNodeAnswer,
   useRunQuestNode,
   type QuestNode,
@@ -48,6 +49,7 @@ export default function QuestGraphView() {
   const detail = useQuestGraph(selectedGraphId);
   const createGraph = useCreateQuestGraph();
   const runNode = useRunQuestNode(selectedGraphId);
+  const generatePlan = useGenerateQuestPlan(selectedGraphId);
 
   const nodes = detail.data?.nodes ?? [];
   const selectedNode = useMemo(() => nodes.find(n => n.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
@@ -69,6 +71,19 @@ export default function QuestGraphView() {
       setError(errorMessage(err, 'Could not create quest'));
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleGeneratePlan = async () => {
+    setError(null);
+    if (!model) {
+      setError('Pick a model first - planning uses your currently selected model.');
+      return;
+    }
+    try {
+      await generatePlan.mutateAsync({ model });
+    } catch (err) {
+      setError(errorMessage(err, 'Could not generate a plan'));
     }
   };
 
@@ -208,7 +223,21 @@ export default function QuestGraphView() {
                   </Stack>
                 </Sheet>
               ))}
-              {!nodes.length && <Typography level="body-sm">No nodes yet. Add the first one below.</Typography>}
+              {!nodes.length && (
+                <Sheet variant="soft" sx={{ p: 2, borderRadius: 'sm' }} data-testid="questmaster-v5-empty-graph">
+                  <Typography level="body-sm" sx={{ mb: 1 }}>
+                    No nodes yet. Generate a plan from the goal, or add the first node by hand below.
+                  </Typography>
+                  <Button
+                    size="sm"
+                    loading={generatePlan.isPending}
+                    onClick={handleGeneratePlan}
+                    data-testid="questmaster-v5-generate-plan-btn"
+                  >
+                    Generate plan
+                  </Button>
+                </Sheet>
+              )}
             </Stack>
 
             {/* Keyed by graph: without it React keeps this subtree mounted
