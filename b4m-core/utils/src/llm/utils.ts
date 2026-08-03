@@ -1552,9 +1552,11 @@ const IMAGE_REQUEST_PATTERN =
  *
  * That list is the truthful source for presence but says nothing about usability: a tool whose
  * provider key is missing is still listed, and still refuses at dispatch rather than degrading, so
- * this gate cannot cover that case (#1103). Nor does it reach a model that has already exhausted its
- * tool-call budget - the backends re-send the assembled messages with `tools: undefined`, carrying
- * this instruction onto a call with no tools at all.
+ * this gate cannot cover that case (#1103).
+ *
+ * It also only decides the turn it runs on. A turn that starts with the tool and later gives it up -
+ * every backend drops tools once the tool-call budget is spent - is handled by the `requiresTool`
+ * marker set below, which `stripToolDependentMessages` acts on at those sites.
  */
 export function includeImagePromptSystemMessage(
   messages: IMessage[],
