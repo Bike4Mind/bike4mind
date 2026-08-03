@@ -46,3 +46,28 @@ export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): R
     ],
   };
 }
+
+/**
+ * Datastore mirror of `satisfiesTagPrefix`, NEGATED: matches files carrying no tag that places
+ * them under `prefix`. What the backfill migration selects, so it stamps exactly the files the
+ * write-door reconciler would have. A parity test asserts the two agree; change them together.
+ *
+ * The trailing `[\s\S]` in the pattern is the length check - a bare `acme:` is not a category
+ * anyone can navigate to, so it does not satisfy `acme:`. It is spelled that way rather than `.`
+ * because `.` excludes newlines, which would make `acme:\nfoo` satisfy the predicate but not this
+ * filter. Case-sensitive (no `i` flag), matching both the predicate and the read arms the stamp
+ * has to become visible to.
+ *
+ * `satisfiesTagPrefix` also excludes `datalake:*` tags; there is no conjunct for that here because
+ * callers reach this only for a prefix `decideStampPrefix` cleared, which rules out the reserved
+ * namespace. A tag cannot then start with both `prefix` and `datalake:` - one would have to be a
+ * prefix of the other, and the only prefix inside that namespace ending in ':' is `datalake:`
+ * itself. The parity test covers the case rather than leaving it to this argument.
+ *
+ * Returns a top-level filter fragment; spread it alongside the meta-tag arm.
+ */
+export function buildLacksContentPrefixTagFilter(prefix: string): Record<string, unknown> {
+  return {
+    tags: { $not: { $elemMatch: { name: { $regex: new RegExp(`^${escapeRegex(prefix)}[\\s\\S]`) } } } },
+  };
+}

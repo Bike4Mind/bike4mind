@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IDataLakeDocument } from '@bike4mind/common';
-import { createDataLakeFallbackTagger, reconcileDataLakeFallbackTags } from './fallbackLakeTags';
+import { createDataLakeFallbackTagger, decideStampPrefix, reconcileDataLakeFallbackTags } from './fallbackLakeTags';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
   ({
@@ -312,5 +312,57 @@ describe('createDataLakeFallbackTagger', () => {
 
     expect(db.dataLakes.findByDatalakeTag).toHaveBeenCalledTimes(1);
     for (const result of results) expect(names(result)).toEqual(['acme:uncategorized', META]);
+  });
+});
+
+/**
+ * The gate itself, as the backfill migration consumes it. The reconciler cases above already
+ * cover the decisions it reaches through the write doors; these pin the SHAPE the migration
+ * branches on, which those cases cannot see because the reconciler collapses it to a prefix.
+ */
+describe('decideStampPrefix', () => {
+  it('permits a healthy lake and reports the trimmed prefix', async () => {
+    const db = makeDb({ [META]: lake({ fileTagPrefix: '  acme:  ' }) });
+    expect(await decideStampPrefix(lake({ fileTagPrefix: '  acme:  ' }), db)).toEqual({
+      stamp: true,
+      prefix: 'acme:',
+    });
+  });
+
+  it.each([
+    ['an unanchorable prefix', 'acme', 'unusable-prefix'],
+    ['an empty prefix', '', 'unusable-prefix'],
+    ['the reserved namespace', 'datalake:', 'reserved-namespace'],
+    ['the reserved namespace in mixed case', 'DataLake:x:', 'reserved-namespace'],
+  ])('refuses %s', async (_label, fileTagPrefix, reason) => {
+    const db = makeDb({});
+    expect(await decideStampPrefix(lake({ fileTagPrefix }), db)).toEqual({ stamp: false, reason });
+  });
+
+  it('refuses an overlapping prefix and names the clashing lakes', async () => {
+    const db = makeDb({}, [
+      lake(),
+      lake({ id: 'lake2', name: 'Other', slug: 'other', fileTagPrefix: 'acme:hr:', datalakeTag: 'datalake:other' }),
+    ]);
+    expect(await decideStampPrefix(lake(), db)).toEqual({
+      stamp: false,
+      reason: 'prefix-overlap',
+      detail: '"Other" (acme:hr:)',
+    });
+  });
+
+  it('flags a failed overlap lookup instead of deciding for the caller', async () => {
+    // The write doors stamp anyway; the migration refuses. Neither direction belongs in the gate,
+    // so it permits and surfaces the flag - a plain `{stamp:true}` here would silently give the
+    // bulk mint the write door's fail-open.
+    const db = makeDb({});
+    db.dataLakes.find = vi.fn(async () => {
+      throw new Error('mongo down');
+    }) as unknown as typeof db.dataLakes.find;
+    expect(await decideStampPrefix(lake(), db)).toEqual({
+      stamp: true,
+      prefix: 'acme:',
+      overlapCheckFailed: true,
+    });
   });
 });
