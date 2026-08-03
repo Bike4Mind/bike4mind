@@ -10,6 +10,7 @@ import {
   normalizeTagPrefix,
   toDataLakeConfig,
   tagPrefixesOverlap,
+  satisfiesTagPrefix,
 } from './dataLakes';
 
 // A dynamic (DB-registered) lake config builder. Passing dynamicDataLakes bypasses the
@@ -246,5 +247,41 @@ describe('tagPrefixesOverlap', () => {
   ])('never overlaps when one side is %s, since no query arm is built from it', (_label, a, b) => {
     expect(tagPrefixesOverlap(a, b)).toBe(false);
     expect(tagPrefixesOverlap(b, a)).toBe(false);
+  });
+});
+
+describe('satisfiesTagPrefix', () => {
+  it.each([
+    ['a plain content tag', ['acme:legal']],
+    ['a nested content tag', ['acme:legal:2024']],
+    ['one satisfying tag among several', ['important', 'globex:x', 'acme:legal']],
+    // The suffix is any non-empty string, including one that starts with a separator.
+    ['a tag whose suffix begins with a colon', ['acme::odd']],
+  ])('is satisfied by %s', (_label, tags) => {
+    expect(satisfiesTagPrefix(tags, 'acme:')).toBe(true);
+  });
+
+  it.each([
+    ['no tags at all', []],
+    ['only tags outside the prefix', ['important', 'globex:legal']],
+    // Renders as an unlabeled row in the tag tree, so it is not a category to navigate to.
+    ['a bare prefix with no suffix', ['acme:']],
+    // The read arms build an unflagged ^regex, so this file is still uncategorized to them.
+    ['a differently-cased prefix', ['ACME:legal']],
+    ['a prefix that is only a substring', ['not-acme:legal']],
+  ])('is not satisfied by %s', (_label, tags) => {
+    expect(satisfiesTagPrefix(tags, 'acme:')).toBe(false);
+  });
+
+  it('never counts a membership meta-tag as content, whatever its case', () => {
+    // The tag counters exclude `datalake:*` from the tree, so a meta-tag leaves the file
+    // uncategorized even when the lake prefix would otherwise match it.
+    expect(satisfiesTagPrefix(['datalake:acme'], 'datalake:')).toBe(false);
+    expect(satisfiesTagPrefix(['DataLake:acme'], 'DataLake:')).toBe(false);
+  });
+
+  it('ignores malformed entries rather than throwing', () => {
+    expect(satisfiesTagPrefix([null, undefined, 42, { name: 'acme:legal' }], 'acme:')).toBe(false);
+    expect(satisfiesTagPrefix([null, 'acme:legal'], 'acme:')).toBe(true);
   });
 });

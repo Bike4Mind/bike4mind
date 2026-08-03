@@ -748,6 +748,13 @@ export interface DataLakeTagCountsResponse {
   tagCounts: { tag: string; count: number }[];
   /** Distinct-file counts: combined total + per-prefix breakdown (keyed by lake tag prefix, e.g. 'opti:'). */
   uniqueArticleCounts: { total: number; byPrefix: Record<string, number> };
+  /**
+   * Distinct live files per lake, keyed by `datalakeTag`. This is the number to show for a
+   * LAKE: it counts membership, so it stays truthful for files that carry no taxonomy tag and
+   * counts a multi-tagged file once. The prefix/occurrence counts above still drive the tag
+   * tree's branches.
+   */
+  lakeFileCounts: Record<string, number>;
 }
 
 /**

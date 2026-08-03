@@ -4,10 +4,11 @@ import {
   IInviteDocument,
   InviteType,
   IOrganizationRepository,
+  IProjectRepository,
   ISessionDocument,
   IUserDocument,
 } from '@bike4mind/common';
-import { NotFoundError, secureParameters } from '@bike4mind/utils';
+import { NotFoundError, secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
 import { z } from 'zod';
 
 const cancelInviteSchema = z.object({
@@ -34,6 +35,7 @@ interface CancelInviteAdapters {
       findByIdAndUserId: (id: string, userId: string) => Promise<IFabFileDocument | null>;
     };
     organizations: IOrganizationRepository;
+    projects: Pick<IProjectRepository, 'shareable'>;
     groups: {
       findById: (id: string) => Promise<IGroupDocument | null>;
     };
@@ -49,7 +51,9 @@ export const cancelInvite = async (
   { db }: CancelInviteAdapters
 ) => {
   const { id, type, email } = secureParameters(parameters, cancelInviteSchema);
-  if (!user.email) throw new Error('User has no email');
+  // Typed errors, not bare `Error`: errorHandler cannot map a bare Error, so it falls through to a
+  // 500, which trips the LiveOps CloudWatch filter on what are ordinary client conditions.
+  if (!user.email) throw new UnprocessableEntityError('User has no email');
 
   if (type === InviteType.FabFile) {
     const fabFile = await db.fabFiles.findByIdAndUserId(id, user.id);
@@ -68,10 +72,21 @@ export const cancelInvite = async (
 
     const organization = await db.organizations.shareable.findShareAccessById(user, group.organizationId);
     if (!organization) throw new NotFoundError('Group not found');
+  } else if (type === InviteType.Project) {
+    // Same share-access predicate the create and list paths use for Project
+    // (sharingService/create.ts, authorizeByInviteType.ts).
+    const project = await db.projects.shareable.findShareAccessById(user, id);
+    if (!project) throw new NotFoundError('Project not found');
+  } else {
+    // Default deny: a type reaching this point has no authorization predicate written for it, so it
+    // must not reach the write below, which zeroes every invite for the document and returns their
+    // names and pending recipients. InviteType.Tool has no arm today, and neither would a newly
+    // added type - an explicit else keeps that safe by default rather than by enumeration.
+    throw new NotFoundError('Invite not found');
   }
 
   const invites = await db.invites.findAllByDocumentId(id);
-  if (invites.length === 0) throw new Error('Invite not found');
+  if (invites.length === 0) throw new NotFoundError('Invite not found');
 
   for (const invite of invites) {
     // If email is provided, we need to remove it from the pending list

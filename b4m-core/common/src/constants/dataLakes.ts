@@ -7,6 +7,14 @@
 export const DATALAKE_TAG_PREFIX = 'datalake:';
 
 /**
+ * Relevance weight stored on the membership meta-tag itself. Membership is binary - the tag is
+ * either there or it isn't - so this is a constant, not a score. It exists only because every
+ * tag carries a strength; keep every door that stamps the meta-tag agreeing on one value, or the
+ * same membership reads as differently weighted depending on which door wrote it.
+ */
+export const DATALAKE_TAG_STRENGTH = 1;
+
+/**
  * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
  * (non-empty, ends with ':'), else null. An empty prefix would match every tag, so it is
  * rejected rather than honored.
@@ -34,6 +42,32 @@ export const normalizeTagPrefix = (prefix: string | undefined | null): string | 
  */
 export const isReservedTagPrefix = (prefix: string | undefined | null): boolean =>
   typeof prefix === 'string' && prefix.trim().startsWith(DATALAKE_TAG_PREFIX);
+
+/**
+ * Does any of these tag names already place a file under `prefix`?
+ *
+ * The ONE satisfaction rule, so the write-door reconciler and the backfill migration cannot
+ * disagree about which files still need a content tag. `buildLacksContentPrefixTagFilter` in
+ * `@bike4mind/database` is its Mongo mirror; a parity test asserts they agree.
+ *
+ * Case-SENSITIVE on purpose, unlike the meta-tag match: the consumers that decide whether the
+ * file shows up under the prefix - `buildOwnershipConditions` and the tag-count aggregates -
+ * build their regexes with no `i` flag, so `Acme:legal` genuinely does not satisfy `acme:`
+ * for them. Lowercasing here would skip the stamp on a file those queries still see as
+ * uncategorized.
+ *
+ * A meta-tag never satisfies a prefix (the counters exclude `datalake:*` from the tree), and
+ * neither does a bare `acme:` with no suffix: that splits to `['acme', '']` and renders as an
+ * unlabeled row in the tag tree, so it is not a category a user can navigate to.
+ */
+export const satisfiesTagPrefix = (tagNames: readonly unknown[], prefix: string): boolean =>
+  tagNames.some(
+    name =>
+      typeof name === 'string' &&
+      name.startsWith(prefix) &&
+      name.length > prefix.length &&
+      !name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)
+  );
 
 /**
  * True when two `fileTagPrefix` values would match each other's tags, so two lakes carrying them

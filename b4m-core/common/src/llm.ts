@@ -179,6 +179,12 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   enableQuestMaster: z.boolean().optional(),
   /** Whether QuestMaster v5 (node-graph) is enabled */
   enableQuestMasterV5: z.boolean().optional(),
+  /**
+   * How much of the system stack to put in front of the model, for callers that need a completion
+   * they can compare against the bare provider model. Unset keeps the full stack - what every
+   * in-app completion wants. See PROMPT_MODE_SOURCES in services/llm/systemPromptSources.
+   */
+  promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
   /** Whether Mementos is enabled */
   enableMementos: z.boolean().optional(),
   /** Whether Artifacts is enabled */

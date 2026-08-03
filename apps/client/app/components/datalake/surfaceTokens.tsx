@@ -49,6 +49,8 @@ export interface DataLakeSurfaceCopy {
   zeroTitle: string;
   zeroHint: string;
   createLabel: string;
+  /** Label for the shared manage-knowledge affordance (`ManageKnowledgeButton`). */
+  manageLabel: string;
   askAboutLabel: string;
   askAboutPrompt: (title: string) => string;
   /** Optional second action under an article; omit to render only "ask about". */
@@ -113,6 +115,7 @@ export const DEFAULT_DATA_LAKE_SURFACE_TOKENS: DataLakeSurfaceTokens = {
     zeroTitle: 'Nothing here yet',
     zeroHint: `Create your first ${DATA_LAKE.toLowerCase()} to turn your files into searchable knowledge.`,
     createLabel: `Create ${DATA_LAKE.toLowerCase()}`,
+    manageLabel: 'Manage lakes',
     askAboutLabel: 'Ask about this document',
     askAboutPrompt: title => `Tell me about this document: ${title}`,
     secondaryActionLabel: 'Summarize the key points',

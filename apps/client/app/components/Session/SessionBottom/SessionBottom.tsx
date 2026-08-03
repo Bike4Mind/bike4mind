@@ -259,6 +259,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // The floating chat window frames the input itself, so like docked it drops the
   // outer spacing and rounded card look; unlike docked it keeps a top separator.
   const isFloatingLayout = useSessionLayout(s => s.layout === 'floatingChat');
+  // The Data Lake chat is embedded edge-to-edge in the Explorer (#836), so it drops
+  // the outer bottom gutter like the docked/floating layouts do.
+  const isDataLakeSurface = currentSession?.surface === 'datalake';
 
   // Determine if the stop button should be shown
   const shouldShowStopButton = useMemo(() => {
@@ -428,7 +431,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       ref={ref}
       className="session-bottom"
       sx={{
-        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? '0' : '1.25rem',
+        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout || isDataLakeSurface ? '0' : '1.25rem',
         paddingTop: isDockedLayout || isFloatingLayout ? 0 : '20px',
         position: 'relative',
       }}

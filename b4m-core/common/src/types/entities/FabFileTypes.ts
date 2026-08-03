@@ -303,6 +303,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findAllInIds(ids: string[]): Promise<IFabFileDocument[]>;
 
   /**
+   * Find files by ID with the heavy and URL-bearing fields projected out, for
+   * callers that need to know what a file IS without loading or linking to it.
+   * Includes soft-deleted files, so a still-referenced deleted attachment stays
+   * visible as such. Capped; `hasMore` reports truncation rather than hiding it.
+   * @param ids - The IDs of the files.
+   * @param cap - Maximum rows to return.
+   */
+  findMetadataByIds(ids: string[], cap?: number): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+
+  /**
+   * As `findMetadataByIds`, for the files a session currently holds (excludes
+   * soft-deleted). Capped; `hasMore` reports truncation rather than hiding it.
+   * @param sessionId - The session whose files to list.
+   * @param cap - Maximum rows to return.
+   */
+  findMetadataBySessionId(sessionId: string, cap?: number): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+
+  /**
    * Delete many files in the given IDs.
    * @param ids - The IDs of the files.
    * @returns A promise that resolves to void.
@@ -383,10 +401,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
   /**
-   * Count the number of files by user id and tag.
-   * @param userId - The ID of the user.
-   * @param tag - The tag to count.
-   * @returns A promise that resolves to the number of files.
+   * Count a user's live files carrying one tag. Matches the WHOLE name, case-insensitively - a
+   * `test` tag does not count files tagged `testing`. Excludes soft-deleted files, unlike the
+   * write paths that keep tag names in step.
    */
   countByUserIdAndTag(userId: string, tag: string): Promise<number>;
 
@@ -451,32 +468,85 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ namespace: string; fileCount: number }[]>;
 
   /**
-   * Remove a tag from a user's files.
-   * @param userId - The ID of the user.
-   * @param tag - The tag to remove.
-   * @returns A promise that resolves to the number of files.
+   * Strip one tag name off every file a user owns, so deleting a tag document cannot leave the
+   * name orphaned on the files that carried it. Matches the WHOLE name, case-insensitively, and
+   * removes every occurrence - including a name a file carries twice.
+   *
+   * Includes SOFT-DELETED files, unlike most reads here: a soft-deleted file that kept the name
+   * would resurrect a tag that no longer exists the moment it is undeleted. Also clears
+   * `primaryTag` where it named the removed tag.
+   *
+   * Scoped to files the user OWNS. A file shared to them but owned by someone else keeps the
+   * name, which is correct - one user's tag edit must not rewrite another user's file.
+   *
+   * @returns files modified by the tag removal (not tags removed, and not counting the
+   * `primaryTag` sweep).
    */
   removeTagByUserId(userId: string, tag: string): Promise<number>;
 
   /**
-   * Update the tags for a user's files.
-   * @param userId - The ID of the user.
-   * @param tag - The tag to update.
-   * @returns A promise that resolves to the number of files.
+   * Rename one tag on every file a user owns, so renaming a tag document cannot leave the old name
+   * orphaned on the files that carried it. Matches the WHOLE name, case-insensitively, and renames
+   * EVERY occurrence in a file's tags array rather than only the first. Includes soft-deleted files
+   * and carries `primaryTag` across, for the same reasons as `removeTagByUserId`.
+   *
+   * May leave a file carrying `newTag` twice - once from the rename and once because it already
+   * had that tag. The caller resolves it with `dedupeTagByUserId`; doing both in one write would
+   * mean rewriting the whole array and losing the element-level concurrency this buys.
+   *
+   * @returns files modified by the rename (not the `primaryTag` sweep).
    */
   updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number>;
+
+  /**
+   * Collapse a repeated tag name to a single entry on every file of a user's that carries it more
+   * than once, normalizing the survivor to `name`'s casing. Keeps the FIRST occurrence and its
+   * other fields (`strength`, and anything this schemaless array happens to hold).
+   *
+   * The companion to `updateTagsByUserId`: renaming in place is what creates the duplicate, when a
+   * file already carried the target name.
+   *
+   * @returns the number of files that actually had a duplicate to collapse.
+   */
+  dedupeTagByUserId(userId: string, name: string): Promise<number>;
 
   /**
    * Atomically remove every tag matching one of `tagNames` (exact names) from one file's
    * tags array, and clear `primaryTag` if it named one of them. Uses `$pull`, so concurrent
    * removals of DIFFERENT tags on the same file don't clobber each other the way a
    * read-filter-write `$set: { tags }` would. Absent names are a no-op (idempotent).
+   *
+   * Matching is case-SENSITIVE, unlike its `pushTagsByFabFileId` counterpart: names must be
+   * given exactly as stored, resolved from the loaded document rather than from user input.
+   * Passing a user's `foo` against a stored `Foo` removes nothing and reports no error.
    * @param fabFileId - The ID of the file.
    * @param tagNames - The exact tag names to remove. Empty is a no-op.
    * @returns Documents modified by the pull. The schema has timestamps, so this can be 1
    * even when no tag matched - do not read it as "a tag was removed".
    */
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
+
+  /**
+   * Atomically add each of `tagNames` to one file's tags array, skipping any already present.
+   * The add counterpart to `pullTagsByFabFileId`: one filtered `$push` per name, so concurrent
+   * adds of DIFFERENT tags on the same file don't clobber each other and a re-add is a no-op
+   * rather than a duplicate.
+   *
+   * Presence is compared by EXACT name, matching the pull half and the read path (which admits
+   * a tag by exact `$in`), and a new name is stored with the caller's casing, never lowercased.
+   * Case-insensitive matching here would be wrong, not merely stricter: a file carrying some
+   * other casing of a lake's meta-tag is not a member of that lake, so the canonical tag has to
+   * be insertable alongside it. Callers that want case-insensitive semantics resolve the stored
+   * spelling from the document first, as the tag-toggle path does. A filter is not a unique
+   * index, so two SIMULTANEOUS adds of one name can both pass; `pullTagsByFabFileId` removes both.
+   * @param fabFileId - The ID of the file.
+   * @param tagNames - Tag names to add, deduplicated. Empty is a no-op.
+   * @param strength - Relevance weight stored on each new tag. Defaults to 0; the data-lake
+   * membership meta-tag is written at 1.
+   * @returns The number of tags actually inserted. Unlike the pull half this IS meaningful: a
+   * name already present fails its filter, so it neither counts nor bumps updatedAt.
+   */
+  pushTagsByFabFileId(fabFileId: string, tagNames: string[], strength?: number): Promise<number>;
 
   /**
    * Bulk-writes each file's full tags array in a single round trip via bulkWrite, instead of
@@ -513,6 +583,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * find().length). Counts only live files (not archived, not deleted).
    */
   computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }>;
+  /**
+   * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
+   * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
+   * stored stats. Prefer this over counting `<prefix>:` tag matches, which misses files that
+   * carry only the membership tag and over-counts multi-tagged ones.
+   */
+  countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>>;
   /** Soft-archive (reversible) all live member files. Returns affected count. */
   archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
   /** Reverse archive for all archived member files. */

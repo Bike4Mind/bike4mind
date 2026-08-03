@@ -321,6 +321,15 @@ describe('GET /api/embed/serve - white-label branding (epic #41 Phase D)', () =>
     expect(res._getData()).not.toContain('Powered by');
   });
 
+  // The key id is what makes a failed owner lookup traceable to the key whose
+  // branding it affected, so this public read path has to hand it over.
+  it('passes the key id to the entitlement lookup', async () => {
+    mockOwnerHasEntitlement.mockResolvedValue(true);
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ hideBranding: true }));
+    await run({ k: 'b4m_live_brand' });
+    expect(mockOwnerHasEntitlement).toHaveBeenCalledWith(expect.anything(), expect.any(String), 'key-1');
+  });
+
   it('shows branding for an unentitled owner even when hideBranding is stored true', async () => {
     // THE server-side enforcement the AC requires: the stored flag alone must
     // never hide branding.

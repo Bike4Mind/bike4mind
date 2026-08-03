@@ -1682,6 +1682,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.1080.0
         version: 3.1080.0
+      '@bike4mind/hearth':
+        specifier: workspace:*
+        version: link:../../b4m-core/hearth
       '@casl/ability':
         specifier: ^6.8.1
         version: 6.8.1

@@ -333,6 +333,95 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // The promptMode wiring, asserted at the boundary the prompt actually crosses: the
+    // context/system array handed to buildAndSortMessages. The two cases form a discriminating
+    // pair - if the filter were unwired, the raw case would still carry the date context and the
+    // pair could not both pass. This is the "provably zero injectors" claim for API mode raw.
+    describe('promptMode', () => {
+      const mockTextModel = () => {
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['Hi!']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      };
+
+      it('hands the full system stack to the builder when no mode is set', async () => {
+        mockTextModel();
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+        await expect(service.process({ body, logger: mockLogger })).resolves.not.toThrow();
+
+        const [, contextAndSystemMessages, , , , , , , options] = mockedBuildAndSortMessages.mock.calls[0];
+        expect(
+          contextAndSystemMessages.some(m => typeof m.content === 'string' && m.content.startsWith('Current date:'))
+        ).toBe(true);
+        expect(options).toEqual(expect.objectContaining({ skipAdminPromptTemplates: false }));
+      });
+
+      it('hands an EMPTY system stack to the builder under raw, and skips the admin templates', async () => {
+        mockTextModel();
+        const body = {
+          ...startQuestParams,
+          promptMode: 'raw' as const,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+        };
+
+        await expect(service.process({ body, logger: mockLogger })).resolves.not.toThrow();
+
+        const [, contextAndSystemMessages, , , , , , , options] = mockedBuildAndSortMessages.mock.calls[0];
+        expect(contextAndSystemMessages).toEqual([]);
+        expect(options).toEqual(expect.objectContaining({ skipAdminPromptTemplates: true }));
+        // The adapter appends a model-identity line to the system parameter on its own;
+        // raw has to reach through and turn that off too, or "empty stack" is off by 17 tokens.
+        const completeOpts = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2];
+        expect(completeOpts.omitIdentityReminder).toBe(true);
+      });
+
+      // Auto-added tools are OUR additions, and any attached tool also pulls the provider's
+      // server-side tool-use preamble into the request (observed live: an Anthropic completion
+      // with only auto-added tools knew the current date on a fresh raw session). The same
+      // admin user is used for both cases, so the pair discriminates on the mode alone.
+      it('suppresses auto-added tools under a mode, but not for a default request', async () => {
+        (service as any).user.isAdmin = true; // makes blog_draft auto-add fire on the default path
+        try {
+          mockTextModel();
+          const base = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+          await service.process({ body: base, logger: mockLogger });
+          const defaultTools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          expect(defaultTools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toContain('blog_draft');
+
+          mockTextModel();
+          await service.process({ body: { ...base, promptMode: 'raw' as const }, logger: mockLogger });
+          const rawTools = vi.mocked(mockedGetLlmByModel.mock.results[1].value.complete).mock.calls[0][2].tools;
+          expect(rawTools ?? []).toEqual([]);
+        } finally {
+          delete (service as any).user.isAdmin;
+        }
+      });
+    });
+
     // An empty message array means the input budget was non-positive - e.g. a model configured with
     // max output equal to its whole context window. The old guard was `if (!messages)`, which is
     // false for `[]`, so the empty prompt reached the model and it answered confidently from nothing.
@@ -408,6 +497,7 @@ describe('ChatCompletionProcess', () => {
         expect.anything(),
         expect.anything(),
         9000,
+        expect.anything(),
         expect.anything(),
         expect.anything(),
         expect.anything(),
@@ -1993,6 +2083,59 @@ describe('computeSettlementDelta (zero-balance shortfall clamp)', () => {
 
   it('treats a negative balance snapshot as zero', () => {
     expect(computeSettlementDelta(100, 130, -50)).toEqual({ delta: 0, writtenOffCredits: 30 });
+  });
+
+  // #1238: the org-wide balance is a HARD STOP - the settlement true-up must never drive it
+  // negative. Pin the invariant across a swept input range, not just the examples above, so a
+  // future refactor of the clamp can't quietly reintroduce a negative-balance path.
+  // The grid below is deliberately coarse non-negative INTEGERS so the conservation assertion can use
+  // exact equality. Real credits are token-derived floats, where `collected + writtenOff === shortfall`
+  // is not exact - hence the separate fractional case, which asserts the floor exactly (it is a
+  // comparison, not a sum) and conservation approximately.
+  it('never drives the settled balance below zero, and conserves the shortfall (hard-stop invariant)', () => {
+    for (let reserved = 0; reserved <= 200; reserved += 25) {
+      for (let used = 0; used <= 300; used += 25) {
+        for (let available = 0; available <= 300; available += 25) {
+          const { delta, writtenOffCredits } = computeSettlementDelta(reserved, used, available);
+          // The balance already moved by `reserved` at reservation; settlement applies `delta`.
+          // Post-settlement balance = available + delta and must never be negative.
+          expect(available + delta).toBeGreaterThanOrEqual(0);
+          expect(writtenOffCredits).toBeGreaterThanOrEqual(0);
+          if (used <= reserved) {
+            // Over- or exactly-reserved: pure refund/no-op, nothing written off.
+            expect(writtenOffCredits).toBe(0);
+            expect(delta).toBe(reserved - used);
+          } else {
+            // Under-reserved: the shortfall is either collected (via -delta) or written off,
+            // and the collected part is clamped to what the balance can actually cover.
+            const shortfall = used - reserved;
+            // delta <= 0 here (a shortfall debit); Math.abs avoids a -0 vs +0 Object.is mismatch.
+            const collected = Math.abs(delta);
+            expect(collected + writtenOffCredits).toBe(shortfall);
+            expect(collected).toBe(Math.min(shortfall, available));
+          }
+        }
+      }
+    }
+  });
+
+  it('holds the floor for fractional credits (token-derived costs are not integers)', () => {
+    const fractional: Array<[number, number, number]> = [
+      [0.1, 0.30000000000000004, 0.15], // shortfall the balance only partly covers
+      [1.7, 2.9, 0.05],
+      [0.25, 0.25, 0.1], // exact settlement on a fractional basis
+      [0.2, 0.7, 0], // whole shortfall written off at zero balance
+      [3.3, 1.1, 0.5], // over-reserved: fractional refund
+    ];
+    for (const [reserved, used, available] of fractional) {
+      const { delta, writtenOffCredits } = computeSettlementDelta(reserved, used, available);
+      expect(available + delta).toBeGreaterThanOrEqual(0);
+      expect(writtenOffCredits).toBeGreaterThanOrEqual(0);
+      if (used > reserved) {
+        // Conservation only up to FP error here; its exact form is pinned by the integer sweep above.
+        expect(Math.abs(delta) + writtenOffCredits).toBeCloseTo(used - reserved, 10);
+      }
+    }
   });
 });
 
