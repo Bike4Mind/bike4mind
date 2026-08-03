@@ -127,6 +127,30 @@ describe('sessionSummarization summary-file lookup', () => {
     expect(h.createFabFile).toHaveBeenCalledWith(OWNER, expect.objectContaining({ userId: OWNER }), expect.anything());
   });
 
+  it('refuses to summarize an owner-less session instead of running an unscoped lookup', async () => {
+    // A missing userId would be dropped from the filter, leaving the lookup keyed on sessionId
+    // alone. The event carries its own userId here, which is what gets an owner-less session
+    // past the `!user` check on the spider and agent-run paths.
+    h.session = { id: SESSION_ID, _id: SESSION_ID, name: 'Notebook', tags: [] };
+    h.fabFileStore.push({ id: 'fabfile-stranger', userId: STRANGER, sessionId: SESSION_ID, tags: [] });
+
+    await (handler as unknown as (event: unknown, logger: unknown) => Promise<void>)(
+      { event: 'session.summarize', properties: { sessionId: SESSION_ID, userId: STRANGER, trigger: 'manual' } },
+      logger
+    );
+
+    expect(h.findOne).not.toHaveBeenCalled();
+    expect(h.updateFabFile).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('has no owner'));
+  });
+
+  it('stays silent about ownership on the healthy path', async () => {
+    await run();
+
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("updates the owner's existing summary file", async () => {
     h.fabFileStore.push({
       id: 'fabfile-owner',
