@@ -2694,6 +2694,7 @@ describe('includeImagePromptSystemMessage - request trigger', () => {
     'the graphical output is wrong',
     'can you explain what this diagram means',
     'draw a diagram of the auth flow',
+    'give me a snapshot of the metrics table',
   ])('does not fire on %j', prompt => {
     expect(fires(prompt)).toBe(false);
   });

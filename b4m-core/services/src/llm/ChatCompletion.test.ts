@@ -1319,7 +1319,8 @@ describe('ChatCompletionProcess', () => {
   describe('image prompt tool availability', () => {
     const imageTool = { toolSchema: { name: 'image_generation', description: 'gen', parameters: {} } };
 
-    const optionsPassedWithTools = async (tools: any[]) => {
+    const optionsPassedWithTools = async (tools: any[], disabledTools?: string[]) => {
+      mockSession.disabledTools = disabledTools;
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
 
@@ -1362,6 +1363,15 @@ describe('ChatCompletionProcess', () => {
 
     it('reports it unavailable when the built tool list does not carry it', async () => {
       expect(await optionsPassedWithTools([])).toMatchObject({ imageGenerationAvailable: false });
+    });
+
+    // Availability has to be read AFTER the post-build denylist pass, not from the requested tools:
+    // a session that forbids the tool has it stripped from the built list, and reading any earlier
+    // would report it available on a turn where the model never receives it.
+    it('reports it unavailable when the session denylist strips it from the built list', async () => {
+      expect(await optionsPassedWithTools([imageTool], ['image_generation'])).toMatchObject({
+        imageGenerationAvailable: false,
+      });
     });
   });
 

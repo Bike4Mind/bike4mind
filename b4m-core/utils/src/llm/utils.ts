@@ -1531,24 +1531,30 @@ export function includeHardcodedSystemMessage(messages: IMessage[], formatPrompt
  * matched "graphical". Compiled once - this runs on every turn. No `g` flag, which would carry
  * `lastIndex` between calls and make the match depend on the previous prompt.
  *
- * `visual`, `graphic` and `diagram` are deliberately gone rather than boundary-matched: they fire on
- * prompts that only discuss visualizing or diagrams, and a request for either is served by mermaid
- * and artifacts, not by image generation.
+ * `visual`, `graphic`, `diagram` and `snapshot` are deliberately gone rather than boundary-matched:
+ * each reads naturally about something other than a picture ("visualize this data", "a snapshot of the
+ * metrics"), and a request for a diagram or a chart is served by mermaid and artifacts, not by image
+ * generation. Plurals and `photograph` are spelled out because the substring scan matched those for
+ * free and a bare word-boundary list would silently stop firing on them.
  *
  * Errs toward missing a request rather than inventing one. A missed prompt costs a hint the model can
  * still get from the tool's own schema; a wrongly matched one plants a MUST-generate-an-image order on
  * a turn the user never asked about images.
  */
 const IMAGE_REQUEST_PATTERN =
-  /\b(?:images?|illustrations?|photos?|photographs?|pictures?|watercolou?rs?|paintings?|comic\s+books?|snapshots?)\b/i;
+  /\b(?:images?|illustrations?|photos?|photographs?|pictures?|watercolou?rs?|paintings?|comic\s+books?)\b/i;
 
 /**
  * Prepends the image-generation nudge, but only when `image_generation` actually reached the model's
- * tool schema this turn. A MUST-use instruction for an absent tool leaves the model no good move:
- * image_generation throws on a missing key rather than degrading (#1103), and pointing a model at a
- * tool it does not have makes it emit the call as leaked JSON text in the reply. The blog-workflow
- * prompt gates on its tool surviving into the final set for the same reason - see
- * ChatCompletionProcess, which is also where `imageGenerationAvailable` is resolved.
+ * tool schema this turn. Pointing a model at a tool it does not have makes it emit the call as leaked
+ * JSON text in the reply, which is why the blog-workflow prompt gates the same way - see
+ * ChatCompletionProcess, where `imageGenerationAvailable` is resolved from the built tool list.
+ *
+ * That list is the truthful source for presence but says nothing about usability: a tool whose
+ * provider key is missing is still listed, and still refuses at dispatch rather than degrading, so
+ * this gate cannot cover that case (#1103). Nor does it reach a model that has already exhausted its
+ * tool-call budget - the backends re-send the assembled messages with `tools: undefined`, carrying
+ * this instruction onto a call with no tools at all.
  */
 export function includeImagePromptSystemMessage(
   messages: IMessage[],
