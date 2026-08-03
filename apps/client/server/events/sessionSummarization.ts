@@ -189,7 +189,12 @@ export const handler = withEventContext(async (event, logger) => {
   // entire summarization - the summary text is already saved on the session.
   try {
     await withTransaction(async () => {
-      const fabfile = await fabFileRepository.findOne({ sessionId: session.id });
+      // A FabFile's sessionId is not an ownership claim - any user can stamp an arbitrary one
+      // onto a file they own via PUT /api/files/[id]. Without the owner conjunct this lookup can
+      // select a stranger's document, and the update below gates on ACCESSIBLE-not-owned, so the
+      // summary would overwrite their content and tags. A miss falls through to createFabFile,
+      // which is the safe direction: a duplicate summary beats clobbering someone else's file.
+      const fabfile = await fabFileRepository.findOne({ sessionId: session.id, userId: session.userId });
       if (fabfile) {
         // Re-summarizing must not change which data lakes this file belongs to. The tags here are
         // the SESSION's, which never carry a `datalake:` meta-tag, and a whole-array tag write
