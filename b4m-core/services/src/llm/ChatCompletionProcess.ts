@@ -1889,6 +1889,10 @@ export class ChatCompletionProcess {
       // have makes it emit the call as leaked JSON text in the reply.
       const blogDraftAvailable = allTools?.some(t => t.toolSchema.name === 'blog_draft') ?? false;
 
+      // Same gate, same reason, for the image prompt - except buildAndSortMessages appends that one
+      // out of sight of this assembly site, so availability has to be threaded into the builder.
+      const imageGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'image_generation') ?? false;
+
       const toolPromptMessage = await toolBuilder.buildToolPrompt({
         toolPromptId,
         hasContentTransform: (hasContentTransform ?? false) && blogDraftAvailable,
@@ -2052,6 +2056,9 @@ export class ChatCompletionProcess {
         ...fabMessages,
       ];
       const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
+      // One object shared with the overflow-recovery rebuild further down, so a prompt rebuilt after
+      // shedding history cannot carry different builder options than the first build.
+      const buildMessagesOptions = { verbose: false, imageGenerationAvailable };
       let messages = await buildAndSortMessages(
         previousMessages,
         contextAndSystemMessages,
@@ -2060,7 +2067,8 @@ export class ChatCompletionProcess {
         defaultAdminSettings,
         historyCount,
         logger,
-        this.tokenizer
+        this.tokenizer,
+        buildMessagesOptions
       );
       // The length check is the part that matters: buildAndSortMessages returns an EMPTY ARRAY when
       // the input budget is non-positive, and `!messages` is false for `[]`, so an empty prompt used
@@ -2205,7 +2213,8 @@ export class ChatCompletionProcess {
               defaultAdminSettings,
               historyCount,
               logger,
-              this.tokenizer
+              this.tokenizer,
+              buildMessagesOptions
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
             messages = rebuilt;

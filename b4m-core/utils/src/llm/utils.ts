@@ -1525,7 +1525,23 @@ export function includeHardcodedSystemMessage(messages: IMessage[], formatPrompt
   return [hardcodedSystemMessage, ...messages];
 }
 
-export function includeImagePromptSystemMessage(messages: IMessage[], userPrompt: string): IMessage[] {
+/**
+ * Prepends the image-generation nudge, but only when `image_generation` actually reached the model's
+ * tool schema this turn. A MUST-use instruction for an absent tool leaves the model no good move:
+ * image_generation throws on a missing key rather than degrading (#1103), and pointing a model at a
+ * tool it does not have makes it emit the call as leaked JSON text in the reply. The blog-workflow
+ * prompt gates on its tool surviving into the final set for the same reason - see
+ * ChatCompletionProcess, which is also where `imageGenerationAvailable` is resolved.
+ */
+export function includeImagePromptSystemMessage(
+  messages: IMessage[],
+  userPrompt: string,
+  imageGenerationAvailable: boolean
+): IMessage[] {
+  if (!imageGenerationAvailable) {
+    return messages;
+  }
+
   const imageRelatedVerbs = [
     'image',
     'illustration',
@@ -1772,7 +1788,15 @@ export async function buildAndSortMessages(
   historyCount: number = 0,
   logger: Logger,
   tokenizer: ITokenizer,
-  options: { verbose: boolean } = { verbose: false }
+  options: {
+    verbose: boolean;
+    /**
+     * Whether `image_generation` survived into the tool list handed to the model this turn. Absent
+     * means "unknown", which suppresses the image prompt: staying quiet costs a hint the model can
+     * get from the tool schema anyway, whereas ordering a tool it lacks has no recovery.
+     */
+    imageGenerationAvailable?: boolean;
+  } = { verbose: false }
 ): Promise<IMessage[]> {
   // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
   // comparison below.
@@ -1835,7 +1859,11 @@ export async function buildAndSortMessages(
   }
 
   if (getSettingsValue('UseImagePrompt', settings)) {
-    fabMessages = includeImagePromptSystemMessage(fabMessages, userPromptContent);
+    fabMessages = includeImagePromptSystemMessage(
+      fabMessages,
+      userPromptContent,
+      options.imageGenerationAvailable ?? false
+    );
   }
 
   // Artifact guidance comes from the admin-editable `ArtifactEmissionPrompt` system message that the

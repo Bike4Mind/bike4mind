@@ -8,6 +8,7 @@ import {
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
   includeHardcodedSystemMessage,
+  includeImagePromptSystemMessage,
   TOOL_RESULT_NOT_RECORDED,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
@@ -2650,5 +2651,63 @@ describe('includeHardcodedSystemMessage - format prompt scoping (#1320)', () => 
     expect(result).toHaveLength(2);
     expect(result[0]).toEqual({ role: 'system', content: 'Custom template.' });
     expect(result[1]).toEqual(existing[0]);
+  });
+});
+
+const IMAGE_PROMPT_MATCH = /MUST use the image_generation tool/;
+const hasImagePrompt = (messages: IMessage[]) =>
+  messages.some(m => typeof m.content === 'string' && IMAGE_PROMPT_MATCH.test(m.content));
+
+describe('includeImagePromptSystemMessage - tool availability gate', () => {
+  it('injects nothing when image_generation is not on the turn, even on an explicit image request', () => {
+    expect(includeImagePromptSystemMessage([], 'draw me a picture of a cat', false)).toEqual([]);
+  });
+
+  it('injects the instruction when the tool is available', () => {
+    const result = includeImagePromptSystemMessage([], 'draw me a picture of a cat', true);
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe('system');
+    expect(result[0].content as string).toMatch(IMAGE_PROMPT_MATCH);
+  });
+
+  it('prepends ahead of the messages it is given', () => {
+    const existing: IMessage[] = [{ role: 'system', content: 'other block' }];
+    const result = includeImagePromptSystemMessage(existing, 'a painting of a fox', true);
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual(existing[0]);
+  });
+
+  it('leaves the messages untouched when the prompt asks for no image at all', () => {
+    const existing: IMessage[] = [{ role: 'user', content: 'what is the capital of France' }];
+    expect(includeImagePromptSystemMessage(existing, 'what is the capital of France', true)).toEqual(existing);
+  });
+});
+
+describe('buildAndSortMessages - image prompt threading', () => {
+  const buildWithOptions = (options?: { verbose: boolean; imageGenerationAvailable?: boolean }) =>
+    buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'draw me a picture of a cat' }],
+      100000,
+      { UseImagePrompt: 'true' },
+      0,
+      mockLogger,
+      createMockTokenizer(),
+      options
+    );
+
+  it('injects the image prompt when the caller reports the tool available', async () => {
+    expect(hasImagePrompt(await buildWithOptions({ verbose: false, imageGenerationAvailable: true }))).toBe(true);
+  });
+
+  it('injects nothing when the caller reports the tool unavailable', async () => {
+    expect(hasImagePrompt(await buildWithOptions({ verbose: false, imageGenerationAvailable: false }))).toBe(false);
+  });
+
+  // Fails closed: a caller that never threads availability through gets no instruction, rather than
+  // one aimed at a tool the model may not hold.
+  it('injects nothing when the caller passes no options at all', async () => {
+    expect(hasImagePrompt(await buildWithOptions())).toBe(false);
   });
 });

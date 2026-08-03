@@ -411,6 +411,7 @@ describe('ChatCompletionProcess', () => {
         expect.anything(),
         expect.anything(),
         expect.anything(),
+        expect.anything(),
         expect.anything()
       );
     });
@@ -1308,6 +1309,59 @@ describe('ChatCompletionProcess', () => {
       expect(warm.estimatedCost).toBeCloseTo(0.0051, 6);
       expect(warm.creditsUsed).toBe(11);
       expect(warm.creditsUsed).toBeLessThan(cold.creditsUsed);
+    });
+  });
+
+  // The image prompt is appended inside buildAndSortMessages, out of sight of the assembly this
+  // class does, so this option is the only thing keeping that MUST-use instruction aimed at a tool
+  // the model actually holds. Asserted at this layer because the builder's own tests cannot see
+  // whether the caller threads it through.
+  describe('image prompt tool availability', () => {
+    const imageTool = { toolSchema: { name: 'image_generation', description: 'gen', parameters: {} } };
+
+    const optionsPassedWithTools = async (tools: any[]) => {
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockClear();
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      buildToolsSpy.mockRestore();
+      buildToolPromptSpy.mockRestore();
+      return mockedBuildAndSortMessages.mock.calls.at(-1)?.[8];
+    };
+
+    it('reports the tool available when it survives into the built tool list', async () => {
+      expect(await optionsPassedWithTools([imageTool])).toMatchObject({ imageGenerationAvailable: true });
+    });
+
+    it('reports it unavailable when the built tool list does not carry it', async () => {
+      expect(await optionsPassedWithTools([])).toMatchObject({ imageGenerationAvailable: false });
     });
   });
 
