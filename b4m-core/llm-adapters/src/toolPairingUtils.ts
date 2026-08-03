@@ -8,6 +8,10 @@ import type { IMessage, MessageContentObject, MessageContentText, MessageContent
  * call that carries no tools leaves the model no valid move, and it answers by emitting the tool call
  * as text in the reply - which is exactly what the callers that inject those prompts gate against
  * when they decide whether to add them in the first place.
+ *
+ * Drops on the presence of the marker, not on which tool it names, because every call site today
+ * removes the whole tool set at once. A site that ever drops only SOME tools would need to compare
+ * `requiresTool` against the survivors instead.
  */
 export const stripToolDependentMessages = (messages: IMessage[]): IMessage[] =>
   messages.filter(message => !message.requiresTool);

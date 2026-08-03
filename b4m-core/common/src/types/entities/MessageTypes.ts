@@ -103,6 +103,11 @@ export interface IMessage {
    * rebuild each wire message from `role`/`content` drop it for free; the two that forward IMessage
    * objects more or less intact strip it explicitly, so setting it on a user or assistant message is
    * safe rather than a silent leak.
+   *
+   * An empty string counts as UNSET for dropping: `stripToolDependentMessages` keeps such a message
+   * rather than losing a real prompt to a mis-set marker. The wire-side strip is deliberately less
+   * forgiving and removes the key whenever it is present, since an empty one is still not something a
+   * provider should see.
    */
   requiresTool?: string;
 }
