@@ -63,13 +63,14 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
     // Renaming the document first strands them - the next attempt reads the new name and has
     // nothing left to search for. Not wrapped in a transaction: the rename can touch thousands of
     // files and would hold locks against the 16MB/60s ceiling, and every write here is idempotent.
-    const filesUpdated = await db.fabFiles.updateTagsByUserId(userId, tag.name, newName);
+    await db.fabFiles.updateTagsByUserId(userId, tag.name, newName);
 
     // Renaming in place is what creates a duplicate, on any file that already carried the target
-    // name - so this runs whenever files moved, not only when a tag document collided.
-    if (filesUpdated > 0) {
-      await db.fabFiles.dedupeTagByUserId(userId, newName);
-    }
+    // name. Deliberately NOT gated on the rename having moved files this time: if a previous
+    // attempt renamed the files and then died here, the retry's rename matches nothing and a
+    // count-gated dedupe would skip the duplicate it left behind, stranding it. Its own $expr
+    // prefilter makes the no-duplicate case an empty write, so running it every rename is cheap.
+    await db.fabFiles.dedupeTagByUserId(userId, newName);
 
     // Before the update below, not after: the unique index on { userId, name } has no collation, so
     // an exactly-colliding document makes that write fail while this one still exists. There can be

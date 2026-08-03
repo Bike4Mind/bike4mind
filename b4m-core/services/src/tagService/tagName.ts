@@ -17,7 +17,7 @@ export const normalizeTagName = (raw: string): string => raw.trim();
  * toLowerCase and not toLocaleLowerCase, whose dotless-i mapping varies by runtime locale - the
  * same reasoning listFileTags spells out where it folds bucket names.
  */
-export const foldTagName = (raw: string): string => raw.trim().toLowerCase();
+export const foldTagName = (raw: string): string => normalizeTagName(raw).toLowerCase();
 
 /**
  * True when a tag NAME sits in the lake-membership namespace. Folds case, because the writes this

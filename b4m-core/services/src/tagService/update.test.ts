@@ -191,13 +191,16 @@ describe('tagService - update', () => {
       expect(mockFabFileRepo.dedupeTagByUserId).toHaveBeenCalledWith(userId, 'receipts');
     });
 
-    it('skips the de-dupe when the rename moved no files', async () => {
+    // Deliberately NOT gated on this call's file count. A previous attempt may have renamed the
+    // files and died before de-duping; the retry's rename then matches nothing, and a count-gated
+    // de-dupe would skip the duplicate it left behind.
+    it('de-dupes even when the rename moved no files, so a retry still clears a stranded duplicate', async () => {
       (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'invoices' }));
       (mockFabFileRepo.updateTagsByUserId as Mock).mockResolvedValueOnce(0);
 
       await update(userId, { id: existingTagId, name: 'receipts' }, adapters);
 
-      expect(mockFabFileRepo.dedupeTagByUserId).not.toHaveBeenCalled();
+      expect(mockFabFileRepo.dedupeTagByUserId).toHaveBeenCalledWith(userId, 'receipts');
     });
 
     // Retry-convergence: if the document write fails, the source still names the old tag, so the
