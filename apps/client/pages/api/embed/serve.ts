@@ -120,7 +120,7 @@ const handler = baseApi({ auth: false })
     const branding = info.branding ?? {};
     const showBranding =
       branding.hideBranding !== true ||
-      !(await embedKeyOwnerHasEntitlement(info, EMBED_WHITELABEL_ENTITLEMENT_KEY).catch(() => false));
+      !(await embedKeyOwnerHasEntitlement(info, EMBED_WHITELABEL_ENTITLEMENT_KEY, info.keyId).catch(() => false));
     const displayName = parseBrandingDisplayName(branding.displayName) ?? agent?.name ?? undefined;
     const primaryColor = parseBrandingColor(branding.primaryColor) ?? undefined;
     const logoUrl = parseBrandingLogoUrl(branding.logoUrl) ?? undefined;
