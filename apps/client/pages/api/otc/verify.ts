@@ -23,6 +23,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { setRefreshCookie } from '@server/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { Config } from '@server/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -182,7 +183,8 @@ const handler = baseApi({ auth: false })
           logger: req.logger,
         }
       );
-      const tokens = { accessToken, refreshToken };
+      setRefreshCookie(res, refreshToken);
+      const tokens = { accessToken };
       const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
 
       // Analytics + device history are best-effort for the same post-rotation reason as
@@ -422,10 +424,10 @@ const handler = baseApi({ auth: false })
         logger: req.logger,
       }
     );
+    setRefreshCookie(res, registrationSession.refreshToken);
     return res.status(200).json({
       user: redactUserSecretsForSelf(newUser),
       accessToken: registrationSession.accessToken,
-      refreshToken: registrationSession.refreshToken,
     });
   });
 
