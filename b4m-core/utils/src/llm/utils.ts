@@ -1801,9 +1801,18 @@ export async function buildAndSortMessages(
   options: {
     verbose: boolean;
     /**
+     * Skip the admin-configured templates this function appends (FormatPromptTemplate, image
+     * prompt). They are invisible from the caller's own system-message assembly, so a caller
+     * asking for an unadorned completion cannot exclude them any other way.
+     */
+    skipAdminPromptTemplates?: boolean;
+    /**
      * Whether `image_generation` survived into the tool list handed to the model this turn. Absent
      * means "unknown", which suppresses the image prompt: staying quiet costs a hint the model can
      * get from the tool schema anyway, whereas ordering a tool it lacks has no recovery.
+     *
+     * Independent of `skipAdminPromptTemplates`: that decides whether the admin templates are
+     * offered at all, this decides whether the image one is honest on a turn that does get them.
      */
     imageGenerationAvailable?: boolean;
   } = { verbose: false }
@@ -1863,17 +1872,19 @@ export async function buildAndSortMessages(
   const systemMessages: IMessage[] = [];
   let systemTokenCount: number = 0;
 
-  if (getSettingsValue('UseFormatPrompt', settings)) {
-    const formatPromptTemplate = settings.FormatPromptTemplate;
-    fabMessages = includeHardcodedSystemMessage(fabMessages, formatPromptTemplate);
-  }
+  if (!options.skipAdminPromptTemplates) {
+    if (getSettingsValue('UseFormatPrompt', settings)) {
+      const formatPromptTemplate = settings.FormatPromptTemplate;
+      fabMessages = includeHardcodedSystemMessage(fabMessages, formatPromptTemplate);
+    }
 
-  if (getSettingsValue('UseImagePrompt', settings)) {
-    fabMessages = includeImagePromptSystemMessage(
-      fabMessages,
-      userPromptContent,
-      options.imageGenerationAvailable ?? false
-    );
+    if (getSettingsValue('UseImagePrompt', settings)) {
+      fabMessages = includeImagePromptSystemMessage(
+        fabMessages,
+        userPromptContent,
+        options.imageGenerationAvailable ?? false
+      );
+    }
   }
 
   // Artifact guidance comes from the admin-editable `ArtifactEmissionPrompt` system message that the

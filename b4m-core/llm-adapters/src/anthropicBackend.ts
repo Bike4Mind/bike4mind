@@ -800,8 +800,12 @@ export class AnthropicBackend implements ICompletionBackend {
     // append the model-identity reminder as a separate uncached block to keep
     // the cached prefix stable across requests (otherwise the suffix would
     // bust the cache key on every model identifier change).
-    const identityReminder = `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
-    let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }>;
+    // Omitted for callers whose contract is a bare completion (API promptMode raw) -
+    // with no system messages left either, the request then carries no system at all.
+    const identityReminder = options.omitIdentityReminder
+      ? null
+      : `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
+    let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
     if (anySystemCacheControlled) {
       const systemMessages = messages.filter(m => m.role === 'system');
       const blocks: Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> = [];
@@ -813,11 +817,14 @@ export class AnthropicBackend implements ICompletionBackend {
           blocks.push({ type: 'text', text });
         }
       }
-      blocks.push({ type: 'text', text: identityReminder });
-      system = blocks.length > 0 ? blocks : identityReminder;
+      if (identityReminder) {
+        blocks.push({ type: 'text', text: identityReminder });
+      }
+      system = blocks.length > 0 ? blocks : undefined;
     } else {
       const joined = this.consolidateSystemMessages(messages);
-      system = joined ? `${joined}\n${identityReminder}` : identityReminder;
+      const parts = [joined, identityReminder].filter(Boolean);
+      system = parts.length > 0 ? parts.join('\n') : undefined;
     }
 
     // Ensure tool_use/tool_result pairing integrity after filterRelevantMessages.

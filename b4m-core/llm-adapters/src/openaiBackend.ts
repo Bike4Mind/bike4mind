@@ -1834,7 +1834,15 @@ export class OpenAIBackend implements ICompletionBackend {
       )
       .map(m => m.content)
       .join('\n\n');
-    const mergedContent = callerSystem ? `${systemContent}\n\n${callerSystem}` : systemContent;
+    // Bare-completion contract (API promptMode raw): synthesize nothing - no
+    // helpful-assistant preamble, no identity line. The lead message is then exactly the
+    // caller's own system text, or absent entirely. Must stay in sync with the same flag
+    // in anthropicBackend / bedrockBackend.
+    const mergedContent = options.omitIdentityReminder
+      ? callerSystem
+      : callerSystem
+        ? `${systemContent}\n\n${callerSystem}`
+        : systemContent;
 
     const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
       role: 'system',
@@ -1848,8 +1856,9 @@ export class OpenAIBackend implements ICompletionBackend {
     const formattedMessages = convertedMessages as OpenAI.ChatCompletionMessageParam[];
 
     // O1 models take no system message at all (their system content was already stripped
-    // from filteredMessages above); every other model gets the consolidated lead message.
-    return isO1Model ? formattedMessages : [systemMessage, ...formattedMessages];
+    // from filteredMessages above); every other model gets the consolidated lead message -
+    // unless there is nothing to lead with (bare-completion path, no caller system text).
+    return isO1Model || !mergedContent ? formattedMessages : [systemMessage, ...formattedMessages];
   }
 
   pushToolMessages(messages: IMessage[], tool: IChoiceEndToolUse['tool'], result: string, _thinkingBlocks?: unknown[]) {

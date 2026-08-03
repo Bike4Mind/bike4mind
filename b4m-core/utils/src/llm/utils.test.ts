@@ -2745,4 +2745,44 @@ describe('buildAndSortMessages - image prompt threading', () => {
   it('injects nothing when the caller passes no options at all', async () => {
     expect(hasImagePrompt(await buildWithOptions())).toBe(false);
   });
+
+  // The two options are independent: skipping the admin templates removes the image prompt whatever
+  // availability says, so a raw-mode turn must not carry it even with the tool attached.
+  it('injects nothing when the admin templates are skipped, even with the tool available', async () => {
+    expect(
+      hasImagePrompt(await buildWithOptions({ verbose: false, imageGenerationAvailable: true, skipAdminPromptTemplates: true } as any))
+    ).toBe(false);
+  });
+});
+
+describe('admin prompt templates', () => {
+  const FORMAT_TEMPLATE = 'Adhere to specific formatting requests such as TypeScript.';
+  const settings = { UseFormatPrompt: 'true', FormatPromptTemplate: FORMAT_TEMPLATE };
+
+  const build = async (options?: { verbose: boolean; skipAdminPromptTemplates?: boolean }) =>
+    buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'hello' }],
+      100000,
+      settings,
+      0,
+      mockLogger as any,
+      createMockTokenizer(),
+      options
+    );
+
+  const carriesFormatTemplate = (messages: IMessage[]) =>
+    messages.some(m => typeof m.content === 'string' && m.content.includes(FORMAT_TEMPLATE));
+
+  it('injects the admin format template by default, since in-app completions expect it', async () => {
+    expect(carriesFormatTemplate(await build())).toBe(true);
+  });
+
+  // This template is invisible from ChatCompletionProcess - it is appended here - and it measurably
+  // suppressed the model's willingness to refuse an underspecified request. A caller asking for an
+  // unadorned completion has to be able to reach it.
+  it('omits the admin format template when the caller opts out', async () => {
+    expect(carriesFormatTemplate(await build({ verbose: false, skipAdminPromptTemplates: true }))).toBe(false);
+  });
 });
