@@ -13,7 +13,11 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
   StandardUnit: { Count: 'Count' },
 }));
 
-import { recordDeprecatedModelRequest, MODEL_SUNSET_NAMESPACE, DEPRECATED_MODEL_REQUEST_METRIC } from './modelSunsetMetrics';
+import {
+  recordDeprecatedModelRequest,
+  MODEL_SUNSET_NAMESPACE,
+  DEPRECATED_MODEL_REQUEST_METRIC,
+} from './modelSunsetMetrics';
 
 describe('recordDeprecatedModelRequest', () => {
   const originalStage = process.env.SEED_STAGE_NAME;
