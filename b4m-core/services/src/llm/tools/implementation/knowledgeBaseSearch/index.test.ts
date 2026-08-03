@@ -32,6 +32,7 @@ vi.mock('../../../../apiKeyService', () => ({
 }));
 
 import { knowledgeBaseSearchTool } from './index';
+import { emptyEmbeddingMismatchReport } from '../../../../dataLakeService/embeddingMismatch';
 import type { ToolContext } from '../../base/types';
 
 const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
@@ -68,9 +69,36 @@ async function run(context: ToolContext) {
 
 beforeEach(() => {
   getDynamicDataLakeAccessMock.mockClear();
-  semanticDataLakeSearchMock.mockClear().mockResolvedValue({ results: [], totalChunksSearched: 0, filesInScope: 0 });
-  fileScopedSemanticSearchMock.mockClear().mockResolvedValue({ results: [], totalChunksSearched: 0, filesInScope: 0 });
+  // Mirrors the real result shape: chunksScored/embeddingMismatch are required on the service's
+  // return type, and these mocks are untyped, so omitting them surfaces only at runtime.
+  semanticDataLakeSearchMock.mockClear().mockResolvedValue(emptySemanticResult());
+  fileScopedSemanticSearchMock.mockClear().mockResolvedValue(emptySemanticResult());
 });
+
+const ADA = 'text-embedding-ada-002';
+const SMALL_3 = 'text-embedding-3-small';
+
+const emptySemanticResult = () => ({
+  results: [],
+  totalChunksSearched: 0,
+  filesInScope: 0,
+  chunksScored: 0,
+  embeddingModel: ADA,
+  embeddingMismatch: emptyEmbeddingMismatchReport(),
+});
+
+/** A report describing one file withheld for being embedded with another model. */
+const mismatchReport = () => {
+  const report = emptyEmbeddingMismatchReport();
+  report.excludedFiles = {
+    count: 1,
+    models: [SMALL_3],
+    estimatedChunks: 12,
+    sample: [{ fileId: 'f9', fileName: 'foreign.md', embeddingModel: SMALL_3 }],
+  };
+  report.partial = true;
+  return report;
+};
 
 describe('search_knowledge_base keyword fallback retrieval exclusion', () => {
   it('drops a marked file from keyword results but keeps the clean one', async () => {
@@ -273,5 +301,271 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
     await run(semanticContext());
 
     expect(semanticDataLakeSearchMock.mock.calls[0][0]).toHaveProperty('budgets');
+  });
+});
+
+/**
+ * Retrieval-scoped lake-prompt injection on the MODEL-DRIVEN path (#1108). When a semantic search
+ * grounds on a trusted lake's files, that lake's operating instructions are prepended (defended) to
+ * the tool result; when it grounds on nothing lake-owned, nothing is injected. The agent-scoped arm
+ * never injects. Trust itself is covered by getDataLakePrompts.test.ts - here we lock the WIRING.
+ */
+describe('search_knowledge_base scoped lake-prompt injection (#1108)', () => {
+  const lakeHit = (fileTags: string[]) => ({
+    chunkId: 'c1',
+    fileId: 'f1',
+    fileName: 'Handbook.pdf',
+    fileTags,
+    chunkText: 'pto accrues monthly',
+    score: 0.81,
+  });
+  const scan = {
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 1,
+    filesScoped: 1,
+    filesScanned: 1,
+    chunksScanned: 1,
+    chunksSkippedDimensionMismatch: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+  };
+  const makeLake = (overrides: Record<string, unknown> = {}) => ({
+    id: 'lakeX',
+    slug: 'x',
+    name: 'Lake X',
+    fileTagPrefix: 'x:',
+    datalakeTag: 'datalake:x',
+    createdByUserId: 'u1',
+    status: 'active',
+    systemPrompt: 'Prefer the 2026 revision.',
+    ...overrides,
+  });
+
+  // Semantic deps wired AND db.dataLakes present so the real getAccessibleDataLakePrompts runs.
+  function semCtx(lakes: Array<Record<string, unknown>>, overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+        dataLakes: {
+          findActiveByUserTags: vi.fn(),
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(lakes),
+        },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+    });
+  });
+
+  it('prepends the retrieved lake prompt (defended) ahead of the passages', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({ results: [lakeHit(['datalake:x'])], scan });
+    const out = await run(semCtx([makeLake()]));
+    expect(out).toContain('[Data Lake Instructions]');
+    expect(out).toContain('[Data Lake - Lake X]\nPrefer the 2026 revision.');
+    // The passage content still follows the injected prompt.
+    expect(out).toContain('pto accrues monthly');
+    expect(out.indexOf('[Data Lake - Lake X]')).toBeLessThan(out.indexOf('pto accrues monthly'));
+  });
+
+  it('injects nothing when the grounded files carry no lake tag', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({ results: [lakeHit([])], scan });
+    const out = await run(semCtx([makeLake()]));
+    expect(out).not.toContain('[Data Lake -');
+    expect(out).toContain('pto accrues monthly');
+  });
+
+  it('dedupes across repeated searches: the same lake is injected once per completion', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({ results: [lakeHit(['datalake:x'])], scan });
+    // One tool instance = one completion, so its closure carries the injected-tags set.
+    const tool = knowledgeBaseSearchTool.implementation(semCtx([makeLake()]), undefined);
+    const first = (await tool.toolFn({ query: 'pto' })) as string;
+    const second = (await tool.toolFn({ query: 'pto again' })) as string;
+    expect(first).toContain('[Data Lake - Lake X]');
+    expect(second).not.toContain('[Data Lake - Lake X]');
+    // The second search still returns its passages - only the repeated prompt is suppressed.
+    expect(second).toContain('pto accrues monthly');
+  });
+
+  it('agent-scoped arm never injects a lake prompt, even when results carry lake tags', async () => {
+    fileScopedSemanticSearchMock.mockResolvedValue({ results: [lakeHit(['datalake:x'])], scan });
+    const out = await run(semCtx([makeLake()], { kbScope: { fileIds: ['f1'] } as never }));
+    expect(fileScopedSemanticSearchMock).toHaveBeenCalled();
+    expect(out).not.toContain('[Data Lake -');
+    expect(out).toContain('pto accrues monthly');
+  });
+
+  it('marks a retrieved no-prompt lake as injected so a later search does not re-resolve it', async () => {
+    // The lake resolves to no block (empty systemPrompt), but its tag is still marked injected up
+    // front - so a second search over the same lake short-circuits before hitting the DB again.
+    semanticDataLakeSearchMock.mockResolvedValue({ results: [lakeHit(['datalake:x'])], scan });
+    const ctx = semCtx([makeLake({ systemPrompt: '' })]);
+    const findMock = (ctx.db.dataLakes as { findActiveByUserTagsAndEntitlements: ReturnType<typeof vi.fn> })
+      .findActiveByUserTagsAndEntitlements;
+    const tool = knowledgeBaseSearchTool.implementation(ctx, undefined);
+    const first = (await tool.toolFn({ query: 'a' })) as string;
+    await tool.toolFn({ query: 'b' });
+    expect(first).not.toContain('[Data Lake -'); // empty prompt -> nothing injected
+    expect(findMock).toHaveBeenCalledTimes(1); // second search never re-resolved the lake
+  });
+});
+
+describe('search_knowledge_base embedding-mismatch disclosure', () => {
+  // Distinct from the truncated-scan disclosure above: that says how much of the corpus was
+  // REACHED, this says whether what was reached could be COMPARED. Both can be true at once.
+  function makeSemanticContext(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'k', fileName: 'Keyword doc.pdf', tags: [], vectorized: true, mimeType: 'application/pdf' }],
+            total: 1,
+          }),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+    });
+  });
+
+  it('tells the MODEL about withheld content, in the string it actually receives', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+      embeddingMismatch: mismatchReport(),
+    });
+
+    const out = await run(makeSemanticContext());
+
+    expect(out).toContain('body');
+    expect(out).toContain(SMALL_3);
+    expect(out).toContain('partial');
+  });
+
+  it('says nothing extra when the corpus is consistent', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+    });
+
+    const out = await run(makeSemanticContext());
+
+    expect(out).toContain('body');
+    expect(out).not.toContain('partial');
+  });
+
+  it('carries the notice through the keyword fall-through when everything was withheld', async () => {
+    // The worst case: no semantic hits BECAUSE every matching file was excluded. The arm has no
+    // output, keyword search answers instead, and the notice has to survive that hand-off - on
+    // BOTH channels: the model's tool string AND the human-visible status/promptMeta write, which
+    // previously only ran inside emitSemanticCitables (never reached when semantic found nothing).
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [],
+      embeddingMismatch: mismatchReport(),
+    });
+
+    const ctx = makeSemanticContext();
+    const out = await run(ctx);
+
+    expect(ctx.db.fabfiles!.search).toHaveBeenCalledTimes(1);
+    expect(out).toContain('Keyword doc.pdf');
+    expect(out).toContain(SMALL_3);
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const withWarning = calls.find(c => (c[0] as { promptMeta?: { warnings?: string[] } })?.promptMeta?.warnings);
+    expect(withWarning).toBeDefined();
+    expect((withWarning![0] as { promptMeta: { warnings: string[] } }).promptMeta.warnings[0]).toContain(SMALL_3);
+    expect(withWarning![1]).toContain('partial results');
+  });
+
+  it('surfaces the notice on the status line even when keyword search ALSO finds nothing', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [],
+      embeddingMismatch: mismatchReport(),
+    });
+    const ctx = makeSemanticContext({
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }) },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    const out = await run(ctx);
+
+    expect(out).toContain(SMALL_3);
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const withWarning = calls.find(c => (c[0] as { promptMeta?: { warnings?: string[] } })?.promptMeta?.warnings);
+    expect(withWarning).toBeDefined();
+    expect(withWarning![1]).toContain('partial results');
+  });
+
+  it('does not invent a notice when the semantic arm throws', async () => {
+    semanticDataLakeSearchMock.mockRejectedValue(new Error('embedding provider down'));
+
+    const out = await run(makeSemanticContext());
+
+    expect(out).toContain('Keyword doc.pdf');
+    expect(out).not.toContain('partial');
+  });
+
+  it('repeats the last notice on the capped call, which runs no search of its own', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+      embeddingMismatch: mismatchReport(),
+    });
+    const ctx = makeSemanticContext();
+    const tool = knowledgeBaseSearchTool.implementation(ctx, undefined);
+    for (let i = 0; i < 3; i++) {
+      await tool.toolFn({ query: 'q' });
+    }
+    // The 4th call is capped: no search runs, so without carrying the notice forward it would be
+    // silently dropped from the model's view even though the corpus is still mid-migration.
+    const capped = await tool.toolFn({ query: 'q' });
+    expect(capped).toContain('STOP searching');
+    expect(capped).toContain(SMALL_3);
+  });
+
+  it('accretes the warning onto promptMeta alongside the citables', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+      embeddingMismatch: mismatchReport(),
+    });
+
+    const ctx = makeSemanticContext();
+    await run(ctx);
+
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const withWarning = calls.find(c => (c[0] as { promptMeta?: { warnings?: string[] } })?.promptMeta?.warnings);
+    expect(withWarning).toBeDefined();
+    expect((withWarning![0] as { promptMeta: { warnings: string[] } }).promptMeta.warnings[0]).toContain(SMALL_3);
   });
 });

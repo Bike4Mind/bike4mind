@@ -24,6 +24,7 @@ import {
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
+  ImageModels,
   ModelBackend,
   usdToCredits as realUsdToCredits,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
@@ -329,6 +330,88 @@ describe('ChatCompletionProcess', () => {
           status: 'done',
           type: 'message',
         })
+      );
+    });
+
+    // An empty message array means the input budget was non-positive - e.g. a model configured with
+    // max output equal to its whole context window. The old guard was `if (!messages)`, which is
+    // false for `[]`, so the empty prompt reached the model and it answered confidently from nothing.
+    it('refuses to send an empty prompt when there is no input budget', async () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn(),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      // Fails loudly with an actionable message naming the cause, rather than sending an empty prompt.
+      await expect(service.process({ body, logger: mockLogger })).rejects.toThrow(/no input budget/);
+    });
+
+    // Image and video entries set max_tokens equal to contextWindow across every backend in the repo -
+    // both are the prompt-length limit, since these models return media rather than tokens. Reserving
+    // that as output left no input room, so the guard above rejected a request that fits fine.
+    it('does not reserve text output on an image model, whose max_tokens is not an output budget', async () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['done']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ImageModels.GPT_IMAGE_1,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ImageModels.GPT_IMAGE_1,
+          type: 'image',
+          name: 'GPT Image 1',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 10000,
+          contextWindow: 10000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'a duck on a bicycle' }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'a duck on a bicycle' });
+
+      const body = {
+        ...startQuestParams,
+        params: { model: ImageModels.GPT_IMAGE_1, temperature: 0.5, top_p: 1, max_tokens: 9000 },
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+
+      await expect(service.process({ body, logger: mockLogger })).resolves.not.toThrow();
+      // 10000 context - 1000 reserve, with no output subtracted.
+      expect(mockedBuildAndSortMessages).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        9000,
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.anything()
       );
     });
 
@@ -1910,6 +1993,59 @@ describe('computeSettlementDelta (zero-balance shortfall clamp)', () => {
 
   it('treats a negative balance snapshot as zero', () => {
     expect(computeSettlementDelta(100, 130, -50)).toEqual({ delta: 0, writtenOffCredits: 30 });
+  });
+
+  // #1238: the org-wide balance is a HARD STOP - the settlement true-up must never drive it
+  // negative. Pin the invariant across a swept input range, not just the examples above, so a
+  // future refactor of the clamp can't quietly reintroduce a negative-balance path.
+  // The grid below is deliberately coarse non-negative INTEGERS so the conservation assertion can use
+  // exact equality. Real credits are token-derived floats, where `collected + writtenOff === shortfall`
+  // is not exact - hence the separate fractional case, which asserts the floor exactly (it is a
+  // comparison, not a sum) and conservation approximately.
+  it('never drives the settled balance below zero, and conserves the shortfall (hard-stop invariant)', () => {
+    for (let reserved = 0; reserved <= 200; reserved += 25) {
+      for (let used = 0; used <= 300; used += 25) {
+        for (let available = 0; available <= 300; available += 25) {
+          const { delta, writtenOffCredits } = computeSettlementDelta(reserved, used, available);
+          // The balance already moved by `reserved` at reservation; settlement applies `delta`.
+          // Post-settlement balance = available + delta and must never be negative.
+          expect(available + delta).toBeGreaterThanOrEqual(0);
+          expect(writtenOffCredits).toBeGreaterThanOrEqual(0);
+          if (used <= reserved) {
+            // Over- or exactly-reserved: pure refund/no-op, nothing written off.
+            expect(writtenOffCredits).toBe(0);
+            expect(delta).toBe(reserved - used);
+          } else {
+            // Under-reserved: the shortfall is either collected (via -delta) or written off,
+            // and the collected part is clamped to what the balance can actually cover.
+            const shortfall = used - reserved;
+            // delta <= 0 here (a shortfall debit); Math.abs avoids a -0 vs +0 Object.is mismatch.
+            const collected = Math.abs(delta);
+            expect(collected + writtenOffCredits).toBe(shortfall);
+            expect(collected).toBe(Math.min(shortfall, available));
+          }
+        }
+      }
+    }
+  });
+
+  it('holds the floor for fractional credits (token-derived costs are not integers)', () => {
+    const fractional: Array<[number, number, number]> = [
+      [0.1, 0.30000000000000004, 0.15], // shortfall the balance only partly covers
+      [1.7, 2.9, 0.05],
+      [0.25, 0.25, 0.1], // exact settlement on a fractional basis
+      [0.2, 0.7, 0], // whole shortfall written off at zero balance
+      [3.3, 1.1, 0.5], // over-reserved: fractional refund
+    ];
+    for (const [reserved, used, available] of fractional) {
+      const { delta, writtenOffCredits } = computeSettlementDelta(reserved, used, available);
+      expect(available + delta).toBeGreaterThanOrEqual(0);
+      expect(writtenOffCredits).toBeGreaterThanOrEqual(0);
+      if (used > reserved) {
+        // Conservation only up to FP error here; its exact form is pinned by the integer sweep above.
+        expect(Math.abs(delta) + writtenOffCredits).toBeCloseTo(used - reserved, 10);
+      }
+    }
   });
 });
 

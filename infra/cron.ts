@@ -8,6 +8,7 @@ import {
   whatsNewHighlightsQueue,
   liveOpsTriageQueue,
   deepAgentWakeQueue,
+  dataLakeTaxonomyQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
@@ -640,7 +641,9 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     handler: 'apps/client/server/cron/dataLakeBatchReconcile.handler',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
-    link: [...allSecrets],
+    // dataLakeTaxonomyQueue: the stuck-batch backstop calls enqueueTaxonomyAnalysisIfWanted,
+    // which needs Resource.dataLakeTaxonomyQueue.url.
+    link: [...allSecrets, dataLakeTaxonomyQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },

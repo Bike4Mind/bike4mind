@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-07-28T23:36:59.144Z",
-  "notice": "Fallback defaults last maintained on 2026-07-28. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-07-29T13:51:57.149Z",
+  "notice": "Fallback defaults last maintained on 2026-07-29. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -1725,7 +1725,7 @@
         "type": "text",
         "name": "GPT-4",
         "contextWindow": 8192,
-        "maxOutputTokens": 8192,
+        "maxOutputTokens": 4096,
         "canStream": true,
         "supportsVision": false,
         "supportsTools": false,

@@ -303,6 +303,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findAllInIds(ids: string[]): Promise<IFabFileDocument[]>;
 
   /**
+   * Find files by ID with the heavy and URL-bearing fields projected out, for
+   * callers that need to know what a file IS without loading or linking to it.
+   * Includes soft-deleted files, so a still-referenced deleted attachment stays
+   * visible as such. Capped; `hasMore` reports truncation rather than hiding it.
+   * @param ids - The IDs of the files.
+   * @param cap - Maximum rows to return.
+   */
+  findMetadataByIds(ids: string[], cap?: number): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+
+  /**
+   * As `findMetadataByIds`, for the files a session currently holds (excludes
+   * soft-deleted). Capped; `hasMore` reports truncation rather than hiding it.
+   * @param sessionId - The session whose files to list.
+   * @param cap - Maximum rows to return.
+   */
+  findMetadataBySessionId(sessionId: string, cap?: number): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
+
+  /**
    * Delete many files in the given IDs.
    * @param ids - The IDs of the files.
    * @returns A promise that resolves to void.
@@ -315,6 +333,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @returns A promise that resolves to an array of files.
    */
   findAllByIds(ids: string[]): Promise<IFabFileDocument[]>;
+
+  /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
+  findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
 
   /**
    * Search for files.
@@ -468,12 +489,47 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * tags array, and clear `primaryTag` if it named one of them. Uses `$pull`, so concurrent
    * removals of DIFFERENT tags on the same file don't clobber each other the way a
    * read-filter-write `$set: { tags }` would. Absent names are a no-op (idempotent).
+   *
+   * Matching is case-SENSITIVE, unlike its `pushTagsByFabFileId` counterpart: names must be
+   * given exactly as stored, resolved from the loaded document rather than from user input.
+   * Passing a user's `foo` against a stored `Foo` removes nothing and reports no error.
    * @param fabFileId - The ID of the file.
    * @param tagNames - The exact tag names to remove. Empty is a no-op.
    * @returns Documents modified by the pull. The schema has timestamps, so this can be 1
    * even when no tag matched - do not read it as "a tag was removed".
    */
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
+
+  /**
+   * Atomically add each of `tagNames` to one file's tags array, skipping any already present.
+   * The add counterpart to `pullTagsByFabFileId`: one filtered `$push` per name, so concurrent
+   * adds of DIFFERENT tags on the same file don't clobber each other and a re-add is a no-op
+   * rather than a duplicate.
+   *
+   * Presence is compared by EXACT name, matching the pull half and the read path (which admits
+   * a tag by exact `$in`), and a new name is stored with the caller's casing, never lowercased.
+   * Case-insensitive matching here would be wrong, not merely stricter: a file carrying some
+   * other casing of a lake's meta-tag is not a member of that lake, so the canonical tag has to
+   * be insertable alongside it. Callers that want case-insensitive semantics resolve the stored
+   * spelling from the document first, as the tag-toggle path does. A filter is not a unique
+   * index, so two SIMULTANEOUS adds of one name can both pass; `pullTagsByFabFileId` removes both.
+   * @param fabFileId - The ID of the file.
+   * @param tagNames - Tag names to add, deduplicated. Empty is a no-op.
+   * @param strength - Relevance weight stored on each new tag. Defaults to 0; the data-lake
+   * membership meta-tag is written at 1.
+   * @returns The number of tags actually inserted. Unlike the pull half this IS meaningful: a
+   * name already present fails its filter, so it neither counts nor bumps updatedAt.
+   */
+  pushTagsByFabFileId(fabFileId: string, tagNames: string[], strength?: number): Promise<number>;
+
+  /**
+   * Bulk-writes each file's full tags array in a single round trip via bulkWrite, instead of
+   * one findOneAndUpdate per file. Used by applyTaxonomySuggestions, where a batch can hold
+   * thousands of files and one write per file risks exceeding the caller's request timeout.
+   * @param updates - Each file's id and its complete resolved tags array.
+   * @returns Number of documents modified.
+   */
+  bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number>;
 
   /**
    * Find files by content hashes for a given user (deduplication).
@@ -501,6 +557,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * find().length). Counts only live files (not archived, not deleted).
    */
   computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }>;
+  /**
+   * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
+   * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
+   * stored stats. Prefer this over counting `<prefix>:` tag matches, which misses files that
+   * carry only the membership tag and over-counts multi-tagged ones.
+   */
+  countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>>;
   /** Soft-archive (reversible) all live member files. Returns affected count. */
   archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
   /** Reverse archive for all archived member files. */

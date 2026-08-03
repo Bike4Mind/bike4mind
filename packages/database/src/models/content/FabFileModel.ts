@@ -1,4 +1,5 @@
 import {
+  DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   IFabFileChunkDocument,
   IFabFileChunkRepository,
@@ -8,12 +9,37 @@ import {
   KnowledgeType,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
-import { convertIds, softDeletePlugin } from '../../utils/mongo';
+import { convertId, convertIds, softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
 import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
+
+/**
+ * "not a lake membership tag", derived from the one constant rather than spelled out, so a change
+ * to the namespace cannot leave a counter behind. Both tag counters exclude it: a meta-tag is
+ * membership, never content, so it must not appear in the tag tree or inflate a prefix's count.
+ */
+const NOT_META_TAG = { $not: new RegExp(`^${DATALAKE_TAG_PREFIX}`) };
+
+/**
+ * Trim, then drop prefixes that cannot be anchored into a meaningful regex. A blank entry
+ * contributes an empty alternation, so `['acme:', '']` becomes `^(acme:|)` and matches every tag
+ * name - one bad entry would return the caller's entire non-deleted tag cloud. An all-blank list
+ * would likewise become `^()`.
+ *
+ * The rule is `normalizeTagPrefix`'s, applied here so a direct caller gets the same answer as the
+ * lake-resolving ones: trim, and require the trailing colon. Trimming matters because a padded
+ * `' acme:'` builds `^( acme:)` and matches nothing, so the lake reads as empty while its files
+ * stay browsable. The colon matters because a bare `acme` would match `acmecorp:` tags - a
+ * different lake's content.
+ *
+ * NOTE for `countDataLakeUniqueFilesByPrefix`: `byPrefix` is therefore keyed by the NORMALIZED
+ * prefix, so a consumer indexing it with a raw stored value must normalize too.
+ */
+const usableTagPrefixes = (tagPrefixes: string[]): string[] =>
+  tagPrefixes.map(p => p.trim()).filter(p => p.length > 0 && p.endsWith(':'));
 
 interface IFabFileChunkModel extends Model<IFabFileChunkDocument> {}
 
@@ -132,6 +158,17 @@ export const FabFileChunk =
 
 export const fabFileChunkRepository = new FabFileChunkRepository(FabFileChunk);
 
+/**
+ * Projection for metadata-only reads. Drops the heavy payload fields (matching
+ * the exclusion used by `executeSearch`) AND the two URL-bearing fields, so a
+ * metadata read can never carry a downloadable link even if a caller later
+ * forwards the document verbatim.
+ */
+const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUrl: 0, fileUrl: 0 } as const;
+
+/** Row cap for unbounded metadata listings. */
+const METADATA_PAGE_CAP = 500;
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -221,6 +258,65 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toObject());
   }
 
+  /**
+   * Metadata-only fetch for a set of ids. The heavy fields AND the URL-bearing
+   * ones are projected out (see METADATA_ONLY_PROJECTION), so a caller that only
+   * needs to know *what* was attached never loads the file bodies and cannot
+   * accidentally hand out a download URL.
+   *
+   * Invalid ObjectIds are dropped rather than throwing a BSONError, since the ids
+   * come from a session's `knowledgeIds` and can outlive the file.
+   *
+   * Soft-deleted files ARE returned here, via the plugin's explicit
+   * `includeDeleted` opt-in: an id handed to this method comes from a reference
+   * that outlived the file (e.g. `session.knowledgeIds`), and "this attachment was
+   * deleted at T" is the answer the caller needs - silently dropping the row would
+   * look identical to the file never having existed. Callers should surface
+   * `deletedAt`. This deliberately differs from `findMetadataBySessionId` below,
+   * which lists what a session currently holds; do not "fix" one to match the other.
+   *
+   * Bounded like its sibling: the id list is caller-supplied and a session can
+   * accumulate knowledge references without limit, so an uncapped `$in` would size
+   * both the query and the response off whatever that array grew to. `hasMore`
+   * reports the truncation so a caller can say the list is partial rather than
+   * under-reporting it as complete.
+   */
+  async findMetadataByIds(
+    ids: string[],
+    cap = METADATA_PAGE_CAP
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return { data: [], hasMore: false };
+    const result = await this.fabFileModel
+      .find({ _id: { $in: convertIds(validIds.slice(0, cap + 1)) } }, METADATA_ONLY_PROJECTION)
+      .setOptions({ includeDeleted: true })
+      .limit(cap + 1);
+    const hasMore = result.length > cap;
+    const rows = hasMore ? result.slice(0, cap) : result;
+    return { data: rows.map(d => d.toJSON()), hasMore };
+  }
+
+  /**
+   * As `findMetadataByIds`, for the files a session currently holds. Excludes
+   * soft-deleted files - see the note above on why the two differ.
+   *
+   * Bounded at METADATA_PAGE_CAP rows; a session with more uploads than that is
+   * truncated rather than returning an unbounded list. `hasMore` lets the caller
+   * say so instead of silently under-reporting.
+   */
+  async findMetadataBySessionId(
+    sessionId: string,
+    cap = METADATA_PAGE_CAP
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }> {
+    const result = await this.fabFileModel
+      .find({ sessionId, deletedAt: null }, METADATA_ONLY_PROJECTION)
+      .sort({ createdAt: 1, _id: 1 })
+      .limit(cap + 1);
+    const hasMore = result.length > cap;
+    const rows = hasMore ? result.slice(0, cap) : result;
+    return { data: rows.map(d => d.toJSON()), hasMore };
+  }
+
   async deleteManyInIds(ids: string[]) {
     await this.fabFileModel.deleteMany({ _id: { $in: ids } });
   }
@@ -251,6 +347,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   async findByUserId(userId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ userId, deletedAt: null });
+    return result.map(d => d.toJSON());
+  }
+
+  async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
+    const result = await this.fabFileModel.find({ batchId, deletedAt: null });
     return result.map(d => d.toJSON());
   }
 
@@ -333,6 +434,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       scopedTagPrefixes?: string[];
     }
   ): Promise<{ tag: string; count: number }[]> {
+    const usablePrefixes = usableTagPrefixes(tagPrefixes);
+    if (usablePrefixes.length === 0) return [];
+
     const ownershipFilter = options ? { $or: buildOwnershipConditions(userId, options) } : { userId };
     const sessionFilter = {
       $or: [
@@ -342,7 +446,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       ],
     };
 
-    const prefixPattern = tagPrefixes.map(p => escapeRegex(p)).join('|');
+    const prefixPattern = usablePrefixes.map(p => escapeRegex(p)).join('|');
     const prefixRegex = new RegExp(`^(${prefixPattern})`);
 
     const result = await this.fabFileModel.aggregate([
@@ -363,7 +467,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         },
       },
       { $unwind: '$tags' },
-      { $match: { $and: [{ 'tags.name': { $regex: prefixRegex } }, { 'tags.name': { $not: /^datalake:/ } }] } },
+      { $match: { $and: [{ 'tags.name': { $regex: prefixRegex } }, { 'tags.name': NOT_META_TAG }] } },
       { $group: { _id: '$tags.name', count: { $sum: 1 } } },
       { $project: { tag: '$_id', count: 1, _id: 0 } },
     ]);
@@ -387,11 +491,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       scopedTagPrefixes?: string[];
     }
   ): Promise<{ total: number; byPrefix: Record<string, number> }> {
-    // Defense-in-depth: an empty prefix list builds `^()`, which matches every
-    // string and would return the user's entire non-deleted scope as the "total".
-    // The endpoint already early-returns when no lakes are accessible, but guard
-    // here too so a direct caller can't accidentally over-count.
-    if (tagPrefixes.length === 0) return { total: 0, byPrefix: {} };
+    const usablePrefixes = usableTagPrefixes(tagPrefixes);
+    if (usablePrefixes.length === 0) return { total: 0, byPrefix: {} };
 
     const ownershipFilter = options ? { $or: buildOwnershipConditions(userId, options) } : { userId };
     const sessionFilter = {
@@ -408,19 +509,23 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // One indexed countDocuments per prefix (few lakes), plus one for the combined total.
     // $elemMatch on the anchored prefix regex lets MongoDB use the tags.name index and
     // counts each file once regardless of how many matching tags it carries.
-    const anyPrefixRegex = new RegExp(`^(${tagPrefixes.map(p => escapeRegex(p)).join('|')})`);
+    //
+    const anyPrefixRegex = new RegExp(`^(${usablePrefixes.map(p => escapeRegex(p)).join('|')})`);
     const [total, ...prefixCounts] = await Promise.all([
-      this.fabFileModel.countDocuments({ ...baseMatch, tags: { $elemMatch: { name: { $regex: anyPrefixRegex } } } }),
-      ...tagPrefixes.map(prefix =>
+      this.fabFileModel.countDocuments({
+        ...baseMatch,
+        tags: { $elemMatch: { name: { $regex: anyPrefixRegex, ...NOT_META_TAG } } },
+      }),
+      ...usablePrefixes.map(prefix =>
         this.fabFileModel.countDocuments({
           ...baseMatch,
-          tags: { $elemMatch: { name: { $regex: new RegExp(`^${escapeRegex(prefix)}`) } } },
+          tags: { $elemMatch: { name: { $regex: new RegExp(`^${escapeRegex(prefix)}`), ...NOT_META_TAG } } },
         })
       ),
     ]);
 
     const byPrefix: Record<string, number> = {};
-    tagPrefixes.forEach((prefix, i) => {
+    usablePrefixes.forEach((prefix, i) => {
       byPrefix[prefix] = prefixCounts[i];
     });
     return { total, byPrefix };
@@ -522,6 +627,21 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
+  async bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number> {
+    if (updates.length === 0) return 0;
+
+    const result = await this.fabFileModel.bulkWrite(
+      updates.map(({ id, tags }) => ({
+        updateOne: {
+          filter: { _id: convertId(id) },
+          update: { $set: { tags } },
+        },
+      })),
+      { ordered: false, session: this._txn ?? undefined }
+    );
+    return result.modifiedCount;
+  }
+
   /**
    * Atomically mark a file as failed only if it isn't already errored.
    * Returns true if THIS call performed the marking (i.e. first failure), false on retry.
@@ -586,6 +706,27 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1 } },
     ]);
     return agg ?? { fileCount: 0, totalSizeBytes: 0 };
+  }
+
+  /**
+   * Distinct live file count per lake, keyed by `datalakeTag`. Browse surfaces used to size a
+   * lake from `<prefix>:` tag matches, which reads 0 for a lake whose files carry only the
+   * membership tag - the shape the upload wizard and bulk ingest produce - and over-counts a
+   * file carrying several taxonomy tags. Same predicate and live-file filter as
+   * computeDataLakeStats, so a displayed count and a lake's stored stats cannot disagree.
+   */
+  async countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>> {
+    if (scopes.length === 0) return {};
+    const counts = await Promise.all(
+      scopes.map(scope =>
+        this.fabFileModel.countDocuments({
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+        })
+      )
+    );
+    return Object.fromEntries(scopes.map((scope, i) => [scope.datalakeTag, counts[i]]));
   }
 
   async archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
@@ -669,6 +810,31 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           'tags.$.name': newTag,
         },
       }
+    );
+    return result.modifiedCount;
+  }
+
+  async pushTagsByFabFileId(fabFileId: string, tagNames: string[], strength = 0): Promise<number> {
+    // Skip the round trip: the batch caller hits this whenever a file has nothing to add.
+    if (tagNames.length === 0) return 0;
+    // Each filter below is evaluated against the STORED document, not against the other ops, so
+    // a name repeated within one call would otherwise pass its filter twice and insert twice.
+    const names = [...new Set(tagNames)];
+    // One filtered $push per name, the atomic counterpart to the $pull above. Not $addToSet:
+    // it dedupes on whole-element equality, so { name: 'x', strength: 1 } would land alongside
+    // an existing { name: 'x', strength: 0 }. Not a single $each push either - that has no
+    // per-element guard, so one already-present name either poisons the batch or duplicates.
+    const result = await this.fabFileModel.bulkWrite(
+      names.map(name => ({
+        updateOne: {
+          // Exact names, mirroring the $pull above and the read path, which matches a tag by
+          // exact `$in`. A case-insensitive guard here would be actively wrong: a file carrying
+          // some other casing of a data-lake meta-tag is NOT a member of that lake, so the
+          // canonical tag has to be insertable alongside it.
+          filter: { _id: fabFileId, 'tags.name': { $ne: name } },
+          update: { $push: { tags: { name, strength } } },
+        },
+      }))
     );
     return result.modifiedCount;
   }

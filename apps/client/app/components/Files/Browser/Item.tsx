@@ -50,7 +50,7 @@ const ImageThumbnail: FC<{ url: string; fileName: string; size: number }> = ({ u
   );
 };
 
-/** Inline audio player for generated TTS / sound-effect files. Stops click
+/** Inline audio player for generated audio files (TTS, sound-effect, music). Stops click
  *  propagation so using the transport controls doesn't toggle row selection. */
 const AudioPlayer: FC<{ url: string }> = ({ url }) => (
   <Box
@@ -453,7 +453,7 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
             </Typography>
           </Box>
 
-          {/* Inline audio player for generated TTS / sound-effect files */}
+          {/* Inline audio player for generated audio files (TTS, sound-effect, music) */}
           {isAudioMimeType(file.mimeType) && (file.fileUrl || file.presignedUrl) && (
             <Box sx={{ width: '100%', maxWidth: 320 }}>
               <AudioPlayer url={(file.fileUrl || file.presignedUrl)!} />
@@ -789,7 +789,7 @@ const GridItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
             })}
           </Typography>
 
-          {/* Inline audio player for generated TTS / sound-effect files */}
+          {/* Inline audio player for generated audio files (TTS, sound-effect, music) */}
           {isAudioMimeType(file.mimeType) && (file.fileUrl || file.presignedUrl) && (
             <Box sx={{ width: '100%', px: 1, mt: 1 }}>
               <AudioPlayer url={(file.fileUrl || file.presignedUrl)!} />

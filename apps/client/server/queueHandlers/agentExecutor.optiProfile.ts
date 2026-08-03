@@ -16,10 +16,18 @@
 import type { ResolvedOrchestrationProfile } from './agentExecutor.orchestrationProfile';
 
 /**
- * Tools offered to the optimizer agent. The four `optihashi_*` tools resolve from the premium
- * tool map already merged into `externalTools`; `web_search` / `current_datetime` are core
- * generics (verified registered in `b4m-core/services/src/llm/tools/index.ts`). Kept deliberately
- * small so the loop stays on the model->formulate->solve->advance task.
+ * Tools offered to the optimizer agent. The five `optihashi_*` tools resolve from the premium
+ * tool map already merged into `externalTools`; the rest are core generics (verified registered
+ * in `b4m-core/services/src/llm/tools/index.ts`). Kept deliberately small so the loop stays on
+ * the model->formulate->solve->advance task.
+ *
+ * `retrieve_knowledge_content` is load-bearing rather than a convenience: the agent path injects
+ * attached files as METADATA ONLY and points the agent at this tool to read them
+ * (`agentExecutor.firstIterationQuery.ts`). Without it, a user who attaches a file to an
+ * optimizer chat gets "I can't access the attached file" even though the file ingested fine.
+ * `search_knowledge_base` is deliberately NOT here - reading an explicitly attached file keeps
+ * the loop on task, whereas open-ended lake search invites it off task, and that search is
+ * still available on the chat path.
  */
 export const OPTI_AGENT_TOOLS: string[] = [
   'optihashi_decompose',
@@ -27,6 +35,7 @@ export const OPTI_AGENT_TOOLS: string[] = [
   'optihashi_edit_problem',
   'optihashi_schedule',
   'optihashi_solve',
+  'retrieve_knowledge_content',
   'web_search',
   'current_datetime',
 ];

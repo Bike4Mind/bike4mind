@@ -177,11 +177,15 @@ function resolveToolStatus(toolName: string, data: any): string | null {
 /**
  * Apply a partial status-update change set onto the live quest object.
  *
- * Most fields are overwritten wholesale via Object.assign, but two fields
+ * Most fields are overwritten wholesale via Object.assign, but three fields
  * accrete across a single turn and MUST merge instead of overwrite:
  *   - promptMeta.citables: accreted by web_search / knowledge retrieval; merged
  *     and deduped by stable identity (id, then url, then title) to avoid duplicate
  *     "Sources" chips and React duplicate-key warnings.
+ *   - promptMeta.warnings: several independent producers append here (response
+ *     truncation, knowledge-base partial results), each sending only its own
+ *     string, so a wholesale overwrite drops whichever landed first. Deduped by
+ *     exact string since the same condition can be reported more than once.
  *   - images: each image_generation / edit_image tool call sends only its own
  *     output through statusUpdate, so a wholesale overwrite collapses an N-image
  *     request down to just the last call's image. Merge-append with dedup;
@@ -205,10 +209,14 @@ export function applyQuestStatusChanges(
       seenCitableKeys.add(key);
       return true;
     });
+    const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
     quest.promptMeta = {
       ...quest.promptMeta,
       ...changedPromptMeta,
       citables: dedupedCitables,
+      // Omit the key entirely when neither side has warnings, so an untouched quest is not
+      // given an empty array it never had.
+      ...(mergedWarnings.length ? { warnings: [...new Set(mergedWarnings)] } : {}),
     };
   } else if (changedPromptMeta) {
     quest.promptMeta = changedPromptMeta;
@@ -352,16 +360,45 @@ export class ToolBuilder {
     // Tool schemas are populated by the GET /api/mcp-servers endpoint and connect/OAuth flows.
     // callTool connects lazily via Lambda only when the LLM actually invokes a tool.
     for (const server of mcpServers) {
-      if (server.toolSchemas?.length) {
-        const callTool = async (toolName: string, toolArgs: unknown) => {
-          const client = await this.deps.getMcpClient(server);
-          const result = await client.callTool(toolName, toolArgs);
-          return result;
-        };
-        mcpToolsByServer[server.name] = generateMcpToolsFromCache(server.name, server.toolSchemas, callTool);
-        logger.info(`🛠️ [MCP] Loaded ${server.toolSchemas.length} tool schemas for ${server.name} from DB`);
-      } else {
-        logger.warn(`🛠️ [MCP] No tool schemas found for ${server.name} — skipping (reconnect server to populate)`);
+      // Isolate per server: a malformed cached schema must not drop tools for every other server.
+      try {
+        let schemas = server.toolSchemas;
+
+        // If cached schemas are missing, attempt a live fetch so the LLM still gets
+        // the tools for this request rather than silently ignoring the server.
+        if (!schemas?.length) {
+          try {
+            logger.info(`🛠️ [MCP] No cached tool schemas for ${server.name} - fetching live`);
+            const client = await this.deps.getMcpClient(server);
+            const liveTools = await client.getTools();
+            if (Array.isArray(liveTools) && liveTools.length > 0) {
+              schemas = liveTools;
+              // Persist so future requests don't need a live fetch
+              await this.deps.db.mcpServers.update({
+                id: server.id,
+                tools: liveTools.map((t: { name: string }) => t.name),
+                toolSchemas: liveTools,
+              });
+              logger.info(`🛠️ [MCP] Live-fetched and cached ${liveTools.length} tool schemas for ${server.name}`);
+            }
+          } catch (fetchError) {
+            logger.warn(`🛠️ [MCP] Live tool fetch failed for ${server.name} - skipping:`, fetchError);
+          }
+        }
+
+        if (schemas?.length) {
+          const callTool = async (toolName: string, toolArgs: unknown) => {
+            const client = await this.deps.getMcpClient(server);
+            const result = await client.callTool(toolName, toolArgs);
+            return result;
+          };
+          mcpToolsByServer[server.name] = generateMcpToolsFromCache(server.name, schemas, callTool);
+          logger.info(`🛠️ [MCP] Loaded ${schemas.length} tool schemas for ${server.name}`);
+        } else {
+          logger.warn(`🛠️ [MCP] No tool schemas found for ${server.name} - skipping (reconnect server to populate)`);
+        }
+      } catch (serverError) {
+        logger.error(`🛠️ [MCP] Failed to build tools for ${server.name} - skipping this server:`, serverError);
       }
     }
 

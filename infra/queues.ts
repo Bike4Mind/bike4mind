@@ -420,6 +420,12 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
         actions: ['rekognition:DetectModerationLabels'],
         resources: ['*'],
       },
+      {
+        // generateAndSend resolves the agent's pinned model, which emits
+        // Lumina5/ModelSunset. PutMetricData takes no resource scope.
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
     ],
     copyFiles: [
       {
@@ -629,6 +635,36 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
     timeout: '10 minutes',
     vpc: lambdaVpc,
     link: [...allSecrets],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Data Lake Taxonomy Analysis Queue
+// Triggered once per batch (from finalizeBatchIfComplete) when the wizard opted into
+// background AI tag suggestion. A single bounded OpenAI call over already-uploaded
+// FabFiles - no buckets needed (metadata-only sampling in v1), but links websocketApi
+// so the handler can push `data_lake_batch_progress` taxonomyStatus updates live.
+const dataLakeTaxonomyQueueDLQ = new sst.aws.Queue('dataLakeTaxonomyQueueDLQ', {});
+const dataLakeTaxonomyQueue = new sst.aws.Queue('dataLakeTaxonomyQueue', {
+  visibilityTimeout: '6 minutes',
+  dlq: {
+    queue: dataLakeTaxonomyQueueDLQ.arn,
+    retry: 2, // LLM calls cost money; the stuck-job reconciler is the backstop for the rest.
+  },
+});
+const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/dataLakeTaxonomyAnalysis.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi],
     logging: {
       retention: '3 days',
     },
@@ -1246,6 +1282,7 @@ export {
   webhookDeliveryQueue,
   questExportQueue,
   dataLakeCleanupQueue,
+  dataLakeTaxonomyQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1272,6 +1309,7 @@ export {
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
   dataLakeCleanupQueueDLQ,
+  dataLakeTaxonomyQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1300,6 +1338,7 @@ export {
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
   dataLakeCleanupQueueSubscription,
+  dataLakeTaxonomyQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,

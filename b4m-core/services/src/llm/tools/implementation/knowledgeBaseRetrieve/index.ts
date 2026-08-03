@@ -2,6 +2,8 @@ import { ToolDefinition } from '../../base/types';
 import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
+import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 
 interface KnowledgeBaseRetrieveParams {
   file_id?: string;
@@ -33,6 +35,9 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
     // eager models still over-retrieve, so cap it and steer them back to composing.
     let retrieveCallCount = 0;
     const MAX_RETRIEVES = 2;
+    // Per-completion set of `datalake:` tags whose lake prompt has already been injected this turn,
+    // so multiple retrieve calls never restate the same lake's instructions (#1108).
+    const injectedLakeTags = new Set<string>();
     return {
       toolFn: async value => {
         const params = value as KnowledgeBaseRetrieveParams;
@@ -270,7 +275,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           }
 
           const header = `Retrieved content from ${retrievedFiles.length} of ${files.length} document(s):\n`;
-          return header + '\n' + sections.join('\n\n---\n\n');
+          const result = header + '\n' + sections.join('\n\n---\n\n');
+
+          // Retrieval-scoped lake-prompt injection (#1108): prepend the operating instructions of
+          // the trusted lakes this content came from. Skipped for the agent-scoped branch, which
+          // must never consult owner-wide access or imply a wider corpus (see kbScope).
+          if (scope) return result;
+          const datalakeTags = datalakeTagsFrom(retrievedFiles.flatMap(f => f.tags?.map(t => t.name) ?? []));
+          return prependRetrievedLakePrompts(context, result, datalakeTags, injectedLakeTags);
         } catch (error) {
           context.logger.error('❌ Knowledge Retrieve: Error during retrieval:', error);
           return 'An error occurred while retrieving document content. Please try again.';

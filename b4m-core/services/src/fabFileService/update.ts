@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import {
+  IDataLakeRepository,
   IFabFileDocument,
   IFabFileRepository,
   IUserDocument,
@@ -9,6 +10,7 @@ import {
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
+import { reconcileLakeTags } from './reconcileLakeTags';
 
 import { z } from 'zod';
 
@@ -40,8 +42,14 @@ type UpdateFabFileParameters = z.infer<typeof updateFabFileSchema>;
 
 interface UpdateFabFileAdapters {
   db: {
-    fabFiles: Pick<IFabFileRepository, 'shareable' | 'update'>;
+    fabFiles: Pick<
+      IFabFileRepository,
+      'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
+    >;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'find'>;
   };
+  /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void };
   storage: {
     upload: (filePath: string, content: string, metadata?: Record<string, unknown>) => Promise<unknown>;
     generateSignedUrl: (path: string, expireInSeconds: number) => Promise<string>;
@@ -57,7 +65,7 @@ interface UpdateFabFileAdapters {
 export const updateFabFile = async (
   user: IUserDocument,
   parameters: UpdateFabFileParameters,
-  { db, storage }: UpdateFabFileAdapters
+  { db, logger, storage }: UpdateFabFileAdapters
 ) => {
   const { id, fileContent, ...params } = secureParameters(parameters, updateFabFileSchema);
 
@@ -90,9 +98,24 @@ export const updateFabFile = async (
     fabFile.fileUrlExpireAt = new Date(Date.now() + EXPIRE_IN_SECONDS * 1000);
   }
 
+  // A tag replacement can join or leave a data lake, which is more than an array write: leaving
+  // has to clear the lake's prefixed content tags as well, and both directions have to leave the
+  // lake's stats correct. Resolved (and gated) BEFORE the write below, applied after it.
+  const lakeTags =
+    params.tags === undefined
+      ? undefined
+      : await reconcileLakeTags(
+          { userId: user.id, isAdmin: !!user.isAdmin },
+          id,
+          (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
+          params.tags,
+          { db, logger }
+        );
+
   const updatedFabFile: Partial<IFabFileDocument> = {
     ...fabFile,
     ...params,
+    ...(lakeTags ? { tags: lakeTags.tagsToPersist } : {}),
     systemPriority: params.system && params.systemPriority === undefined ? 999 : params.systemPriority,
     updatedAt: new Date(),
   };
@@ -110,6 +133,17 @@ export const updateFabFile = async (
   }
 
   await db.fabFiles.update(updatedFabFile);
+
+  // Membership writes land on the persisted array, so they cannot be clobbered by the write
+  // above.
+  if (lakeTags) {
+    await lakeTags.commit();
+    // Leaving a lake also clears its prefixed content tags, so the array assembled above is no
+    // longer what is stored. Report what a subsequent GET would: a caller trusting a response
+    // that still lists tags this call just removed draws the wrong conclusion.
+    const persisted = await db.fabFiles.findById(id);
+    if (persisted) updatedFabFile.tags = persisted.tags;
+  }
 
   return updatedFabFile;
 };

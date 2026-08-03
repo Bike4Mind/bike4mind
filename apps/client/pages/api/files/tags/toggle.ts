@@ -25,19 +25,15 @@ const handler = baseApi().post(
       }
     );
 
-    const result = await fabFilesService.toggleTags(
-      req.user.id,
-      {
-        ...(req.body as any),
+    const result = await fabFilesService.toggleTags(req.user.id, req.body, {
+      db: {
+        fabFiles: fabFileRepository,
+        fileTags: fileTagRepository,
+        dataLakes: dataLakeRepository,
+        users: userRepository,
       },
-      {
-        db: {
-          fabFiles: fabFileRepository,
-          fileTags: fileTagRepository,
-          users: userRepository,
-        },
-      }
-    );
+      logger: req.logger,
+    });
 
     return res.json(result);
   })

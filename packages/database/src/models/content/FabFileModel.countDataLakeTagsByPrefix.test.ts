@@ -16,6 +16,7 @@ const makeFile = (overrides: {
   deleted?: boolean;
   archived?: boolean;
   fileName?: string;
+  users?: { userId: string; permissions: string[] }[];
 }) => {
   const tagNames = [...(overrides.tags ?? [])];
   if (overrides.curatedNotebook) tagNames.push('curated-notebook');
@@ -27,11 +28,16 @@ const makeFile = (overrides: {
     ...(overrides.sessionId !== undefined ? { sessionId: overrides.sessionId } : {}),
     ...(overrides.deleted ? { deletedAt: new Date() } : {}),
     ...(overrides.archived ? { archivedAt: new Date() } : {}),
+    ...(overrides.users ? { users: overrides.users } : {}),
   });
 };
 
-const countOf = async (tag: string, prefixes: string[]) => {
-  const counts = await fabFileRepository.countDataLakeTagsByPrefix(USER, prefixes);
+const countOf = async (
+  tag: string,
+  prefixes: string[],
+  options?: Parameters<typeof fabFileRepository.countDataLakeTagsByPrefix>[2]
+) => {
+  const counts = await fabFileRepository.countDataLakeTagsByPrefix(USER, prefixes, options);
   return counts.find(c => c.tag === tag)?.count ?? 0;
 };
 
@@ -52,6 +58,22 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
     const counts = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:']);
 
     expect(counts.some(c => c.tag === 'invoices')).toBe(false);
+  });
+
+  it('returns nothing for a file carrying only the datalake meta-tag with no prefixed tag', async () => {
+    await makeFile({ tags: ['datalake:orga:acme'] });
+
+    expect(await countOf('acme:uncategorized', ['acme:'])).toBe(0);
+  });
+
+  // datalake: meta-tags are membership markers, not content tags, so the tree must not list them.
+  it('omits the datalake meta-tag from the tree even when a requested prefix would match it', async () => {
+    await makeFile({ tags: ['datalake:acme:handbook', 'acme:industry'] });
+
+    const counts = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:', 'datalake:']);
+
+    expect(counts.some(c => c.tag === 'datalake:acme:handbook')).toBe(false);
+    expect(counts.some(c => c.tag === 'acme:industry')).toBe(true);
   });
 
   // The tag tree these counts build sits beside an article list that filters archivedAt: null.
@@ -84,13 +106,77 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
     expect(await countOf('acme:industry', ['acme:'])).toBe(0);
   });
 
-  // datalake: meta-tags are membership markers, not content tags, so the tree must not list them.
-  it('omits the datalake meta-tag from the tree', async () => {
-    await makeFile({ tags: ['datalake:acme:handbook', 'acme:industry'] });
+  describe('ownership scoping', () => {
+    it('excludes another user file from the scoped-prefix arm', async () => {
+      await makeFile({ userId: 'other-user', tags: ['acme:uncategorized'] });
 
-    const counts = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:', 'datalake:']);
+      const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], {
+        scopedTagPrefixes: ['acme:'],
+      });
 
-    expect(counts.some(c => c.tag === 'datalake:acme:handbook')).toBe(false);
-    expect(counts.some(c => c.tag === 'acme:industry')).toBe(true);
+      expect(result).toEqual([]);
+    });
+
+    it('includes another user file via the exact data-lake meta-tag arm', async () => {
+      await makeFile({ userId: 'other-user', tags: ['datalake:orga:acme', 'acme:uncategorized'] });
+
+      const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], {
+        dataLakeTags: ['datalake:orga:acme'],
+      });
+
+      expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
+    });
+
+    it('includes a file shared with our user via the scoped-prefix arm (base access AND)', async () => {
+      await makeFile({
+        userId: 'other-user',
+        tags: ['acme:uncategorized'],
+        users: [{ userId: USER, permissions: ['read'] }],
+      });
+
+      const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], {
+        scopedTagPrefixes: ['acme:'],
+      });
+
+      expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
+    });
+  });
+
+  it('returns nothing for an empty prefix list', async () => {
+    await makeFile({ tags: ['acme:uncategorized'] });
+
+    const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, []);
+
+    expect(result).toEqual([]);
+  });
+
+  it('does not let a blank entry in a non-empty prefix list match every tag', async () => {
+    // Without the usableTagPrefixes guard, `['acme:', '']` becomes the regex `^(acme:|)`,
+    // which matches any tag name - including the unrelated one below.
+    await makeFile({ tags: ['acme:uncategorized', 'personal-note'] });
+
+    const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:', '']);
+
+    expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
+  });
+
+  it("ignores a colon-less prefix, which would reach another lake's namespace", async () => {
+    // `acme` without its colon anchors to `^acme` and would sweep in `acmecorp:` tags - a
+    // different lake's content. usableTagPrefixes applies normalizeTagPrefix's rule, so it drops.
+    await makeFile({ tags: ['acmecorp:secret'] });
+
+    const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme']);
+
+    expect(result).toEqual([]);
+  });
+
+  it('counts a padded prefix, which builds no usable regex untrimmed', async () => {
+    // Both counters share usableTagPrefixes; the sibling suite pins this too, so a future edit
+    // dropping the trim is caught on either side rather than only one.
+    await makeFile({ tags: ['acme:uncategorized'] });
+
+    const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, [' acme:']);
+
+    expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
   });
 });
