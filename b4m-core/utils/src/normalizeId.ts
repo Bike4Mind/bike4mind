@@ -18,7 +18,11 @@ export function normalizeId(value: unknown): string | undefined {
     // Populated document: prefer its ObjectId `_id` (recurse), then a virtual `id` getter.
     if (obj._id != null) return normalizeId(obj._id);
     if (typeof obj.id === 'string') return obj.id || undefined;
+    // Unrecognized object (e.g. an array) is not an id - never stringify it to junk
+    // like "1,2,3" or "[object Object]".
+    return undefined;
   }
+  // Non-object primitive (e.g. a numeric id) - stringify.
   const s = String(value);
-  return s && s !== '[object Object]' ? s : undefined;
+  return s || undefined;
 }
