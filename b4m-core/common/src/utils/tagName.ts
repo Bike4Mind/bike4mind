@@ -47,39 +47,31 @@ export const isDataLakeTagName = (raw: string): boolean => foldTagName(raw).star
  * yields a chip per matching DOCUMENT, which is where the phantom came from.
  */
 export const matchTagDocument = <T extends { name: string }>(name: string, docs: readonly T[]): T | undefined => {
-  const exact = docs.find(doc => doc.name === name);
-  if (exact) return exact;
-
   const folded = foldTagName(name);
+  // Every exact match also folds equal, so one pass over the candidates covers both arms.
   const candidates = docs.filter(doc => foldTagName(doc.name) === folded);
-  return candidates.length === 1 ? candidates[0] : undefined;
+  return candidates.find(doc => doc.name === name) ?? (candidates.length === 1 ? candidates[0] : undefined);
 };
 
 /**
- * Resolve every tag name stored on a file to its document, keeping the names nothing claims so a
- * caller can decide what to do with them (the shared-files view synthesizes a placeholder chip).
- *
- * Documents are deduped by identity: a file carrying both `Foo` and `foo` while only `foo` exists
- * as a document resolves both names to it and must still render one chip.
+ * The documents behind the tag names stored on one file, deduped by identity: a file carrying both
+ * `Foo` and `foo` while only `foo` exists as a document resolves both names to it and must still
+ * render one chip. A name no document claims is dropped, which is the whole point - see
+ * matchTagDocument.
  */
 export const resolveFileTagDocs = <T extends { name: string }>(
   fileTagNames: readonly string[],
   docs: readonly T[]
-): { matched: T[]; unmatchedNames: string[] } => {
+): T[] => {
   const matched: T[] = [];
   const seen = new Set<T>();
-  const unmatchedNames: string[] = [];
 
   for (const name of fileTagNames) {
     const doc = matchTagDocument(name, docs);
-    if (!doc) {
-      unmatchedNames.push(name);
-      continue;
-    }
-    if (seen.has(doc)) continue;
+    if (!doc || seen.has(doc)) continue;
     seen.add(doc);
     matched.push(doc);
   }
 
-  return { matched, unmatchedNames };
+  return matched;
 };

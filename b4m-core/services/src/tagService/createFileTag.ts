@@ -18,9 +18,6 @@ interface TagCreateFileTagAdapters {
   };
 }
 
-const isDuplicateKeyError = (error: unknown): boolean =>
-  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
-
 /**
  * Find-or-create a file tag by name, under the shared collision rule (see tagName): a name the user
  * already holds in ANY casing resolves to that document instead of minting a second one.
@@ -67,10 +64,9 @@ export const createFileTag = async (
   try {
     return await adapters.db.fileTags.create(build);
   } catch (error) {
-    // A concurrent creation of the same exact name between the lookup and this write. Converge on
-    // whatever landed rather than failing a background task; the caller asked for the tag to exist,
-    // and it does.
-    if (isDuplicateKeyError(error)) {
+    // E11000: a concurrent create took the exact name. Converge on whatever landed rather than
+    // failing a background task - the caller asked for the tag to exist, and it does.
+    if ((error as { code?: number })?.code === 11000) {
       const raced = await adapters.db.fileTags.findByFoldedNameAndUserId(name, userId);
       if (raced) return raced;
     }

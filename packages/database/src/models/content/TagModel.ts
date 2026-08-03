@@ -135,20 +135,24 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
   }
 
   /**
-   * The same name lookup as findByNameAndUserId, but under the rule the rest of the app uses to
-   * decide whether two tag names are the same tag (see common/utils/tagName): case folded. This is
-   * what every tag-document creation path checks before minting a document, so `Invoices` cannot be
-   * created beside `invoices` - a pair the count aggregate reads as two buckets while the file-list
-   * filter and the row chips read as one.
+   * findByNameAndUserId under the shared collision rule (see common/utils/tagName): trimmed and case
+   * folded. Every path that mints a tag document checks this first, so one user cannot end up with
+   * two names differing only by case.
    *
-   * Legacy data can still hold such a pair, so more than one document can match; the first is
-   * returned, which is all a "does this name already exist" check needs.
+   * Legacy data can still hold such a pair, so ordered oldest-first rather than left to whatever the
+   * scan returns: findOrCreateByNameAndUserId increments the document this picks, and an unordered
+   * read could credit a different one of the pair on each call.
+   *
+   * The regex means only the userId prefix of { userId, name } is usable as a bound, so this scans
+   * one user's tags. Same cost as incrementFileCountBy above, and small at realistic tag counts.
    */
   async findByFoldedNameAndUserId(name: string, userId: string) {
-    const result = await this.fileTagModel.findOne({
-      name: new RegExp(`^${escapeRegex(name.trim())}$`, 'i'),
-      userId,
-    });
+    const result = await this.fileTagModel
+      .findOne({
+        name: new RegExp(`^${escapeRegex(name.trim())}$`, 'i'),
+        userId,
+      })
+      .sort({ createdAt: 1, _id: 1 });
     return result?.toJSON() || null;
   }
 
@@ -172,21 +176,31 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
     }
   }
 
+  /**
+   * Upsert a tag by name, resolving to the casing the user already holds. The upsert filter matches
+   * the name exactly, so handing it a name the user holds in some other casing minted a second
+   * document folding to the same name - the pair the count aggregate reads as two buckets while the
+   * file-list filter and the row chips read as one. Folding here rather than at the caller keeps
+   * every caller safe by default; see findByFoldedNameAndUserId for the rule.
+   */
   async findOrCreateByNameAndUserId(
     name: string,
     userId: string,
     defaultData: Partial<IFileTag>,
     incrementFileCount: number = 0
   ) {
+    const held = await this.findByFoldedNameAndUserId(name, userId);
+    const upsertName = held?.name ?? name.trim();
     try {
       const result = await this.fileTagModel.findOneAndUpdate(
-        { name, userId },
+        { name: upsertName, userId },
         {
           $inc: { fileCount: incrementFileCount || 0 },
           $set: { lastActivityAt: new Date() },
           $setOnInsert: {
             ...defaultData,
-            name,
+            // Same value as the filter: two different ones would conflict on the insert path.
+            name: upsertName,
             userId,
             type: TagType.FILE,
             createdAt: new Date(),
@@ -206,7 +220,7 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
         // Duplicate key error, tag was created by another request
         // Try to increment the existing tag
         const result = await this.fileTagModel.findOneAndUpdate(
-          { name, userId },
+          { name: upsertName, userId },
           {
             $inc: { fileCount: incrementFileCount || 0 },
             $set: { lastActivityAt: new Date() },

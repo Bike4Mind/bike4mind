@@ -131,7 +131,7 @@ const FileBrowserList: FC<FileBrowserListProps> = ({
     return resolveFileTagDocs(
       (file.tags ?? []).map(t => t.name),
       fileTags
-    ).matched;
+    );
   }
 
   const handleSort = (field: SortField) => {

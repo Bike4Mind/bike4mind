@@ -48,47 +48,34 @@ describe('resolveFileTagDocs', () => {
   // The defect this replaces: with both documents present, a file carrying only `run2-alpha`
   // rendered a chip for each document, so every file in the lowercase tag grew a phantom
   // `RUN2-Alpha` chip after one unrelated apply.
-  it('resolves only the names the file actually stores', () => {
-    const { matched, unmatchedNames } = resolveFileTagDocs(['run2-alpha'], DOCS);
+  const idsFor = (names: string[], docs: typeof DOCS) => resolveFileTagDocs(names, docs).map(d => d.id);
 
-    expect(matched.map(d => d.id)).toEqual(['lower']);
-    expect(unmatchedNames).toEqual([]);
+  it('resolves only the names the file actually stores', () => {
+    expect(idsFor(['run2-alpha'], DOCS)).toEqual(['lower']);
   });
 
   it('keeps both documents when the file genuinely carries both names', () => {
-    const { matched } = resolveFileTagDocs(['run2-alpha', 'RUN2-Alpha'], DOCS);
-
-    expect(matched.map(d => d.id)).toEqual(['lower', 'upper']);
+    expect(idsFor(['run2-alpha', 'RUN2-Alpha'], DOCS)).toEqual(['lower', 'upper']);
   });
 
   // Two stored casings collapsing onto one document must still be one chip.
   it('dedupes names that resolve to the same document', () => {
-    const { matched } = resolveFileTagDocs(['run2-alpha', 'RUN2-ALPHA'], ONE_DOC);
-
-    expect(matched.map(d => d.id)).toEqual(['lower']);
+    expect(idsFor(['run2-alpha', 'RUN2-ALPHA'], ONE_DOC)).toEqual(['lower']);
   });
 
-  it('reports names no document claims', () => {
-    const { matched, unmatchedNames } = resolveFileTagDocs(['run2-alpha', 'shared-only'], ONE_DOC);
-
-    expect(matched.map(d => d.id)).toEqual(['lower']);
-    expect(unmatchedNames).toEqual(['shared-only']);
+  it('drops a name no document claims', () => {
+    expect(idsFor(['run2-alpha', 'shared-only'], ONE_DOC)).toEqual(['lower']);
   });
 
-  it('reports an ambiguous name as unmatched rather than picking a side', () => {
-    const { matched, unmatchedNames } = resolveFileTagDocs(['RUN2-ALPHA'], DOCS);
-
-    expect(matched).toEqual([]);
-    expect(unmatchedNames).toEqual(['RUN2-ALPHA']);
+  it('drops an ambiguous name rather than picking a side', () => {
+    expect(idsFor(['RUN2-ALPHA'], DOCS)).toEqual([]);
   });
 
   it('preserves the order the file stores its tags in', () => {
-    const { matched } = resolveFileTagDocs(['RUN2-Alpha', 'run2-alpha'], DOCS);
-
-    expect(matched.map(d => d.id)).toEqual(['upper', 'lower']);
+    expect(idsFor(['RUN2-Alpha', 'run2-alpha'], DOCS)).toEqual(['upper', 'lower']);
   });
 
   it('handles a file with no tags', () => {
-    expect(resolveFileTagDocs([], DOCS)).toEqual({ matched: [], unmatchedNames: [] });
+    expect(resolveFileTagDocs([], DOCS)).toEqual([]);
   });
 });

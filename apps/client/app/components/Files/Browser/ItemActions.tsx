@@ -1,4 +1,4 @@
-import { IFabFileDocument, resolveFileTagDocs } from '@bike4mind/common';
+import { foldTagName, IFabFileDocument, resolveFileTagDocs } from '@bike4mind/common';
 import {
   useCloneFabFile,
   useDeleteFile,
@@ -48,7 +48,7 @@ import IosShareIcon from '@mui/icons-material/IosShare';
 import CheckIcon from '@mui/icons-material/Check';
 import AutoRenewIcon from '@mui/icons-material/Autorenew';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
-import { FC, useState, type MouseEvent, type ChangeEvent } from 'react';
+import { FC, useMemo, useState, type MouseEvent, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import KnowledgeChunkControls from '../../Knowledge/KnowledgeChunkControls';
@@ -420,7 +420,12 @@ const FileBrowserItemActions: FC<{
   );
 };
 
-const FileTagsModal: FC<{ file: IFabFileDocument; open: boolean; onClose: () => void }> = ({ file, open, onClose }) => {
+// Exported for its own test: which tags this dialog offers decides whether a click adds or removes.
+export const FileTagsModal: FC<{ file: IFabFileDocument; open: boolean; onClose: () => void }> = ({
+  file,
+  open,
+  onClose,
+}) => {
   const { t } = useTranslation();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTagIds, setSelectedTagIds] = useState<Set<string>>(new Set());
@@ -430,16 +435,23 @@ const FileTagsModal: FC<{ file: IFabFileDocument; open: boolean; onClose: () => 
 
   // Resolved from the names the FILE stores, not by filtering the tag list for a folded match - see
   // matchTagDocument. That filter listed a tag the file did not carry, and the remove button beside
-  // it then toggled a name the file never had, which ADDS it.
-  const fileTags = resolveFileTagDocs(
-    (file.tags ?? []).map(t => t.name),
-    allTags ?? []
-  ).matched;
-
-  // The complement by document id, not the folded negation: with two documents differing only by
-  // case, negating the fold hid BOTH from the available list, so neither could be applied.
-  const onFileIds = new Set(fileTags.map(tag => tag.id));
-  const availableTags = allTags?.filter(tag => !onFileIds.has(tag.id)) || [];
+  // that row stripped the OTHER casing's tag, because toggleTags matches by fold.
+  //
+  // Memoized because the search box re-renders on every keystroke and neither list depends on it.
+  const { fileTags, availableTags } = useMemo(() => {
+    const storedNames = (file.tags ?? []).map(t => t.name);
+    const onFile = resolveFileTagDocs(storedNames, allTags ?? []);
+    // "Available" is the FOLDED complement, and deliberately not the complement of the list above:
+    // fabFileService/toggleTags picks add-vs-remove by folding, so offering a document whose name
+    // folds to one the file already stores turns the Add button into a remove of the tag the file
+    // does have. Folded against the stored names rather than the resolved documents, because a
+    // stored casing too ambiguous to resolve still makes the toggle a remove.
+    const storedFolds = new Set(storedNames.map(foldTagName));
+    return {
+      fileTags: onFile,
+      availableTags: allTags?.filter(tag => !storedFolds.has(foldTagName(tag.name))) ?? [],
+    };
+  }, [file.tags, allTags]);
 
   // Filter tags based on search
   const filteredFileTags = fileTags.filter(tag => tag.name.toLowerCase().includes(searchQuery.toLowerCase()));

@@ -184,20 +184,22 @@ describe('file tag mutations', () => {
       );
     });
 
-    it('falls back to the generic message when the server sent no reason', async () => {
-      mockPost.mockRejectedValueOnce(new AxiosError('Network Error', 'ERR_NETWORK', undefined, undefined, undefined));
+    it('says the request never landed when there was no response at all', async () => {
+      const networkError = new AxiosError('Network Error', 'ERR_NETWORK');
+      networkError.request = {};
+      mockPost.mockRejectedValueOnce(networkError);
 
       await attemptCreate();
 
-      expect(toast.error).toHaveBeenCalledWith('Failed to create tag');
+      expect(toast.error).toHaveBeenCalledWith('No response received from the server.');
     });
 
-    it('falls back to the generic message for an error that is not an axios failure', async () => {
+    it('reports a plain error by its own message', async () => {
       mockPost.mockRejectedValueOnce(new Error('boom'));
 
       await attemptCreate();
 
-      expect(toast.error).toHaveBeenCalledWith('Failed to create tag');
+      expect(toast.error).toHaveBeenCalledWith('boom');
     });
   });
 });

@@ -20,10 +20,6 @@ interface TagCreateAdapters {
   };
 }
 
-/** Mongo's duplicate-key code. Unwrapped rather than typed, because the driver's error is untyped. */
-const isDuplicateKeyError = (error: unknown): boolean =>
-  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
-
 /**
  * Create a tag document, refusing a name the user already holds under the shared collision rule
  * (see tagName): trimmed and case folded. Without that refusal `Invoices` could be created beside
@@ -37,6 +33,11 @@ const isDuplicateKeyError = (error: unknown): boolean =>
  * lake IS that string on the file, so a hand-made document under that namespace is not an ordinary
  * tag. The auto-create paths deliberately still mint them (accepting an invite to a shared lake
  * file needs one), which is why the refusal lives here and not in the repository.
+ *
+ * One race survives: the unique index has no collation, so two concurrent creates of `Foo` and
+ * `foo` both pass the lookup and both land. listFileTags under-reports such a pair rather than
+ * lying about it, and renaming one onto the other merges them. Closing it properly needs a collated
+ * index, so a migration plus a backfill for the pairs already stored.
  */
 export const create = async (userId: string, parameters: TagCreateParameters, adapters: TagCreateAdapters) => {
   const params = secureParameters(parameters, tagCreateSchema);
@@ -70,13 +71,9 @@ export const create = async (userId: string, parameters: TagCreateParameters, ad
   try {
     return await adapters.db.fileTags.create(buildData);
   } catch (error) {
-    // The check above and this write are not atomic, and the unique index has no collation, so it
-    // only catches an EXACT re-submit. Left unhandled that surfaced as a 500, because errorHandler
-    // finds no statusCode on a driver error. The folded-but-not-exact race (`Foo` and `foo` landing
-    // together) still gets through: listFileTags under-reports such a pair rather than lying, and
-    // renaming one onto the other merges them. Closing it for real needs a collated unique index,
-    // which means a migration plus a backfill for the pairs already stored.
-    if (isDuplicateKeyError(error)) {
+    // E11000: a concurrent create took the exact name between the lookup and this write. Unhandled
+    // it surfaced as a 500, because errorHandler finds no statusCode on a driver error.
+    if ((error as { code?: number })?.code === 11000) {
       throw new BadRequestError(`Tag Service - Create: you already have a tag named "${name}"`);
     }
     throw error;

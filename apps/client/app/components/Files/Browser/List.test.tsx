@@ -91,9 +91,11 @@ describe('FileBrowserList tag chips', () => {
   // The shared view synthesizes a chip for a name the viewer holds no document for, so it must keep
   // matching per stored name rather than intersecting the document list.
   describe('shared files', () => {
-    it('uses the viewer document that matches the stored name', () => {
+    // Variant document listed FIRST on purpose: a loose folded `.find` would return it, so this
+    // fails unless the exact name wins.
+    it('uses the viewer document that matches the stored name exactly', () => {
       renderList(
-        <FileBrowserList files={[makeFile('f7', ['run2-alpha'])]} fileTags={[LOWER, UPPER]} fileFilterType="shared" />
+        <FileBrowserList files={[makeFile('f7', ['run2-alpha'])]} fileTags={[UPPER, LOWER]} fileFilterType="shared" />
       );
 
       expect(screen.getAllByTestId('row-tag').map(el => el.getAttribute('data-tag-id'))).toEqual(['lower']);
