@@ -1998,6 +1998,8 @@ export class ChatCompletionProcess {
           ? [
               {
                 role: 'system' as const,
+                // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
+                requiresTool: 'navigate_view',
                 content: (() => {
                   // Extract current path from extraContextMessages for context-aware prompting
                   const viewCtx = extraContextMessages.find(

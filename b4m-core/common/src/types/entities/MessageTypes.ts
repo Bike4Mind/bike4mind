@@ -93,4 +93,11 @@ export interface IMessage {
    * beta header.
    */
   cache?: boolean;
+  /**
+   * Names the tool whose presence this message's instructions assume ("you MUST use the X tool").
+   * Messages carrying it are dropped by `stripToolDependentMessages` wherever a turn continues
+   * WITHOUT tools - notably each backend's max-tool-call recursion, which re-sends the assembled
+   * messages with tools removed. Control-only, like `cache`: never sent to a provider.
+   */
+  requiresTool?: string;
 }

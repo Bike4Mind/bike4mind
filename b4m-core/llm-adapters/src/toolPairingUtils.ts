@@ -2,6 +2,17 @@
 import type { IMessage, MessageContentObject, MessageContentText, MessageContentToolUse } from '@bike4mind/common';
 
 /**
+ * Drops the messages whose instructions assume a tool is attached (see `IMessage.requiresTool`).
+ *
+ * Call this wherever a turn continues with tools removed. Re-sending "you MUST use the X tool" on a
+ * call that carries no tools leaves the model no valid move, and it answers by emitting the tool call
+ * as text in the reply - which is exactly what the callers that inject those prompts gate against
+ * when they decide whether to add them in the first place.
+ */
+export const stripToolDependentMessages = (messages: IMessage[]): IMessage[] =>
+  messages.filter(message => !message.requiresTool);
+
+/**
  * Ensures that tool_use and tool_result blocks are properly paired in messages.
  * This function handles both cases by:
  * - Removing orphaned tool_result blocks that reference tool_use_ids that no longer exist

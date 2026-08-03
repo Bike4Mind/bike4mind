@@ -1572,6 +1572,8 @@ export function includeImagePromptSystemMessage(
   const imageSystemMessage: IMessage = {
     role: 'system',
     content: `When the user requests an image, you MUST use the image_generation tool to create it. Craft a vivid and imaginative prompt parameter for the tool based on the user's request and available context.`,
+    // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
+    requiresTool: 'image_generation',
   };
 
   return [imageSystemMessage, ...messages];
