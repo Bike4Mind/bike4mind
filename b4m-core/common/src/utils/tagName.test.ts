@@ -42,6 +42,16 @@ describe('matchTagDocument', () => {
   it('handles an empty document list', () => {
     expect(matchTagDocument('run2-alpha', [])).toBeUndefined();
   });
+
+  // A padded stored name is legacy data - both write paths trim now. It still resolves while one
+  // document folds to it, but must NOT win the exact arm against a pair: that would pick a side.
+  it('resolves a whitespace-padded stored name while only one document folds to it', () => {
+    expect(matchTagDocument('  run2-alpha  ', ONE_DOC)?.id).toBe('lower');
+  });
+
+  it('claims nothing for a padded stored name when a case pair exists', () => {
+    expect(matchTagDocument('  run2-alpha  ', DOCS)).toBeUndefined();
+  });
 });
 
 describe('resolveFileTagDocs', () => {

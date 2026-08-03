@@ -50,6 +50,10 @@ export const matchTagDocument = <T extends { name: string }>(name: string, docs:
   const folded = foldTagName(name);
   // Every exact match also folds equal, so one pass over the candidates covers both arms.
   const candidates = docs.filter(doc => foldTagName(doc.name) === folded);
+  // Raw comparison, deliberately NOT trimmed: a whitespace-padded stored name is legacy data (both
+  // write paths trim now), and letting it win the exact arm would resolve `' Foo '` to `Foo` while a
+  // case pair is present. Losing the exact arm drops it instead, which under-reports rather than
+  // guessing - the same direction the ambiguous-fold case takes below.
   return candidates.find(doc => doc.name === name) ?? (candidates.length === 1 ? candidates[0] : undefined);
 };
 

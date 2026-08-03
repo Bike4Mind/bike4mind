@@ -43,8 +43,10 @@ export const create = async (userId: string, parameters: TagCreateParameters, ad
   const params = secureParameters(parameters, tagCreateSchema);
   const name = normalizeTagName(params.name);
 
+  // A 4xx like every other refusal here: unreachable from the route, which forces the type after the
+  // body spread, but a direct call with the session type would otherwise answer 500.
   if (params.type !== TagType.FILE) {
-    throw new Error('Tag Service: Create - Invalid tag type');
+    throw new BadRequestError('Tag Service - Create: Invalid tag type');
   }
 
   if (isDataLakeTagName(name)) {
@@ -74,7 +76,10 @@ export const create = async (userId: string, parameters: TagCreateParameters, ad
     // E11000: a concurrent create took the exact name between the lookup and this write. Unhandled
     // it surfaced as a 500, because errorHandler finds no statusCode on a driver error.
     if ((error as { code?: number })?.code === 11000) {
-      throw new BadRequestError(`Tag Service - Create: you already have a tag named "${name}"`);
+      // Re-read so the message names the document that actually won, not this losing submission -
+      // otherwise a racing `RUN2-Alpha` is told it already has a tag named `RUN2-Alpha`.
+      const winner = await adapters.db.fileTags.findByFoldedNameAndUserId(name, userId);
+      throw new BadRequestError(`Tag Service - Create: you already have a tag named "${winner?.name ?? name}"`);
     }
     throw error;
   }

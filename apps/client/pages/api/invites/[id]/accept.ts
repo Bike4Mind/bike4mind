@@ -17,7 +17,7 @@ import {
 import { baseApi } from '@server/middlewares/baseApi';
 import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { sendToClient } from '@server/websocket/utils';
-import { InviteType, ProjectEvents } from '@bike4mind/common';
+import { foldTagName, InviteType, ProjectEvents } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 import { Resource } from 'sst';
 
@@ -33,24 +33,27 @@ const transferFileTagsToUser = async (fileId: string, userId: string) => {
 
     // Get original tags from the file owner to copy their properties
     const fileOwnerTags = await fileTagRepository.findAllByUserId(file.userId);
-    const ownerTagsByName = new Map(fileOwnerTags.map(tag => [tag.name.toLowerCase(), tag]));
+    // foldTagName, not a local toLowerCase: these keys decide which owner tag a name copies its
+    // icon/colour from, and the repository upsert below folds under the same rule.
+    const ownerTagsByName = new Map(fileOwnerTags.map(tag => [foldTagName(tag.name), tag]));
 
-    // Process file tags: group by lowercase name and count occurrences
+    // Process file tags: group under the shared collision rule and count occurrences, so two stored
+    // casings of one tag copy across as one tag rather than two.
     const tagInfo = new Map<string, { originalName: string; count: number; ownerTag?: any }>();
 
     console.log('File tags:', file.tags);
 
     for (const fileTag of file.tags) {
-      const lowerName = fileTag.name.toLowerCase();
-      const existing = tagInfo.get(lowerName);
+      const foldedName = foldTagName(fileTag.name);
+      const existing = tagInfo.get(foldedName);
 
       if (existing) {
         existing.count += 1;
       } else {
-        tagInfo.set(lowerName, {
+        tagInfo.set(foldedName, {
           originalName: fileTag.name,
           count: 1,
-          ownerTag: ownerTagsByName.get(lowerName),
+          ownerTag: ownerTagsByName.get(foldedName),
         });
       }
     }

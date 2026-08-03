@@ -95,10 +95,12 @@ describe('tagService - create', () => {
     await expect(create(userId, params, adapters)).rejects.toThrow('Invalid option');
   });
 
-  it('rejects a session tag, which this path has no branch for', async () => {
-    await expect(create(userId, { name: 'Test Tag', type: TagType.SESSION }, adapters)).rejects.toThrow(
-      'Invalid tag type'
-    );
+  // A 4xx, not a 500: the route forces the type so this is unreachable over HTTP, but a direct
+  // service call should still refuse like every other guard here rather than reading as an outage.
+  it('rejects a session tag as a client error, which this path has no branch for', async () => {
+    const attempt = create(userId, { name: 'Test Tag', type: TagType.SESSION }, adapters);
+    await expect(attempt).rejects.toThrow('Invalid tag type');
+    await expect(attempt).rejects.toMatchObject({ statusCode: 400 });
     expect(mockFileTagRepo.create).not.toHaveBeenCalled();
   });
 
@@ -140,6 +142,31 @@ describe('tagService - create', () => {
       const attempt = create(userId, { name: 'run2-alpha', type: TagType.FILE }, adapters);
       await expect(attempt).rejects.toThrow('you already have a tag named "run2-alpha"');
       await expect(attempt).rejects.toMatchObject({ statusCode: 400 });
+    });
+
+    // The loser must be told the winner's casing, not its own submission - otherwise a racing
+    // `RUN2-Alpha` is told it already has a tag named `RUN2-Alpha`, which reads as nonsense.
+    it('names the document that won the race, not the losing submission', async () => {
+      (mockFileTagRepo.findByFoldedNameAndUserId as Mock)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'winner-1', name: 'run2-alpha' });
+      (mockFileTagRepo.create as Mock).mockRejectedValueOnce(
+        Object.assign(new Error('E11000 duplicate key error'), { code: 11000 })
+      );
+
+      await expect(create(userId, { name: 'RUN2-Alpha', type: TagType.FILE }, adapters)).rejects.toThrow(
+        'you already have a tag named "run2-alpha"'
+      );
+    });
+
+    it('falls back to the submitted name when the winner cannot be re-read', async () => {
+      (mockFileTagRepo.create as Mock).mockRejectedValueOnce(
+        Object.assign(new Error('E11000 duplicate key error'), { code: 11000 })
+      );
+
+      await expect(create(userId, { name: 'RUN2-Alpha', type: TagType.FILE }, adapters)).rejects.toThrow(
+        'you already have a tag named "RUN2-Alpha"'
+      );
     });
 
     it('does not swallow an unrelated write failure', async () => {
