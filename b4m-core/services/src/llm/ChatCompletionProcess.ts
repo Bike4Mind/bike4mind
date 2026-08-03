@@ -115,6 +115,14 @@ import { AgentDetectionFeature } from './features/AgentDetectionFeature';
 import { SkillsFeature } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { buildContextOverflowMessage } from './contextOverflowMessage';
+import {
+  buildTaggedContextMessages,
+  filterByPromptMode,
+  filterFeaturesByPromptMode,
+  resolveForcedRetrieval,
+  toPromptDetails,
+  type PromptSourceId,
+} from './systemPromptSources';
 import { buildInsufficientCreditsMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import { deductCreditsWithOrgSupport, subtractCredits } from '../creditService';
@@ -862,7 +870,7 @@ export class ChatCompletionProcess {
     let enableQuestMaster = initialEnableQuestMaster;
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
-    const { questId, sessionId } = parsedBody;
+    const { questId, sessionId, promptMode } = parsedBody;
 
     // Variables to store actual timing durations
     let actualArtifactProcessingDuration = 0;
@@ -1206,10 +1214,13 @@ export class ChatCompletionProcess {
         enableMementos || false,
         enableAgents || false,
         projectId,
-        optimizedFeatureList,
+        // Not built at all under a prompt mode, rather than built and filtered later: these
+        // features have side effects (memory writes, reply replacement) that outlive the prompt.
+        filterFeaturesByPromptMode(optimizedFeatureList, promptMode),
         organization,
         session.systemPromptText,
-        session.forceKnowledgeRetrieval,
+        // A mode overrides the session flag in both directions; see resolveForcedRetrieval.
+        resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval),
         session.retrievalTags,
         session.citationStyle,
         toRetrievalFilter(session)
@@ -1969,20 +1980,20 @@ export class ChatCompletionProcess {
 
       // Extracted so the overflow-guard safety net below can rebuild with a trimmed
       // history without duplicating this (long, order-sensitive) system/context block.
-      const contextAndSystemMessages: IMessage[] = [
-        dateTimeContext, // Always provide current date/time awareness
-        ...extraContextMessages, // Add extra context messages from external sources at the top
+      const taggedContextMessages = buildTaggedContextMessages({
+        dateContext: [dateTimeContext], // Always provide current date/time awareness
+        extraContext: extraContextMessages, // Extra context messages from external sources, at the top
         // Artifact emission guidance. Without this, correct <artifact> usage
         // is left to the model's defaults and large HTML/code can leak into the chat
         // body as raw markup. Gated on the same effective flag as extraction, so a turn is
         // never told to emit artifacts that the post-processing below will not extract.
-        ...(artifactsEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : []),
+        artifactEmission: artifactsEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : [],
         // Help-center awareness. Makes the model aware of the in-app
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
         // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).
-        ...(isLocalModel ? [] : [{ role: 'system' as const, content: helpCenterContent }]),
+        helpCenter: isLocalModel ? [] : [{ role: 'system' as const, content: helpCenterContent }],
         // Inject view registry summary when navigate_view tool is enabled
-        ...(enabledTools.includes('navigate_view')
+        viewRegistry: enabledTools.includes('navigate_view')
           ? [
               {
                 role: 'system' as const,
@@ -2003,52 +2014,59 @@ export class ChatCompletionProcess {
                 })(),
               },
             ]
-          : []),
-        ...(toolPromptMessage ? [toolPromptMessage] : []), // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
-        ...(featureContextMessages['agentDetection'] ?? []), // Add agent system prompts
-        ...(featureContextMessages['questMaster'] ?? []),
-        ...(featureContextMessages['organizationPrompt'] ?? []), // Add team-wide system prompt
-        ...(featureContextMessages['sessionPrompt'] ?? []), // Per-session system prompt (product surfaces)
-        ...(featureContextMessages['knowledgeRetrieval'] ?? []), // Forced data-lake retrieval (grounding + citations)
+          : [],
+        toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
+        agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
+        questMaster: featureContextMessages['questMaster'],
+        organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
+        sessionPrompt: featureContextMessages['sessionPrompt'], // Per-session system prompt (product surfaces)
+        knowledgeRetrieval: featureContextMessages['knowledgeRetrieval'], // Forced data-lake retrieval (grounding + citations)
         // Add LLM-optimized context summary if available (covers messages before verbatim window)
-        ...(session.contextSummary
+        contextSummary: session.contextSummary
           ? [
               {
                 role: 'system' as const,
                 content: `[Context from earlier in this conversation]\n${session.contextSummary}`,
               },
             ]
-          : []),
-        ...(featureContextMessages['mementos'] ?? []),
-        ...(featureContextMessages['project'] ?? []),
+          : [],
+        mementos: featureContextMessages['mementos'],
+        project: featureContextMessages['project'],
         // Recently generated images - gives the model a handle to edit a prior
         // generated image ("make it cartoonish"). Generated images persist as
         // bare storage keys in quest.images with no fabFile record, so without
         // this note the model can't reference them and either declines or (worse)
         // claims success without calling a tool. Gated on edit_image being
         // available (paired with image_generation).
-        ...(enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
-          ? [
-              {
-                role: 'system' as const,
-                content: [
-                  '# Recently generated images',
-                  '',
-                  'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
-                  '',
-                  ...cacheInfo.recentGeneratedImages!.map(
-                    img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
-                  ),
-                  '',
-                  'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
-                ].join('\n'),
-              },
-            ]
-          : []),
-        ...urlMessages,
-        ...fabMessages,
-      ];
+        recentImages:
+          enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
+            ? [
+                {
+                  role: 'system' as const,
+                  content: [
+                    '# Recently generated images',
+                    '',
+                    'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
+                    '',
+                    ...cacheInfo.recentGeneratedImages!.map(
+                      img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
+                    ),
+                    '',
+                    'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
+                  ].join('\n'),
+                },
+              ]
+            : [],
+        urls: urlMessages,
+        attachedFiles: fabMessages,
+      });
+      const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
+      const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
+      // An explicit mode also excludes the admin templates this helper appends downstream
+      // (FormatPromptTemplate, image prompt) - they are invisible from the assembly above, so the
+      // source filter alone would leave them in front of a "raw" completion.
+      const buildOptions = { verbose: false, skipAdminPromptTemplates: Boolean(promptMode) };
       let messages = await buildAndSortMessages(
         previousMessages,
         contextAndSystemMessages,
@@ -2057,7 +2075,8 @@ export class ChatCompletionProcess {
         defaultAdminSettings,
         historyCount,
         logger,
-        this.tokenizer
+        this.tokenizer,
+        buildOptions
       );
       // The length check is the part that matters: buildAndSortMessages returns an EMPTY ARRAY when
       // the input budget is non-positive, and `!messages` is false for `[]`, so an empty prompt used
@@ -2202,7 +2221,8 @@ export class ChatCompletionProcess {
               defaultAdminSettings,
               historyCount,
               logger,
-              this.tokenizer
+              this.tokenizer,
+              buildOptions
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
             messages = rebuilt;
@@ -2248,99 +2268,37 @@ export class ChatCompletionProcess {
       // Feed breakdown into telemetry builder for detailed system prompt tracking
       if (telemetryBuilder) {
         try {
-          // Build system prompt details for telemetry
-          const systemPromptDetails: SystemPromptDetail[] = [];
-
-          // Date/time context (hardcoded)
-          if (dateTimeContext) {
-            const dtTokens = await calculateTotalTokenLength([dateTimeContext], tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'hardcoded',
-              name: 'date_time_context',
-              tokenCount: dtTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Tool prompt (admin/hardcoded)
-          if (toolPromptMessage) {
-            const toolTokens = await calculateTotalTokenLength([toolPromptMessage], tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'admin',
-              name: 'tool_guidance',
-              tokenCount: toolTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Agent detection prompts
-          const agentMessages = featureContextMessages['agentDetection'] ?? [];
-          if (agentMessages.length > 0) {
-            const agentTokens = await calculateTotalTokenLength(agentMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'hardcoded',
-              name: 'agent_detection',
-              tokenCount: agentTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Quest master prompts
-          const qmMessages = featureContextMessages['questMaster'] ?? [];
-          if (qmMessages.length > 0) {
-            const qmTokens = await calculateTotalTokenLength(qmMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'session',
-              name: 'quest_master',
-              tokenCount: qmTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Organization prompts
-          const orgMessages = featureContextMessages['organizationPrompt'] ?? [];
-          if (orgMessages.length > 0) {
-            const orgTokens = await calculateTotalTokenLength(orgMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'org',
-              name: 'organization_prompt',
-              tokenCount: orgTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Session summary
-          if (session.summary) {
-            const summaryMsg = [
-              { role: 'system' as const, content: `Previous conversation summary:\n${session.summary}` },
-            ];
-            const summaryTokens = await calculateTotalTokenLength(summaryMsg, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'session',
-              name: 'session_summary',
-              tokenCount: summaryTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Project prompts
-          const projectMessages = featureContextMessages['project'] ?? [];
-          if (projectMessages.length > 0) {
-            const projectTokens = await calculateTotalTokenLength(projectMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'project',
-              name: 'project_context',
-              tokenCount: projectTokens,
-              wasIncluded: true,
-            });
-          }
+          // Per-source breakdown, derived from the same tagged list the prompt was assembled
+          // from (see systemPromptSources) rather than re-listed by hand here. The hand-written
+          // version this replaces covered a third of the sources and reported a `session_summary`
+          // row built from `session.summary`, a field the assembled prompt never carried - it
+          // carries `session.contextSummary`. Sources appended downstream by buildAndSortMessages
+          // (FormatPromptTemplate, image prompt) are still not represented here. The two always-on
+          // floor sources are excluded: systemPromptFloorTelemetry owns those rows outright
+          // (pushed below), including the wasIncluded:false inventory rows a derivation from the
+          // admitted stack cannot produce.
+          const floorSources: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
+          const systemPromptDetails: SystemPromptDetail[] = await toPromptDetails(
+            admittedContextMessages.filter(t => !floorSources.includes(t.source)),
+            messages => calculateTotalTokenLength(messages, tokenCalcOptions)
+          );
 
           // Always-on floor blocks (artifact-emission, help-center) billed on every basic
           // turn. Previously invisible inside the systemPrompts residual; itemized here so
-          // the fixed prompt cost is auditable in the Context Inspector (#810).
+          // the fixed prompt cost is auditable in the Context Inspector (#810). Inclusion is
+          // read off the admitted stack rather than the raw settings gates, so a promptMode
+          // that strips a block reports it excluded instead of billed.
+          const admitted = (source: PromptSourceId) => admittedContextMessages.some(t => t.source === source);
           systemPromptDetails.push(
             ...(await buildAlwaysOnFloorDetails(
-              { artifactEmissionEnabled: artifactsEnabled, artifactEmissionContent, isLocalModel, helpCenterContent },
+              {
+                artifactEmissionEnabled: admitted('artifactEmission'),
+                artifactEmissionContent,
+                // The helper models exactly one exclusion ("local model"); a mode that strips
+                // the help-center block must surface the same way: excluded, zero tokens.
+                isLocalModel: !admitted('helpCenter'),
+                helpCenterContent,
+              },
               content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
             ))
           );
