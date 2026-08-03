@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { toast } from 'sonner';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeExplorer from './DataLakeExplorer';
 
@@ -66,5 +67,55 @@ describe('DataLakeExplorer - create-first affordance (#837)', () => {
     );
 
     expect(screen.queryByTestId('datalake-create-btn')).not.toBeInTheDocument();
+  });
+});
+
+describe('DataLakeExplorer - drag-and-drop discoverability (#839)', () => {
+  it('advertises drag-to-add at rest, before any drag has started', () => {
+    render(
+      <Wrapper>
+        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
+      </Wrapper>
+    );
+
+    // No drag is underway, so the drag-active overlay must stay hidden while the
+    // resting affordances carry the invitation.
+    expect(screen.queryByTestId('datalake-dropzone')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-drop-hint')).toHaveTextContent(/drag files here to add/i);
+    expect(screen.getByTestId('datalake-drop-prompt')).toBeInTheDocument();
+  });
+
+  it('swaps the resting hint for the drag overlay once a file drag enters', () => {
+    render(
+      <Wrapper>
+        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
+      </Wrapper>
+    );
+
+    fireEvent.dragEnter(screen.getByTestId('datalake-explorer'), {
+      dataTransfer: { types: ['Files'] },
+    });
+
+    expect(screen.getByTestId('datalake-dropzone')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-drop-hint')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-drop-prompt')).not.toBeInTheDocument();
+  });
+
+  it('confirms a successful drop with a toast naming the file count', async () => {
+    render(
+      <Wrapper>
+        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
+      </Wrapper>
+    );
+
+    fireEvent.drop(screen.getByTestId('datalake-explorer'), {
+      dataTransfer: {
+        types: ['Files'],
+        items: [],
+        files: [new File(['a'], 'a.txt'), new File(['b'], 'b.txt')],
+      },
+    });
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/^2 files /)));
   });
 });

@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { Box, Button, Typography, useTheme } from '@mui/joy';
+import { alpha } from '@mui/system';
 import AddIcon from '@mui/icons-material/Add';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
@@ -7,7 +8,7 @@ import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { SurfaceBreadcrumb } from '@client/app/components/datalake/SurfaceBreadcrumb';
 import DataLakeTree from './DataLakeTree';
 import DataLakeArticle from './DataLakeArticle';
-import { StatTicker, surfaceBackground } from '@client/app/components/datalake/surfaceChrome';
+import { StatTicker, inkFor, surfaceBackground } from '@client/app/components/datalake/surfaceChrome';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { useGetDataLakeArticles, useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import type { DataLakeBrowseSource } from '@client/app/hooks/data/fabFiles';
@@ -57,6 +58,8 @@ export default function DataLakeExplorer({
   const muiTheme = useTheme();
   const isDark = muiTheme.palette.mode === 'dark';
   const { theme, copy } = useDataLakeSurface();
+  const acceptedHint = copy.dropAcceptedHint;
+  const accentInk = inkFor(theme.accent, isDark);
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
   const [userSelectedFile, setUserSelectedFile] = useState<IFabFileDocument | null>(null);
 
@@ -84,22 +87,26 @@ export default function DataLakeExplorer({
     if (dragDepth.current === 0) setIsDragging(false);
   }, []);
 
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
-    if (!isFileDrag(e)) return;
-    e.preventDefault();
-    dragDepth.current = 0;
-    setIsDragging(false);
-    // Prefer the items API (traverses folders); fall back to the flat files list for any
-    // browser without it - mirrors the wizard's SourceSelectionStep handler.
-    const files = e.dataTransfer.items?.length
-      ? await readDroppedItems(e.dataTransfer.items)
-      : Array.from(e.dataTransfer.files);
-    if (files.length === 0) {
-      toast.error('No files found in that drop.');
-      return;
-    }
-    setDroppedFiles(files);
-  }, []);
+  const handleDrop = useCallback(
+    async (e: React.DragEvent) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragDepth.current = 0;
+      setIsDragging(false);
+      // Prefer the items API (traverses folders); fall back to the flat files list for any
+      // browser without it - mirrors the wizard's SourceSelectionStep handler.
+      const files = e.dataTransfer.items?.length
+        ? await readDroppedItems(e.dataTransfer.items)
+        : Array.from(e.dataTransfer.files);
+      if (files.length === 0) {
+        toast.error('No files found in that drop.');
+        return;
+      }
+      toast.success(`${files.length} ${files.length === 1 ? 'file' : 'files'} ${acceptedHint}`);
+      setDroppedFiles(files);
+    },
+    [acceptedHint, setDroppedFiles]
+  );
 
   // Phase 1: Lightweight counts for the tree (server-side aggregation, ~50 entries)
   const { data: tagCountsData, isLoading: tagCountsLoading, isError: tagCountsError } = useGetDataLakeTagCounts(source);
@@ -258,6 +265,31 @@ export default function DataLakeExplorer({
             Discover
           </Button>
         )}
+        {/* Resting drop affordance: the drag overlay only appears once a drag is already
+            underway, so without this the ingest capability is invisible at rest. */}
+        {!isDragging && (
+          <Box
+            data-testid="datalake-drop-hint"
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              mb: 2,
+              ml: 1,
+              px: 1,
+              py: 0.25,
+              borderRadius: 'sm',
+              border: '1px dashed',
+              borderColor: alpha(accentInk, 0.45),
+              color: 'text.tertiary',
+            }}
+          >
+            <CloudUploadIcon sx={{ fontSize: 15 }} />
+            <Typography level="body-xs" sx={{ color: 'inherit', whiteSpace: 'nowrap' }}>
+              {copy.dropRestingHint}
+            </Typography>
+          </Box>
+        )}
         <Box sx={{ ml: 'auto', mb: 2 }}>
           <StatTicker
             stats={[
@@ -273,6 +305,34 @@ export default function DataLakeExplorer({
           />
         </Box>
       </Box>
+      {/* Zero-state gets a full-width version of the same invitation - a first-time user
+          has no tree to scan, so the small header hint alone reads as chrome. */}
+      {isEmpty && !isDragging && (
+        <Box
+          data-testid="datalake-drop-prompt"
+          sx={{
+            mx: 3,
+            mt: 1,
+            px: 2,
+            py: 1.5,
+            borderRadius: 'md',
+            border: '1.5px dashed',
+            borderColor: alpha(accentInk, 0.5),
+            backgroundColor: alpha(accentInk, isDark ? 0.06 : 0.04),
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1.5,
+          }}
+        >
+          <CloudUploadIcon sx={{ fontSize: 28, color: accentInk }} />
+          <Box>
+            <Typography level="title-sm">{copy.dropTitle}</Typography>
+            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+              {copy.dropHint}
+            </Typography>
+          </Box>
+        </Box>
+      )}
       <Box sx={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <DataLakeTree
           tree={tree}
