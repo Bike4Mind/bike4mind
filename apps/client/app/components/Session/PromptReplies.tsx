@@ -490,11 +490,26 @@ const PromptReplies: FC<PromptReplyProps> = ({
         : [],
     [messageData.images, generatedImagesUrl]
   );
+  // Audio tracks (music_generation) also ride quest.images; render them as inline
+  // players and keep them out of the download-chip list below.
+  const audio = useMemo(
+    () =>
+      generatedImagesUrl
+        ? (messageData.images ?? [])
+            .filter(file => /\.(mp3|wav|ogg|m4a|aac|flac|webm)$/i.test(file))
+            .map(file => `${generatedImagesUrl}/${file}`)
+        : [],
+    [messageData.images, generatedImagesUrl]
+  );
   const generatedFiles = useMemo(
     () =>
       generatedImagesUrl
         ? (messageData.images ?? [])
-            .filter(image => !/\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(image))
+            .filter(
+              image =>
+                !/\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(image) &&
+                !/\.(mp3|wav|ogg|m4a|aac|flac|webm)$/i.test(image)
+            )
             .map(image => ({ name: image, url: `${generatedImagesUrl}/${image}` }))
         : [],
     [messageData.images, generatedImagesUrl]
@@ -544,6 +559,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         images={images}
         generatedFiles={generatedFiles}
         videos={videos}
+        audio={audio}
         search={search}
         isExpandable={isExpandable}
         promptMeta={messageData.promptMeta}
@@ -1089,6 +1105,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   images = [],
   generatedFiles = [],
   videos = [],
+  audio = [],
   search,
   isExpandable = false,
   completed = false,
@@ -1595,7 +1612,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
             />
           ) : (
             <>
-              {(cleanReply || images.length > 0 || generatedFiles.length > 0 || videos.length > 0) && (
+              {(cleanReply ||
+                images.length > 0 ||
+                generatedFiles.length > 0 ||
+                videos.length > 0 ||
+                audio.length > 0) && (
                 <Box
                   sx={{
                     position: 'relative',
@@ -1683,6 +1704,22 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                               >
                                 {file.name}
                               </Button>
+                            ))}
+                          </Box>
+                        )}
+
+                        {audio.length > 0 && (
+                          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, width: '100%', mt: 1 }}>
+                            {audio.map((src, index) => (
+                              <Box
+                                key={index}
+                                component="audio"
+                                controls
+                                preload="metadata"
+                                src={src}
+                                data-testid="generated-audio-player"
+                                sx={{ width: '100%', maxWidth: 480 }}
+                              />
                             ))}
                           </Box>
                         )}

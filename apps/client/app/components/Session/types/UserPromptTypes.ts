@@ -59,6 +59,8 @@ export interface ReplyContainerProps {
   /** Non-image files a tool generated this turn (e.g. .xlsx), rendered as download chips. */
   generatedFiles?: { name: string; url: string }[];
   videos?: string[];
+  /** Audio tracks a tool generated this turn (music_generation), rendered as inline players. */
+  audio?: string[];
   search?: string;
   isExpandable?: boolean;
   completed?: boolean;

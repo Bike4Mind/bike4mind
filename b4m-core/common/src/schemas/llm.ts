@@ -7,6 +7,8 @@ export const b4mLLMTools = z.enum([
   'dice_roll',
   'image_generation',
   'edit_image',
+  // Background-music generation (ElevenLabs); mirrors image_generation
+  'music_generation',
   'weather_info',
   'web_search',
   'web_fetch',

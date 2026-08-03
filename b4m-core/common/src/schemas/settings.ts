@@ -399,6 +399,7 @@ export const OrchestrationDefaultsSchema = z.object({
     // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
     'image_generation',
     'edit_image',
+    'music_generation',
     'excel_generation',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so

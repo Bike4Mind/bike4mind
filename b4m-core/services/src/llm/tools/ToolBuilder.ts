@@ -6,6 +6,7 @@ import {
   IOrganizationDocument,
   IUsageEventInput,
   ModelInfo,
+  MusicGenerationVendor,
 } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
@@ -14,7 +15,7 @@ import type { ServerAgentConfig } from '@bike4mind/agents';
 import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
 import { ToolDefinition, type ToolContext } from './base/types';
-import { validateUserCredits } from './base/utils';
+import { validateUserCredits, validateMusicCredits } from './base/utils';
 import {
   extractAndSaveEntitiesFromUserMessage,
   getConversationContextSystemMessage,
@@ -132,6 +133,7 @@ const TOOL_PREAMBLES: Record<string, string> = {
   deep_research: 'Doing deeper research — give me a moment…',
   image_generation: 'Generating an image…',
   edit_image: 'Editing the image…',
+  music_generation: 'Composing music…',
 };
 
 function resolveToolPreamble(toolName: string): string | null {
@@ -544,6 +546,43 @@ export class ToolBuilder {
               );
             }
           }
+
+          if (toolName === 'music_generation') {
+            // Deterministic, length-driven charge (no model catalog needed, unlike
+            // image_generation). Reserve into toolCreditsMap for end-of-quest settlement.
+            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
+            if (enforceCredits && !!this.deps.db.creditTransactions) {
+              const { provider, lengthMs, modelId } = data as {
+                provider: MusicGenerationVendor;
+                lengthMs: number;
+                modelId: string;
+              };
+              const {
+                requiredCredits: creditsUsed,
+                usdCost,
+                billedSeconds,
+              } = validateMusicCredits(this.deps.user, provider, lengthMs, this.deps.logger, organization);
+              this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
+              this.deps.toolCreditsMap.set('music_generation', creditsUsed);
+              quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
+              await saveQuest(quest);
+              recordToolUsageEvent(
+                this.deps.db,
+                this.deps.logger,
+                'music_generation',
+                buildToolUsageEvent({
+                  quest,
+                  user: this.deps.user,
+                  organization,
+                  provider,
+                  model: modelId,
+                  costUsd: usdCost,
+                  creditsCharged: creditsUsed,
+                  units: billedSeconds,
+                })
+              );
+            }
+          }
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         onToolFinish: async (toolName: string, data: any) => {
@@ -552,11 +591,13 @@ export class ToolBuilder {
             quest.deepResearchState = data;
             await saveQuest(quest);
           }
-          if (toolName === 'image_generation' || toolName === 'edit_image') {
+          // music_generation rides quest.images too: the client splits by extension,
+          // rendering audio as an inline player and images as the grid.
+          if (toolName === 'image_generation' || toolName === 'edit_image' || toolName === 'music_generation') {
             this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
-            const imagePaths = Array.isArray(data) ? data : [data];
+            const generatedPaths = Array.isArray(data) ? data : [data];
             if (!quest.images) quest.images = [];
-            imagePaths.forEach((path: string) => {
+            generatedPaths.forEach((path: string) => {
               if (!quest.images?.includes(path)) quest.images?.push(path);
             });
             await saveQuest(quest);
