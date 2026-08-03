@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { foldTagName, normalizeTagName } from './tagName';
+import { foldTagName, isDataLakeTagName, normalizeTagName } from './tagName';
 
 describe('tagName', () => {
   describe('normalizeTagName', () => {
@@ -36,6 +36,32 @@ describe('tagName', () => {
     it('uses locale-independent folding', () => {
       expect(foldTagName('INVOICES')).toBe('invoices');
       expect(foldTagName('I')).toBe('i');
+    });
+  });
+
+  describe('isDataLakeTagName', () => {
+    it('recognizes a membership tag', () => {
+      expect(isDataLakeTagName('datalake:acme')).toBe(true);
+    });
+
+    // The guard must fold, because the writes it gates match names case-insensitively. A
+    // case-sensitive guard would pass `DATALAKE:acme` through and then strip the real
+    // `datalake:acme` membership off every file the caller owns.
+    it('recognizes casing variants, which a case-sensitive check would let through', () => {
+      expect(isDataLakeTagName('DATALAKE:acme')).toBe(true);
+      expect(isDataLakeTagName('DataLake:acme')).toBe(true);
+      expect(isDataLakeTagName('dAtAlAkE:acme')).toBe(true);
+    });
+
+    it('sees through surrounding whitespace', () => {
+      expect(isDataLakeTagName('  datalake:acme  ')).toBe(true);
+      expect(isDataLakeTagName('\tDATALAKE:acme')).toBe(true);
+    });
+
+    it('leaves ordinary tags alone, including one that merely mentions the word', () => {
+      expect(isDataLakeTagName('invoices')).toBe(false);
+      expect(isDataLakeTagName('my-datalake:acme')).toBe(false);
+      expect(isDataLakeTagName('datalake')).toBe(false);
     });
   });
 });

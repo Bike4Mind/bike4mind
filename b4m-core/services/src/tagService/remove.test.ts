@@ -144,4 +144,20 @@ describe('tagService - remove', () => {
     expect(mockFabFileRepo.removeTagByUserId).not.toHaveBeenCalled();
     expect(mockTagRepo.delete).not.toHaveBeenCalled();
   });
+
+  // The strip matches names case-insensitively, so a case-sensitive guard was walkable: create a
+  // `DATALAKE:acme` document (nothing refuses that at create time), delete it, and the strip pulls
+  // the real `datalake:acme` membership off every file the caller owns.
+  it.each(['DATALAKE:acme', 'DataLake:acme', '  datalake:acme'])(
+    'refuses the membership namespace spelled as %s',
+    async name => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc(name));
+
+      await expect(remove(userId, { id: existingTagId }, adapters)).rejects.toThrow(
+        'a data lake membership tag cannot be deleted here'
+      );
+      expect(mockFabFileRepo.removeTagByUserId).not.toHaveBeenCalled();
+      expect(mockTagRepo.delete).not.toHaveBeenCalled();
+    }
+  );
 });

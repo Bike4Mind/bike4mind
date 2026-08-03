@@ -1,7 +1,7 @@
-import { IFabFileRepository, ITagRepository, isReservedTagPrefix } from '@bike4mind/common';
+import { IFabFileRepository, ITagRepository } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
-import { foldTagName, normalizeTagName } from './tagName';
+import { foldTagName, isDataLakeTagName, normalizeTagName } from './tagName';
 
 const tagUpdateSchema = z.object({
   id: z.string(),
@@ -44,7 +44,7 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
 
   const newName = rest.name === undefined ? undefined : normalizeTagName(rest.name);
 
-  if (isReservedTagPrefix(tag.name) || (newName !== undefined && isReservedTagPrefix(newName))) {
+  if (isDataLakeTagName(tag.name) || (newName !== undefined && isDataLakeTagName(newName))) {
     throw new BadRequestError('Tag Service - Update: a data lake membership tag cannot be renamed here');
   }
 

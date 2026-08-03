@@ -328,5 +328,34 @@ describe('tagService - update', () => {
       expect(mockFabFileRepo.updateTagsByUserId).not.toHaveBeenCalled();
       expect(mockTagRepo.update).not.toHaveBeenCalled();
     });
+
+    // The rename matches names case-insensitively, so a case-sensitive guard was walkable in both
+    // directions: renaming a `DATALAKE:acme` document rewrites the real membership tag, and
+    // renaming an ordinary tag to `DATALAKE:acme` injects files into the lake.
+    it.each(['DATALAKE:acme', 'DataLake:acme', '  datalake:acme'])(
+      'refuses the membership namespace spelled as %s on the stored name',
+      async name => {
+        (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name }));
+
+        await expect(update(userId, { id: existingTagId, name: 'harmless' }, adapters)).rejects.toThrow(
+          'a data lake membership tag cannot be renamed here'
+        );
+        expect(mockFabFileRepo.updateTagsByUserId).not.toHaveBeenCalled();
+        expect(mockTagRepo.update).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['DATALAKE:acme', 'DataLake:acme'])(
+      'refuses the membership namespace spelled as %s on the new name',
+      async name => {
+        (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'reports' }));
+
+        await expect(update(userId, { id: existingTagId, name }, adapters)).rejects.toThrow(
+          'a data lake membership tag cannot be renamed here'
+        );
+        expect(mockFabFileRepo.updateTagsByUserId).not.toHaveBeenCalled();
+        expect(mockTagRepo.update).not.toHaveBeenCalled();
+      }
+    );
   });
 });

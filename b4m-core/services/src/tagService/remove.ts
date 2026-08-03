@@ -1,6 +1,7 @@
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
-import { IFabFileRepository, ITagRepository, isReservedTagPrefix } from '@bike4mind/common';
+import { IFabFileRepository, ITagRepository } from '@bike4mind/common';
 import { z } from 'zod';
+import { isDataLakeTagName } from './tagName';
 
 const tagRemoveSchema = z.object({
   id: z.string(),
@@ -35,7 +36,7 @@ export const remove = async (userId: string, params: TagRemoveParams, adapters: 
     throw new Error('Tag Service - Delete: Tag not found');
   }
 
-  if (isReservedTagPrefix(tag.name)) {
+  if (isDataLakeTagName(tag.name)) {
     throw new BadRequestError('Tag Service - Delete: a data lake membership tag cannot be deleted here');
   }
 

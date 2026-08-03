@@ -401,10 +401,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
   /**
-   * Count the number of files by user id and tag.
-   * @param userId - The ID of the user.
-   * @param tag - The tag to count.
-   * @returns A promise that resolves to the number of files.
+   * Count a user's live files carrying one tag. Matches the WHOLE name, case-insensitively - a
+   * `test` tag does not count files tagged `testing`. Excludes soft-deleted files, unlike the
+   * write paths that keep tag names in step.
    */
   countByUserIdAndTag(userId: string, tag: string): Promise<number>;
 
