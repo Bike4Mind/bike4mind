@@ -456,6 +456,10 @@ function omitBetweenTags(input: string, openTag: string, closeTag: string): stri
   return result;
 }
 
+// Generated audio (music_generation) rides quest.images alongside images/xlsx; this
+// splits it out for the inline player and excludes it from the download-chip list.
+const GENERATED_AUDIO_EXT = /\.(mp3|wav|ogg|m4a|aac|flac|webm)$/i;
+
 // PromptReplies: top-level component (public API unchanged)
 
 const PromptReplies: FC<PromptReplyProps> = ({
@@ -496,7 +500,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
     () =>
       generatedImagesUrl
         ? (messageData.images ?? [])
-            .filter(file => /\.(mp3|wav|ogg|m4a|aac|flac|webm)$/i.test(file))
+            .filter(file => GENERATED_AUDIO_EXT.test(file))
             .map(file => `${generatedImagesUrl}/${file}`)
         : [],
     [messageData.images, generatedImagesUrl]
@@ -506,9 +510,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
       generatedImagesUrl
         ? (messageData.images ?? [])
             .filter(
-              image =>
-                !/\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(image) &&
-                !/\.(mp3|wav|ogg|m4a|aac|flac|webm)$/i.test(image)
+              image => !/\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(image) && !GENERATED_AUDIO_EXT.test(image)
             )
             .map(image => ({ name: image, url: `${generatedImagesUrl}/${image}` }))
         : [],
