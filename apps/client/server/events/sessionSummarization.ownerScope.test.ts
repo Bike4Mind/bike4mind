@@ -4,6 +4,9 @@ const OWNER = 'session-owner';
 const STRANGER = 'someone-else';
 const SESSION_ID = 'session-1';
 
+// Flipped by the ownerless case; the Session mock reads it at call time.
+let ownerlessSession = false;
+
 const h = vi.hoisted(() => {
   const state = {
     fabFiles: [] as { id: string; sessionId: string; userId: string; tags: { name: string }[] }[],
@@ -38,7 +41,15 @@ vi.mock('@server/utils/eventBus', () => ({
 
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
-  Session: { findById: async () => ({ id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [], summary: '' }) },
+  Session: {
+    findById: async () => ({
+      id: SESSION_ID,
+      userId: ownerlessSession ? undefined : OWNER,
+      name: 'Notebook',
+      tags: [],
+      summary: '',
+    }),
+  },
   User: { findById: async () => ({ id: OWNER }) },
   Quest: {
     find: () => ({ sort: () => ({ limit: async () => [{ _id: 'q1', prompt: 'p', reply: 'r' }] }) }),
@@ -93,6 +104,7 @@ const run = () =>
 describe('sessionSummarization - summary FabFile lookup is owner-scoped', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    ownerlessSession = false;
     h.fabFiles = [];
     h.findOne.mockImplementation(async (filter: Record<string, unknown>) => {
       const match = h.fabFiles.find(f =>
@@ -148,5 +160,22 @@ describe('sessionSummarization - summary FabFile lookup is owner-scoped', () => 
     await run();
 
     expect(h.findOne).toHaveBeenCalledWith({ sessionId: SESSION_ID, userId: OWNER });
+    // The healthy path has to stay quiet, or the ownerless warning below is just noise.
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('indexes nothing, loudly, when the session records no owner', async () => {
+    // Mongoose strips an undefined value out of a query filter, so passing one through would
+    // silently restore the unscoped lookup rather than fail. Verified against mongoose 8.24.1:
+    // {sessionId:'x', userId: undefined} casts to {sessionId:'x'}.
+    ownerlessSession = true;
+    h.fabFiles = [{ id: 'stranger-file', sessionId: SESSION_ID, userId: STRANGER, tags: [] }];
+
+    await run();
+
+    expect(h.findOne).not.toHaveBeenCalled();
+    expect(h.updateFabFile).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('records no owner'));
   });
 });

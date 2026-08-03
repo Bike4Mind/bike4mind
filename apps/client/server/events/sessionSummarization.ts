@@ -189,6 +189,16 @@ export const handler = withEventContext(async (event, logger) => {
   // entire summarization - the summary text is already saved on the session.
   try {
     await withTransaction(async () => {
+      // Mongoose drops an undefined value out of a query filter, so an ownerless session would
+      // turn the scoped lookup below back into the unscoped one it replaced - silently, and
+      // with the overwrite hazard restored. Refuse instead. The summary text is already saved on
+      // the session above; only the RAG indexing is skipped. `userId` is required by the schema,
+      // so this fires only for a row written before that constraint existed.
+      if (!session.userId) {
+        logger.error(`Skipping summary file for session ${session.id}: the session records no owner`);
+        return;
+      }
+
       // Scoped to the session's owner because a sessionId is not an ownership claim: a FabFile
       // carrying this one but belonging to somebody else would otherwise be selected and have its
       // content, name and tags overwritten wholesale. This job runs unattended (chat completion,
