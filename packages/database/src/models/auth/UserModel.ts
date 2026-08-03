@@ -842,9 +842,9 @@ UserSchema.pre('save', function (next) {
   const providers = this.authProviders;
   if (Array.isArray(providers) && providers.length > 1) {
     const lastIndexByKey = new Map<string, number>();
-    providers.forEach((p, i) => lastIndexByKey.set(`${p?.strategy} ${p?.id ?? ''}`, i));
+    providers.forEach((p, i) => lastIndexByKey.set(`${p?.strategy}\u0000${p?.id ?? ''}`, i));
     if (lastIndexByKey.size !== providers.length) {
-      this.authProviders = providers.filter((p, i) => lastIndexByKey.get(`${p?.strategy} ${p?.id ?? ''}`) === i);
+      this.authProviders = providers.filter((p, i) => lastIndexByKey.get(`${p?.strategy}\u0000${p?.id ?? ''}`) === i);
     }
   }
   next();
