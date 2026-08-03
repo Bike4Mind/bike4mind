@@ -32,4 +32,8 @@ describe('normalizeId', () => {
   it('never yields "[object Object]" for an unrecognized object', () => {
     expect(normalizeId({ foo: 'bar' })).toBeUndefined();
   });
+
+  it('returns undefined for an array (not a valid id shape), not a stringified "1,2,3"', () => {
+    expect(normalizeId([1, 2, 3] as unknown)).toBeUndefined();
+  });
 });
