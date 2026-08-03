@@ -461,7 +461,8 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
         .filter((file): file is IFabFileDocument => file !== undefined)
         .map(file => ({ ...file, enabled: true }));
     },
-    [] // stable: reads fabFilesRef at call time
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally stable: reads fabFilesRef at call time
+    []
   );
 
   // Persist session knowledgeIds to the backend
