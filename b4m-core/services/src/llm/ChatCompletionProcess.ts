@@ -2275,45 +2275,50 @@ export class ChatCompletionProcess {
         logger.warn(`📊 Failed to calculate token breakdown:`, tokenBreakdownError);
       }
 
+      // Per-source breakdown, derived from the same tagged list the prompt was assembled
+      // from (see systemPromptSources) rather than re-listed by hand here. The hand-written
+      // version this replaces covered a third of the sources and reported a `session_summary`
+      // row built from `session.summary`, a field the assembled prompt never carried - it
+      // carries `session.contextSummary`. Sources appended downstream by buildAndSortMessages
+      // (FormatPromptTemplate, image prompt) are still not represented here. The two always-on
+      // floor sources come from systemPromptFloorTelemetry, which owns those rows outright -
+      // including the wasIncluded:false inventory rows a derivation from the admitted stack
+      // cannot produce; inclusion is read off the admitted stack rather than the raw settings
+      // gates, so a promptMode that strips a block reports it excluded instead of billed (#810).
+      //
+      // Persisted on the quest for every completion - unlike contextTelemetry, which exists
+      // only when enhanced telemetry is on - so the API layer can report which prompts fed a
+      // completion instead of leaving callers to infer it from behavior. Guarded: a counting
+      // failure must degrade to a missing breakdown, never a failed completion.
+      let systemPromptDetails: SystemPromptDetail[] | undefined;
+      try {
+        const floorSources: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
+        systemPromptDetails = await toPromptDetails(
+          admittedContextMessages.filter(t => !floorSources.includes(t.source)),
+          messages => calculateTotalTokenLength(messages, tokenCalcOptions)
+        );
+        const admitted = (source: PromptSourceId) => admittedContextMessages.some(t => t.source === source);
+        systemPromptDetails.push(
+          ...(await buildAlwaysOnFloorDetails(
+            {
+              artifactEmissionEnabled: admitted('artifactEmission'),
+              artifactEmissionContent,
+              // The helper models exactly one exclusion ("local model"); a mode that strips
+              // the help-center block must surface the same way: excluded, zero tokens.
+              isLocalModel: !admitted('helpCenter'),
+              helpCenterContent,
+            },
+            content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
+          ))
+        );
+        quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
+      } catch (detailsError) {
+        logger.warn(`📊 Failed to derive system prompt details:`, detailsError);
+      }
+
       // Feed breakdown into telemetry builder for detailed system prompt tracking
-      if (telemetryBuilder) {
+      if (telemetryBuilder && systemPromptDetails) {
         try {
-          // Per-source breakdown, derived from the same tagged list the prompt was assembled
-          // from (see systemPromptSources) rather than re-listed by hand here. The hand-written
-          // version this replaces covered a third of the sources and reported a `session_summary`
-          // row built from `session.summary`, a field the assembled prompt never carried - it
-          // carries `session.contextSummary`. Sources appended downstream by buildAndSortMessages
-          // (FormatPromptTemplate, image prompt) are still not represented here. The two always-on
-          // floor sources are excluded: systemPromptFloorTelemetry owns those rows outright
-          // (pushed below), including the wasIncluded:false inventory rows a derivation from the
-          // admitted stack cannot produce.
-          const floorSources: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
-          const systemPromptDetails: SystemPromptDetail[] = await toPromptDetails(
-            admittedContextMessages.filter(t => !floorSources.includes(t.source)),
-            messages => calculateTotalTokenLength(messages, tokenCalcOptions)
-          );
-
-          // Always-on floor blocks (artifact-emission, help-center) billed on every basic
-          // turn. Previously invisible inside the systemPrompts residual; itemized here so
-          // the fixed prompt cost is auditable in the Context Inspector (#810). Inclusion is
-          // read off the admitted stack rather than the raw settings gates, so a promptMode
-          // that strips a block reports it excluded instead of billed.
-          const admitted = (source: PromptSourceId) => admittedContextMessages.some(t => t.source === source);
-          systemPromptDetails.push(
-            ...(await buildAlwaysOnFloorDetails(
-              {
-                artifactEmissionEnabled: admitted('artifactEmission'),
-                artifactEmissionContent,
-                // The helper models exactly one exclusion ("local model"); a mode that strips
-                // the help-center block must surface the same way: excluded, zero tokens.
-                isLocalModel: !admitted('helpCenter'),
-                helpCenterContent,
-              },
-              content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
-            ))
-          );
-
-          // Calculate total system prompt tokens
           const systemPromptTokensTotal = systemPromptDetails.reduce((sum, p) => sum + p.tokenCount, 0);
 
           telemetryBuilder.setSystemPrompts({
