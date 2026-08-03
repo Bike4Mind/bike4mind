@@ -1893,6 +1893,11 @@ export class ChatCompletionProcess {
       // out of sight of this assembly site, so availability has to be threaded into the builder.
       const imageGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'image_generation') ?? false;
 
+      // navigate_view is auto-added (AUTO_ADDED_TOOL_NAMES), so the local-model trim above drops it
+      // from the built list while it stays in the requested one - the view registry below would then
+      // describe a tool the model never received.
+      const navigateViewAvailable = allTools?.some(t => t.toolSchema.name === 'navigate_view') ?? false;
+
       const toolPromptMessage = await toolBuilder.buildToolPrompt({
         toolPromptId,
         hasContentTransform: (hasContentTransform ?? false) && blogDraftAvailable,
@@ -1988,8 +1993,8 @@ export class ChatCompletionProcess {
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
         // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).
         ...(isLocalModel ? [] : [{ role: 'system' as const, content: helpCenterContent }]),
-        // Inject view registry summary when navigate_view tool is enabled
-        ...(enabledTools.includes('navigate_view')
+        // Inject view registry summary when the navigate_view tool reached the model
+        ...(navigateViewAvailable
           ? [
               {
                 role: 'system' as const,

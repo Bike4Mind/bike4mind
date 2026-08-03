@@ -1312,14 +1312,15 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
-  // The image prompt is appended inside buildAndSortMessages, out of sight of the assembly this
-  // class does, so this option is the only thing keeping that MUST-use instruction aimed at a tool
-  // the model actually holds. Asserted at this layer because the builder's own tests cannot see
-  // whether the caller threads it through.
-  describe('image prompt tool availability', () => {
+  // A prompt block that describes a tool has to be gated on the BUILT tool list, not the requested
+  // one: the two diverge for auto-added tools on local models, and for anything the session denylist
+  // strips after the build. Asserted at this layer because neither the builder's own tests nor the
+  // view-registry helper can see which list the caller consulted.
+  describe('tool-conditional prompt gating', () => {
     const imageTool = { toolSchema: { name: 'image_generation', description: 'gen', parameters: {} } };
+    const navigateTool = { toolSchema: { name: 'navigate_view', description: 'nav', parameters: {} } };
 
-    const optionsPassedWithTools = async (tools: any[], disabledTools?: string[]) => {
+    const runWithTools = async (tools: any[], disabledTools?: string[]) => {
       mockSession.disabledTools = disabledTools;
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
@@ -1354,8 +1355,16 @@ describe('ChatCompletionProcess', () => {
 
       buildToolsSpy.mockRestore();
       buildToolPromptSpy.mockRestore();
-      return mockedBuildAndSortMessages.mock.calls.at(-1)?.[8];
+      return mockedBuildAndSortMessages.mock.calls.at(-1);
     };
+
+    // Argument 9 is the builder options bag; argument 2 is the assembled system-message list.
+    const optionsPassedWithTools = async (tools: any[], disabledTools?: string[]) =>
+      (await runWithTools(tools, disabledTools))?.[8];
+    const hasViewRegistry = async (tools: any[]) =>
+      ((await runWithTools(tools))?.[1] ?? ([] as any[])).some(
+        (m: any) => typeof m?.content === 'string' && m.content.includes('# navigate_view Tool Usage')
+      );
 
     it('reports the tool available when it survives into the built tool list', async () => {
       expect(await optionsPassedWithTools([imageTool])).toMatchObject({ imageGenerationAvailable: true });
@@ -1372,6 +1381,16 @@ describe('ChatCompletionProcess', () => {
       expect(await optionsPassedWithTools([imageTool], ['image_generation'])).toMatchObject({
         imageGenerationAvailable: false,
       });
+    });
+
+    it('includes the view registry when navigate_view is in the built tool list', async () => {
+      expect(await hasViewRegistry([navigateTool])).toBe(true);
+    });
+
+    // navigate_view is auto-added, so a local model has it trimmed from the built list while the
+    // requested list still names it. Gating on the requested list described a tool the model lacked.
+    it('omits the view registry when navigate_view never reached the built tool list', async () => {
+      expect(await hasViewRegistry([])).toBe(false);
     });
   });
 
