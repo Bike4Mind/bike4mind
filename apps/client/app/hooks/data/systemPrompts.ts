@@ -152,6 +152,25 @@ export function useCreateSystemPrompt() {
 }
 
 /**
+ * Hook to delete a DB-only system prompt (one with no code default).
+ * Prompts that have a code default are removed via the reset endpoint instead.
+ */
+export function useDeleteSystemPrompt() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (promptId: string) => {
+      const { data } = await api.delete<{ success: boolean; message: string }>(`/api/admin/system-prompts/${promptId}`);
+      return data;
+    },
+    onSuccess: (_data, promptId) => {
+      queryClient.invalidateQueries({ queryKey: ['system-prompts'] });
+      queryClient.removeQueries({ queryKey: ['system-prompt', promptId] });
+    },
+  });
+}
+
+/**
  * Request params for testing a system prompt
  */
 export interface TestSystemPromptParams {

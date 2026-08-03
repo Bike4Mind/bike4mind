@@ -1011,7 +1011,7 @@ Admin endpoints require the \`admin:*\` scope or superuser role.
 | POST | /api/admin/system-prompts | Create system prompt |
 | GET | /api/admin/system-prompts/[promptId] | Get prompt |
 | PUT | /api/admin/system-prompts/[promptId] | Update prompt |
-| DELETE | /api/admin/system-prompts/[promptId] | Delete prompt |
+| DELETE | /api/admin/system-prompts/[promptId] | Delete prompt (DB-only prompts; use reset when a code default exists) |
 | POST | /api/admin/system-prompts/[promptId]/create-version | Create version |
 | POST | /api/admin/system-prompts/[promptId]/save-version | Save version |
 | POST | /api/admin/system-prompts/[promptId]/switch-version | Switch active version |

@@ -72,6 +72,7 @@ const handler = baseApi()
             return {
               ...dbOverride,
               hasOverride: true,
+              hasCodeDefault: true,
               source: 'db' as const,
               divergesFromCodeDefault: activeContent !== defaultPrompt.content,
             };
@@ -79,6 +80,7 @@ const handler = baseApi()
             return {
               ...defaultPrompt,
               hasOverride: false,
+              hasCodeDefault: true,
               source: 'code' as const,
               divergesFromCodeDefault: false,
             };
@@ -92,6 +94,7 @@ const handler = baseApi()
           allPrompts.push({
             ...dbPrompt,
             hasOverride: true,
+            hasCodeDefault: false,
             source: 'db' as const,
             divergesFromCodeDefault: false,
           });

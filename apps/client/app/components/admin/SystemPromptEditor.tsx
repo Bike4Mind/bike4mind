@@ -32,8 +32,14 @@ import {
   Add as AddIcon,
   History as HistoryIcon,
   Warning as WarningIcon,
+  DeleteOutline as DeleteIcon,
 } from '@mui/icons-material';
-import { useSystemPrompts, useUpdateSystemPrompt, useCreateSystemPrompt } from '@client/app/hooks/data/systemPrompts';
+import {
+  useSystemPrompts,
+  useUpdateSystemPrompt,
+  useCreateSystemPrompt,
+  useDeleteSystemPrompt,
+} from '@client/app/hooks/data/systemPrompts';
 import { IAdminSystemPrompt, IAdminSystemPromptHistory } from '@bike4mind/common';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
@@ -51,6 +57,8 @@ interface ISystemPromptWithMeta extends Omit<IAdminSystemPrompt, 'activeVersion'
   activeVersion?: number;
   /** True when an active DB override's content has drifted from the current code default */
   divergesFromCodeDefault?: boolean;
+  /** False for DB-only prompts: there is no code default behind them, so they can be deleted outright */
+  hasCodeDefault?: boolean;
 }
 
 /** Get the effective active version (handles legacy prompts without activeVersion)
@@ -78,6 +86,7 @@ const SystemPromptEditor: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [editingPrompt, setEditingPrompt] = useState<ISystemPromptWithMeta | null>(null);
   const [viewingPrompt, setViewingPrompt] = useState<ISystemPromptWithMeta | null>(null);
+  const [deletingPrompt, setDeletingPrompt] = useState<ISystemPromptWithMeta | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
   // Version history state
@@ -99,6 +108,7 @@ const SystemPromptEditor: React.FC = () => {
   // Mutation hooks
   const updatePrompt = useUpdateSystemPrompt();
   const createPrompt = useCreateSystemPrompt();
+  const deletePrompt = useDeleteSystemPrompt();
 
   const prompts = (data?.data || []) as ISystemPromptWithMeta[];
   const total = data?.count || 0;
@@ -260,6 +270,17 @@ const SystemPromptEditor: React.FC = () => {
 
   const handleView = (prompt: ISystemPromptWithMeta) => {
     setViewingPrompt(prompt);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingPrompt) return;
+    try {
+      await deletePrompt.mutateAsync(deletingPrompt.promptId);
+      toast.success(`System prompt "${deletingPrompt.name}" deleted`);
+      setDeletingPrompt(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete system prompt');
+    }
   };
 
   // Parse tags/variables from the current input strings
@@ -869,6 +890,20 @@ const SystemPromptEditor: React.FC = () => {
                             <EditIcon />
                           </IconButton>
                         </Tooltip>
+                        {/* Only DB-only prompts can be deleted; ones with a code default are reset instead */}
+                        {prompt.hasCodeDefault === false && (
+                          <Tooltip title="Delete prompt">
+                            <IconButton
+                              size="sm"
+                              variant="plain"
+                              color="danger"
+                              data-testid={`system-prompt-delete-btn-${prompt.promptId}`}
+                              onClick={() => setDeletingPrompt(prompt)}
+                            >
+                              <DeleteIcon />
+                            </IconButton>
+                          </Tooltip>
+                        )}
                       </Stack>
                     </td>
                   </tr>
@@ -878,6 +913,36 @@ const SystemPromptEditor: React.FC = () => {
           </tbody>
         </Table>
       </Sheet>
+
+      {/* Delete confirmation (DB-only prompts) */}
+      <Modal open={!!deletingPrompt} onClose={() => setDeletingPrompt(null)}>
+        <ModalDialog sx={{ maxWidth: 480 }}>
+          <ModalClose />
+          <Typography level="h4">Delete system prompt</Typography>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <Typography level="body-md">
+              Delete <strong>{deletingPrompt?.name}</strong> (
+              <Typography component="span" fontFamily="monospace">
+                {deletingPrompt?.promptId}
+              </Typography>
+              )? This prompt has no code default, so it will be removed entirely. Its version history is preserved.
+            </Typography>
+            <Stack direction="row" spacing={1} justifyContent="flex-end">
+              <Button variant="plain" color="neutral" onClick={() => setDeletingPrompt(null)}>
+                Cancel
+              </Button>
+              <Button
+                color="danger"
+                loading={deletePrompt.isPending}
+                data-testid="system-prompt-delete-confirm-btn"
+                onClick={handleConfirmDelete}
+              >
+                Delete
+              </Button>
+            </Stack>
+          </Stack>
+        </ModalDialog>
+      </Modal>
 
       {/* View Modal */}
       <Modal open={!!viewingPrompt} onClose={() => setViewingPrompt(null)}>
