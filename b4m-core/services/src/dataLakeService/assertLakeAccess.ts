@@ -54,7 +54,7 @@ export function canAccessLake(
   // Org is a hard prerequisite when the lake is org-scoped - evaluated BEFORE the
   // tag/entitlement any-of so a holder in a different org can never pass. Normalize both
   // sides: the ctx org id can reach here as an ObjectId or populated doc, and a raw strict
-  // compare then 404s a lake the casting Mongo collection query still returns (#1109).
+  // compare then 404s a lake the casting Mongo collection query still returns.
   const lakeOrgId = normalizeId(lake.organizationId);
   if (lakeOrgId && lakeOrgId !== normalizeId(ctx.organizationId)) return false;
 
