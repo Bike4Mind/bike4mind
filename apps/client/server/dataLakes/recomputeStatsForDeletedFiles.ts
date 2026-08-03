@@ -20,7 +20,7 @@ import { dataLakeService } from '@bike4mind/services';
  * the aggregation will not see the `deletedAt` it is meant to count.
  *
  * Prefix-only members are not healed here: resolving a prefix back to its lake needs a scan
- * across lakes, and gating that arm is tracked separately.
+ * across lakes, and gating that arm is #1263 (blocked on #1152 for prefix uniqueness).
  */
 export const recomputeStatsForDeletedFiles = async (
   tagNames: readonly unknown[],
