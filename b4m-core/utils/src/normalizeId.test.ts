@@ -36,4 +36,14 @@ describe('normalizeId', () => {
   it('returns undefined for an array (not a valid id shape), not a stringified "1,2,3"', () => {
     expect(normalizeId([1, 2, 3] as unknown)).toBeUndefined();
   });
+
+  it('stringifies a finite number id', () => {
+    expect(normalizeId(42)).toBe('42');
+  });
+
+  it('returns undefined for non-id primitives (NaN, booleans) - never "NaN"/"false"', () => {
+    expect(normalizeId(NaN)).toBeUndefined();
+    expect(normalizeId(false as unknown)).toBeUndefined();
+    expect(normalizeId(true as unknown)).toBeUndefined();
+  });
 });
