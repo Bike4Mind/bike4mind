@@ -11,9 +11,10 @@ import { SAFE_USER_LOOKUP_PROJECT, USER_SECRET_FIELDS } from '@bike4mind/common'
  * End-to-end tests for the `{logs}` branch, driving the real handler against createMongoServer.
  *
  * Originally written for the M1 $lookup reorder; the row shape they pin is now flat (one row per
- * day/counter/user/metadata) rather than nested under `users[]`, because paging moved server-side.
- * The properties each test guards are unchanged: grouping/count correctness, the orphaned-user
- * $ifNull fallback, the $convert onError arm, the $lookup projection, and metadata fragmentation.
+ * day/counter/user, split by SPLIT_METADATA_KEYS) rather than nested under `users[]`, because
+ * paging moved server-side. The properties each test guards are unchanged: grouping/count
+ * correctness, the orphaned-user $ifNull fallback, the $convert onError arm, and the $lookup
+ * projection.
  *
  * The projection test asserts on the exported builder the handler actually calls, NOT on a copy of
  * the stages. An earlier version re-declared its own pipeline, which meant deleting the production
@@ -97,8 +98,8 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
         metadata: { sessionId: 'session-a' },
       },
       {
-        // Second event for the same user/date/counterName/metadata -> should collapse into the
-        // same group and sum, exactly like the pre-reorder pipeline.
+        // Second event for the same user/date/counterName -> should collapse into the same
+        // group and sum, exactly like the pre-reorder pipeline.
         userId: goodUser.id,
         userName: 'Good User',
         userLevel: 'User',
@@ -181,6 +182,8 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
   });
 
   it('builds the user $lookup with an inner $project restricted to non-secret fields', () => {
+    // email is the only field the route reads off the joined user; the organization comes off
+    // the counter log itself, which is also what the org filters match on.
     // Asserts on the EXPORTED builder the handler calls, so deleting or widening the production
     // $project fails here. Do not inline a copy of the stages: the $lookup's projection has no
     // effect on the HTTP response (the outer $group/$project already forward only named scalars),
@@ -201,15 +204,13 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     // Exact key set: an inclusion projection that gains a field is exactly the regression to catch,
     // so assert equality rather than a subset. Secret fields are named explicitly too, so the
     // intent survives even if SAFE_USER_LOOKUP_PROJECT itself is ever widened by mistake.
-    expect(new Set(Object.keys(projection!))).toEqual(
-      new Set([...Object.keys(SAFE_USER_LOOKUP_PROJECT), 'email', 'organization'])
-    );
+    expect(new Set(Object.keys(projection!))).toEqual(new Set([...Object.keys(SAFE_USER_LOOKUP_PROJECT), 'email']));
     for (const secret of USER_SECRET_FIELDS) {
       expect(projection, `secret field "${secret}" must never be projected`).not.toHaveProperty(secret);
     }
   });
 
-  it('keeps metadata fragments in separate groups', async () => {
+  it('keeps report activity in separate groups per report', async () => {
     const user = await User.create({
       username: 'e2e-frag-user',
       name: 'Frag User',
@@ -243,7 +244,8 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     const body = JSON.parse(JSON.stringify(res._getJSONData()));
     const rows = body.logs as Array<{ metadata: { reportId: string } }>;
 
-    // Still two rows, one per distinct reportId - collapsing the group key is not this change's job.
+    // reportId is a SPLIT_METADATA_KEY, so these two views stay apart even though everything
+    // else about them (day, counter, user) is identical.
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map(r => r.metadata.reportId))).toEqual(new Set(['report-1', 'report-2']));
   });
