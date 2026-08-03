@@ -134,6 +134,7 @@ import {
   mapMimeTypeToArtifactType,
   ARTIFACT_EMISSION_PROMPT,
   HELP_CENTER_PROMPT,
+  ABSTENTION_PROMPT,
   ELISION_WARNING,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
@@ -1969,6 +1970,16 @@ export class ChatCompletionProcess {
                 content: getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT),
               },
             ]),
+        // Abstention licence. Counterweight to the completeness pressure the rest of the prompt
+        // applies - without it the model treats "answer fully" as unconditional and invents
+        // specifics about the user or their data rather than naming the gap. Ships on EVERY
+        // completion (not just the grounded surfaces) because that is where the pressure is.
+        // Admin-editable via `AbstentionPrompt`; a blank value falls back to the built-in default
+        // so the licence can never be silently stripped.
+        {
+          role: 'system' as const,
+          content: getSettingsValue('AbstentionPrompt', defaultAdminSettings, ABSTENTION_PROMPT),
+        },
         // Inject view registry summary when navigate_view tool is enabled
         ...(enabledTools.includes('navigate_view')
           ? [

@@ -86,6 +86,34 @@ If the full deliverable genuinely will not fit, do NOT stub the difference. REDU
  */
 export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Center that documents how to use the app. Users reach it from the "Help Center" item in the left sidebar, the help (?) icons beside feature titles, or the ? keyboard shortcut. When the user is clearly asking how to DO something in Bike4Mind itself (navigation, settings, files, the data lake, OptiHashi, agents, projects, sharing, billing, etc.) — as opposed to asking you to perform a task — give a brief, helpful answer and point them to the Help Center for full, up-to-date steps. If a knowledge-base/help search tool is available, use it to ground your answer in the actual help docs first. Do NOT invent menu paths, button names, or features you are not sure exist; if unsure, say so and direct them to the Help Center rather than guessing.`;
 
+/**
+ * Default text for the abstention licence. Single source of truth used BOTH as the
+ * `AbstentionPrompt` admin setting's default AND as the runtime fallback in ChatCompletionProcess -
+ * so an unset/empty/cleared DB value reverts to this and never strips the licence.
+ *
+ * Counterweight to the completeness pressure the rest of the system prompt applies: without an
+ * explicit licence to abstain, the model treats "answer fully" as unconditional and fills gaps with
+ * invented specifics about the user or their data. Measured as the single largest quality gain on
+ * questions whose correct answer is a refusal, so it ships on every completion rather than only on
+ * the grounded surfaces. Kept short on purpose - it must be cheap and behaviorally light.
+ */
+export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data.`;
+
+/**
+ * Default text for the formatting system message. Single source of truth used BOTH as the
+ * `FormatPromptTemplate` admin setting's default AND as the runtime fallback in
+ * `includeHardcodedSystemMessage` (b4m-core/utils/src/llm/utils.ts) - keep the two in sync.
+ *
+ * Deliberately scoped to formatting ONLY. The previous wording ("Adhere to specific formatting
+ * requests...") read as a general compliance instruction and bled into WHETHER to answer: as the
+ * only system content it roughly halved refusal quality. The opening clause is the fix - it fences
+ * this message off from the answer/abstain decision. Injected only when `UseFormatPrompt` is on.
+ *
+ * NOTE: a stored settings row pins its own wording, so changing this default does not reach an
+ * existing deployment that has already saved a value - the row must be edited in admin settings too.
+ */
+export const FORMAT_PROMPT_TEMPLATE = `Formatting only - nothing here decides whether or how fully to answer. Format replies to maintain the integrity of the requested style; default to markdown for text. Preserve proper structure for poems, songs, or haikus. When the user specifies an output format (e.g. TypeScript), use that format for the parts you do answer.`;
+
 export const SettingKeySchema = z.enum([
   'openaiDemoKey',
   'anthropicDemoKey',
@@ -104,6 +132,7 @@ export const SettingKeySchema = z.enum([
   'FormatPromptTemplate',
   'ArtifactEmissionPrompt',
   'HelpCenterPrompt',
+  'AbstentionPrompt',
   'UseFormatPrompt',
   'EnableQuestMaster',
   'EnableQuestMasterDefault',
@@ -1235,6 +1264,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'SystemFiles', order: 8 },
       { key: 'ArtifactEmissionPrompt', order: 9 },
       { key: 'HelpCenterPrompt', order: 10 },
+      { key: 'AbstentionPrompt', order: 11 },
     ],
   },
   EMBEDDING: {
@@ -1963,8 +1993,9 @@ export const settingsMap = {
   FormatPromptTemplate: makeStringSetting({
     key: 'FormatPromptTemplate',
     name: 'Format Prompt Template',
-    defaultValue: '',
-    description: 'The template to use for formatting prompts.',
+    defaultValue: FORMAT_PROMPT_TEMPLATE,
+    description:
+      'System message governing OUTPUT FORMATTING only, injected when Use Format Prompt is on. Live-editable; clearing it reverts to the built-in default. Keep it scoped to formatting - wording that reads as general compliance ("adhere to requests") bleeds into whether the model answers at all and measurably degrades appropriate refusals.',
     category: 'AI',
     order: 4,
   }),
@@ -1985,6 +2016,15 @@ export const settingsMap = {
       'Short system prompt that makes the model aware of the in-app Help Center and tells it to point users there for app how-to questions. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default.',
     category: 'AI',
     order: 10,
+  }),
+  AbstentionPrompt: makeStringSetting({
+    key: 'AbstentionPrompt',
+    name: 'Abstention Prompt',
+    defaultValue: ABSTENTION_PROMPT,
+    description:
+      'Short system prompt licensing the model to say "I do not have enough to answer that" and to name what is missing instead of inventing facts about the user or their data. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default.',
+    category: 'AI',
+    order: 11,
   }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',

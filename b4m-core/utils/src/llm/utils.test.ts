@@ -7,10 +7,11 @@ import {
   getLastBuildDebugInfo,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
+  includeHardcodedSystemMessage,
   TOOL_RESULT_NOT_RECORDED,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
-import { DEFAULT_HISTORY_FETCH_LIMIT, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
+import { DEFAULT_HISTORY_FETCH_LIMIT, FORMAT_PROMPT_TEMPLATE, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
 import type { IMessage, ISessionDocument } from '@bike4mind/common';
 
 // Define ITokenizer type locally since it's in @bike4mind/utils
@@ -2627,5 +2628,25 @@ describe('unusable attachments are judged one at a time', () => {
     expect(result.some(m => typeof m.content === 'string' && (m.content as string).startsWith('bravo,col'))).toBe(
       false
     );
+  });
+});
+
+describe('includeHardcodedSystemMessage', () => {
+  it('falls back to the shared default when the stored template is blank', () => {
+    const result = includeHardcodedSystemMessage([{ role: 'user', content: 'hi' }], '');
+    expect(result[0]).toEqual({ role: 'system', content: FORMAT_PROMPT_TEMPLATE });
+    expect(result[1]).toEqual({ role: 'user', content: 'hi' });
+  });
+
+  it('uses the stored template when one is set', () => {
+    const result = includeHardcodedSystemMessage([{ role: 'user', content: 'hi' }], 'Always answer in Klingon.');
+    expect(result[0]).toEqual({ role: 'system', content: 'Always answer in Klingon.' });
+  });
+
+  it('keeps the default scoped to formatting so it cannot bleed into whether to answer', () => {
+    // The prior wording ("Adhere to specific formatting requests...") read as general compliance
+    // and roughly halved refusal quality when it was the only system content.
+    expect(FORMAT_PROMPT_TEMPLATE).toContain('nothing here decides whether or how fully to answer');
+    expect(FORMAT_PROMPT_TEMPLATE).not.toMatch(/adhere to/i);
   });
 });

@@ -1,6 +1,7 @@
 import {
   dayjs,
   extractSnippetMeta,
+  FORMAT_PROMPT_TEMPLATE,
   ICacheRepository,
   IChatHistoryItemRepository,
   IExtendedMessage,
@@ -1495,15 +1496,17 @@ export async function processFabFilesServer(
   return { userMessages, errorMessages };
 }
 
+/**
+ * Prepends the formatting system message. `formatPrompt` is the admin-editable
+ * `FormatPromptTemplate` value; blank falls back to FORMAT_PROMPT_TEMPLATE, the shared default this
+ * used to duplicate inline. That older inline wording ("Adhere to specific formatting requests...")
+ * read as general compliance and bled into whether the model answered at all - see the const's
+ * comment in @bike4mind/common schemas/settings.
+ */
 export function includeHardcodedSystemMessage(messages: IMessage[], formatPrompt: string): IMessage[] {
-  let format = `format replies to maintain the integrity of the requested style. Default to markdown for text-based responses. Ensure proper structuring for poems, songs, or haikus with appropriate line breaks and stanza divisions. Adhere to specific formatting requests such as TypeScript when specified by the user.`;
-  if (formatPrompt) {
-    format = formatPrompt;
-  }
-
   const hardcodedSystemMessage: IMessage = {
     role: 'system',
-    content: format,
+    content: formatPrompt || FORMAT_PROMPT_TEMPLATE,
   };
 
   return [hardcodedSystemMessage, ...messages];
