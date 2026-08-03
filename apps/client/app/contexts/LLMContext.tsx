@@ -478,6 +478,16 @@ export const LLMProvider: React.FC = () => {
           const lastUsed = state.lastUsedTextModel ? models.find(model => model.id === state.lastUsedTextModel) : null;
           const modelToUse = adminDefault || lastUsed || models[0];
 
+          // False-alarm switch: the chain resolved back to the model already selected. This happens
+          // when isModelAccessible transiently reports the current model inaccessible during a
+          // catalog refetch (#1254). Do NOT reset max_tokens (would silently raise a user-lowered
+          // ceiling) or the agent flags - only correct a stale/unset ceiling down, and otherwise
+          // leave state untouched so the re-run is a no-op.
+          if (modelToUse.id === state.model) {
+            const refitted = refitMaxTokensForModel(state.max_tokens, modelToUse, { allowRaise: false });
+            return refitted === state.max_tokens ? state : { ...state, max_tokens: refitted };
+          }
+
           return {
             ...state,
             model: modelToUse.id,
