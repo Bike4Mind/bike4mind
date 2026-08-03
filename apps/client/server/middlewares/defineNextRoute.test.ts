@@ -236,4 +236,22 @@ describe('nextRouteForContract', () => {
       expect(res._getStatusCode()).toBe(404);
     });
   });
+
+  describe('verb binding (P3-1)', () => {
+    it('throws when a handler is registered on a verb other than the contract method', () => {
+      // A POST contract wired via .get(handler) would serve GET with validation on the
+      // wrong verb - fail loud at registration instead.
+      expect(() => nextRouteForContract(makeContract()).get(vi.fn())).toThrow(/method 'post'/i);
+      expect(() => nextRouteForContract(makeContract({ method: 'put' })).post(vi.fn())).toThrow(/method 'put'/i);
+    });
+
+    it('throws for the registrars that previously bypassed the prelude (.all/.head/.options/.trace)', () => {
+      // These were not wrapped before, so a handler mounted on them left req.validated
+      // undefined and skipped the drift check. They now match no single-method contract.
+      for (const verb of ['all', 'head', 'options', 'trace'] as const) {
+        const route = nextRouteForContract(makeContract()) as unknown as Record<string, (h: unknown) => unknown>;
+        expect(() => route[verb](vi.fn()), verb).toThrow(/method 'post'/i);
+      }
+    });
+  });
 });

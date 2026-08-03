@@ -10,16 +10,8 @@ import { chatContract } from './chat.contract';
  */
 export const CONTRACTS: readonly EndpointContract[] = [chatContract];
 
-// A duplicated operationId silently overwrites an SDK method name, and a duplicated
-// method+path silently overwrites a whole operation in the spec. Both are cheap to
-// make impossible at import time rather than discovering them in generated output.
-const seen = new Map<string, string>();
-for (const contract of CONTRACTS) {
-  for (const key of [`operationId:${contract.operationId}`, `route:${contract.method} ${contract.path}`]) {
-    const previous = seen.get(key);
-    if (previous) {
-      throw new Error(`Duplicate contract ${key} declared by both ${previous} and ${contract.operationId}.`);
-    }
-    seen.set(key, contract.operationId);
-  }
-}
+// Duplicate-operation detection (operationId / method+path collisions, including
+// against the hand-registered ops) runs at spec-generation time via
+// assertUniqueOperations in openapi/operations.ts - NOT here at import time, so a
+// mistake fails the spec build/tests rather than crashing every module that imports
+// the @bike4mind/common barrel.

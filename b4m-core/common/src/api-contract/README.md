@@ -54,10 +54,10 @@ Reference example: `contracts/chat.contract.ts` + `apps/client/pages/api/chat.ts
   runtime handlers do not import - calling it there crashes the endpoint on import.
   Annotation happens in the OpenAPI layer (`registerContract`) only.
 - **Responses assembled inline** in a handler are validated against the contract in
-  non-prod by both adapters, so drift shows up in tests. Keep the response schema
+  non-prod by the Next adapter, so drift shows up in tests. Keep the response schema
   accurate.
 - **422 is auto-documented.** A contract with a `request` schema returns 422 on
-  validation failure (both adapters guarantee it), so `registerContract` injects a
+  validation failure (the adapter guarantees it), so `registerContract` injects a
   standard 422 response - you do not (and should not) declare it per endpoint.
   Declare your own `422` only if the shape genuinely differs.
 - **Naming / versioning (forward-only):** new public endpoints under `/api/v1/*`,
