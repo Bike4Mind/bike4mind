@@ -89,6 +89,10 @@ export function redactLakeForActor(
     // strip, so keep identity; every other blank drops the key so a reader sees "unset".
     if (!trimmed) {
       if (lake.systemPrompt === undefined) return lake;
+      // Object-rest spread is safe here (unlike the reader path, which uses the allow-list): this
+      // branch runs only for an editor, who is already authorized to see the whole document, so a
+      // stray key it fails to drop is at worst their own re-exposed blank prompt - never a leak to
+      // an unauthorized reader. Only the reader path needs the leak-proof allow-list projection.
       const { systemPrompt: _blank, ...rest } = lake;
       return rest as IDataLakeDocument;
     }
