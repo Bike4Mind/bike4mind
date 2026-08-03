@@ -36,6 +36,9 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
   EmbeddingFactory: class {},
   getProviderFromModel: vi.fn(),
+  resolveEmbeddingConfig: vi.fn(() => ({ config: {}, missing: null })),
+  // Mirror the real name-based guard so any test that reaches the failure branch classifies correctly.
+  isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
 }));
 vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get: () => 'mock' }) }) }));
 

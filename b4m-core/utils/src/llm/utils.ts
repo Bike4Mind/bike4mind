@@ -1076,10 +1076,13 @@ export async function processFabFilesServer(
       logger
     );
   } catch (error) {
+    // Pass the message, not the Error object: the structured logger serializes a raw Error to `{}`,
+    // which drops exactly the reason (401 vs rate limit vs network) an operator needs in this
+    // degraded-mode line.
     logger.warn(
       `[processFabFilesServer] Query embedding failed (${selectedEmbeddingModel}); ` +
         'falling back to raw file content for this turn.',
-      error
+      error instanceof Error ? error.message : String(error)
     );
   }
 
