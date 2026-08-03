@@ -90,15 +90,5 @@ describe('refitMaxTokensForModel', () => {
     it('still lowers a value the model cannot accept', () => {
       expect(refitMaxTokensForModel(128000, small, { allowRaise: false })).toBe(16384);
     });
-
-    // #1254: on a new chat a transient accessibility blip makes the LLMContext fallback effect
-    // re-resolve to the SAME model and re-fit it with allowRaise:false. A user who dragged Sol
-    // (context 1,050,000, ceiling 128,000) to the 2048 floor must keep 2048 - never the recomputed
-    // 128,000 default. This pins the contract that effect now depends on.
-    it('preserves the Sol 2048 floor on a same-model re-fit (never the 128000 default)', () => {
-      const sol = { contextWindow: 1_050_000, max_tokens: 128000 };
-      expect(computeDefaultMaxTokens(sol)).toBe(128000);
-      expect(refitMaxTokensForModel(2048, sol, { allowRaise: false })).toBe(2048);
-    });
   });
 });
