@@ -401,10 +401,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
   /**
-   * Count the number of files by user id and tag.
-   * @param userId - The ID of the user.
-   * @param tag - The tag to count.
-   * @returns A promise that resolves to the number of files.
+   * Count a user's live files carrying one tag. Matches the WHOLE name, case-insensitively - a
+   * `test` tag does not count files tagged `testing`. Excludes soft-deleted files, unlike the
+   * write paths that keep tag names in step.
    */
   countByUserIdAndTag(userId: string, tag: string): Promise<number>;
 
@@ -469,20 +468,47 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ namespace: string; fileCount: number }[]>;
 
   /**
-   * Remove a tag from a user's files.
-   * @param userId - The ID of the user.
-   * @param tag - The tag to remove.
-   * @returns A promise that resolves to the number of files.
+   * Strip one tag name off every file a user owns, so deleting a tag document cannot leave the
+   * name orphaned on the files that carried it. Matches the WHOLE name, case-insensitively, and
+   * removes every occurrence - including a name a file carries twice.
+   *
+   * Includes SOFT-DELETED files, unlike most reads here: a soft-deleted file that kept the name
+   * would resurrect a tag that no longer exists the moment it is undeleted. Also clears
+   * `primaryTag` where it named the removed tag.
+   *
+   * Scoped to files the user OWNS. A file shared to them but owned by someone else keeps the
+   * name, which is correct - one user's tag edit must not rewrite another user's file.
+   *
+   * @returns files modified by the tag removal (not tags removed, and not counting the
+   * `primaryTag` sweep).
    */
   removeTagByUserId(userId: string, tag: string): Promise<number>;
 
   /**
-   * Update the tags for a user's files.
-   * @param userId - The ID of the user.
-   * @param tag - The tag to update.
-   * @returns A promise that resolves to the number of files.
+   * Rename one tag on every file a user owns, so renaming a tag document cannot leave the old name
+   * orphaned on the files that carried it. Matches the WHOLE name, case-insensitively, and renames
+   * EVERY occurrence in a file's tags array rather than only the first. Includes soft-deleted files
+   * and carries `primaryTag` across, for the same reasons as `removeTagByUserId`.
+   *
+   * May leave a file carrying `newTag` twice - once from the rename and once because it already
+   * had that tag. The caller resolves it with `dedupeTagByUserId`; doing both in one write would
+   * mean rewriting the whole array and losing the element-level concurrency this buys.
+   *
+   * @returns files modified by the rename (not the `primaryTag` sweep).
    */
   updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number>;
+
+  /**
+   * Collapse a repeated tag name to a single entry on every file of a user's that carries it more
+   * than once, normalizing the survivor to `name`'s casing. Keeps the FIRST occurrence and its
+   * other fields (`strength`, and anything this schemaless array happens to hold).
+   *
+   * The companion to `updateTagsByUserId`: renaming in place is what creates the duplicate, when a
+   * file already carried the target name.
+   *
+   * @returns the number of files that actually had a duplicate to collapse.
+   */
+  dedupeTagByUserId(userId: string, name: string): Promise<number>;
 
   /**
    * Atomically remove every tag matching one of `tagNames` (exact names) from one file's

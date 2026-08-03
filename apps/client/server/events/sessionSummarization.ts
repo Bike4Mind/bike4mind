@@ -48,6 +48,16 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
+  // Everything downstream keys off the session's owner: it is the conjunct that stops the
+  // summary-file lookup selecting someone else's document, and the owner createFabFile stamps.
+  // Mongoose drops an undefined value from a filter, so an owner-less session would silently
+  // restore the unscoped lookup - and the acting user comes from the event on the spider and
+  // agent-run paths, so the `!user` check below does not catch it.
+  if (!session.userId) {
+    logger.warn(`Session ${sessionId} has no owner; skipping summarization`);
+    return;
+  }
+
   const user = await User.findById(userId ?? session.userId);
   if (!user) {
     logger.error(`User not found`);
@@ -189,22 +199,11 @@ export const handler = withEventContext(async (event, logger) => {
   // entire summarization - the summary text is already saved on the session.
   try {
     await withTransaction(async () => {
-      // Mongoose drops an undefined value out of a query filter, so an ownerless session would
-      // turn the scoped lookup below back into the unscoped one it replaced - silently, and
-      // with the overwrite hazard restored. Refuse instead. The summary text is already saved on
-      // the session above; only the RAG indexing is skipped. `userId` is required by the schema,
-      // so this fires only for a row written before that constraint existed.
-      if (!session.userId) {
-        logger.error(`Skipping summary file for session ${session.id}: the session records no owner`);
-        return;
-      }
-
-      // Scoped to the session's owner because a sessionId is not an ownership claim: a FabFile
-      // carrying this one but belonging to somebody else would otherwise be selected and have its
-      // content, name and tags overwritten wholesale. This job runs unattended (chat completion,
-      // quest processing, the admin spider across other users' notebooks), so there is no
-      // user-facing gate in front of it. A miss falls through to createFabFile below, which is the
-      // safe direction - a duplicate summary rather than an overwrite of a stranger's document.
+      // The owner conjunct is load-bearing: a sessionId is not an ownership claim (any user can
+      // stamp one on their own file via PUT /api/files/[id]) and updateFabFile below gates on
+      // findAccessibleById, which a read share satisfies. Without it, a file merely shared with
+      // the summarizing user gets its content and tags overwritten with this summary. A miss
+      // falls through to createFabFile - a duplicate beats clobbering someone else's file.
       const fabfile = await fabFileRepository.findOne({ sessionId: session.id, userId: session.userId });
       if (fabfile) {
         // Re-summarizing must not change which data lakes this file belongs to. The tags here are
