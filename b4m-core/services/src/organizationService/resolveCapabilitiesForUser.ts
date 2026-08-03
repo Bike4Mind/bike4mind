@@ -23,6 +23,18 @@ interface CapabilityAdapters {
 type CapabilityUser = Pick<IUserDocument, 'id' | 'groups'> & { isAdmin?: boolean };
 
 /**
+ * Group-type -> capability keys, injected by the consumer (org-groups #1178).
+ *
+ * `GROUP_TYPE_CATALOG` ships `capabilities` EMPTY in open core on purpose: what a type confers is
+ * product-specific (e.g. `crm:read`) and a product key can't live in the generic public
+ * catalog. The consuming overlay owns that mapping and passes it here; core stays generic and simply
+ * resolves the union. A type absent from the map falls back to the catalog's own capabilities (empty
+ * today), so omitting a type means it confers nothing. Code-defined and platform-controlled - never
+ * org-writable, which is what keeps an org from granting itself a capability (#1178 decision).
+ */
+export type GroupTypeCapabilityMap = Readonly<Record<string, readonly string[]>>;
+
+/**
  * Resolve the CAPABILITY set a user holds within an organization (org-groups #1234).
  *
  * `GroupTypeDefinition.capabilities` is the product-behaviour axis a group type confers; until this
@@ -50,7 +62,13 @@ export async function resolveCapabilitiesForUser(
     user,
     organizationId,
     override,
-  }: { user: CapabilityUser; organizationId: string; override?: GroupTypeResolutionOverride },
+    capabilitiesByType,
+  }: {
+    user: CapabilityUser;
+    organizationId: string;
+    override?: GroupTypeResolutionOverride;
+    capabilitiesByType?: GroupTypeCapabilityMap;
+  },
   adapters: CapabilityAdapters
 ): Promise<string[]> {
   const organization = await adapters.db.organizations.findById(organizationId);
@@ -78,9 +96,11 @@ export async function resolveCapabilitiesForUser(
     }
   }
 
+  // Prefer the consumer-injected mapping (#1178); fall back to the catalog's own capabilities
+  // (empty in open core). A type absent from the injected map contributes nothing.
   const capabilities = new Set<string>();
   for (const type of effectiveTypes) {
-    for (const capability of getGroupType(type)?.capabilities ?? []) {
+    for (const capability of capabilitiesByType?.[type] ?? getGroupType(type)?.capabilities ?? []) {
       capabilities.add(capability);
     }
   }
@@ -98,9 +118,19 @@ export async function userHasCapability(
     organizationId,
     capability,
     override,
-  }: { user: CapabilityUser; organizationId: string; capability: string; override?: GroupTypeResolutionOverride },
+    capabilitiesByType,
+  }: {
+    user: CapabilityUser;
+    organizationId: string;
+    capability: string;
+    override?: GroupTypeResolutionOverride;
+    capabilitiesByType?: GroupTypeCapabilityMap;
+  },
   adapters: CapabilityAdapters
 ): Promise<boolean> {
-  const capabilities = await resolveCapabilitiesForUser({ user, organizationId, override }, adapters);
+  const capabilities = await resolveCapabilitiesForUser(
+    { user, organizationId, override, capabilitiesByType },
+    adapters
+  );
   return capabilities.includes(capability);
 }
