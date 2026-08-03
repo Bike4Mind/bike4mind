@@ -16,6 +16,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { findLakeAccessibleFabFile } from '@server/dataLakes';
+import { recomputeStatsForDeletedFiles } from '@server/dataLakes/recomputeStatsForDeletedFiles';
 import { getFilesStorage } from '@server/utils/storage';
 import { Request } from 'express';
 import { Types } from 'mongoose';
@@ -220,38 +221,13 @@ const handler = baseApi()
       }
     }
 
-    // A soft delete drops the file out of every lake's membership scope (computeDataLakeStats
-    // excludes deletedAt), so the lakes it belonged to need their stats rebuilt. Only on
-    // 'deleted': an 'unshared' outcome edits the file's `users` array and touches neither
-    // `tags` nor `userId`, so neither membership arm moves and the counts are still right.
-    //
-    // Best-effort, per lake, and deliberately after the transaction: the delete has already
-    // succeeded, stats are a cache the batch finalizer and the read-time reconciler also
-    // rebuild, and the aggregation has to see the committed `deletedAt` to count correctly.
-    //
-    // Prefix-only members are NOT healed here - resolving a prefix back to its lake needs a scan
-    // across lakes, and gating that arm is #1263 (blocked on #1152).
+    // After the transaction, so the aggregation sees the committed `deletedAt`. The shared helper
+    // also backs bulk-delete; see it for why only the 'deleted' outcome moves lake membership.
     if (deleteAction === 'deleted') {
-      const metaTags = dataLakeService.extractDataLakeMetaTags((fabFile?.tags ?? []).map(tag => tag?.name));
-      for (const metaTag of metaTags) {
-        try {
-          const lake = await dataLakeRepository.findByDatalakeTag(metaTag);
-          // An orphaned meta-tag left behind by a deleted lake has no stats to rebuild.
-          if (!lake) continue;
-          // The lake DOCUMENT, not a narrower shape: recomputeLakeStats derives the two-signal
-          // membership scope from it, and a partial one silently counts the meta-tag arm alone.
-          await dataLakeService.recomputeLakeStats(lake, {
-            db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
-          });
-        } catch (error) {
-          // Per lake, so one unresolvable or unwritable lake cannot skip the rest.
-          req.logger.error('Error recomputing data lake stats after single file delete:', {
-            error,
-            fileId: fabFileId,
-            metaTag,
-          });
-        }
-      }
+      await recomputeStatsForDeletedFiles(
+        (fabFile?.tags ?? []).map(tag => tag?.name),
+        { logger: req.logger }
+      );
     }
 
     return res.json({ msg: 'Fab file deleted', action: deleteAction });

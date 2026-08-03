@@ -9,6 +9,7 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
+import { recomputeStatsForDeletedFiles } from '@server/dataLakes/recomputeStatsForDeletedFiles';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
 import { FileEvents } from '@bike4mind/common';
@@ -41,6 +42,9 @@ const handler = baseApi()
     };
 
     let totalSizeToDeduct = 0;
+    // Collected across the whole batch and recomputed once at the end, so deleting N files out of
+    // one lake costs one aggregation rather than N identical ones.
+    const deletedFileTagNames: unknown[] = [];
 
     // Process each file deletion sequentially
     for (const fileId of fileIds) {
@@ -88,6 +92,9 @@ const handler = baseApi()
               { ability: req.ability, session }
             );
             results.deleted.push(fileId);
+            // Read off the pre-delete row: this is a soft delete, so `tags` survives, but the
+            // file has already dropped out of every lake's membership scope.
+            deletedFileTagNames.push(...(fabFile?.tags ?? []).map(tag => tag?.name));
           } else if (result.action === 'unshared') {
             await logEvent(
               {
@@ -127,6 +134,11 @@ const handler = baseApi()
           totalSizeToDeduct,
         });
       }
+    }
+
+    // After every delete transaction has committed, so the aggregation sees each `deletedAt`.
+    if (deletedFileTagNames.length > 0) {
+      await recomputeStatsForDeletedFiles(deletedFileTagNames, { logger: req.logger });
     }
 
     const parts: string[] = [];
