@@ -4,7 +4,8 @@ import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useGetAllOrganizations } from '@client/app/utils/organizationAPICalls';
 import { Box, LinearProgress, Sheet, Stack } from '@mui/joy';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 import AdminProfileModal from '../AdminProfileModal';
 import ComplianceModal from './ComplianceModal';
@@ -29,7 +30,12 @@ const UsersTab: React.FC = () => {
   const [totalUsers, setTotalUsers] = useState<number>(1);
   const [params, setParams] = useUsersTab(useShallow(state => [state.params, state.setParams]));
 
-  const { value: search, debouncedValue: debouncedSearch, setValue: setSearch } = useDebounceValue('');
+  // Seed from the persisted params so the sync effect below does not wipe a restored search.
+  const {
+    value: search,
+    debouncedValue: debouncedSearch,
+    setValue: setSearch,
+  } = useDebounceValue(useUsersTab.getState().params.search ?? '');
 
   const usersQuery = useGetUsers(params);
   const users = useMemo(() => usersQuery.data?.users ?? [], [usersQuery.data]);
@@ -68,6 +74,15 @@ const UsersTab: React.FC = () => {
     [usersQuery.isLoading, usersQuery.isFetching]
   );
 
+  const handleDownloadCsv = useCallback(async () => {
+    try {
+      await exportUsersCsv(params);
+    } catch (err) {
+      console.error('Failed to export users CSV:', err);
+      toast.error('Failed to download the user CSV.');
+    }
+  }, [params]);
+
   return (
     <Sheet
       sx={{
@@ -88,7 +103,7 @@ const UsersTab: React.FC = () => {
             search={search}
             onSearchChange={setSearch}
             onRefresh={() => usersQuery.refetch()}
-            onDownloadCsv={() => exportUsersCsv(params)}
+            onDownloadCsv={handleDownloadCsv}
             onCreateUser={() => setCreateUserModalOpen(true)}
             downloadDisabled={loading || users.length === 0}
             onOpenFilters={() => setFiltersDrawerOpen(true)}
