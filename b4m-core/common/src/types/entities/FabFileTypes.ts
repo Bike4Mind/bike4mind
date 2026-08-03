@@ -469,10 +469,19 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ namespace: string; fileCount: number }[]>;
 
   /**
-   * Remove a tag from a user's files.
-   * @param userId - The ID of the user.
-   * @param tag - The tag to remove.
-   * @returns A promise that resolves to the number of files.
+   * Strip one tag name off every file a user owns, so deleting a tag document cannot leave the
+   * name orphaned on the files that carried it. Matches the WHOLE name, case-insensitively, and
+   * removes every occurrence - including a name a file carries twice.
+   *
+   * Includes SOFT-DELETED files, unlike most reads here: a soft-deleted file that kept the name
+   * would resurrect a tag that no longer exists the moment it is undeleted. Also clears
+   * `primaryTag` where it named the removed tag.
+   *
+   * Scoped to files the user OWNS. A file shared to them but owned by someone else keeps the
+   * name, which is correct - one user's tag edit must not rewrite another user's file.
+   *
+   * @returns files modified by the tag removal (not tags removed, and not counting the
+   * `primaryTag` sweep).
    */
   removeTagByUserId(userId: string, tag: string): Promise<number>;
 

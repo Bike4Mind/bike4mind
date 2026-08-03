@@ -82,6 +82,9 @@ export const useDeleteFileTag = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+      // Deleting a tag now strips its name off the files too, so cached file rows carry tags the
+      // server has already removed.
+      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
     },
     onError: () => {
       toast.error('Failed to delete tag');

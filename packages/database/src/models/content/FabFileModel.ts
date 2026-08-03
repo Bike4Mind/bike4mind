@@ -356,12 +356,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async countByUserIdAndTag(userId: string, tag: string): Promise<number> {
+    if (!tag) return 0;
+    // Anchored and escaped for the same reason as removeTagByUserId, which queries this same
+    // tags.name data: unanchored, `test` counted every file carrying `testing` too.
     const result = await this.fabFileModel.countDocuments({
       userId,
       deletedAt: null,
       tags: {
         $elemMatch: {
-          name: { $regex: new RegExp(tag, 'i') },
+          name: new RegExp(`^${escapeRegex(tag)}$`, 'i'),
         },
       },
     });
@@ -606,24 +609,34 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async removeTagByUserId(userId: string, tag: string): Promise<number> {
+    if (!tag) return 0;
+    // Anchored, not a substring match: unanchored, removing `test` also stripped `testing` and
+    // `unit-test` off every file. Escaped because a tag name is user-chosen and can carry regex
+    // metacharacters. Case-insensitive so a `Foo` document also clears files carrying `foo`.
+    const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
+    // No deletedAt conjunct, unlike most reads here: a soft-deleted file that kept the name would
+    // resurrect a tag document that no longer exists the moment it is undeleted.
     const result = await this.fabFileModel.updateMany(
       {
         userId,
-        deletedAt: null,
         tags: {
           $elemMatch: {
-            name: { $regex: new RegExp(tag, 'i') },
+            name: nameRegex,
           },
         },
       },
       {
         $pull: {
           tags: {
-            name: { $regex: new RegExp(tag, 'i') },
+            name: nameRegex,
           },
         },
       }
     );
+    // Same reasoning as pullTagsByFabFileId: a primaryTag naming a tag the file no longer carries
+    // later fails the data-lake write gate on PUT /api/files/[id]. Separate filtered write because
+    // a plain update cannot clear a field conditionally on its own value.
+    await this.fabFileModel.updateMany({ userId, primaryTag: nameRegex }, { $unset: { primaryTag: '' } });
     return result.modifiedCount;
   }
 

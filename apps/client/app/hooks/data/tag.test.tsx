@@ -6,11 +6,13 @@ import type { IFileTag, ITag } from '@bike4mind/common';
 
 const mockPut = vi.fn();
 const mockPost = vi.fn();
+const mockDelete = vi.fn();
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: {
     put: (...args: unknown[]) => mockPut(...args),
     post: (...args: unknown[]) => mockPost(...args),
+    delete: (...args: unknown[]) => mockDelete(...args),
   },
 }));
 
@@ -18,7 +20,7 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
 
-import { useCreateFileTag, useUpdateFileTag } from './tag';
+import { useCreateFileTag, useDeleteFileTag, useUpdateFileTag } from './tag';
 
 const CACHED_TAG = { id: 'tag-1', name: 'invoices', color: 'blue', fileCount: 7 } as IFileTag;
 
@@ -36,6 +38,7 @@ describe('file tag mutations', () => {
   beforeEach(() => {
     mockPut.mockReset();
     mockPost.mockReset();
+    mockDelete.mockReset();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     queryClient.setQueryData(['file-tags'], [CACHED_TAG]);
     invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
@@ -79,6 +82,34 @@ describe('file tag mutations', () => {
 
       await waitFor(() => expect(cachedTags()[0].name).toBe('renamed'));
       expect(cachedTags()[1]).toEqual(other);
+    });
+  });
+
+  describe('useDeleteFileTag', () => {
+    const remove = async () => {
+      const { result } = renderHook(() => useDeleteFileTag(), { wrapper });
+      await act(async () => {
+        await result.current.mutateAsync('tag-1');
+      });
+    };
+
+    it('invalidates the tag list', async () => {
+      mockDelete.mockResolvedValueOnce({});
+
+      await remove();
+
+      expect(invalidatedKeys()).toContainEqual(['file-tags']);
+    });
+
+    // Deleting a tag now strips the name off the files as well, so a cached file row still carries
+    // a tag the server has removed. Without this the chips stay on screen until something else
+    // happens to refetch.
+    it('invalidates the file list, because the delete retags the files', async () => {
+      mockDelete.mockResolvedValueOnce({});
+
+      await remove();
+
+      expect(invalidatedKeys()).toContainEqual(['fabFiles']);
     });
   });
 
