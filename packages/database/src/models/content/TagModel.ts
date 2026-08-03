@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { IFileTag, IFileTagRepository, ITag, ITagRepository, TagType } from '@bike4mind/common';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 const options = {
   toJSON: {
@@ -109,7 +110,9 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
     try {
       // Use updateOne instead of findOne + save to avoid potential conflicts
       const filter: Record<string, unknown> = {};
-      if (by.name) filter.name = new RegExp(`^${by.name}$`, 'i');
+      // Escaped for the same reason as findByFoldedNameAndUserId below: a tag name is user text,
+      // so an unescaped `a.b` also matched `axb`.
+      if (by.name) filter.name = new RegExp(`^${escapeRegex(by.name)}$`, 'i');
       if (by.userId) filter.userId = by.userId;
 
       const updateResult = await this.fileTagModel.updateOne(filter, {
@@ -128,6 +131,24 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
 
   async findByNameAndUserId(name: string, userId: string) {
     const result = await this.fileTagModel.findOne({ name, userId });
+    return result?.toJSON() || null;
+  }
+
+  /**
+   * The same name lookup as findByNameAndUserId, but under the rule the rest of the app uses to
+   * decide whether two tag names are the same tag (see common/utils/tagName): case folded. This is
+   * what every tag-document creation path checks before minting a document, so `Invoices` cannot be
+   * created beside `invoices` - a pair the count aggregate reads as two buckets while the file-list
+   * filter and the row chips read as one.
+   *
+   * Legacy data can still hold such a pair, so more than one document can match; the first is
+   * returned, which is all a "does this name already exist" check needs.
+   */
+  async findByFoldedNameAndUserId(name: string, userId: string) {
+    const result = await this.fileTagModel.findOne({
+      name: new RegExp(`^${escapeRegex(name.trim())}$`, 'i'),
+      userId,
+    });
     return result?.toJSON() || null;
   }
 
