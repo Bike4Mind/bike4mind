@@ -221,6 +221,13 @@ export const useLLM = create(
 
           // Track model changes for remembering
           if (params.model && params.model !== prev.model) {
+            // TEMP #1254 instrumentation - remove before merge
+            console.log('[T1254] setLLM model change', {
+              from: prev.model,
+              to: params.model,
+              max_tokens: newState.max_tokens,
+              max_tokens_in_params: params.max_tokens,
+            });
             if (params.model && isImageModel(params.model)) {
               newState.lastUsedImageModel = params.model;
               // Sync imageModel when user selects an image model as primary
@@ -462,6 +469,15 @@ export const LLMProvider: React.FC = () => {
           if (needsModelSwitch && state.model) {
             const fallback = stableGetFallbackModel(state.model);
             if (fallback) {
+              // TEMP #1254 instrumentation - remove before merge
+              console.log('[T1254] fallback-effect deprecation-fallback reset', {
+                fromModel: state.model,
+                toModel: fallback.id,
+                fromMaxTokens: state.max_tokens,
+                toMaxTokens: getDefaultMaxTokens(fallback),
+                currentAccessible: stableIsModelAccessible(state.model),
+                accessibleIds: models.map(m => m.id),
+              });
               return {
                 ...state,
                 model: fallback.id,
@@ -478,16 +494,17 @@ export const LLMProvider: React.FC = () => {
           const lastUsed = state.lastUsedTextModel ? models.find(model => model.id === state.lastUsedTextModel) : null;
           const modelToUse = adminDefault || lastUsed || models[0];
 
-          // False-alarm switch: the chain resolved back to the model already selected. This happens
-          // when isModelAccessible transiently reports the current model inaccessible during a
-          // catalog refetch (#1254). Do NOT reset max_tokens (would silently raise a user-lowered
-          // ceiling) or the agent flags - only correct a stale/unset ceiling down, and otherwise
-          // leave state untouched so the re-run is a no-op.
-          if (modelToUse.id === state.model) {
-            const refitted = refitMaxTokensForModel(state.max_tokens, modelToUse, { allowRaise: false });
-            return refitted === state.max_tokens ? state : { ...state, max_tokens: refitted };
-          }
-
+          // TEMP #1254 instrumentation - remove before merge
+          console.log('[T1254] fallback-effect main reset', {
+            trigger: hasNoModel ? 'hasNoModel' : 'needsModelSwitch',
+            fromModel: state.model,
+            toModel: modelToUse.id,
+            sameModel: modelToUse.id === state.model,
+            fromMaxTokens: state.max_tokens,
+            toMaxTokens: getDefaultMaxTokens(modelToUse),
+            currentAccessible: state.model ? stableIsModelAccessible(state.model) : null,
+            accessibleIds: models.map(m => m.id),
+          });
           return {
             ...state,
             model: modelToUse.id,
@@ -525,6 +542,17 @@ export const LLMProvider: React.FC = () => {
     refitModelRef.current = activeModel;
     setState(state => {
       const refitted = refitMaxTokensForModel(state.max_tokens, info, { allowRaise: modelChanged });
+      if (refitted !== state.max_tokens) {
+        // TEMP #1254 instrumentation - remove before merge
+        console.log('[T1254] refit-effect change', {
+          model: activeModel,
+          modelChanged,
+          allowRaise: modelChanged,
+          fromMaxTokens: state.max_tokens,
+          toMaxTokens: refitted,
+          catalogMaxTokens: info.max_tokens,
+        });
+      }
       return refitted === state.max_tokens ? state : { ...state, max_tokens: refitted };
     });
     // setState from Zustand is stable by reference - matches the convention used by the
