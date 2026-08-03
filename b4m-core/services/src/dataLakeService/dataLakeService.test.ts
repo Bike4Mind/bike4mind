@@ -160,7 +160,7 @@ describe('canAccessLake — entitlement-aware any-of (tag-retirement)', () => {
   });
 });
 
-describe('canAccessLake — org id shape parity with the casting collection query (#1109)', () => {
+describe('canAccessLake — org id shape parity with the casting collection query', () => {
   // findAccessible matches an org lake via a Mongo query that CASTS types, so an org member
   // whose ctx.organizationId is an ObjectId or a populated Organization doc still lands in the
   // list. canAccessLake compares in memory, so it must reach the SAME grant for every shape -
