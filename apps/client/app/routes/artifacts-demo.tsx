@@ -22,10 +22,10 @@ const ArtifactsDemoPage: React.FC = () => {
     setShowCreator(true);
   };
 
-  const handleArtifactSave = (artifact: BaseArtifact) => {
+  // No success toasts in these two handlers: the creator and editor each raise their own.
+  const handleArtifactSave = () => {
     setShowCreator(false);
     setRefreshKey(prev => prev + 1); // Force refresh of gallery
-    toast.success(`Artifact "${artifact.title}" created successfully!`);
   };
 
   const handleArtifactSelect = (artifact: ArtifactWithContent) => {
@@ -38,11 +38,10 @@ const ArtifactsDemoPage: React.FC = () => {
     setShowEditor(true);
   };
 
-  const handleArtifactUpdate = (artifact: BaseArtifact) => {
+  const handleArtifactUpdate = () => {
     setShowEditor(false);
     setEditingArtifact(null);
     setRefreshKey(prev => prev + 1); // Force refresh of gallery
-    toast.success(`Artifact "${artifact.title}" updated successfully!`);
   };
 
   return (

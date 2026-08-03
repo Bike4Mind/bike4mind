@@ -321,10 +321,12 @@ export const ArtifactCreator: React.FC<ArtifactCreatorProps> = ({
 
     try {
       setSaving(true);
-      const response = await api.post<BaseArtifact>('/api/artifacts', formData);
+      // Envelope response: onSave takes response.data.artifact, never response.data.
+      const response = await api.post<{ artifact: BaseArtifact }>('/api/artifacts', formData);
+      const created = response.data.artifact;
 
-      toast.success('Artifact created successfully!');
-      onSave?.(response.data);
+      toast.success(`Artifact "${created.title}" created successfully!`);
+      onSave?.(created);
       onClose?.();
     } catch (error: any) {
       toast.error(error.message || 'Failed to create artifact');
@@ -378,6 +380,7 @@ export const ArtifactCreator: React.FC<ArtifactCreatorProps> = ({
 
           <Button
             className="artifact-creator-save-button"
+            data-testid="artifact-creator-save-btn"
             startDecorator={<SaveIcon />}
             onClick={handleSave}
             loading={saving}
@@ -429,6 +432,7 @@ export const ArtifactCreator: React.FC<ArtifactCreatorProps> = ({
                   <FormLabel className="artifact-creator-title-label">Title</FormLabel>
                   <Input
                     className="artifact-creator-title-input"
+                    slotProps={{ input: { 'data-testid': 'artifact-creator-title-input' } }}
                     placeholder="Enter artifact title..."
                     value={formData.title}
                     onChange={e => handleFieldChange('title', e.target.value)}

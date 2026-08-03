@@ -209,6 +209,37 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
     [currentUser, teamOrg, publishAndShare]
   );
 
+  // Same hydration the Share path needs, for the same reason: the gallery renders from the list
+  // feed, which omits `content`. The editor's Save button is gated on a non-empty content, so
+  // handing it a list artifact opened an editor that could never save.
+  const handleEditArtifact = useCallback(
+    async (artifact: ArtifactWithContent) => {
+      let content = artifact.content ?? '';
+      if (!content) {
+        try {
+          const { data } = await api.get<{ content?: { content?: string } }>(
+            `/api/artifacts/${encodeURIComponent(artifact.id)}?includeContent=true`
+          );
+          content = data.content?.content ?? '';
+        } catch (err) {
+          // Keep transport failure distinct from "genuinely empty" so a transient error doesn't
+          // read as a data problem.
+          console.error('Failed to load artifact content for edit:', err);
+          toast.error('Could not load artifact content, please try again');
+          return;
+        }
+      }
+      if (!content) {
+        // Content is required at create time, so this is a data problem rather than a valid state.
+        // Refusing beats opening an editor whose Save is permanently disabled.
+        toast.error('This artifact has no content to edit');
+        return;
+      }
+      onArtifactEdit?.({ ...artifact, content });
+    },
+    [onArtifactEdit]
+  );
+
   // State
   const [artifacts, setArtifacts] = useState<ArtifactWithContent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -438,7 +469,9 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
                 <MenuItem
                   onClick={e => {
                     e.stopPropagation();
-                    onArtifactEdit?.(artifact);
+                    // Fire-and-forget: the handler hydrates content, then opens the editor or
+                    // toasts. `void` marks the intent, matching the Share item below.
+                    void handleEditArtifact(artifact);
                   }}
                 >
                   <EditIcon sx={{ mr: 1 }} />

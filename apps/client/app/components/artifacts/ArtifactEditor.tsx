@@ -281,14 +281,12 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
       if (JSON.stringify(formData.metadata) !== JSON.stringify(originalData.metadata))
         changedFields.metadata = formData.metadata;
 
-      const response = await api.put<{ artifact: BaseArtifact; content?: any; version?: any }>(
-        `/api/artifacts/${artifact.id}`,
-        changedFields
-      );
+      // Envelope response: onSave takes response.data.artifact, never response.data.
+      const response = await api.put<{ artifact: BaseArtifact }>(`/api/artifacts/${artifact.id}`, changedFields);
+      const updated = response.data.artifact;
 
-      toast.success('Artifact updated successfully!');
-      // Extract the artifact from the response (API returns {artifact, content, version})
-      onSave?.(response.data.artifact || response.data);
+      toast.success(`Artifact "${updated.title}" updated successfully!`);
+      onSave?.(updated);
       onClose?.();
     } catch (error: any) {
       console.error('[ARTIFACT EDITOR] Save failed:', error);
@@ -382,6 +380,7 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
           </Button>
 
           <Button
+            data-testid="artifact-editor-save-btn"
             startDecorator={<SaveIcon />}
             onClick={handleSave}
             loading={saving}
@@ -427,6 +426,7 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
                 <FormControl error={!!errors.title}>
                   <FormLabel>Title</FormLabel>
                   <Input
+                    slotProps={{ input: { 'data-testid': 'artifact-editor-title-input' } }}
                     placeholder="Enter artifact title..."
                     value={formData.title}
                     onChange={e => handleFieldChange('title', e.target.value)}
