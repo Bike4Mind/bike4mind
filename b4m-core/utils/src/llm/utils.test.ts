@@ -2683,6 +2683,40 @@ describe('includeImagePromptSystemMessage - tool availability gate', () => {
   });
 });
 
+describe('includeImagePromptSystemMessage - request trigger', () => {
+  const fires = (prompt: string) => includeImagePromptSystemMessage([], prompt, true).length === 1;
+
+  // The substring scan matched these as `visual`, `graphic` and `diagram`, so a MUST-generate-an-image
+  // instruction landed on prompts that only talked about visualizing or diagrams.
+  it.each([
+    'help me visualize this data',
+    'a visualization of the deploy pipeline',
+    'the graphical output is wrong',
+    'can you explain what this diagram means',
+    'draw a diagram of the auth flow',
+  ])('does not fire on %j', prompt => {
+    expect(fires(prompt)).toBe(false);
+  });
+
+  it.each([
+    'draw me a picture of a cat',
+    'an image of a cat',
+    'generate some photos of the coast',
+    'An Illustration Of A Fox',
+    'a comic book cover for this story',
+    'paint a watercolour of the harbour',
+  ])('fires on %j', prompt => {
+    expect(fires(prompt)).toBe(true);
+  });
+
+  // A `g` flag on the module-scope pattern would carry lastIndex between calls, making the result
+  // depend on whatever prompt came before.
+  it('matches the same prompt on repeated calls', () => {
+    expect(fires('a picture of a cat')).toBe(true);
+    expect(fires('a picture of a cat')).toBe(true);
+  });
+});
+
 describe('buildAndSortMessages - image prompt threading', () => {
   const buildWithOptions = (options?: { verbose: boolean; imageGenerationAvailable?: boolean }) =>
     buildAndSortMessages(

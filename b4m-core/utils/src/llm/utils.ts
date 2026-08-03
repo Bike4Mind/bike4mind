@@ -1526,6 +1526,23 @@ export function includeHardcodedSystemMessage(messages: IMessage[], formatPrompt
 }
 
 /**
+ * Nouns that name a picture the user wants made. Matched on word boundaries because the previous
+ * substring scan fired on any prompt merely containing one: `visual` matched "visualize", `graphic`
+ * matched "graphical". Compiled once - this runs on every turn. No `g` flag, which would carry
+ * `lastIndex` between calls and make the match depend on the previous prompt.
+ *
+ * `visual`, `graphic` and `diagram` are deliberately gone rather than boundary-matched: they fire on
+ * prompts that only discuss visualizing or diagrams, and a request for either is served by mermaid
+ * and artifacts, not by image generation.
+ *
+ * Errs toward missing a request rather than inventing one. A missed prompt costs a hint the model can
+ * still get from the tool's own schema; a wrongly matched one plants a MUST-generate-an-image order on
+ * a turn the user never asked about images.
+ */
+const IMAGE_REQUEST_PATTERN =
+  /\b(?:images?|illustrations?|photos?|photographs?|pictures?|watercolou?rs?|paintings?|comic\s+books?|snapshots?)\b/i;
+
+/**
  * Prepends the image-generation nudge, but only when `image_generation` actually reached the model's
  * tool schema this turn. A MUST-use instruction for an absent tool leaves the model no good move:
  * image_generation throws on a missing key rather than degrading (#1103), and pointing a model at a
@@ -1542,33 +1559,16 @@ export function includeImagePromptSystemMessage(
     return messages;
   }
 
-  const imageRelatedVerbs = [
-    'image',
-    'illustration',
-    'photo',
-    'watercolor',
-    'painting',
-    'comic book',
-    'picture',
-    'diagram',
-    'snapshot',
-    'visual',
-    'graphic',
-  ];
-  const hasImageRequest = imageRelatedVerbs.some(verb => userPrompt.toLowerCase().includes(verb));
-
-  const content = `When the user requests an image, you MUST use the image_generation tool to create it. Craft a vivid and imaginative prompt parameter for the tool based on the user's request and available context.`;
-
-  if (hasImageRequest) {
-    const imageSystemMessage: IMessage = {
-      role: 'system',
-      content: content,
-    };
-
-    return [imageSystemMessage, ...messages];
-  } else {
+  if (!IMAGE_REQUEST_PATTERN.test(userPrompt)) {
     return messages;
   }
+
+  const imageSystemMessage: IMessage = {
+    role: 'system',
+    content: `When the user requests an image, you MUST use the image_generation tool to create it. Craft a vivid and imaginative prompt parameter for the tool based on the user's request and available context.`,
+  };
+
+  return [imageSystemMessage, ...messages];
 }
 
 // Priority order for message retention (lower number = higher priority)
