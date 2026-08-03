@@ -1,7 +1,6 @@
-import { DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { canManageLake } from './authorizeLakeWrite';
+import { NotFoundError } from '@bike4mind/utils';
+import { removeFileFromLake } from './lakeMembership';
 import { recomputeLakeStats } from './recomputeLakeStats';
 
 interface RemoveFileFromDataLakeAdapters {
@@ -60,6 +59,10 @@ interface RemoveFileFromDataLakeAdapters {
  * Lake owner or admin only. Idempotent-safe: a second call 404s because both signals are
  * already gone - the correct "already removed" response for a retry.
  *
+ * This entry point resolves the lake by id and recomputes stats; the membership write itself is
+ * `removeFileFromLake` in lakeMembership.ts, shared with the tag-toggle door so both doors clear
+ * the same signals.
+ *
  * No per-file retrieval-index call: RetrievalIndexPort exposes only removeByDataLakeTag,
  * which would de-index the ENTIRE lake, and it has no implementer here (bestEffortIndexRemove
  * no-ops without one). Removal is enforced by Mongo tag state, so it takes effect on the next
@@ -79,35 +82,8 @@ export const removeFileFromDataLake = async (
   if (!lake) {
     throw new NotFoundError('Data lake not found');
   }
-  if (!canManageLake(lake, actor)) {
-    throw new BadRequestError('Only the creator can remove files from this data lake');
-  }
 
-  const file = await db.fabFiles.findById(fabFileId);
-  const tagNames = (file?.tags ?? []).map(t => t.name).filter((name): name is string => typeof name === 'string');
-  // Normalized through the same predicate the read arms use, so a lake whose prefix no query
-  // matches (empty, or missing its trailing colon) also gets nothing cleared by prefix.
-  const prefix = normalizeTagPrefix(lake.fileTagPrefix);
-  // Positive ownership: both ids must be present AND equal, so a file with no owner does not
-  // fall through as a match.
-  const ownsFile = actor.isAdmin || (!!file?.userId && file.userId === actor.userId);
-  const prefixedTags = prefix ? tagNames.filter(name => name.startsWith(prefix)) : [];
-  const inLake = !!file && (tagNames.includes(lake.datalakeTag) || (ownsFile && prefixedTags.length > 0));
-  if (!file || !inLake) {
-    throw new NotFoundError('File not found in this data lake');
-  }
-
-  // One atomic $pull for both signals. Two writes would leave a window - and on a crash, a
-  // permanent state - where the meta-tag is gone but a prefixed tag still matches this lake.
-  // $pull removes only matching elements, so a concurrent removal of the same file from a
-  // DIFFERENT lake can't clobber this write the way a read-filter-write of the whole tags
-  // array would (last-write-wins re-adding a tag).
-  await db.fabFiles.pullTagsByFabFileId(file.id, [
-    lake.datalakeTag,
-    // Never strip another lake's membership: a lake whose fileTagPrefix sits inside the
-    // reserved datalake: namespace would otherwise evict the file from every lake at once.
-    ...prefixedTags.filter(name => !name.startsWith(DATALAKE_TAG_PREFIX)),
-  ]);
+  await removeFileFromLake(actor, lake, fabFileId, { db });
 
   const stats = await recomputeLakeStats(lake, { db });
   return { success: true, ...stats };

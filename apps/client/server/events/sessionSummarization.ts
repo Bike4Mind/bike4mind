@@ -2,6 +2,7 @@ import { withEventContext } from '@server/events/utils';
 import { SessionEvents } from '@server/utils/eventBus';
 import {
   adminSettingsRepository,
+  dataLakeRepository,
   fabFileRepository,
   Quest,
   Session,
@@ -11,7 +12,14 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import { AiEvents, ChatModelName, IMessage, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import {
+  AiEvents,
+  ChatModelName,
+  DATALAKE_TAG_PREFIX,
+  IMessage,
+  KnowledgeType,
+  SupportedFabFileMimeTypes,
+} from '@bike4mind/common';
 import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -183,6 +191,20 @@ export const handler = withEventContext(async (event, logger) => {
     await withTransaction(async () => {
       const fabfile = await fabFileRepository.findOne({ sessionId: session.id });
       if (fabfile) {
+        // Re-summarizing must not change which data lakes this file belongs to. The tags here are
+        // the SESSION's, which never carry a `datalake:` meta-tag, and a whole-array tag write
+        // omitting one reads as leaving that lake - so without carrying the file's existing
+        // meta-tags through, every re-summarization would evict a lake-indexed summary (and fail
+        // outright for a summariser who cannot manage the lake).
+        //
+        // reconcileLakeTags may stamp a content tag for one of these lakes if this file lacks
+        // one - never a NEW membership, since `lakeTags` only ever carries through tags already
+        // stored on the file. Harmless either way: this FabFile always carries a sessionId,
+        // which both tag counters exclude unless it is a curated notebook, so a stamp here could
+        // never reach the tag tree.
+        const lakeTags = (fabfile.tags ?? []).filter(
+          t => typeof t?.name === 'string' && t.name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)
+        );
         await fabFilesService.updateFabFile(
           user,
           {
@@ -192,18 +214,13 @@ export const handler = withEventContext(async (event, logger) => {
             type: fabFileData.type,
             fileContent: fabFileData.fileContent,
             sessionId: fabFileData.sessionId,
-            tags: fabFileData.tags,
+            tags: [...(fabFileData.tags ?? []), ...lakeTags],
           },
           {
             db: {
               fabFiles: fabFileRepository,
+              dataLakes: dataLakeRepository,
             },
-            // Pass-through on purpose, for two reasons. This path writes `session.tags` with no
-            // assertCanWriteDataLakeTags gate, so stamping a lake's content prefix here would
-            // mint tags for a lake the session owner may not manage. And it would buy nothing
-            // anyway: this FabFile always carries a sessionId, which both tag counters exclude
-            // unless the file is a curated-notebook, so a stamp could never reach the tag tree.
-            reconcileTags: async tags => tags,
             storage: {
               upload: (filepath, content, options) => {
                 return getFilesStorage().upload(content, filepath, {

@@ -2,6 +2,7 @@ import { requireUser } from '@server/middlewares/requireUser';
 import { baseApi } from '@server/middlewares/baseApi';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { issueSessionForRequest } from '@server/auth/issueSession';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 
 const handler = baseApi()
@@ -16,7 +17,10 @@ const handler = baseApi()
 
     let refreshToken: string | undefined;
     if (!accessToken) {
-      ({ accessToken, refreshToken } = authTokenGenerator.createAccessToken(req.user?.id, req.user?.tokenVersion ?? 0));
+      ({ accessToken, refreshToken } = await issueSessionForRequest(req, req.user!.id, {
+        createdVia: 'identify',
+        tokenVersion: req.user!.tokenVersion ?? 0,
+      }));
     } else {
       const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
       let previousSecret = undefined;
@@ -26,10 +30,10 @@ const handler = baseApi()
       }
       const decoded = authTokenGenerator.verifyToken(accessToken, previousSecret);
       if (decoded.exp && decoded.exp < Date.now() / 1000) {
-        ({ accessToken, refreshToken } = authTokenGenerator.createAccessToken(
-          req.user?.id,
-          req.user?.tokenVersion ?? 0
-        ));
+        ({ accessToken, refreshToken } = await issueSessionForRequest(req, req.user!.id, {
+          createdVia: 'identify',
+          tokenVersion: req.user!.tokenVersion ?? 0,
+        }));
       }
     }
 

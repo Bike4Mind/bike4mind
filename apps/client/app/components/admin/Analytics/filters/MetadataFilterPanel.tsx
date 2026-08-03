@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Stack, Typography, Button, FormControl, Input, IconButton, Box, Select, Option, Chip } from '@mui/joy';
 import DeleteIcon from '@mui/icons-material/Delete';
+import type { MetadataFilter } from '../types';
 import AddIcon from '@mui/icons-material/Add';
 
-export interface MetadataFilter {
-  field: string;
-  operator: 'equals' | 'contains' | 'in' | 'exists' | 'not_exists';
-  value: any;
-}
+// Shared with the store and the server-side matcher; not redeclared here.
+export type { MetadataFilter } from '../types';
 
 interface FilterRowProps {
   filter: MetadataFilter;
@@ -83,7 +81,7 @@ const FilterRow: React.FC<FilterRowProps> = ({ filter, onChange, onDelete, metad
       <Stack direction="row" spacing={1} alignItems="center">
         <FormControl size="sm" sx={{ flex: 1 }}>
           <Input
-            value={filter.value}
+            value={String(filter.value ?? '')}
             onChange={e => onChange({ ...filter, value: e.target.value })}
             placeholder="Filter value"
             disabled={filter.operator === 'exists' || filter.operator === 'not_exists'}

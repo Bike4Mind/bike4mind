@@ -76,7 +76,7 @@ const handler = baseApi()
 
           user.currentStorageSize = 0;
 
-          await Promise.all([user.save({ session }), FabFile.deleteMany(accessible).session(session)]);
+          await Promise.all([user.save({ session }), FabFile.deleteMany(accessible, { session })]);
 
           await Promise.all(
             filePaths.map(async filePath => {

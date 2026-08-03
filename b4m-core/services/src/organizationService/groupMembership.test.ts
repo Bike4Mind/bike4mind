@@ -1,4 +1,4 @@
-import { assignUserToGroup, removeUserFromGroup, renameGroup } from './groupMembership';
+import { assignUserToGroup, removeUserFromGroup, renameGroup, listOrganizationGroups } from './groupMembership';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { IUserDocument } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -132,5 +132,53 @@ describe('group membership (assign / remove)', () => {
       await expect(rename(billingOwner)).rejects.toThrow(NotFoundError);
       expect(db.groups.update).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('listOrganizationGroups', () => {
+  const ORG = 'org-1';
+  const owner = { id: 'owner-1', isAdmin: false } as IUserDocument;
+  const outsider = { id: 'stranger-1', isAdmin: false } as IUserDocument;
+
+  const org = (over: Record<string, unknown> = {}) => ({
+    id: ORG,
+    userId: 'owner-1',
+    adminUserIds: [],
+    users: [{ userId: 'owner-1' }],
+    ...over,
+  });
+  const group = (id: string, type: string) => ({ id, type, organizationId: ORG, name: type });
+
+  let db: any;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db = {
+      organizations: { findById: vi.fn().mockResolvedValue(org()) },
+      groups: {
+        findByOrganization: vi.fn().mockResolvedValue([group('g-sales', 'sales'), group('g-research', 'research')]),
+      },
+      users: { findUserIdsByGroupIds: vi.fn().mockResolvedValue({ 'g-sales': ['u1', 'u2'] }) },
+    };
+  });
+
+  it('returns each group with its member ids and a count derived from those ids', async () => {
+    const result = await listOrganizationGroups(owner, { organizationId: ORG }, { db });
+
+    expect(result).toEqual([
+      { id: 'g-sales', type: 'sales', organizationId: ORG, name: 'sales', memberIds: ['u1', 'u2'], memberCount: 2 },
+      { id: 'g-research', type: 'research', organizationId: ORG, name: 'research', memberIds: [], memberCount: 0 },
+    ]);
+    expect(db.users.findUserIdsByGroupIds).toHaveBeenCalledWith(['g-sales', 'g-research']);
+  });
+
+  it('throws NotFound when the org does not exist, before any authz or group read', async () => {
+    db.organizations.findById.mockResolvedValue(null);
+    await expect(listOrganizationGroups(owner, { organizationId: ORG }, { db })).rejects.toThrow(NotFoundError);
+    expect(db.groups.findByOrganization).not.toHaveBeenCalled();
+  });
+
+  it('rejects a caller who cannot manage the org (the MANAGE gate, not read)', async () => {
+    await expect(listOrganizationGroups(outsider, { organizationId: ORG }, { db })).rejects.toThrow(ForbiddenError);
+    expect(db.groups.findByOrganization).not.toHaveBeenCalled();
   });
 });

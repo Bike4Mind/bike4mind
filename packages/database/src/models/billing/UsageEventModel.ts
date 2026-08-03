@@ -1,6 +1,7 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import {
+  COMPLETION_SOURCES,
   CreditHolderType,
   IMongoDocument,
   IModelDayMargin,
@@ -9,6 +10,9 @@ import {
   IOwnerSpendMember,
   IOwnerSpendModel,
   IOwnerUsageSummary,
+  IPlatformConsumerUsage,
+  IPlatformUsageParams,
+  IPlatformUsageSummary,
   IProviderMonthCogs,
   ISessionModelUsage,
   ISessionQuestUsage,
@@ -57,6 +61,13 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
 
     status: { type: String, required: true, enum: [...USAGE_EVENT_STATUSES], default: 'ok' },
     latencyMs: { type: Number, required: false },
+
+    // Denormalized origin, copied from the same call's ledger write (see
+    // UsageEventTypes). Both optional; rows written before this change (or by a
+    // recorder whose ledger write carries no source) leave them unset and fall
+    // into the UNCLASSIFIED_SOURCE bucket in aggregation.
+    source: { type: String, required: false, enum: [...COMPLETION_SOURCES] },
+    apiKeyId: { type: String, required: false },
   },
   {
     timestamps: true,
@@ -74,6 +85,10 @@ UsageEventSchema.index({ createdAt: -1, settledBasis: 1 });
 UsageEventSchema.index({ ownerId: 1, ownerType: 1, createdAt: -1 });
 // Supports sessionUsageSummary()'s $match on sessionId (per-session usage detail).
 UsageEventSchema.index({ sessionId: 1, createdAt: -1 });
+// Supports platformUsageSummary()'s optional source filter over a time window.
+UsageEventSchema.index({ source: 1, createdAt: -1 });
+// Supports platformUsageSummary()'s byConsumer cut ($match apiKeyId present).
+UsageEventSchema.index({ apiKeyId: 1, createdAt: -1 });
 
 export type IUsageEventModel = Model<IUsageEventDocument>;
 
@@ -290,6 +305,84 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       byModel: result?.byModel ?? [],
       byFeature: result?.byFeature ?? [],
       // $facet yields totals as a 0- or 1-element array; unwrap to a scalar bucket.
+      totals: result?.totals?.[0] ?? emptyTotals,
+    };
+  }
+
+  async platformUsageSummary(params: IPlatformUsageParams = {}): Promise<IPlatformUsageSummary> {
+    const { days = 30, source, ownerType } = params;
+    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    // Shared across every day/feature/model cut.
+    const spendSums = {
+      requests: { $sum: 1 },
+      cogsUsd: { $sum: '$costUsd' },
+      creditsCharged: { $sum: '$creditsCharged' },
+    } as const;
+    const spendFields = { requests: 1, cogsUsd: 1, creditsCharged: 1 } as const;
+
+    // source and ownerType are optional filters applied the same way - extra
+    // $match predicates, never a separate query path. Omitting either spans all.
+    const match: Record<string, unknown> = { createdAt: { $gte: from } };
+    if (source) match.source = source;
+    if (ownerType) match.ownerType = ownerType;
+
+    const [result] = await this.model.aggregate<{
+      overTime: IOwnerSpendDay[];
+      byFeature: IOwnerSpendFeature[];
+      byConsumer: IPlatformConsumerUsage[];
+      byModel: IOwnerSpendModel[];
+      totals: IUsageSpendBucket[];
+    }>([
+      { $match: match },
+      {
+        $facet: {
+          overTime: [
+            {
+              $group: {
+                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+                ...spendSums,
+              },
+            },
+            { $project: { _id: 0, day: '$_id', ...spendFields } },
+            { $sort: { day: 1 } },
+          ],
+          byFeature: [
+            { $group: { _id: '$feature', ...spendSums } },
+            { $project: { _id: 0, feature: '$_id', ...spendFields } },
+            { $sort: { creditsCharged: -1 } },
+          ],
+          // Consumers are API-key holders; only key-authed events carry apiKeyId.
+          // Tokens ride along so the admin view shows per-consumer input/output.
+          byConsumer: [
+            { $match: { apiKeyId: { $exists: true, $ne: null } } },
+            {
+              $group: {
+                _id: '$apiKeyId',
+                ...spendSums,
+                inputTokens: { $sum: '$inputTokens' },
+                outputTokens: { $sum: '$outputTokens' },
+              },
+            },
+            { $project: { _id: 0, apiKeyId: '$_id', ...spendFields, inputTokens: 1, outputTokens: 1 } },
+            { $sort: { creditsCharged: -1 } },
+          ],
+          byModel: [
+            { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
+            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
+            { $sort: { creditsCharged: -1 } },
+          ],
+          totals: [{ $group: { _id: null, ...spendSums } }, { $project: { _id: 0, ...spendFields } }],
+        },
+      },
+    ]);
+
+    const emptyTotals: IUsageSpendBucket = { requests: 0, cogsUsd: 0, creditsCharged: 0 };
+    return {
+      overTime: result?.overTime ?? [],
+      byFeature: result?.byFeature ?? [],
+      byConsumer: result?.byConsumer ?? [],
+      byModel: result?.byModel ?? [],
       totals: result?.totals?.[0] ?? emptyTotals,
     };
   }

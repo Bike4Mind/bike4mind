@@ -13,6 +13,8 @@ import {
   IOrganizationDocument,
   ICreditTransactionRepository,
   ICreditTransactionDocument,
+  IAuthSessionRepository,
+  IAuthSessionDocument,
 } from '@bike4mind/common';
 import {
   IResearchTask,
@@ -58,6 +60,8 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   getAccessibleFiles: vi.fn(),
   findByIdAndUserId: vi.fn(),
   findAllInIds: vi.fn(),
+  findMetadataByIds: vi.fn(),
+  findMetadataBySessionId: vi.fn(),
   deleteManyInIds: vi.fn(),
   findAllByIds: vi.fn(),
   findByBatchId: vi.fn(),
@@ -71,11 +75,13 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   removeTagByUserId: vi.fn(),
   updateTagsByUserId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
+  pushTagsByFabFileId: vi.fn(),
   bulkUpdateTags: vi.fn(),
   findByContentHashes: vi.fn(),
   findByContentHashesInDataLake: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
   computeDataLakeStats: vi.fn(),
+  countDataLakeFilesByMembership: vi.fn(),
   archiveByDataLakeTag: vi.fn(),
   unarchiveByDataLakeTag: vi.fn(),
   findArchivedByDataLakeTag: vi.fn(),
@@ -124,6 +130,16 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     populateMessageCounts: vi.fn(),
     countByUserId: vi.fn(),
     countActiveVoiceSessionsByUserId: vi.fn(),
+  });
+
+export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepository> =>
+  vi.mocked({
+    ...createMockRepository<IAuthSessionDocument>(),
+    findBySid: vi.fn(),
+    findActiveByUserId: vi.fn(),
+    rotateHash: vi.fn(),
+    revokeBySid: vi.fn(),
+    revokeAllByUserId: vi.fn(),
   });
 
 export const createMockUserRepository = (): MockedObject<IUserRepository> =>
