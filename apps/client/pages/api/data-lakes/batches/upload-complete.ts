@@ -72,9 +72,11 @@ const handler = baseApi()
     const fresh = await dataLakeBatchRepository.findById(batchId);
     await finalizeBatchIfComplete(fresh, req.logger);
 
-    // Background AI-tag suggestion: the browser upload phase is done here regardless
-    // of how much longer chunk/vectorize takes, so this fires independently of the finalize
-    // call above rather than waiting behind it.
+    // Background AI-tag suggestion: not gated on chunk/vectorize completion, only on the
+    // browser upload phase being done - so this call still matters even though it usually
+    // loses the claim now. finalizeBatchIfComplete above already tries the same guarded
+    // enqueue when ingest happens to be complete already; this is the call that actually wins
+    // it on the (more common) case where chunk/vectorize are still running.
     await enqueueTaxonomyAnalysisIfWanted(fresh, req.logger);
 
     return res.json({ success: true });

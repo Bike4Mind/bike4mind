@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   findByDatalakeTag: vi.fn(),
   batchFindById: vi.fn(),
+  getSettingsValue: vi.fn(),
 }));
 
 // The route calls `baseApi().post(...)` directly, with no `.use(...)` in the chain.
@@ -25,7 +26,7 @@ vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFi
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: {},
+  adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   dataLakeBatchRepository: { findById: h.batchFindById },
 }));
@@ -120,14 +121,25 @@ describe('POST /api/files/generate-presigned-url - batch ownership (IDOR guard)'
   beforeEach(() => {
     vi.clearAllMocks();
     h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
+    h.getSettingsValue.mockResolvedValue(true);
   });
 
-  it('never looks up a batch when none was sent', async () => {
+  it('never looks up a batch or checks the feature flag when none was sent', async () => {
     const { res } = makeRes();
     await run(body(), res);
 
+    expect(h.getSettingsValue).not.toHaveBeenCalled();
     expect(h.batchFindById).not.toHaveBeenCalled();
     expect(h.createFabFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a batchId when Data Lakes is disabled, before ever looking the batch up', async () => {
+    h.getSettingsValue.mockResolvedValue(false);
+    const { res } = makeRes();
+
+    await expect(run(body({ batchId: 'b1' }), res)).rejects.toThrow(/feature/i);
+    expect(h.batchFindById).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
   });
 
   it('stamps batchId onto the created file when the caller owns the batch', async () => {

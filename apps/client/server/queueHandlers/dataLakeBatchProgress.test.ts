@@ -6,7 +6,9 @@ const h = vi.hoisted(() => ({
   findById: vi.fn(),
   recomputeLakeStats: vi.fn(),
   recordBatchCompletion: vi.fn(),
+  recordTaxonomyDailyCapExceeded: vi.fn(),
   sendToQueue: vi.fn(),
+  sendToClient: vi.fn(),
   tryIncrementWithinLimitFixedWindow: vi.fn(),
 }));
 
@@ -22,9 +24,16 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({ dataLakeService: { recomputeLakeStats: h.recomputeLakeStats } }));
 vi.mock('@server/utils/cloudwatch', () => ({
   recordBatchCompletion: (...a: unknown[]) => h.recordBatchCompletion(...a),
+  recordTaxonomyDailyCapExceeded: (...a: unknown[]) => h.recordTaxonomyDailyCapExceeded(...a),
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
-vi.mock('sst', () => ({ Resource: { dataLakeTaxonomyQueue: { url: 'http://sqs.example/taxonomy' } } }));
+vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
+vi.mock('sst', () => ({
+  Resource: {
+    dataLakeTaxonomyQueue: { url: 'http://sqs.example/taxonomy' },
+    websocket: { managementEndpoint: 'http://ws.example' },
+  },
+}));
 
 import { finalizeBatchIfComplete, enqueueTaxonomyAnalysisIfWanted } from './dataLakeBatchProgress';
 
@@ -75,6 +84,12 @@ describe('finalizeBatchIfComplete - batch-completion metric parity', () => {
     expect(h.recordBatchCompletion).not.toHaveBeenCalled();
   });
 
+  it('does not enqueue taxonomy analysis either when this handler loses the terminal-transition race', async () => {
+    h.markTerminalIfActive.mockResolvedValue(null);
+    await finalizeBatchIfComplete(batch({ wantsTaxonomy: true }), logger as never);
+    expect(h.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+  });
+
   // Backstop for upload-complete.ts's own call: if that request never lands (network blip,
   // tab closed) but chunk/vectorize finish here on their own, this is the only other
   // guaranteed-to-run path left that can still enqueue taxonomy analysis for the batch.
@@ -109,6 +124,8 @@ describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue'
     vi.clearAllMocks();
     h.setTaxonomyStatusIfActive.mockResolvedValue(batch({ taxonomyStatus: 'queued' }));
     h.sendToQueue.mockResolvedValue('msg-id');
+    h.sendToClient.mockResolvedValue(undefined);
+    h.recordTaxonomyDailyCapExceeded.mockResolvedValue(undefined);
     h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
   });
 
@@ -155,6 +172,9 @@ describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue'
   // ('failed', recoverable via Re-analyze) instead of being silently stranded at 'none' forever.
   it('claims first, then reverts to a real failed status (with a real message) when the daily cap is exceeded', async () => {
     h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: false, count: 50, expiresAt: new Date() });
+    h.setTaxonomyStatusIfActive
+      .mockResolvedValueOnce(batch({ taxonomyStatus: 'queued' })) // the claim
+      .mockResolvedValueOnce(batch({ taxonomyStatus: 'failed' })); // the revert-to-failed
 
     await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u1' }), logger as never);
 
@@ -166,10 +186,40 @@ describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue'
       50,
       24 * 60 * 60 * 1000
     );
+    expect(h.recordTaxonomyDailyCapExceeded).toHaveBeenCalledTimes(1);
     expect(h.setTaxonomyStatusIfActive).toHaveBeenNthCalledWith(2, 'b1', ['queued'], 'failed', {
       taxonomyError: 'Daily AI tag-suggestion limit reached - try again tomorrow',
     });
+    // Notified live (mirrors analyzeBatchTaxonomy's fail()), since this transition won the race.
+    expect(h.sendToClient).toHaveBeenCalledWith('u1', 'http://ws.example', {
+      action: 'data_lake_batch_progress',
+      batchId: 'b1',
+      taxonomyStatus: 'failed',
+    });
     expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('does not notify when the revert-to-failed write loses its own guard (something else already resolved it)', async () => {
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: false, count: 50, expiresAt: new Date() });
+    h.setTaxonomyStatusIfActive
+      .mockResolvedValueOnce(batch({ taxonomyStatus: 'queued' })) // the claim
+      .mockResolvedValueOnce(null); // revert-to-failed guard lost
+
+    await enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u1' }), logger as never);
+
+    expect(h.sendToClient).not.toHaveBeenCalled();
+  });
+
+  it('swallows a failed revert-to-failed write instead of throwing (never blocks the caller)', async () => {
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: false, count: 50, expiresAt: new Date() });
+    h.setTaxonomyStatusIfActive
+      .mockResolvedValueOnce(batch({ taxonomyStatus: 'queued' })) // the claim
+      .mockRejectedValueOnce(new Error('mongo down')); // revert-to-failed write itself errors
+
+    await expect(
+      enqueueTaxonomyAnalysisIfWanted(batch({ wantsTaxonomy: true, userId: 'u1' }), logger as never)
+    ).resolves.toBeUndefined();
+    expect(h.sendToClient).not.toHaveBeenCalled();
   });
 
   it('shares its rate-limit bucket with the manual reanalyze endpoint (same key format)', async () => {

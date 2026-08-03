@@ -1,5 +1,12 @@
 import { CreateFabFileRequestInputType, FileEvents, Permission } from '@bike4mind/common';
-import { adminSettingsRepository, dataLakeRepository, FabFile, User, withTransaction } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  FabFile,
+  User,
+  withTransaction,
+} from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -38,6 +45,14 @@ const handler = baseApi()
         db: { dataLakes: dataLakeRepository },
         logger: req.logger,
       });
+
+      // Verify batch ownership before stamping - batchId comes from the body (IDOR otherwise).
+      // Shared with the presign routes (see assertBatchOwnership).
+      if (params.batchId) {
+        await dataLakeService.assertBatchOwnership(user.id, params.batchId, {
+          db: { batches: dataLakeBatchRepository },
+        });
+      }
 
       const result = await withTransaction(async () => {
         return fabFilesService.createFabFile(

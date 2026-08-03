@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   fabFileCreate: vi.fn(),
   userFindById: vi.fn(),
   findByDatalakeTag: vi.fn(),
+  batchFindById: vi.fn(),
 }));
 
 // Single-method chain: the route only calls `.use(...).post(...)`, and the ability check in
@@ -22,6 +23,7 @@ vi.mock('@server/utils/storage', () => ({
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
+  dataLakeBatchRepository: { findById: h.batchFindById },
   FabFile: { create: h.fabFileCreate },
   User: { findById: h.userFindById },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
@@ -112,5 +114,46 @@ describe('POST /api/files/createFabFile - data-lake tags', () => {
 
     expect(h.fabFileCreate.mock.calls[0][0]).not.toHaveProperty('tags');
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/files/createFabFile - batch ownership (IDOR guard)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+  });
+
+  it('never looks up a batch when none was sent', async () => {
+    const { res } = makeRes();
+    await run(body(), res);
+
+    expect(h.batchFindById).not.toHaveBeenCalled();
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('stamps batchId onto the created file when the caller owns the batch', async () => {
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1' });
+    const { res } = makeRes();
+    await run(body({ batchId: 'b1' }), res);
+
+    expect(h.batchFindById).toHaveBeenCalledWith('b1');
+    expect(h.fabFileCreate.mock.calls[0][0]).toMatchObject({ batchId: 'b1' });
+  });
+
+  it('rejects a batchId belonging to another user, without creating a file', async () => {
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'someone-else' });
+    const { res } = makeRes();
+
+    await expect(run(body({ batchId: 'b1' }), res)).rejects.toThrow(/batch not found/i);
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a batchId that does not exist, without creating a file', async () => {
+    h.batchFindById.mockResolvedValue(null);
+    const { res } = makeRes();
+
+    await expect(run(body({ batchId: 'b1' }), res)).rejects.toThrow(/batch not found/i);
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
   });
 });

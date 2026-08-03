@@ -7,7 +7,7 @@ import {
   KnowledgeType,
 } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { adminSettingsRepository, dataLakeBatchRepository, dataLakeRepository } from '@bike4mind/database';
@@ -29,6 +29,13 @@ const handler = baseApi().post(
 
       const userId = req.user.id;
       const data = FileGeneratePresignedUrlRequestInput.parse(req.body);
+
+      // Same feature gate as the batch-presign sibling: when this upload is bound to a data
+      // lake batch, the feature must actually be on.
+      if (data.batchId) {
+        const enabled = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
+        if (!enabled) throw new ForbiddenError('Feature not available');
+      }
 
       const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
       let maxFileSize: number = 20 * 1024 * 1024; // Default to 20MB
@@ -68,16 +75,10 @@ const handler = baseApi().post(
         logger: req.logger,
       });
 
-      // Verify batch ownership before stamping - batchId comes from the body, and this batch's
-      // taxonomy analysis/apply now read straight off whatever files carry its id, so without
-      // this a caller who learns another user's batchId could inject a file that gets sampled
-      // into that user's inference prompt (billed to them) or have its tags rewritten by apply.
-      // Mirrors the identical guard on the batch-presign endpoint (generate-presigned-urls-batch.ts).
+      // Verify batch ownership before stamping - batchId comes from the body (IDOR otherwise).
+      // Shared with the batch-presign and createFabFile routes (see assertBatchOwnership).
       if (data.batchId) {
-        const batch = await dataLakeBatchRepository.findById(data.batchId);
-        if (!batch || batch.userId !== userId) {
-          throw new NotFoundError('Batch not found');
-        }
+        await dataLakeService.assertBatchOwnership(userId, data.batchId, { db: { batches: dataLakeBatchRepository } });
       }
 
       // Reject unsupported/binary types (e.g. .exe) - the chunker can't

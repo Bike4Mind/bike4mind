@@ -1,8 +1,9 @@
 import { cacheRepository, dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { IDataLakeBatchDocument } from '@bike4mind/common';
-import { recordBatchCompletion } from '@server/utils/cloudwatch';
+import { recordBatchCompletion, recordTaxonomyDailyCapExceeded } from '@server/utils/cloudwatch';
 import { sendToQueue } from '@server/utils/sqs';
+import { sendToClient } from '@server/websocket/utils';
 import {
   TAXONOMY_DAILY_CAP,
   TAXONOMY_RATE_LIMIT_WINDOW_MS,
@@ -97,14 +98,25 @@ export async function enqueueTaxonomyAnalysisIfWanted(
       TAXONOMY_RATE_LIMIT_WINDOW_MS
     );
     if (!withinDailyCap) {
+      await recordTaxonomyDailyCapExceeded().catch(() => {});
       // Real terminal status with a real message, same as any other enqueue failure - a
       // rate-limited batch is recoverable via Re-analyze ('failed' is a legal `from` state),
       // unlike 'none' which the review UI never surfaces and nothing can claim out of.
-      await dataLakeBatchRepository
+      const transitioned = await dataLakeBatchRepository
         .setTaxonomyStatusIfActive(batch.id, ['queued'], 'failed', {
           taxonomyError: 'Daily AI tag-suggestion limit reached - try again tomorrow',
         })
-        .catch(() => {});
+        .catch(() => null);
+      // Only notify if THIS call's transition actually won (mirrors analyzeBatchTaxonomy's
+      // fail()) - otherwise something else already resolved the phase, and pushing here would
+      // contradict whatever that other resolution already told the client.
+      if (transitioned) {
+        await sendToClient(batch.userId, Resource.websocket.managementEndpoint, {
+          action: 'data_lake_batch_progress',
+          batchId: batch.id,
+          taxonomyStatus: 'failed',
+        }).catch(err => logger.error(`Error notifying taxonomy status for batch ${batch.id}: ${err}`));
+      }
       return;
     }
 
