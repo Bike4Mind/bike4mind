@@ -17,7 +17,7 @@ import { setLakeVisibility } from './setLakeVisibility';
 import { updateDataLake } from './updateDataLake';
 import { reconcileStuckBatches, DEFAULT_STUCK_BATCH_TIMEOUT_MS } from './reconcileStuckBatches';
 import { listDataLakes, listAllDataLakes, listArchivedDataLakes, listDeletedDataLakes } from './listDataLakes';
-import { redactLakeForActor } from './redactLakeForActor';
+import { redactLakeForActor, READER_LAKE_FIELDS } from './redactLakeForActor';
 import { browsePublicDataLakes } from './browsePublicDataLakes';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
@@ -410,6 +410,8 @@ describe('listAllDataLakes - the admin list still gates the prompt on canManage'
 
 // The raw-document exits (GET /api/data-lakes/:id, /archived, /deleted) are gated on READ
 // access, which is deliberately wider than manage - so each one must redact before serializing.
+// The redaction is an ALLOW-LIST (toReaderLake): a non-editor receives only the named fields, so
+// a field added to IDataLake later is withheld by default rather than shipped.
 describe('redactLakeForActor - editor-only fields on the raw-document exits', () => {
   const prompted = (overrides: Partial<IDataLakeDocument> = {}) =>
     lake({ createdByUserId: 'owner', systemPrompt: 'Answer only from this lake.', ...overrides });
@@ -421,12 +423,14 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
 
   it('leaves the document untouched for an admin', () => {
     const l = prompted();
-    expect(redactLakeForActor(l, { userId: 'admin', isAdmin: true }).systemPrompt).toBe('Answer only from this lake.');
+    const visible = redactLakeForActor(l, { userId: 'admin', isAdmin: true });
+    expect(visible).toBe(l);
+    expect((visible as IDataLakeDocument).systemPrompt).toBe('Answer only from this lake.');
   });
 
   it('strips the prompt for a stranger who can READ a published lake', () => {
     const l = prompted({ isPublic: true });
-    const visible = redactLakeForActor(l, { userId: 'stranger', isAdmin: false });
+    const visible = redactLakeForActor(l, { userId: 'stranger', isAdmin: false }) as IDataLakeDocument;
 
     expect(visible.systemPrompt).toBeUndefined();
     expect('systemPrompt' in visible).toBe(false);
@@ -435,11 +439,74 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     expect(visible.datalakeTag).toBe('datalake:lake');
   });
 
+  it('serves a stranger ONLY the allow-listed fields, never an unlisted one', () => {
+    // An extra own-enumerable key (as a hydrated document could carry) must not pass through: the
+    // allow-list emits named fields only, so the deny-list's "unlisted field leaks" failure is gone.
+    const l = prompted({ isPublic: true, secretField: 'leak-me' } as unknown as Partial<IDataLakeDocument>);
+    const visible = redactLakeForActor(l, { userId: 'stranger', isAdmin: false });
+
+    expect('secretField' in visible).toBe(false);
+    expect('systemPrompt' in visible).toBe(false);
+    expect(Object.keys(visible).every(k => (READER_LAKE_FIELDS as readonly string[]).includes(k))).toBe(true);
+  });
+
   it('reports a whitespace-only prompt as absent for the OWNER too, matching the list projection', () => {
     // Without this the same lake reads as "has a prompt" on GET /:id and "has none" in the list.
     const blank = lake({ createdByUserId: 'owner', systemPrompt: '   \n ' });
     const visible = redactLakeForActor(blank, { userId: 'owner', isAdmin: false });
     expect('systemPrompt' in visible).toBe(false);
+  });
+
+  it('reports an EMPTY-STRING prompt as absent for the OWNER, like the list projection does', () => {
+    // '' must be normalized identically to whitespace: the list omits it (''?.trim() is falsy), so
+    // GET /:id must not echo it back as a present-but-empty field for an editor.
+    const empty = lake({ createdByUserId: 'owner', systemPrompt: '' });
+    const visible = redactLakeForActor(empty, { userId: 'owner', isAdmin: false });
+    expect('systemPrompt' in visible).toBe(false);
+  });
+
+  it('trims a padded-but-non-blank prompt for the OWNER, matching the list projection', () => {
+    // GET /:id must not echo stored padding an editor never typed while the list sends it trimmed.
+    const padded = lake({ createdByUserId: 'owner', systemPrompt: '  Cite the source.  ' });
+    const visible = redactLakeForActor(padded, { userId: 'owner', isAdmin: false }) as IDataLakeDocument;
+    expect(visible.systemPrompt).toBe('Cite the source.');
+    // A copy, not the source - the padded original is left intact for any write path still holding it.
+    expect(visible).not.toBe(padded);
+    expect(padded.systemPrompt).toBe('  Cite the source.  ');
+  });
+
+  it('treats a null prompt as blank for an editor rather than throwing on .trim()', () => {
+    // Only a direct DB write or migration produces null; the predicate must stay null-safe regardless.
+    const nulled = lake({ createdByUserId: 'owner', systemPrompt: null as unknown as string });
+    const visible = redactLakeForActor(nulled, { userId: 'owner', isAdmin: false });
+    expect('systemPrompt' in visible).toBe(false);
+  });
+
+  it('pins the reader allow-list so a new IDataLake field forces a visibility decision', () => {
+    // If this fails, a field was added to IDataLake (or READER_LAKE_FIELDS changed) without deciding
+    // whether a non-editor may receive it. Add it to READER_LAKE_FIELDS on purpose, or leave it out.
+    expect([...READER_LAKE_FIELDS].sort()).toEqual(
+      [
+        'createdAt',
+        'createdByUserId',
+        'datalakeTag',
+        'description',
+        'fileCount',
+        'fileTagPrefix',
+        'id',
+        'isPublic',
+        'lastSyncAt',
+        'name',
+        'organizationId',
+        'requiredEntitlement',
+        'requiredUserTag',
+        'slug',
+        'status',
+        'totalSizeBytes',
+        'updatedAt',
+      ].sort()
+    );
+    expect((READER_LAKE_FIELDS as readonly string[]).includes('systemPrompt')).toBe(false);
   });
 
   it('does not mutate the source document (the caller may still hold it for a write path)', () => {
@@ -455,7 +522,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
 
     const result = await listArchivedDataLakes(ctx({ userId: 'me', organizationId: 'orgA' }), { db });
 
-    expect(result.find(l => l.id === 'mine')?.systemPrompt).toBe('Answer only from this lake.');
+    expect((result.find(l => l.id === 'mine') as IDataLakeDocument)?.systemPrompt).toBe('Answer only from this lake.');
     // Key absence, not undefined: blanking instead of deleting would pass the weaker assertion.
     const redactedArchived = result.find(l => l.id === 'org')!;
     expect('systemPrompt' in redactedArchived).toBe(false);
