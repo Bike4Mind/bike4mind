@@ -30,7 +30,14 @@ const LOG = '[backfill-datalake-content-prefix-tag]';
 
 // Statuses whose files no longer belong to anyone: a lake mid-teardown is about to lose its files,
 // so minting tags onto them is churn at best. Every other status keeps a browsable lake - an
-// archived one is restorable, and its tree should be right when it comes back.
+// archived one is restorable, and its tree should be right when it comes back; the transient
+// `archiving`/`restoring` pair only rewrites membership meta-tags, never content-prefix tags, so
+// there is nothing for this to race.
+//
+// Excluded via $nin rather than an $in allow-list ON PURPOSE: $nin also matches a lake with no
+// `status` field at all. `status` carries a schema default, so only rows written before it existed
+// lack one - and those are the oldest lakes in the database, exactly the population this backfill
+// is for. An allow-list would skip them silently.
 const TEARDOWN_STATUSES = ['deleting', 'deleted'];
 
 const migration: MigrationFile = {
@@ -56,6 +63,7 @@ const migration: MigrationFile = {
     const skipped: SkippedLake[] = [];
     let stampedFiles = 0;
     let stampedLakes = 0;
+    let alreadyCoveredLakes = 0;
 
     for (const lake of lakes) {
       const decision = await dataLakeService.decideStampPrefix(lake, { dataLakes: dataLakeRepository });
@@ -93,10 +101,17 @@ const migration: MigrationFile = {
         console.log(
           `${LOG} stamped ${result.modifiedCount} file(s) in "${lake.name}" as ${decision.prefix}${dataLakeService.UNCATEGORIZED_TAG_SUFFIX}`
         );
+      } else {
+        // Permitted, but nothing to do - an empty lake, or one a prior run already covered.
+        // Counted separately so the three buckets below add up to everything scanned; folding
+        // these into neither would leave an operator wondering which lakes went unaccounted for.
+        alreadyCoveredLakes++;
       }
     }
 
-    console.log(`${LOG} stamped ${stampedFiles} file(s) across ${stampedLakes} lake(s) of ${lakes.length} scanned`);
+    console.log(
+      `${LOG} stamped ${stampedFiles} file(s) across ${stampedLakes} lake(s); ${alreadyCoveredLakes} already covered, ${skipped.length} skipped, ${lakes.length} scanned`
+    );
 
     if (skipped.length > 0) {
       // These lakes stay uncategorized until someone acts on them, and nothing else will say so -

@@ -20,9 +20,8 @@ const mockRepoFind = vi.fn<(filter: Filter) => Promise<Lake[]>>();
 // it, and a stub would let the two drift. Its agreement with the satisfaction predicate is proven
 // against a real server in packages/database.
 vi.mock('@bike4mind/database', async () => {
-  const { buildLacksContentPrefixTagFilter } = await vi.importActual<
-    typeof import('../../../database/src/queries/dataLakeLifecycleScope')
-  >('../../../database/src/queries/dataLakeLifecycleScope');
+  const { buildLacksContentPrefixTagFilter } =
+    await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
   return {
     buildLacksContentPrefixTagFilter,
     DataLakeModel: { find: (filter: Filter) => mockLakeFind(filter) },
@@ -90,7 +89,11 @@ describe('backfill-datalake-content-prefix-tag', () => {
     await migration.up();
 
     expect(output()).toContain('stamped 0 file(s) across 0 lake(s)');
-    expect(output()).not.toContain('skipped');
+    // The lake was permitted and simply had nothing left to do, so it lands in "already covered",
+    // never in the skipped report - a skip means the gate refused it, which is a different story
+    // for an operator reading this.
+    expect(output()).toContain('1 already covered, 0 skipped, 1 scanned');
+    expect(output()).not.toContain('their files stay uncategorized');
   });
 
   it('skips a lake mid-teardown', async () => {
@@ -159,7 +162,8 @@ describe('backfill-datalake-content-prefix-tag', () => {
 
     expect(mockUpdateMany).toHaveBeenCalledTimes(1);
     expect(mockUpdateMany.mock.calls[0][0]['tags.name']).toBe('datalake:acme');
-    expect(output()).toContain('stamped 2 file(s) across 1 lake(s) of 2 scanned');
+    // The three buckets account for every scanned lake: 1 stamped + 0 already covered + 1 skipped.
+    expect(output()).toContain('stamped 2 file(s) across 1 lake(s); 0 already covered, 1 skipped, 2 scanned');
   });
 
   it('stamps a nested pair outermost-first, whatever order the lakes come back in', async () => {
