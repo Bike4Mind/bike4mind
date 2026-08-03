@@ -44,7 +44,7 @@ const handler = baseApi()
     let totalSizeToDeduct = 0;
     // Collected across the whole batch and recomputed once at the end, so deleting N files out of
     // one lake costs one aggregation rather than N identical ones.
-    const deletedFileTagNames: unknown[] = [];
+    const deletedFileTagNames: (string | undefined)[] = [];
 
     // Process each file deletion sequentially
     for (const fileId of fileIds) {
