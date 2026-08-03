@@ -59,7 +59,10 @@ export const updateSession = async (
 ) => {
   const { db } = adapters;
   const { knowledgeIds, artifactIds, name, id, tags, lastUsedModel, forceKnowledgeRetrieval, propagateToProjects } =
-    secureParameters(parameters, updateSessionParamtersSchema);
+    secureParameters(
+    parameters,
+    updateSessionParamtersSchema
+  );
   const session = await db.sessions.shareable.findUpdateAccessById(user, id);
 
   if (!session) {
