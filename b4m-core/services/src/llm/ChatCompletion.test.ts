@@ -392,6 +392,33 @@ describe('ChatCompletionProcess', () => {
         const [, contextAndSystemMessages, , , , , , , options] = mockedBuildAndSortMessages.mock.calls[0];
         expect(contextAndSystemMessages).toEqual([]);
         expect(options).toEqual(expect.objectContaining({ skipAdminPromptTemplates: true }));
+        // The adapter appends a model-identity line to the system parameter on its own;
+        // raw has to reach through and turn that off too, or "empty stack" is off by 17 tokens.
+        const completeOpts = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2];
+        expect(completeOpts.omitIdentityReminder).toBe(true);
+      });
+
+      // Auto-added tools are OUR additions, and any attached tool also pulls the provider's
+      // server-side tool-use preamble into the request (observed live: an Anthropic completion
+      // with only auto-added tools knew the current date on a fresh raw session). The same
+      // admin user is used for both cases, so the pair discriminates on the mode alone.
+      it('suppresses auto-added tools under a mode, but not for a default request', async () => {
+        (service as any).user.isAdmin = true; // makes blog_draft auto-add fire on the default path
+        try {
+          mockTextModel();
+          const base = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+          await service.process({ body: base, logger: mockLogger });
+          const defaultTools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          expect(defaultTools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toContain('blog_draft');
+
+          mockTextModel();
+          await service.process({ body: { ...base, promptMode: 'raw' as const }, logger: mockLogger });
+          const rawTools = vi.mocked(mockedGetLlmByModel.mock.results[1].value.complete).mock.calls[0][2].tools;
+          expect(rawTools ?? []).toEqual([]);
+        } finally {
+          delete (service as any).user.isAdmin;
+        }
       });
     });
 

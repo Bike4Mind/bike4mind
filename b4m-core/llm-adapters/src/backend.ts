@@ -120,6 +120,12 @@ export interface ICompletionOptions {
   /** If false, backend returns tool calls without executing (for CLI). Default: true */
   executeTools?: boolean;
   /**
+   * Skip the model-identity reminder the backend appends to the system parameter.
+   * For callers whose contract is a bare completion (API promptMode raw): with this
+   * set and no system messages, the request carries no system parameter at all.
+   */
+  omitIdentityReminder?: boolean;
+  /**
    * Controls which tool the model should use.
    * - 'auto': Model decides whether to call a tool (default)
    * - 'required': Model must call at least one tool

@@ -735,34 +735,41 @@ export class ChatCompletionProcess {
     finalEnabledTools = addPairedTool(finalEnabledTools, 'search_knowledge_base', 'retrieve_knowledge_content');
     let hasContentTransform = false;
 
-    // Auto-add blog_publish tool if user has blog integration configured (admin-only for now)
-    if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_publish')) {
-      finalEnabledTools.push('blog_publish');
-    }
+    // Auto-added capabilities are OUR additions, not the caller's, so a prompt mode skips this
+    // whole block - and not only for prompt hygiene: attaching any tool also pulls the provider's
+    // server-side tool-use preamble into the request (observed live: a completion whose only tools
+    // were auto-added knew the current date on a fresh raw-mode session). Tools the caller sent
+    // explicitly are caller intent and stay, mode or not.
+    if (!parsedBody.promptMode) {
+      // Auto-add blog_publish tool if user has blog integration configured (admin-only for now)
+      if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_publish')) {
+        finalEnabledTools.push('blog_publish');
+      }
 
-    // Auto-add blog_edit tool if user has blog integration configured (admin-only for now)
-    if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_edit')) {
-      finalEnabledTools.push('blog_edit');
-    }
+      // Auto-add blog_edit tool if user has blog integration configured (admin-only for now)
+      if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_edit')) {
+        finalEnabledTools.push('blog_edit');
+      }
 
-    // Auto-add blog_draft tool for admin users (used by Content Publishing Studio)
-    if (this.user.isAdmin && !enabledTools.includes('blog_draft')) {
-      finalEnabledTools.push('blog_draft');
-      hasContentTransform = true;
-    }
+      // Auto-add blog_draft tool for admin users (used by Content Publishing Studio)
+      if (this.user.isAdmin && !enabledTools.includes('blog_draft')) {
+        finalEnabledTools.push('blog_draft');
+        hasContentTransform = true;
+      }
 
-    if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
-      finalEnabledTools.push('navigate_view');
-    }
+      if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
+        finalEnabledTools.push('navigate_view');
+      }
 
-    // Auto-add the `skill` LLM tool when the host has wired a skill repository.
-    // Skills are user-defined instruction templates and there's no separate
-    // toggle for them in the UI - gating purely on db.skills being present
-    // keeps callers without skill support unaffected. SkillsFeature still
-    // surfaces the catalog into the system prompt so the LLM knows what's
-    // invocable.
-    if (this.db.skills && !finalEnabledTools.includes('skill')) {
-      finalEnabledTools.push('skill');
+      // Auto-add the `skill` LLM tool when the host has wired a skill repository.
+      // Skills are user-defined instruction templates and there's no separate
+      // toggle for them in the UI - gating purely on db.skills being present
+      // keeps callers without skill support unaffected. SkillsFeature still
+      // surfaces the catalog into the system prompt so the LLM knows what's
+      // invocable.
+      if (this.db.skills && !finalEnabledTools.includes('skill')) {
+        finalEnabledTools.push('skill');
+      }
     }
 
     // Auto-add Lattice tools when Lattice feature is enabled
@@ -2580,6 +2587,9 @@ export class ChatCompletionProcess {
               }
             : undefined,
         tools: allTools,
+        // raw promises an empty system parameter; the adapters append a model-identity
+        // line on their own, so the promise has to be threaded down to them.
+        ...(promptMode === 'raw' ? { omitIdentityReminder: true } : {}),
       };
 
       // Check if Research Mode is enabled and handle parallel processing
