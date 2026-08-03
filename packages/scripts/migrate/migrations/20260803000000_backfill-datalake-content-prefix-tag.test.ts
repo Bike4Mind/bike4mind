@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { DATA_LAKES } from '@bike4mind/common';
 
 type Filter = Record<string, unknown>;
 type Lake = {
@@ -112,6 +113,18 @@ describe('backfill-datalake-content-prefix-tag', () => {
     expect(mockUpdateMany).not.toHaveBeenCalled();
     expect(output()).toContain('skipped 1 lake(s)');
     expect(output()).toContain(why);
+  });
+
+  it('writes nothing for a prefix overlapping a built-in lake', async () => {
+    // The registry read arm bypasses ownership, so a stamp under its prefix would publish every
+    // one of these files to anyone who can reach that built-in lake. Registry lakes have no Mongo
+    // rows, so the same-scope collision query cannot see this one.
+    mockLakeFind.mockResolvedValue([lake({ fileTagPrefix: DATA_LAKES[0].fileTagPrefix })]);
+
+    await migration.up();
+
+    expect(mockUpdateMany).not.toHaveBeenCalled();
+    expect(output()).toContain('registry-prefix-overlap');
   });
 
   it('writes nothing for an overlapping prefix and names the clashing lake', async () => {

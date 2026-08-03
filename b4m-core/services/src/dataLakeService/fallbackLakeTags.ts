@@ -1,7 +1,7 @@
 import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { DATALAKE_TAG_PREFIX, normalizeTagPrefix, satisfiesTagPrefix } from '@bike4mind/common';
 import { extractDataLakeMetaTags } from './authorizeLakeWrite';
-import { findCollidingPrefixLakes } from './tagPrefixCollision';
+import { collidesWithRegistryPrefix, findCollidingPrefixLakes } from './tagPrefixCollision';
 
 /**
  * Suffix stamped under a lake's `fileTagPrefix` for a file no other tag under that prefix
@@ -63,7 +63,11 @@ const satisfiesPrefix = (tags: readonly FileTag[], prefix: string): boolean =>
  */
 export type LakeStampDecision =
   | { stamp: true; prefix: string; overlapCheckFailed?: boolean }
-  | { stamp: false; reason: 'unusable-prefix' | 'reserved-namespace' | 'prefix-overlap'; detail?: string };
+  | {
+      stamp: false;
+      reason: 'unusable-prefix' | 'reserved-namespace' | 'prefix-overlap' | 'registry-prefix-overlap';
+      detail?: string;
+    };
 
 type StampGateLake = Pick<IDataLakeDocument, 'id' | 'name' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId'>;
 
@@ -88,6 +92,19 @@ export const decideStampPrefix = async (
       `[dataLakes] not stamping a content tag for "${lake.name}": its prefix ${prefix} reaches the reserved ${DATALAKE_TAG_PREFIX} namespace`
     );
     return { stamp: false, reason: 'reserved-namespace' };
+  }
+
+  // A STATIC-registry prefix is worse than a colliding dynamic one, and invisible to the query
+  // below: the registry lakes have no Mongo rows. Their read arm is an intentional ownership
+  // BYPASS (`dataLakeTagPrefixes` in buildOwnershipConditions, no owner conjunct - a shared
+  // knowledge base), so minting under one would publish this file to every user who can reach
+  // that registry lake, whoever owns it. Create already refuses such a prefix, so only rows
+  // predating that check land here.
+  if (collidesWithRegistryPrefix(lake.fileTagPrefix)) {
+    logger?.warn?.(
+      `[dataLakes] not stamping a content tag for "${lake.name}": its prefix ${prefix} overlaps a built-in data lake, so the tag would expose this file to everyone with access to that lake`
+    );
+    return { stamp: false, reason: 'registry-prefix-overlap' };
   }
 
   // A prefix tag on a creator-owned file is full membership of any lake sharing that prefix,

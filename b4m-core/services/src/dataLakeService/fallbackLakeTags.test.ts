@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { IDataLakeDocument } from '@bike4mind/common';
+import { DATA_LAKES, type IDataLakeDocument } from '@bike4mind/common';
 import { createDataLakeFallbackTagger, decideStampPrefix, reconcileDataLakeFallbackTags } from './fallbackLakeTags';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
@@ -363,6 +363,35 @@ describe('decideStampPrefix', () => {
       stamp: true,
       prefix: 'acme:',
       overlapCheckFailed: true,
+    });
+  });
+});
+
+describe('decideStampPrefix - static registry prefixes', () => {
+  const registryPrefix = DATA_LAKES[0]?.fileTagPrefix;
+
+  it('refuses a prefix that overlaps a built-in lake', async () => {
+    // The registry read arm has no ownership conjunct, so a tag under its prefix is readable by
+    // everyone who can reach that lake. The collision query cannot see registry lakes at all -
+    // they have no Mongo rows - so this is a separate check, not a duplicate of the one below it.
+    const db = makeDb({});
+    expect(await decideStampPrefix(lake({ fileTagPrefix: registryPrefix }), db)).toEqual({
+      stamp: false,
+      reason: 'registry-prefix-overlap',
+    });
+  });
+
+  it('refuses a prefix that NESTS under a built-in lake', async () => {
+    const db = makeDb({});
+    const decision = await decideStampPrefix(lake({ fileTagPrefix: `${registryPrefix}legal:` }), db);
+    expect(decision).toEqual({ stamp: false, reason: 'registry-prefix-overlap' });
+  });
+
+  it('still stamps an unrelated prefix', async () => {
+    const db = makeDb({});
+    expect(await decideStampPrefix(lake({ fileTagPrefix: 'totally-unrelated:' }), db)).toEqual({
+      stamp: true,
+      prefix: 'totally-unrelated:',
     });
   });
 });
