@@ -16,7 +16,9 @@ import { buildLacksContentPrefixTagFilter } from './dataLakeLifecycleScope';
  * newlines is one this caught.
  */
 
-const PREFIX = 'acme:';
+// `datalake:` is not a prefix the stamp gate ever clears, but the filter is exported and parity
+// should not depend on every future caller knowing that.
+const PREFIXES = ['acme:', 'a:', 'datalake:', 'ACME:'];
 
 // [label, tag names on the file]. Each is evaluated BOTH ways; the assertion is that the two
 // answers are opposites, so a case only has to be interesting, not pre-classified.
@@ -36,6 +38,9 @@ const CASES: [string, string[]][] = [
   // predicate reported it satisfied.
   ['a suffix beginning with a newline', ['acme:\nlegal']],
   ['a suffix beginning with a space', ['acme: legal']],
+  ['a nested tag under a shorter prefix', ['a:b:c']],
+  ['a meta-tag in mixed case', ['DataLake:acme']],
+  ['a meta-tag and a content tag together', ['datalake:acme', 'acme:legal']],
 ];
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
@@ -61,20 +66,21 @@ afterAll(async () => {
 }, 30000);
 
 describe('buildLacksContentPrefixTagFilter', () => {
-  it('selects exactly the files satisfiesTagPrefix reports as uncategorized', async () => {
-    const selected = await FabFile.find(buildLacksContentPrefixTagFilter(PREFIX)).select('filePath').lean();
+  it.each(PREFIXES)('selects exactly the files satisfiesTagPrefix reports as uncategorized under %s', async prefix => {
+    const selected = await FabFile.find(buildLacksContentPrefixTagFilter(prefix)).select('filePath').lean();
     const selectedLabels = new Set(selected.map(f => f.filePath));
 
     const disagreements = CASES.filter(
-      ([label, tags]) => satisfiesTagPrefix(tags, PREFIX) === selectedLabels.has(label)
+      ([label, tags]) => satisfiesTagPrefix(tags, prefix) === selectedLabels.has(label)
     ).map(([label, tags]) => `${label} [${tags.join(', ')}]`);
 
     expect(disagreements).toEqual([]);
-    // Guards the assertion above against a filter that matches nothing (every case would then
-    // "agree" only if every case were satisfied, but a typo'd field name matching nothing is the
-    // realistic failure), and against one that matches everything.
+    // Guards the assertion above against a filter that matches nothing: every case would then
+    // "agree" only if every case were satisfied, and a typo'd field name matching nothing is the
+    // realistic failure. `datalake:` and `ACME:` satisfy no case, so only the real prefixes can
+    // assert the lower bound.
+    if (prefix === 'acme:' || prefix === 'a:') expect(selectedLabels.size).toBeLessThan(CASES.length);
     expect(selectedLabels.size).toBeGreaterThan(0);
-    expect(selectedLabels.size).toBeLessThan(CASES.length);
   });
 
   it('escapes regex metacharacters in a user-chosen prefix', async () => {

@@ -1,4 +1,9 @@
-import { isReservedTagPrefix, normalizeTagPrefix, type DataLakeMembershipScope } from '@bike4mind/common';
+import {
+  DATALAKE_TAG_PREFIX,
+  isReservedTagPrefix,
+  normalizeTagPrefix,
+  type DataLakeMembershipScope,
+} from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 /**
@@ -58,16 +63,25 @@ export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): R
  * filter. Case-sensitive (no `i` flag), matching both the predicate and the read arms the stamp
  * has to become visible to.
  *
- * `satisfiesTagPrefix` also excludes `datalake:*` tags; there is no conjunct for that here because
- * callers reach this only for a prefix `decideStampPrefix` cleared, which rules out the reserved
- * namespace. A tag cannot then start with both `prefix` and `datalake:` - one would have to be a
- * prefix of the other, and the only prefix inside that namespace ending in ':' is `datalake:`
- * itself. The parity test covers the case rather than leaving it to this argument.
+ * The second conjunct mirrors the predicate's "a meta-tag is membership, never content" rule. It is
+ * unreachable for the prefixes the stamp gate actually clears, since those are outside the
+ * `datalake:` namespace - but carrying it means parity holds for ANY prefix rather than only under
+ * that precondition, which is one fewer thing for a future caller to get wrong. Case-insensitive,
+ * matching the predicate.
  *
  * Returns a top-level filter fragment; spread it alongside the meta-tag arm.
  */
 export function buildLacksContentPrefixTagFilter(prefix: string): Record<string, unknown> {
   return {
-    tags: { $not: { $elemMatch: { name: { $regex: new RegExp(`^${escapeRegex(prefix)}[\\s\\S]`) } } } },
+    tags: {
+      $not: {
+        $elemMatch: {
+          $and: [
+            { name: { $regex: new RegExp(`^${escapeRegex(prefix)}[\\s\\S]`) } },
+            { name: { $not: new RegExp(`^${DATALAKE_TAG_PREFIX}`, 'i') } },
+          ],
+        },
+      },
+    },
   };
 }

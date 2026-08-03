@@ -78,8 +78,8 @@ describe('backfill-datalake-content-prefix-tag', () => {
     // the built regex rather than merely "a filter was passed" is what would fail if the
     // migration dropped the arm and stamped every member.
     const [filter] = mockUpdateMany.mock.calls[0];
-    const tagsArm = filter.tags as { $not: { $elemMatch: { name: { $regex: RegExp } } } };
-    expect(tagsArm.$not.$elemMatch.name.$regex.source).toBe('^acme:[\\s\\S]');
+    const tagsArm = filter.tags as { $not: { $elemMatch: { $and: [{ name: { $regex: RegExp } }] } } };
+    expect(tagsArm.$not.$elemMatch.$and[0].name.$regex.source).toBe('^acme:[\\s\\S]');
   });
 
   it('re-running is a no-op once every file carries the tag', async () => {
@@ -147,6 +147,24 @@ describe('backfill-datalake-content-prefix-tag', () => {
     expect(mockUpdateMany).toHaveBeenCalledTimes(1);
     expect(mockUpdateMany.mock.calls[0][0]['tags.name']).toBe('datalake:acme');
     expect(output()).toContain('stamped 2 file(s) across 1 lake(s) of 2 scanned');
+  });
+
+  it('stamps a nested pair outermost-first, whatever order the lakes come back in', async () => {
+    // Each lake's write is visible to the next one's filter, and `a:x:uncategorized` satisfies
+    // `a:`. Reaching the inner lake first would leave the outer one with no node of its own -
+    // the exact symptom this migration exists to remove. The reconciler sorts for the same
+    // reason; a cross-scope nested pair is not a collision, so the gate lets both through.
+    const inner = lake({ id: 'inner', name: 'Inner', fileTagPrefix: 'a:x:', datalakeTag: 'datalake:inner' });
+    const outer = lake({ id: 'outer', name: 'Outer', fileTagPrefix: 'a:', datalakeTag: 'datalake:outer' });
+    mockLakeFind.mockResolvedValue([inner, outer]);
+    mockUpdateMany.mockResolvedValue({ modifiedCount: 1 });
+
+    await migration.up();
+
+    const stamped = mockUpdateMany.mock.calls.map(
+      ([, update]) => (update as { $push: { tags: { name: string } } }).$push.tags.name
+    );
+    expect(stamped).toEqual(['a:uncategorized', 'a:x:uncategorized']);
   });
 
   it('is irreversible', async () => {

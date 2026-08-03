@@ -1,4 +1,5 @@
 import { DataLakeModel, FabFile, buildLacksContentPrefixTagFilter, dataLakeRepository } from '@bike4mind/database';
+import { normalizeTagPrefix } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { type MigrationFile } from './index';
 
@@ -37,11 +38,20 @@ const migration: MigrationFile = {
   name: 'backfill-datalake-content-prefix-tag',
 
   up: async () => {
-    const lakes = await DataLakeModel.find({ status: { $nin: TEARDOWN_STATUSES } });
-    if (lakes.length === 0) {
+    const found = await DataLakeModel.find({ status: { $nin: TEARDOWN_STATUSES } });
+    if (found.length === 0) {
       console.log(`${LOG} no data lakes, nothing to do`);
       return;
     }
+
+    // Shortest prefix first, mirroring the reconciler's sort, because each lake's write is visible
+    // to the next one's filter. Prefixes can nest (`a:` and `a:x:` both valid, and a cross-scope
+    // pair is not a collision), and `a:x:uncategorized` satisfies `a:` - so stamping the inner
+    // lake first would leave the outer lake with no node of its own, which is the whole symptom
+    // this migration exists to fix.
+    const lakes = [...found].sort((a, b) =>
+      (normalizeTagPrefix(a.fileTagPrefix) ?? '').localeCompare(normalizeTagPrefix(b.fileTagPrefix) ?? '')
+    );
 
     const skipped: SkippedLake[] = [];
     let stampedFiles = 0;
