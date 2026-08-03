@@ -46,6 +46,16 @@ const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unkno
 describe('PUT /api/files/tags/[id]', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('puts a fabFiles repository in scope so a rename can retag the files', async () => {
+    const { res } = makeRes();
+
+    await call({ method: 'PUT', query: { id: 't1' }, body: { id: 't1', name: 'receipts' }, user: { id: 'u1' } }, res);
+
+    const [, , adapters] = h.update.mock.calls[0];
+    expect(adapters.db.fabFiles).toEqual({ __repo: 'fabFiles' });
+    expect(adapters.db.tags).toEqual({ __repo: 'fileTags' });
+  });
+
   it('acts as the authenticated user, never a userId supplied in the body', async () => {
     const { res } = makeRes();
 

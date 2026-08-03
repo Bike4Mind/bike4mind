@@ -62,8 +62,8 @@ describe('file tag mutations', () => {
       expect(cachedTags()[0].color).toBe('blue');
     });
 
-    // A rename does not retag the files, so the cached count is optimistic at best and flatly
-    // wrong at worst. Invalidating the bare prefix is what makes the server-derived count win;
+    // A rename retags the files and can merge two tags into one, so the cached count and the
+    // cached row set are both guesses. Invalidating the bare prefix is what makes the server win;
     // invalidating only ['file-tags','counts'] leaves the longer key matched and the list stale.
     it('invalidates the tag list so the derived count is refetched, not trusted', async () => {
       mockPut.mockResolvedValueOnce({ data: { id: 'tag-1', name: 'receipts' } });
@@ -71,6 +71,16 @@ describe('file tag mutations', () => {
       await rename();
 
       expect(invalidatedKeys()).toContainEqual(['file-tags']);
+    });
+
+    // The rename rewrites the tag names stored on the files, so a cached file row still shows the
+    // old name until something refetches it.
+    it('invalidates the file list, because the rename retags the files', async () => {
+      mockPut.mockResolvedValueOnce({ data: { id: 'tag-1', name: 'receipts' } });
+
+      await rename();
+
+      expect(invalidatedKeys()).toContainEqual(['fabFiles']);
     });
 
     it('leaves other cached tags untouched', async () => {

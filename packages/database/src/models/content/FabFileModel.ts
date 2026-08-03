@@ -812,17 +812,96 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number> {
+    if (!tag || !newTag) return 0;
+    // Anchored and escaped for the same reason as removeTagByUserId: unanchored, renaming `q1`
+    // also rewrote `q1-draft`.
+    const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
+    // `$[elem]` and not `$`: the first-positional operator updates only the FIRST matching element
+    // per document, so a file carrying the name twice kept one stale copy.
+    // No deletedAt conjunct - see removeTagByUserId; an undelete must not revive the old name.
     const result = await this.fabFileModel.updateMany(
       {
         userId,
-        deletedAt: null,
-        'tags.name': { $regex: new RegExp(tag, 'i') },
+        'tags.name': nameRegex,
       },
       {
         $set: {
-          'tags.$.name': newTag,
+          'tags.$[elem].name': newTag,
         },
-      }
+      },
+      { arrayFilters: [{ 'elem.name': nameRegex }] }
+    );
+    // Renamed rather than cleared: unlike a delete, the tag still exists under its new name, so
+    // the file's primary label should follow it.
+    await this.fabFileModel.updateMany({ userId, primaryTag: nameRegex }, { $set: { primaryTag: newTag } });
+    return result.modifiedCount;
+  }
+
+  async dedupeTagByUserId(userId: string, name: string): Promise<number> {
+    if (!name) return 0;
+    const folded = name.toLowerCase();
+    // An aggregation-pipeline update, which is NOT the read-modify-write that pullTagsByFabFileId
+    // rejects: the array is rebuilt from the document's own value server-side inside one atomic
+    // per-document write, so there is no snapshot round trip for a concurrent writer to lose.
+    // Same mechanism as StockPortfolioRepository.executeBuy.
+    //
+    // `$ifNull` guards throughout: `tags` is declared as [Object] with no sub-schema, and legacy
+    // rows carry elements with a missing or non-string `name` - six other call sites defend the
+    // same shape. Without the guard one bad element decides the whole user's dedupe.
+    const isMatch = (expr: unknown) => ({ $eq: [{ $toLower: { $ifNull: [expr, ''] } }, folded] });
+    const result = await this.fabFileModel.updateMany(
+      {
+        userId,
+        // Index-eligible prefilter first, then the $expr narrows to documents that genuinely carry
+        // the name more than once, so the write set stays small.
+        'tags.name': new RegExp(`^${escapeRegex(name)}$`, 'i'),
+        $expr: {
+          $gt: [
+            {
+              $size: {
+                $filter: {
+                  input: { $ifNull: ['$tags', []] },
+                  as: 't',
+                  cond: isMatch('$$t.name'),
+                },
+              },
+            },
+            1,
+          ],
+        },
+      },
+      [
+        {
+          $set: {
+            tags: {
+              $reduce: {
+                input: { $ifNull: ['$tags', []] },
+                initialValue: [],
+                in: {
+                  $cond: {
+                    if: isMatch('$$this.name'),
+                    // Keep the FIRST match, normalized to the passed casing, and drop later ones.
+                    // $mergeObjects rather than a rebuilt {name, strength} so `strength` and any
+                    // field this schema does not declare survive.
+                    then: {
+                      $cond: {
+                        if: {
+                          $anyElementTrue: {
+                            $map: { input: '$$value', as: 'kept', in: isMatch('$$kept.name') },
+                          },
+                        },
+                        then: '$$value',
+                        else: { $concatArrays: ['$$value', [{ $mergeObjects: ['$$this', { name }] }]] },
+                      },
+                    },
+                    else: { $concatArrays: ['$$value', ['$$this']] },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ]
     );
     return result.modifiedCount;
   }

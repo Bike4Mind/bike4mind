@@ -21,6 +21,7 @@ const handler = baseApi()
         {
           db: {
             tags: fileTagRepository as unknown as ITagRepository,
+            fabFiles: fabFileRepository,
           },
         }
       );

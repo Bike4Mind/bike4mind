@@ -486,12 +486,30 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   removeTagByUserId(userId: string, tag: string): Promise<number>;
 
   /**
-   * Update the tags for a user's files.
-   * @param userId - The ID of the user.
-   * @param tag - The tag to update.
-   * @returns A promise that resolves to the number of files.
+   * Rename one tag on every file a user owns, so renaming a tag document cannot leave the old name
+   * orphaned on the files that carried it. Matches the WHOLE name, case-insensitively, and renames
+   * EVERY occurrence in a file's tags array rather than only the first. Includes soft-deleted files
+   * and carries `primaryTag` across, for the same reasons as `removeTagByUserId`.
+   *
+   * May leave a file carrying `newTag` twice - once from the rename and once because it already
+   * had that tag. The caller resolves it with `dedupeTagByUserId`; doing both in one write would
+   * mean rewriting the whole array and losing the element-level concurrency this buys.
+   *
+   * @returns files modified by the rename (not the `primaryTag` sweep).
    */
   updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number>;
+
+  /**
+   * Collapse a repeated tag name to a single entry on every file of a user's that carries it more
+   * than once, normalizing the survivor to `name`'s casing. Keeps the FIRST occurrence and its
+   * other fields (`strength`, and anything this schemaless array happens to hold).
+   *
+   * The companion to `updateTagsByUserId`: renaming in place is what creates the duplicate, when a
+   * file already carried the target name.
+   *
+   * @returns the number of files that actually had a duplicate to collapse.
+   */
+  dedupeTagByUserId(userId: string, name: string): Promise<number>;
 
   /**
    * Atomically remove every tag matching one of `tagNames` (exact names) from one file's

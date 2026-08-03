@@ -58,14 +58,17 @@ export const useUpdateFileTag = () => {
     onSuccess: data => {
       // Merge rather than replace so the edited fields show immediately: PUT /api/files/tags/[id]
       // echoes back only what tagUpdateSchema accepted, and a wholesale swap would blank the rest
-      // of the row. This is optimistic only - fileCount is derived from the files that carry the
-      // tag, and a rename does not retag them, so the invalidation below is what settles it.
+      // of the row. This is optimistic only - a rename retags the files and can merge two tags into
+      // one, so fileCount here is a guess and the invalidation below is what settles it.
       queryClient.setQueryData(['file-tags'], (prev: IFileTag[]) =>
         prev.map(t => (t.id === data.id ? { ...t, ...data } : t))
       );
       // The bare prefix: invalidating ['file-tags','counts'] alone leaves the longer key matched
-      // and the list itself - which is what carries fileCount - stale.
+      // and the list itself - which is what carries fileCount - stale. A merge also removes the
+      // collided row entirely, which only a refetch of the list can reflect.
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+      // A rename rewrites the tag names stored on the files, so cached file rows are stale too.
+      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
       toast.success('Tag updated successfully');
     },
     onError: () => {
