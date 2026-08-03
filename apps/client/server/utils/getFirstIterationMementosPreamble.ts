@@ -9,11 +9,14 @@
  * write side was already populating it.
  *
  * This helper produces a preamble string the caller appends to the
- * first-iteration query. It mirrors the guards used by
- * `publishMementoCompletion`:
+ * first-iteration query. The caller resolves the memory policy once, via
+ * `resolveExecutionMementoGates`, and hands us the concrete `MementoGates` - the SAME resolver the
+ * write side (`publishMementoCompletion`) uses, so a per-request opt-out reads the same on both
+ * sides (#1337). It mirrors those guards:
  *
- * - the user is on NEITHER pipeline. V2 (if the user opted in) is tried first and is mutually
- *   exclusive with V1; V1 additionally requires `enableMementos` (user/admin).
+ * - neither gate is live -> no retrieval. V2 (`gates.v2`) is tried first and is mutually exclusive
+ *   with V1 at inject time; V1 (`gates.v1`) already folds in the admin setting and the request flag.
+ *   An explicit `enableMementos: false` resolves both gates off, so nothing is read.
  * - `parentExecutionId` set -> no retrieval. Subagent / DAG-child executions
  *   inherit the parent's materialized context via the existing handoff path
  *   and must not re-fetch (parity with the publish side).
@@ -34,12 +37,9 @@ import type { IAgentExecution } from '@bike4mind/database';
 import { buildMemoryContext } from '@bike4mind/common';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import type { IApiKeyRepository, IMementoRepository, IAdminSettingsRepository } from '@bike4mind/common';
-import { mementoService } from '@bike4mind/services';
+import { mementoService, type MementoGates } from '@bike4mind/services';
 
-export type MementoRetrievalExecution = Pick<
-  IAgentExecution,
-  'id' | 'userId' | 'query' | 'enableMementos' | 'parentExecutionId'
->;
+export type MementoRetrievalExecution = Pick<IAgentExecution, 'id' | 'userId' | 'query' | 'parentExecutionId'>;
 
 export interface MementoRetrievalAdapters {
   db: {
@@ -85,6 +85,7 @@ const buildV2Preamble = (facts: string[]): string => {
 
 export async function getFirstIterationMementosPreamble(
   execution: MementoRetrievalExecution,
+  gates: MementoGates,
   adapters: MementoRetrievalAdapters,
   logger: Logger
 ): Promise<MementosPreambleResult> {
@@ -92,25 +93,26 @@ export async function getFirstIterationMementosPreamble(
 
   try {
     // Mementos V2: the two pipelines are mutually exclusive, exactly as in chat (MementoFeature). A V2
-    // user's memory must reach agent mode too - gating this on `enableMementos` alone is what left a
-    // V2-only user running un-personalized in agent mode while chat knew them perfectly well.
-    //
-    // V2 returns null for a user who is NOT on V2, which is what falls through to the V1 path below.
-    const v2 = await recallMementosV2(execution.userId, execution.query);
-    if (v2 !== null) {
-      if (v2.length === 0) {
-        logger.info('[Mementos V2] No relevant beliefs for first iteration', { executionId: execution.id });
-        return EMPTY_RESULT;
+    // user's memory must reach agent mode too, but only when the resolved V2 gate allows it - an
+    // explicit per-request opt-out resolves `gates.v2` off, so V2 recall never runs (#1337). We hand
+    // recallMementosV2 the already-resolved opt-in so it does not look it up again.
+    if (gates.v2) {
+      const v2 = await recallMementosV2(execution.userId, execution.query, { enabled: true });
+      if (v2 !== null) {
+        if (v2.length === 0) {
+          logger.info('[Mementos V2] No relevant beliefs for first iteration', { executionId: execution.id });
+          return EMPTY_RESULT;
+        }
+        logger.info('[Mementos V2] Injected beliefs into first-iteration context', {
+          executionId: execution.id,
+          count: v2.length,
+        });
+        // V2 beliefs are not V1 mementos and have no memento id to track; `mementoIds` stays empty.
+        return { preamble: buildV2Preamble(v2.map(({ fact }) => fact)), mementoIds: [] };
       }
-      logger.info('[Mementos V2] Injected beliefs into first-iteration context', {
-        executionId: execution.id,
-        count: v2.length,
-      });
-      // V2 beliefs are not V1 mementos and have no memento id to track; `mementoIds` stays empty.
-      return { preamble: buildV2Preamble(v2.map(({ fact }) => fact)), mementoIds: [] };
     }
 
-    if (!execution.enableMementos) return EMPTY_RESULT;
+    if (!gates.v1) return EMPTY_RESULT;
 
     const relevantMementos = await mementoService.getRelevantMementos(
       execution.userId,

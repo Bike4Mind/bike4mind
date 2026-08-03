@@ -15,6 +15,7 @@
 
 import { withWebSocketContext } from '@server/websocket/utils';
 import {
+  adminSettingsRepository,
   agentExecutionRepository,
   organizationRepository,
   sessionRepository,
@@ -27,6 +28,7 @@ import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
 import { publishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveExecutionMementoGates } from '@server/utils/resolveExecutionMementoGates';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
 import { Resource } from 'sst';
@@ -767,9 +769,12 @@ async function handleGateResponse(
     );
     // Memento parity with chat_completion. Stop-at-gate is also a
     // terminal `completed` write, so fire the same event the executor's
-    // natural completion path fires. Guarded inside the helper on
-    // `enableMementos` and `parentExecutionId`.
-    await publishMementoCompletion(execution, logger);
+    // natural completion path fires. Resolve gates through the shared authority
+    // and hand them over; the helper guards on the gates and `parentExecutionId`.
+    const mementoGates = await resolveExecutionMementoGates(execution, {
+      db: { adminSettings: adminSettingsRepository },
+    });
+    await publishMementoCompletion(execution, mementoGates, logger);
     logger.info('[Gate] Stopped execution with partial answer', { executionId: cmd.executionId });
     return;
   }

@@ -1,5 +1,6 @@
 export * from './ChatCompletionProcess';
 export * from './ChatCompletionInvoke';
+export * from './mementoGating';
 export * from './ImageGeneration';
 export * from './VideoGeneration';
 export * from './ChatCompletionFeatures';

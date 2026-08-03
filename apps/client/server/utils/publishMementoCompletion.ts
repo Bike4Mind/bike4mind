@@ -1,5 +1,5 @@
 /**
- * Memento parity helper for agent_executor.
+ * Memento parity helper for agent_executor (write side).
  *
  * The chat-completion flow fires `LLMEvents.CompletionCompleted` from
  * `chatCompletionDefaults.invokeCreateMemento` on the user-authored QuestStart;
@@ -11,12 +11,18 @@
  * the stop-at-gate branch (`handleGateResponse`) - emits the same event with
  * the same guards and the same log line.
  *
+ * The caller resolves the memory policy once, via `resolveExecutionMementoGates`, and hands us the
+ * concrete `MementoGates` - the SAME resolver the read side uses and the same shape the chat path
+ * resolves in ChatCompletionProcess. We publish those gates verbatim; we do not re-derive them, so no
+ * surface can disagree about what `enableMementos: false` means (#1337). The completion event carries
+ * explicit booleans (mirroring the chat path's `MementoFeature.onComplete`), so the subscriber writes
+ * exactly the pipelines the gates allow rather than defaulting anything on.
+ *
  * Skips when:
- * - The user is on NEITHER memory pipeline. V1 is gated by `enableMementos` on the execution
- *   doc (user/admin), V2 by the user's own `enableMementosV2` opt-in - and V2 has to be
- *   checked independently, or turning V1 off would silently stop V2 from LEARNING while it
- *   carried on answering from a frozen snapshot. That is the whole point of V2 having its own
- *   write path: V1 must be switchable off, and one day deletable.
+ * - Both gates are off - the user is on NEITHER pipeline for this turn (V1 off AND V2 off, whether by
+ *   an explicit opt-out, no opt-in, or the admin setting). V2 has its own write flag precisely so V1
+ *   can be switched off without freezing V2's learning; a resolved-off V2 gate is the one thing that
+ *   stops the write.
  * - The execution has a `parentExecutionId` (subagent / DAG child); only the
  *   top-level run emits a memento event so the user's prompt is what gets
  *   evaluated - not internal coordination prompts produced by subagent
@@ -30,23 +36,22 @@
 
 import type { Logger } from '@bike4mind/observability';
 import type { IAgentExecution } from '@bike4mind/database';
+import type { MementoGates } from '@bike4mind/services';
 import { LLMEvents } from '@server/utils/eventBus';
-import { isMementosV2Enabled } from '@server/memory/mementoLedgerMirror';
 
 export type MementoCompletionExecution = Pick<
   IAgentExecution,
-  'id' | 'userId' | 'sessionId' | 'questId' | 'query' | 'model' | 'enableMementos' | 'parentExecutionId'
+  'id' | 'userId' | 'sessionId' | 'questId' | 'query' | 'model' | 'parentExecutionId'
 >;
 
-export async function publishMementoCompletion(execution: MementoCompletionExecution, logger: Logger): Promise<void> {
+export async function publishMementoCompletion(
+  execution: MementoCompletionExecution,
+  gates: MementoGates,
+  logger: Logger
+): Promise<void> {
   if (execution.parentExecutionId) return;
 
-  const enableMementos = execution.enableMementos === true;
-  // Only pay for the opt-in lookup when V1 is off - if V1 is already capturing this turn the event
-  // fires regardless, and the subscriber resolves V2 for itself.
-  const enableMementosV2 = enableMementos || (await isMementosV2Enabled(execution.userId).catch(() => false));
-
-  if (!enableMementos && !enableMementosV2) return;
+  if (!gates.v1 && !gates.v2) return;
 
   try {
     await LLMEvents.CompletionCompleted.publish({
@@ -55,18 +60,14 @@ export async function publishMementoCompletion(execution: MementoCompletionExecu
       userId: execution.userId,
       prompt: execution.query,
       model: execution.model,
-      enableMementos,
-      // Deliberately NOT forwarded when V1 short-circuited the lookup above: the value would be a
-      // lie (`true` because V1 is on, not because the user opted in). Undefined tells the subscriber
-      // to resolve it properly.
-      ...(enableMementos ? {} : { enableMementosV2 }),
+      // Explicit resolved gates - the subscriber writes exactly these, no defaulting.
+      enableMementos: gates.v1,
+      enableMementosV2: gates.v2,
     });
     logger.info('[Mementos] Published completion event', {
       executionId: execution.id,
-      enableMementos,
-      // When V1 short-circuited the lookup, the V2 opt-in was NOT resolved here (the subscriber does it),
-      // so `enableMementosV2` would just be `true` because V1 is on - log 'deferred', not a false opt-in.
-      enableMementosV2: enableMementos ? 'deferred-to-subscriber' : enableMementosV2,
+      enableMementos: gates.v1,
+      enableMementosV2: gates.v2,
     });
   } catch (err) {
     logger.warn('[Mementos] Failed to publish completion event — memento creation skipped', {
