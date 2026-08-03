@@ -189,7 +189,13 @@ export const handler = withEventContext(async (event, logger) => {
   // entire summarization - the summary text is already saved on the session.
   try {
     await withTransaction(async () => {
-      const fabfile = await fabFileRepository.findOne({ sessionId: session.id });
+      // Scoped to the session's owner because a sessionId is not an ownership claim: a FabFile
+      // carrying this one but belonging to somebody else would otherwise be selected and have its
+      // content, name and tags overwritten wholesale. This job runs unattended (chat completion,
+      // quest processing, the admin spider across other users' notebooks), so there is no
+      // user-facing gate in front of it. A miss falls through to createFabFile below, which is the
+      // safe direction - a duplicate summary rather than an overwrite of a stranger's document.
+      const fabfile = await fabFileRepository.findOne({ sessionId: session.id, userId: session.userId });
       if (fabfile) {
         // Re-summarizing must not change which data lakes this file belongs to. The tags here are
         // the SESSION's, which never carry a `datalake:` meta-tag, and a whole-array tag write
