@@ -1,4 +1,4 @@
-import { IFabFileDocument } from '@bike4mind/common';
+import { IFabFileDocument, resolveFileTagDocs } from '@bike4mind/common';
 import {
   useCloneFabFile,
   useDeleteFile,
@@ -428,12 +428,18 @@ const FileTagsModal: FC<{ file: IFabFileDocument; open: boolean; onClose: () => 
   const { mutateAsync: toggleTagToFiles } = useToggleTagToFiles();
   const update = useUpdateFabFile();
 
-  // Get current file tags
-  const fileTags = allTags?.filter(tag => file.tags?.some(t => t.name.toLowerCase() === tag.name.toLowerCase())) || [];
+  // Resolved from the names the FILE stores, not by filtering the tag list for a folded match - see
+  // matchTagDocument. That filter listed a tag the file did not carry, and the remove button beside
+  // it then toggled a name the file never had, which ADDS it.
+  const fileTags = resolveFileTagDocs(
+    (file.tags ?? []).map(t => t.name),
+    allTags ?? []
+  ).matched;
 
-  // Get available tags (not on this file)
-  const availableTags =
-    allTags?.filter(tag => !file.tags?.some(t => t.name.toLowerCase() === tag.name.toLowerCase())) || [];
+  // The complement by document id, not the folded negation: with two documents differing only by
+  // case, negating the fold hid BOTH from the available list, so neither could be applied.
+  const onFileIds = new Set(fileTags.map(tag => tag.id));
+  const availableTags = allTags?.filter(tag => !onFileIds.has(tag.id)) || [];
 
   // Filter tags based on search
   const filteredFileTags = fileTags.filter(tag => tag.name.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -541,6 +547,8 @@ const FileTagsModal: FC<{ file: IFabFileDocument; open: boolean; onClose: () => 
                     return (
                       <Box
                         key={tag.id}
+                        data-testid="file-tags-modal-current-row"
+                        data-tag-name={tag.name}
                         sx={{
                           display: 'flex',
                           alignItems: 'center',
@@ -648,6 +656,8 @@ const FileTagsModal: FC<{ file: IFabFileDocument; open: boolean; onClose: () => 
                     return (
                       <Box
                         key={tag.id}
+                        data-testid="file-tags-modal-available-row"
+                        data-tag-name={tag.name}
                         sx={{
                           display: 'flex',
                           alignItems: 'center',
