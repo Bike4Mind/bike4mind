@@ -33,6 +33,18 @@ export type ResolvedEmbeddingConfig = {
 type EmbeddingProvider = ModelBackend.OpenAI | ModelBackend.VoyageAI | ModelBackend.Bedrock | ModelBackend.Ollama;
 
 /**
+ * `getEffectiveLLMApiKeys` returns the literal string `'expired'` in a key slot when the user's
+ * per-provider key has passed its expiry. Every other LLM consumer special-cases this sentinel
+ * (llm-adapters, image-gen, modelDiscoveryService's EXPIRED_KEY_SENTINEL) so it never reaches a
+ * provider as a bearer token. Embeddings must do the same: an unnormalized `'expired'` is truthy
+ * and not a placeholder, so it would sail through as a real key and come back as an opaque 401
+ * ("OpenAI rejected the embedding request") instead of the actionable missing-credential path.
+ */
+const EXPIRED_KEY_SENTINEL = 'expired';
+const usableKey = (value: string | null | undefined): string | null =>
+  value && value !== EXPIRED_KEY_SENTINEL ? value : null;
+
+/**
  * Map an embedding provider plus the caller's resolved key table to the config
  * `EmbeddingFactory` expects, and report which credential is missing if any.
  *
@@ -57,15 +69,15 @@ export function resolveEmbeddingConfig(
   keyTable: EmbeddingKeyTable | null | undefined
 ): ResolvedEmbeddingConfig {
   switch (provider) {
-    case ModelBackend.OpenAI:
-      return keyTable?.openai
-        ? { config: { openaiApiKey: keyTable.openai }, missing: null }
-        : { config: {}, missing: 'openai' };
+    case ModelBackend.OpenAI: {
+      const key = usableKey(keyTable?.openai);
+      return key ? { config: { openaiApiKey: key }, missing: null } : { config: {}, missing: 'openai' };
+    }
 
-    case ModelBackend.VoyageAI:
-      return keyTable?.voyageai
-        ? { config: { voyageApiKey: keyTable.voyageai }, missing: null }
-        : { config: {}, missing: 'voyageai' };
+    case ModelBackend.VoyageAI: {
+      const key = usableKey(keyTable?.voyageai);
+      return key ? { config: { voyageApiKey: key }, missing: null } : { config: {}, missing: 'voyageai' };
+    }
 
     case ModelBackend.Ollama:
       return keyTable?.ollama

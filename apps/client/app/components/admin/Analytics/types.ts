@@ -25,18 +25,30 @@ export interface UserActivityFilters {
   userEmailSearch: string;
 }
 
+export interface MetadataFilter {
+  field: string;
+  operator: 'equals' | 'contains' | 'in' | 'exists' | 'not_exists';
+  value?: unknown;
+}
+
 export interface AnalyticsState {
   activeSubTab: AnalyticsSubTab;
   selectedOrganizations: string[];
   excludedOrgs: ExcludedOrgs;
   dateFilters: DateFilters;
   userActivityFilters: UserActivityFilters;
+  metadataFilters: MetadataFilter[];
+  page: number;
+  limit: number;
   showUserActivityAdvancedFilters: boolean;
   setActiveSubTab: (tab: AnalyticsSubTab) => void;
   setSelectedOrganizations: (orgs: string[]) => void;
   toggleExcludedOrg: (key: keyof ExcludedOrgs) => void;
   setDateFilters: (filters: DateFilters) => void;
   setUserActivityFilters: (filters: Partial<UserActivityFilters>) => void;
+  setMetadataFilters: (filters: MetadataFilter[]) => void;
+  setPage: (page: number) => void;
+  setLimit: (limit: number) => void;
   setShowUserActivityAdvancedFilters: (show: boolean) => void;
 }
 

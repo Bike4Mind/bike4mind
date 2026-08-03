@@ -15,9 +15,9 @@ interface State {
   setPromptBuilderOpen: (open: boolean) => void;
   historyLines: number;
   setHistoryLines: (historyLines: number) => void;
-  activeTab: 'ai-settings' | 'research-mode';
-  setActiveTab: (tab: 'ai-settings' | 'research-mode') => void;
-  openModal: (tab: 'ai-settings' | 'research-mode') => void;
+  activeTab: 'ai-settings' | 'research-mode' | 'audio';
+  setActiveTab: (tab: 'ai-settings' | 'research-mode' | 'audio') => void;
+  openModal: (tab: 'ai-settings' | 'research-mode' | 'audio') => void;
   agentsDropdownOpen: boolean;
   setAgentsDropdownOpen: (open: boolean) => void;
   sessionFilesOpen: boolean;
@@ -37,7 +37,7 @@ export const useAdvancedAISettings = create<State>(set => ({
   setHistoryLines: historyLines => set({ historyLines }),
   activeTab: 'ai-settings',
   setActiveTab: activeTab => set({ activeTab }),
-  openModal: (tab: 'ai-settings' | 'research-mode') => set({ activeTab: tab, showAdvancedSettings: true }),
+  openModal: (tab: 'ai-settings' | 'research-mode' | 'audio') => set({ activeTab: tab, showAdvancedSettings: true }),
   agentsDropdownOpen: false,
   setAgentsDropdownOpen: (agentsDropdownOpen: boolean) => set({ agentsDropdownOpen }),
   sessionFilesOpen: false,

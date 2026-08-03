@@ -32,7 +32,11 @@ const makeFile = (overrides: {
   });
 };
 
-const countOf = async (tag: string, prefixes: string[], options?: Parameters<typeof fabFileRepository.countDataLakeTagsByPrefix>[2]) => {
+const countOf = async (
+  tag: string,
+  prefixes: string[],
+  options?: Parameters<typeof fabFileRepository.countDataLakeTagsByPrefix>[2]
+) => {
   const counts = await fabFileRepository.countDataLakeTagsByPrefix(USER, prefixes, options);
   return counts.find(c => c.tag === tag)?.count ?? 0;
 };

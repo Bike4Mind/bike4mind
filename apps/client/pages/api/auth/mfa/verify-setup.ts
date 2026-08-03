@@ -1,8 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { mfaService } from '@bike4mind/services';
-import { userRepository } from '@bike4mind/database';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { mfaService, userService } from '@bike4mind/services';
+import { userRepository, authSessionRepository } from '@bike4mind/database';
+import { issueSessionForRequest } from '@server/auth/issueSession';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import * as z from 'zod';
@@ -47,11 +47,18 @@ const handler = baseApi()
         // `result.user`) would wipe the select:false totpSecret/backupCodes and brick MFA.
         const result = await mfaService.verifyMFASetup(freshUser, cleanToken, userRepository);
 
-        // Enabling MFA is a security-relevant change: bump tokenVersion to
-        // invalidate any other active sessions. Mint the completion token with
-        // the new version so this session stays valid.
-        const newTokenVersion = await userRepository.incrementTokenVersion(result.user.id);
-        const tokens = authTokenGenerator.createAccessToken(result.user.id, newTokenVersion);
+        // Enabling MFA is a security-relevant change: revoke every existing session (bumps
+        // tokenVersion AND clears session rows, so other devices can't silently refresh back in),
+        // then mint a fresh session for THIS device with the new version.
+        const newTokenVersion = await userService.revokeUserSessions(result.user.id, {
+          db: { users: userRepository, authSessions: authSessionRepository },
+          logger: req.logger,
+        });
+        const { accessToken, refreshToken } = await issueSessionForRequest(req, result.user.id, {
+          createdVia: 'mfa-setup',
+          tokenVersion: newTokenVersion,
+        });
+        const tokens = { accessToken, refreshToken };
 
         await logAuthAudit(req, { userId: result.user.id, event: 'mfa_enrolled' });
 

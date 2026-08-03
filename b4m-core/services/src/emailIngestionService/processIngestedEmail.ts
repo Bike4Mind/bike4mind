@@ -4,10 +4,12 @@ import { UnauthorizedError } from '@bike4mind/utils';
 import { validateSenderAuthorization, extractEmails } from './validateSender';
 import { processAttachments } from './processAttachments';
 import { processEmailBody } from './processEmailBody';
+import type { IIngestedEmailDocument } from '@bike4mind/common';
 import {
   ParsedEmailObject,
   EmailIngestionAdapters,
   IngestedEmailResult,
+  ProcessedAttachment,
   ValidatedSender,
   processIngestedEmailSchema,
 } from './types';
@@ -156,12 +158,14 @@ export async function processIngestedEmail(
   const alreadyProcessed =
     existingEmail && ((existingEmail.attachments?.length ?? 0) > 0 || existingEmail.bodyFabFileId);
 
-  let processedAttachments: any[] = [];
+  let processedAttachments: ProcessedAttachment[] = [];
   let bodyFabFileCreated = false;
 
   if (alreadyProcessed && existingEmail) {
     Logger.info('Email already processed (from previous attempt), skipping attachment/body processing');
-    processedAttachments = existingEmail.attachments || [];
+    // IEmailAttachment types fabFileId as string | null but nothing ever writes null,
+    // so collapse it here rather than widening the exported ProcessedAttachment.
+    processedAttachments = (existingEmail.attachments ?? []).map(a => ({ ...a, fabFileId: a.fabFileId ?? undefined }));
     bodyFabFileCreated = !!existingEmail.bodyFabFileId;
   } else {
     // 3. Process attachments and upload to fabFiles
@@ -201,7 +205,7 @@ export async function processIngestedEmail(
 
     // 5. Update email with fabFile information
     Logger.info('Updating email with fabFile references...');
-    const updateData: any = {
+    const updateData: Partial<IIngestedEmailDocument> = {
       attachments: processedAttachments,
     };
 

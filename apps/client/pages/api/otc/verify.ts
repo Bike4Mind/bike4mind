@@ -14,14 +14,16 @@ import {
   creditTransactionRepository,
   pendingOtcTokenRepository,
   organizationRepository,
+  authSessionRepository,
 } from '@bike4mind/database';
-import { creditService, userService, organizationService } from '@bike4mind/services';
+import { creditService, userService, organizationService, authSessionService } from '@bike4mind/services';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { Config } from '@server/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
@@ -171,7 +173,16 @@ const handler = baseApi({ auth: false })
       }
 
       // --- DIRECT LOGIN ---
-      const tokens = authTokenGenerator.createAccessToken(existingUser.id, existingUser.tokenVersion ?? 0);
+      const { accessToken, refreshToken } = await authSessionService.issueSession(
+        existingUser.id,
+        { createdVia: 'otc', tokenVersion: existingUser.tokenVersion ?? 0, device: buildSessionDevice(req) },
+        {
+          db: { authSessions: authSessionRepository },
+          signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
+          logger: req.logger,
+        }
+      );
+      const tokens = { accessToken, refreshToken };
       const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
 
       // Analytics + device history are best-effort for the same post-rotation reason as
@@ -402,9 +413,19 @@ const handler = baseApi({ auth: false })
       metadata: { strategy: 'otc' },
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
 
+    const registrationSession = await authSessionService.issueSession(
+      newUser.id,
+      { createdVia: 'otc-registration', tokenVersion: newUser.tokenVersion ?? 0, device: buildSessionDevice(req) },
+      {
+        db: { authSessions: authSessionRepository },
+        signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
+        logger: req.logger,
+      }
+    );
     return res.status(200).json({
       user: redactUserSecretsForSelf(newUser),
-      ...authTokenGenerator.createAccessToken(newUser.id, newUser.tokenVersion ?? 0),
+      accessToken: registrationSession.accessToken,
+      refreshToken: registrationSession.refreshToken,
     });
   });
 

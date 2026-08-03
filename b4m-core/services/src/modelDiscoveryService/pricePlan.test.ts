@@ -22,6 +22,9 @@ const provider = (price: DiscoveredPrice, modelId?: string) => from('openai', 'p
 const modelsDev = (price: DiscoveredPrice, modelId?: string) =>
   from('models.dev', 'aggregator', priced(price, modelId));
 const litellm = (price: DiscoveredPrice, modelId?: string) => from('litellm', 'aggregator', priced(price, modelId));
+/** A third mirror; the repo registers two, and some rules only show up past that. */
+const openRouter = (price: DiscoveredPrice, modelId?: string) =>
+  from('openrouter', 'aggregator', priced(price, modelId));
 
 const inForce = (pricing: Record<string, IModelPriceTier>, note = 'adapter-seed', modelId = 'gpt-6'): IModelPrice => ({
   modelId,
@@ -35,6 +38,21 @@ const inForce = (pricing: Record<string, IModelPriceTier>, note = 'adapter-seed'
 
 /** $5/$25 per MTok as the collection stores it: USD per single token. */
 const FIVE_AND_TWENTY_FIVE: IModelPriceTier = { input: 5e-6, output: 25e-6 };
+
+/**
+ * A stored pricing map read back in $/MTok, which is the unit the sources quote
+ * and the one these expectations are legible in. Rounded like the run report's
+ * own numbers: a rate that crosses 1e6 and back picks up float noise
+ * (0.2 -> 2.0000000000000002e-7), and that noise is not what any of these
+ * assertions are about.
+ */
+const perMTok = (pricing: Record<string, IModelPriceTier>): Record<string, Record<string, number>> =>
+  Object.fromEntries(
+    Object.entries(pricing).map(([threshold, tier]) => [
+      threshold,
+      Object.fromEntries(Object.entries(tier).map(([rate, value]) => [rate, Number((value * 1e6).toPrecision(10))])),
+    ])
+  );
 
 const plan = (overrides: Partial<PricePlanInput> = {}) =>
   planPriceWrites({
@@ -191,11 +209,11 @@ describe('planPriceWrites guardrails', () => {
   });
 
   it('proposes one of the two values it names as disagreeing', () => {
-    // The provider agrees with both aggregators inside the tolerance while they
-    // disagree with each other, so the first disagreeing pair excludes it.
+    // Three aggregators where the outer two disagree with each other and the
+    // middle one agrees with both, so the first disagreeing pair excludes it.
     const result = plan({
       contributions: [
-        provider({ inputPerMTok: 5, outputPerMTok: 25 }),
+        openRouter({ inputPerMTok: 5, outputPerMTok: 25 }),
         modelsDev({ inputPerMTok: 4.6, outputPerMTok: 25 }),
         litellm({ inputPerMTok: 5.4, outputPerMTok: 25 }),
       ],
@@ -209,7 +227,7 @@ describe('planPriceWrites guardrails', () => {
     expect(result.flags[0].detail).toContain('litellm');
   });
 
-  it('applies neither side when a provider and an aggregator disagree', () => {
+  it('applies neither side when the only aggregator disagrees with the provider', () => {
     const result = plan({
       contributions: [
         modelsDev({ inputPerMTok: 5, outputPerMTok: 25 }),
@@ -219,6 +237,9 @@ describe('planPriceWrites guardrails', () => {
 
     expect(result.rows).toEqual([]);
     expect(result.flags[0].kind).toBe('source-disagreement');
+    // A different sentence from mirrors contradicting each other: what is wrong
+    // here is that nothing backs the provider up.
+    expect(result.flags[0].detail).toContain('no source corroborates the provider');
   });
 
   it('flags a move beyond the band and keeps the row in force', () => {
@@ -236,7 +257,7 @@ describe('planPriceWrites guardrails', () => {
   });
 
   it('applies the same move once the band is widened past it', () => {
-    // The band is a multiple of the rate in force, so 200% passes anything up to
+    // The band is the ratio between the two rates, so 200% passes anything up to
     // 3x: $5 -> $12 is a 140% move.
     const result = plan({
       contributions: [provider({ inputPerMTok: 12, outputPerMTok: 25 })],
@@ -249,8 +270,6 @@ describe('planPriceWrites guardrails', () => {
   });
 
   it('still flags a 10x move against a widened band', () => {
-    // A symmetric distance saturates at 100%, which would make every band of 100
-    // or more a no-op; against the rate in force this is a 900% move.
     const result = plan({
       contributions: [provider({ inputPerMTok: 50, outputPerMTok: 25 })],
       rowsInForce: [inForce({ '0': FIVE_AND_TWENTY_FIVE })],
@@ -259,6 +278,77 @@ describe('planPriceWrites guardrails', () => {
 
     expect(result.rows).toEqual([]);
     expect(result.flags[0]).toMatchObject({ kind: 'band-exceeded', proposed: { inputPerMTok: 50 } });
+  });
+
+  it('scores a 5x cut as 400%, the same multiple as the matching rise', () => {
+    // $1/MTok down to $0.20 is the shape a provider price drop actually arrives
+    // in. Measured as a fraction of the rate in force it would score 80% and no
+    // band of 100 or more could ever flag a cut at all.
+    const banded = (bandPct: number) =>
+      plan({
+        contributions: [provider({ inputPerMTok: 0.2, outputPerMTok: 25 })],
+        rowsInForce: [inForce({ '0': { input: 1e-6, output: 25e-6 } })],
+        bandPct,
+      });
+
+    const flagged = banded(50);
+    expect(flagged.rows).toEqual([]);
+    expect(flagged.flags[0]).toMatchObject({ kind: 'band-exceeded', proposed: { inputPerMTok: 0.2 } });
+    expect(flagged.flags[0].detail).toContain('input 400%');
+
+    // 500 is the setting's cap, and 400% is inside it.
+    const wide = banded(500);
+    expect(wide.flags).toEqual([]);
+    expect(wide.rows).toHaveLength(1);
+  });
+
+  it.each([
+    ['rise', 18],
+    ['cut', 2],
+  ])('passes a 3x %s at a band of 200 and flags it at 150', (_label, observed) => {
+    const banded = (bandPct: number) =>
+      plan({
+        contributions: [provider({ inputPerMTok: observed, outputPerMTok: 25 })],
+        rowsInForce: [inForce({ '0': { input: 6e-6, output: 25e-6 } })],
+        bandPct,
+      });
+
+    // What the setting's own description promises: 200 passes up to a 3x change
+    // in EITHER direction, and both directions score the same 200%.
+    expect(banded(200).flags).toEqual([]);
+    expect(banded(200).rows).toHaveLength(1);
+
+    const tight = banded(150);
+    expect(tight.rows).toEqual([]);
+    expect(tight.flags[0]).toMatchObject({ kind: 'band-exceeded' });
+    expect(tight.flags[0].detail).toContain('input 200%');
+  });
+
+  it('reads a move off a zero rate as unbounded, which no band passes', () => {
+    const result = plan({
+      contributions: [provider({ inputPerMTok: 5, outputPerMTok: 25 })],
+      rowsInForce: [inForce({ '0': { input: 0, output: 25e-6 } })],
+      bandPct: 500,
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'band-exceeded' });
+    expect(result.flags[0].detail).toContain('input unbounded');
+  });
+
+  it('fails the band closed when the row it bands against carries an unusable rate', () => {
+    // The discovered side cannot reach this (isUsable requires a finite rate), so
+    // this is the stored side. NaN > band is false, which would wave the move
+    // through as if it were inside the band.
+    const result = plan({
+      contributions: [provider({ inputPerMTok: 5, outputPerMTok: 25 })],
+      rowsInForce: [inForce({ '0': { input: Number.NaN, output: 25e-6 } })],
+      bandPct: 500,
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'band-exceeded' });
+    expect(result.flags[0].detail).toContain('input unbounded');
   });
 
   it('measures the band against the run-start row, not the one an earlier pass wrote', () => {
@@ -290,7 +380,222 @@ describe('planPriceWrites guardrails', () => {
   it('drops an all-zero observation rather than writing a free row', () => {
     const result = plan({ contributions: [provider({ inputPerMTok: 0, outputPerMTok: 0 })] });
 
-    expect(result).toEqual({ rows: [], flags: [], skipped: [] });
+    expect(result).toEqual({ rows: [], flags: [], overrides: [], skipped: [] });
+  });
+});
+
+/**
+ * A provider's own published price is primary: it needs ONE mirror to agree, not
+ * all of them. The mirrors go stale on their own schedules (litellm publishes off
+ * a git ref, models.dev re-scrapes on its own cadence), so a unanimity rule hands
+ * any one of them a veto over a price the provider itself publishes.
+ */
+describe('planPriceWrites provider primacy', () => {
+  const CUT: DiscoveredPrice = { inputPerMTok: 0.2, outputPerMTok: 1.2 };
+  const STALE: DiscoveredPrice = { inputPerMTok: 1, outputPerMTok: 6 };
+  const CUT_IN_FORCE: IModelPriceTier = { input: 1e-6, output: 6e-6 };
+
+  it('writes the provider price when one mirror agrees and another is stale', () => {
+    const result = plan({
+      contributions: [provider(CUT), modelsDev(CUT), litellm(STALE)],
+      rowsInForce: [inForce({ '0': CUT_IN_FORCE })],
+      bandPct: 500,
+    });
+
+    expect(result.flags).toEqual([]);
+    expect(perMTok(result.rows[0].pricing)).toEqual({ '0': { input: 0.2, output: 1.2 } });
+    // Credited to the provider alone: the agreeing mirror corroborated the value,
+    // it did not supply it.
+    expect(result.rows[0].note).toBe(`discovery:openai@${RUN_AT.toISOString()}`);
+  });
+
+  it('records the overruled source rather than swallowing it', () => {
+    const result = plan({
+      contributions: [provider(CUT), modelsDev(CUT), litellm(STALE)],
+      rowsInForce: [inForce({ '0': CUT_IN_FORCE })],
+      bandPct: 500,
+    });
+
+    expect(result.overrides).toHaveLength(1);
+    expect(result.overrides[0]).toMatchObject({
+      modelId: 'gpt-6',
+      source: 'openai',
+      dissenting: ['litellm'],
+      applied: { inputPerMTok: 0.2, outputPerMTok: 1.2 },
+    });
+    // The whole point of recording it: the operator learns WHICH mirror is stale.
+    expect(result.overrides[0].detail).toContain('litellm');
+    expect(result.overrides[0].detail).toContain('in 1/out 6');
+    // Present tense: this planner runs identically in report mode, where nothing
+    // is written, so the sentence may not claim a write.
+    expect(result.overrides[0].detail).toContain('the provider value wins');
+    expect(result.overrides[0].detail).not.toContain('was applied');
+  });
+
+  it('records nothing when every source agreed', () => {
+    const result = plan({ contributions: [provider(CUT), modelsDev(CUT), litellm(CUT)] });
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.overrides).toEqual([]);
+  });
+
+  it('writes the provider price when the mirrors disagree with each other but not with it', () => {
+    const result = plan({
+      contributions: [
+        provider({ inputPerMTok: 5, outputPerMTok: 25 }),
+        modelsDev({ inputPerMTok: 4.6, outputPerMTok: 25 }),
+        litellm({ inputPerMTok: 5.4, outputPerMTok: 25 }),
+      ],
+    });
+
+    expect(result.flags).toEqual([]);
+    expect(result.rows[0].pricing['0'].input).toBe(5e-6);
+    expect(result.overrides).toEqual([]);
+  });
+
+  it('refuses when every mirror disagrees with the provider', () => {
+    // Primary, not unaccountable. All of them dissenting is the shape of a parser
+    // that broke against a docs restructure, which must reprice nothing.
+    const result = plan({
+      contributions: [provider(CUT), modelsDev(STALE), litellm(STALE)],
+      rowsInForce: [inForce({ '0': CUT_IN_FORCE })],
+      bandPct: 500,
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.overrides).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'source-disagreement' });
+  });
+
+  it('still writes a provider price no mirror carries at all', () => {
+    const result = plan({ contributions: [provider(CUT)] });
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.overrides).toEqual([]);
+  });
+
+  it('does not record an override for a price it declined to write', () => {
+    // The band refuses this move, so nothing was applied over anything.
+    const result = plan({
+      contributions: [provider(CUT), modelsDev(CUT), litellm(STALE)],
+      rowsInForce: [inForce({ '0': CUT_IN_FORCE })],
+      bandPct: 50,
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.overrides).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'band-exceeded' });
+  });
+
+  it('leaves the aggregator-only rules exactly as they were', () => {
+    const disagreeing = plan({
+      contributions: [
+        modelsDev({ inputPerMTok: 5, outputPerMTok: 25 }),
+        litellm({ inputPerMTok: 9, outputPerMTok: 25 }),
+      ],
+    });
+    expect(disagreeing.rows).toEqual([]);
+    expect(disagreeing.flags[0]).toMatchObject({ kind: 'source-disagreement' });
+
+    const lone = plan({ contributions: [litellm({ inputPerMTok: 5, outputPerMTok: 25 })] });
+    expect(lone.rows).toEqual([]);
+    expect(lone.flags[0]).toMatchObject({ kind: 'single-source-untrusted' });
+  });
+
+  it('makes two providers that disagree with each other refuse, with neither outranking', () => {
+    const result = plan({
+      contributions: [
+        provider({ inputPerMTok: 5, outputPerMTok: 25 }),
+        from('bedrock', 'provider', priced({ inputPerMTok: 15, outputPerMTok: 25 })),
+        modelsDev({ inputPerMTok: 5, outputPerMTok: 25 }),
+      ],
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'source-disagreement' });
+    // Two providers is a mutual contradiction, not an uncorroborated one, even
+    // though both sides of the pair are providers.
+    expect(result.flags[0].detail).toContain('sources disagree beyond');
+    expect(result.flags[0].detail).not.toContain('corroborates');
+  });
+
+  it('reports a stale mirror on a model whose row already carries the right price', () => {
+    // The steady state: the provider's value is already in force, so there is no
+    // row to write - and that is exactly when "which mirror is stale" is the only
+    // fact left. Recording this only against a write would hide it forever.
+    const result = plan({
+      contributions: [provider(CUT), modelsDev(CUT), litellm(STALE)],
+      // Exactly what buildTier produces from these rates, which is what a prior
+      // run would have written; 0.2e-6 is a DIFFERENT float from 0.2 / 1e6.
+      rowsInForce: [inForce({ '0': { input: 0.2 / 1_000_000, output: 1.2 / 1_000_000 } })],
+      bandPct: 500,
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.skipped).toEqual([{ modelId: 'gpt-6', reason: 'unchanged' }]);
+    expect(result.overrides).toHaveLength(1);
+    expect(result.overrides[0]).toMatchObject({ source: 'openai', dissenting: ['litellm'] });
+  });
+
+  it('refuses a provider ladder no mirror corroborates, rather than writing the upper rung alone', () => {
+    // diverges() is silent when only one side publishes brackets, so a mirror
+    // that went flat still "agrees" on the base rates. Without this the upper
+    // bracket would be written on one scrape's word.
+    const ladder: DiscoveredPrice = {
+      inputPerMTok: 0.2,
+      outputPerMTok: 1.2,
+      brackets: [{ aboveTokens: 272_000, inputPerMTok: 0.4, outputPerMTok: 1.8 }],
+    };
+    const flat: DiscoveredPrice = { inputPerMTok: 0.2, outputPerMTok: 1.2 };
+    const result = plan({
+      contributions: [provider(ladder), modelsDev(flat), litellm(flat)],
+      rowsInForce: [inForce({ '272000': { input: 1e-6, output: 6e-6 }, '1050000': { input: 2e-6, output: 9e-6 } })],
+      bandPct: 500,
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'tiered-pricing-manual' });
+    expect(result.flags[0].detail).toContain('no long-context rates');
+  });
+
+  it('still lets a flat row take a provider price no mirror carries a ladder for', () => {
+    // A flat row discards the brackets anyway, so refusing there would block a
+    // write whose ladder was never going to be used.
+    const ladder: DiscoveredPrice = {
+      inputPerMTok: 0.2,
+      outputPerMTok: 1.2,
+      brackets: [{ aboveTokens: 272_000, inputPerMTok: 0.4, outputPerMTok: 1.8 }],
+    };
+    const result = plan({
+      contributions: [provider(ladder), modelsDev({ inputPerMTok: 0.2, outputPerMTok: 1.2 })],
+      rowsInForce: [inForce({ '0': CUT_IN_FORCE })],
+      bandPct: 500,
+    });
+
+    expect(result.flags).toEqual([]);
+    expect(perMTok(result.rows[0].pricing)).toEqual({ '0': { input: 0.2, output: 1.2 } });
+  });
+
+  it('lets a provider ladder reprice a tiered row over a stale flat mirror', () => {
+    // The case this whole change exists for: the provider publishes the ladder,
+    // one mirror agrees, and the other still has last quarter's price.
+    const ladder: DiscoveredPrice = {
+      inputPerMTok: 0.2,
+      outputPerMTok: 1.2,
+      brackets: [{ aboveTokens: 272_000, inputPerMTok: 0.4, outputPerMTok: 1.8 }],
+    };
+    const result = plan({
+      contributions: [provider(ladder), modelsDev(ladder), litellm(STALE)],
+      rowsInForce: [inForce({ '272000': { input: 1e-6, output: 6e-6 }, '1050000': { input: 2e-6, output: 9e-6 } })],
+      bandPct: 500,
+    });
+
+    expect(result.flags).toEqual([]);
+    expect(perMTok(result.rows[0].pricing)).toEqual({
+      '272000': { input: 0.2, output: 1.2 },
+      '1050000': { input: 0.4, output: 1.8 },
+    });
+    expect(result.overrides[0].dissenting).toEqual(['litellm']);
   });
 });
 
@@ -381,6 +686,258 @@ describe('planPriceWrites provenance', () => {
   });
 });
 
+describe('planPriceWrites tier ladders', () => {
+  const LUNA = 'gpt-5.6-luna';
+
+  /**
+   * The row in force as production holds it: a two-tier ladder whose keys are the
+   * UPPER bound of each bracket (tierForTokens picks the first threshold >= the
+   * prompt), so 272000 is the up-to-272k rate and 1050000 the rest of the window.
+   */
+  const LUNA_ROW: Record<string, IModelPriceTier> = {
+    '272000': { input: 1e-6, output: 6e-6 },
+    '1050000': { input: 2e-6, output: 9e-6 },
+  };
+
+  /** models.dev after the 80% cut: a base rate plus one bracket above 272k. */
+  const LUNA_MODELS_DEV: DiscoveredPrice = {
+    inputPerMTok: 0.2,
+    outputPerMTok: 1.2,
+    cacheReadPerMTok: 0.02,
+    cacheWritePerMTok: 0.25,
+    brackets: [
+      {
+        aboveTokens: 272_000,
+        inputPerMTok: 0.4,
+        outputPerMTok: 1.8,
+        cacheReadPerMTok: 0.04,
+        cacheWritePerMTok: 0.5,
+      },
+    ],
+  };
+
+  /** The same rates off litellm, whose per-token quotes pick up 1e6 float noise. */
+  const LUNA_LITELLM: DiscoveredPrice = {
+    inputPerMTok: 2e-7 * 1e6,
+    outputPerMTok: 1.2e-6 * 1e6,
+    cacheReadPerMTok: 2e-8 * 1e6,
+    cacheWritePerMTok: 2.5e-7 * 1e6,
+    brackets: [
+      {
+        aboveTokens: 272_000,
+        inputPerMTok: 4e-7 * 1e6,
+        outputPerMTok: 1.8e-6 * 1e6,
+        cacheReadPerMTok: 4e-8 * 1e6,
+        cacheWritePerMTok: 5e-7 * 1e6,
+      },
+    ],
+  };
+
+  const lunaPlan = (overrides: Partial<PricePlanInput> = {}) =>
+    plan({
+      knownModelIds: new Set([LUNA]),
+      rowsInForce: [inForce(LUNA_ROW, 'adapter-seed', LUNA)],
+      // An 80% cut is a 5x move, so the default 50% band would flag it. The band
+      // is a separate guardrail and has its own cases below.
+      bandPct: 500,
+      ...overrides,
+    });
+
+  it('rewrites both tiers of the row in force from the brackets both aggregators publish', () => {
+    const result = lunaPlan({
+      contributions: [modelsDev(LUNA_MODELS_DEV, LUNA), litellm(LUNA_LITELLM, LUNA)],
+    });
+
+    expect(result.flags).toEqual([]);
+    expect(result.skipped).toEqual([]);
+    expect(result.rows).toHaveLength(1);
+    // The keys are the row's own, untouched: re-deriving a threshold would move
+    // where the long-context rate starts.
+    expect(Object.keys(result.rows[0].pricing)).toEqual(['272000', '1050000']);
+    expect(perMTok(result.rows[0].pricing)).toEqual({
+      '272000': { input: 0.2, output: 1.2, cache_read: 0.02, cache_write: 0.25 },
+      '1050000': { input: 0.4, output: 1.8, cache_read: 0.04, cache_write: 0.5 },
+    });
+    // Stored per SINGLE token, the same 1e6 crossing a flat row makes.
+    expect(result.rows[0].pricing['1050000'].input).toBeLessThan(1e-6);
+    expect(result.rows[0].note).toBe(`discovery:models.dev+litellm@${RUN_AT.toISOString()}`);
+    expect(result.rows[0].repricedBy).toBe('model-discovery');
+  });
+
+  it('applies neither side when the two sources agree on the base and differ on the bracket', () => {
+    const disagreeing: DiscoveredPrice = {
+      ...LUNA_MODELS_DEV,
+      brackets: [{ aboveTokens: 272_000, inputPerMTok: 0.9, outputPerMTok: 1.8 }],
+    };
+    const result = lunaPlan({ contributions: [modelsDev(LUNA_MODELS_DEV, LUNA), litellm(disagreeing, LUNA)] });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'source-disagreement', sources: ['models.dev', 'litellm'] });
+    // Both upper rates on the line: the base rates are identical, so a detail
+    // without the brackets would show two equal prices "disagreeing".
+    expect(result.flags[0].detail).toContain('above 272000 in 0.4');
+    expect(result.flags[0].detail).toContain('above 272000 in 0.9');
+  });
+
+  it('applies neither side when only one source publishes a breakpoint the other does not', () => {
+    const shifted: DiscoveredPrice = {
+      ...LUNA_MODELS_DEV,
+      brackets: [{ aboveTokens: 200_000, inputPerMTok: 0.4, outputPerMTok: 1.8 }],
+    };
+    const result = lunaPlan({ contributions: [modelsDev(LUNA_MODELS_DEV, LUNA), litellm(shifted, LUNA)] });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'source-disagreement' });
+  });
+
+  it('still refuses a ladder whose breakpoints do not line up with the row', () => {
+    const misaligned: DiscoveredPrice = {
+      ...LUNA_MODELS_DEV,
+      brackets: [{ aboveTokens: 200_000, inputPerMTok: 0.4, outputPerMTok: 1.8 }],
+    };
+    const result = lunaPlan({ contributions: [modelsDev(misaligned, LUNA), litellm(misaligned, LUNA)] });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'tiered-pricing-manual' });
+    // The flag has to say WHY it could not be mapped, not only that it wasn't.
+    expect(result.flags[0].detail).toContain('272000, 1050000');
+    expect(result.flags[0].detail).toContain('brackets above 200000 do not line up');
+  });
+
+  it('still refuses a flat observation against a tiered row, and says so', () => {
+    const flat: DiscoveredPrice = { inputPerMTok: 0.2, outputPerMTok: 1.2 };
+    const result = lunaPlan({ contributions: [modelsDev(flat, LUNA), litellm(flat, LUNA)] });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'tiered-pricing-manual' });
+    expect(result.flags[0].detail).toContain('the sources publish one flat rate');
+  });
+
+  it('flags the ladder when only its upper tier leaves the band', () => {
+    // The base rate barely moves and the 1050000 tier goes up 10x. Banding on the
+    // lowest tier alone would write that upper rate unattended.
+    const runaway: DiscoveredPrice = {
+      inputPerMTok: 1.02,
+      outputPerMTok: 6,
+      brackets: [{ aboveTokens: 272_000, inputPerMTok: 20, outputPerMTok: 9 }],
+    };
+    const result = lunaPlan({
+      contributions: [modelsDev(runaway, LUNA), litellm(runaway, LUNA)],
+      bandPct: 200,
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'band-exceeded' });
+    // Named per tier, or 'input' alone would not say which rung moved.
+    expect(result.flags[0].detail).toContain('input@1050000 900%');
+    expect(result.flags[0].detail).toContain('above 272000 in 2');
+  });
+
+  it.each([
+    ['carries an unusable rate', [{ aboveTokens: 272_000, inputPerMTok: Number.NaN, outputPerMTok: 1.8 }]],
+    ['is free above the breakpoint', [{ aboveTokens: 272_000, inputPerMTok: 0, outputPerMTok: 0 }]],
+    [
+      'quotes one breakpoint twice',
+      [
+        { aboveTokens: 272_000, inputPerMTok: 0.4, outputPerMTok: 1.8 },
+        { aboveTokens: 272_000, inputPerMTok: 0.9, outputPerMTok: 1.8 },
+      ],
+    ],
+  ])('refuses the whole ladder when a bracket %s', (_label, brackets) => {
+    const broken: DiscoveredPrice = { ...LUNA_MODELS_DEV, brackets };
+    const result = lunaPlan({ contributions: [modelsDev(broken, LUNA), litellm(broken, LUNA)] });
+
+    // A ladder we cannot read is a flat observation, which a tiered row refuses.
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'tiered-pricing-manual' });
+    expect(result.flags[0].detail).toContain('the sources publish one flat rate');
+  });
+
+  it('appends nothing when the same ladder is observed again', () => {
+    const contributions = [modelsDev(LUNA_MODELS_DEV, LUNA), litellm(LUNA_LITELLM, LUNA)];
+    const first = lunaPlan({ contributions });
+
+    const second = lunaPlan({
+      contributions,
+      rowsInForce: [
+        {
+          ...inForce(LUNA_ROW, `discovery:models.dev+litellm@${RUN_AT.toISOString()}`, LUNA),
+          pricing: first.rows[0].pricing,
+        },
+      ],
+    });
+
+    expect(second.rows).toEqual([]);
+    expect(second.flags).toEqual([]);
+    expect(second.skipped).toEqual([{ modelId: LUNA, reason: 'unchanged' }]);
+  });
+
+  it('carries a cache rate forward per tier, from the tier under the same threshold', () => {
+    // grok-4.5's shape: a 200k breakpoint with cache_read in both tiers, and an
+    // audio rate no feed publishes that only survives by being carried.
+    const GROK = 'grok-4.5';
+    const observed: DiscoveredPrice = {
+      inputPerMTok: 2.2,
+      outputPerMTok: 6,
+      cacheReadPerMTok: 0.33,
+      brackets: [{ aboveTokens: 200_000, inputPerMTok: 4.4, outputPerMTok: 12 }],
+    };
+    const result = plan({
+      knownModelIds: new Set([GROK]),
+      contributions: [modelsDev(observed, GROK), litellm(observed, GROK)],
+      rowsInForce: [
+        inForce(
+          {
+            '200000': { input: 2e-6, output: 6e-6, cache_read: 0.3e-6, audio_input: 40e-6 },
+            '500000': { input: 4e-6, output: 12e-6, cache_read: 0.6e-6 },
+          },
+          'adapter-seed',
+          GROK
+        ),
+      ],
+    });
+
+    expect(result.flags).toEqual([]);
+    expect(perMTok(result.rows[0].pricing)).toEqual({
+      // The observed cache rate wins in the tier that quotes one; the upper tier
+      // keeps its own 0.6 rather than inheriting the base tier's.
+      '200000': { input: 2.2, output: 6, cache_read: 0.33, audio_input: 40 },
+      '500000': { input: 4.4, output: 12, cache_read: 0.6 },
+    });
+  });
+
+  it('leaves a flat row flat even when the sources publish a ladder', () => {
+    const result = plan({
+      contributions: [
+        provider({ inputPerMTok: 6, outputPerMTok: 25 }),
+        modelsDev({
+          inputPerMTok: 6,
+          outputPerMTok: 25,
+          brackets: [{ aboveTokens: 200_000, inputPerMTok: 12, outputPerMTok: 50 }],
+        }),
+      ],
+      rowsInForce: [inForce({ '1000000': FIVE_AND_TWENTY_FIVE })],
+    });
+
+    // Inventing a second threshold would bill long prompts at a rate that was
+    // never in a row, so the base rate lands alone under the row's own key.
+    expect(result.rows[0].pricing).toEqual({ '1000000': { input: 6e-6, output: 25e-6 } });
+  });
+
+  it('refuses the ladder when the run-start row has no tier to band the upper one against', () => {
+    // Pass 2 of a run whose pass 1 wrote a differently keyed row: the upper tier
+    // would go in unbanded, which is the one thing the band exists to prevent.
+    const result = lunaPlan({
+      contributions: [modelsDev(LUNA_MODELS_DEV, LUNA), litellm(LUNA_LITELLM, LUNA)],
+      baselineRowsInForce: [inForce({ '272000': { input: 1e-6, output: 6e-6 } }, 'adapter-seed', LUNA)],
+    });
+
+    expect(result.rows).toEqual([]);
+    expect(result.flags[0]).toMatchObject({ kind: 'tiered-pricing-manual' });
+    expect(result.flags[0].detail).toContain('no tier at 1050000');
+  });
+});
+
 describe('planPriceWrites idempotence and carry-forward', () => {
   const asInForce = (row: {
     modelId: string;
@@ -439,11 +996,13 @@ describe('planPriceWrites idempotence and carry-forward', () => {
   });
 
   it('prefers an observed cache rate over the carried one', () => {
+    // The cache rates here are a fifth apart on purpose: halving one is a 100%
+    // move against the band, and these carry-forward cases are not about the band.
     const result = plan({
       contributions: [provider({ inputPerMTok: 5, outputPerMTok: 25, cacheReadPerMTok: 0.25, cacheWritePerMTok: 5 })],
       rowsInForce: [
         inForce(
-          { '0': { ...FIVE_AND_TWENTY_FIVE, cache_read: 0.5e-6, cache_write: 6.25e-6 } },
+          { '0': { ...FIVE_AND_TWENTY_FIVE, cache_read: 0.3e-6, cache_write: 6.25e-6 } },
           'discovery:openai@2026-01-01T00:00:00.000Z'
         ),
       ],
@@ -493,7 +1052,7 @@ describe('planPriceWrites idempotence and carry-forward', () => {
       contributions: [provider({ inputPerMTok: 5, outputPerMTok: 25, cacheReadPerMTok: 0.25 })],
       rowsInForce: [
         inForce(
-          { '0': { ...FIVE_AND_TWENTY_FIVE, cache_read: 0.5e-6, cache_write: 6.25e-6 } },
+          { '0': { ...FIVE_AND_TWENTY_FIVE, cache_read: 0.3e-6, cache_write: 6.25e-6 } },
           'discovery:openai@2026-01-01T00:00:00.000Z'
         ),
       ],
@@ -539,7 +1098,7 @@ describe('planPriceWrites idempotence and carry-forward', () => {
     const result = plan({
       contributions,
       rowsInForce: [
-        inForce({ '0': { ...FIVE_AND_TWENTY_FIVE, cache_read: 0.5e-6 } }, 'discovery:openai@2026-01-01T00:00:00.000Z'),
+        inForce({ '0': { ...FIVE_AND_TWENTY_FIVE, cache_read: 0.3e-6 } }, 'discovery:openai@2026-01-01T00:00:00.000Z'),
       ],
     });
 

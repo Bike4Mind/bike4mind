@@ -16,6 +16,8 @@ import {
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
+import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import {
   describeEmbeddingMismatch,
   PARTIAL_RESULTS_STATUS_SUFFIX,
@@ -208,14 +210,17 @@ async function emitSemanticCitables(
  * keyword search. `skipNotice` is carried SEPARATELY so it survives that fall-through: when every
  * matching file was withheld the arm has no output at all, and without this the keyword answer
  * would reach the model with no hint that part of the corpus could not be compared.
+ * `datalakeTags` is the `datalake:` provenance of the returned passages, driving retrieval-scoped
+ * lake-prompt injection (#1108); it is EMPTY for the agent-scoped arm, which must never inject.
  */
 interface SemanticArmResult {
   output: string | null;
   skipNotice: string | null;
+  datalakeTags: string[];
 }
 
 /** Nothing to report: dependency missing, no accessible corpus, or the arm threw. */
-const NO_SEMANTIC_RESULT: SemanticArmResult = { output: null, skipNotice: null };
+const NO_SEMANTIC_RESULT: SemanticArmResult = { output: null, skipNotice: null, datalakeTags: [] };
 
 /**
  * Semantic-first KB search: embed the query and cosine-rank against the pre-computed chunk
@@ -270,7 +275,7 @@ async function trySemanticKbSearch(
 
     const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
     // No hits: the keyword arm answers, but it has to carry the notice with it.
-    if (search.results.length === 0) return { output: null, skipNotice };
+    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [] };
 
     // Honor the max_results contract: topK fetches a wider pool (≥6) so cosine ranking has
     // candidates, but we return at most maxResults passages - parity with the keyword path's
@@ -282,7 +287,12 @@ async function trySemanticKbSearch(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)})`
     );
 
-    return { output: formatSemanticResults(ranked, search.scan, skipNotice), skipNotice };
+    // Provenance for retrieval-scoped lake-prompt injection: which lakes these passages came from.
+    return {
+      output: formatSemanticResults(ranked, search.scan, skipNotice),
+      skipNotice,
+      datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
+    };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
     // A genuine failure must not fabricate a notice.
@@ -328,11 +338,13 @@ async function tryScopedSemanticKbSearch(
     await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
 
     const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
-    if (search.results.length === 0) return { output: null, skipNotice };
+    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [] };
 
     const ranked = search.results.slice(0, maxResults);
     await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice);
-    return { output: formatSemanticResults(ranked, search.scan, skipNotice), skipNotice };
+    // Agent-scoped results never carry a lake prompt: this arm must not consult owner-wide access
+    // or imply a wider corpus, so its provenance is intentionally empty (no injection downstream).
+    return { output: formatSemanticResults(ranked, search.scan, skipNotice), skipNotice, datalakeTags: [] };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
     return NO_SEMANTIC_RESULT;
@@ -382,6 +394,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
     // the relevant passages, we hard-stop the loop and tell the model to compose its answer.
     let searchCallCount = 0;
     const MAX_SEARCHES = 3;
+    // Per-completion set of `datalake:` tags whose lake prompt has already been injected this turn,
+    // so multiple search_knowledge_base calls never restate the same lake's instructions (#1108).
+    const injectedLakeTags = new Set<string>();
     // Carries the most recent skip notice across calls in this completion, so the model still
     // hears about a comparability gap on the capped call, which never runs a search of its own.
     let lastSkipNotice: string | null = null;
@@ -426,9 +441,14 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           ? await tryScopedSemanticKbSearch(context, scope.fileIds, query, max_results)
           : await trySemanticKbSearch(context, query, tags, max_results);
         lastSkipNotice = semantic.skipNotice;
-        // Must test .output, not the object: the arm always resolves to a truthy result now, and
-        // `if (semantic)` would swallow the keyword fallback entirely.
-        if (semantic.output) return semantic.output;
+        // Attach the retrieved lakes' scoped prompts (no-op for the agent-scoped arm, whose
+        // datalakeTags are empty). The keyword fallback below returns metadata only (no grounded
+        // content), so a lake prompt rides only actual retrieved content; the keyword path's content
+        // enters later via retrieve_knowledge_content, which injects there. Test .output, not the
+        // object: the arm always resolves to a truthy result now, so `if (semantic)` would swallow
+        // the keyword fallback entirely.
+        if (semantic.output)
+          return prependRetrievedLakePrompts(context, semantic.output, semantic.datalakeTags, injectedLakeTags);
 
         try {
           let searchResults;

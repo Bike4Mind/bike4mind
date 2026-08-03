@@ -3,6 +3,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
   BatchPresignedUrlRequestInput,
   DATALAKE_TAG_PREFIX,
+  DATALAKE_TAG_STRENGTH,
   KnowledgeType,
   type IDataLakeBatchFile,
 } from '@bike4mind/common';
@@ -111,7 +112,7 @@ const handler = baseApi().post(async (req: Request, res) => {
   // lake-dependent read up front means a lookup failure aborts with nothing persisted; the
   // memo makes this free for the files that follow.
   if (datalakeTag) {
-    await applyFallbackTags([{ name: datalakeTag, strength: 1.0 }]);
+    await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
   }
 
   const results = await Promise.all(
@@ -138,9 +139,10 @@ const handler = baseApi().post(async (req: Request, res) => {
       // read arms and counters build unflagged regexes, so `Acme:x` and `acme:x` really are two.
       const dedupeKey = (name: string) =>
         name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX) ? name.toLowerCase() : name;
-      const merged = [...(datalakeTag ? [{ name: datalakeTag, strength: 1.0 }] : []), ...(fileItem.tags || [])].filter(
-        (tag, i, all) => all.findIndex(other => dedupeKey(other.name) === dedupeKey(tag.name)) === i
-      );
+      const merged = [
+        ...(datalakeTag ? [{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }] : []),
+        ...(fileItem.tags || []),
+      ].filter((tag, i, all) => all.findIndex(other => dedupeKey(other.name) === dedupeKey(tag.name)) === i);
       const tags = await applyFallbackTags(merged);
 
       // Stamp batchId so the existing pipeline (objectCreated -> chunk -> vectorize)

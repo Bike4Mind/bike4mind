@@ -29,7 +29,7 @@ export type DeleteValidationFn = (
 interface DeleteAdapters {
   db: {
     organizations: IOrganizationRepository;
-    groups: Pick<IGroupRepository, 'findByOrganization' | 'softDeleteByIds'>;
+    groups: Pick<IGroupRepository, 'findByOrganization' | 'delete'>;
     users: Pick<IUserRepository, 'removeGroupsFromAllUsers'>;
   };
   /**
@@ -86,14 +86,23 @@ export async function deleteOrganization(
   // soft-deleted group's id, so purging membership after the group delete (or not at all) would
   // leave live access to a group whose organization no longer exists. Mirrors the revoke order in
   // setOrganizationGroupTypes for the same reason.
-  const orgGroups = await adapters.db.groups.findByOrganization(id);
+  // includeDeleted: org deletion is the last chance to reconcile membership, so purge EVERY group
+  // the org ever owned - including already-soft-deleted ones whose ids can still linger in
+  // user.groups from a lost prior revoke. Once the org row is gone there is nothing left to join
+  // against, and ability.ts keeps matching a document's groups[] against user.groups (#1230).
+  const orgGroups = await adapters.db.groups.findByOrganization(id, { includeDeleted: true });
   if (orgGroups.length > 0) {
     const groupIds = orgGroups.map(group => group.id);
     await adapters.db.users.removeGroupsFromAllUsers(groupIds);
-    await adapters.db.groups.softDeleteByIds(groupIds);
+    // Soft-delete each group via the inherited `delete` (softDeletePlugin). It now joins the
+    // caller's transaction through transactionAsyncLocalStorage (#1228), so no bulk workaround.
+    // delete() is a no-op on an already-soft-deleted row, so passing stale ids here is harmless.
+    for (const groupId of groupIds) {
+      await adapters.db.groups.delete(groupId);
+    }
   }
 
-  // softDeleteById, not the inherited `delete`: the latter soft-deletes through the raw driver and
-  // would commit immediately regardless of the caller's transaction (see the repository note).
-  await adapters.db.organizations.softDeleteById(id);
+  // The inherited `delete` (softDeletePlugin) now joins the caller's transaction via ALS (#1228),
+  // so this soft-delete rolls back with the surrounding writes instead of committing immediately.
+  await adapters.db.organizations.delete(id);
 }

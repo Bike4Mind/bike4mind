@@ -86,6 +86,15 @@ export interface DeductSoundEffectsCreditsParams extends DeductCreditsCommonPara
 }
 
 /**
+ * Parameters for music-generation credit deduction. Quest-less, like sound
+ * effects: music generation is a stateless API call with only a synthetic
+ * sessionId, so it extends the common base rather than the quest-scoped one.
+ */
+export interface DeductMusicGenerationCreditsParams extends DeductCreditsCommonParams {
+  type: 'music_generation_usage';
+}
+
+/**
  * Union type of all deduction parameter types
  */
 export type DeductCreditsParams =
@@ -93,7 +102,8 @@ export type DeductCreditsParams =
   | DeductImageEditCreditsParams
   | DeductVideoGenerationCreditsParams
   | DeductTextGenerationCreditsParams
-  | DeductSoundEffectsCreditsParams;
+  | DeductSoundEffectsCreditsParams
+  | DeductMusicGenerationCreditsParams;
 
 /**
  * Database adapters required for credit deduction.
@@ -196,6 +206,9 @@ export async function deductCreditsWithOrgSupport(
   } else if (type === 'sound_effects_usage') {
     // Quest-less: sound effects has no questId.
     transactionParams = { ...baseParams, type: 'sound_effects_usage' };
+  } else if (type === 'music_generation_usage') {
+    // Quest-less: music generation has no questId.
+    transactionParams = { ...baseParams, type: 'music_generation_usage' };
   } else {
     // Quest-scoped image/edit/video types; questId is guaranteed by their param shape.
     transactionParams = {

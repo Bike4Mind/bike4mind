@@ -8,18 +8,20 @@ import { CounterLog, User } from '@bike4mind/database';
 import { SAFE_USER_LOOKUP_PROJECT, USER_SECRET_FIELDS } from '@bike4mind/common';
 
 /**
- * Tests for the M1 $lookup reorder (see counterlogs-phase2-payload-reduction.md).
+ * End-to-end tests for the `{logs}` branch, driving the real handler against createMongoServer.
  *
- * Tests 1 and 3 are AGREEMENT tests: they drive the real handler against createMongoServer and
- * pin the output contract, which is unchanged by the reorder. They pass against both the old and
- * new pipeline by design - that is the point, since the PR's claim is "identical output, faster".
- * The staging before/after diff (13,308 rows, byte-identical once resorted, ~2x faster) is the
- * empirical parity proof.
+ * Originally written for the M1 $lookup reorder; the row shape they pin is now flat (one row per
+ * day/counter/user/metadata) rather than nested under `users[]`, because paging moved server-side.
+ * The properties each test guards are unchanged: grouping/count correctness, the orphaned-user
+ * $ifNull fallback, the $convert onError arm, the $lookup projection, and metadata fragmentation.
  *
- * Test 2 asserts on `buildCounterLogsPipeline` - the exported builder the handler actually calls -
- * NOT on a copy of the stages. An earlier version re-declared its own pipeline, which meant
- * deleting the production `$project` failed nothing; it was asserting that MongoDB's `$project`
- * works rather than that this route uses it.
+ * The projection test asserts on the exported builder the handler actually calls, NOT on a copy of
+ * the stages. An earlier version re-declared its own pipeline, which meant deleting the production
+ * `$project` failed nothing; it was asserting that MongoDB's `$project` works rather than that this
+ * route uses it.
+ *
+ * Handler-level paging concerns (envelope, clamping, cache keys, auth) are mocked-dependency tests
+ * and live in counterLogs.paging.test.ts, which cannot share this file's real-Mongo harness.
  */
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -36,7 +38,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-import handler, { buildCounterLogsPipeline } from '../counterLogs';
+import handler from '../counterLogs';
+import { buildUserActivityPipeline } from '@server/analytics/userActivityQuery';
 
 let mongoServer: MongoMemoryServer;
 
@@ -74,7 +77,7 @@ function run(query: Record<string, string>) {
 }
 
 describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
-  it('aggregates counts per user via the reordered lookup', async () => {
+  it('aggregates counts per user via the post-group lookup', async () => {
     const goodUser = await User.create({
       username: 'e2e-good-user',
       name: 'Good User',
@@ -127,8 +130,9 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
       counterName: string;
       count: number;
       totalValue: number;
+      userId: string;
+      userEmail: string;
       metadata: Record<string, unknown>;
-      users: Array<{ userId: string; userEmail: string; count: number; totalValue: number }>;
     }>;
 
     expect(rows).toHaveLength(2);
@@ -137,13 +141,11 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     expect(goodRow).toBeDefined();
     expect(goodRow!.count).toBe(2);
     expect(goodRow!.totalValue).toBe(2);
-    expect(goodRow!.users).toHaveLength(1);
-    expect(goodRow!.users[0].userEmail).toBe('good-user@example.com');
-    expect(goodRow!.users[0].count).toBe(2);
+    expect(goodRow!.userEmail).toBe('good-user@example.com');
 
     const orphanRow = rows.find(r => (r.metadata as { sessionId: string }).sessionId === 'session-b');
     expect(orphanRow).toBeDefined();
-    expect(orphanRow!.users[0].userEmail).toBe('');
+    expect(orphanRow!.userEmail).toBe('');
   });
 
   it('does not abort the aggregation when a userId is not a valid ObjectId', async () => {
@@ -168,13 +170,14 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     expect(res._getStatusCode()).toBe(200);
     const rows = JSON.parse(JSON.stringify(res._getJSONData())).logs as Array<{
       metadata: { sessionId: string };
-      users: Array<{ userId: string; userEmail: string }>;
+      userId: string;
+      userEmail: string;
     }>;
 
     const systemRow = rows.find(r => r.metadata.sessionId === 'session-system');
     expect(systemRow, 'the row must still be returned, not dropped or thrown on').toBeDefined();
-    expect(systemRow!.users[0].userId).toBe('SYSTEM');
-    expect(systemRow!.users[0].userEmail).toBe('');
+    expect(systemRow!.userId).toBe('SYSTEM');
+    expect(systemRow!.userEmail).toBe('');
   });
 
   it('builds the user $lookup with an inner $project restricted to non-secret fields', () => {
@@ -182,11 +185,14 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     // $project fails here. Do not inline a copy of the stages: the $lookup's projection has no
     // effect on the HTTP response (the outer $group/$project already forward only named scalars),
     // so an output-level assertion cannot pin it - the property is structural.
-    const stages = buildCounterLogsPipeline({ datetime: { $gte: new Date(0) } }) as Array<
-      Record<string, { pipeline?: Array<{ $project?: Record<string, unknown> }>; as?: string }>
-    >;
+    const { pipeline: stages } = buildUserActivityPipeline({
+      startDate: '2026-07-21',
+      endDate: '2026-07-21',
+      page: 1,
+      limit: 25,
+    });
 
-    const lookup = stages.find(s => s.$lookup?.as === 'user')?.$lookup;
+    const lookup = stages.find((s: Record<string, any>) => s.$lookup?.as === 'user')?.$lookup;
     expect(lookup, 'the pipeline must contain a $lookup aliased to "user"').toBeDefined();
 
     const projection = lookup!.pipeline?.[0]?.$project;
@@ -203,7 +209,7 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     }
   });
 
-  it('keeps metadata fragments in separate groups (M1 does not change the group key)', async () => {
+  it('keeps metadata fragments in separate groups', async () => {
     const user = await User.create({
       username: 'e2e-frag-user',
       name: 'Frag User',
@@ -237,7 +243,7 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     const body = JSON.parse(JSON.stringify(res._getJSONData()));
     const rows = body.logs as Array<{ metadata: { reportId: string } }>;
 
-    // Still two rows, one per distinct reportId - the group-key collapse is M2's job, not M1's.
+    // Still two rows, one per distinct reportId - collapsing the group key is not this change's job.
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map(r => r.metadata.reportId))).toEqual(new Set(['report-1', 'report-2']));
   });
