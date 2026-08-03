@@ -280,13 +280,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const errorMessage = err instanceof Error ? err.message : String(err);
     // The stored message surfaces to the end user on the file. An embedding-auth failure carries
     // operator instructions (set OPENAI_API_KEY / OLLAMA_BASE_URL) that a user can neither see nor
-    // act on, so persist user-safe copy instead - and note the file is still usable, because an
-    // attached file falls back to its raw content in chat (see processFabFilesServer). The full
-    // operator detail still goes to the logs below. Other failures (e.g. oversized chunk) keep their
-    // specific, user-actionable message.
+    // act on, so persist user-safe copy instead. The advice differs by file kind: a turn-attached
+    // file falls back to its raw content in chat (see processFabFilesServer / canCosineSearch), so
+    // it is still usable there; a data-lake file (batchId set) is retrieved only by cosine search
+    // over its chunks, so with no vectors it is simply unfindable until re-indexed. The full
+    // operator detail still goes to the logs below. Other failures (e.g. oversized chunk) keep
+    // their specific, user-actionable message.
     const isAuthFailure = isEmbeddingAuthError(err);
     const storedError = isAuthFailure
-      ? 'This file could not be indexed for semantic search because the embedding service was unavailable. You can still ask about it directly in chat.'
+      ? existingFabFile.batchId
+        ? 'This file could not be indexed for semantic search because the embedding service was unavailable. It will not be found by knowledge search until it is re-indexed.'
+        : 'This file could not be indexed for semantic search because the embedding service was unavailable. You can still ask about it directly in chat.'
       : errorMessage;
     if (isAuthFailure) {
       logger.warn(`Vectorization failed for ${fabFileId} (embedding auth): ${errorMessage}`);

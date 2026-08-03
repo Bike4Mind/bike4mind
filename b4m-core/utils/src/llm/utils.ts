@@ -1076,13 +1076,14 @@ export async function processFabFilesServer(
       logger
     );
   } catch (error) {
-    // Pass the message, not the Error object: the structured logger serializes a raw Error to `{}`,
+    // Pass a string, not the Error object: the structured logger serializes a raw Error to `{}`,
     // which drops exactly the reason (401 vs rate limit vs network) an operator needs in this
-    // degraded-mode line.
+    // degraded-mode line. Keep the class name too - for an EmbeddingAuthError it is the cheapest
+    // signal that this is a credential problem rather than a timeout.
     logger.warn(
       `[processFabFilesServer] Query embedding failed (${selectedEmbeddingModel}); ` +
         'falling back to raw file content for this turn.',
-      error instanceof Error ? error.message : String(error)
+      error instanceof Error ? `${error.name}: ${error.message}` : String(error)
     );
   }
 
