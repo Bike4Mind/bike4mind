@@ -375,6 +375,12 @@ describe('ChatCompletionProcess', () => {
           contextAndSystemMessages.some(m => typeof m.content === 'string' && m.content.startsWith('Current date:'))
         ).toBe(true);
         expect(options).toEqual(expect.objectContaining({ skipAdminPromptTemplates: false }));
+        // The per-source breakdown persists on the quest unconditionally - not only when enhanced
+        // telemetry is enabled - so the API layer can report which prompts fed a completion.
+        const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+          promptMeta?: { context?: { systemPromptDetails?: { name: string }[] } };
+        };
+        expect(savedQuest.promptMeta?.context?.systemPromptDetails?.map(d => d.name)).toContain('date_time_context');
       });
 
       it('hands an EMPTY system stack to the builder under raw, and skips the admin templates', async () => {
