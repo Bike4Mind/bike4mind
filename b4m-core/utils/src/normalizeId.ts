@@ -22,7 +22,8 @@ export function normalizeId(value: unknown): string | undefined {
     // like "1,2,3" or "[object Object]".
     return undefined;
   }
-  // Non-object primitive (e.g. a numeric id) - stringify.
-  const s = String(value);
-  return s || undefined;
+  // Non-object primitive: only a finite number is a plausible id to stringify. Anything else
+  // (boolean, bigint, symbol, NaN) is not an id -> undefined, so junk like "false"/"NaN" never
+  // enters an id comparison.
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : undefined;
 }
