@@ -37,7 +37,9 @@ const TYPES_RESPONSE = {
   categories: ['web'],
 };
 
-const CREATED = { id: 'artifact_1', type: 'html', title: 'My Artifact', status: 'draft' };
+// Server-returned title differs from the typed text so the toast assertion pins the response value.
+const TYPED_TITLE = 'Typed Title';
+const CREATED = { id: 'artifact_1', type: 'html', title: 'Server Title', status: 'draft' };
 
 /** Fills the form and saves; returns the onSave spy. */
 async function createArtifact() {
@@ -52,7 +54,7 @@ async function createArtifact() {
     </TestWrapper>
   );
 
-  await user.type(await screen.findByTestId('artifact-creator-title-input'), 'My Artifact');
+  await user.type(await screen.findByTestId('artifact-creator-title-input'), TYPED_TITLE);
   await user.click(await screen.findByTestId('artifact-creator-save-btn'));
   return onSave;
 }
@@ -66,7 +68,7 @@ describe('ArtifactCreator - create success notification', () => {
     await createArtifact();
 
     await waitFor(() =>
-      expect(mocks.toastSuccess).toHaveBeenCalledWith('Artifact "My Artifact" created successfully!')
+      expect(mocks.toastSuccess).toHaveBeenCalledWith('Artifact "Server Title" created successfully!')
     );
     // Count asserted after the await: a bare count check would pass before the toast fires.
     expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);

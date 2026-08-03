@@ -6,17 +6,10 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 /**
- * Regression guard for #147: the gallery renders from the list feed (/api/artifacts),
- * which omits `content`. The card's Share action must hydrate the single artifact's
- * content (via the :id GET, whose string lives at response.content.content) BEFORE
- * wiring the publish dialog - otherwise publishArtifactBundle throws "no content to
- * publish" before any network call and Share silently no-ops.
- *
- * These tests lock three behaviors: (1) a content-less list artifact gets hydrated and
- * the wiring receives the real content, (2) a successful fetch that returns empty
- * content shows the "no content" toast and never opens the dialog, and (3) a failed
- * fetch is reported as a load error - distinct from "no content" - and never opens the
- * dialog.
+ * The gallery renders from the list feed (/api/artifacts), which omits `content`. Both the Share
+ * and Edit card actions therefore have to hydrate the single artifact first - Share because
+ * publishArtifactBundle throws on empty content before any network call, Edit because the editor
+ * gates Save on a non-empty content. These tests lock the hydration outcomes for both.
  */
 
 const mocks = vi.hoisted(() => ({
@@ -80,28 +73,28 @@ const LIST_RESPONSE = {
   pagination: { total: 1, limit: 20, offset: 0, hasMore: false },
 };
 
-/** Route api.get by URL; the single-artifact GET is supplied per-test. */
-function wireApi(singleArtifact: () => Promise<any>) {
+/** Route api.get by URL; the single-artifact GET and the list payload are supplied per-test. */
+function wireApi(singleArtifact: () => Promise<any>, list: unknown = LIST_RESPONSE) {
   mocks.apiGet.mockImplementation((url: string) => {
     if (url.startsWith('/api/artifacts/types')) return Promise.resolve({ data: TYPES_RESPONSE });
     if (url.includes('includeContent=true')) return singleArtifact();
     // Base list feed (starts with /api/artifacts but not a sub-resource we handle above).
-    if (url.startsWith('/api/artifacts')) return Promise.resolve({ data: LIST_RESPONSE });
+    if (url.startsWith('/api/artifacts')) return Promise.resolve({ data: list });
     return Promise.resolve({ data: {} });
   });
 }
 
-/** Open the card's kebab menu and click Share. */
-async function openShare(user: ReturnType<typeof userEvent.setup>) {
+/** Open the card's kebab menu and click one of its actions. */
+async function openCardAction(user: ReturnType<typeof userEvent.setup>, testId: string) {
   // Wait for the list to render the card past the artifactTypes loading gate.
   await screen.findByText('My Demo Artifact');
-  const kebab = await screen.findByTestId('artifact-card-menu-btn');
-  await user.click(kebab);
-  const share = await screen.findByTestId('artifact-publish-share');
-  await user.click(share);
+  await user.click(await screen.findByTestId('artifact-card-menu-btn'));
+  await user.click(await screen.findByTestId(testId));
 }
+const openShare = (user: ReturnType<typeof userEvent.setup>) => openCardAction(user, 'artifact-publish-share');
+const openEdit = (user: ReturnType<typeof userEvent.setup>) => openCardAction(user, 'artifact-edit');
 
-describe('ArtifactGallery - Share hydrates content (#147)', () => {
+describe('ArtifactGallery - Share hydrates content', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -194,5 +187,127 @@ describe('ArtifactGallery - Share hydrates content (#147)', () => {
     // Let the first flow finish so it publishes exactly once and no pending work leaks.
     resolveFetch({ data: { content: { content: '<h1>hydrated</h1>' } } });
     await waitFor(() => expect(mocks.publishAndShare).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('ArtifactGallery - Edit hydrates content', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('hydrates content and hands the artifact to onArtifactEdit with it', async () => {
+    wireApi(() => Promise.resolve({ data: { content: { content: '<h1>hydrated</h1>' } } }));
+    const onArtifactEdit = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <TestWrapper>
+        <ArtifactGallery onArtifactEdit={onArtifactEdit} />
+      </TestWrapper>
+    );
+
+    await openEdit(user);
+
+    await waitFor(() =>
+      expect(onArtifactEdit).toHaveBeenCalledWith(
+        expect.objectContaining({ id: ARTIFACT_ID, content: '<h1>hydrated</h1>' })
+      )
+    );
+    expect(mocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it('refuses to open the editor when the artifact has no content', async () => {
+    wireApi(() => Promise.resolve({ data: { content: { content: '' } } }));
+    const onArtifactEdit = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <TestWrapper>
+        <ArtifactGallery onArtifactEdit={onArtifactEdit} />
+      </TestWrapper>
+    );
+
+    await openEdit(user);
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('This artifact has no content to edit'), {
+      timeout: 5000,
+    });
+    expect(onArtifactEdit).not.toHaveBeenCalled();
+  });
+
+  it('reports a load error (distinct from "no content") and does not open the editor', async () => {
+    wireApi(() => Promise.reject(new Error('boom')));
+    const onArtifactEdit = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <TestWrapper>
+        <ArtifactGallery onArtifactEdit={onArtifactEdit} />
+      </TestWrapper>
+    );
+
+    await openEdit(user);
+
+    await waitFor(
+      () => expect(mocks.toastError).toHaveBeenCalledWith('Could not load artifact content, please try again'),
+      { timeout: 5000 }
+    );
+    expect(mocks.toastError).not.toHaveBeenCalledWith('This artifact has no content to edit');
+    expect(onArtifactEdit).not.toHaveBeenCalled();
+  });
+
+  // This branch was silently regressed once by moving the id check behind a content short-circuit,
+  // and no test caught it - hence pinning it here. The helper is shared, so this covers the
+  // publish path's use of the same guard.
+  it('refuses an artifact with no stable id before attempting any hydration', async () => {
+    // Carries content as well as an empty id: that combination is what slips past a guard placed
+    // after the content short-circuit, so this pins the guard's order, not just its existence.
+    const idless = { ...LIST_RESPONSE.artifacts[0], id: '', content: '<h1>already here</h1>' };
+    // A hydration attempt rejects rather than falling through, so the no-fetch claim cannot pass
+    // for the wrong reason.
+    wireApi(() => Promise.reject(new Error('should not hydrate an id-less artifact')), {
+      ...LIST_RESPONSE,
+      artifacts: [idless],
+    });
+    const onArtifactEdit = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <TestWrapper>
+        <ArtifactGallery onArtifactEdit={onArtifactEdit} />
+      </TestWrapper>
+    );
+
+    await openEdit(user);
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('This artifact has no stable id to edit'), {
+      timeout: 5000,
+    });
+    expect(onArtifactEdit).not.toHaveBeenCalled();
+    // No hydration attempted: an empty id would have fetched the list endpoint by accident.
+    const hydrationCalls = mocks.apiGet.mock.calls.filter(
+      ([url]: [string]) => typeof url === 'string' && url.includes('includeContent=true')
+    );
+    expect(hydrationCalls).toHaveLength(0);
+  });
+
+  it('ignores a re-entrant Edit click while a hydration fetch is already in flight', async () => {
+    let resolveFetch!: (v: unknown) => void;
+    const pending = new Promise<unknown>(res => {
+      resolveFetch = res;
+    });
+    wireApi(() => pending as Promise<{ data: unknown }>);
+    const onArtifactEdit = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <TestWrapper>
+        <ArtifactGallery onArtifactEdit={onArtifactEdit} />
+      </TestWrapper>
+    );
+
+    await openEdit(user); // first click: hydration starts and stays pending
+    await openEdit(user); // second click while in flight: must be dropped
+
+    resolveFetch({ data: { content: { content: '<h1>hydrated</h1>' } } });
+
+    // The outcome that matters: one editor opened, not two. Without the guard both clicks resolve
+    // off the same pending promise and this fires twice.
+    await waitFor(() => expect(onArtifactEdit).toHaveBeenCalledTimes(1), { timeout: 5000 });
   });
 });

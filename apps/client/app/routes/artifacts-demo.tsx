@@ -1,15 +1,13 @@
 import React, { useState } from 'react';
 import { Box, Typography, Stack, Button, Modal, ModalDialog, ModalClose, Divider, Alert, Chip } from '@mui/joy';
 import { AutoAwesome as MagicIcon, Visibility as ViewIcon, Create as CreateIcon } from '@mui/icons-material';
-import { ArtifactGallery, ArtifactCreator, ArtifactEditor } from '@client/app/components/artifacts';
-import { type BaseArtifact } from '@bike4mind/common';
+import {
+  ArtifactGallery,
+  ArtifactCreator,
+  ArtifactEditor,
+  type ArtifactWithContent,
+} from '@client/app/components/artifacts';
 import { toast } from 'sonner';
-
-interface ArtifactWithContent extends BaseArtifact {
-  content?: string;
-  contentSize: number;
-  contentHash: string;
-}
 
 const ArtifactsDemoPage: React.FC = () => {
   const [showCreator, setShowCreator] = useState(false);
@@ -177,7 +175,10 @@ const ArtifactsDemoPage: React.FC = () => {
         >
           <ModalClose />
           {editingArtifact && (
+            // Keyed by id so switching artifacts reseeds the form; the editor pins its own PUT
+            // target at mount, so this is a display concern rather than a data-integrity one.
             <ArtifactEditor
+              key={editingArtifact.id}
               artifact={editingArtifact}
               onClose={() => setShowEditor(false)}
               onSave={handleArtifactUpdate}

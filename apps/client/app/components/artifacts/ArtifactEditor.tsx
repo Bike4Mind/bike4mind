@@ -38,6 +38,7 @@ import {
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import { type BaseArtifact } from '@bike4mind/common';
+import { type ArtifactWithContent } from './types';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import Editor from 'react-simple-code-editor';
@@ -85,13 +86,6 @@ interface UpdateArtifactRequest {
   versionMessage?: string;
 }
 
-interface ArtifactWithContent extends BaseArtifact {
-  content?: string;
-  contentSize: number;
-  contentHash: string;
-  metadata?: Record<string, unknown>;
-}
-
 interface ArtifactEditorProps {
   artifact: ArtifactWithContent;
   onClose?: () => void;
@@ -137,7 +131,7 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
   const [saving, setSaving] = useState(false);
   const [currentTab, setCurrentTab] = useState(0); // 0 = Edit, 1 = Preview
 
-  // Form state - initialize with artifact data
+  // Form state - seeded from props once on mount, with no resync on prop change.
   const [formData, setFormData] = useState<UpdateArtifactRequest>({
     title: artifact.title,
     description: artifact.description || '',
@@ -154,6 +148,11 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
     },
     metadata: artifact.metadata || {},
   });
+
+  // Pinned at mount so the PUT target and the diffed body always describe the same artifact: the
+  // body is derived from mount-time state, so reading a live `artifact.id` could target a
+  // different artifact than the edits belong to.
+  const [artifactId] = useState(artifact.id);
 
   // Track original values for change detection
   const [originalData] = useState<UpdateArtifactRequest>({
@@ -282,7 +281,7 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
         changedFields.metadata = formData.metadata;
 
       // Envelope response: onSave takes response.data.artifact, never response.data.
-      const response = await api.put<{ artifact: BaseArtifact }>(`/api/artifacts/${artifact.id}`, changedFields);
+      const response = await api.put<{ artifact: BaseArtifact }>(`/api/artifacts/${artifactId}`, changedFields);
       const updated = response.data.artifact;
 
       toast.success(`Artifact "${updated.title}" updated successfully!`);
@@ -294,7 +293,7 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
     } finally {
       setSaving(false);
     }
-  }, [formData, originalData, validateForm, artifact.id, onSave, onClose, hasChanges]);
+  }, [formData, originalData, validateForm, artifactId, onSave, onClose, hasChanges]);
 
   // Handle revert changes
   const handleRevert = useCallback(() => {

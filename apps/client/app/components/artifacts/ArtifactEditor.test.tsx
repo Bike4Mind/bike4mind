@@ -51,9 +51,15 @@ const EXISTING = {
   visibility: 'private' as const,
   tags: [],
   version: 1,
+  // Present so they don't register as changes: the editor defaults these when absent, which would
+  // otherwise make them differ from originalData and land in the PUT body.
+  permissions: { canRead: [], canWrite: [], canDelete: [], isPublic: false, inheritFromProject: true },
+  metadata: {},
 };
 
-const UPDATED = { ...EXISTING, title: 'Renamed Title' };
+// Server-returned title differs from the typed text so the assertions pin the response value.
+const TYPED_TITLE = 'Typed Rename';
+const UPDATED = { ...EXISTING, title: 'Server Renamed' };
 
 /** Renames the artifact and saves; returns the onSave spy. */
 async function renameAndSave() {
@@ -70,7 +76,7 @@ async function renameAndSave() {
   // Save stays disabled until hasChanges flips, so the title must actually change.
   const title = await screen.findByTestId('artifact-editor-title-input');
   await user.clear(title);
-  await user.type(title, 'Renamed Title');
+  await user.type(title, TYPED_TITLE);
   await user.click(await screen.findByTestId('artifact-editor-save-btn'));
   return onSave;
 }
@@ -84,11 +90,18 @@ describe('ArtifactEditor - update success notification', () => {
     await renameAndSave();
 
     await waitFor(() =>
-      expect(mocks.toastSuccess).toHaveBeenCalledWith('Artifact "Renamed Title" updated successfully!')
+      expect(mocks.toastSuccess).toHaveBeenCalledWith('Artifact "Server Renamed" updated successfully!')
     );
     // Count asserted after the await: a bare count check would pass before the toast fires.
     expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
     expect(mocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it('PUTs only the changed fields, to the id of the artifact it was mounted with', async () => {
+    await renameAndSave();
+
+    await waitFor(() => expect(mocks.apiPut).toHaveBeenCalledTimes(1));
+    expect(mocks.apiPut).toHaveBeenCalledWith(`/api/artifacts/${EXISTING.id}`, { title: TYPED_TITLE });
   });
 
   it('hands onSave the unwrapped artifact, not the response envelope', async () => {
