@@ -10,7 +10,6 @@ import {
   AccordionSummary,
   Select,
   Option,
-  Button,
   CircularProgress,
   IconButton,
   Tooltip,
@@ -25,7 +24,17 @@ import {
 } from '@mui/icons-material';
 import ClearIcon from '@mui/icons-material/Clear';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import SettingsIcon from '@mui/icons-material/Settings';
+import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
+import GridViewOutlinedIcon from '@mui/icons-material/GridViewOutlined';
+import ViewListOutlinedIcon from '@mui/icons-material/ViewListOutlined';
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import SpeedIcon from '@mui/icons-material/Speed';
+import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
+import ConstructionIcon from '@mui/icons-material/Construction';
+// Named for tools, but this is the thinking glyph: ToolsSection renders it on the Thinking
+// row and ToolIndicators uses it as tool-indicator-thinking.
+import SupportsToolsIcon from '@client/app/components/svgs/SupportsToolsIcon';
 import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
@@ -35,17 +44,17 @@ import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
 import { ModelName, ModelInfo, ModelBackend, SpeechToTextModels, isModelDeprecated } from '@bike4mind/common';
 import SearchIcon from '@mui/icons-material/Search';
-import { sortModelsByCapability } from '@client/app/utils/modelRanking';
+import { sortModelsForPicker } from '@client/app/utils/modelRanking';
 import { useTheme } from '@mui/joy';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import {
+  ChipVariant,
   getModelPriceTier,
   isOpenAIModel,
   getModelSpeedVariant,
   getModelSpeedTooltip,
-  getTopUsedModelsFromStats,
   getModelSpeedFromStats,
   getPriceTierTooltip,
   isNewModel,
@@ -53,9 +62,9 @@ import {
 import MetadataChip from './AISettings/MetaDataChips';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { isImageModel } from '@client/app/utils/commands';
-import { green, greenAlpha, orange } from '@client/app/utils/themes/colors';
-import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
+import { green, greenAlpha, orange, red } from '@client/app/utils/themes/colors';
 import { useFavoriteModels } from '@client/app/hooks/useFavoriteModels';
+import { useIsMobile } from '@client/app/hooks/useIsMobile';
 
 // List of model IDs to exclude from the dropdown
 // Add any model IDs you want to hide here
@@ -90,7 +99,7 @@ const checkBoxStyle = {
 // Function to get backend logo path
 const getBackendLogo = (backend: string): string | null => {
   const logoMap: Record<string, string> = {
-    'OPEN AI': '/images/logos/llm/llm-logo-openai.png',
+    OpenAI: '/images/logos/llm/llm-logo-openai.png',
     Anthropic: '/images/logos/llm/llm-logo-anthropic.png',
     Meta: '/images/logos/llm/llm-logo-meta.png',
     'Black Forest Labs': '/images/logos/llm/llm-logo-bfl.png',
@@ -100,13 +109,12 @@ const getBackendLogo = (backend: string): string | null => {
   return logoMap[backend] || null;
 };
 
-// Badge shown on each model card hosted via AWS Bedrock. Deliberately kept separate
-// from getBackendLogo() above: that map returns provider logos (OpenAI, Anthropic, ...)
-// keyed by who authored the model, whereas this marks the hosting platform - any
-// provider's model can be Bedrock-hosted, so it's a different axis, not another entry.
-// Note: the asset bakes in a teal (#01A88D) background so it reads in both light and
-// dark themes; a transparent/outlined variant would require re-cutting the SVG.
-const BEDROCK_LOGO_SRC = '/images/logos/llm/llm-logo-bedrock.svg';
+// Marks a card as AWS Bedrock-hosted. Deliberately separate from getBackendLogo() above: that
+// map returns provider logos (OpenAI, Anthropic, ...) keyed by who authored the model, whereas
+// this marks the hosting platform - any provider's model can be Bedrock-hosted, so it's a
+// different axis, not another entry. Amazon Bedrock's own teal, so the badge reads as the
+// platform rather than as another status colour.
+const BEDROCK_BADGE_BG = '#01A88D';
 
 // Global image cache to prevent re-requests
 const imageCache = new Map<string, string>();
@@ -140,7 +148,7 @@ const preloadAndCacheImage = (src: string): Promise<string> => {
 // Preload all backend logos
 const preloadBackendLogos = async () => {
   const logoMap: Record<string, string> = {
-    'OPEN AI': '/images/logos/llm/llm-logo-openai.png',
+    OpenAI: '/images/logos/llm/llm-logo-openai.png',
     Anthropic: '/images/logos/llm/llm-logo-anthropic.png',
     Meta: '/images/logos/llm/llm-logo-meta.png',
     'Black Forest Labs': '/images/logos/llm/llm-logo-bfl.png',
@@ -164,6 +172,8 @@ interface ModelSelectionProps {
   onModelFilterChange?: (filter: 'all' | 'text' | 'image' | 'video') => void;
   onSettingsClick?: (model: ModelInfo) => void;
   isResearchModeFeatureEnabled?: boolean;
+  /** Rendered inside the sticky header, above the search/filter row, so it pins with it. */
+  stickyHeader?: React.ReactNode;
 }
 
 // Format large numbers with commas
@@ -205,7 +215,7 @@ export const getModelBackend = (model: ModelInfo): string => {
 
   // OpenAI models
   if (isOpenAIModel(modelName) || modelDescription?.includes('OpenAI')) {
-    return 'OPEN AI';
+    return 'OpenAI';
   }
 
   // Anthropic models
@@ -243,7 +253,106 @@ export const getModelBackend = (model: ModelInfo): string => {
   return 'Other';
 };
 
-// Updated ModelOption component for grid layout
+// Display order of the provider sections. Anything absent sorts alphabetically after these.
+const BACKEND_PRIORITY = [
+  SELF_HOSTED_BACKEND,
+  'OpenAI',
+  'Anthropic',
+  'Google',
+  'Meta',
+  'xAI',
+  'Mistral',
+  'Black Forest Labs',
+  'Cohere',
+];
+
+// Non-mutating: callers pass a fresh Object.keys() array, but the copy keeps that a contract
+// of this function rather than of each call site.
+const sortBackendsByPriority = (backends: string[]): string[] =>
+  [...backends].sort((a, b) => {
+    const aIndex = BACKEND_PRIORITY.indexOf(a);
+    const bIndex = BACKEND_PRIORITY.indexOf(b);
+
+    if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+    if (aIndex !== -1) return -1;
+    if (bIndex !== -1) return 1;
+
+    return a.localeCompare(b);
+  });
+
+// Layout of the model list: roomy cards in a 2-up grid, or compact single-column rows.
+export type ModelViewMode = 'grid' | 'list';
+
+// Cost and speed render as icon-only chips in a neutral frame, so the glyph says which
+// dimension and its colour says the value. Reuses the existing tier/speed variants as the
+// scale rather than a second set of thresholds.
+const metricIconColor = (variant: ChipVariant): string =>
+  variant === 'green' ? green[800] : variant === 'yellow' ? orange[450] : red[400];
+
+// Same purple the New chip used before it became a corner badge. No theme token exists for
+// it; getChipStyles hardcodes the identical value for its `purple` variant.
+const NEW_BADGE_BG = '#A52ECD';
+
+// Small label riding the card's top border. Positioning lives on the shared row in the card
+// so multiple badges line up; this only draws the pill.
+const CornerBadge = ({
+  testId,
+  label,
+  tooltip,
+  background,
+}: {
+  testId: string;
+  label: string;
+  tooltip: string;
+  background: string;
+}) => (
+  <Tooltip title={tooltip} placement="top">
+    <Box
+      data-testid={testId}
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        height: '20px',
+        px: '6px',
+        borderRadius: '4px',
+        backgroundColor: background,
+        color: '#FFFFFF',
+        fontSize: '12px',
+        fontWeight: 600,
+        lineHeight: 1,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </Box>
+  </Tooltip>
+);
+
+// Read-only indicator. The frame is what separates these from the star and settings icons
+// sitting beside them - without it, informational glyphs read as pressable. Borrows the
+// card's own border shorthand so the frames, the card and the row divider stay in step.
+const MetricIcon = ({ label, tooltip, children }: { label: string; tooltip: string; children: React.ReactNode }) => (
+  <Tooltip title={tooltip} placement="top">
+    <Box
+      role="img"
+      aria-label={label}
+      sx={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '24px',
+        height: '24px',
+        flex: 'none',
+        boxSizing: 'border-box',
+        borderRadius: '50%',
+        border: 'var(--joy-palette-aiSettings-modelCard-border)',
+      }}
+    >
+      {children}
+    </Box>
+  </Tooltip>
+);
+
 const ModelOption = React.memo(
   ({
     model,
@@ -254,10 +363,10 @@ const ModelOption = React.memo(
     onSettingsClick,
     isFavorite = false,
     onToggleFavorite,
-    topUsedModelIds,
     avgResponseTimeByModel,
     statsLoading,
     mode,
+    viewMode = 'grid',
   }: {
     model: ModelInfo;
     isSelected: boolean;
@@ -267,21 +376,237 @@ const ModelOption = React.memo(
     onSettingsClick?: (model: ModelInfo) => void;
     isFavorite?: boolean;
     onToggleFavorite?: (modelId: string) => void;
-    topUsedModelIds: string[];
     avgResponseTimeByModel: Record<string, number>;
     statsLoading: boolean;
     mode: 'dark' | 'light';
+    viewMode?: ModelViewMode;
   }) => {
     const priceTierInfo = getModelPriceTier(model);
     const modelSpeed = getModelSpeedFromStats(model.id, avgResponseTimeByModel);
-    const isPopular = topUsedModelIds.includes(model.id);
     // A disabled model stays in the list so users can see it, but it can't be picked:
     // no click handler, a not-allowed cursor, dimmed, and no hover affordance.
     const isDisabled = !!model.disabled;
+    const isList = viewMode === 'list';
 
-    const card = (
+    // Each tooltip is scoped to its own element rather than to the whole row: MUI listens on
+    // `mouseover`, which bubbles, so a tooltip on the badge nested inside one on the row would
+    // open both at once.
+    const nameBlock = (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: isList ? 'none' : 1, minWidth: '50px' }}>
+        <Tooltip
+          title={model.description ?? ''}
+          placement="top"
+          variant="soft"
+          sx={{ maxWidth: 320 }}
+          disableHoverListener={!model.description}
+        >
+          <Typography
+            level="body-md"
+            sx={{
+              textAlign: 'left',
+              color: 'text.primary',
+              fontWeight: '500',
+            }}
+          >
+            {model.name}
+          </Typography>
+        </Tooltip>
+        {/* Selected Checkmark - sits right of the model name */}
+        {isSelected && (
+          <CheckIcon
+            sx={{
+              fontSize: '16px',
+              flex: 'none',
+              color: green[800],
+              '& path': {
+                strokeWidth: '2px',
+                stroke: green[800],
+              },
+            }}
+          />
+        )}
+      </Box>
+    );
+
+    const favoriteLabel = isFavorite ? 'Remove from favorites' : 'Add to favorites';
+    const favoriteToggle = onToggleFavorite && (
+      <Tooltip title={favoriteLabel} placement="bottom">
+        <IconButton
+          data-testid={`favorite-toggle-${model.id}`}
+          aria-label={favoriteLabel}
+          variant="plain"
+          size="sm"
+          sx={{
+            minWidth: '28px',
+            minHeight: '28px',
+            width: '28px',
+            height: '28px',
+            // Joy's SvgIcon resolves its colour from `--Icon-color`; the filled star opts out
+            // by declaring its own.
+            '--Icon-color': 'var(--joy-palette-text-tertiary)',
+            '& .MuiSvgIcon-root': {
+              transition: 'color 0.2s',
+            },
+            '&:hover': {
+              backgroundColor: 'transparent',
+              '--Icon-color': 'var(--joy-palette-text-primary)',
+              // The filled star ignores --Icon-color, so give it the same solid-button hover
+              // token the New Agent button uses to signal that clicking unfavorites.
+              ...(isFavorite && { '& .MuiSvgIcon-root': { color: 'primary.solidHoverBg' } }),
+            },
+          }}
+          onClick={e => {
+            e.stopPropagation();
+            onToggleFavorite(model.id);
+          }}
+        >
+          {isFavorite ? (
+            <StarRounded sx={{ fontSize: '20px', color: 'primary.solidBg' }} />
+          ) : (
+            <StarBorderRounded sx={{ fontSize: '20px' }} />
+          )}
+        </IconButton>
+      </Tooltip>
+    );
+
+    // Selects the model and opens its detail & settings dialog (all viewports).
+    const viewMoreButton = onSettingsClick && (
+      <Tooltip title="View model details & settings" placement="bottom">
+        <IconButton
+          data-testid={`model-view-more-${model.id}`}
+          aria-label="View model details and settings"
+          variant="plain"
+          size="sm"
+          sx={{
+            flex: 'none',
+            minWidth: '28px',
+            minHeight: '28px',
+            width: '28px',
+            height: '28px',
+            '--Icon-color': 'var(--joy-palette-text-tertiary)',
+            '& .MuiSvgIcon-root': {
+              transition: 'color 0.2s',
+            },
+            '&:hover': {
+              backgroundColor: 'transparent',
+              '--Icon-color': 'var(--joy-palette-text-primary)',
+            },
+          }}
+          onClick={e => {
+            e.stopPropagation();
+            onSettingsClick(model);
+          }}
+        >
+          <SettingsOutlinedIcon sx={{ fontSize: '20px' }} />
+        </IconButton>
+      </Tooltip>
+    );
+
+    const metricIndicators = (
+      <>
+        <MetricIcon label={`${priceTierInfo.tier} cost`} tooltip={getPriceTierTooltip(priceTierInfo.tier)}>
+          <AttachMoneyIcon
+            sx={{
+              fontSize: '16px',
+              color: metricIconColor(priceTierInfo.variant),
+              // The $ glyph is drawn 0.59 units left of centre inside its own 24-unit viewBox
+              // (ink spans x 6.32..16.50), so centring the <svg> still leaves it visibly left
+              // in a round frame. Divided by 24 in em so it tracks fontSize. Speed and the
+              // capability glyphs measure centred and are deliberately left alone.
+              transform: 'translateX(calc(0.59em / 24))',
+            }}
+          />
+        </MetricIcon>
+
+        {!statsLoading && modelSpeed && (
+          <MetricIcon
+            label={`${modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)} speed`}
+            tooltip={getModelSpeedTooltip(modelSpeed)}
+          >
+            <SpeedIcon sx={{ fontSize: '16px', color: metricIconColor(getModelSpeedVariant(modelSpeed)) }} />
+          </MetricIcon>
+        )}
+      </>
+    );
+
+    // Capabilities are present-or-absent, so they stay neutral: no colour to imply a scale
+    // that doesn't exist. Absence of the icon is the "no" state.
+    const capabilityIndicators = (
+      <>
+        {model.supportsVision && (
+          <MetricIcon label="Vision" tooltip="Able to understand images">
+            <VisibilityOutlinedIcon sx={{ fontSize: '16px', color: 'text.tertiary' }} />
+          </MetricIcon>
+        )}
+
+        {model.can_think && (
+          <MetricIcon label="Thinking" tooltip="Reasons step-by-step before responding">
+            {/* 18px where the others are 16: this glyph carries far more detail than the
+                MUI icons, so it needs the extra couple of px to stay legible. */}
+            <SupportsToolsIcon width={18} height={18} fill="var(--joy-palette-text-tertiary)" />
+          </MetricIcon>
+        )}
+
+        {model.supportsTools && (
+          <MetricIcon label="Tools" tooltip="Able to use a growing list of tools">
+            <ConstructionIcon sx={{ fontSize: '16px', color: 'text.tertiary' }} />
+          </MetricIcon>
+        )}
+      </>
+    );
+
+    const metadataChips = (
+      <Stack
+        direction="row"
+        spacing={1}
+        useFlexGap
+        flexWrap="wrap"
+        alignItems="center"
+        // Unavailable is the only framed chip left in this row; 32px gives it presence next to
+        // the 24px indicators. Set here rather than in getChipStyles, which the model-details
+        // dialog also uses.
+        sx={{ '& .MuiChip-root': { height: '32px' } }}
+      >
+        {isDisabled ? (
+          // A disabled model can't be picked, so cost and speed are noise: say why and stop.
+          <MetadataChip
+            label="Unavailable"
+            mode={mode}
+            variant="red"
+            tooltip={model.disabledReason ?? 'This model is currently unavailable'}
+          />
+        ) : (
+          // Cost and speed are the only two always present, so they anchor the group's fixed
+          // edge and stay column-aligned down the list: leading in grid (left-aligned) and
+          // trailing in list (right-aligned). The optional capabilities take the ragged side.
+          <>
+            {!isList && metricIndicators}
+            {capabilityIndicators}
+            {isList && metricIndicators}
+          </>
+        )}
+      </Stack>
+    );
+
+    // Text models only: image and video entries carry placeholder context values (FLUX is
+    // 10000/10000), so the number would be noise. max_tokens is deliberately not shown - the
+    // catalog value is the model's ceiling, not the user's configured limit, so it can
+    // disagree with what the model will actually emit. It lives in the settings dialog next
+    // to the control that sets it.
+    const contextSummary = model.type === 'text' && (
+      <Tooltip title={`${formatNumber(model.contextWindow)} token context window`} placement="top">
+        <Typography sx={{ fontSize: { xs: '12px' }, color: 'text.primary50', fontWeight: '500' }}>
+          {formatContextWindow(model.contextWindow)}
+        </Typography>
+      </Tooltip>
+    );
+
+    // Tooltips are scoped to the name + description regions rather than the whole card, so
+    // they don't stack on top of the per-chip tooltips in the metadata row.
+    return (
       <Box
         data-testid={`model-card-${model.id}`}
+        data-view-mode={viewMode}
         aria-disabled={isDisabled || undefined}
         data-disabled={isDisabled || undefined}
         onClick={isDisabled ? undefined : () => onSelect(model)}
@@ -291,18 +616,17 @@ const ModelOption = React.memo(
           maxWidth: '100%',
           minWidth: '100%',
           mx: 'auto',
-          alignItems: 'stretch',
           justifyContent: 'space-between',
-          padding: '16px',
           cursor: isDisabled ? 'not-allowed' : 'pointer',
           opacity: isDisabled ? 0.55 : 1,
           transition: 'all 0.2s ease',
-          backgroundColor: isSelected
-            ? {
-                xs: 'var(--joy-palette-background-panel)',
-                sm: 'var(--joy-palette-background-panel)',
-              }
-            : { xs: 'var(--joy-palette-background-panel)' },
+          backgroundColor: 'var(--joy-palette-aiSettings-modelCard-background)',
+          // Selected tint rides on top as a background *image*, so the surface colour below it
+          // (base or hover) still shows through instead of being replaced.
+          ...(isSelected && {
+            backgroundImage:
+              'linear-gradient(var(--joy-palette-aiSettings-modelCard-activeBackground), var(--joy-palette-aiSettings-modelCard-activeBackground))',
+          }),
           '&:hover': {
             backgroundColor: isDisabled ? undefined : 'var(--joy-palette-aiSettings-modelCard-hoverBackground)',
           },
@@ -311,267 +635,160 @@ const ModelOption = React.memo(
             : 'var(--joy-palette-aiSettings-modelCard-border)',
           position: 'relative',
           borderWidth: '1px',
-          maxHeight: { xs: 'none', sm: '180px' },
           boxSizing: 'border-box',
           borderRadius: '8px',
-          flexDirection: 'column',
+          ...(isList
+            ? {
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 2,
+                padding: '16px',
+                maxHeight: 'none',
+              }
+            : {
+                flexDirection: 'column',
+                alignItems: 'stretch',
+                padding: '16px',
+                maxHeight: { xs: 'none', sm: '180px' },
+              }),
         }}
       >
-        {/* Model Name and Metadata Chips, Top Side */}
-
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            textAlign: 'left',
-            mb: 1,
-          }}
-        >
-          {/* Model Name — hovering the name region reveals the full description */}
-          <Tooltip
-            title={model.description ?? ''}
-            placement="top"
-            variant="soft"
-            sx={{ maxWidth: 320 }}
-            disableHoverListener={!model.description}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flex: 1, minWidth: '50px' }}>
-              <Typography
-                level="body-md"
-                sx={{
-                  textAlign: 'left',
-                  color: 'text.primary',
-                  fontWeight: '500',
-                  minWidth: '70px',
-                }}
-              >
-                {model.name}
-              </Typography>
-              {/* Bedrock-hosted indicator */}
-              {model.backend === ModelBackend.Bedrock && (
-                <img
-                  data-testid={`bedrock-badge-${model.id}`}
-                  src={BEDROCK_LOGO_SRC}
-                  alt="Hosted on AWS Bedrock"
-                  width={18}
-                  height={18}
-                  style={{ flex: 'none', objectFit: 'contain', display: 'block', borderRadius: 4 }}
-                />
-              )}
-              {/* Selected Checkmark - sits right of the model name / Bedrock icon */}
-              {isSelected && (
-                <CheckIcon
-                  sx={{
-                    fontSize: '16px',
-                    flex: 'none',
-                    color: green[800],
-                    '& path': {
-                      strokeWidth: '2px',
-                      stroke: green[800],
-                    },
-                  }}
-                />
-              )}
-            </Box>
-          </Tooltip>
-
-          {/* Favorite Toggle */}
-          {onToggleFavorite && (
-            <IconButton
-              data-testid={`favorite-toggle-${model.id}`}
-              variant="plain"
-              size="sm"
-              sx={{
-                minWidth: '28px',
-                minHeight: '28px',
-                width: '28px',
-                height: '28px',
-                '&:hover': {
-                  backgroundColor: 'transparent',
-                },
-              }}
-              onClick={e => {
-                e.stopPropagation();
-                onToggleFavorite(model.id);
-              }}
-            >
-              {isFavorite ? (
-                <StarRounded sx={{ fontSize: '20px', color: 'primary.solidBg' }} />
-              ) : (
-                <StarBorderRounded sx={{ fontSize: '20px', color: 'neutral.400' }} />
-              )}
-            </IconButton>
+        {/* Badges straddle the top border rather than the corner: the scroll container in
+            AdvancedAIModal is overflowY:auto, which makes overflow-x compute to auto too, so
+            anything reaching left of x=0 gets clipped - and in grid view that would clip the
+            left column while sparing the right. Vertical overhang is unaffected. One shared
+            row so New and Bedrock can never overlap each other. */}
+        <Box sx={{ position: 'absolute', top: '-7px', left: '12px', zIndex: 1, display: 'flex', gap: '4px' }}>
+          {!isDisabled && isNewModel(model) && (
+            <CornerBadge
+              testId={`model-new-badge-${model.id}`}
+              label="New"
+              tooltip="Released in the last 3 months"
+              background={NEW_BADGE_BG}
+            />
           )}
-
-          {/* View More — selects the model and opens its detail & settings dialog (all viewports) */}
-          {onSettingsClick && (
-            <Tooltip title="View model details & settings" placement="bottom">
-              <Button
-                data-testid={`model-view-more-${model.id}`}
-                variant="outlined"
-                color="neutral"
-                size="sm"
-                sx={{
-                  flex: 'none',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  px: 1.5,
-                  py: 0.25,
-                  minHeight: '28px',
-                  borderRadius: '6px',
-                  color: 'text.primary',
-                  whiteSpace: 'nowrap',
-                  '&:hover': {
-                    backgroundColor: 'primary.softHoverBg',
-                    borderColor: 'primary.main',
-                  },
-                }}
-                onClick={e => {
-                  e.stopPropagation();
-                  onSettingsClick(model);
-                }}
-              >
-                View more
-              </Button>
-            </Tooltip>
+          {/* Kept on disabled models, unlike New: it identifies *which* of two
+              identically-named models this is. */}
+          {model.backend === ModelBackend.Bedrock && (
+            <CornerBadge
+              testId={`bedrock-badge-${model.id}`}
+              label="AWS Bedrock"
+              tooltip="Hosted on AWS Bedrock, not the provider's own API"
+              background={BEDROCK_BADGE_BG}
+            />
           )}
         </Box>
 
-        {/* Model Description, Bottom Side — hovering reveals the full, untruncated text.
-            placement="bottom" so the tooltip opens below the description text instead of
-            upward over the favorite-star / View more row directly above it. */}
-        {model.description && (
-          <Tooltip title={model.description} placement="bottom" variant="soft" sx={{ maxWidth: 320 }}>
+        {isList ? (
+          <>
+            {/* Title with the context window beneath it, indicators pushed right, then a rule
+                separating what the row *says* from what you can *do* to it. minHeight holds the
+                row steady when contextSummary is absent - image and video models drop that
+                second line, and Favorites is the one section that mixes them with text models. */}
             <Box
               sx={{
                 display: 'flex',
-                alignItems: 'flex-end',
-                gap: '8px',
-                flexDirection: 'row',
-                justifyContent: 'flex-start',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                gap: '2px',
+                minHeight: '44px',
+                flex: 1,
+                minWidth: 0,
+                textAlign: 'left',
               }}
             >
-              <Typography
-                level="body-xs"
-                sx={{
-                  textAlign: 'left',
-                  whiteSpace: 'normal',
-                  color: 'text.primary50',
-                  fontSize: { xs: '13px', sm: '14px' },
-                  lineHeight: '1.4',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  display: '-webkit-box',
-                  WebkitLineClamp: { xs: 3, sm: 2 },
-                  WebkitBoxOrient: 'vertical',
-                }}
-              >
-                {model.description}
-              </Typography>
-              {/* Tokens Right Side */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>{nameBlock}</Box>
+              {contextSummary}
             </Box>
-          </Tooltip>
-        )}
 
-        <Box
-          sx={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            width: '100%',
-            mt: 2.5,
-            gap: '4px',
-            flexWrap: 'wrap',
-          }}
-        >
-          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-            {/* Unavailable Chip — model is disabled for this deployment (e.g. gated upstream) */}
-            {isDisabled && (
-              <MetadataChip
-                label="Unavailable"
-                mode={mode}
-                variant="red"
-                tooltip={model.disabledReason ?? 'This model is currently unavailable'}
-              />
-            )}
-            {/* Latest Model Chip */}
-            {isNewModel(model) && (
-              <MetadataChip
-                label="New"
-                mode={mode}
-                variant="purple"
-                tooltip="This model is released in the last 3 months"
-              />
-            )}
+            <Box sx={{ display: 'flex', alignItems: 'center', flex: 'none' }}>{metadataChips}</Box>
 
-            {/* Popular Model Chip - based on usage data */}
-            {!statsLoading && isPopular && (
-              <MetadataChip
-                label="Popular"
-                mode={mode}
-                variant="blue-filled"
-                tooltip="This is one of the most used models"
-              />
-            )}
-
-            {/* Price Tier */}
-            <MetadataChip
-              label={priceTierInfo.tier}
-              startDecorator={
-                <Box
-                  sx={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: '50%',
-                    backgroundColor:
-                      priceTierInfo.variant === 'green'
-                        ? green[800]
-                        : priceTierInfo.variant === 'yellow'
-                          ? orange[450]
-                          : 'red',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '10px',
-                    fontWeight: 'bold',
-                    color: 'common.white',
-                    mr: '4px',
-                    p: 0.5,
-                  }}
-                >
-                  $
-                </Box>
-              }
-              tooltip={getPriceTierTooltip(priceTierInfo.tier)}
-              variant={priceTierInfo.variant}
-              isMaximum={false}
-              mode={mode}
+            <Box
+              sx={{
+                display: { xs: 'none', sm: 'block' },
+                alignSelf: 'stretch',
+                my: '4px',
+                flex: 'none',
+                // Reuses the card's own border shorthand so the two can't drift apart.
+                borderLeft: 'var(--joy-palette-aiSettings-modelCard-border)',
+              }}
             />
 
-            {/* Speed Chip - based on performance data */}
-            {!statsLoading && modelSpeed && (
-              <MetadataChip
-                label={modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)}
-                mode={mode}
-                variant={getModelSpeedVariant(modelSpeed)}
-                tooltip={getModelSpeedTooltip(modelSpeed)}
-              />
-            )}
-          </Stack>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+              {favoriteToggle}
+              {viewMoreButton}
+            </Box>
+          </>
+        ) : (
+          <>
+            {/* Model Name and Metadata Chips, Top Side */}
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                textAlign: 'left',
+                mb: 1.5,
+              }}
+            >
+              {nameBlock}
+              {favoriteToggle}
+              {viewMoreButton}
+            </Box>
 
-          <Stack sx={{ alignItems: 'flex-end', justifyContent: 'flex-end' }}>
-            <Typography sx={{ fontSize: { xs: '12px' }, color: 'text.primary50', fontWeight: '500' }}>
-              {formatContextWindow(model.contextWindow)} · {formatContextWindow(model.max_tokens)}
-            </Typography>
-          </Stack>
-        </Box>
+            {/* Model Description, Bottom Side — hovering reveals the full, untruncated text.
+                placement="bottom" so the tooltip opens below the description text instead of
+                upward over the favorite-star / View more row directly above it. */}
+            {model.description && (
+              <Tooltip title={model.description} placement="bottom" variant="soft" sx={{ maxWidth: 320 }}>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'flex-end',
+                    gap: '8px',
+                    flexDirection: 'row',
+                    justifyContent: 'flex-start',
+                  }}
+                >
+                  <Typography
+                    level="body-xs"
+                    sx={{
+                      textAlign: 'left',
+                      whiteSpace: 'normal',
+                      color: 'text.primary50',
+                      fontSize: { xs: '13px', sm: '14px' },
+                      lineHeight: '1.4',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      display: '-webkit-box',
+                      WebkitLineClamp: { xs: 3, sm: 2 },
+                      WebkitBoxOrient: 'vertical',
+                    }}
+                  >
+                    {model.description}
+                  </Typography>
+                </Box>
+              </Tooltip>
+            )}
+
+            <Box
+              sx={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                width: '100%',
+                mt: 2.5,
+                gap: '4px',
+                flexWrap: 'wrap',
+              }}
+            >
+              {metadataChips}
+              <Stack sx={{ alignItems: 'flex-end', justifyContent: 'flex-end' }}>{contextSummary}</Stack>
+            </Box>
+          </>
+        )}
       </Box>
     );
-
-    // Tooltips are scoped to the name + description regions (above) rather than the
-    // whole card, so they don't stack on top of the per-chip tooltips in the metadata row.
-    return card;
   }
 );
 ModelOption.displayName = 'ModelOption';
@@ -586,6 +803,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   onModelFilterChange,
   onSettingsClick,
   isResearchModeFeatureEnabled = false,
+  stickyHeader,
 }) => {
   const { isLoading, error } = useModelInfo();
   const {
@@ -610,18 +828,20 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
   const { isFavorite, toggleFavorite } = useFavoriteModels();
+  const [viewMode, setViewMode] = useState<ModelViewMode>('list');
+  // Below `sm` the grid is already one column, so the two layouts differ only by the
+  // description and the row/column flow - not enough to justify a control. Grid wins there.
+  // The user's own choice is left untouched in state so it returns when the viewport widens.
+  const isMobile = useIsMobile();
+  const effectiveViewMode: ModelViewMode = isMobile ? 'grid' : viewMode;
 
   // Lift model stats into parent - avoids N redundant query subscriptions and computations in ModelOption
   const { data: modelStats, isLoading: statsLoading } = useModelStats();
-  const topUsedModelIds = useMemo(
-    () => getTopUsedModelsFromStats(modelStats?.popularity ?? {}, 3),
-    [modelStats?.popularity]
-  );
   const avgResponseTimeByModel = modelStats?.avgResponseTime ?? emptyRecord;
 
   // State for user-toggled accordion backends (manual expand/collapse)
   const [userToggledBackends, setUserToggledBackends] = useState<Set<string>>(
-    new Set(['Favorites', 'OPEN AI', 'Anthropic'])
+    new Set(['Favorites', 'OpenAI', 'Anthropic'])
   );
 
   // Memoize backend logos to prevent unnecessary re-renders and network requests
@@ -700,9 +920,9 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       {} as Record<string, ModelInfo[]>
     );
 
-    // Sort models within each backend by capability
+    // Sort within each backend: newly released first, then curated rank, then recency
     Object.keys(grouped).forEach(backend => {
-      grouped[backend] = sortModelsByCapability(grouped[backend]);
+      grouped[backend] = sortModelsForPicker(grouped[backend]);
     });
 
     // Group models by backend and then by type for "All Models" view
@@ -725,42 +945,13 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
     // Sort models within each backend and type by capability
     Object.keys(groupedByBackendAndType).forEach(backend => {
-      groupedByBackendAndType[backend].text = sortModelsByCapability(groupedByBackendAndType[backend].text);
-      groupedByBackendAndType[backend].image = sortModelsByCapability(groupedByBackendAndType[backend].image);
-      groupedByBackendAndType[backend].video = sortModelsByCapability(groupedByBackendAndType[backend].video);
-    });
-
-    // Sort backends by priority (OpenAI, Anthropic, Google, Meta, etc.)
-    const backendPriority = [
-      SELF_HOSTED_BACKEND,
-      'OPEN AI',
-      'Anthropic',
-      'Google',
-      'Meta',
-      'xAI',
-      'Mistral',
-      'Black Forest Labs',
-      'Cohere',
-    ];
-    const sortedBackends = Object.keys(grouped).sort((a, b) => {
-      const aIndex = backendPriority.indexOf(a);
-      const bIndex = backendPriority.indexOf(b);
-
-      // If both backends are in priority list, sort by priority
-      if (aIndex !== -1 && bIndex !== -1) {
-        return aIndex - bIndex;
-      }
-
-      // If only one is in priority list, prioritize it
-      if (aIndex !== -1) return -1;
-      if (bIndex !== -1) return 1;
-
-      // If neither is in priority list, sort alphabetically
-      return a.localeCompare(b);
+      groupedByBackendAndType[backend].text = sortModelsForPicker(groupedByBackendAndType[backend].text);
+      groupedByBackendAndType[backend].image = sortModelsForPicker(groupedByBackendAndType[backend].image);
+      groupedByBackendAndType[backend].video = sortModelsForPicker(groupedByBackendAndType[backend].video);
     });
 
     // Flatten the sorted models
-    const sorted = sortedBackends.flatMap(backend => grouped[backend]);
+    const sorted = sortBackendsByPriority(Object.keys(grouped)).flatMap(backend => grouped[backend]);
 
     // Find maximum values
     let maxCtx = 0;
@@ -803,6 +994,10 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
   // Compute favorite models from the already-filtered list (respects search, filter, access control)
   const favoriteModels = useMemo(() => filteredModels.filter(m => isFavorite(m.id)), [filteredModels, isFavorite]);
+
+  // Provider section order for display. Same ordering the memo above applies when flattening
+  // filteredModels, so the accordions and the flat list agree.
+  const sortedBackends = useMemo(() => sortBackendsByPriority(Object.keys(modelsByBackend)), [modelsByBackend]);
 
   // Derive effective expanded backends from user toggles and search state
   const expandedBackends = useMemo(() => {
@@ -867,10 +1062,9 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     const timer = window.setTimeout(() => {
       const card = container.querySelector<HTMLElement>(`[data-testid="model-card-${model}"]`);
       if (!card) return;
-      const containerRect = container.getBoundingClientRect();
-      const cardRect = card.getBoundingClientRect();
-      const offset = cardRect.top - containerRect.top - container.clientHeight / 2 + card.clientHeight / 2;
-      container.scrollBy({ top: offset, behavior: 'auto' });
+      // scrollIntoView resolves the real scrolling ancestor; this component's root box is not
+      // one, so scrollBy-ing it would silently no-op.
+      card.scrollIntoView({ block: 'center', behavior: 'auto' });
       hasScrolledRef.current = true;
     }, 50);
 
@@ -900,32 +1094,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     );
   if (error) return <div>Error loading models: {error.message}</div>;
 
-  // Group models by backend for display
-  const backendPriority = [
-    SELF_HOSTED_BACKEND,
-    'OPEN AI',
-    'Anthropic',
-    'Google',
-    'Meta',
-    'xAI',
-    'Mistral',
-    'Black Forest Labs',
-    'Cohere',
-  ];
-  const sortedBackends = Object.keys(modelsByBackend).sort((a, b) => {
-    const aIndex = backendPriority.indexOf(a);
-    const bIndex = backendPriority.indexOf(b);
-
-    if (aIndex !== -1 && bIndex !== -1) {
-      return aIndex - bIndex;
-    }
-
-    if (aIndex !== -1) return -1;
-    if (bIndex !== -1) return 1;
-
-    return a.localeCompare(b);
-  });
-
   return (
     <Box
       ref={scrollContainerRef}
@@ -935,11 +1103,11 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
         display: 'flex',
         flexDirection: 'column',
         gap: 2,
-        maxHeight: { xs: 'auto' },
-        overflow: 'auto',
+        // Must not be a scrollport: with no bounded height, `overflow: auto` here captures the
+        // sticky row below and pins it to a box that never scrolls. The consumer scrolls.
+        overflow: 'visible',
         px: 0,
-        pr: { xs: 0, sm: 1 },
-        ...scrollbarStyles,
+        pr: { xs: 0, sm: '16px' },
       }}
     >
       {/* Search Input and Filter Dropdown */}
@@ -948,16 +1116,25 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
           position: 'sticky',
           top: 0,
           zIndex: 10,
-          backgroundColor: 'var(--joy-palette-background-var(--joy-palette-background-body)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '16px',
+          // Opaque, matching the enclosing Sheet: cards scroll under this header.
+          backgroundColor: 'background.surface',
+          // Covers the container gap below without taking layout space, so cards don't
+          // show in the space between the pinned header and the first card.
+          boxShadow: `0 16px 0 var(--joy-palette-background-surface)`,
         }}
       >
+        {stickyHeader}
+
         <Stack
           direction="row"
-          spacing={1}
           sx={{
             alignItems: 'center',
             width: '100%',
             px: 0,
+            gap: '8px',
             backgroundColor: 'background.surface',
           }}
         >
@@ -980,6 +1157,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               backgroundColor: 'var(--joy-palette-background-body)',
               border: '1px solid var(--joy-palette-divider)',
               borderRadius: '8px',
+              boxShadow: 'none',
               '& input': {
                 fontSize: '14px',
                 '&::placeholder': {
@@ -1006,8 +1184,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                     color: 'text.primary',
                     width: '16px',
                     height: '16px',
-                    ml: { xs: 0, sm: '2px' },
-                    mr: { xs: 0, sm: '-2px' },
                   }}
                 />
               }
@@ -1022,7 +1198,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                   }}
                 />
               }
-              sx={{
+              sx={theme => ({
                 minWidth: { xs: '32px', sm: '140px' },
                 width: { xs: '32px', sm: 'auto' },
                 height: '32px !important',
@@ -1032,9 +1208,15 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                 border: '1px solid var(--joy-palette-divider)',
                 borderRadius: '8px',
                 justifyContent: 'center',
-                ml: '16px !important',
+                boxShadow: 'none',
                 py: 0,
-                px: 1,
+                transition: 'background 0.2s',
+                // Matches the sidenav list items. Goes through Joy's own variant var because
+                // its `:hover` rule outranks a plain `&:hover` here; this root is `outlined`.
+                '--variant-outlinedHoverBg': theme.palette.notebooklist.hoverBg,
+                // Zero on mobile: the button is 32px square and the 16px icon does not fit
+                // inside 8px side padding, which knocked it off centre.
+                paddingInline: { xs: 0, sm: '8px' },
                 '& .MuiSelect-button': {
                   display: { xs: 'flex', sm: 'flex' },
                   position: { xs: 'absolute', sm: 'relative' },
@@ -1051,8 +1233,21 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                   lineHeight: { xs: 0, sm: 'normal' },
                   color: { xs: 'transparent', sm: 'text.primary' },
                 },
+                // Desktop shows the label alone. Mobile hides the label and chevron, so the
+                // icon is the only affordance there and must stay - centred by overlaying the
+                // whole square rather than relying on the root's flex/padding.
                 '& .MuiSelect-startDecorator': {
-                  mr: { xs: 0, sm: 1 },
+                  display: { xs: 'flex', sm: 'none' },
+                  // Joy's start decorator pulls its icon left by --Select-paddingInline / -4
+                  // (-3px at sizeMd) and adds --Select-gap on the end; both knock the icon off
+                  // centre in the 32px mobile square.
+                  '--Icon-margin': '0',
+                  margin: 0,
+                  position: 'absolute',
+                  inset: 0,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  pointerEvents: 'none',
                 },
                 '& .MuiSelect-endDecorator': {
                   display: { xs: 'none', sm: 'inline-flex' },
@@ -1063,7 +1258,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                 '&:focus-within': {
                   borderColor: 'var(--joy-palette-primary-500)',
                 },
-              }}
+              })}
               slotProps={{
                 listbox: {
                   sx: {
@@ -1108,23 +1303,56 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
             </Select>
           )}
 
+          {/* Shows the layout it switches TO, so the icon reads as the action. Hidden below
+              `sm`, where the layout is pinned to grid and the control would be a no-op. */}
+          <Tooltip title={viewMode === 'list' ? 'Switch to grid view' : 'Switch to list view'}>
+            <IconButton
+              data-testid="model-view-mode-toggle"
+              aria-label={viewMode === 'list' ? 'Switch to grid view' : 'Switch to list view'}
+              onClick={() => setViewMode(current => (current === 'list' ? 'grid' : 'list'))}
+              sx={theme => ({
+                display: { xs: 'none', sm: 'inline-flex' },
+                flexShrink: 0,
+                '--IconButton-size': '32px',
+                backgroundColor: 'var(--joy-palette-background-body)',
+                border: '1px solid var(--joy-palette-divider)',
+                borderRadius: '8px',
+                transition: 'background 0.2s',
+                '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+                '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
+                '--variant-plainHoverColor': 'inherit',
+              })}
+            >
+              {viewMode === 'list' ? (
+                <GridViewOutlinedIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
+              ) : (
+                <ViewListOutlinedIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
+              )}
+            </IconButton>
+          </Tooltip>
+
           {isAdmin && (
             <Tooltip title="Manage models in the LLM Dashboard">
               <IconButton
                 data-testid="model-selection-manage-models-btn"
                 onClick={handleManageModels}
                 aria-label="Manage models"
-                sx={{
+                sx={theme => ({
                   flexShrink: 0,
-                  width: '32px',
-                  height: '32px !important',
-                  minHeight: '32px !important',
+                  // Drives min-width/min-height together; a plain `width` loses to Joy's
+                  // size-variant min-width (36px at sizeMd).
+                  '--IconButton-size': '32px',
                   backgroundColor: 'var(--joy-palette-background-body)',
                   border: '1px solid var(--joy-palette-divider)',
                   borderRadius: '8px',
-                }}
+                  transition: 'background 0.2s',
+                  // Matches the sidenav list items; this root is `plain`, unlike the Select above.
+                  '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+                  '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
+                  '--variant-plainHoverColor': 'inherit',
+                })}
               >
-                <SettingsIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
+                <AdminPanelSettingsOutlinedIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
               </IconButton>
             </Tooltip>
           )}
@@ -1159,6 +1387,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
           sx={{
             display: 'flex',
             flexDirection: 'column',
+            gap: '8px',
             height: {
               xs: isResearchModeFeatureEnabled ? 'calc(100dvh - 180px)' : 'calc(100dvh - 110px)',
               sm: 'auto',
@@ -1172,31 +1401,69 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               data-testid="favorites-section"
               expanded={expandedBackends.has('Favorites')}
               onChange={() => toggleBackend('Favorites')}
-              sx={{
+              sx={theme => ({
                 backgroundColor: 'background.surface',
                 '& .MuiAccordionSummary-root': {
-                  height: '56px !important',
-                  minHeight: '56px !important',
-                  maxHeight: '56px !important',
+                  height: '48px !important',
+                  minHeight: '48px !important',
+                  maxHeight: '48px !important',
+                  // Frame sits flush with the list; the 12px inset lives on the button so the
+                  // hover fill covers it.
+                  paddingInline: 0,
                 },
-                '&:not(.Mui-expanded):hover': {},
+                // Favorites only: breathing room above the cards once open. Lives on the root,
+                // not the button - the root's height is pinned, so a margin there would shrink
+                // the button instead of spacing the section.
+                '& .MuiAccordionSummary-root.Mui-expanded': {
+                  marginBottom: '8px',
+                },
+                '& .MuiAccordionSummary-button': {
+                  paddingInline: '8px',
+                  borderRadius: '6px',
+                  transition: 'background 0.2s',
+                  // Matches the sidenav list items. Must go through Joy's own variant vars:
+                  // its `:not(...):hover` rule ties on specificity and lands later in the
+                  // stylesheet, so a plain `&:hover` here loses.
+                  '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+                  '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
+                  // Sidenav rows keep their text colour on hover; Joy's plain variant darkens it.
+                  '--variant-plainHoverColor': 'inherit',
+                  // Joy's SvgIcon override reads `--Icon-color` rather than the inherited
+                  // `color`, so the chevron only responds through the variable. The section
+                  // logo/star set their own colour and are unaffected.
+                  '--Icon-color': 'var(--joy-palette-text-tertiary)',
+                  '& .MuiSvgIcon-root': {
+                    transition: 'color 0.2s',
+                  },
+                  '&:hover': {
+                    '--Icon-color': 'var(--joy-palette-text-primary)',
+                  },
+                },
                 '&.Mui-expanded': {
                   pb: '16px',
                 },
                 '& .MuiAccordionSummary-indicator': {
                   display: 'none',
                 },
-              }}
+                // Gives the first card's corner badge room to overhang. Joy clips this slot with
+                // overflow: hidden, and its expanded top padding is calc(var(--ListItem-paddingY)
+                // / 2) - a var no Accordion component defines, so the declaration is invalid and
+                // computes to 0. Must stay scoped to .Mui-expanded: Joy zeroes paddingBlock while
+                // collapsed so the section can animate to zero height.
+                '& .MuiAccordionDetails-content.Mui-expanded': {
+                  paddingBlockStart: '8px',
+                },
+              })}
             >
-              <AccordionSummary sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: '56px' }}>
+              <AccordionSummary sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: '48px' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                  <StarRounded sx={{ fontSize: '18px', color: 'warning.400' }} />
+                  <StarRounded sx={{ fontSize: '18px', color: 'primary.solidBg' }} />
                   <Typography
                     level="h4"
                     sx={{
                       color: 'text.primary',
-                      fontSize: '18px',
-                      fontWeight: 'bold',
+                      fontSize: '16px',
+                      fontWeight: 500,
                     }}
                   >
                     Favorites
@@ -1213,7 +1480,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                   <Box
                     sx={{
                       display: 'grid',
-                      gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                      gridTemplateColumns: effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                       gap: 2,
                     }}
                   >
@@ -1228,10 +1495,10 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                         onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                         isFavorite={true}
                         onToggleFavorite={toggleFavorite}
-                        topUsedModelIds={topUsedModelIds}
                         avgResponseTimeByModel={avgResponseTimeByModel}
                         statsLoading={statsLoading}
                         mode={mode}
+                        viewMode={effectiveViewMode}
                       />
                     ))}
                   </Box>
@@ -1245,23 +1512,55 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               key={backend}
               expanded={expandedBackends.has(backend)}
               onChange={() => toggleBackend(backend)}
-              sx={{
+              sx={theme => ({
                 backgroundColor: 'background.surface',
                 '& .MuiAccordionSummary-root': {
-                  height: '56px !important',
-                  minHeight: '56px !important',
-                  maxHeight: '56px !important',
+                  height: '48px !important',
+                  minHeight: '48px !important',
+                  maxHeight: '48px !important',
+                  // Frame sits flush with the list; the 12px inset lives on the button so the
+                  // hover fill covers it.
+                  paddingInline: 0,
                 },
-                '&:not(.Mui-expanded):hover': {},
+                '& .MuiAccordionSummary-button': {
+                  paddingInline: '8px',
+                  borderRadius: '6px',
+                  transition: 'background 0.2s',
+                  // Matches the sidenav list items. Must go through Joy's own variant vars:
+                  // its `:not(...):hover` rule ties on specificity and lands later in the
+                  // stylesheet, so a plain `&:hover` here loses.
+                  '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+                  '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
+                  // Sidenav rows keep their text colour on hover; Joy's plain variant darkens it.
+                  '--variant-plainHoverColor': 'inherit',
+                  // Joy's SvgIcon override reads `--Icon-color` rather than the inherited
+                  // `color`, so the chevron only responds through the variable. The section
+                  // logo/star set their own colour and are unaffected.
+                  '--Icon-color': 'var(--joy-palette-text-tertiary)',
+                  '& .MuiSvgIcon-root': {
+                    transition: 'color 0.2s',
+                  },
+                  '&:hover': {
+                    '--Icon-color': 'var(--joy-palette-text-primary)',
+                  },
+                },
                 '&.Mui-expanded': {
                   pb: '16px',
                 },
                 '& .MuiAccordionSummary-indicator': {
                   display: 'none',
                 },
-              }}
+                // Gives the first card's corner badge room to overhang. Joy clips this slot with
+                // overflow: hidden, and its expanded top padding is calc(var(--ListItem-paddingY)
+                // / 2) - a var no Accordion component defines, so the declaration is invalid and
+                // computes to 0. Must stay scoped to .Mui-expanded: Joy zeroes paddingBlock while
+                // collapsed so the section can animate to zero height.
+                '& .MuiAccordionDetails-content.Mui-expanded': {
+                  paddingBlockStart: '8px',
+                },
+              })}
             >
-              <AccordionSummary sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: '56px' }}>
+              <AccordionSummary sx={{ alignItems: 'center', justifyContent: 'space-between', minHeight: '48px' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                   {backendLogos[backend] && (
                     <img
@@ -1280,8 +1579,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                     level="h4"
                     sx={{
                       color: 'text.primary',
-                      fontSize: '18px',
-                      fontWeight: 'bold',
+                      fontSize: '16px',
+                      fontWeight: 500,
                     }}
                   >
                     {backend}
@@ -1307,6 +1606,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                               color: 'text.primary50',
                               fontSize: '14px',
                               fontWeight: '400',
+                              mt: '8px',
+                              ml: '8px',
                               mb: 2,
                               display: 'flex',
                               alignItems: 'center',
@@ -1319,7 +1620,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           <Box
                             sx={{
                               display: 'grid',
-                              gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                              gridTemplateColumns:
+                                effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                               gap: 2,
                             }}
                           >
@@ -1334,10 +1636,10 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
-                                topUsedModelIds={topUsedModelIds}
                                 avgResponseTimeByModel={avgResponseTimeByModel}
                                 statsLoading={statsLoading}
                                 mode={mode}
+                                viewMode={effectiveViewMode}
                               />
                             ))}
                           </Box>
@@ -1353,6 +1655,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                               color: 'text.primary50',
                               fontSize: '14px',
                               fontWeight: '400',
+                              mt: '8px',
+                              ml: '8px',
                               mb: 2,
                               display: 'flex',
                               alignItems: 'center',
@@ -1365,7 +1669,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           <Box
                             sx={{
                               display: 'grid',
-                              gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                              gridTemplateColumns:
+                                effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                               gap: 2,
                             }}
                           >
@@ -1380,10 +1685,10 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
-                                topUsedModelIds={topUsedModelIds}
                                 avgResponseTimeByModel={avgResponseTimeByModel}
                                 statsLoading={statsLoading}
                                 mode={mode}
+                                viewMode={effectiveViewMode}
                               />
                             ))}
                           </Box>
@@ -1399,6 +1704,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                               color: 'text.primary50',
                               fontSize: '14px',
                               fontWeight: '400',
+                              mt: '8px',
+                              ml: '8px',
                               mb: 2,
                               display: 'flex',
                               alignItems: 'center',
@@ -1411,7 +1718,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           <Box
                             sx={{
                               display: 'grid',
-                              gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                              gridTemplateColumns:
+                                effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                               gap: 2,
                             }}
                           >
@@ -1426,10 +1734,10 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
-                                topUsedModelIds={topUsedModelIds}
                                 avgResponseTimeByModel={avgResponseTimeByModel}
                                 statsLoading={statsLoading}
                                 mode={mode}
+                                viewMode={effectiveViewMode}
                               />
                             ))}
                           </Box>
@@ -1441,7 +1749,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                     <Box
                       sx={{
                         display: 'grid',
-                        gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, 1fr)' },
+                        gridTemplateColumns: effectiveViewMode === 'list' ? '1fr' : { xs: '1fr', lg: 'repeat(2, 1fr)' },
                         gap: 2,
                       }}
                     >
@@ -1456,10 +1764,10 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                           isFavorite={isFavorite(modelInfo.id)}
                           onToggleFavorite={toggleFavorite}
-                          topUsedModelIds={topUsedModelIds}
                           avgResponseTimeByModel={avgResponseTimeByModel}
                           statsLoading={statsLoading}
                           mode={mode}
+                          viewMode={effectiveViewMode}
                         />
                       ))}
                     </Box>

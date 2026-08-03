@@ -59,6 +59,18 @@ describe('UsageEventRepository', () => {
       expect(doc!.createdAt).toBeInstanceOf(Date);
     });
 
+    it('persists denormalized origin (source + apiKeyId) when provided', async () => {
+      const doc = await record({ source: 'api', apiKeyId: 'key-123' });
+      expect(doc!.source).toBe('api');
+      expect(doc!.apiKeyId).toBe('key-123');
+    });
+
+    it('leaves origin unset when omitted (unclassified)', async () => {
+      const doc = await record();
+      expect(doc!.source).toBeUndefined();
+      expect(doc!.apiKeyId).toBeUndefined();
+    });
+
     it('rejects an unknown feature', async () => {
       await expect(record({ feature: 'nonsense' as IUsageEventInput['feature'] })).rejects.toThrow();
     });
@@ -299,6 +311,119 @@ describe('UsageEventRepository', () => {
         byMember: [],
         byModel: [],
         byFeature: [],
+        totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
+      });
+    });
+  });
+
+  describe('platformUsageSummary', () => {
+    it('rolls up across owners by day, feature, consumer, and model', async () => {
+      await record({
+        ownerId: 'u1',
+        ownerType: CreditHolderType.User,
+        feature: 'chat',
+        source: 'web',
+        costUsd: 0.01,
+        creditsCharged: 50,
+      });
+      await record({
+        ownerId: 'o1',
+        ownerType: CreditHolderType.Organization,
+        feature: 'completion_api',
+        source: 'api',
+        apiKeyId: 'k1',
+        inputTokens: 100,
+        outputTokens: 40,
+        costUsd: 0.02,
+        creditsCharged: 100,
+      });
+      await record({
+        ownerId: 'o1',
+        ownerType: CreditHolderType.Organization,
+        feature: 'completion_api',
+        source: 'api',
+        apiKeyId: 'k1',
+        inputTokens: 200,
+        outputTokens: 60,
+        costUsd: 0.03,
+        creditsCharged: 150,
+      });
+      await record({
+        ownerId: 'u2',
+        ownerType: CreditHolderType.User,
+        feature: 'completion_api',
+        source: 'api',
+        apiKeyId: 'k2',
+        costUsd: 0.005,
+        creditsCharged: 25,
+      });
+
+      const summary = await usageEventRepository.platformUsageSummary();
+
+      expect(summary.totals).toMatchObject({ requests: 4, creditsCharged: 325 });
+      expect(summary.totals.cogsUsd).toBeCloseTo(0.065, 10);
+
+      // byConsumer covers only key-authed events, biggest spender first, with tokens.
+      expect(summary.byConsumer).toMatchObject([
+        { apiKeyId: 'k1', requests: 2, creditsCharged: 250, inputTokens: 300, outputTokens: 100 },
+        { apiKeyId: 'k2', requests: 1, creditsCharged: 25 },
+      ]);
+      expect(summary.byFeature).toMatchObject([
+        { feature: 'completion_api', creditsCharged: 275 },
+        { feature: 'chat', creditsCharged: 50 },
+      ]);
+      expect(summary.overTime).toHaveLength(1);
+      expect(summary.overTime[0]).toMatchObject({ requests: 4, creditsCharged: 325 });
+    });
+
+    it('applies the source filter as an extra $match (default: all sources)', async () => {
+      await record({ source: 'web', creditsCharged: 50 });
+      await record({ source: 'api', apiKeyId: 'k1', creditsCharged: 100 });
+
+      const all = await usageEventRepository.platformUsageSummary();
+      expect(all.totals.requests).toBe(2);
+
+      const apiOnly = await usageEventRepository.platformUsageSummary({ source: 'api' });
+      expect(apiOnly.totals).toMatchObject({ requests: 1, creditsCharged: 100 });
+      expect(apiOnly.byConsumer).toMatchObject([{ apiKeyId: 'k1' }]);
+    });
+
+    it('applies the ownerType filter the same way as source', async () => {
+      await record({ ownerId: 'u1', ownerType: CreditHolderType.User, creditsCharged: 10 });
+      await record({ ownerId: 'o1', ownerType: CreditHolderType.Organization, creditsCharged: 20 });
+
+      const users = await usageEventRepository.platformUsageSummary({ ownerType: CreditHolderType.User });
+      expect(users.totals).toMatchObject({ requests: 1, creditsCharged: 10 });
+
+      const orgs = await usageEventRepository.platformUsageSummary({ ownerType: CreditHolderType.Organization });
+      expect(orgs.totals).toMatchObject({ requests: 1, creditsCharged: 20 });
+    });
+
+    it('excludes events without an apiKeyId from byConsumer', async () => {
+      await record({ source: 'web', creditsCharged: 50 });
+      await record({ source: 'api', apiKeyId: 'k1', creditsCharged: 100 });
+
+      const summary = await usageEventRepository.platformUsageSummary();
+      expect(summary.byConsumer).toHaveLength(1);
+      expect(summary.byConsumer).toMatchObject([{ apiKeyId: 'k1' }]);
+    });
+
+    it('excludes events outside the trailing window', async () => {
+      await record({ source: 'api', apiKeyId: 'k1', creditsCharged: 100 });
+      await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
+
+      const summary = await usageEventRepository.platformUsageSummary({ days: 30 });
+      expect(summary.totals).toEqual({ requests: 0, cogsUsd: 0, creditsCharged: 0 });
+      expect(summary.byConsumer).toHaveLength(0);
+    });
+
+    it('returns zeroed totals when there are no events', async () => {
+      const summary = await usageEventRepository.platformUsageSummary();
+      expect(summary).toEqual({
+        overTime: [],
+        byFeature: [],
+        byConsumer: [],
+        byModel: [],
         totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
       });
     });

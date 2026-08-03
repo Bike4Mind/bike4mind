@@ -101,7 +101,6 @@ import {
   ContextSummarizationFeature,
   MementoFeature,
   OrganizationPromptFeature,
-  DataLakePromptFeature,
   SessionPromptFeature,
   KnowledgeRetrievalFeature,
   ProjectFeature,
@@ -116,6 +115,14 @@ import { AgentDetectionFeature } from './features/AgentDetectionFeature';
 import { SkillsFeature } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { buildContextOverflowMessage } from './contextOverflowMessage';
+import {
+  buildTaggedContextMessages,
+  filterByPromptMode,
+  filterFeaturesByPromptMode,
+  resolveForcedRetrieval,
+  toPromptDetails,
+  type PromptSourceId,
+} from './systemPromptSources';
 import { buildInsufficientCreditsMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import { deductCreditsWithOrgSupport, subtractCredits } from '../creditService';
@@ -126,7 +133,10 @@ import {
   AnomalyAlertService,
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
-import type { ToolTelemetry, ToolErrorCategory } from '@bike4mind/common';
+import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail } from '@bike4mind/common';
+import { buildAlwaysOnFloorDetails } from './systemPromptFloorTelemetry';
+import { resolveArtifactsEnabled } from './artifactGating';
+import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
   detectAgentMentions,
@@ -192,9 +202,10 @@ function assertNeverElisionSignal(signal: never): never {
 
 /**
  * Output budget used when a caller supplies no max_tokens. Within supported output
- * limits for every configured non-reasoning model; adaptive reasoning models default
- * to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since they spend thinking tokens
- * inside this budget. Distinct from the catalog's DEFAULT_MAX_OUTPUT_TOKENS, which
+ * limits for every configured non-reasoning model; models that reason inside the
+ * output budget default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since their
+ * reasoning would otherwise consume this whole budget (see reasonsWithinOutputBudget
+ * for which those are). Distinct from the catalog's DEFAULT_MAX_OUTPUT_TOKENS, which
  * fills in a model's *capability* when its record omits one.
  */
 const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
@@ -725,34 +736,41 @@ export class ChatCompletionProcess {
     finalEnabledTools = addPairedTool(finalEnabledTools, 'search_knowledge_base', 'retrieve_knowledge_content');
     let hasContentTransform = false;
 
-    // Auto-add blog_publish tool if user has blog integration configured (admin-only for now)
-    if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_publish')) {
-      finalEnabledTools.push('blog_publish');
-    }
+    // Auto-added capabilities are OUR additions, not the caller's, so a prompt mode skips this
+    // whole block - and not only for prompt hygiene: attaching any tool also pulls the provider's
+    // server-side tool-use preamble into the request (observed live: a completion whose only tools
+    // were auto-added knew the current date on a fresh raw-mode session). Tools the caller sent
+    // explicitly are caller intent and stay, mode or not.
+    if (!parsedBody.promptMode) {
+      // Auto-add blog_publish tool if user has blog integration configured (admin-only for now)
+      if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_publish')) {
+        finalEnabledTools.push('blog_publish');
+      }
 
-    // Auto-add blog_edit tool if user has blog integration configured (admin-only for now)
-    if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_edit')) {
-      finalEnabledTools.push('blog_edit');
-    }
+      // Auto-add blog_edit tool if user has blog integration configured (admin-only for now)
+      if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_edit')) {
+        finalEnabledTools.push('blog_edit');
+      }
 
-    // Auto-add blog_draft tool for admin users (used by Content Publishing Studio)
-    if (this.user.isAdmin && !enabledTools.includes('blog_draft')) {
-      finalEnabledTools.push('blog_draft');
-      hasContentTransform = true;
-    }
+      // Auto-add blog_draft tool for admin users (used by Content Publishing Studio)
+      if (this.user.isAdmin && !enabledTools.includes('blog_draft')) {
+        finalEnabledTools.push('blog_draft');
+        hasContentTransform = true;
+      }
 
-    if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
-      finalEnabledTools.push('navigate_view');
-    }
+      if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
+        finalEnabledTools.push('navigate_view');
+      }
 
-    // Auto-add the `skill` LLM tool when the host has wired a skill repository.
-    // Skills are user-defined instruction templates and there's no separate
-    // toggle for them in the UI - gating purely on db.skills being present
-    // keeps callers without skill support unaffected. SkillsFeature still
-    // surfaces the catalog into the system prompt so the LLM knows what's
-    // invocable.
-    if (this.db.skills && !finalEnabledTools.includes('skill')) {
-      finalEnabledTools.push('skill');
+      // Auto-add the `skill` LLM tool when the host has wired a skill repository.
+      // Skills are user-defined instruction templates and there's no separate
+      // toggle for them in the UI - gating purely on db.skills being present
+      // keeps callers without skill support unaffected. SkillsFeature still
+      // surfaces the catalog into the system prompt so the LLM knows what's
+      // invocable.
+      if (this.db.skills && !finalEnabledTools.includes('skill')) {
+        finalEnabledTools.push('skill');
+      }
     }
 
     // Auto-add Lattice tools when Lattice feature is enabled
@@ -860,7 +878,7 @@ export class ChatCompletionProcess {
     let enableQuestMaster = initialEnableQuestMaster;
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
-    const { questId, sessionId } = parsedBody;
+    const { questId, sessionId, promptMode } = parsedBody;
 
     // Variables to store actual timing durations
     let actualArtifactProcessingDuration = 0;
@@ -1201,13 +1219,18 @@ export class ChatCompletionProcess {
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
         enableQuestMaster || false,
-        enableMementos || false,
+        // Tri-state, deliberately NOT coerced: explicit false is the caller's memory
+        // opt-out and must stay distinguishable from absence (#1319, resolveMementoGates).
+        enableMementos,
         enableAgents || false,
         projectId,
-        optimizedFeatureList,
+        // Not built at all under a prompt mode, rather than built and filtered later: these
+        // features have side effects (memory writes, reply replacement) that outlive the prompt.
+        filterFeaturesByPromptMode(optimizedFeatureList, promptMode),
         organization,
         session.systemPromptText,
-        session.forceKnowledgeRetrieval,
+        // A mode overrides the session flag in both directions; see resolveForcedRetrieval.
+        resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval),
         session.retrievalTags,
         session.citationStyle,
         toRetrievalFilter(session)
@@ -1538,7 +1561,19 @@ export class ChatCompletionProcess {
       // model (a context window smaller than its own reserved output). Clamping there would
       // silently restore the empty payload that guard exists to catch.
       const modelMaxOutput = modelInfo.max_tokens ?? 16384;
-      const safeInputTokens = Math.max(0, safeInputWindow(modelInfo, params.max_tokens ?? modelMaxOutput));
+      // Resolved here, above its first use, because BOTH safeInputWindow callers have to
+      // reserve the same output or the window drifts - which is exactly what the note
+      // above promises cannot happen. Falling back to the model's full output cap was
+      // that drift: once an absent max_tokens became representable, this reserved the
+      // whole cap while assembly reserved the resolved default, and verbatim history
+      // compacted far sooner than the turn actually required.
+      const safeMaxTokens = resolveOutputMaxTokens({
+        requested: params.max_tokens,
+        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+        modelInfo,
+        modelMaxOutputTokens: modelMaxOutput,
+      });
+      const safeInputTokens = Math.max(0, safeInputWindow(modelInfo, safeMaxTokens));
       // Reserve the non-history overhead that shares this budget before applying the
       // fraction, so heavier-payload turns (more tools, a longer running summary, a
       // large prompt) compact SOONER rather than overflowing first - this is the
@@ -1623,17 +1658,10 @@ export class ChatCompletionProcess {
       // Input-window limits, needed BEFORE building messages because the amount of
       // attached-file content we extract has to be derived from them.
       const contextLimit = modelInfo.contextWindow ?? 200000;
-      const modelMaxOutputTokens = modelInfo.max_tokens ?? 16384;
-
-      // An explicit caller budget is honored as-is; only its absence is sized for the
-      // model. See resolveOutputMaxTokens for why raising an explicit value is not a
-      // free action (it feeds the credit pre-reservation and maxSafeInputTokens below).
-      const safeMaxTokens = resolveOutputMaxTokens({
-        requested: maxTokens,
-        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
-        thinkingStyle: modelInfo.thinkingStyle,
-        modelMaxOutputTokens,
-      });
+      // safeMaxTokens is resolved once further up, where the verbatim-history window
+      // needs it too. An explicit caller budget is honored as-is; only its absence is
+      // sized for the model. See resolveOutputMaxTokens for why raising an explicit
+      // value is not free (it feeds the credit pre-reservation and the window below).
 
       // Fetch buffer for URL/file content. Deliberately NOT safeMaxTokens: this is a
       // *content* budget, unrelated to the output cap (same confusion called out for
@@ -1937,40 +1965,45 @@ export class ChatCompletionProcess {
         });
       }
 
+      // Always-on system-prompt floor. Resolved once here (pure settings reads with
+      // built-in fallbacks) so the assembly below and the telemetry itemization further
+      // down measure the exact same content - see buildAlwaysOnFloorDetails.
+      //
+      // Admin setting AND the caller's request flag - see resolveArtifactsEnabled for why
+      // `undefined` leaves the admin setting as the only gate. Gates the emission prompt here and
+      // the extraction pass after streaming, so the two can never disagree.
+      const artifactsEnabled = resolveArtifactsEnabled(
+        Boolean(getSettingsValue('EnableArtifacts', defaultAdminSettings)),
+        parsedBody.enableArtifacts
+      );
+      // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings); falls back
+      // to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared, so a blank value can
+      // never strip artifact guidance from completions.
+      const artifactEmissionContent = getSettingsValue(
+        'ArtifactEmissionPrompt',
+        defaultAdminSettings,
+        ARTIFACT_EMISSION_PROMPT
+      );
+      // Admin-editable via the `HelpCenterPrompt` setting; a blank value falls back to the built-in
+      // default so the nudge can never be silently stripped.
+      const helpCenterContent = getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT);
+
       // Extracted so the overflow-guard safety net below can rebuild with a trimmed
       // history without duplicating this (long, order-sensitive) system/context block.
-      const contextAndSystemMessages: IMessage[] = [
-        dateTimeContext, // Always provide current date/time awareness
-        ...extraContextMessages, // Add extra context messages from external sources at the top
+      const taggedContextMessages = buildTaggedContextMessages({
+        dateContext: [dateTimeContext], // Always provide current date/time awareness
+        extraContext: extraContextMessages, // Extra context messages from external sources, at the top
         // Artifact emission guidance. Without this, correct <artifact> usage
         // is left to the model's defaults and large HTML/code can leak into the chat
-        // body as raw markup. Gated on the same EnableArtifacts flag as extraction.
-        ...(getSettingsValue('EnableArtifacts', defaultAdminSettings)
-          ? [
-              {
-                role: 'system' as const,
-                // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings);
-                // falls back to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared,
-                // so a blank value can never strip artifact guidance from completions.
-                content: getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
-              },
-            ]
-          : []),
+        // body as raw markup. Gated on the same effective flag as extraction, so a turn is
+        // never told to emit artifacts that the post-processing below will not extract.
+        artifactEmission: artifactsEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : [],
         // Help-center awareness. Makes the model aware of the in-app
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
-        // gets pointed to it instead of an ungrounded guess. Admin-editable via the
-        // `HelpCenterPrompt` setting; a blank value falls back to the built-in default so the
-        // nudge can never be silently stripped. Skipped for local models (lean prompt).
-        ...(isLocalModel
-          ? []
-          : [
-              {
-                role: 'system' as const,
-                content: getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT),
-              },
-            ]),
+        // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).
+        helpCenter: isLocalModel ? [] : [{ role: 'system' as const, content: helpCenterContent }],
         // Inject view registry summary when navigate_view tool is enabled
-        ...(enabledTools.includes('navigate_view')
+        viewRegistry: enabledTools.includes('navigate_view')
           ? [
               {
                 role: 'system' as const,
@@ -1991,53 +2024,59 @@ export class ChatCompletionProcess {
                 })(),
               },
             ]
-          : []),
-        ...(toolPromptMessage ? [toolPromptMessage] : []), // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
-        ...(featureContextMessages['agentDetection'] ?? []), // Add agent system prompts
-        ...(featureContextMessages['questMaster'] ?? []),
-        ...(featureContextMessages['organizationPrompt'] ?? []), // Add team-wide system prompt
-        ...(featureContextMessages['dataLakePrompt'] ?? []), // Per-lake system prompts (defer to the org block above)
-        ...(featureContextMessages['sessionPrompt'] ?? []), // Per-session system prompt (product surfaces)
-        ...(featureContextMessages['knowledgeRetrieval'] ?? []), // Forced data-lake retrieval (grounding + citations)
+          : [],
+        toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
+        agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
+        questMaster: featureContextMessages['questMaster'],
+        organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
+        sessionPrompt: featureContextMessages['sessionPrompt'], // Per-session system prompt (product surfaces)
+        knowledgeRetrieval: featureContextMessages['knowledgeRetrieval'], // Forced data-lake retrieval (grounding + citations)
         // Add LLM-optimized context summary if available (covers messages before verbatim window)
-        ...(session.contextSummary
+        contextSummary: session.contextSummary
           ? [
               {
                 role: 'system' as const,
                 content: `[Context from earlier in this conversation]\n${session.contextSummary}`,
               },
             ]
-          : []),
-        ...(featureContextMessages['mementos'] ?? []),
-        ...(featureContextMessages['project'] ?? []),
+          : [],
+        mementos: featureContextMessages['mementos'],
+        project: featureContextMessages['project'],
         // Recently generated images - gives the model a handle to edit a prior
         // generated image ("make it cartoonish"). Generated images persist as
         // bare storage keys in quest.images with no fabFile record, so without
         // this note the model can't reference them and either declines or (worse)
         // claims success without calling a tool. Gated on edit_image being
         // available (paired with image_generation).
-        ...(enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
-          ? [
-              {
-                role: 'system' as const,
-                content: [
-                  '# Recently generated images',
-                  '',
-                  'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
-                  '',
-                  ...cacheInfo.recentGeneratedImages!.map(
-                    img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
-                  ),
-                  '',
-                  'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
-                ].join('\n'),
-              },
-            ]
-          : []),
-        ...urlMessages,
-        ...fabMessages,
-      ];
+        recentImages:
+          enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
+            ? [
+                {
+                  role: 'system' as const,
+                  content: [
+                    '# Recently generated images',
+                    '',
+                    'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
+                    '',
+                    ...cacheInfo.recentGeneratedImages!.map(
+                      img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
+                    ),
+                    '',
+                    'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
+                  ].join('\n'),
+                },
+              ]
+            : [],
+        urls: urlMessages,
+        attachedFiles: fabMessages,
+      });
+      const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
+      const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
+      // An explicit mode also excludes the admin templates this helper appends downstream
+      // (FormatPromptTemplate, image prompt) - they are invisible from the assembly above, so the
+      // source filter alone would leave them in front of a "raw" completion.
+      const buildOptions = { verbose: false, skipAdminPromptTemplates: Boolean(promptMode) };
       let messages = await buildAndSortMessages(
         previousMessages,
         contextAndSystemMessages,
@@ -2046,7 +2085,8 @@ export class ChatCompletionProcess {
         defaultAdminSettings,
         historyCount,
         logger,
-        this.tokenizer
+        this.tokenizer,
+        buildOptions
       );
       // The length check is the part that matters: buildAndSortMessages returns an EMPTY ARRAY when
       // the input budget is non-positive, and `!messages` is false for `[]`, so an empty prompt used
@@ -2191,7 +2231,8 @@ export class ChatCompletionProcess {
               defaultAdminSettings,
               historyCount,
               logger,
-              this.tokenizer
+              this.tokenizer,
+              buildOptions
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
             messages = rebuilt;
@@ -2237,98 +2278,40 @@ export class ChatCompletionProcess {
       // Feed breakdown into telemetry builder for detailed system prompt tracking
       if (telemetryBuilder) {
         try {
-          // Build system prompt details for telemetry
-          type SystemPromptDetail = {
-            source: 'hardcoded' | 'admin' | 'user' | 'project' | 'session' | 'org';
-            name: string;
-            tokenCount: number;
-            wasIncluded: boolean;
-          };
-          const systemPromptDetails: SystemPromptDetail[] = [];
+          // Per-source breakdown, derived from the same tagged list the prompt was assembled
+          // from (see systemPromptSources) rather than re-listed by hand here. The hand-written
+          // version this replaces covered a third of the sources and reported a `session_summary`
+          // row built from `session.summary`, a field the assembled prompt never carried - it
+          // carries `session.contextSummary`. Sources appended downstream by buildAndSortMessages
+          // (FormatPromptTemplate, image prompt) are still not represented here. The two always-on
+          // floor sources are excluded: systemPromptFloorTelemetry owns those rows outright
+          // (pushed below), including the wasIncluded:false inventory rows a derivation from the
+          // admitted stack cannot produce.
+          const floorSources: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
+          const systemPromptDetails: SystemPromptDetail[] = await toPromptDetails(
+            admittedContextMessages.filter(t => !floorSources.includes(t.source)),
+            messages => calculateTotalTokenLength(messages, tokenCalcOptions)
+          );
 
-          // Date/time context (hardcoded)
-          if (dateTimeContext) {
-            const dtTokens = await calculateTotalTokenLength([dateTimeContext], tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'hardcoded',
-              name: 'date_time_context',
-              tokenCount: dtTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Tool prompt (admin/hardcoded)
-          if (toolPromptMessage) {
-            const toolTokens = await calculateTotalTokenLength([toolPromptMessage], tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'admin',
-              name: 'tool_guidance',
-              tokenCount: toolTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Agent detection prompts
-          const agentMessages = featureContextMessages['agentDetection'] ?? [];
-          if (agentMessages.length > 0) {
-            const agentTokens = await calculateTotalTokenLength(agentMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'hardcoded',
-              name: 'agent_detection',
-              tokenCount: agentTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Quest master prompts
-          const qmMessages = featureContextMessages['questMaster'] ?? [];
-          if (qmMessages.length > 0) {
-            const qmTokens = await calculateTotalTokenLength(qmMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'session',
-              name: 'quest_master',
-              tokenCount: qmTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Organization prompts
-          const orgMessages = featureContextMessages['organizationPrompt'] ?? [];
-          if (orgMessages.length > 0) {
-            const orgTokens = await calculateTotalTokenLength(orgMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'org',
-              name: 'organization_prompt',
-              tokenCount: orgTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Session summary
-          if (session.summary) {
-            const summaryMsg = [
-              { role: 'system' as const, content: `Previous conversation summary:\n${session.summary}` },
-            ];
-            const summaryTokens = await calculateTotalTokenLength(summaryMsg, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'session',
-              name: 'session_summary',
-              tokenCount: summaryTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Project prompts
-          const projectMessages = featureContextMessages['project'] ?? [];
-          if (projectMessages.length > 0) {
-            const projectTokens = await calculateTotalTokenLength(projectMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'project',
-              name: 'project_context',
-              tokenCount: projectTokens,
-              wasIncluded: true,
-            });
-          }
+          // Always-on floor blocks (artifact-emission, help-center) billed on every basic
+          // turn. Previously invisible inside the systemPrompts residual; itemized here so
+          // the fixed prompt cost is auditable in the Context Inspector (#810). Inclusion is
+          // read off the admitted stack rather than the raw settings gates, so a promptMode
+          // that strips a block reports it excluded instead of billed.
+          const admitted = (source: PromptSourceId) => admittedContextMessages.some(t => t.source === source);
+          systemPromptDetails.push(
+            ...(await buildAlwaysOnFloorDetails(
+              {
+                artifactEmissionEnabled: admitted('artifactEmission'),
+                artifactEmissionContent,
+                // The helper models exactly one exclusion ("local model"); a mode that strips
+                // the help-center block must surface the same way: excluded, zero tokens.
+                isLocalModel: !admitted('helpCenter'),
+                helpCenterContent,
+              },
+              content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
+            ))
+          );
 
           // Calculate total system prompt tokens
           const systemPromptTokensTotal = systemPromptDetails.reduce((sum, p) => sum + p.tokenCount, 0);
@@ -2607,6 +2590,9 @@ export class ChatCompletionProcess {
               }
             : undefined,
         tools: allTools,
+        // raw promises an empty system parameter; the adapters append a model-identity
+        // line on their own, so the promise has to be threaded down to them.
+        ...(promptMode === 'raw' ? { omitIdentityReminder: true } : {}),
       };
 
       // Check if Research Mode is enabled and handle parallel processing
@@ -3324,8 +3310,11 @@ export class ChatCompletionProcess {
 
         timer.phase('post_process');
 
-        // Process artifacts if enabled
-        if (getSettingsValue('EnableArtifacts', defaultAdminSettings)) {
+        // Process artifacts if enabled. Same effective gate as the guidance prompt above:
+        // convertCodeBlocksToArtifacts REWRITES the reply, so a caller that passed
+        // enableArtifacts:false previously got <artifact> markup spliced into a response it had
+        // explicitly asked to keep artifact-free.
+        if (artifactsEnabled) {
           // The barrel is the only export path for these two; there is no artifactParser subpath
           // that carries them, so this import stays as-is.
           const { parseArtifacts, convertCodeBlocksToArtifacts } = await import('@bike4mind/utils');
@@ -3776,6 +3765,9 @@ export class ChatCompletionProcess {
               feature: 'chat',
               provider: currentModel.backend,
               model: currentModel.id,
+              // 'web' covers all callers of ChatCompletionProcess today (matches
+              // the paired ledger writes below); no API-key auth on this path.
+              source: 'web',
               // inputTokens/outputTokens are ALWAYS the local estimate and the
               // provider* fields ALWAYS the provider counts, so drift and invoice
               // reconciliation stay comparable across rows; settledBasis says
@@ -4719,7 +4711,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   private async buildOptimizedFeatures(
     adminSettings: Record<string, string>,
     enableQuestMaster: boolean,
-    enableMementos: boolean,
+    enableMementos: boolean | undefined,
     enableAgents: boolean,
     projectId?: string,
     optimizedFeatureList: featureNames[] = [],
@@ -4751,29 +4743,30 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.features.set('contextSummarization', new ContextSummarizationFeature(this));
     }
 
-    // Conditional features - only build if requested AND enabled. Mementos runs when V1 is on
-    // (admin + request flag) OR when the user has opted into V2, so V2 works independently of V1
-    // (the two are mutually exclusive at inject time - MementoFeature picks which).
+    // Conditional features - only build if requested AND enabled. Memento gating for BOTH
+    // pipelines lives in resolveMementoGates (#1319): V1 needs explicit request intent plus
+    // the admin setting; V2 rides the per-user opt-in but an explicit `enableMementos: false`
+    // from the caller now disables it too - on the read side (the feature is never registered,
+    // so nothing injects) and the write side (the flags below never fire). The two remain
+    // mutually exclusive at inject time - MementoFeature picks which.
     //
     // MUST go through isExperimentalFeatureEnabled: `preferences.experimentalFeatures` is a Mongoose
     // Map at runtime, so reading it with dot access silently yields undefined and the feature never
     // runs. That is exactly the bug this line used to have - V2 memory was never injected into a
     // prompt even for a user who had opted in.
     const enableMementosV2 = isExperimentalFeatureEnabled(this.user, 'enableMementosV2');
-    if (
-      optimizedFeatureList.includes('mementos') &&
-      ((enableMementos && adminSettingsEnableMementos) || enableMementosV2)
-    ) {
-      this.logger.log(`  - Enabling Mementos feature${enableMementosV2 ? ' (V2 opt-in)' : ''}`);
-      // Resolve the WRITE gates here, where both the admin setting and the per-user opt-in are in
-      // scope, and hand them to the feature. V1 writes only when it is fully on (request flag AND admin
-      // setting); V2 writes on the opt-in. Without this, the completion event carried no flags and the
-      // subscriber defaulted V1 on - so chat kept writing V1 mementos for a V2 user even with V1 off.
+    const mementoGates = resolveMementoGates(enableMementos, Boolean(adminSettingsEnableMementos), enableMementosV2);
+    if (optimizedFeatureList.includes('mementos') && (mementoGates.v1 || mementoGates.v2)) {
+      this.logger.log(`  - Enabling Mementos feature${mementoGates.v2 ? ' (V2 opt-in)' : ''}`);
+      // Resolve the WRITE gates here, where the request flag, admin setting, and per-user opt-in
+      // are all in scope, and hand them to the feature. Without explicit flags, the completion
+      // event carried none and the subscriber defaulted V1 on - so chat kept writing V1 mementos
+      // for a V2 user even with V1 off.
       this.features.set(
         'mementos',
         new MementoFeature(this, {
-          writeV1: Boolean(enableMementos && adminSettingsEnableMementos),
-          writeV2: enableMementosV2,
+          writeV1: mementoGates.v1,
+          writeV2: mementoGates.v2,
         })
       );
     }
@@ -4819,22 +4812,11 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.features.set('organizationPrompt', new OrganizationPromptFeature(this, organization));
     }
 
-    // Data lake prompt feature - per-lake system prompts for the caller's trusted lakes.
-    // Gated only on the repo being wired (like skills above): whether any lake actually
-    // carries a prompt is a DB question the feature answers itself, and it emits nothing
-    // when none do. Registered outside the complexity-optimized list so a lake's operating
-    // instructions are not silently dropped on a 'simple' turn.
-    //
-    // COST, accepted deliberately: this adds one accessible-lakes read per turn, and until the
-    // per-lake prompt editor ships it returns nothing useful (no UI writes the field yet). The
-    // collection is tiny, so the alternative - a repo method filtering on a non-empty
-    // systemPrompt - would buy little while adding a THIRD Mongo copy of the access predicate
-    // that the existing two already need a parity test to keep honest. Revisit if lake counts
-    // grow or this shows up in turn latency.
-    if (this.db.dataLakes) {
-      this.logger.log('  - Enabling DataLakePrompt feature');
-      this.features.set('dataLakePrompt', new DataLakePromptFeature(this));
-    }
+    // Per-lake system prompts are injected RETRIEVAL-SCOPED, not as an always-on feature (#1108):
+    // a lake's prompt rides only turns that actually use that lake. Forced retrieval attaches it in
+    // KnowledgeRetrievalFeature; the model-driven path attaches it in the search/retrieve knowledge
+    // tools. The old always-on DataLakePromptFeature injected every trusted lake's prompt into every
+    // turn (org-wide invisible steering) and has been removed.
 
     // Session prompt feature - generic per-session system prompt (e.g. product
     // surfaces that scope a session's behavior without a project record).

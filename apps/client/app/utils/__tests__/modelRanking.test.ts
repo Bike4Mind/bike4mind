@@ -1,139 +1,113 @@
 import { describe, it, expect } from 'vitest';
-import { calculateModelScore, sortModelsByCapability } from '../modelRanking';
-import { ModelBackend } from '@bike4mind/common';
+import dayjs from 'dayjs';
+import { sortModelsForPicker } from '../modelRanking';
+import { ModelBackend, ModelInfo } from '@bike4mind/common';
 
-// Minimal model factory for testing family score behavior
-function createModel(
-  overrides: Partial<{
-    id: string;
-    name: string;
-    backend: string;
-    contextWindow: number;
-    max_tokens: number;
-    supportsTools: boolean;
-    supportsVision: boolean;
-    pricing: Record<number, { input: number; output: number }>;
-    rank: number;
-    trainingCutoff: string;
-    type: string;
-  }>
-) {
+// Dates are resolved relative to now because isNewModel uses a rolling 3-month window,
+// so hardcoded dates would silently stop being "new" as the calendar moves.
+const daysAgo = (n: number) => dayjs().subtract(n, 'day').format('YYYY-MM-DD');
+const RECENT = daysAgo(10); // inside the NEW window
+const OLDER_RECENT = daysAgo(40); // also NEW, but not the newest
+const STALE = daysAgo(400); // outside the NEW window
+
+function createModel(overrides: Partial<ModelInfo> & { name: string }): ModelInfo {
   return {
-    id: overrides.id ?? 'test-model',
-    type: overrides.type ?? 'text',
-    name: overrides.name ?? overrides.id ?? 'test-model',
-    backend: overrides.backend ?? ModelBackend.Anthropic,
-    contextWindow: overrides.contextWindow ?? 200000,
-    max_tokens: overrides.max_tokens ?? 8192,
-    supportsTools: overrides.supportsTools ?? true,
-    supportsVision: overrides.supportsVision ?? true,
+    id: overrides.name,
+    type: 'text',
+    backend: ModelBackend.Anthropic,
+    contextWindow: 200000,
+    max_tokens: 8192,
+    supportsTools: true,
+    supportsVision: true,
     supportsImageVariation: false,
-    pricing: overrides.pricing ?? { 200000: { input: 0.001, output: 0.005 } },
-    rank: overrides.rank,
-    trainingCutoff: overrides.trainingCutoff,
-  } as Parameters<typeof calculateModelScore>[0];
+    ...overrides,
+  } as ModelInfo;
 }
 
-describe('calculateModelScore', () => {
-  // All tests use a shared allModels array for normalization
-  const allModels = [
-    createModel({ id: 'norm-1', contextWindow: 200000, max_tokens: 8192 }),
-    createModel({ id: 'norm-2', contextWindow: 100000, max_tokens: 4096 }),
-  ];
+const names = (models: ModelInfo[]) => models.map(m => m.name);
 
-  describe('Claude 4.x family scoring', () => {
-    it('should score Claude 4.x Opus at 1.0 family score', () => {
-      const opus = createModel({ name: 'Claude 4.5 Opus' });
-      const score = calculateModelScore(opus, allModels);
-      // familyScore=1.0, weight=0.35, so family contribution = 0.35
-      expect(score).toBeGreaterThan(0.8);
-    });
+describe('sortModelsForPicker', () => {
+  it('puts newly released models first, even over a better admin rank', () => {
+    const curatedDefault = createModel({ name: 'curated', rank: 0, releaseDate: STALE });
+    const justLaunched = createModel({ name: 'launched', rank: 50, releaseDate: RECENT });
 
-    it('should score Claude 4.x Sonnet at 0.97 family score', () => {
-      const sonnet = createModel({ name: 'Claude 4.6 Sonnet' });
-      const score = calculateModelScore(sonnet, allModels);
-      expect(score).toBeGreaterThan(0.7);
-    });
-
-    it('should score Claude 4.x Haiku at 0.85 family score', () => {
-      const haiku = createModel({ name: 'Claude 4.5 Haiku' });
-      const score = calculateModelScore(haiku, allModels);
-      expect(score).toBeGreaterThan(0.6);
-    });
-
-    it('should rank Claude 4.x Opus > Sonnet > Haiku', () => {
-      const opus = createModel({ name: 'Claude 4.5 Opus' });
-      const sonnet = createModel({ name: 'Claude 4.6 Sonnet' });
-      const haiku = createModel({ name: 'Claude 4.5 Haiku' });
-
-      const opusScore = calculateModelScore(opus, allModels);
-      const sonnetScore = calculateModelScore(sonnet, allModels);
-      const haikuScore = calculateModelScore(haiku, allModels);
-
-      expect(opusScore).toBeGreaterThan(sonnetScore);
-      expect(sonnetScore).toBeGreaterThan(haikuScore);
-    });
+    expect(names(sortModelsForPicker([curatedDefault, justLaunched]))).toEqual(['launched', 'curated']);
   });
 
-  describe('Claude 4.x vs 3.x ranking', () => {
-    it('should rank Claude 4.x Sonnet higher than Claude 3.7', () => {
-      const sonnet4 = createModel({ name: 'Claude 4.6 Sonnet' });
-      const claude37 = createModel({ name: 'claude-3-7-sonnet' });
+  it('puts an unranked new model first - the case admin rank misses entirely', () => {
+    const ranked = createModel({ name: 'ranked', rank: 0, releaseDate: STALE });
+    const unrankedButNew = createModel({ name: 'unranked-new', releaseDate: RECENT });
 
-      const sonnet4Score = calculateModelScore(sonnet4, allModels);
-      const claude37Score = calculateModelScore(claude37, allModels);
-
-      expect(sonnet4Score).toBeGreaterThan(claude37Score);
-    });
-
-    it('should rank Claude 4.5 Haiku higher than Claude 3.5 Haiku', () => {
-      const haiku45 = createModel({ name: 'Claude 4.5 Haiku' });
-      const haiku35 = createModel({ name: 'claude-3-5-haiku' });
-
-      const haiku45Score = calculateModelScore(haiku45, allModels);
-      const haiku35Score = calculateModelScore(haiku35, allModels);
-
-      expect(haiku45Score).toBeGreaterThan(haiku35Score);
-    });
+    expect(names(sortModelsForPicker([ranked, unrankedButNew]))).toEqual(['unranked-new', 'ranked']);
   });
 
-  describe('Unrecognized models', () => {
-    it('should give unrecognized models a base family score of 0.3', () => {
-      const unknown = createModel({ name: 'some-unknown-model' });
-      const haiku35 = createModel({ name: 'claude-3-5-haiku' });
+  it('orders the new models among themselves by release date, ahead of their rank', () => {
+    // The real case: Claude 5 Opus is the newest model in the catalog but sits at rank 1,
+    // so ranking first would bury it under an older rank-0 model.
+    const newestButLowerRank = createModel({ name: 'newest', rank: 1, releaseDate: RECENT });
+    const olderTopRank = createModel({ name: 'older', rank: 0, releaseDate: OLDER_RECENT });
 
-      const unknownScore = calculateModelScore(unknown, allModels);
-      const haiku35Score = calculateModelScore(haiku35, allModels);
-
-      expect(unknownScore).toBeLessThan(haiku35Score);
-    });
-  });
-});
-
-describe('sortModelsByCapability', () => {
-  it('should sort admin-ranked models before unranked models', () => {
-    const ranked = createModel({ id: 'ranked', name: 'claude-3-5-haiku', rank: 1 });
-    const unranked = createModel({ id: 'unranked', name: 'Claude 4.5 Opus' });
-
-    const sorted = sortModelsByCapability([unranked, ranked]);
-    expect(sorted[0].id).toBe('ranked');
+    expect(names(sortModelsForPicker([olderTopRank, newestButLowerRank]))).toEqual(['newest', 'older']);
   });
 
-  it('should sort admin-ranked models by rank value (lower = first)', () => {
-    const rank1 = createModel({ id: 'first', name: 'model-a', rank: 1 });
-    const rank5 = createModel({ id: 'second', name: 'model-b', rank: 5 });
+  it('falls back to rank for two models released the same day', () => {
+    const sameDayRank1 = createModel({ name: 'rank1', rank: 1, releaseDate: RECENT });
+    const sameDayRank0 = createModel({ name: 'rank0', rank: 0, releaseDate: RECENT });
 
-    const sorted = sortModelsByCapability([rank5, rank1]);
-    expect(sorted[0].id).toBe('first');
-    expect(sorted[1].id).toBe('second');
+    expect(names(sortModelsForPicker([sameDayRank1, sameDayRank0]))).toEqual(['rank0', 'rank1']);
   });
 
-  it('should sort unranked models by calculated score (higher capability first)', () => {
-    const opus = createModel({ id: 'opus', name: 'Claude 4.5 Opus' });
-    const haiku = createModel({ id: 'haiku', name: 'claude-3-5-haiku' });
+  it('respects admin rank once neither model is new', () => {
+    const rank5 = createModel({ name: 'rank5', rank: 5, releaseDate: STALE });
+    const rank1 = createModel({ name: 'rank1', rank: 1, releaseDate: STALE });
 
-    const sorted = sortModelsByCapability([haiku, opus]);
-    expect(sorted[0].id).toBe('opus');
-    expect(sorted[1].id).toBe('haiku');
+    expect(names(sortModelsForPicker([rank5, rank1]))).toEqual(['rank1', 'rank5']);
+  });
+
+  it('sorts ranked models before unranked ones', () => {
+    const unranked = createModel({ name: 'unranked' });
+    const ranked = createModel({ name: 'ranked', rank: 3 });
+
+    expect(names(sortModelsForPicker([unranked, ranked]))).toEqual(['ranked', 'unranked']);
+  });
+
+  it('breaks a shared rank by release date, newest first', () => {
+    // The case that decides most of the real list: rank 0 and rank 1 hold over 40% of the
+    // catalog between them, so this tiebreak is what users actually see.
+    const olderSameRank = createModel({ name: 'older', rank: 1, releaseDate: daysAgo(500) });
+    const newerSameRank = createModel({ name: 'newer', rank: 1, releaseDate: STALE });
+
+    expect(names(sortModelsForPicker([olderSameRank, newerSameRank]))).toEqual(['newer', 'older']);
+  });
+
+  it('sends models with no release date to the bottom of their rank', () => {
+    const undated = createModel({ name: 'undated', rank: 1 });
+    const dated = createModel({ name: 'dated', rank: 1, releaseDate: STALE });
+
+    expect(names(sortModelsForPicker([undated, dated]))).toEqual(['dated', 'undated']);
+  });
+
+  it('does not treat trainingCutoff as a release date', () => {
+    // trainingCutoff always predates release, so using it as a fallback would rank a model
+    // that only has a cutoff below every model carrying a real release date.
+    const cutoffOnly = createModel({ name: 'cutoff-only', rank: 1, trainingCutoff: RECENT });
+    const undated = createModel({ name: 'aaa-undated', rank: 1 });
+
+    // Both count as undated, so the tie falls through to the name.
+    expect(names(sortModelsForPicker([cutoffOnly, undated]))).toEqual(['aaa-undated', 'cutoff-only']);
+  });
+
+  it('falls back to name so the order does not depend on catalog declaration order', () => {
+    const b = createModel({ name: 'beta', rank: 1, releaseDate: STALE });
+    const a = createModel({ name: 'alpha', rank: 1, releaseDate: STALE });
+
+    expect(names(sortModelsForPicker([b, a]))).toEqual(['alpha', 'beta']);
+  });
+
+  it('does not mutate the input array', () => {
+    const input = [createModel({ name: 'z', rank: 9 }), createModel({ name: 'a', rank: 1 })];
+    sortModelsForPicker(input);
+
+    expect(names(input)).toEqual(['z', 'a']);
   });
 });

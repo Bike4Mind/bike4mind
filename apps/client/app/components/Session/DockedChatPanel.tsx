@@ -9,9 +9,11 @@ import ChatPanelControls from './ChatPanelControls';
 interface DockedChatPanelProps {
   children: React.ReactNode;
   headerActions?: React.ReactNode;
+  /** Overrides the default "AI Chat" header label (e.g. /opti swaps in the Data Lakes toggle). */
+  title?: React.ReactNode;
 }
 
-const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActions }) => {
+const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActions, title }) => {
   const layout = useSessionLayout(s => s.layout);
 
   const handleClose = useCallback(() => {
@@ -45,13 +47,15 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
         })}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography
-            level="body-sm"
-            fontWeight="md"
-            sx={theme => ({ color: theme.palette.sidenav?.navItemText ?? theme.palette.text.primary })}
-          >
-            AI Chat
-          </Typography>
+          {title ?? (
+            <Typography
+              level="body-sm"
+              fontWeight="md"
+              sx={theme => ({ color: theme.palette.sidenav?.navItemText ?? theme.palette.text.primary })}
+            >
+              AI Chat
+            </Typography>
+          )}
         </Box>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

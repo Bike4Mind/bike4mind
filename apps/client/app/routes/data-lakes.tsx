@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import DataLakeExplorer from '@client/app/components/datalake/DataLakeExplorer';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { useManageKnowledge } from '@client/app/components/datalake/manageKnowledge';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 
 /**
@@ -12,14 +13,24 @@ import { useChatInput } from '@client/app/hooks/useChatInput';
  *
  * The management panel + wizard modals are store-driven singletons already mounted
  * globally by ProviderBundle (Files/Browser). We only drive them via the store
- * (`openManager`); mounting our own copies here would stack a second modal on the
- * same `isManagerOpen`/`isOpen` flag.
+ * (`openManager`, reached through the shared `useManageKnowledge` capability);
+ * mounting our own copies here would stack a second modal on the same
+ * `isManagerOpen`/`isOpen` flag.
  */
 export default function DataLakesHome() {
   const navigate = useNavigate();
   const { article } = useSearch({ strict: false }) as { article?: string };
+  // Shared manage-knowledge capability (#841) - the gate and the open-manager wiring
+  // live in core, not here. No `requireAdmin`: these are the user's OWN lakes.
+  const { canManage, onManage } = useManageKnowledge();
   const openManager = useDataLakeWizardStore(s => s.openManager);
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
+
+  // Discover shares Manage's gate rather than carrying none: it deep-links the SAME
+  // store-driven manager modal, whose panel renders nothing without EnableDataLakes (and
+  // whose /api/data-lakes/public read is flag-gated too). Ungated it opened a full-screen
+  // modal holding only a close button - the same dead end the manage button had.
+  const onDiscover = canManage ? () => openManager('discover') : undefined;
 
   // No docked chat on this surface - "Ask about this article" prefills the composer
   // and drops the user into a fresh chat to send it.
@@ -37,8 +48,8 @@ export default function DataLakesHome() {
       articleId={article ?? null}
       onBack={() => navigate({ to: '/new' })}
       onAskAbout={handleAskAbout}
-      onManage={openManager}
-      onDiscover={() => openManager('discover')}
+      onManage={onManage}
+      onDiscover={onDiscover}
       onCreate={openWizard}
     />
   );

@@ -6,11 +6,13 @@ import type { IFileTag, ITag } from '@bike4mind/common';
 
 const mockPut = vi.fn();
 const mockPost = vi.fn();
+const mockDelete = vi.fn();
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: {
     put: (...args: unknown[]) => mockPut(...args),
     post: (...args: unknown[]) => mockPost(...args),
+    delete: (...args: unknown[]) => mockDelete(...args),
   },
 }));
 
@@ -18,7 +20,7 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
 
-import { useCreateFileTag, useUpdateFileTag } from './tag';
+import { useCreateFileTag, useDeleteFileTag, useUpdateFileTag } from './tag';
 
 const CACHED_TAG = { id: 'tag-1', name: 'invoices', color: 'blue', fileCount: 7 } as IFileTag;
 
@@ -36,6 +38,7 @@ describe('file tag mutations', () => {
   beforeEach(() => {
     mockPut.mockReset();
     mockPost.mockReset();
+    mockDelete.mockReset();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     queryClient.setQueryData(['file-tags'], [CACHED_TAG]);
     invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
@@ -59,8 +62,8 @@ describe('file tag mutations', () => {
       expect(cachedTags()[0].color).toBe('blue');
     });
 
-    // A rename does not retag the files, so the cached count is optimistic at best and flatly
-    // wrong at worst. Invalidating the bare prefix is what makes the server-derived count win;
+    // A rename retags the files and can merge two tags into one, so the cached count and the
+    // cached row set are both guesses. Invalidating the bare prefix is what makes the server win;
     // invalidating only ['file-tags','counts'] leaves the longer key matched and the list stale.
     it('invalidates the tag list so the derived count is refetched, not trusted', async () => {
       mockPut.mockResolvedValueOnce({ data: { id: 'tag-1', name: 'receipts' } });
@@ -68,6 +71,16 @@ describe('file tag mutations', () => {
       await rename();
 
       expect(invalidatedKeys()).toContainEqual(['file-tags']);
+    });
+
+    // The rename rewrites the tag names stored on the files, so a cached file row still shows the
+    // old name until something refetches it.
+    it('invalidates the file list, because the rename retags the files', async () => {
+      mockPut.mockResolvedValueOnce({ data: { id: 'tag-1', name: 'receipts' } });
+
+      await rename();
+
+      expect(invalidatedKeys()).toContainEqual(['fabFiles']);
     });
 
     it('leaves other cached tags untouched', async () => {
@@ -79,6 +92,34 @@ describe('file tag mutations', () => {
 
       await waitFor(() => expect(cachedTags()[0].name).toBe('renamed'));
       expect(cachedTags()[1]).toEqual(other);
+    });
+  });
+
+  describe('useDeleteFileTag', () => {
+    const remove = async () => {
+      const { result } = renderHook(() => useDeleteFileTag(), { wrapper });
+      await act(async () => {
+        await result.current.mutateAsync('tag-1');
+      });
+    };
+
+    it('invalidates the tag list', async () => {
+      mockDelete.mockResolvedValueOnce({});
+
+      await remove();
+
+      expect(invalidatedKeys()).toContainEqual(['file-tags']);
+    });
+
+    // Deleting a tag now strips the name off the files as well, so a cached file row still carries
+    // a tag the server has removed. Without this the chips stay on screen until something else
+    // happens to refetch.
+    it('invalidates the file list, because the delete retags the files', async () => {
+      mockDelete.mockResolvedValueOnce({});
+
+      await remove();
+
+      expect(invalidatedKeys()).toContainEqual(['fabFiles']);
     });
   });
 

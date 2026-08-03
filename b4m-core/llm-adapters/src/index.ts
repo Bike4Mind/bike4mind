@@ -64,6 +64,11 @@ export function getLlmByModel(
   // record swapped in at this point would drop the catalog dispatch profile for
   // the id actually sent. Resolution belongs at the call sites, which already do
   // it through resolveDeprecatedModelId (now catalog-backed).
+  // Rarely reached: getAvailableModels drops anything at or past its
+  // deprecationDate, so a deprecated record here means a hand-built ModelInfo or
+  // a model that expired inside the 5-minute model cache. The alarmable signal
+  // lives in resolveDeprecatedModelId, which still sees the id the caller asked
+  // for; see modelSunsetMetrics.
   if (isModelDeprecated(modelInfo)) {
     Logger.globalInstance.warn(
       `[model-sunset] getLlmByModel invoked with deprecated model: ${modelInfo.id} (deprecationDate: ${modelInfo.deprecationDate})`
@@ -503,5 +508,6 @@ export * from './realtimeVoicePricing';
 export * from './resolveDeprecatedModel';
 export * from './deprecationHorizon';
 export * from './staleReferences';
+export * from './modelSunsetMetrics';
 export * from './thinkingParams';
 export * from './toolPairingUtils';
