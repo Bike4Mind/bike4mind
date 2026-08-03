@@ -219,11 +219,13 @@ export default function DataLakeExplorer({
           data-testid="field-tooltip-data-lake-explorer"
           sx={{ mb: 2 }}
         />
+        {/* Create is the surface's primary action (solid) and leads the header row; Manage /
+            Discover stay outlined-neutral so creating a lake is never buried inside Manage. */}
         {onCreate && (
           <Button
             data-testid="datalake-create-btn"
             size="sm"
-            variant="soft"
+            variant="solid"
             color="primary"
             startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
             onClick={onCreate}

@@ -68,3 +68,44 @@ describe('DataLakeExplorer - create-first affordance (#837)', () => {
     expect(screen.queryByTestId('datalake-create-btn')).not.toBeInTheDocument();
   });
 });
+
+describe('DataLakeExplorer - Create primary alongside Manage secondary', () => {
+  it('renders both buttons, Create first, each wired to its own handler', () => {
+    const onCreate = vi.fn();
+    const onManage = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} onCreate={onCreate} onManage={onManage} />
+      </Wrapper>
+    );
+
+    const createBtn = screen.getByTestId('datalake-create-btn');
+    const manageBtn = screen.getByTestId('datalake-manage-btn');
+    expect(createBtn.compareDocumentPosition(manageBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(createBtn);
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(onManage).not.toHaveBeenCalled();
+
+    fireEvent.click(manageBtn);
+    expect(onManage).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives Create the primary treatment and Manage the secondary one', () => {
+    render(
+      <Wrapper>
+        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} onCreate={vi.fn()} onManage={vi.fn()} />
+      </Wrapper>
+    );
+
+    // Joy's variant/color modifier classes are a stable public API (unlike its emotion
+    // hashes), so they are the only way to assert visual hierarchy without a snapshot.
+    const createBtn = screen.getByTestId('datalake-create-btn');
+    expect(createBtn.className).toMatch(/MuiButton-variantSolid/);
+    expect(createBtn.className).toMatch(/MuiButton-colorPrimary/);
+
+    const manageBtn = screen.getByTestId('datalake-manage-btn');
+    expect(manageBtn.className).toMatch(/MuiButton-variantOutlined/);
+    expect(manageBtn.className).toMatch(/MuiButton-colorNeutral/);
+  });
+});
