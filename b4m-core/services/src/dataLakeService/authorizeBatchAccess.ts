@@ -1,4 +1,4 @@
-import type { IDataLakeBatchDocument, IDataLakeBatchRepository } from '@bike4mind/common';
+import type { IDataLakeBatchRepository } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
 /**
@@ -14,10 +14,9 @@ export const assertBatchOwnership = async (
   userId: string,
   batchId: string,
   { db }: { db: { batches: Pick<IDataLakeBatchRepository, 'findById'> } }
-): Promise<IDataLakeBatchDocument> => {
+): Promise<void> => {
   const batch = await db.batches.findById(batchId);
   if (!batch || batch.userId !== userId) {
     throw new NotFoundError('Batch not found');
   }
-  return batch;
 };

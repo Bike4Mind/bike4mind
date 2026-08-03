@@ -11,7 +11,7 @@ import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 
@@ -29,6 +29,13 @@ const handler = baseApi()
       const { user } = req;
 
       const params = createFabFileSchema.parse(req.body);
+
+      // Same feature gate as the presign siblings: when this create is bound to a data lake
+      // batch, the feature must actually be on.
+      if (params.batchId) {
+        const enabled = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
+        if (!enabled) throw new ForbiddenError('Feature not available');
+      }
 
       // Applying a lake's `datalake:*` meta-tag at creation is a WRITE into that lake - gate it
       // with the creator/admin check so this path can't be used to bypass the Send-to-Data-Lake
