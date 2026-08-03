@@ -67,6 +67,12 @@ const handler = baseApi()
 
     req.logger.updateMetadata({ userId, fileId: fabFileId });
 
+    // Same guard the DELETE branch below carries. The round trip matters on top of isValid():
+    // isValid() also accepts any 12-character string, which then coerces to an unrelated id.
+    if (!Types.ObjectId.isValid(fabFileId) || new Types.ObjectId(fabFileId).toString() !== fabFileId) {
+      return res.status(404).json({ msg: 'File not found' });
+    }
+
     // Data-lake membership is conferred by the lake's `datalake:*` meta-tag. Applying one is a
     // WRITE into that lake, so gate it with the same creator/admin check the remove path uses -
     // otherwise a read-only member could inject files via Send-to-Data-Lake.
