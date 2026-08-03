@@ -8,6 +8,7 @@ import {
   type IFabFileDocument,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { setPendingMessageFiles } from '@client/app/hooks/useSessionLayout';
 import {
   chunkFileUtility,
   createFabFileOnServer,
@@ -36,6 +37,10 @@ export function useDeleteAllFiles(options: { onSuccess?: () => void } = {}) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      // The composer's pending-attachment chips are a denormalized Zustand snapshot, not
+      // backed by the fabFiles query cache, so invalidation above doesn't reach them - clear
+      // them explicitly or they keep rendering chips for now-deleted files (see #1279).
+      setPendingMessageFiles([]);
       if (onSuccess) onSuccess();
     },
     onError: error => {
