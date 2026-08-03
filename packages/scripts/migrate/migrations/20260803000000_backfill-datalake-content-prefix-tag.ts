@@ -66,7 +66,13 @@ const migration: MigrationFile = {
     let alreadyCoveredLakes = 0;
 
     for (const lake of lakes) {
-      const decision = await dataLakeService.decideStampPrefix(lake, { dataLakes: dataLakeRepository });
+      // The gate explains each refusal through `logger.warn`; without an adapter those messages go
+      // nowhere and an operator only sees the trailing summary. Printed as it happens AND
+      // collected below, so a long run reads in order instead of deferring every reason to the end.
+      const decision = await dataLakeService.decideStampPrefix(lake, {
+        dataLakes: dataLakeRepository,
+        logger: { warn: (msg, ...args) => console.log(`${LOG} ${msg}`, ...args) },
+      });
 
       if (!decision.stamp) {
         skipped.push({ name: lake.name, prefix: lake.fileTagPrefix, why: decision.detail ?? decision.reason });

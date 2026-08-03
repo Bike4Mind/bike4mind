@@ -118,6 +118,18 @@ describe('backfill-datalake-content-prefix-tag', () => {
     expect(output()).toContain(why);
   });
 
+  it("prints the gate's own reason for a refusal, not just the trailing summary", async () => {
+    // The gate reports through logger.warn. With no adapter wired those messages vanish and an
+    // operator sees only the end-of-run block, so this asserts the reason reaches stdout as the
+    // lake is processed.
+    mockLakeFind.mockResolvedValue([lake()]);
+    mockRepoFind.mockResolvedValue([lake({ id: 'lake2', name: 'Other', fileTagPrefix: 'acme:hr:' })]);
+
+    await migration.up();
+
+    expect(output()).toContain('not stamping a content tag for "Acme"');
+  });
+
   it('writes nothing for a prefix overlapping a built-in lake', async () => {
     // The registry read arm bypasses ownership, so a stamp under its prefix would publish every
     // one of these files to anyone who can reach that built-in lake. Registry lakes have no Mongo
