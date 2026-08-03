@@ -9,6 +9,7 @@ import {
   FormLabel,
   IconButton,
   Input,
+  Link,
   Modal,
   ModalDialog,
   Sheet,
@@ -19,8 +20,12 @@ import {
 } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { api } from '@client/app/contexts/ApiContext';
 import { DiscoveryStatusCard } from './DiscoveryStatusCard';
+import { AdminTab } from './adminSidebarConfig';
+import { useAdminModal } from './useAdminModal';
+import { useCreditAnalysisStore } from './CreditAnalysis/store';
 
 /** Wire shapes of /api/admin/model-deprecation-status (dates arrive as strings). */
 interface QueueItem {
@@ -144,6 +149,9 @@ export const ModelLifecycleTab: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [pendingDismissId, setPendingDismissId] = useState<string | null>(null);
 
+  const setAdminTab = useAdminModal(state => state.setActiveTab);
+  const setCreditAnalysisTab = useCreditAnalysisStore(state => state.setActiveTab);
+
   const fetchStatus = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -238,6 +246,23 @@ export const ModelLifecycleTab: React.FC = () => {
             Detected deprecations awaiting a verdict. Accepting appends an operator catalog row; the stale-reference
             list is a report - those chains live in code.
           </Typography>
+          {/* Prices live in a different sidebar section, so settling a flagged
+              price meant hunting for it. Already inside /admin: setting the tab
+              is the whole navigation. component="button" because a Joy Link with
+              an onClick and no href renders an <a> with no href, which is not
+              focusable and unreachable by keyboard. */}
+          <Link
+            level="body-sm"
+            component="button"
+            startDecorator={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+            onClick={() => {
+              setCreditAnalysisTab('pricing');
+              setAdminTab(AdminTab.CreditAnalytics);
+            }}
+            data-testid="model-lifecycle-model-pricing-link"
+          >
+            Model pricing catalog
+          </Link>
         </Box>
         <IconButton
           size="sm"

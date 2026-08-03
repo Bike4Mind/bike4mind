@@ -410,3 +410,42 @@ describe('🎭 DocumentDB $facet Compatibility - Comprehensive Testing', () => {
     });
   });
 });
+
+describe('executeFacetCompatible - aggregate options', () => {
+  const originalEnv = process.env.USE_DOCUMENTDB_COMPATIBILITY;
+  afterEach(() => {
+    process.env.USE_DOCUMENTDB_COMPATIBILITY = originalEnv;
+  });
+
+  /**
+   * The counterLogs route sizes allowDiskUse/maxTimeMS to its own Lambda budget. Dropping them
+   * here would let a heavy aggregation spill or run past the function timeout unnoticed.
+   */
+  it('forwards aggregate options to the native $facet call', async () => {
+    process.env.USE_DOCUMENTDB_COMPATIBILITY = 'false';
+    const aggregate = vi.fn().mockResolvedValue([]);
+    const model = { aggregate } as unknown as Parameters<typeof executeFacetCompatible>[0];
+
+    await executeFacetCompatible(model, [], { rows: [{ $limit: 1 }] }, { allowDiskUse: true, maxTimeMS: 45000 });
+
+    expect(aggregate).toHaveBeenCalledWith(expect.any(Array), { allowDiskUse: true, maxTimeMS: 45000 });
+  });
+
+  it('forwards aggregate options to each split query in DocumentDB mode', async () => {
+    process.env.USE_DOCUMENTDB_COMPATIBILITY = 'true';
+    const aggregate = vi.fn().mockResolvedValue([]);
+    const model = { aggregate } as unknown as Parameters<typeof executeFacetCompatible>[0];
+
+    await executeFacetCompatible(
+      model,
+      [],
+      { rows: [{ $limit: 1 }], total: [{ $count: 'value' }] },
+      { allowDiskUse: true, maxTimeMS: 45000 }
+    );
+
+    expect(aggregate).toHaveBeenCalledTimes(2);
+    for (const call of aggregate.mock.calls) {
+      expect(call[1]).toEqual({ allowDiskUse: true, maxTimeMS: 45000 });
+    }
+  });
+});

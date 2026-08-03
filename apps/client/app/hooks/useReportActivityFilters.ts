@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import dayjs from 'dayjs';
-import { MetadataFilter } from './useUserActivityFilters';
+import { MetadataFilter } from '../components/admin/Analytics/types';
 
 export interface FilterState {
   counterNameSearch: string;

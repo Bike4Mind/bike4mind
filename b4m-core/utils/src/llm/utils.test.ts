@@ -2631,22 +2631,25 @@ describe('unusable attachments are judged one at a time', () => {
   });
 });
 
-describe('includeHardcodedSystemMessage', () => {
-  it('falls back to the shared default when the stored template is blank', () => {
+describe('includeHardcodedSystemMessage - format prompt scoping', () => {
+  it('prepends the shared default when no template is stored', () => {
     const result = includeHardcodedSystemMessage([{ role: 'user', content: 'hi' }], '');
     expect(result[0]).toEqual({ role: 'system', content: FORMAT_PROMPT_TEMPLATE });
     expect(result[1]).toEqual({ role: 'user', content: 'hi' });
   });
 
-  it('uses the stored template when one is set', () => {
-    const result = includeHardcodedSystemMessage([{ role: 'user', content: 'hi' }], 'Always answer in Klingon.');
-    expect(result[0]).toEqual({ role: 'system', content: 'Always answer in Klingon.' });
+  it('uses the stored template verbatim when provided, prepended ahead of existing messages', () => {
+    const existing: IMessage[] = [{ role: 'system', content: 'other block' }];
+    const result = includeHardcodedSystemMessage(existing, 'Custom template.');
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ role: 'system', content: 'Custom template.' });
+    expect(result[1]).toEqual(existing[0]);
   });
 
   it('keeps the default scoped to formatting so it cannot bleed into whether to answer', () => {
     // The prior wording ("Adhere to specific formatting requests...") read as general compliance
     // and roughly halved refusal quality when it was the only system content.
-    expect(FORMAT_PROMPT_TEMPLATE).toContain('nothing here decides whether or how fully to answer');
+    expect(FORMAT_PROMPT_TEMPLATE).toMatch(/^Formatting only - nothing here decides whether or how fully to answer/);
     expect(FORMAT_PROMPT_TEMPLATE).not.toMatch(/adhere to/i);
   });
 });

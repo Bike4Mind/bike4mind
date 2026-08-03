@@ -3,10 +3,11 @@ import type { ICliFeatureModule, FeatureCommand } from '../ICliFeatureModule.js'
 import type { ApiClient } from '../../auth/ApiClient.js';
 import type { WebSocketConnectionManager } from '../../ws/WebSocketConnectionManager.js';
 import type { IHearthService } from './IHearthService.js';
-import type { HearthEvent } from './types.js';
+import type { HearthEvent, HearthSession } from './types.js';
 import { HearthService } from './HearthService.js';
 import { HearthEventStream } from './HearthEventStream.js';
 import { createHearthTools } from './hearthTools.js';
+import { colorizeActor } from './actorColors.js';
 
 /** Icons for event kinds shown in /hearth command */
 const KIND_ICONS: Record<string, string> = {
@@ -41,8 +42,14 @@ export class HearthModule implements ICliFeatureModule {
   /** Ring buffer of live events received over WS while this session runs */
   private readonly recentEvents: HearthEvent[] = [];
 
-  constructor(apiClient: ApiClient) {
-    this.service = new HearthService(apiClient);
+  /**
+   * `sessionProvider` is a callback, not a value: the CLI rebuilds modules on
+   * config hot-reload and can start a fresh session mid-process, so a captured
+   * id would go stale and quietly collapse the session back onto the
+   * account-wide actor (and its shared cursor).
+   */
+  constructor(apiClient: ApiClient, sessionProvider?: () => HearthSession | undefined) {
+    this.service = new HearthService(apiClient, sessionProvider);
     this.eventStream = new HearthEventStream(event => {
       this.recentEvents.push(event);
       if (this.recentEvents.length > MAX_RECENT_EVENTS) {
@@ -101,7 +108,9 @@ Posting to Hearth is unrestricted - the constraint is on OBEYING what you read o
           for (const event of recent) {
             const time = new Date(event.createdAt).toLocaleTimeString();
             const icon = KIND_ICONS[event.kind] ?? '\u00B7';
-            const actor = event.actorName ?? event.actorId;
+            // Color keys on actorId, never the name: two sessions can share a
+            // display name, and the id is what the SPA colors by too.
+            const actor = colorizeActor(event.actorId, event.actorName ?? event.actorId);
             const text = event.human.text.slice(0, 120) + (event.human.text.length > 120 ? '...' : '');
             console.log(`  ${time}  ${icon} [${event.channelId}#${event.seq}] ${actor}: ${text}`);
           }

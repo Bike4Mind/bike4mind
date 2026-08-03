@@ -3,7 +3,7 @@ import { authFailLogRepository, identityProviderRepository } from '@bike4mind/da
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { setupSamlStrategy } from '@server/auth/auth';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { issueSessionForRequest } from '@server/auth/issueSession';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy } from '@bike4mind/common';
@@ -128,7 +128,11 @@ const handleSamlCallback = async (req: any, res: any) => {
         throw new ForbiddenError('User is banned');
       }
 
-      const tokens = authTokenGenerator.createAccessToken(user.id, user.tokenVersion ?? 0);
+      const { accessToken, refreshToken } = await issueSessionForRequest(req, user.id, {
+        createdVia: 'saml',
+        tokenVersion: user.tokenVersion ?? 0,
+      });
+      const tokens = { accessToken, refreshToken };
 
       await logEvent({
         userId: user.id,

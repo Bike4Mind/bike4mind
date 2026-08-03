@@ -112,7 +112,16 @@
     "pricing": {
       "inputPerMTok": 2,
       "outputPerMTok": 12,
-      "cacheReadPerMTok": 0.19999999999999998
+      "cacheReadPerMTok": 0.19999999999999998,
+      "brackets": [
+        {
+          "aboveTokens": 200000,
+          "inputPerMTok": 4,
+          "outputPerMTok": 18,
+          "cacheReadPerMTok": 0.39999999999999997,
+          "cacheWritePerMTok": 0.25
+        }
+      ]
     }
   },
   {
@@ -201,7 +210,15 @@
     "pricing": {
       "inputPerMTok": 2,
       "outputPerMTok": 6,
-      "cacheReadPerMTok": 0.5
+      "cacheReadPerMTok": 0.5,
+      "brackets": [
+        {
+          "aboveTokens": 200000,
+          "inputPerMTok": 4,
+          "outputPerMTok": 12,
+          "cacheReadPerMTok": 1
+        }
+      ]
     }
   },
   {

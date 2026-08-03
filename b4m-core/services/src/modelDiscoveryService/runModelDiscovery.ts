@@ -4,6 +4,7 @@ import {
   type FieldGroup,
   type ICatalogContributor,
   type IDiscoveryJoinCoverage,
+  type IDiscoveryRunDetailTotals,
   type IDiscoverySourceReport,
   type IModelDiscoveryRun,
   type IModelDiscoveryRunDocument,
@@ -44,6 +45,8 @@ import type {
   ModelDiscoveryMetrics,
   ModelDiscoveryRunResult,
   PriceFlag,
+  PriceOverride,
+  PriceSkip,
   RunModelDiscoveryOptions,
   SourceResult,
   SourceSkipReason,
@@ -103,6 +106,13 @@ const LOG_PREFIX = '[model-discovery]';
  * would put an unbounded array on a document the admin card reads whole.
  */
 export const MAX_PERSISTED_DROPPED_RECORDS = 200;
+
+/**
+ * Per-model detail kept on the run document, for the same reason: it is a
+ * bounded trace on a document the admin reads whole, and a run that touches
+ * every model would otherwise put thousands of entries on it.
+ */
+export const MAX_PERSISTED_RUN_DETAIL = 200;
 
 /** Its own prefix (sec 10) so a flagged price move alarms without a log filter. */
 const PRICE_BAND_PREFIX = '[PRICE_BAND]';
@@ -213,12 +223,15 @@ async function executeRun(
 
   // The run document is created up front because every appended row carries its
   // id. 'failed' is the pessimistic placeholder: a run that never reaches the
-  // final update must not read as ok or partial.
+  // final update must not read as ok or partial. `mode` is written here too: a
+  // report-mode run plans writes and lands none by design, so a reader with no
+  // mode on the document cannot tell it from a write run whose appends threw.
   const run = await db.discoveryRuns.create({
     startedAt,
     trigger: options.trigger,
     host: options.host,
     status: 'failed',
+    mode: ctx.mode,
   } as Omit<IModelDiscoveryRunDocument, 'id' | 'createdAt' | 'updatedAt'>);
   const runId = run.id;
 
@@ -387,6 +400,7 @@ async function executeRun(
   const deprecated = [...new Set(merged.transitions.map(transition => transition.modelId))];
   const sourceReports = [...results.values()].map(entry => entry.report);
   const finishedAt = ctx.now();
+  const plannedPrices = describePriceRows(merged.priceRows);
 
   logPriceFlags(merged.priceFlags, logger);
   logLifecycle(merged, logger);
@@ -407,6 +421,9 @@ async function executeRun(
       // Operator overlaps and price flags are one queue: both are "a human has
       // to look at this model", which is what report mode exists to surface.
       flagged: [...new Set([...summary.operatorConflicts, ...merged.priceFlags.map(flag => flag.modelId)])],
+      // The same overlaps on their own, because the merged array cannot say which
+      // half of the queue a model came from.
+      operatorConflicts: [...new Set(summary.operatorConflicts)],
       plannedRows: merged.plannedRows,
       appendedRows: merged.appended,
       plannedPriceRows: merged.plannedPriceRows,
@@ -414,6 +431,25 @@ async function executeRun(
     },
     passes: passes.length,
     droppedRecords: merged.droppedRecords.slice(0, MAX_PERSISTED_DROPPED_RECORDS),
+    // The detail behind the counts above, every array bounded. Without it the
+    // admin reads a flag count with no way to learn which models or why.
+    priceFlags: merged.priceFlags.slice(0, MAX_PERSISTED_RUN_DETAIL),
+    priceRows: plannedPrices.slice(0, MAX_PERSISTED_RUN_DETAIL),
+    priceOverrides: merged.priceOverrides.slice(0, MAX_PERSISTED_RUN_DETAIL),
+    priceSkips: merged.priceSkips.slice(0, MAX_PERSISTED_RUN_DETAIL),
+    lifecycleTransitions: merged.transitions.slice(0, MAX_PERSISTED_RUN_DETAIL),
+    catalogDiff: merged.diff.slice(0, MAX_PERSISTED_RUN_DETAIL),
+    // What those slices were cut from, so a reader shows "the first 200 of 260"
+    // instead of a cap that looks like the whole set. The change-id arrays above
+    // are uncapped, so the two would otherwise disagree with no marker anywhere.
+    ...truncatedTotals({
+      priceFlags: merged.priceFlags.length,
+      priceRows: plannedPrices.length,
+      priceOverrides: merged.priceOverrides.length,
+      priceSkips: merged.priceSkips.length,
+      lifecycleTransitions: merged.transitions.length,
+      catalogDiff: merged.diff.length,
+    }),
   } as Partial<IModelDiscoveryRunDocument>);
 
   logger.info(
@@ -434,7 +470,7 @@ async function executeRun(
     diff: merged.diff,
     droppedRecords: merged.droppedRecords,
     absence: passes[0].plan.absence,
-    prices: { rows: describePriceRows(merged.priceRows), flags: merged.priceFlags },
+    prices: { rows: plannedPrices, flags: merged.priceFlags, overrides: merged.priceOverrides },
     lifecycle: {
       transitions: merged.transitions,
       dateChanges: merged.dateChanges,
@@ -630,6 +666,8 @@ interface RunAggregate {
   droppedRecords: DroppedSourceRecord[];
   priceRows: IModelPriceInput[];
   priceFlags: PriceFlag[];
+  priceOverrides: PriceOverride[];
+  priceSkips: PriceSkip[];
   transitions: LifecycleTransition[];
   dateChanges: LifecycleDateChange[];
   suggestions: LifecycleSuggestion[];
@@ -671,6 +709,17 @@ function aggregate(passes: readonly CompletedPass[]): RunAggregate {
     priceFlags: lastPerKey(
       plans.flatMap(plan => plan.prices.flags),
       flag => `${flag.modelId} ${flag.kind}`
+    ),
+    // One per model, newest kept. A pass whose append threw leaves the row out
+    // of force, so the next pass re-plans that model and produces the same
+    // override again - and two identical entries would read as two mirrors.
+    priceOverrides: lastPerKey(
+      plans.flatMap(plan => plan.prices.overrides),
+      override => override.modelId
+    ),
+    priceSkips: lastPerKey(
+      plans.flatMap(plan => plan.prices.skipped),
+      skip => `${skip.modelId} ${skip.reason}`
     ),
     transitions: plans.flatMap(plan => plan.lifecycle.transitions),
     dateChanges: plans.flatMap(plan => plan.lifecycle.dateChanges),
@@ -722,6 +771,19 @@ function lastPerKey<T>(items: readonly T[], keyOf: (item: T) => string): T[] {
   const byKey = new Map<string, T>();
   for (const item of items) byKey.set(keyOf(item), item);
   return [...byKey.values()];
+}
+
+/**
+ * The `detailTotals` patch, or nothing when every array fit inside the cap. Only
+ * the truncated ones are recorded: a total equal to what is stored says nothing,
+ * and omitting the field keeps an ordinary run's document as it was.
+ */
+function truncatedTotals(counts: Required<IDiscoveryRunDetailTotals>): { detailTotals?: IDiscoveryRunDetailTotals } {
+  const totals: IDiscoveryRunDetailTotals = {};
+  for (const [key, total] of Object.entries(counts) as Array<[keyof IDiscoveryRunDetailTotals, number]>) {
+    if (total > MAX_PERSISTED_RUN_DETAIL) totals[key] = total;
+  }
+  return Object.keys(totals).length > 0 ? { detailTotals: totals } : {};
 }
 
 async function appendRows(
@@ -1141,7 +1203,7 @@ function skippedResult(
     diff: [],
     droppedRecords: [],
     absence: { sighted: [], missed: [], frozenBackends: [] },
-    prices: { rows: [], flags: [] },
+    prices: { rows: [], flags: [], overrides: [] },
     lifecycle: { transitions: [], dateChanges: [], suggestions: [], wouldDeprecate: [] },
     metrics: emptyMetrics(),
     passes: 1,
