@@ -191,6 +191,19 @@ describe('canAccessLake — org id shape parity with the casting collection quer
     expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: otherObjectId }))).toBe(false);
     expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: otherPopulated }))).toBe(false);
   });
+
+  it('fails CLOSED: a lake with a truthy-but-not-id-shaped org and no gate denies a non-owner', () => {
+    // Guards the fail-open asymmetry: private-by-default and the org-match check must both read
+    // the SAME normalized lake org id. A garbage org (normalizes to undefined) with no gate must
+    // deny a non-owner, not fall through to public.
+    const garbageOrgLake = lake({
+      id: 'garbageOrg',
+      organizationId: { not: 'an id' } as unknown as string,
+      createdByUserId: 'owner',
+    });
+    expect(canAccessLake(garbageOrgLake, ctx({ userId: 'member', organizationId: 'orgA' }))).toBe(false);
+    expect(canAccessLake(garbageOrgLake, ctx({ userId: 'owner' }))).toBe(true); // owner still in
+  });
 });
 
 describe('assertLakeAccess — not-found-style denial', () => {
