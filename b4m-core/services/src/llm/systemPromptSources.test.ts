@@ -48,6 +48,12 @@ describe('buildTaggedContextMessages', () => {
   it('describes every ordered source, so a new source cannot reach the prompt untagged', () => {
     expect(PROMPT_SOURCE_ORDER.filter(source => !PROMPT_SOURCE_METADATA[source])).toEqual([]);
   });
+
+  // The compiler forces METADATA to cover the union but happily accepts a subset for ORDER, so a
+  // new source declared everywhere except ORDER would silently vanish from every prompt.
+  it('orders every described source, so a new source cannot silently drop out of assembly', () => {
+    expect([...PROMPT_SOURCE_ORDER].sort()).toEqual(Object.keys(PROMPT_SOURCE_METADATA).sort());
+  });
 });
 
 describe('filterByPromptMode', () => {
@@ -122,6 +128,13 @@ describe('filterFeaturesByPromptMode', () => {
 
   it('drops the features that author their own prompt content when a mode is set', () => {
     expect(filterFeaturesByPromptMode(['questMaster', 'agentDetection', 'skills'], 'raw')).toEqual(['skills']);
+  });
+
+  // contextSummarization writes session.contextSummary as a side effect, and that field is an
+  // admitted source in every non-raw mode - so a mode turn that ran it would quietly shape what
+  // future in-app completions on the same session see.
+  it.each(['raw', 'grounded', 'surface'] as const)('never summarizes context under %s', mode => {
+    expect(filterFeaturesByPromptMode(['contextSummarization', 'skills'], mode)).toEqual(['skills']);
   });
 });
 

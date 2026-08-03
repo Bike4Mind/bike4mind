@@ -317,3 +317,37 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     });
   });
 });
+
+describe('POST /api/chat (integration - promptMode request contract)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSettingsMap.mockResolvedValue({});
+    mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'queued' });
+    mockFindById.mockReturnValue(
+      Promise.resolve({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false })
+    );
+    mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
+    mockResolveDefaultChatModel.mockResolvedValue({ model: 'test-default-model' });
+    mockIsChatModelUsable.mockReturnValue(true);
+    mockValidate.mockResolvedValue({
+      isValid: true,
+      keyId: 'k1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+  });
+
+  it('accepts promptMode: raw at the HTTP boundary', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', promptMode: 'raw' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBeGreaterThanOrEqual(200);
+    expect(res._getStatusCode()).toBeLessThan(300);
+  });
+
+  it('rejects an unknown promptMode with 422 and a named field, not a 5xx', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', promptMode: 'nonsense' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+  });
+});

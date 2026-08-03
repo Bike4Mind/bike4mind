@@ -1,5 +1,6 @@
 import { IMessage, SystemPromptDetailSchema } from '@bike4mind/common';
 import type { z } from 'zod';
+import type { featureNames } from './ChatCompletionFeatures';
 
 /**
  * The system/context stack a completion is assembled from, as data rather than as an inline array
@@ -120,15 +121,24 @@ export function filterByPromptMode(tagged: TaggedSystemMessage[], mode?: PromptM
  * user memory as a side effect, so suppressing only its injected text would still let an API
  * workload rewrite what the model believes about the user on every later completion. QuestMaster
  * and agent detection author their own prompt content and can replace the reply outright.
+ * Context summarization writes `session.contextSummary`, an admitted source in every non-raw
+ * mode, so a mode turn that ran it would quietly shape later in-app completions on the session.
  *
- * Forced retrieval is absent deliberately - it is registered from a session flag rather than this
- * list, and `grounded`/`surface` want it.
+ * NOT excluded, deliberately: forced retrieval (registered from a session flag, and
+ * `grounded`/`surface` want it), and low-stakes session grooming (auto-naming, notebook
+ * summaries) whose output never re-enters a prompt. Session history itself still accrues -
+ * that is what a session is.
  */
-const FEATURES_EXCLUDED_BY_PROMPT_MODE = new Set(['mementos', 'questMaster', 'agentDetection']);
+const FEATURES_EXCLUDED_BY_PROMPT_MODE = new Set<featureNames>([
+  'mementos',
+  'questMaster',
+  'agentDetection',
+  'contextSummarization',
+]);
 
 export function filterFeaturesByPromptMode<T extends string>(features: T[], mode?: PromptMode): T[] {
   if (!mode) return features;
-  return features.filter(feature => !FEATURES_EXCLUDED_BY_PROMPT_MODE.has(feature));
+  return features.filter(feature => !FEATURES_EXCLUDED_BY_PROMPT_MODE.has(feature as featureNames));
 }
 
 /**
