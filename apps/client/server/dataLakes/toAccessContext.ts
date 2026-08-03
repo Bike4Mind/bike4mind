@@ -33,7 +33,7 @@ export async function toAccessContext(req: EntitlementRequest): Promise<AccessCo
     // Normalize to a primitive string: `organizationId` can arrive as an ObjectId or a
     // populated Organization document depending on the route's `.populate`, and the org
     // gates compare it in memory with strict equality. A casting Mongo query would still
-    // match, so an un-normalized value 404s a lake the caller's own list returns (#1109).
+    // match, so an un-normalized value 404s a lake the caller's own list returns.
     organizationId: normalizeId(user.organizationId),
     entitlementKeys: isAdmin ? [] : await getRequestEntitlements(req),
   };
