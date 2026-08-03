@@ -1,6 +1,6 @@
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
-import { IFileTagRepository, ITag, TagType } from '@bike4mind/common';
+import { IFileTag, IFileTagRepository, TagType } from '@bike4mind/common';
 import { isDataLakeTagName, normalizeTagName } from './tagName';
 
 const tagCreateSchema = z.object({
@@ -63,7 +63,9 @@ export const create = async (userId: string, parameters: TagCreateParameters, ad
     lastActivityAt: new Date(),
     createdAt: new Date(),
     updatedAt: new Date(),
-  } as ITag;
+    // The FILE shape specifically: the type guard above is what rules out the session branch, and
+    // ITag is a union the repository's create signature does not accept.
+  } as IFileTag;
 
   try {
     return await adapters.db.fileTags.create(buildData);
