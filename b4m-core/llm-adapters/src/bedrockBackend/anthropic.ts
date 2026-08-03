@@ -662,9 +662,13 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       .map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
       .join('\n');
 
-    // Append model identity so the model correctly identifies itself when asked
-    const modelIdentity = `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
-    systemMessage = systemMessage ? `${systemMessage}\n${modelIdentity}` : modelIdentity;
+    // Append model identity so the model correctly identifies itself when asked.
+    // Skipped for bare-completion callers (API promptMode raw) - must stay in sync
+    // with the same flag in anthropicBackend.
+    if (!options.omitIdentityReminder) {
+      const modelIdentity = `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
+      systemMessage = systemMessage ? `${systemMessage}\n${modelIdentity}` : modelIdentity;
+    }
 
     // Check if model ID needs to be transformed
     const hasVendorPrefix =
