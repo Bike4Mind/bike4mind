@@ -65,11 +65,16 @@ export const createFileTag = async (
     return await adapters.db.fileTags.create(build);
   } catch (error) {
     // E11000: a concurrent create took the exact name. Converge on whatever landed rather than
-    // failing a background task - the caller asked for the tag to exist, and it does.
+    // failing a background task - the caller asked for the tag to exist, and it does. Attributed to
+    // the name without inspecting keyPattern because { userId, name } is the ONLY unique index on
+    // TagSchema; add a second one and this has to start checking which fired.
     if ((error as { code?: number })?.code === 11000) {
       const raced = await adapters.db.fileTags.findByFoldedNameAndUserId(name, userId);
       if (raced) return raced;
     }
+    // Deliberately the raw driver error, unlike tagService/create's worded BadRequestError: there is
+    // no HTTP surface here, so nobody reads a friendly message - this lands in a background task's
+    // logs, where the driver's own text is the more diagnostic thing to keep.
     throw error;
   }
 };

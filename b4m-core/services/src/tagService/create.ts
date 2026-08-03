@@ -75,6 +75,9 @@ export const create = async (userId: string, parameters: TagCreateParameters, ad
   } catch (error) {
     // E11000: a concurrent create took the exact name between the lookup and this write. Unhandled
     // it surfaced as a 500, because errorHandler finds no statusCode on a driver error.
+    //
+    // Attributed to the name without inspecting keyPattern because { userId, name } is the ONLY
+    // unique index on TagSchema. Add a second one and this has to start checking which fired.
     if ((error as { code?: number })?.code === 11000) {
       // Re-read so the message names the document that actually won, not this losing submission -
       // otherwise a racing `RUN2-Alpha` is told it already has a tag named `RUN2-Alpha`.

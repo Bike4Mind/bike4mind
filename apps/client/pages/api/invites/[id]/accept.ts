@@ -41,8 +41,6 @@ const transferFileTagsToUser = async (fileId: string, userId: string) => {
     // casings of one tag copy across as one tag rather than two.
     const tagInfo = new Map<string, { originalName: string; count: number; ownerTag?: any }>();
 
-    console.log('File tags:', file.tags);
-
     for (const fileTag of file.tags) {
       const foldedName = foldTagName(fileTag.name);
       const existing = tagInfo.get(foldedName);
@@ -58,11 +56,8 @@ const transferFileTagsToUser = async (fileId: string, userId: string) => {
       }
     }
 
-    console.log('Tag info processed:', Array.from(tagInfo.entries()));
-
     // Create/update tags atomically
     for (const { originalName, count, ownerTag } of Array.from(tagInfo.values())) {
-      console.log('Processing tag:', { originalName, count, ownerTag });
       await fileTagRepository.findOrCreateByNameAndUserId(
         originalName,
         userId,
