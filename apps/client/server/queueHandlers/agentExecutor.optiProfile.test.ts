@@ -16,6 +16,17 @@ describe('buildOptiOrchestrationProfile', () => {
     expect(profile.allowedTools).not.toContain('coordinate_task');
   });
 
+  it('offers retrieve_knowledge_content so attached files are readable, without open-ended lake search', () => {
+    const profile = buildOptiOrchestrationProfile();
+    // The agent path injects attached files as metadata only and points the agent at
+    // `retrieve_knowledge_content`; dropping it makes every attachment on this surface
+    // unreadable even though the file ingested fine.
+    expect(profile.allowedTools).toContain('retrieve_knowledge_content');
+    // Reading an explicitly attached file keeps the loop on task; open-ended lake search
+    // invites it off task, and that search stays available on the chat path.
+    expect(profile.allowedTools).not.toContain('search_knowledge_base');
+  });
+
   it('denies image generation and multi-agent delegation', () => {
     const profile = buildOptiOrchestrationProfile();
     expect(profile.deniedTools).toEqual(

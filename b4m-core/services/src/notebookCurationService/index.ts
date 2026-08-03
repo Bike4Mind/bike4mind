@@ -15,15 +15,19 @@ import {
   IUserDocument,
 } from '@bike4mind/common';
 import type { CurationTokenUsage, LLMContext } from './llmMarkdownGenerator';
+import type { CurationMessage } from './artifactExtractor';
 import { createFabFile, CreateFabFileAdapters } from '../fabFileService/create';
 import { FormatConverter } from './formatConverter';
 import { createHash } from 'crypto';
 
 interface ChatHistorySource {
+  // CurationMessage, not IChatHistoryItem: repositories return toObject() output, which
+  // carries the mongo `_id` the interface omits. Without it the `_id` id-fallback in the
+  // hash and the artifact extractor would look like dead code at every call site.
   find(
     filter: Record<string, unknown>,
     options: { skip: number; limit: number; sort: Record<string, 1 | -1> }
-  ): Promise<IChatHistoryItem[]>;
+  ): Promise<CurationMessage[]>;
 }
 
 export interface NotebookCurationAdapters {
@@ -49,13 +53,6 @@ export interface NotebookCurationAdapters {
 const CURATION_HASH_VERSION = 'v1';
 
 /**
- * The loaded `IChatHistoryItem` plus the mongo `_id` that document/lean-form
- * items carry but the interface omits (used only as an id fallback in the hash).
- * Every other field the hash reads already lives on `IChatHistoryItem`.
- */
-type CurationHashMessage = IChatHistoryItem & { _id?: { toString(): string } };
-
-/**
  * Stable hash of everything that determines the curated output: the hash version,
  * the curation type, the include/format options, and the conversation content. An
  * unchanged re-curation produces the same hash, letting curateNotebook reuse the
@@ -65,8 +62,10 @@ type CurationHashMessage = IChatHistoryItem & { _id?: { toString(): string } };
  * - options.tokenBudget: affects only the base credit deduction, not the document.
  * - session.name: curation is a point-in-time snapshot, so a rename alone should
  *   not force a full (paid) re-curation just to refresh the header title.
+ * - message.timestamp: the extractor reads it for artifact metadata, but it is fixed
+ *   at message creation, so it cannot change without prompt/reply changing too.
  */
-export function computeCurationContentHash(messages: CurationHashMessage[], options: CurationOptions): string {
+export function computeCurationContentHash(messages: CurationMessage[], options: CurationOptions): string {
   const hash = createHash('sha256');
   hash.update(`ver:${CURATION_HASH_VERSION}`);
   hash.update(`|type:${options.curationType || 'transcript'}`);

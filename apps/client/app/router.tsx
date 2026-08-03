@@ -71,6 +71,7 @@ const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
 const DataLakesPage = lazy(() => import('./routes/data-lakes'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
+const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 
 // AI-themed loading messages for route transitions
 const loadingMessages = [
@@ -375,6 +376,12 @@ const HEARTH_FEATURE_GATE = {
   feature: 'enableHearth' as const,
   featureName: 'Hearth',
   description: 'A shared event log where you, your agents, and your devices all post and catch up as actors.',
+};
+
+const QUESTMASTER_V5_FEATURE_GATE = {
+  feature: 'enableQuestMasterV5' as const,
+  featureName: 'Quest Master v5',
+  description: 'Quests as a graph of nodes: each node is one scoreable task that runs its own agent.',
 };
 
 // Hearth channel view (minimal projection of the shared event log)
@@ -773,6 +780,20 @@ const questsRoute = createRoute({
   },
 });
 
+// QuestMaster v5 node-graph surface. Peer to /quests, which stays untouched
+// until v5 supersedes it.
+const questsV5Route = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/quests-v5',
+  component: () => (
+    <ExperimentalFeatureGate {...QUESTMASTER_V5_FEATURE_GATE} loadingFallback={<RouteLoadingFallback />}>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <QuestMasterV5Page />
+      </Suspense>
+    </ExperimentalFeatureGate>
+  ),
+});
+
 // Data Lakes home - top-level, Opti-independent destination for a user's own lakes
 // (browse + manage). Gated for discovery by the EnableDataLakes admin flag in the
 // sidebar nav; the /api/data-lakes/* endpoints enforce the flag server-side.
@@ -988,6 +1009,7 @@ const routeTree = rootRoute.addChildren([
     tutorialsRoute,
     artifactsDemoRoute,
     questsRoute,
+    questsV5Route,
     dataLakesRoute,
     hudRoute,
     hearthRoute,

@@ -3,33 +3,33 @@ import { Stack, Grid, Divider, Box, Typography } from '@mui/joy';
 import { SearchBox } from './SearchBox';
 import { DateFilterComponent } from './DateFilterComponent';
 import { MetadataFilterPanel } from './MetadataFilterPanel';
-import dayjs from 'dayjs';
-import { FilterState } from '@client/app/hooks/useUserActivityFilters';
+import { useAnalyticsStore } from '../store';
+import type { CounterLogRow } from '@client/app/utils/userAPICalls';
 
 interface UserActivityFiltersProps {
-  filters: FilterState;
-  updateFilter: (key: keyof FilterState, value: any) => void;
-  rawData?: any[];
+  rows?: CounterLogRow[];
 }
 
-export const UserActivityFilters: React.FC<UserActivityFiltersProps> = ({ filters, updateFilter, rawData = [] }) => {
-  // Extract metadata fields from raw data
+/**
+ * Every control here writes straight to the analytics store, which is the query the server
+ * runs. Filtering locally would only ever filter the page currently on screen.
+ */
+export const UserActivityFilters: React.FC<UserActivityFiltersProps> = ({ rows = [] }) => {
+  const {
+    dateFilters,
+    setDateFilters,
+    userActivityFilters,
+    setUserActivityFilters,
+    metadataFilters,
+    setMetadataFilters,
+  } = useAnalyticsStore();
+
+  // Suggestions only: the list reflects the current page, and the panel accepts a custom field.
   const metadataFields = React.useMemo(() => {
     const fields = new Set<string>();
-    rawData.forEach(item => {
-      if (item.metadata) {
-        Object.keys(item.metadata).forEach(field => fields.add(field));
-      }
-      if (item.users) {
-        item.users.forEach((user: any) => {
-          if (user.metadata) {
-            Object.keys(user.metadata).forEach(field => fields.add(field));
-          }
-        });
-      }
-    });
+    rows.forEach(row => Object.keys(row.metadata || {}).forEach(field => fields.add(field)));
     return Array.from(fields).sort();
-  }, [rawData]);
+  }, [rows]);
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -38,14 +38,10 @@ export const UserActivityFilters: React.FC<UserActivityFiltersProps> = ({ filter
       </Typography>
       <Stack spacing={2}>
         <DateFilterComponent
-          startDate={filters.startDate}
-          endDate={filters.endDate}
-          onStartDateChange={value => updateFilter('startDate', value)}
-          onEndDateChange={value => updateFilter('endDate', value)}
-          onRangeSelect={days => {
-            updateFilter('startDate', dayjs().subtract(days, 'days').format('YYYY-MM-DD'));
-            updateFilter('endDate', dayjs().format('YYYY-MM-DD'));
-          }}
+          startDate={dateFilters.startDate}
+          endDate={dateFilters.endDate}
+          onStartDateChange={value => setDateFilters({ ...dateFilters, startDate: value })}
+          onEndDateChange={value => setDateFilters({ ...dateFilters, endDate: value })}
         />
 
         <Divider />
@@ -53,15 +49,15 @@ export const UserActivityFilters: React.FC<UserActivityFiltersProps> = ({ filter
         <Grid container spacing={2}>
           <Grid xs={12} md={6}>
             <SearchBox
-              value={filters.counterNameSearch}
-              onChange={value => updateFilter('counterNameSearch', value)}
+              value={userActivityFilters.counterNameSearch}
+              onChange={value => setUserActivityFilters({ counterNameSearch: value })}
               placeholder="Search by Counter Name"
             />
           </Grid>
           <Grid xs={12} md={6}>
             <SearchBox
-              value={filters.userEmailSearch}
-              onChange={value => updateFilter('userEmailSearch', value)}
+              value={userActivityFilters.userEmailSearch}
+              onChange={value => setUserActivityFilters({ userEmailSearch: value })}
               placeholder="Search by User Email"
             />
           </Grid>
@@ -70,8 +66,8 @@ export const UserActivityFilters: React.FC<UserActivityFiltersProps> = ({ filter
         <Divider />
 
         <MetadataFilterPanel
-          onApplyFilters={filters => updateFilter('metadataFilters', filters)}
-          initialFilters={filters.metadataFilters}
+          onApplyFilters={setMetadataFilters}
+          initialFilters={metadataFilters}
           metadataFields={metadataFields}
         />
       </Stack>

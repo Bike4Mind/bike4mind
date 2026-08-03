@@ -142,6 +142,7 @@ const UserPreferencesSchema = new Schema(
     agentModeDefault: { type: String, enum: ['off', 'auto', 'on'] },
     showFunTools: { type: Boolean },
     saveGeneratedAudio: { type: Boolean },
+    showSplashCards: { type: Boolean },
   },
   { _id: false }
 );

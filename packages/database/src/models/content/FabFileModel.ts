@@ -158,6 +158,17 @@ export const FabFileChunk =
 
 export const fabFileChunkRepository = new FabFileChunkRepository(FabFileChunk);
 
+/**
+ * Projection for metadata-only reads. Drops the heavy payload fields (matching
+ * the exclusion used by `executeSearch`) AND the two URL-bearing fields, so a
+ * metadata read can never carry a downloadable link even if a caller later
+ * forwards the document verbatim.
+ */
+const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUrl: 0, fileUrl: 0 } as const;
+
+/** Row cap for unbounded metadata listings. */
+const METADATA_PAGE_CAP = 500;
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -245,6 +256,65 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findAllInIds(ids: string[]) {
     const result = await this.fabFileModel.find({ _id: { $in: ids } });
     return result.map(d => d.toObject());
+  }
+
+  /**
+   * Metadata-only fetch for a set of ids. The heavy fields AND the URL-bearing
+   * ones are projected out (see METADATA_ONLY_PROJECTION), so a caller that only
+   * needs to know *what* was attached never loads the file bodies and cannot
+   * accidentally hand out a download URL.
+   *
+   * Invalid ObjectIds are dropped rather than throwing a BSONError, since the ids
+   * come from a session's `knowledgeIds` and can outlive the file.
+   *
+   * Soft-deleted files ARE returned here, via the plugin's explicit
+   * `includeDeleted` opt-in: an id handed to this method comes from a reference
+   * that outlived the file (e.g. `session.knowledgeIds`), and "this attachment was
+   * deleted at T" is the answer the caller needs - silently dropping the row would
+   * look identical to the file never having existed. Callers should surface
+   * `deletedAt`. This deliberately differs from `findMetadataBySessionId` below,
+   * which lists what a session currently holds; do not "fix" one to match the other.
+   *
+   * Bounded like its sibling: the id list is caller-supplied and a session can
+   * accumulate knowledge references without limit, so an uncapped `$in` would size
+   * both the query and the response off whatever that array grew to. `hasMore`
+   * reports the truncation so a caller can say the list is partial rather than
+   * under-reporting it as complete.
+   */
+  async findMetadataByIds(
+    ids: string[],
+    cap = METADATA_PAGE_CAP
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return { data: [], hasMore: false };
+    const result = await this.fabFileModel
+      .find({ _id: { $in: convertIds(validIds.slice(0, cap + 1)) } }, METADATA_ONLY_PROJECTION)
+      .setOptions({ includeDeleted: true })
+      .limit(cap + 1);
+    const hasMore = result.length > cap;
+    const rows = hasMore ? result.slice(0, cap) : result;
+    return { data: rows.map(d => d.toJSON()), hasMore };
+  }
+
+  /**
+   * As `findMetadataByIds`, for the files a session currently holds. Excludes
+   * soft-deleted files - see the note above on why the two differ.
+   *
+   * Bounded at METADATA_PAGE_CAP rows; a session with more uploads than that is
+   * truncated rather than returning an unbounded list. `hasMore` lets the caller
+   * say so instead of silently under-reporting.
+   */
+  async findMetadataBySessionId(
+    sessionId: string,
+    cap = METADATA_PAGE_CAP
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }> {
+    const result = await this.fabFileModel
+      .find({ sessionId, deletedAt: null }, METADATA_ONLY_PROJECTION)
+      .sort({ createdAt: 1, _id: 1 })
+      .limit(cap + 1);
+    const hasMore = result.length > cap;
+    const rows = hasMore ? result.slice(0, cap) : result;
+    return { data: rows.map(d => d.toJSON()), hasMore };
   }
 
   async deleteManyInIds(ids: string[]) {
@@ -638,6 +708,27 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return agg ?? { fileCount: 0, totalSizeBytes: 0 };
   }
 
+  /**
+   * Distinct live file count per lake, keyed by `datalakeTag`. Browse surfaces used to size a
+   * lake from `<prefix>:` tag matches, which reads 0 for a lake whose files carry only the
+   * membership tag - the shape the upload wizard and bulk ingest produce - and over-counts a
+   * file carrying several taxonomy tags. Same predicate and live-file filter as
+   * computeDataLakeStats, so a displayed count and a lake's stored stats cannot disagree.
+   */
+  async countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>> {
+    if (scopes.length === 0) return {};
+    const counts = await Promise.all(
+      scopes.map(scope =>
+        this.fabFileModel.countDocuments({
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+        })
+      )
+    );
+    return Object.fromEntries(scopes.map((scope, i) => [scope.datalakeTag, counts[i]]));
+  }
+
   async archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
     const result = await this.fabFileModel.updateMany(
       { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null },
@@ -719,6 +810,31 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           'tags.$.name': newTag,
         },
       }
+    );
+    return result.modifiedCount;
+  }
+
+  async pushTagsByFabFileId(fabFileId: string, tagNames: string[], strength = 0): Promise<number> {
+    // Skip the round trip: the batch caller hits this whenever a file has nothing to add.
+    if (tagNames.length === 0) return 0;
+    // Each filter below is evaluated against the STORED document, not against the other ops, so
+    // a name repeated within one call would otherwise pass its filter twice and insert twice.
+    const names = [...new Set(tagNames)];
+    // One filtered $push per name, the atomic counterpart to the $pull above. Not $addToSet:
+    // it dedupes on whole-element equality, so { name: 'x', strength: 1 } would land alongside
+    // an existing { name: 'x', strength: 0 }. Not a single $each push either - that has no
+    // per-element guard, so one already-present name either poisons the batch or duplicates.
+    const result = await this.fabFileModel.bulkWrite(
+      names.map(name => ({
+        updateOne: {
+          // Exact names, mirroring the $pull above and the read path, which matches a tag by
+          // exact `$in`. A case-insensitive guard here would be actively wrong: a file carrying
+          // some other casing of a data-lake meta-tag is NOT a member of that lake, so the
+          // canonical tag has to be insertable alongside it.
+          filter: { _id: fabFileId, 'tags.name': { $ne: name } },
+          update: { $push: { tags: { name, strength } } },
+        },
+      }))
     );
     return result.modifiedCount;
   }

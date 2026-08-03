@@ -7,6 +7,7 @@ import {
   getLastBuildDebugInfo,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
+  includeHardcodedSystemMessage,
   TOOL_RESULT_NOT_RECORDED,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
@@ -2627,5 +2628,27 @@ describe('unusable attachments are judged one at a time', () => {
     expect(result.some(m => typeof m.content === 'string' && (m.content as string).startsWith('bravo,col'))).toBe(
       false
     );
+  });
+});
+
+describe('includeHardcodedSystemMessage - format prompt scoping (#1320)', () => {
+  it('prepends the built-in scoped default when no template is stored', () => {
+    const result = includeHardcodedSystemMessage([], '');
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe('system');
+    // The scope guard is the load-bearing part of the fix: the previous wording read as a
+    // general compliance instruction and degraded refusal behavior on underspecified asks.
+    expect(result[0].content as string).toMatch(
+      /^Formatting only - nothing here decides whether or how fully to answer/
+    );
+    expect(result[0].content as string).not.toContain('Adhere to specific formatting requests');
+  });
+
+  it('uses the stored template verbatim when provided, prepended ahead of existing messages', () => {
+    const existing: IMessage[] = [{ role: 'system', content: 'other block' }];
+    const result = includeHardcodedSystemMessage(existing, 'Custom template.');
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ role: 'system', content: 'Custom template.' });
+    expect(result[1]).toEqual(existing[0]);
   });
 });

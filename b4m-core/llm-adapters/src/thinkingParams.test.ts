@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, buildThinkingParams, resolveOutputMaxTokens } from './thinkingParams';
+import {
+  ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+  buildThinkingParams,
+  reasonsWithinOutputBudget,
+  resolveOutputMaxTokens,
+} from './thinkingParams';
 import { ChatModels, ModelBackend, type ModelInfo } from '@bike4mind/common';
 
 const baseModelInfo: ModelInfo = {
@@ -15,6 +20,26 @@ const baseModelInfo: ModelInfo = {
 };
 
 const legacyModel: ModelInfo = { ...baseModelInfo };
+
+/** GPT-5.6 Sol: a hardcoded OpenAI reasoning model, so REASONING_SUPPORTED_MODELS knows it. */
+const openAiReasoningModel: ModelInfo = {
+  ...baseModelInfo,
+  id: ChatModels.GPT5_6_SOL,
+  name: 'GPT-5.6 Sol',
+  backend: ModelBackend.OpenAI,
+  thinkingStyle: undefined,
+};
+
+/** The same shape, but an id no hardcoded set lists - only the dispatch profile identifies it. */
+const catalogOnlyReasoningModel: ModelInfo = {
+  ...baseModelInfo,
+  id: 'some-unlisted-reasoning-model' as ModelInfo['id'],
+  name: 'Unlisted reasoning model',
+  backend: ModelBackend.OpenAI,
+  thinkingStyle: undefined,
+  can_think: true,
+  dispatchProfile: { maxTokensParam: 'max_completion_tokens', toolTransport: 'chat' },
+};
 const adaptiveModel: ModelInfo = {
   ...baseModelInfo,
   id: ChatModels.CLAUDE_4_7_OPUS,
@@ -92,7 +117,7 @@ describe('resolveOutputMaxTokens', () => {
     resolveOutputMaxTokens({
       requested,
       fallback: 4096,
-      thinkingStyle: modelInfo.thinkingStyle,
+      modelInfo,
       modelMaxOutputTokens: modelInfo.max_tokens,
     });
 
@@ -111,6 +136,10 @@ describe('resolveOutputMaxTokens', () => {
     it('honors a budget on a legacy model', () => {
       expect(resolve(16_000, legacyModel)).toBe(16_000);
     });
+
+    it('honors a budget on an OpenAI reasoning model', () => {
+      expect(resolve(16_000, openAiReasoningModel)).toBe(16_000);
+    });
   });
 
   describe('absence is sized for the model', () => {
@@ -120,6 +149,24 @@ describe('resolveOutputMaxTokens', () => {
 
     it('defaults a legacy model to the caller-supplied fallback', () => {
       expect(resolve(undefined, legacyModel)).toBe(4096);
+    });
+
+    // The starvation this fixes: OpenAI spends reasoning inside max_completion_tokens,
+    // so a 4096 default was consumed entirely by reasoning and the turn came back empty.
+    it('defaults an OpenAI reasoning model to the shared floor', () => {
+      expect(resolve(undefined, openAiReasoningModel)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    // Catalog-only reasoning models are not in any hardcoded set, so the reasoning-shaped
+    // max-tokens param plus can_think has to carry them.
+    it('defaults an unlisted but reasoning-shaped catalog model to the shared floor', () => {
+      expect(resolve(undefined, catalogOnlyReasoningModel)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    // can_think alone must not trigger headroom: legacy thinking is opt-in and
+    // separately budgeted, so these models would pay for room they never use.
+    it('does not give a non-reasoning-shaped model the floor merely for can_think', () => {
+      expect(resolve(undefined, { ...legacyModel, can_think: true })).toBe(4096);
     });
   });
 
@@ -136,10 +183,10 @@ describe('resolveOutputMaxTokens', () => {
     });
   });
 
-  // Bedrock's Kimi ids carry no thinkingStyle (that field describes Anthropic
-  // request shapes only), yet they reason inside max_tokens like an adaptive model.
-  // Left on the 4096 fallback, k2-thinking spent the whole budget on its monologue
-  // and the reply reached the user as a reasoning trace cut off at </think>.
+  // Bedrock's Kimi ids reason inside max_tokens but match none of the shape checks:
+  // no adaptive thinkingStyle, no reasoning_effort, plain max_tokens. Left on the
+  // 4096 fallback, k2-thinking spent the whole budget on its monologue and the reply
+  // reached the user as a reasoning trace cut off at </think>.
   describe('models that reason inside the output budget by id', () => {
     const kimiThinking: ModelInfo = {
       ...baseModelInfo,
@@ -150,33 +197,26 @@ describe('resolveOutputMaxTokens', () => {
     };
     const kimiK25: ModelInfo = { ...kimiThinking, id: ChatModels.KIMI_K2_5_BEDROCK, name: 'Kimi K2.5 (Bedrock)' };
 
-    const resolveById = (requested: number | undefined, modelInfo: ModelInfo) =>
-      resolveOutputMaxTokens({
-        requested,
-        fallback: 4096,
-        thinkingStyle: modelInfo.thinkingStyle,
-        modelMaxOutputTokens: modelInfo.max_tokens,
-        model: modelInfo.id,
-      });
-
     it('defaults k2-thinking to its own cap rather than the fallback', () => {
-      expect(resolveById(undefined, kimiThinking)).toBe(16_384);
+      expect(resolve(undefined, kimiThinking)).toBe(16_384);
     });
 
     it('defaults k2.5 to its own cap rather than the fallback', () => {
-      expect(resolveById(undefined, kimiK25)).toBe(16_384);
+      expect(resolve(undefined, kimiK25)).toBe(16_384);
     });
 
     it('still honors an explicit caller budget', () => {
-      expect(resolveById(2048, kimiThinking)).toBe(2048);
+      expect(resolve(2048, kimiThinking)).toBe(2048);
     });
 
     it('leaves a non-listed model on the fallback', () => {
-      expect(resolveById(undefined, legacyModel)).toBe(4096);
+      expect(resolve(undefined, legacyModel)).toBe(4096);
     });
 
-    it('ignores the id set when no model is passed', () => {
-      expect(resolve(undefined, kimiThinking)).toBe(4096);
+    it('reports the Kimi ids as reasoning within the output budget', () => {
+      expect(reasonsWithinOutputBudget(kimiThinking)).toBe(true);
+      expect(reasonsWithinOutputBudget(kimiK25)).toBe(true);
+      expect(reasonsWithinOutputBudget(legacyModel)).toBe(false);
     });
   });
 });

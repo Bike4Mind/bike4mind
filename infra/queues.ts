@@ -420,6 +420,12 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
         actions: ['rekognition:DetectModerationLabels'],
         resources: ['*'],
       },
+      {
+        // generateAndSend resolves the agent's pinned model, which emits
+        // Lumina5/ModelSunset. PutMetricData takes no resource scope.
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
     ],
     copyFiles: [
       {

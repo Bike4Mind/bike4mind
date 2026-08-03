@@ -1063,12 +1063,23 @@ export async function processFabFilesServer(
   const userVectorPrompt: { [embeddingModel: string]: number[] } = {};
   const selectedEmbeddingModel = embeddingFactory.getDefaultEmbeddingModel();
 
-  if (!userVectorPrompt[selectedEmbeddingModel]) {
-    // TODO: Optimize this. Currently taking 1-2 seconds to vectorize user prompt
+  // Embedding the query powers semantic chunk selection over vectorized files, but it is an
+  // OPTIMIZATION, not a prerequisite for answering. A failure here - provider down, key revoked or
+  // scoped out of the embeddings endpoint, rate limited - must not abort the whole turn: without
+  // this guard a single 401 surfaced as "OpenAI rejected the embedding request" and no file reached
+  // the model at all. On failure we leave userVectorPrompt empty and every file falls through to the
+  // raw-content path below, so the attachment still reaches the model.
+  try {
     userVectorPrompt[selectedEmbeddingModel] = await generateSafeEmbedding(
       embeddingFactory.createEmbeddingService(selectedEmbeddingModel),
       userPrompt,
       logger
+    );
+  } catch (error) {
+    logger.warn(
+      `[processFabFilesServer] Query embedding failed (${selectedEmbeddingModel}); ` +
+        'falling back to raw file content for this turn.',
+      error
     );
   }
 
@@ -1284,23 +1295,21 @@ export async function processFabFilesServer(
       } else if (!supportsVision && isImageAttachment(file.mimeType)) {
         logger.warn(`File ${file.fileName} is an image but model does not support vision. Skipping...`);
       } else {
-        if (file.vectorized) {
+        // Files without embeddingModel are old files that were vectorized with the default embedding
+        // model, which is text-embedding-ada-002.
+        const embeddingModel =
+          (file.embeddingModel as SupportedEmbeddingModel) ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+        const userVector = userVectorPrompt[embeddingModel];
+
+        // Cosine chunk selection needs BOTH a vectorized file and a query vector in the same space.
+        // A vectorized file with no usable query vector (the query embedding failed above, or the
+        // file was stored under a different embedding model than this turn's default) must NOT be
+        // dropped - fall through to the raw-content path so the attachment still reaches the model.
+        const canCosineSearch = file.vectorized && !!userVector && userVector.length > 0;
+
+        if (canCosineSearch) {
           // Perform cosine search for vectorized content
           sendStatusUpdate('Now doing retrieval augmented search');
-
-          // Files without embeddingModel are old files that were vectorized with the default embedding model
-          // which is text-embedding-ada-002
-          const embeddingModel =
-            (file.embeddingModel as SupportedEmbeddingModel) ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
-
-          const userVector = userVectorPrompt[embeddingModel];
-
-          if (!userVector || userVector.length === 0) {
-            logger.warn(
-              `No user vector found for embedding model ${embeddingModel}, skipping cosine search for file ${file.fileName}`
-            );
-            return;
-          }
 
           // clear error message if the file has been vectorized
           if (file.error?.startsWith('Knowledge in the workbench with the fileName')) {
@@ -1362,7 +1371,8 @@ export async function processFabFilesServer(
         } else {
           try {
             logger.info(
-              `[processFabFilesServer] File "${file.fileName}" is NOT vectorized — using raw content path (maxTokens=${maxTokens})`
+              `[processFabFilesServer] Using raw content path for "${file.fileName}" ` +
+                `(vectorized=${!!file.vectorized}, haveQueryVector=${!!userVector}, maxTokens=${maxTokens})`
             );
             let errorMsg = null;
 
@@ -1496,7 +1506,13 @@ export async function processFabFilesServer(
 }
 
 export function includeHardcodedSystemMessage(messages: IMessage[], formatPrompt: string): IMessage[] {
-  let format = `format replies to maintain the integrity of the requested style. Default to markdown for text-based responses. Ensure proper structuring for poems, songs, or haikus with appropriate line breaks and stanza divisions. Adhere to specific formatting requests such as TypeScript when specified by the user.`;
+  // Scoped to formatting ONLY. The previous wording ("Adhere to specific formatting
+  // requests...") read as a general compliance instruction and measurably degraded
+  // refusal behavior on underspecified asks (#1320: 81.1 -> 40.3 as the sole system
+  // content). Same failure shape as the artifact prompt's pre-SCOPE wording (#1296):
+  // any instruction that sounds like "comply with requests" bleeds into WHETHER to
+  // answer, not just how to format. Keep any future edit inside that boundary.
+  let format = `Formatting only - nothing here decides whether or how fully to answer. Format replies to maintain the integrity of the requested style; default to markdown for text. Preserve proper structure for poems, songs, or haikus. When the user specifies an output format (e.g. TypeScript), use that format for the parts you do answer.`;
   if (formatPrompt) {
     format = formatPrompt;
   }

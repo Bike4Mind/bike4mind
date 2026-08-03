@@ -122,3 +122,35 @@ describe('UserModel authProviders', () => {
     });
   });
 });
+
+describe('UserModel preferences', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await User.deleteMany({});
+  });
+
+  // UserPreferencesSchema is a strict subdocument, so it silently drops any key not
+  // declared on it - a pref added to the client types and the Zod allowlist but not
+  // here still reverts on reload. Drop showSplashCards from the schema -> this fails.
+  it('persists declared boolean display preferences and drops undeclared keys', async () => {
+    const user = await User.create({
+      name: 'Preferences Test',
+      username: `prefs-test-${Math.random().toString(36).slice(2, 10)}`,
+      password: null,
+      hasUsablePassword: false,
+      preferences: {
+        showSplashCards: true,
+        showFunTools: false,
+        saveGeneratedAudio: true,
+        notAPreference: true,
+      },
+    } as unknown as Parameters<typeof User.create>[0]);
+
+    const reloaded = await User.findById(user._id);
+    expect(reloaded?.preferences?.showSplashCards).toBe(true);
+    expect(reloaded?.preferences?.showFunTools).toBe(false);
+    expect(reloaded?.preferences?.saveGeneratedAudio).toBe(true);
+    expect((reloaded?.preferences as Record<string, unknown>)?.notAPreference).toBeUndefined();
+  });
+});

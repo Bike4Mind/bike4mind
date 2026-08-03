@@ -138,6 +138,8 @@ export async function recordOperationalUsage(
     creditsCharged,
     status: 'ok',
     latencyMs: params.latencyMs,
+    // Same origin as this call's ledger write above (params.source ?? 'system').
+    source: params.source ?? 'system',
   };
 
   await db.usageEvents

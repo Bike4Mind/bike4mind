@@ -11,8 +11,9 @@ import {
   createLiteLlmSource,
   indexLiteLlm,
   LITELLM_PRICES_URL,
-  LITELLM_RELEASE_TAG,
+  LITELLM_REF,
   normalizeLiteLlm,
+  parseBracketField,
   TOKENS_PER_MTOK,
 } from './litellm';
 
@@ -39,12 +40,51 @@ const byId = (records: ReturnType<typeof normalizeLiteLlm>['records']) =>
   new Map(records.map(record => [record.modelId, record]));
 
 describe('litellm supply chain', () => {
-  it('is pinned to a release tag, never a moving branch', () => {
-    expect(LITELLM_RELEASE_TAG).toMatch(/^v\d+\.\d+\.\d+$/);
-    expect(LITELLM_PRICES_URL).toContain(`/${LITELLM_RELEASE_TAG}/`);
-    for (const moving of ['/main/', '/master/', '/HEAD/', '/refs/heads/']) {
-      expect(LITELLM_PRICES_URL).not.toContain(moving);
-    }
+  it('reads a moving ref, because a snapshot reports the price a provider used to charge', () => {
+    // A release tag froze this feed weeks behind models.dev. The two then disagreed
+    // about every repriced model, the agreement check applied neither, and the old
+    // rate kept billing - so the ref moves and the guardrails do the protecting.
+    expect(LITELLM_REF).toBe('main');
+    expect(LITELLM_PRICES_URL).toContain(`/${LITELLM_REF}/`);
+  });
+
+  it('builds the url from the one constant, so re-pinning is a single edit', () => {
+    expect(LITELLM_PRICES_URL.split('/').filter(Boolean)).toContain(LITELLM_REF);
+    expect(LITELLM_PRICES_URL.endsWith('/model_prices_and_context_window.json')).toBe(true);
+  });
+});
+
+describe('litellm long-context bracket field names', () => {
+  it.each([
+    ['input_cost_per_token_above_272k_tokens', 'inputPerMTok', 272_000],
+    ['output_cost_per_token_above_272k_tokens', 'outputPerMTok', 272_000],
+    ['cache_read_input_token_cost_above_272k_tokens', 'cacheReadPerMTok', 272_000],
+    ['cache_creation_input_token_cost_above_272k_tokens', 'cacheWritePerMTok', 272_000],
+    ['input_cost_per_token_above_128k_tokens', 'inputPerMTok', 128_000],
+    ['output_cost_per_token_above_512k_tokens', 'outputPerMTok', 512_000],
+  ])('reads %s as the %s rate above %i tokens', (field, rate, aboveTokens) => {
+    // The breakpoint comes from the name: 272k here is data, not a constant.
+    expect(parseBracketField(field)).toEqual({ rate, aboveTokens });
+  });
+
+  it.each([
+    // Service tiers of the same bracket, not brackets: pricing one of them as the
+    // long-context rate would overcharge or undercharge every long prompt.
+    'input_cost_per_token_above_272k_tokens_priority',
+    'output_cost_per_token_above_272k_tokens_flex',
+    'cache_read_input_token_cost_above_200k_tokens_priority',
+    // A cache-TTL lane, and a compound of a TTL lane with a bracket.
+    'cache_creation_input_token_cost_above_1hr',
+    'cache_creation_input_token_cost_above_1hr_above_200k_tokens',
+    // Units DiscoveredPrice cannot express, bracketed or not.
+    'input_cost_per_character_above_128k_tokens',
+    'input_cost_per_video_per_second_above_15s_interval',
+    // The flat rates themselves, and a breakpoint of zero.
+    'input_cost_per_token',
+    'input_cost_per_token_flex',
+    'input_cost_per_token_above_0k_tokens',
+  ])('rejects %s', field => {
+    expect(parseBracketField(field)).toBeNull();
   });
 });
 
@@ -74,6 +114,61 @@ describe('litellm normalization', () => {
       outputPerMTok: 10,
       cacheReadPerMTok: 0.125,
     });
+  });
+
+  it('carries the long-context bracket, cache rates and all', () => {
+    // xai/grok-4.5 prices above 200k at double its base rate, cache_read included.
+    expect(byId(result.records).get('grok-4.5')?.pricing?.brackets).toEqual([
+      { aboveTokens: 200_000, inputPerMTok: 4, outputPerMTok: 12, cacheReadPerMTok: 1 },
+    ]);
+  });
+
+  it('never mistakes a priority or flex lane for a context bracket', () => {
+    // The fixture's gemini-3-pro-preview carries _above_200k_tokens_priority
+    // variants at double the standard bracket; one bracket is the right answer.
+    const brackets = byId(result.records).get('gemini-3-pro-preview')?.pricing?.brackets;
+    expect(brackets).toHaveLength(1);
+    expect(brackets?.[0]).toMatchObject({ aboveTokens: 200_000, inputPerMTok: 4, outputPerMTok: 18 });
+  });
+
+  it('leaves an entry with no bracket fields flat', () => {
+    expect(byId(result.records).get('gpt-5')?.pricing).not.toHaveProperty('brackets');
+    // claude-opus-4-5 carries cache_creation_input_token_cost_above_1hr, which is a
+    // cache TTL and not a context bracket.
+    expect(byId(result.records).get('claude-opus-4-5-20251101')?.pricing).not.toHaveProperty('brackets');
+  });
+
+  it('drops the whole ladder when a bracket prices only one direction', () => {
+    // Upstream really does this: gemini/gemini-1.5-flash publishes an above-128k
+    // input rate and no output rate. Half a ladder would bill long prompts at the
+    // short-prompt output rate, so the observation goes out flat instead.
+    const half = {
+      'claude-half-ladder': {
+        input_cost_per_token: 1e-6,
+        output_cost_per_token: 5e-6,
+        input_cost_per_token_above_200k_tokens: 2e-6,
+      },
+    };
+    const records = normalizeLiteLlm(half, [{ modelId: 'claude-half-ladder', backend: 'anthropic' }], RUN_AT).records;
+    expect(records[0]?.pricing).toEqual({ inputPerMTok: 1, outputPerMTok: 5 });
+  });
+
+  it('sorts brackets ascending whatever order the fields arrive in', () => {
+    const ladder = {
+      'claude-two-rungs': {
+        input_cost_per_token: 1e-6,
+        output_cost_per_token: 5e-6,
+        input_cost_per_token_above_512k_tokens: 4e-6,
+        output_cost_per_token_above_512k_tokens: 20e-6,
+        input_cost_per_token_above_200k_tokens: 2e-6,
+        output_cost_per_token_above_200k_tokens: 10e-6,
+      },
+    };
+    const records = normalizeLiteLlm(ladder, [{ modelId: 'claude-two-rungs', backend: 'anthropic' }], RUN_AT).records;
+    expect(records[0]?.pricing?.brackets).toEqual([
+      { aboveTokens: 200_000, inputPerMTok: 2, outputPerMTok: 10 },
+      { aboveTokens: 512_000, inputPerMTok: 4, outputPerMTok: 20 },
+    ]);
   });
 
   it('joins FLUX and Whisper but carries no price, because theirs is not per token', () => {
@@ -173,7 +268,7 @@ describe('litellm source fetch', () => {
     expect(createLiteLlmSource({ targets }).isConfigured({} as never, {})).toBe(true);
   });
 
-  it('fetches the pinned tag and records a content hash', async () => {
+  it('fetches the ref and records the content hash that is its audit trail', async () => {
     const calls: string[] = [];
     const restore = stubFetch(url => {
       calls.push(url);

@@ -1,4 +1,4 @@
-import { ChatModels, NO_TEMPERATURE_MODELS, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, NO_TEMPERATURE_MODELS, REASONING_SUPPORTED_MODELS, type ModelInfo } from '@bike4mind/common';
 
 /**
  * Thinking parameter shapes for the Anthropic Messages API.
@@ -17,30 +17,56 @@ export type ThinkingConfig =
  * short replies but keeps reasoning from consuming the whole budget and leaving
  * no room for the visible answer. Both paths that size an adaptive model's output
  * budget read it from here: buildThinkingParams (thinking explicitly enabled) and
- * resolveOutputMaxTokens (the default when a caller names no budget), which also
- * applies it to the non-Anthropic ids in REASONS_WITHIN_OUTPUT_BUDGET.
+ * resolveOutputMaxTokens (the default when a caller names no budget).
  */
 export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
 
 /**
- * Models that always reason, and spend the reasoning INSIDE max_tokens without
- * adding to it - the same budget shape as Anthropic's adaptive models, which are
- * recognized by thinkingStyle instead and so are not listed here.
- *
- * On these ids a small default budget is not "a shorter answer": the monologue
- * consumes the whole thing and generation stops mid-thought, so the reply is a
- * reasoning trace with no answer after it at all. Bedrock's Kimi copies inline
- * that monologue in `content` (see bedrockBackend/moonshot.ts) and cap output at
- * 16K, so the floor below clamps to 16K for them - the entire budget, which is
- * the only value that leaves room for an answer after a long trace.
+ * Room reserved for the visible answer above a legacy thinking budget. The API rejects a
+ * thinking budget that is not strictly below max_tokens, and a budget that merely squeaks
+ * under it starves the answer instead, so anything that moves either value has to preserve
+ * this gap - see the non-streaming clamp in anthropicBackend.
  */
-const REASONS_WITHIN_OUTPUT_BUDGET: ReadonlySet<string> = new Set<string>([
+export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
+
+/**
+ * Reasoning-inside-the-budget ids that none of the shape checks below can infer.
+ * Bedrock's Kimi always reasons, but it is not Anthropic-adaptive, does not take
+ * `reasoning_effort`, and sends plain `max_tokens` - so it looks like an ordinary
+ * model at every seam we can inspect. Bedrock copies the monologue inline into
+ * `content` (see bedrockBackend/moonshot.ts) and caps output at 16K, so the floor
+ * resolves to that entire cap, which is the only value leaving room for an answer
+ * after a long trace.
+ */
+const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
   ChatModels.KIMI_K2_THINKING_BEDROCK,
   ChatModels.KIMI_K2_5_BEDROCK,
 ]);
 
 /**
- * Resolves the output budget to send as max_tokens.
+ * Whether the model spends reasoning tokens inside its output budget on every turn,
+ * which is what makes a small budget produce an empty visible reply rather than a
+ * short one. Provider-agnostic on purpose: the trap is identical whether the tokens
+ * are Anthropic extended thinking inside max_tokens or OpenAI reasoning inside
+ * max_completion_tokens.
+ *
+ * Deliberately NOT keyed on can_think alone. Anthropic legacy models set it too, but
+ * their thinking is opt-in and separately budgeted, so they do not starve at a small
+ * default and should not pay for headroom they will not use.
+ *
+ * The last clause is the catalog-only case: a reasoning-shaped model we never
+ * hardcoded still declares a reasoning-shaped max-tokens param, which openaiBackend
+ * already pairs with can_think for the same "not in our tables" reason.
+ */
+export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
+  if (modelInfo.thinkingStyle === 'adaptive') return true;
+  if (REASONING_SUPPORTED_MODELS.has(modelInfo.id)) return true;
+  if (REASONS_WITHIN_OUTPUT_BUDGET_IDS.has(modelInfo.id)) return true;
+  return modelInfo.dispatchProfile?.maxTokensParam === 'max_completion_tokens' && modelInfo.can_think === true;
+}
+
+/**
+ * Resolves the output budget to send as the model's max-tokens param.
  *
  * The distinction that matters: `requested` being undefined means the caller
  * expressed no preference, which is the only case we are free to size for the
@@ -50,29 +76,23 @@ const REASONS_WITHIN_OUTPUT_BUDGET: ReadonlySet<string> = new Set<string>([
  * bump is neither harmless nor invisible. Explicit values are still clamped down
  * to the model's own cap, since over-requesting 400s the whole turn.
  *
- * Models that reason inside max_tokens default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR
- * (clamped to their own cap): a small default can be consumed entirely by reasoning,
- * leaving an empty visible reply. That is Anthropic's adaptive models by
- * thinkingStyle, plus the ids in REASONS_WITHIN_OUTPUT_BUDGET.
+ * Models that reason inside the output budget default to
+ * ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, clamped to their own cap: a small default can
+ * be consumed entirely by reasoning, leaving an empty visible reply.
  */
 export function resolveOutputMaxTokens({
   requested,
   fallback,
-  thinkingStyle,
+  modelInfo,
   modelMaxOutputTokens,
-  model,
 }: {
   requested: number | undefined;
   /** Default for models that do not reason inside the output budget. */
   fallback: number;
-  thinkingStyle: ModelInfo['thinkingStyle'];
+  modelInfo: ModelInfo;
   modelMaxOutputTokens: number;
-  /** Model id, for the id-keyed set above. Absent means no id-keyed quirk applies. */
-  model?: string;
 }): number {
-  const reasonsWithinBudget =
-    thinkingStyle === 'adaptive' || (model !== undefined && REASONS_WITHIN_OUTPUT_BUDGET.has(model));
-  const preferred = requested ?? (reasonsWithinBudget ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
+  const preferred = requested ?? (reasonsWithinOutputBudget(modelInfo) ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
   return Math.min(preferred, modelMaxOutputTokens);
 }
 
@@ -127,7 +147,7 @@ export function buildThinkingParams(
   }
 
   // Legacy models: explicit budget_tokens, inflate max_tokens to fit
-  const maxTokens = Math.max(currentMaxTokens, budgetTokens + 1000);
+  const maxTokens = Math.max(currentMaxTokens, budgetTokens + THINKING_ANSWER_HEADROOM_TOKENS);
 
   return {
     thinkingConfig: {

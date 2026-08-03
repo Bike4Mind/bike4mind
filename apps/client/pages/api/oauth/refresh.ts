@@ -1,6 +1,7 @@
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { isTokenVersionCurrent } from '@bike4mind/services';
-import { User } from '@bike4mind/database';
+import { buildSessionDevice } from '@server/auth/sessionDevice';
+import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
+import { User, userRepository, authSessionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { UnauthorizedError } from '@bike4mind/utils';
@@ -22,7 +23,25 @@ const handler = baseApi({ auth: false })
   .post(async (req, res) => {
     const { refresh_token } = RefreshRequestSchema.parse(req.body);
 
+    const signAccessToken = (id: string, tokenVersion: number, extra?: Record<string, unknown>) =>
+      authTokenGenerator.signAccessToken(id, tokenVersion, extra);
+
     try {
+      // New session-store path: rotate the opaque refresh token against the AuthSession store.
+      if (authSessionService.isOpaqueRefreshToken(refresh_token)) {
+        const rotated = await authSessionService.rotateSession(refresh_token, {
+          db: { authSessions: authSessionRepository, users: userRepository },
+          signAccessToken,
+          logger: req.logger,
+        });
+        return res.json({
+          access_token: rotated.accessToken,
+          refresh_token: rotated.refreshToken,
+          token_type: 'Bearer',
+          expires_in: 604800, // 7 days
+        });
+      }
+
       const payload = authTokenGenerator.verifyRefreshToken(refresh_token);
 
       if (!payload || !payload.userId) {
@@ -36,18 +55,22 @@ const handler = baseApi({ auth: false })
         throw new UnauthorizedError('Invalid refresh token');
       }
 
-      // Re-stamp impersonatedBy from the refresh token onto the new access token pair - otherwise
-      // an impersonated session that refreshes loses the marker and logout.ts's impersonation
-      // guard silently stops applying (see AuthTokenGeneratorService.createRefreshToken).
-      const { accessToken, refreshToken } = authTokenGenerator.createAccessToken(
+      // Legacy JWT refresh token: lazily migrate onto a session. impersonatedBy is re-stamped so
+      // an impersonated session keeps the marker across refresh (logout.ts's guard depends on it).
+      const migrated = await authSessionService.issueSession(
         user.id,
-        user.tokenVersion ?? 0,
-        payload.impersonatedBy ? { impersonatedBy: payload.impersonatedBy } : undefined
+        {
+          createdVia: 'legacy-migration',
+          tokenVersion: user.tokenVersion ?? 0,
+          impersonatedBy: payload.impersonatedBy,
+          device: buildSessionDevice(req),
+        },
+        { db: { authSessions: authSessionRepository }, signAccessToken, logger: req.logger }
       );
 
       return res.json({
-        access_token: accessToken,
-        refresh_token: refreshToken,
+        access_token: migrated.accessToken,
+        refresh_token: migrated.refreshToken,
         token_type: 'Bearer',
         expires_in: 604800, // 7 days
       });

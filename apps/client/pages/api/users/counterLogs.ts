@@ -1,4 +1,4 @@
-import { Permission, dayjs, SAFE_USER_LOOKUP_PROJECT, type CompletionSource } from '@bike4mind/common';
+import { Permission, dayjs, type CompletionSource } from '@bike4mind/common';
 import {
   CounterLog,
   DailyReport,
@@ -7,6 +7,8 @@ import {
   cacheRepository,
   counterLogRepository,
   convertPipelineForDocumentDB,
+  executeFacetCompatible,
+  User,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Logger } from '@bike4mind/observability';
@@ -18,6 +20,12 @@ import { Request } from 'express';
 import qs from 'qs';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { sendMaybeGzip } from '@server/utils/sendMaybeGzip';
+import {
+  buildUserActivityPipeline,
+  parseMetadataFilters,
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+} from '@server/analytics/userActivityQuery';
 
 dayjs.extend(isSameOrBefore);
 
@@ -26,132 +34,6 @@ dayjs.extend(isSameOrBefore);
 // larger than the 20s used by the overwatch services - this route's aggregation is heavier and
 // its Lambda budget is 60s, so it is sized to this route rather than copied from elsewhere.
 const AGGREGATION_MAX_TIME_MS = 45000;
-
-/**
- * Builds the `{logs}` aggregation pipeline.
- *
- * Exported so the test can assert against the pipeline the handler ACTUALLY runs. An earlier
- * version of the test re-declared its own copy of these stages, which meant deleting the
- * `$lookup`'s inner `$project` from this file failed nothing - the test was asserting that
- * MongoDB's `$project` works, not that this route uses it. Keep the builder as the single
- * source of truth rather than reintroducing a replica.
- *
- * The user `$lookup` runs AFTER the first `$group`, not before: userEmail/userOrganization are
- * functionally determined by userId alone, so grouping first and joining once per resulting
- * (date, counterName, userId, metadata) row returns the same output as the old per-raw-document
- * join while touching far fewer rows (this collection's bloat is metadata fragmentation, not
- * user cardinality - see the Phase 2 plan). It also lets the join use the index-eligible
- * localField/foreignField form instead of a correlated let/pipeline/$expr subquery.
- *
- * NOTE: `convertLookupForDocumentDB` returns early when `localField`/`foreignField` are present
- * (b4m-core/db-core/src/utils/documentdb-compat.ts), so the inner pipeline below is passed to
- * DocumentDB unconverted. Do not add an `$expr` in there expecting it to be rewritten.
- */
-export const buildCounterLogsPipeline = (matchCondition: Record<string, unknown>) => [
-  {
-    $match: matchCondition,
-  },
-  {
-    $addFields: {
-      dateString: {
-        $dateToString: {
-          format: '%Y-%m-%d',
-          date: '$datetime',
-          timezone: 'UTC',
-        },
-      },
-    },
-  },
-  {
-    $group: {
-      // metadata is part of the group key; storing it again as a field would
-      // duplicate it in every user pushed below.
-      _id: {
-        date: '$dateString',
-        counterName: '$counterName',
-        userId: '$userId',
-        metadata: '$metadata',
-      },
-      totalValue: { $sum: '$counterValue' },
-      count: { $sum: 1 },
-    },
-  },
-  {
-    $addFields: {
-      // $convert (not $toObjectId) so a non-ObjectId userId such as 'SYSTEM' yields null and
-      // simply fails to join, instead of aborting the whole aggregation with a 500. Mirrors
-      // InboxModel.findByReceiverId, which documents the same hazard.
-      userObjectId: { $convert: { input: '$_id.userId', to: 'objectId', onError: null } },
-    },
-  },
-  {
-    // Aggregation $lookup bypasses Mongoose select:false, so project off the shared
-    // secret-free baseline plus the extra non-secret fields this route reads (email,
-    // organization). Never add credential/secret fields here.
-    $lookup: {
-      from: 'users',
-      localField: 'userObjectId',
-      foreignField: '_id',
-      pipeline: [
-        {
-          $project: {
-            ...SAFE_USER_LOOKUP_PROJECT,
-            email: 1,
-            organization: 1,
-          },
-        },
-      ],
-      as: 'user',
-    },
-  },
-  {
-    $unwind: {
-      path: '$user',
-      preserveNullAndEmptyArrays: true,
-    },
-  },
-  {
-    $addFields: {
-      userEmail: { $ifNull: ['$user.email', ''] },
-    },
-  },
-  {
-    $group: {
-      // Outer key includes metadata, so every user in users[] shares the parent
-      // log's metadata. Consumers read it from the parent row, not per user.
-      _id: {
-        date: '$_id.date',
-        counterName: '$_id.counterName',
-        metadata: '$_id.metadata',
-      },
-      totalValue: { $sum: '$totalValue' },
-      count: { $sum: '$count' },
-      uniqueUsers: { $addToSet: '$_id.userId' },
-      users: {
-        $push: {
-          userId: '$_id.userId',
-          userEmail: '$userEmail',
-          userOrganization: '$user.organization',
-          totalValue: '$totalValue',
-          count: '$count',
-        },
-      },
-    },
-  },
-  {
-    $project: {
-      _id: 0,
-      date: '$_id.date',
-      counterName: '$_id.counterName',
-      metadata: '$_id.metadata',
-      totalValue: 1,
-      count: 1,
-      uniqueUserCount: { $size: '$uniqueUsers' },
-      users: 1,
-    },
-  },
-  { $sort: { date: 1, counterName: 1 } },
-];
 
 const CounterLogsQuerySchema = z.object({
   startDate: z.string(),
@@ -180,6 +62,30 @@ const CounterLogsQuerySchema = z.object({
     .string()
     .optional()
     .transform(val => val === 'true'),
+  counterName: z.string().max(200).optional(),
+  userEmail: z.string().max(200).optional(),
+  metadataFilters: z
+    .string()
+    .optional()
+    .transform((val, ctx) => {
+      try {
+        return parseMetadataFilters(val);
+      } catch {
+        ctx.addIssue({ code: 'custom', message: 'Invalid metadataFilters' });
+        return z.NEVER;
+      }
+    }),
+  // Bounded as well as positive: an absurd page yields a $skip Mongo rejects (500) and mints a
+  // fresh 1h cache document per distinct value after running the full aggregation.
+  page: z.coerce.number().int().positive().max(1_000_000).prefault(1),
+  // Clamped rather than rejected: an over-large page is a client bug, not a caller error,
+  // and the cap is what keeps the response under Lambda's 6MB limit.
+  limit: z.coerce
+    .number()
+    .int()
+    .positive()
+    .prefault(DEFAULT_PAGE_SIZE)
+    .transform(val => Math.min(val, MAX_PAGE_SIZE)),
 });
 
 interface DailyReportResponse {
@@ -225,8 +131,21 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
   }
 
   try {
-    const { startDate, endDate, events, orgs, excludeOrgs, report, includeInsights, weeklyReport } =
-      CounterLogsQuerySchema.parse(qs.parse(req.query));
+    const {
+      startDate,
+      endDate,
+      events,
+      orgs,
+      excludeOrgs,
+      report,
+      includeInsights,
+      weeklyReport,
+      counterName,
+      userEmail,
+      metadataFilters,
+      page,
+      limit,
+    } = CounterLogsQuerySchema.parse(qs.parse(req.query));
 
     // For report requests, check cache first
     if (report || weeklyReport) {
@@ -265,65 +184,79 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
       return sendMaybeGzip(req, res, response);
     } else {
-      // For non-report requests, check cache first
-      const cacheKey = `logs:${startDate}:${endDate}:${events?.join(',')}:${orgs?.join(',')}:${excludeOrgs?.join(',')}`;
+      // Page-scoped key: the pre-pagination key omitted page/limit/search, so any change
+      // of page would have been served the first page's cached body.
+      //
+      // Each segment is percent-encoded before joining. counterName/userEmail are free text,
+      // so a raw ':' in one segment would otherwise shift the delimiter and let two different
+      // filter sets collide - e.g. counterName='a:b' + userEmail='c' vs counterName='a' +
+      // userEmail='b:c' - serving one admin the other's rows and total for the full hour.
+      const cacheKey = [
+        'logs:v2',
+        ...[
+          startDate,
+          endDate,
+          String(page),
+          String(limit),
+          events?.join(',') ?? '',
+          orgs?.join(',') ?? '',
+          excludeOrgs?.join(',') ?? '',
+          counterName ?? '',
+          userEmail ?? '',
+          JSON.stringify(metadataFilters ?? []),
+        ].map(encodeURIComponent),
+      ].join(':');
 
       const cachedResult = await cacheRepository.findByKey(cacheKey);
       if (cachedResult) {
-        return sendMaybeGzip(req, res, { logs: cachedResult.result });
+        const cached = cachedResult.result as { rows: unknown[]; total: number };
+        return sendMaybeGzip(req, res, { logs: cached.rows, total: cached.total, page, limit });
       }
 
-      const startUTC = new Date(`${startDate}T00:00:00.000Z`);
-      const endUTC = new Date(`${endDate}T23:59:59.999Z`);
-
-      const matchCondition: any = {
-        datetime: {
-          $gte: startUTC,
-          $lte: endUTC,
-        },
-      };
-
-      if (events?.length) {
-        matchCondition.counterName = { $in: events };
-      }
-
-      if (orgs?.length && !orgs.includes('all')) {
-        matchCondition.userOrganization = { $in: orgs };
-      }
-
-      if (excludeOrgs?.length) {
-        matchCondition.userOrganization = { $nin: excludeOrgs };
-      }
-
-      // Pipeline lives in buildCounterLogsPipeline (exported, so the test asserts the real thing).
-      const pipeline = buildCounterLogsPipeline(matchCondition);
+      const { pipeline, facetStages } = buildUserActivityPipeline({
+        startDate,
+        endDate,
+        page,
+        limit,
+        events,
+        orgs,
+        excludeOrgs,
+        counterName,
+        userEmail,
+        metadataFilters,
+        usersCollection: User.collection.name,
+      });
 
       // No `hint`: measured with explain() on this collection's real index set, forcing
       // { datetime: 1 } makes Mongo examine 4x the documents on the filtered shape the UI
       // actually sends (orgs/excludeOrgs are always present), because it blocks the
       // { datetime, counterName, userOrganization } compound index the planner would pick.
       // A hint would also hard-fail the whole request if the index were ever absent.
-      const result = await CounterLog.aggregate(convertPipelineForDocumentDB(pipeline), {
+      const [facet] = await executeFacetCompatible(CounterLog, convertPipelineForDocumentDB(pipeline), facetStages, {
         allowDiskUse: true,
         maxTimeMS: AGGREGATION_MAX_TIME_MS,
       });
+      const rows = facet?.rows ?? [];
+      const total = facet?.total?.[0]?.value ?? 0;
 
       // Cache the result with 1 hour expiry
       try {
         await cacheRepository.createOrUpdate({
           key: cacheKey,
-          result,
+          result: { rows, total },
           expiresAt: new Date(Date.now() + 3600000), // 1 hour from now
         });
       } catch (error) {
         console.error('Failed to cache logs: %s', error);
       }
 
-      return sendMaybeGzip(req, res, { logs: result });
+      return sendMaybeGzip(req, res, { logs: rows, total, page, limit });
     }
   } catch (error) {
     if (error instanceof z.ZodError) {
-      throw new BadRequestError('Invalid query parameters', { error: error.issues });
+      // Keyed `issues`, not `error`: errorHandler spreads additionalInfo and then writes its own
+      // `error` message over it, so a detail under that name never reaches the client.
+      throw new BadRequestError('Invalid query parameters', { issues: error.issues });
     }
     throw error;
   }
