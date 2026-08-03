@@ -60,8 +60,13 @@ const transferFileTagsToUser = async (fileId: string, userId: string) => {
     // Create/update tags atomically
     for (const { originalName, count, ownerTag } of Array.from(tagInfo.values())) {
       console.log('Processing tag:', { originalName, count, ownerTag });
+      // Under the recipient's own casing when they already hold the name in another one. The upsert
+      // below matches the name exactly, so handing it the owner's spelling minted a second document
+      // folding to the same name - the pair the count aggregate reads as two buckets while the
+      // file-list filter reads as one.
+      const held = await fileTagRepository.findByFoldedNameAndUserId(originalName, userId);
       await fileTagRepository.findOrCreateByNameAndUserId(
-        originalName,
+        held?.name ?? originalName,
         userId,
         {
           icon: ownerTag?.icon || '🏷️',

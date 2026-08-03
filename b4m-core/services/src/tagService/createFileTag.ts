@@ -1,9 +1,10 @@
 import { IFileTag, IFileTagRepository, TagType } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { normalizeTagName } from './tagName';
 
 const tagCreateFileTagSchema = z.object({
-  name: z.string(),
+  name: z.string().trim().min(1),
   icon: z.string().optional(),
   color: z.string().optional(),
   description: z.string().optional(),
@@ -13,22 +14,45 @@ type TagCreateFileTagSchema = z.infer<typeof tagCreateFileTagSchema>;
 
 interface TagCreateFileTagAdapters {
   db: {
-    fileTags: Pick<IFileTagRepository, 'create'>;
+    fileTags: Pick<IFileTagRepository, 'create' | 'findByFoldedNameAndUserId'>;
   };
 }
 
+const isDuplicateKeyError = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 11000;
+
+/**
+ * Find-or-create a file tag by name, under the shared collision rule (see tagName): a name the user
+ * already holds in ANY casing resolves to that document instead of minting a second one.
+ *
+ * This is the auto-create door - research tasks name their own tag - so unlike tagService/create it
+ * cannot refuse the caller, it has to converge. Without the lookup a generated `Research: Q3` beside
+ * a hand-made `research: q3` produced the pair the count aggregate reads as two buckets while the
+ * file-list filter reads as one, with no user action involved at all.
+ *
+ * A `datalake:` name is deliberately NOT refused here: accepting an invite to a shared lake file
+ * mints one, which is why tagService/remove has to guard against deleting it.
+ *
+ * The caller's icon/colour is ignored when an existing document claims the name. Correct for a
+ * find-or-create - the document the user already has wins - and the same thing
+ * findOrCreateByNameAndUserId's $setOnInsert does.
+ */
 export const createFileTag = async (
   userId: string,
   parameters: TagCreateFileTagSchema,
   adapters: TagCreateFileTagAdapters
-) => {
-  const { name, icon, color, description } = secureParameters(parameters, tagCreateFileTagSchema);
+): Promise<IFileTag> => {
+  const params = secureParameters(parameters, tagCreateFileTagSchema);
+  const name = normalizeTagName(params.name);
+
+  const existing = await adapters.db.fileTags.findByFoldedNameAndUserId(name, userId);
+  if (existing) return existing;
 
   const build: Omit<IFileTag, 'id'> = {
     name,
-    icon,
-    color,
-    description,
+    icon: params.icon,
+    color: params.color,
+    description: params.description,
     userId,
 
     type: TagType.FILE,
@@ -40,7 +64,16 @@ export const createFileTag = async (
     updatedAt: new Date(),
   };
 
-  const tag = await adapters.db.fileTags.create(build);
-
-  return tag;
+  try {
+    return await adapters.db.fileTags.create(build);
+  } catch (error) {
+    // A concurrent creation of the same exact name between the lookup and this write. Converge on
+    // whatever landed rather than failing a background task; the caller asked for the tag to exist,
+    // and it does.
+    if (isDuplicateKeyError(error)) {
+      const raced = await adapters.db.fileTags.findByFoldedNameAndUserId(name, userId);
+      if (raced) return raced;
+    }
+    throw error;
+  }
 };
