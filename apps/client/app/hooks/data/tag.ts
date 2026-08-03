@@ -1,8 +1,18 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { IFabFileDocument, IFileTag, ITag } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { AxiosError } from 'axios';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
+
+/**
+ * The server's own reason, when it gave one. errorHandler puts an HTTPError's message in
+ * `data.error`, and these are the messages a user has to see rather than guess at: a create or
+ * rename is refused when the name already exists in another casing, and "Failed to create tag"
+ * leaves them retrying the same name.
+ */
+const serverReason = (error: unknown, fallback: string): string =>
+  (error instanceof AxiosError ? error.response?.data?.error : undefined) ?? fallback;
 
 interface TagCountsResponse {
   tagCounts: { tag: string; count: number }[];
@@ -41,8 +51,8 @@ export const useCreateFileTag = () => {
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       toast.success('Tag created successfully');
     },
-    onError: () => {
-      toast.error('Failed to create tag');
+    onError: error => {
+      toast.error(serverReason(error, 'Failed to create tag'));
     },
   });
 };
@@ -71,8 +81,8 @@ export const useUpdateFileTag = () => {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
       toast.success('Tag updated successfully');
     },
-    onError: () => {
-      toast.error('Failed to update tag');
+    onError: error => {
+      toast.error(serverReason(error, 'Failed to update tag'));
     },
   });
 };
