@@ -135,4 +135,48 @@ describe('resolveOutputMaxTokens', () => {
       expect(resolve(undefined, smallCap)).toBe(8192);
     });
   });
+
+  // Bedrock's Kimi ids carry no thinkingStyle (that field describes Anthropic
+  // request shapes only), yet they reason inside max_tokens like an adaptive model.
+  // Left on the 4096 fallback, k2-thinking spent the whole budget on its monologue
+  // and the reply reached the user as a reasoning trace cut off at </think>.
+  describe('models that reason inside the output budget by id', () => {
+    const kimiThinking: ModelInfo = {
+      ...baseModelInfo,
+      id: ChatModels.KIMI_K2_THINKING_BEDROCK,
+      name: 'Kimi K2 Thinking (Bedrock)',
+      backend: ModelBackend.Bedrock,
+      max_tokens: 16_384,
+    };
+    const kimiK25: ModelInfo = { ...kimiThinking, id: ChatModels.KIMI_K2_5_BEDROCK, name: 'Kimi K2.5 (Bedrock)' };
+
+    const resolveById = (requested: number | undefined, modelInfo: ModelInfo) =>
+      resolveOutputMaxTokens({
+        requested,
+        fallback: 4096,
+        thinkingStyle: modelInfo.thinkingStyle,
+        modelMaxOutputTokens: modelInfo.max_tokens,
+        model: modelInfo.id,
+      });
+
+    it('defaults k2-thinking to its own cap rather than the fallback', () => {
+      expect(resolveById(undefined, kimiThinking)).toBe(16_384);
+    });
+
+    it('defaults k2.5 to its own cap rather than the fallback', () => {
+      expect(resolveById(undefined, kimiK25)).toBe(16_384);
+    });
+
+    it('still honors an explicit caller budget', () => {
+      expect(resolveById(2048, kimiThinking)).toBe(2048);
+    });
+
+    it('leaves a non-listed model on the fallback', () => {
+      expect(resolveById(undefined, legacyModel)).toBe(4096);
+    });
+
+    it('ignores the id set when no model is passed', () => {
+      expect(resolve(undefined, kimiThinking)).toBe(4096);
+    });
+  });
 });

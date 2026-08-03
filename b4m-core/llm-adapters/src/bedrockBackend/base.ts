@@ -245,6 +245,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     let outputTokens = 0;
     let cacheReadTokens = 0;
     let cacheWriteTokens = 0;
+    // Last normalized stop reason a translate() reported, on either transport. Only
+    // the final frame of a stream carries one, so keeping the last non-empty value is
+    // what makes it available on the callbacks that follow. ChatCompletionProcess reads this to
+    // flag a truncated reply ('max_tokens'); adapters that do not set it leave the
+    // reply on the client's truncation heuristic instead.
+    let stopReason: string | undefined;
 
     const buildCompletionInfo = (): CompletionInfo => {
       // Emit accum + this turn's running tokens. wrappedOnChunk's assign-not-add
@@ -262,6 +268,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         ...(cacheReadTokens > 0 ? { cacheReadInputTokens: cacheReadTokens } : {}),
         ...(cacheWriteTokens > 0 ? { cacheCreationInputTokens: cacheWriteTokens } : {}),
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
+        ...(stopReason ? { stopReason } : {}),
       };
 
       if (options.cacheStrategy?.enableCaching && (cacheReadTokens > 0 || cacheWriteTokens > 0)) {
@@ -335,6 +342,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           if (streamEvent.chunk?.bytes) {
             const json = new TextDecoder().decode(streamEvent.chunk.bytes);
             const { chunk } = this.translateStreamChunk(model, JSON.parse(json));
+            if (chunk?.stopReason) stopReason = chunk.stopReason;
 
             chunk?.choices?.forEach(choice => {
               func[choice.index] ||= {};
@@ -520,6 +528,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         if (!response.body) throw new Error('No response body');
         const json = new TextDecoder().decode(response.body);
         const { chunk } = this.translateChunk(model, JSON.parse(json));
+        if (chunk?.stopReason) stopReason = chunk.stopReason;
         const streamedText: string[] = [];
         chunk?.choices.forEach(choice => {
           streamedText[choice.index] = choice.chunkText || '';

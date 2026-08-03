@@ -192,9 +192,10 @@ function assertNeverElisionSignal(signal: never): never {
 
 /**
  * Output budget used when a caller supplies no max_tokens. Within supported output
- * limits for every configured non-reasoning model; adaptive reasoning models default
- * to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since they spend thinking tokens
- * inside this budget. Distinct from the catalog's DEFAULT_MAX_OUTPUT_TOKENS, which
+ * limits for every configured non-reasoning model; models that reason inside the
+ * output budget default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since they
+ * spend thinking tokens inside it (see resolveOutputMaxTokens for which those are).
+ * Distinct from the catalog's DEFAULT_MAX_OUTPUT_TOKENS, which
  * fills in a model's *capability* when its record omits one.
  */
 const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
@@ -1633,6 +1634,7 @@ export class ChatCompletionProcess {
         fallback: DEFAULT_OUTPUT_MAX_TOKENS,
         thinkingStyle: modelInfo.thinkingStyle,
         modelMaxOutputTokens,
+        model: modelInfo.id,
       });
 
       // Fetch buffer for URL/file content. Deliberately NOT safeMaxTokens: this is a

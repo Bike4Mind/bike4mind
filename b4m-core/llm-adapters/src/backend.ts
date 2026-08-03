@@ -231,6 +231,15 @@ export interface ICompletionResponse {
 export interface ICompletionResponseChunk {
   model: string;
   choices: Array<IChoice>;
+  /**
+   * The provider's end-of-generation reason, already normalized onto the
+   * `CompletionInfo.stopReason` vocabulary. Carried on the chunk rather than the
+   * choice because ChoiceEndReason has no truncation member: 'stop' and 'length'
+   * both map to ChoiceEndReason.STOP, so a translate() that only sets
+   * statusEndReason cannot tell a caller the output was cut off. Backends whose
+   * complete() derives stopReason from the raw provider response leave this unset.
+   */
+  stopReason?: string;
 }
 
 export type CompletionCallback = (done: boolean, chunk?: ICompletionResponseChunk) => Promise<void>;

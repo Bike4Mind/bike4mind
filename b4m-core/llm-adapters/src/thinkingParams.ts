@@ -1,4 +1,4 @@
-import { NO_TEMPERATURE_MODELS, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, NO_TEMPERATURE_MODELS, type ModelInfo } from '@bike4mind/common';
 
 /**
  * Thinking parameter shapes for the Anthropic Messages API.
@@ -17,9 +17,27 @@ export type ThinkingConfig =
  * short replies but keeps reasoning from consuming the whole budget and leaving
  * no room for the visible answer. Both paths that size an adaptive model's output
  * budget read it from here: buildThinkingParams (thinking explicitly enabled) and
- * resolveOutputMaxTokens (the default when a caller names no budget).
+ * resolveOutputMaxTokens (the default when a caller names no budget), which also
+ * applies it to the non-Anthropic ids in REASONS_WITHIN_OUTPUT_BUDGET.
  */
 export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
+
+/**
+ * Models that always reason, and spend the reasoning INSIDE max_tokens without
+ * adding to it - the same budget shape as Anthropic's adaptive models, which are
+ * recognized by thinkingStyle instead and so are not listed here.
+ *
+ * On these ids a small default budget is not "a shorter answer": the monologue
+ * consumes the whole thing and generation stops mid-thought, so the reply is a
+ * reasoning trace with no answer after it at all. Bedrock's Kimi copies inline
+ * that monologue in `content` (see bedrockBackend/moonshot.ts) and cap output at
+ * 16K, so the floor below clamps to 16K for them - the entire budget, which is
+ * the only value that leaves room for an answer after a long trace.
+ */
+const REASONS_WITHIN_OUTPUT_BUDGET: ReadonlySet<string> = new Set<string>([
+  ChatModels.KIMI_K2_THINKING_BEDROCK,
+  ChatModels.KIMI_K2_5_BEDROCK,
+]);
 
 /**
  * Resolves the output budget to send as max_tokens.
@@ -32,23 +50,29 @@ export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
  * bump is neither harmless nor invisible. Explicit values are still clamped down
  * to the model's own cap, since over-requesting 400s the whole turn.
  *
- * Adaptive reasoning models default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR because
- * they spend extended-thinking tokens inside max_tokens: a small default can be
- * consumed entirely by reasoning, leaving an empty visible reply.
+ * Models that reason inside max_tokens default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR
+ * (clamped to their own cap): a small default can be consumed entirely by reasoning,
+ * leaving an empty visible reply. That is Anthropic's adaptive models by
+ * thinkingStyle, plus the ids in REASONS_WITHIN_OUTPUT_BUDGET.
  */
 export function resolveOutputMaxTokens({
   requested,
   fallback,
   thinkingStyle,
   modelMaxOutputTokens,
+  model,
 }: {
   requested: number | undefined;
   /** Default for models that do not reason inside the output budget. */
   fallback: number;
   thinkingStyle: ModelInfo['thinkingStyle'];
   modelMaxOutputTokens: number;
+  /** Model id, for the id-keyed set above. Absent means no id-keyed quirk applies. */
+  model?: string;
 }): number {
-  const preferred = requested ?? (thinkingStyle === 'adaptive' ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
+  const reasonsWithinBudget =
+    thinkingStyle === 'adaptive' || (model !== undefined && REASONS_WITHIN_OUTPUT_BUDGET.has(model));
+  const preferred = requested ?? (reasonsWithinBudget ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
   return Math.min(preferred, modelMaxOutputTokens);
 }
 
