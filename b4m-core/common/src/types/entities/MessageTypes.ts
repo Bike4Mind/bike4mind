@@ -98,6 +98,11 @@ export interface IMessage {
    * Messages carrying it are dropped by `stripToolDependentMessages` wherever a turn continues
    * WITHOUT tools - notably each backend's max-tool-call recursion, which re-sends the assembled
    * messages with tools removed. Control-only, like `cache`: never sent to a provider.
+   *
+   * Intended for SYSTEM messages, which is what every current caller sets it on. The backends that
+   * rebuild each wire message from `role`/`content` drop it for free; the two that forward IMessage
+   * objects more or less intact strip it explicitly, so setting it on a user or assistant message is
+   * safe rather than a silent leak.
    */
   requiresTool?: string;
 }
