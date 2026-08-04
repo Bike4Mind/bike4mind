@@ -1,4 +1,4 @@
-import { ArtifactTypeSchema } from '@bike4mind/common';
+import { ArtifactTypeSchema, queryBool } from '@bike4mind/common';
 import { artifactService } from '@bike4mind/services';
 import { artifactRepository, artifactContentRepository, artifactVersionRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -11,7 +11,7 @@ const ListArtifactsSchema = z.object({
   offset: z.coerce.number().min(0).prefault(0),
   sortBy: z.enum(['type', 'title', 'createdAt', 'updatedAt']).prefault('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).prefault('desc'),
-  includeDeleted: z.coerce.boolean().prefault(false),
+  includeDeleted: queryBool,
   type: z.string().optional(),
   status: z.enum(['draft', 'review', 'published', 'archived']).optional(),
   visibility: z.enum(['private', 'project', 'organization', 'public']).optional(),
@@ -64,7 +64,8 @@ const handler = baseApi()
 
       const result = await artifactService.list(userId, validatedParams, {
         db: {
-          artifacts: artifactRepository as any,        },
+          artifacts: artifactRepository as any,
+        },
       });
 
       return res.json(result);
@@ -85,7 +86,10 @@ const handler = baseApi()
 
       const result = await artifactService.create(userId, validatedData, {
         db: {
-          artifacts: artifactRepository as any,          artifactContents: artifactContentRepository as any,          artifactVersions: artifactVersionRepository as any,        },
+          artifacts: artifactRepository as any,
+          artifactContents: artifactContentRepository as any,
+          artifactVersions: artifactVersionRepository as any,
+        },
       });
 
       return res.status(201).json(result);
