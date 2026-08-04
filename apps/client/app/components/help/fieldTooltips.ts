@@ -21,8 +21,6 @@ export const FIELD_TOOLTIPS = {
     'Pick which AI model handles this request. Different models have different speeds, costs, and capabilities.',
   researchMode:
     'Enables multi-step research with source citations. Sends your prompt to several model configurations in parallel — uses more credits.',
-  researchModeToggle:
-    'Run the same prompt against up to four model/parameter configurations side-by-side. Token usage scales with the number of configurations.',
   imageModelTemperature:
     'Controls how loosely the image model interprets your prompt. Higher values yield more varied results.',
   imageSize:

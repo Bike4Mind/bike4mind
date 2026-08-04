@@ -89,6 +89,7 @@ import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
+import { TabIntro } from './TabIntro';
 import { isImageModel } from '@client/app/utils/commands';
 import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
@@ -1370,8 +1371,6 @@ const AISettingsTab: React.FC<{
         width: { xs: '100%', sm: 'calc(100% + 20px)' },
         height: '100%',
         ...scrollbarStyles,
-        // The tab bar always precedes this container, so the track already starts below the
-        // header icons and needs no top offset to clear them.
         '&::-webkit-scrollbar-track': {
           background: 'transparent',
         },
@@ -1388,22 +1387,10 @@ const AISettingsTab: React.FC<{
         onSettingsClick={onViewDetails}
         stickyHeader={
           !isMobile && (
-            <Stack
-              direction="column"
-              alignItems="flex-start"
-              gap="4px"
-              sx={{
-                width: 'auto',
-                // Clears the tab bar, which is always present: AI Settings + Audio, plus
-                // Research Mode when its flag is on.
-                mt: '20px',
-              }}
-            >
-              <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>AI Settings</Typography>
-              <Typography sx={{ color: 'text.primary50', fontSize: '14px', pr: { sm: 4 }, lineHeight: '1.4' }}>
-                Choose an AI model, then open its settings to tune it to your needs.
-              </Typography>
-            </Stack>
+            <TabIntro
+              title="AI Settings"
+              description="Choose an AI model, then open its settings to tune it to your needs."
+            />
           )
         }
       />
@@ -1446,51 +1433,42 @@ const ResearchModeTab: React.FC<{
       <Box sx={{ mb: 3 }}>
         <Box
           sx={{
+            mt: '20px',
             mb: 2,
             display: 'flex',
             justifyContent: 'space-between',
-            alignItems: 'center',
+            alignItems: 'flex-start',
             flexDirection: { xs: 'column', md: 'row' },
+            gap: { xs: 2, md: 4 },
           }}
         >
-          <Box>
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
-              <Typography
-                sx={{
-                  color: 'text.primary',
-                  fontSize: '18px',
-                  fontWeight: '500',
-                }}
-              >
-                Research Mode
-              </Typography>
-              <ContextHelpButton helpId="features/research-mode" tooltipText="Learn about Research Mode" size="sm" />
-            </Stack>
-            <Typography sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4' }}>
-              Configure up to 4 different model/parameter combinations to compare responses
-            </Typography>
-          </Box>
+          <TabIntro
+            title="Research Mode"
+            description="Run the same prompt against up to four model/parameter configurations side-by-side. Token usage scales with the number of configurations."
+            titleAdornment={
+              <ContextHelpButton
+                helpId="features/research-mode"
+                tooltipText="Learn about Research Mode"
+                size="sm"
+                sx={HEADER_ICON_BUTTON_SX}
+              />
+            }
+            mt={0}
+          />
 
           <Stack
             direction="row"
             alignItems="center"
-            spacing={2}
+            spacing="12px"
             justifyContent={{ xs: 'flex-start', md: 'center' }}
             sx={{
               width: { xs: '100%', md: 'auto' },
-              mt: { xs: 2, md: 0 },
+              flexShrink: 0,
             }}
           >
-            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
-              <Typography level="title-sm" sx={{ fontWeight: 'normal', fontSize: '14px', textAlign: 'right' }}>
-                Enable Research Mode
-              </Typography>
-              <FieldTooltip
-                ariaLabel="Help: Enable Research Mode"
-                content={FIELD_TOOLTIPS.researchModeToggle}
-                data-testid="field-tooltip-research-mode"
-              />
-            </Box>
+            <Typography level="title-sm" sx={{ fontWeight: 'normal', fontSize: '14px', textAlign: 'right' }}>
+              Enable
+            </Typography>
             <SquareSlideToggle
               checked={researchMode.enabled}
               onChange={e => setLLM({ researchMode: { ...researchMode, enabled: e.target.checked } })}
@@ -1978,26 +1956,16 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                     '& .MuiTab-root': {
                       fontSize: '14px',
                       fontWeight: 400,
-                      // Padding alone sets desktop width, so each tab is only as wide as its
-                      // label. A fixed width padded "Audio" out to match "Research Mode"; the
-                      // labels are literals here, so there is no length to defend against.
                       paddingBlock: 0,
                       paddingInline: '12px',
                       color: 'text.primary50',
                       flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                      // Lets the equal-width mobile tabs shrink below their label; on desktop
-                      // flex is 0 0 auto, so this has no effect there.
                       minWidth: 0,
-                      // The bar is pinned to 32px, so a wrapped label would break its height.
                       whiteSpace: 'nowrap',
                       textAlign: 'center',
                       transition: 'background 0.2s, color 0.2s',
-                      // Matches the /profile tab strip (StyledTab there): the shared sidenav
-                      // tint, plus the label coming to full strength - that strip fades its
-                      // label with opacity, but ours is colour, so the hover swaps colour.
-                      // Scoped to unselected tabs so the active one does not react. Goes
-                      // through Joy's variant var because its own :hover rule for the plain
-                      // variant outranks a bare `&:hover` here.
+                      // Joy's own :hover rule for the plain variant outranks a bare `&:hover`
+                      // here, so the tint has to go through its variant var.
                       '&:not(.Mui-selected)': {
                         '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
                         '&:hover': {
@@ -2068,14 +2036,16 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                   sx={{ p: 0, overflowY: 'auto', overflowX: 'hidden', height: 'calc(100% - 37px)' }}
                 >
                   {activeTab === 'audio' && (
-                    <Box sx={{ px: 1, py: 1 }}>
-                      <Typography level="title-md" sx={{ mb: 0.5 }}>
-                        Audio Generation
-                      </Typography>
-                      <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 2 }}>
-                        Defaults for the in-app audio generator (Files Manager &rarr; Generate Audio).
-                      </Typography>
-                      <AudioGenerationSettings />
+                    <Box>
+                      <TabIntro
+                        title="Audio Generation"
+                        description={
+                          <>Defaults for the in-app audio generator (Files Manager &rarr; Generate Audio).</>
+                        }
+                      />
+                      <Box sx={{ mt: 2 }}>
+                        <AudioGenerationSettings />
+                      </Box>
                     </Box>
                   )}
                 </TabPanel>

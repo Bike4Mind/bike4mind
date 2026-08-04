@@ -1387,7 +1387,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
             flexDirection: 'column',
             gap: '8px',
             height: {
-              // Reserves room for the tab bar, which is always present above this list.
               xs: 'calc(100dvh - 180px)',
               sm: 'auto',
             },
