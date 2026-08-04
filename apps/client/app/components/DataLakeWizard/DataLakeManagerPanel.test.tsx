@@ -26,8 +26,21 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
 // TaxonomyReviewPanel has its own suite; here we only assert the manager opens it with the
 // right batch (asserted via a data attribute mirroring the real component's props).
 vi.mock('./TaxonomyReviewPanel', () => ({
-  default: ({ batch, prefix, onClose }: { batch: { id: string }; prefix: string; onClose: () => void }) => (
-    <div data-testid="mock-taxonomy-review-panel" data-batch-id={batch.id} data-prefix={prefix}>
+  default: ({
+    batch,
+    prefix,
+    onClose,
+  }: {
+    batch: { id: string; taxonomyStatus: string };
+    prefix: string;
+    onClose: () => void;
+  }) => (
+    <div
+      data-testid="mock-taxonomy-review-panel"
+      data-batch-id={batch.id}
+      data-batch-status={batch.taxonomyStatus}
+      data-prefix={prefix}
+    >
       <button data-testid="mock-taxonomy-review-close" onClick={onClose}>
         Close
       </button>
@@ -124,6 +137,13 @@ const renderPanel = () =>
     </Wrapper>
   );
 
+const rerenderPanel = (rerender: (ui: ReactNode) => void) =>
+  rerender(
+    <Wrapper>
+      <DataLakeManagerPanel />
+    </Wrapper>
+  );
+
 beforeEach(() => {
   isFeatureEnabled.mockReset();
   isFeatureEnabled.mockReturnValue(true);
@@ -188,6 +208,28 @@ describe('DataLakeManagerPanel - root view', () => {
     expect(screen.queryByTestId('datalake-manager-lake-mine')).not.toBeInTheDocument();
     // The lifecycle accordions are unaffected.
     expect(screen.getByTestId('datalake-archived-section')).toBeInTheDocument();
+  });
+
+  it('shows a persistent info icon next to the Data Lakes header that reveals the RAG explanation on hover', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    // Always present next to the header - not a one-time dismissable callout.
+    const trigger = screen.getByTestId('field-tooltip-data-lake-panel');
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-label', 'Help: Data Lakes');
+
+    await user.hover(trigger);
+    expect(
+      await screen.findByText(/curated knowledge base the AI grounds its answers in \(RAG\)/i)
+    ).toBeInTheDocument();
+  });
+
+  it('clicking the info icon does not also collapse the Data Lakes accordion', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByTestId('field-tooltip-data-lake-panel'));
+    expect(screen.getByTestId('datalake-manager-lake-mine')).toBeInTheDocument();
   });
 });
 
@@ -367,6 +409,46 @@ describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
     expect(panel).toHaveAttribute('data-prefix', 'lk');
     // Clicking the indicator must not also navigate into the lake (stopPropagation).
     expect(screen.queryByTestId('datalake-manager-lakeinfo')).not.toBeInTheDocument();
+  });
+
+  // This is the actual regression: before this fix, `reviewingBatch` was a frozen snapshot
+  // taken at click time, so a re-analyze completing (the query refetching with fresh
+  // taxonomyStatus/taxonomySuggestions) never reached the open panel.
+  it('flows a batches-list refetch into the still-open panel instead of showing a frozen snapshot', async () => {
+    useActiveDataLakeBatches.mockReturnValue({ data: [batch()] });
+    const user = userEvent.setup();
+    const { rerender } = renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-taxonomy-review-mine'));
+    expect(screen.getByTestId('mock-taxonomy-review-panel')).toHaveAttribute('data-batch-status', 'ready');
+
+    // Simulate the poll refetching mid-review with a re-analyze in flight, then completing.
+    useActiveDataLakeBatches.mockReturnValue({ data: [batch({ taxonomyStatus: 'analyzing' })] });
+    rerenderPanel(rerender);
+    expect(screen.getByTestId('mock-taxonomy-review-panel')).toHaveAttribute('data-batch-status', 'analyzing');
+
+    useActiveDataLakeBatches.mockReturnValue({ data: [batch({ taxonomyStatus: 'ready' })] });
+    rerenderPanel(rerender);
+    // Still open (same batch id), now reflecting the fresh suggestions - not stuck on
+    // the object captured when the indicator was first clicked.
+    const panel = screen.getByTestId('mock-taxonomy-review-panel');
+    expect(panel).toHaveAttribute('data-batch-id', 'b1');
+    expect(panel).toHaveAttribute('data-batch-status', 'ready');
+  });
+
+  it('closes the panel once the batch drops out of the attention set (e.g. after apply completes)', async () => {
+    useActiveDataLakeBatches.mockReturnValue({ data: [batch()] });
+    const user = userEvent.setup();
+    const { rerender } = renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-taxonomy-review-mine'));
+    expect(screen.getByTestId('mock-taxonomy-review-panel')).toBeInTheDocument();
+
+    // 'applied' isn't in the attention set, so the batch disappears from the list response.
+    useActiveDataLakeBatches.mockReturnValue({ data: [] });
+    rerenderPanel(rerender);
+
+    expect(screen.queryByTestId('mock-taxonomy-review-panel')).not.toBeInTheDocument();
   });
 
   it('opens the review panel from the right-pane chip too, and closes it', async () => {

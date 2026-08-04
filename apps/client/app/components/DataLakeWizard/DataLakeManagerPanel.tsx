@@ -67,6 +67,8 @@ import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
 import type { EditableLake } from './DataLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
+import FieldTooltip from '@client/app/components/help/FieldTooltip';
+import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchDocument, IFabFileDocument } from '@bike4mind/common';
 import { satisfiesTagPrefix } from '@bike4mind/common';
 
@@ -500,6 +502,14 @@ function ManagerNav({
                 onToggle={() => setShowLakes(v => !v)}
                 testid="datalake-manager-lakes-section-toggle"
                 hoverBg={hoverBg}
+                infoTooltip={
+                  <FieldTooltip
+                    content={FIELD_TOOLTIPS.dataLake}
+                    placement="bottom"
+                    ariaLabel="Help: Data Lakes"
+                    data-testid="field-tooltip-data-lake-panel"
+                  />
+                }
               />
               {showLakes &&
                 (lakesLoading ? (
@@ -844,12 +854,15 @@ function NavSectionHeader({
   onToggle,
   testid,
   hoverBg,
+  infoTooltip,
 }: {
   label: string;
   open: boolean;
   onToggle: () => void;
   testid: string;
   hoverBg: string;
+  /** Persistent help affordance next to the label, e.g. explaining RAG for the Lakes section. */
+  infoTooltip?: React.ReactNode;
 }) {
   return (
     <ListItemButton
@@ -871,6 +884,8 @@ function NavSectionHeader({
       <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
         {label}
       </Typography>
+      {/* Not part of the toggle - stop the click from also collapsing/expanding the section. */}
+      {infoTooltip && <Box onClick={e => e.stopPropagation()}>{infoTooltip}</Box>}
       {open ? (
         <ExpandLessIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
       ) : (
