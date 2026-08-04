@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { IFileTag, ITag } from '@bike4mind/common';
+import { AxiosError, type AxiosResponse } from 'axios';
 
 const mockPut = vi.fn();
 const mockPost = vi.fn();
@@ -20,6 +21,7 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
 
+import { toast } from 'sonner';
 import { useCreateFileTag, useDeleteFileTag, useUpdateFileTag } from './tag';
 
 const CACHED_TAG = { id: 'tag-1', name: 'invoices', color: 'blue', fileCount: 7 } as IFileTag;
@@ -39,6 +41,7 @@ describe('file tag mutations', () => {
     mockPut.mockReset();
     mockPost.mockReset();
     mockDelete.mockReset();
+    vi.mocked(toast.error).mockClear();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     queryClient.setQueryData(['file-tags'], [CACHED_TAG]);
     invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
@@ -138,6 +141,65 @@ describe('file tag mutations', () => {
       });
 
       expect(invalidatedKeys()).toContainEqual(['file-tags']);
+    });
+  });
+
+  // The server refuses a name that already exists in another casing. Reporting only "Failed to
+  // create tag" leaves the user retrying the same name with nothing to go on, so the reason
+  // errorHandler put in `data.error` has to reach the toast.
+  describe('reporting a refusal', () => {
+    const refusal = (message: string) =>
+      new AxiosError('Request failed with status code 400', 'ERR_BAD_REQUEST', undefined, undefined, {
+        status: 400,
+        data: { error: message },
+      } as AxiosResponse);
+
+    const attemptCreate = async () => {
+      const { result } = renderHook(() => useCreateFileTag(), { wrapper });
+      await act(async () => {
+        await result.current
+          .mutateAsync({ name: 'RUN2-Alpha' } as Omit<ITag, 'id' | 'userId' | 'createdAt' | 'updatedAt' | 'type'>)
+          .catch(() => undefined);
+      });
+    };
+
+    it('shows the server reason when a create is refused', async () => {
+      mockPost.mockRejectedValueOnce(refusal('Tag Service - Create: you already have a tag named "run2-alpha"'));
+
+      await attemptCreate();
+
+      expect(toast.error).toHaveBeenCalledWith('Tag Service - Create: you already have a tag named "run2-alpha"');
+    });
+
+    it('shows the server reason when a rename is refused', async () => {
+      mockPut.mockRejectedValueOnce(refusal('Tag Service - Update: a data lake membership tag cannot be renamed here'));
+
+      const { result } = renderHook(() => useUpdateFileTag(), { wrapper });
+      await act(async () => {
+        await result.current.mutateAsync({ id: 'tag-1', name: 'datalake:acme' } as ITag).catch(() => undefined);
+      });
+
+      expect(toast.error).toHaveBeenCalledWith(
+        'Tag Service - Update: a data lake membership tag cannot be renamed here'
+      );
+    });
+
+    it('says the request never landed when there was no response at all', async () => {
+      const networkError = new AxiosError('Network Error', 'ERR_NETWORK');
+      networkError.request = {};
+      mockPost.mockRejectedValueOnce(networkError);
+
+      await attemptCreate();
+
+      expect(toast.error).toHaveBeenCalledWith('No response received from the server.');
+    });
+
+    it('reports a plain error by its own message', async () => {
+      mockPost.mockRejectedValueOnce(new Error('boom'));
+
+      await attemptCreate();
+
+      expect(toast.error).toHaveBeenCalledWith('boom');
     });
   });
 });

@@ -1,6 +1,7 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { IFabFileDocument, IFileTag, ITag } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { getErrorMessage } from '@client/app/utils/error';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 
@@ -41,8 +42,10 @@ export const useCreateFileTag = () => {
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       toast.success('Tag created successfully');
     },
-    onError: () => {
-      toast.error('Failed to create tag');
+    // The server's own reason, not a fixed string: a create is refused when the name already exists
+    // in another casing, and "Failed to create tag" left the user retrying the same name.
+    onError: error => {
+      toast.error(getErrorMessage(error));
     },
   });
 };
@@ -71,8 +74,8 @@ export const useUpdateFileTag = () => {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
       toast.success('Tag updated successfully');
     },
-    onError: () => {
-      toast.error('Failed to update tag');
+    onError: error => {
+      toast.error(getErrorMessage(error));
     },
   });
 };
