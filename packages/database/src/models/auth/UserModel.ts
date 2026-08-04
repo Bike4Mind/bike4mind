@@ -828,13 +828,11 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
   }
 );
 
-// The authProviders dedupe key joins strategy and id with a U+0000 delimiter - a
-// byte that cannot occur in either field - so two distinct (strategy, id) pairs can
-// never collide at the concatenation boundary, e.g. ('ab','c') vs ('a','bc'). The
-// escape (not a raw NUL) keeps this file greppable; see #1221. Exported so the
-// separating property is unit-tested directly rather than only asserted in prose.
-export const authProviderDedupeKey = (strategy: string | undefined, id: string | null | undefined): string =>
-  `${strategy}\u0000${id ?? ''}`;
+// Dedupe key for an authProviders entry: strategy and id joined by a U+0000 delimiter, a
+// byte that cannot occur in either field. Written as an escape (not a raw NUL) so the file
+// stays greppable; see #1221. Exported so the delimiter's separating property is
+// unit-tested directly (see UserModel.test.ts).
+export const authProviderDedupeKey = (strategy: string, id: string | null): string => `${strategy}\u0000${id ?? ''}`;
 
 // Duplicate-(strategy, id) integrity guard for authProviders. A concurrent
 // first-login race (two logins racing stage-1 miss -> stage-2 miss, see
@@ -850,10 +848,10 @@ UserSchema.pre('save', function (next) {
   const providers = this.authProviders;
   if (Array.isArray(providers) && providers.length > 1) {
     const lastIndexByKey = new Map<string, number>();
-    providers.forEach((p, i) => lastIndexByKey.set(authProviderDedupeKey(p?.strategy, p?.id), i));
+    providers.forEach((p, i) => lastIndexByKey.set(authProviderDedupeKey(p.strategy, p.id), i));
     if (lastIndexByKey.size !== providers.length) {
       this.authProviders = providers.filter(
-        (p, i) => lastIndexByKey.get(authProviderDedupeKey(p?.strategy, p?.id)) === i
+        (p, i) => lastIndexByKey.get(authProviderDedupeKey(p.strategy, p.id)) === i
       );
     }
   }
