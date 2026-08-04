@@ -1,4 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS } from '@bike4mind/common';
 import { OllamaBackend } from './ollamaBackend';
 import type { ICompletionOptionTools } from './backend';
 
@@ -335,7 +336,16 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
     // Advertised as the window we will actually allocate (see effectiveContextWindow),
     // not the 262144 the model reports, so callers size history to what fits.
     expect(info.contextWindow).toBe(32768);
-    expect(info.max_tokens).toBe(32768);
+    expect(info.max_tokens).toBe(16384);
+  });
+
+  // collectStaticCatalogModels excludes Ollama, so the catalog-wide input-budget test
+  // cannot reach these rows - the same invariant is asserted here instead. A text model
+  // advertising its whole window as output makes safeInputWindow negative, and the chat
+  // path then refuses to build a prompt at all.
+  it('leaves a positive input budget after the advertised output reserve', async () => {
+    const [info] = await backendWithCapabilities(['completion', 'tools']).getModelInfo();
+    expect(info.contextWindow - (info.max_tokens ?? 0) - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS).toBeGreaterThan(0);
   });
 
   it('advertises a small model window verbatim', async () => {

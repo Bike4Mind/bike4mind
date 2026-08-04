@@ -105,7 +105,11 @@ export class OllamaBackend implements ICompletionBackend {
             name: model.name,
             backend: ModelBackend.Ollama,
             contextWindow,
-            max_tokens: contextWindow,
+            // Half of what we allocate: advertising the whole window made the server's
+            // context - output - buffer negative and emptied the prompt. Halving only keeps
+            // that positive above ~2000 tokens, and a window that small was already
+            // unusable for chat.
+            max_tokens: Math.floor(contextWindow / 2),
             supportsImageVariation: false,
             // Local models are free. pricing is a tier map keyed by a token
             // threshold (consumed by getTextModelCost), not a flat {input,output}
@@ -223,8 +227,9 @@ export class OllamaBackend implements ICompletionBackend {
     return {
       num_ctx: numCtx,
       ...(typeof options.temperature === 'number' && { temperature: options.temperature }),
-      // The catalogue reports max_tokens as the whole context window, so cap
-      // the output budget at what we actually allocated.
+      // A caller can still ask for more than the catalogue advertises - a stale
+      // persisted setting, or a direct API request - so cap the output budget at
+      // what we actually allocated.
       ...(typeof options.maxTokens === 'number' && { num_predict: Math.min(options.maxTokens, numCtx) }),
     };
   }
