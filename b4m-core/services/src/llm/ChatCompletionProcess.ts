@@ -528,6 +528,54 @@ export function addPairedTool<T extends string>(tools: readonly T[], trigger: T,
   return [...tools];
 }
 
+export interface ResolveEnabledToolsInput {
+  /** Tools already assembled for this request: client selection + server auto-adds. */
+  requestTools: string[];
+  /** `session.enabledTools` - tools a surface forces on regardless of the client toggle. */
+  sessionEnabledTools?: string[];
+  /** `session.disabledTools` - tools a curated surface forbids. Wins over everything else. */
+  sessionDisabledTools?: string[];
+  /** True when the session has documents attached (`session.knowledgeIds`). */
+  hasAttachedKnowledge: boolean;
+}
+
+/**
+ * Single owner for the final tool-offer list handed to `buildTools`. The step order is
+ * deliberate:
+ *   1. session-forced union     - a surface can guarantee a tool is offered.
+ *   2. attached-knowledge offer - documents attached => make them reachable via the
+ *      knowledge-base tool. Attaching files is a far stronger retrieval signal than any
+ *      phrase match, and offering a tool is cheap (the model may decline) whereas
+ *      withholding it is unrecoverable.
+ *   3. companion pairing        - a tool useless without its partner rides along
+ *      (search_knowledge_base -> retrieve_knowledge_content, image_generation ->
+ *      edit_image). Runs AFTER the union/offer so session-forced and auto-offered tools
+ *      get paired too; pairing used to run at request-parse time, before the union, so
+ *      anything added later was silently left unpaired.
+ *   4. session denylist wraps pairing - a curated surface ("approved sources only") wins.
+ *      We strip denied tools BEFORE pairing so a denied trigger can't drag its companion
+ *      in (deny search_knowledge_base => retrieve_knowledge_content must not ride along),
+ *      and AFTER pairing so a denied companion can't ride in on a surviving trigger (keep
+ *      image_generation but deny edit_image). The final filter is the authoritative last word.
+ */
+export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
+  const denied = new Set(input.sessionDisabledTools ?? []);
+  const tools = [...input.requestTools];
+
+  for (const tool of input.sessionEnabledTools ?? []) {
+    if (!tools.includes(tool)) tools.push(tool);
+  }
+
+  if (input.hasAttachedKnowledge && !tools.includes('search_knowledge_base')) {
+    tools.push('search_knowledge_base');
+  }
+
+  const survivors = tools.filter(tool => !denied.has(tool));
+  let paired = addPairedTool(survivors, 'image_generation', 'edit_image');
+  paired = addPairedTool(paired, 'search_knowledge_base', 'retrieve_knowledge_content');
+  return paired.filter(tool => !denied.has(tool));
+}
+
 /**
  * Tools this process auto-adds server-side regardless of user selection (see the
  * auto-add pushes in the request-parse method: blog_publish/blog_edit/blog_draft
@@ -730,10 +778,11 @@ export class ChatCompletionProcess {
       timezone: userTimezone,
     } = parsedBody;
 
-    // Pair tools that are useless without their companion. The UI exposes single toggles
-    // ("Image Generation", "Knowledge Base Search") that imply the paired capability.
-    let finalEnabledTools: string[] = addPairedTool(enabledTools, 'image_generation', 'edit_image');
-    finalEnabledTools = addPairedTool(finalEnabledTools, 'search_knowledge_base', 'retrieve_knowledge_content');
+    // Companion pairing now runs once in `resolveEnabledTools` (see process()), after the
+    // per-session union and attached-knowledge offer, so session-forced and auto-offered
+    // tools get paired too. Here we only copy the request selection so the auto-adds below
+    // don't mutate `parsedBody.tools`.
+    const finalEnabledTools: string[] = [...enabledTools];
     let hasContentTransform = false;
 
     // Auto-added capabilities are OUR additions, not the caller's, so a prompt mode skips this
@@ -1090,27 +1139,29 @@ export class ChatCompletionProcess {
       }
       quest.status = 'running';
 
-      // Generic per-session tool defaults: a session may carry tools that must
-      // always be offered to the model, unioned with the per-request selection.
-      // Lets a product surface guarantee grounded retrieval (or other tools)
-      // regardless of the client's Smart/Fast toggle. No product-specific branch
-      // in core - mirrors the generic `session.systemPromptText` capability.
-      if (Array.isArray(session.enabledTools)) {
-        for (const tool of session.enabledTools) {
-          if (!enabledTools.includes(tool)) enabledTools.push(tool);
-        }
-      }
+      // Finalize the tool-offer list in one place: union the session's forced tools,
+      // offer the knowledge-base tool when documents are attached, pair companion tools,
+      // and apply the session denylist last (so a curated "approved sources only" surface
+      // still wins). `enabledTools` is the array reference handed to buildTools, so splice
+      // the result back in place rather than reassigning the binding.
+      const hasAttachedKnowledge = (session.knowledgeIds?.length ?? 0) > 0;
+      const resolvedTools = resolveEnabledTools({
+        requestTools: enabledTools,
+        sessionEnabledTools: Array.isArray(session.enabledTools) ? session.enabledTools : undefined,
+        sessionDisabledTools: Array.isArray(session.disabledTools) ? session.disabledTools : undefined,
+        hasAttachedKnowledge,
+      });
+      enabledTools.splice(0, enabledTools.length, ...resolvedTools);
 
-      // Generic per-session tool denylist: strip tools the session forbids, even if
-      // the request or a global auto-add (e.g. navigate_view) included them. Lets a
-      // product surface enforce an approved toolset ("curated sources only" -> no web
-      // search). Applied last so it wins over every other tool source. Mutates in
-      // place since `enabledTools` is the array reference passed to buildTools.
-      if (Array.isArray(session.disabledTools) && session.disabledTools.length > 0) {
-        const denied = new Set(session.disabledTools);
-        for (let i = enabledTools.length - 1; i >= 0; i--) {
-          if (denied.has(enabledTools[i])) enabledTools.splice(i, 1);
-        }
+      // Loud warning for the invisible failure mode: knowledge attached but no knowledge
+      // tool offered (the model can't run tools, or a denylist stripped it). Silent here
+      // means the model answers from its weights while the user believes their attached
+      // documents were consulted.
+      if (hasAttachedKnowledge && !enabledTools.includes('search_knowledge_base')) {
+        this.logger.warn(
+          `[knowledge] session ${session.id} has ${session.knowledgeIds!.length} attached document(s) but ` +
+            `search_knowledge_base is not offered - the answer will come from model weights, not the documents.`
+        );
       }
 
       // Generic per-session integration isolation: a curated-surface session (e.g. /opti)

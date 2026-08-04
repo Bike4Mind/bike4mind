@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   ChatCompletionProcess,
   addPairedTool,
+  resolveEnabledTools,
   computeSettlementDelta,
   clampFraction,
   dropOldestHistoryTurn,
@@ -2063,6 +2064,68 @@ describe('addPairedTool', () => {
       'image_generation',
       'edit_image',
     ]);
+  });
+});
+
+describe('resolveEnabledTools', () => {
+  it('offers search_knowledge_base (and pairs retrieve) when knowledge is attached', () => {
+    const result = resolveEnabledTools({ requestTools: [], hasAttachedKnowledge: true });
+    expect(result).toContain('search_knowledge_base');
+    expect(result).toContain('retrieve_knowledge_content');
+  });
+
+  it('does not duplicate search_knowledge_base when the request already has it', () => {
+    const result = resolveEnabledTools({
+      requestTools: ['search_knowledge_base'],
+      hasAttachedKnowledge: true,
+    });
+    expect(result.filter(t => t === 'search_knowledge_base')).toHaveLength(1);
+  });
+
+  it('lets the session denylist win over the attached-knowledge offer', () => {
+    const result = resolveEnabledTools({
+      requestTools: [],
+      hasAttachedKnowledge: true,
+      sessionDisabledTools: ['search_knowledge_base'],
+    });
+    expect(result).not.toContain('search_knowledge_base');
+    // retrieve rides on search's pairing, so it must not survive alone either.
+    expect(result).not.toContain('retrieve_knowledge_content');
+  });
+
+  it('leaves the tool list untouched when no knowledge is attached', () => {
+    const result = resolveEnabledTools({ requestTools: ['web_search'], hasAttachedKnowledge: false });
+    expect(result).toEqual(['web_search']);
+  });
+
+  it('pairs edit_image for a session-forced image_generation (latent-gap fix)', () => {
+    const result = resolveEnabledTools({
+      requestTools: [],
+      sessionEnabledTools: ['image_generation'],
+      hasAttachedKnowledge: false,
+    });
+    expect(result).toContain('image_generation');
+    expect(result).toContain('edit_image');
+  });
+
+  it('strips a denied companion (edit_image) even when its trigger stays', () => {
+    const result = resolveEnabledTools({
+      requestTools: ['image_generation'],
+      hasAttachedKnowledge: false,
+      sessionDisabledTools: ['edit_image'],
+    });
+    expect(result).toContain('image_generation');
+    expect(result).not.toContain('edit_image');
+  });
+
+  it('is idempotent on its own output', () => {
+    const once = resolveEnabledTools({
+      requestTools: ['web_search'],
+      sessionEnabledTools: ['image_generation'],
+      hasAttachedKnowledge: true,
+    });
+    const twice = resolveEnabledTools({ requestTools: once, hasAttachedKnowledge: true });
+    expect(twice).toEqual(once);
   });
 });
 
