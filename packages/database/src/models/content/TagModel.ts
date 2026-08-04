@@ -107,8 +107,8 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
 
   /**
    * Marks a tag as just used. `lastActivityAt` is what the sidebar's recent/default ordering sorts
-   * on, and this is the only thing that refreshes it once the document exists - findOrCreate sets it
-   * on its own upsert, and nothing else writes it at all.
+   * on, and this and findOrCreateByNameAndUserId are the only things that refresh it after the
+   * document exists (tagService create/createFileTag set it once, at insert).
    *
    * Best-effort rather than an invariant, and deliberately so. Only the toggle path and the two
    * file-delete doors call it. A tag rename (tagService/update) and a tag delete

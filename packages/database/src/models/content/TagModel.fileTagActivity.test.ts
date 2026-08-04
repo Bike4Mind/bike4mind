@@ -39,8 +39,9 @@ const seed = (name: string, userId: string, extra: Record<string, unknown> = {})
 
 // The stored fileCount counter was removed: counts are derived per read by tagService/listFileTags.
 // These pin the two things that removal could have broken - that no write path resurrects the
-// column, and that `lastActivityAt` (which the sidebar's recent ordering sorts on) is still
-// refreshed by every path that changes which files carry a tag.
+// column, and that the methods which used to share a write with the counter still refresh
+// `lastActivityAt`, which the sidebar's recent ordering sorts on. Only those methods; see
+// touchLastActivityBy's docstring for the callers that change a file's tags without it.
 describe('FileTagRepository after the fileCount removal', () => {
   const userId = 'u-tag-activity';
 
