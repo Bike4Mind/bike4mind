@@ -114,9 +114,9 @@ export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Ce
 export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data.`;
 
 /**
- * Default text for the formatting system message. Single source of truth used BOTH as the
- * `FormatPromptTemplate` admin setting's default AND as the runtime fallback in
- * `includeHardcodedSystemMessage` (b4m-core/utils/src/llm/utils.ts) - keep the two in sync.
+ * Default text for the formatting system message. Runtime fallback used by
+ * `includeHardcodedSystemMessage` (b4m-core/utils/src/llm/utils.ts) when the `FormatPromptTemplate`
+ * admin setting is blank; that setting's own default is intentionally '' - keep this the sole home.
  *
  * Deliberately scoped to formatting ONLY. The previous wording ("Adhere to specific formatting
  * requests...") read as a general compliance instruction and bled into WHETHER to answer: as the
