@@ -77,7 +77,6 @@ vi.mock('@client/app/utils/aiSettingsUtils', () => ({
   isOpenAIModel: (name: string) => name.toLowerCase().includes('gpt'),
   getModelSpeedVariant: () => 'green',
   getModelSpeedTooltip: () => '',
-  getTopUsedModelsFromStats: () => [],
   getModelSpeedFromStats: () => null,
   getPriceTierTooltip: () => '',
   isNewModel: () => false,

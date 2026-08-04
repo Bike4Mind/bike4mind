@@ -40,6 +40,7 @@ import {
   NO_TEMPERATURE_MODELS,
   IMAGE_SIZE_CONSTRAINTS,
   isBflImageModel,
+  ModelBackend,
   ModelInfo,
   ModelName,
   ChatModelName,
@@ -63,7 +64,7 @@ import ToolsSection from './ToolsSection';
 import { AudioGenerationSettings } from './AudioGenerationSettings';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 
-import ModelSelection, { getModelBackend } from '../ModelSelection';
+import ModelSelection, { BEDROCK_BADGE_BG, CornerBadge, getModelBackend } from '../ModelSelection';
 import MetadataChip from './MetaDataChips';
 import {
   buildModelSelectionPatch,
@@ -74,7 +75,6 @@ import {
   getModelSpeedTooltip,
   getModelSpeedVariant,
   getPriceTierTooltip,
-  getTopUsedModelsFromStats,
   isNewModel,
 } from '@client/app/utils/aiSettingsUtils';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
@@ -303,7 +303,6 @@ interface SelectedModelDetailsProps {
   maxContextWindow: number;
   getPriceTierTooltip: (tier: string) => string;
   isNewModel: (modelInfo: ModelInfo) => boolean;
-  isPopular: boolean;
   metricsLoading: boolean;
   modelSpeed: string | null;
   getModelSpeedVariant: (speed: 'fast' | 'medium' | 'slow') => ChipVariant;
@@ -464,7 +463,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   maxContextWindow,
   getPriceTierTooltip,
   isNewModel,
-  isPopular,
   metricsLoading,
   modelSpeed,
   getModelSpeedVariant,
@@ -537,13 +535,12 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               />
             )}
 
-            {/* Popular Model Chip - based on usage data */}
-            {!metricsLoading && isPopular && (
-              <MetadataChip
-                label="Popular"
-                mode={mode}
-                variant="blue-filled"
-                tooltip="This is one of the most used models"
+            {modelInfo.backend === ModelBackend.Bedrock && (
+              <CornerBadge
+                testId={`bedrock-badge-${modelInfo.id}`}
+                label="AWS Bedrock"
+                tooltip="Hosted on AWS Bedrock, not the provider's own API"
+                background={BEDROCK_BADGE_BG}
               />
             )}
 
@@ -1603,7 +1600,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   const { settings: userSettings } = useUserSettings();
 
   const modelSpeed = getModelSpeedFromStats(modelInfo?.id ?? '', stats?.avgResponseTime ?? {});
-  const isPopular = getTopUsedModelsFromStats(stats?.popularity ?? {}, 3).includes(modelInfo?.id ?? '');
   const isResearchModeFeatureEnabled = userSettings.experimentalFeatures?.enableResearchMode === true;
 
   const isKontextModel = isKontextImageModel(model);
@@ -2117,7 +2113,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 maxContextWindow={maxContextWindow}
                 getPriceTierTooltip={getPriceTierTooltip}
                 isNewModel={isNewModel}
-                isPopular={isPopular}
                 metricsLoading={metricsLoading}
                 modelSpeed={modelSpeed}
                 getModelSpeedVariant={getModelSpeedVariant}

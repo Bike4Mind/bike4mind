@@ -114,7 +114,7 @@ const getBackendLogo = (backend: string): string | null => {
 // this marks the hosting platform - any provider's model can be Bedrock-hosted, so it's a
 // different axis, not another entry. Amazon Bedrock's own teal, so the badge reads as the
 // platform rather than as another status colour.
-const BEDROCK_BADGE_BG = '#01A88D';
+export const BEDROCK_BADGE_BG = '#01A88D';
 
 // Global image cache to prevent re-requests
 const imageCache = new Map<string, string>();
@@ -294,7 +294,7 @@ const NEW_BADGE_BG = '#A52ECD';
 
 // Small label riding the card's top border. Positioning lives on the shared row in the card
 // so multiple badges line up; this only draws the pill.
-const CornerBadge = ({
+export const CornerBadge = ({
   testId,
   label,
   tooltip,
