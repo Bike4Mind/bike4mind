@@ -392,6 +392,44 @@ describe('content cut before assembly is declared to the model', () => {
       ).toBeLessThanOrEqual(2500);
     });
 
+    it('keeps fetched page content when the safety pass is the first stage to drop a file', async () => {
+      // The undelivered note is only about attachments, but it replaced the whole content list with the
+      // attachments it had judged - so fetched page content, which is deliberately not one, went with it.
+      // Masked while the allocation was the only caller: a turn it dropped nothing on returned early,
+      // before that filter. The safety pass can now be the first stage to drop something.
+      //
+      // Has to go through processUrlsFromPrompt rather than a hand-made message, because what marks
+      // content as URL-derived is a WeakSet that only this function populates.
+      const { userMessages: pageMessages } = await processUrlsFromPrompt(
+        'summarise https://example.com/report',
+        400,
+        'user-1',
+        async () => {},
+        mockLogger as any
+      );
+
+      const result = await buildAndSortMessages(
+        bigHistory(2, 200),
+        [
+          ...pageMessages,
+          {
+            role: 'user',
+            content: 'Here is the content from the attached file "roster.csv" for context:\n\n' + 'C'.repeat(20000),
+          },
+        ],
+        [{ role: 'user', content: 'Summarize the attached file' }],
+        2000,
+        {},
+        20,
+        mockLogger as any,
+        denseTokenizer(1.5) as any
+      );
+
+      const text = result.map(m => (typeof m.content === 'string' ? m.content : '')).join('\n');
+      expect(text).toContain('could not be included in this request');
+      expect(text).toContain('PAGE-START');
+    });
+
     it('reports content the final safety pass drops, instead of wasTruncated: false', async () => {
       // Here the pass drops the file whole. Its result used to be read straight off `.messages`, so
       // removedMessages was discarded and the turn that lost the MOST content reported no truncation.
