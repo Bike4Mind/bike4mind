@@ -319,6 +319,12 @@ describe('OllamaBackend.complete tool loop', () => {
 // capabilities rather than a hardcoded list, so a thinking-capable model
 // (e.g. qwen3.5) must surface can_think and drive the Thinking toggle.
 describe('OllamaBackend.getModelInfo capability mapping', () => {
+  // The window cases below stub OLLAMA_MAX_NUM_CTX; leaking it would move the sibling
+  // expectations that assert an unconfigured window.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   function backendWithCapabilities(capabilities: string[]) {
     const backend = new OllamaBackend('http://localhost:11434', silentLogger);
     (backend as any)._api = {
@@ -333,8 +339,9 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
     expect(info.can_think).toBe(true);
     expect(info.supportsVision).toBe(true);
     expect(info.supportsTools).toBe(true);
-    // Advertised as the window we will actually allocate (see effectiveContextWindow),
-    // not the 262144 the model reports, so callers size history to what fits.
+    // The window is what we will actually allocate (see effectiveContextWindow), not the
+    // 262144 the model reports, so callers size history to what fits. Output is half of
+    // that, which is what leaves room for the prompt.
     expect(info.contextWindow).toBe(32768);
     expect(info.max_tokens).toBe(16384);
   });
@@ -345,6 +352,15 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
   // path then refuses to build a prompt at all.
   it('leaves a positive input budget after the advertised output reserve', async () => {
     const [info] = await backendWithCapabilities(['completion', 'tools']).getModelInfo();
+    expect(info.contextWindow - (info.max_tokens ?? 0) - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS).toBeGreaterThan(0);
+  });
+
+  // OLLAMA_MAX_NUM_CTX takes any positive value, so an operator can put every local model at the
+  // bottom of the range at once. Halving alone leaves exactly zero budget at 2000.
+  it.each([2000, 1500, 32768])('keeps the budget positive at an allocated window of %i', async window => {
+    vi.stubEnv('OLLAMA_MAX_NUM_CTX', String(window));
+    const [info] = await backendWithCapabilities(['completion', 'tools']).getModelInfo();
+    expect(info.contextWindow).toBe(window);
     expect(info.contextWindow - (info.max_tokens ?? 0) - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS).toBeGreaterThan(0);
   });
 

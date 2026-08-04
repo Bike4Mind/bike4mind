@@ -1,4 +1,5 @@
 import {
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   IMessage,
   isUserInitiatedAbort,
   ModelBackend,
@@ -105,11 +106,7 @@ export class OllamaBackend implements ICompletionBackend {
             name: model.name,
             backend: ModelBackend.Ollama,
             contextWindow,
-            // Half of what we allocate: advertising the whole window made the server's
-            // context - output - buffer negative and emptied the prompt. Halving only keeps
-            // that positive above ~2000 tokens, and a window that small was already
-            // unusable for chat.
-            max_tokens: Math.floor(contextWindow / 2),
+            max_tokens: OllamaBackend.advertisedOutputCap(contextWindow),
             supportsImageVariation: false,
             // Local models are free. pricing is a tier map keyed by a token
             // threshold (consumed by getTextModelCost), not a flat {input,output}
@@ -159,6 +156,19 @@ export class OllamaBackend implements ICompletionBackend {
    * than the advertised maximum. Override with OLLAMA_MAX_NUM_CTX.
    */
   private static readonly DEFAULT_MAX_NUM_CTX = 32768;
+
+  /**
+   * Output ceiling we advertise for a local model. Half of what we allocate, because advertising
+   * the whole window made the server's context - output - buffer negative and emptied the prompt.
+   *
+   * Halving alone is not enough at the bottom of the range: OLLAMA_MAX_NUM_CTX accepts any positive
+   * value, so an operator setting 2000 would leave exactly zero input budget for every local model
+   * at once. The second bound keeps at least one token of input whatever the window is.
+   */
+  private static advertisedOutputCap(contextWindow: number): number {
+    const halved = Math.floor(contextWindow / 2);
+    return Math.max(1, Math.min(halved, contextWindow - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS - 1));
+  }
 
   /** A model's reported window clamped to what we are willing to allocate. */
   private static effectiveContextWindow(reported: number): number {
