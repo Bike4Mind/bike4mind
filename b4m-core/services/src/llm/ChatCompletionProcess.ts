@@ -145,6 +145,7 @@ import {
   ARTIFACT_EMISSION_PROMPT,
   HELP_CENTER_PROMPT,
   ELISION_WARNING,
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 
@@ -215,12 +216,21 @@ const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
  * buffer. Deliberately NOT clamped at zero - the empty-prompt guard depends on seeing a non-positive
  * budget for a genuinely misconfigured text model.
  *
- * Image and video models return media rather than tokens, and every image backend here sets
- * max_tokens equal to contextWindow because both are the prompt-length limit, so reserving it as
- * output left no room for the prompt itself. Two callers need this figure - the assembly budget and
- * the verbatim-history window - and they must not drift apart.
+ * Image and video models return media rather than tokens, so their max_tokens is a prompt-length
+ * limit and is never reserved as output - most media rows set it equal to contextWindow, Gemini's
+ * image rows set it lower, and either way subtracting it would leave no room for the prompt itself.
+ * Two callers need this figure - the assembly budget and the verbatim-history window - and they must
+ * not drift apart.
+ *
+ * The static catalog tables are held to the positive-budget property by
+ * modelCatalogInputBudget.test.ts, and a discovered claim that would break it is refused in
+ * modelDiscoveryService/catalogWrite.
  */
-const safeInputWindow = (modelInfo: ModelInfo, requestedMaxTokens: number, safetyBuffer = 1000): number => {
+const safeInputWindow = (
+  modelInfo: ModelInfo,
+  requestedMaxTokens: number,
+  safetyBuffer = CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS
+): number => {
   const contextLimit = modelInfo.contextWindow ?? 200000;
   const modelMaxOutput = modelInfo.max_tokens ?? 16384;
   const returnsMedia = modelInfo.type === 'image' || modelInfo.type === 'video';
