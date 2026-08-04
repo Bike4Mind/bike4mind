@@ -96,20 +96,22 @@ export async function getFirstIterationMementosPreamble(
     // user's memory must reach agent mode too, but only when the resolved V2 gate allows it - an
     // explicit per-request opt-out resolves `gates.v2` off, so V2 recall never runs (#1337). We hand
     // recallMementosV2 the already-resolved opt-in so it does not look it up again.
+    // V2 and V1 are mutually exclusive at inject time. We hand recallMementosV2 the already-resolved
+    // opt-in as `enabled: true`, so it always returns an array here - its only `null` is the
+    // `if (!enabled)` short-circuit, which this branch has already ruled out. A V2-gated turn therefore
+    // resolves here and never falls through to the V1 path below.
     if (gates.v2) {
-      const v2 = await recallMementosV2(execution.userId, execution.query, { enabled: true });
-      if (v2 !== null) {
-        if (v2.length === 0) {
-          logger.info('[Mementos V2] No relevant beliefs for first iteration', { executionId: execution.id });
-          return EMPTY_RESULT;
-        }
-        logger.info('[Mementos V2] Injected beliefs into first-iteration context', {
-          executionId: execution.id,
-          count: v2.length,
-        });
-        // V2 beliefs are not V1 mementos and have no memento id to track; `mementoIds` stays empty.
-        return { preamble: buildV2Preamble(v2.map(({ fact }) => fact)), mementoIds: [] };
+      const v2 = (await recallMementosV2(execution.userId, execution.query, { enabled: true }))!;
+      if (v2.length === 0) {
+        logger.info('[Mementos V2] No relevant beliefs for first iteration', { executionId: execution.id });
+        return EMPTY_RESULT;
       }
+      logger.info('[Mementos V2] Injected beliefs into first-iteration context', {
+        executionId: execution.id,
+        count: v2.length,
+      });
+      // V2 beliefs are not V1 mementos and have no memento id to track; `mementoIds` stays empty.
+      return { preamble: buildV2Preamble(v2.map(({ fact }) => fact)), mementoIds: [] };
     }
 
     if (!gates.v1) return EMPTY_RESULT;

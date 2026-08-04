@@ -84,4 +84,19 @@ describe('resolveExecutionMementoGates (agent-surface authority, #1337)', () => 
     const gates = await resolveExecutionMementoGates(makeExecution({ enableMementos: undefined }), makeAdapters());
     expect(gates).toEqual({ v1: false, v2: false });
   });
+
+  it('fails closed to no-V1 when the admin-setting lookup rejects (never fails the turn)', async () => {
+    // getSettingsValue is an uncached findOne and can reject; a rejection here must degrade to no
+    // memory, not escape and fail an agent run that has otherwise completed.
+    getSettingsValueMock.mockRejectedValue(new Error('mongo down'));
+    const gates = await resolveExecutionMementoGates(makeExecution({ enableMementos: true }), makeAdapters());
+    expect(gates).toEqual({ v1: false, v2: false });
+  });
+
+  it('short-circuits both lookups on an explicit opt-out', async () => {
+    const gates = await resolveExecutionMementoGates(makeExecution({ enableMementos: false }), makeAdapters());
+    expect(gates).toEqual({ v1: false, v2: false });
+    expect(getSettingsValueMock).not.toHaveBeenCalled();
+    expect(isMementosV2EnabledMock).not.toHaveBeenCalled();
+  });
 });

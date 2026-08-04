@@ -30,8 +30,18 @@ export async function resolveExecutionMementoGates(
   execution: MementoGateExecution,
   adapters: MementoGateAdapters
 ): Promise<MementoGates> {
-  const adminEnabled = (await adapters.db.adminSettings.getSettingsValue('EnableMementos')) ?? false;
-  // A lookup failure must fail closed to "not opted in" - the same catch the chat and read paths use.
-  const v2OptIn = await isMementosV2Enabled(execution.userId).catch(() => false);
+  // An explicit per-request opt-out disables both pipelines regardless of the admin setting or the V2
+  // opt-in (resolveMementoGates(false, ...) is always { v1: false, v2: false }). It is also the
+  // highest-volume input this resolver sees - the Slack senders and the voice proxy all hard-code
+  // false - so short-circuiting skips both round trips and keeps the dominant flow off the reads below.
+  if (execution.enableMementos === false) return { v1: false, v2: false };
+
+  // Both lookups fail closed to "not enabled" (memory degrades, it never fails the turn - the same
+  // convention the chat and read paths use) and are independent - one AdminSettings read, one user
+  // read - so run them concurrently rather than paying their sum on this critical path.
+  const [adminEnabled, v2OptIn] = await Promise.all([
+    adapters.db.adminSettings.getSettingsValue('EnableMementos').catch(() => false),
+    isMementosV2Enabled(execution.userId).catch(() => false),
+  ]);
   return resolveMementoGates(execution.enableMementos, Boolean(adminEnabled), v2OptIn);
 }
