@@ -46,7 +46,7 @@ import { useChatInput } from '@client/app/hooks/useChatInput';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { commandHandlers } from '@client/app/components/Session/SessionBottom/sessionBottomConstants';
 import { isImageModel, isVideoModel, type CommandKey } from '@client/app/utils/commands';
-import { green } from '@client/app/utils/themes/colors';
+import { gray, green } from '@client/app/utils/themes/colors';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import DeepResearchConfigModal from './DeepResearchConfigModal';
 import ImageGenerationModelSelectionModal from './ImageGenerationModelSelectionModal';
@@ -114,17 +114,20 @@ const ToolContainer = ({ children, sx, toolId }: ToolContainerProps) => {
       className="tool-container"
       sx={theme => {
         const baseStyles = {
-          backgroundColor: () =>
-            theme.palette.mode === 'light' ? theme.palette.background.surface2 : theme.palette.background.body,
+          // The row needs its own frame colour, distinct from the surface behind it. Dark mode
+          // used to fall back to background.body - the same colour - so the frame vanished.
+          backgroundColor: theme.palette.mode === 'light' ? gray[0] : theme.palette.background.surface2,
           borderRadius: 5,
           display: 'flex',
           alignItems: 'center',
-          p: '8px',
+          p: '12px 16px',
           gap: 2,
-          '&:hover': {
-            bgcolor: theme.palette.notebooklist.hoverBg,
-          },
-          transition: 'background-color 0.2s',
+          // Fills the grid cell so every card in a row matches the tallest one; descriptions
+          // run one or two lines, which otherwise leaves short cards visibly stunted. No-op in
+          // the single-column layout, where a row holds one card.
+          height: '100%',
+          boxSizing: 'border-box' as const,
+          // No hover: the row is not clickable, only its toggle is.
           border: 'none',
         };
 
@@ -153,7 +156,8 @@ const ToolContainer = ({ children, sx, toolId }: ToolContainerProps) => {
       <Box
         aria-disabled
         data-tool-disabled="true"
-        sx={{ width: '100%', opacity: 0.45, '& .tool-container': { pointerEvents: 'none' } }}
+        // height passes the grid cell's stretch through to the card inside.
+        sx={{ width: '100%', height: '100%', opacity: 0.45, '& .tool-container': { pointerEvents: 'none' } }}
       >
         {content}
       </Box>
@@ -811,7 +815,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="web_search">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <SearchIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -829,7 +833,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="web_fetch">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <LanguageIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -848,7 +852,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="search_knowledge_base">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <KnowledgeBaseIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -871,7 +875,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="fmp_financial_data">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <FinanceIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -893,7 +897,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <SearchIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -911,7 +915,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   {server.name === 'atlassian' ? (
                     <AtlassianIcon
@@ -940,7 +944,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="prompt_enhancement">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <PromptEnhancementIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -962,7 +966,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="deep_research">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <ScienceIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1021,7 +1025,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="image_generation">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <ImageIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1081,7 +1085,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="mermaid_chart">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <MermaidIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1102,7 +1106,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="excel_generation">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <ExcelIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1127,7 +1131,7 @@ const ToolsSection = ({
                 sx={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '12px',
+                  gap: '16px',
                   flex: 1,
                   minWidth: 0,
                   opacity: modelSupportsThinking ? 1 : 0.5,
@@ -1214,7 +1218,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <AutoAwesomeIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1241,7 +1245,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <AutoAwesomeIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1261,7 +1265,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <LatticeIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1284,7 +1288,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="current_datetime">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <DateTimeIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1305,7 +1309,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="math_evaluate">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <MathIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1326,7 +1330,7 @@ const ToolsSection = ({
             <ToolContainer sx={toolContainerSx} toolId="wolfram_alpha">
               <Box
                 className="tool-content"
-                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
               >
                 <WolframIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1348,7 +1352,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx}>
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <CompareIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1368,7 +1372,7 @@ const ToolsSection = ({
           {/* Recharts */}
           <Grid xs={12}>
             <ToolContainer sx={toolContainerSx} toolId="recharts">
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}>
                 <RechartsIcon
                   sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
                 />
@@ -1467,7 +1471,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="chess_engine">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <ChessIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1488,7 +1492,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="dice_roll">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <DiceIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1506,7 +1510,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="weather_info">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <WeatherIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1527,7 +1531,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="wikipedia_on_this_day">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <HistoryIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1548,7 +1552,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="iss_tracker">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <SatelliteIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1566,7 +1570,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="sunrise_sunset">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <SunriseIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1587,7 +1591,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="moon_phase">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <MoonIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
@@ -1605,7 +1609,7 @@ const ToolsSection = ({
               <ToolContainer sx={toolContainerSx} toolId="planet_visibility">
                 <Box
                   className="tool-content"
-                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                  sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
                 >
                   <PlanetIcon
                     sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}

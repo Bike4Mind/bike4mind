@@ -74,14 +74,9 @@ const ToolsButton: FC<ToolsButtonProps> = ({
     columns: 1 as const,
     onModalOpenChange: setIsDeepResearchModalOpen,
     onClose: () => setOpen(false),
-    toolContainerSx: {
-      backgroundColor: (theme: { palette: { background: { surface2: string } } }) => theme.palette.background.surface2,
-      padding: '12px',
-      '&:hover': {
-        backgroundColor: (theme: { palette: { background: { surface2: string } } }) =>
-          theme.palette.background.surface2,
-      },
-    },
+    // Only the padding differs from the default now; the surface colour and the absence of a
+    // hover state both come from ToolContainer.
+    toolContainerSx: { padding: '12px' },
   };
 
   if (isMobile) {
