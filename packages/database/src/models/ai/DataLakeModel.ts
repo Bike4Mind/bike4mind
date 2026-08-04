@@ -453,10 +453,14 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   }
 
   async findActiveByDataLakeId(dataLakeId: string): Promise<IDataLakeBatchDocument[]> {
-    const results = await this.batchModel.find({
-      dataLakeId,
-      status: { $in: BATCH_NON_TERMINAL_STATUSES },
-    });
+    // Both callers (archive/delete-lake teardown) only read `.id` to cancel batches - same
+    // payload-size reasoning as findActiveByUserId.
+    const results = await this.batchModel
+      .find({
+        dataLakeId,
+        status: { $in: BATCH_NON_TERMINAL_STATUSES },
+      })
+      .select('-files');
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);
   }
 
@@ -592,6 +596,22 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       .select('-files')
       .sort({ updatedAt: -1 })
       .limit(50);
+    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+  }
+
+  async findActiveTaxonomyByUserId(userId: string): Promise<IDataLakeBatchDocument[]> {
+    // Separate from findTaxonomyAttentionByUserId's newest-50 cap: that cap serves the list
+    // response, but the read-time reconciler needs the FULL non-terminal working set regardless
+    // of recency - a batch stuck in 'analyzing' for hours has an old updatedAt and would
+    // otherwise be pushed out of the top-50 before the reconciler ever sees it. 'ready'/'failed'
+    // are excluded here (unlike the attention set) since they're already terminal and irrelevant
+    // to stuck-job detection.
+    const results = await this.batchModel
+      .find({
+        userId,
+        taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES },
+      })
+      .select('-files');
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);
   }
 }

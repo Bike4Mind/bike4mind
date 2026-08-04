@@ -682,6 +682,54 @@ describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId - list-surface q
   });
 });
 
+describe('DataLakeBatchRepository.findActiveTaxonomyByUserId - reconciler input', () => {
+  setupMongoTest();
+
+  const seed = (taxonomyStatus: string, userId = 'u1') =>
+    dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId, taxonomyStatus } as never);
+
+  it('includes only queued/analyzing/applying, not ready/failed/none/applied', async () => {
+    const queued = await seed('queued');
+    const analyzing = await seed('analyzing');
+    const applying = await seed('applying');
+    await seed('ready');
+    await seed('failed');
+    await seed('none');
+    await seed('applied');
+
+    const active = await dataLakeBatchRepository.findActiveTaxonomyByUserId('u1');
+    expect(active.map(b => b.id).sort()).toEqual([queued.id, analyzing.id, applying.id].sort());
+  });
+
+  it('is not capped, unlike findTaxonomyAttentionByUserId - a stale batch must not be excluded', async () => {
+    const batches = [];
+    for (let i = 0; i < 55; i++) {
+      batches.push(await seed('analyzing'));
+      await mongoose.models.DataLakeBatch.updateOne(
+        { _id: batches[i].id },
+        { $set: { updatedAt: new Date(2024, 0, 1, 0, 0, i) } },
+        { timestamps: false }
+      );
+    }
+
+    const active = await dataLakeBatchRepository.findActiveTaxonomyByUserId('u1');
+    expect(active).toHaveLength(55);
+    expect(active.map(b => b.id)).toContain(batches[0].id);
+  });
+
+  it('excludes the per-file manifest', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'analyzing',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt' }],
+    } as never);
+
+    const [active] = await dataLakeBatchRepository.findActiveTaxonomyByUserId('u1');
+    expect(active.files).toBeUndefined();
+  });
+});
+
 describe('DataLakeRepository — systemPrompt round-trip (#843)', () => {
   setupMongoTest();
 

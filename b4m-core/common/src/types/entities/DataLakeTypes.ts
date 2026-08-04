@@ -328,9 +328,18 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * Batches whose `taxonomyStatus` is in `TAXONOMY_ATTENTION_STATUSES` - running or awaiting
    * review/dismissal. Deliberately independent of `status` (ingest phase): the common case is
    * an already-'completed' batch whose taxonomy phase is still 'analyzing', which
-   * findActiveByUserId's status-based filter would miss entirely.
+   * findActiveByUserId's status-based filter would miss entirely. `files` is excluded, and the
+   * result is capped to the 50 most-recently-updated - sized for the list-response use case, NOT
+   * suitable as reconciler input (see `findActiveTaxonomyByUserId`).
    */
   findTaxonomyAttentionByUserId(userId: string): Promise<IDataLakeBatchDocument[]>;
+  /**
+   * Per-user counterpart to `findStuckTaxonomy`: the full non-terminal (`queued`/`analyzing`/
+   * `applying`) taxonomy working set for one user, unbounded and unsorted. Use this - not
+   * `findTaxonomyAttentionByUserId` - as reconciler input, since that method's newest-50 cap
+   * would silently exclude exactly the stale, stuck batches a reconciler exists to find.
+   */
+  findActiveTaxonomyByUserId(userId: string): Promise<IDataLakeBatchDocument[]>;
 }
 
 // ── AI Taxonomy Inference ───────────────────────────────────────────────────
