@@ -2098,6 +2098,27 @@ describe('resolveEnabledTools', () => {
     expect(result).toEqual(['web_search']);
   });
 
+  it('skips the attached-knowledge offer when skipAutoOffers is set (prompt-mode eval)', () => {
+    const result = resolveEnabledTools({
+      requestTools: [],
+      hasAttachedKnowledge: true,
+      skipAutoOffers: true,
+    });
+    expect(result).not.toContain('search_knowledge_base');
+    expect(result).not.toContain('retrieve_knowledge_content');
+  });
+
+  it('still honors caller-selected knowledge tools under skipAutoOffers', () => {
+    // skipAutoOffers gates only OUR offer; a tool the caller explicitly sent stays and still pairs.
+    const result = resolveEnabledTools({
+      requestTools: ['search_knowledge_base'],
+      hasAttachedKnowledge: true,
+      skipAutoOffers: true,
+    });
+    expect(result).toContain('search_knowledge_base');
+    expect(result).toContain('retrieve_knowledge_content');
+  });
+
   it('pairs edit_image for a session-forced image_generation (latent-gap fix)', () => {
     const result = resolveEnabledTools({
       requestTools: [],

@@ -537,6 +537,15 @@ export interface ResolveEnabledToolsInput {
   sessionDisabledTools?: string[];
   /** True when the session has documents attached (`session.knowledgeIds`). */
   hasAttachedKnowledge: boolean;
+  /**
+   * Skip OUR server-side auto-offers (step 2, the attached-knowledge offer). Set for any
+   * `promptMode`, matching the auto-add gate at the request-parse site (`if (!parsedBody.promptMode)`):
+   * auto-adds are our additions, not the caller's, and attaching a tool also pulls the provider's
+   * tool-use preamble into the request - so a mode-driven eval, above all `raw` (the bare-model
+   * control arm), must not get surprise tools. Caller-selected and session-forced tools are
+   * unaffected; only step 2 is gated.
+   */
+  skipAutoOffers?: boolean;
 }
 
 /**
@@ -546,7 +555,8 @@ export interface ResolveEnabledToolsInput {
  *   2. attached-knowledge offer - documents attached => make them reachable via the
  *      knowledge-base tool. Attaching files is a far stronger retrieval signal than any
  *      phrase match, and offering a tool is cheap (the model may decline) whereas
- *      withholding it is unrecoverable.
+ *      withholding it is unrecoverable. Skipped when `skipAutoOffers` is set (prompt-mode
+ *      requests), since the offer is our addition, not the caller's.
  *   3. companion pairing        - a tool useless without its partner rides along
  *      (search_knowledge_base -> retrieve_knowledge_content, image_generation ->
  *      edit_image). Runs AFTER the union/offer so session-forced and auto-offered tools
@@ -566,7 +576,7 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
     if (!tools.includes(tool)) tools.push(tool);
   }
 
-  if (input.hasAttachedKnowledge && !tools.includes('search_knowledge_base')) {
+  if (!input.skipAutoOffers && input.hasAttachedKnowledge && !tools.includes('search_knowledge_base')) {
     tools.push('search_knowledge_base');
   }
 
@@ -577,11 +587,17 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
 }
 
 /**
- * Tools this process auto-adds server-side regardless of user selection (see the
- * auto-add pushes in the request-parse method: blog_publish/blog_edit/blog_draft
- * for admins, navigate_view, skill). Small local (Ollama) models get confused by
- * tools they didn't ask for, so these are trimmed for that backend unless the user
- * explicitly enabled them. Keep this list in sync with those auto-add sites.
+ * Tools this process auto-adds server-side regardless of user selection. Two auto-add sites feed
+ * this: the request-parse method (blog_publish/blog_edit/blog_draft for admins, navigate_view,
+ * skill) and `resolveEnabledTools` (the attached-knowledge offer). Small local (Ollama) models get
+ * confused by tools they didn't ask for, so the names in this list are trimmed for that backend
+ * unless the user explicitly enabled them. Keep this list in sync with those auto-add sites.
+ *
+ * Deliberately NOT listed: search_knowledge_base / retrieve_knowledge_content. Attaching a
+ * document is itself an explicit user signal that the docs should be used, unlike the genuinely
+ * unrequested capabilities above - so the attached-knowledge offer must survive the Ollama trim,
+ * which is the whole point of the feature for local models. Listing them here would silently
+ * defeat it.
  */
 export const AUTO_ADDED_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit', 'navigate_view', 'skill'];
 
@@ -1150,19 +1166,13 @@ export class ChatCompletionProcess {
         sessionEnabledTools: Array.isArray(session.enabledTools) ? session.enabledTools : undefined,
         sessionDisabledTools: Array.isArray(session.disabledTools) ? session.disabledTools : undefined,
         hasAttachedKnowledge,
+        // Any promptMode is an eval/passthrough that must not receive our server-side offers.
+        skipAutoOffers: Boolean(promptMode),
       });
       enabledTools.splice(0, enabledTools.length, ...resolvedTools);
 
-      // Loud warning for the invisible failure mode: knowledge attached but no knowledge
-      // tool offered (the model can't run tools, or a denylist stripped it). Silent here
-      // means the model answers from its weights while the user believes their attached
-      // documents were consulted.
-      if (hasAttachedKnowledge && !enabledTools.includes('search_knowledge_base')) {
-        this.logger.warn(
-          `[knowledge] session ${session.id} has ${session.knowledgeIds!.length} attached document(s) but ` +
-            `search_knowledge_base is not offered - the answer will come from model weights, not the documents.`
-        );
-      }
+      // The invisible-failure warning ("knowledge attached but no knowledge tool offered")
+      // moved to after buildTools, where the authoritative post-build tool list is known.
 
       // Generic per-session integration isolation: a curated-surface session (e.g. /opti)
       // can suppress the user's personal integrations so it runs only its server-owned
@@ -1951,6 +1961,30 @@ export class ChatCompletionProcess {
       // the model was actually given, so it reflects server-side offers like the attached-
       // knowledge auto-offer above.
       if (quest.promptMeta) quest.promptMeta.offeredTools = offeredToolNames;
+
+      // Loud warning for the invisible failure mode: knowledge attached but no knowledge tool
+      // survived into the final offered set. Checked here against offeredToolNames (not at
+      // resolveEnabledTools) because this is the authoritative post-build list - it sees the
+      // post-build denylist pass, the Ollama auto-added trim, and tools injected inside
+      // buildTools, none of which the pre-build enabledTools filter can. Skipped under promptMode,
+      // where withholding the offer is deliberate (see skipAutoOffers), not a failure. Silent
+      // otherwise means the model answers from its weights while the user believes their attached
+      // documents were consulted.
+      if (hasAttachedKnowledge && !promptMode) {
+        if (!offeredToolNames.includes('search_knowledge_base')) {
+          this.logger.warn(
+            `[knowledge] session ${session.id} has ${session.knowledgeIds!.length} attached document(s) but ` +
+              `search_knowledge_base is not offered - the answer will come from model weights, not the documents.`
+          );
+        } else if (!offeredToolNames.includes('retrieve_knowledge_content')) {
+          // Search survived but its companion did not (e.g. a denylist stripped retrieve): the
+          // model can locate passages but cannot read their text. See addPairedTool.
+          this.logger.warn(
+            `[knowledge] session ${session.id} offers search_knowledge_base without ` +
+              `retrieve_knowledge_content - the model can locate passages but cannot read them.`
+          );
+        }
+      }
 
       // For tool prompt guidance, only include MCP tools given directly to the main LLM
       // (agent-only tools like Atlassian are excluded - they're accessed via delegate_to_agent)
