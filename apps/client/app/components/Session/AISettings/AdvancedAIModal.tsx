@@ -1500,7 +1500,7 @@ const ResearchModeTab: React.FC<{
           {[0, 1, 2, 3].map(index => {
             const config = researchMode.configurations[index];
             return (
-              <Grid key={index} xs={12} md={3}>
+              <Grid key={index} xs={12} md={6}>
                 <ResearchConfigPanel
                   index={index}
                   config={config}
