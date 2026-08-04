@@ -223,8 +223,9 @@ const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
  * not drift apart.
  *
  * The static catalog tables are held to the positive-budget property by
- * modelCatalogInputBudget.test.ts, and a discovered claim that would break it is refused in
- * modelDiscoveryService/catalogWrite.
+ * modelCatalogInputBudget.test.ts, and a discovered claim that would break it for a TEXT row is
+ * refused in modelDiscoveryService/catalogWrite. Neither covers a media row whose window arrives as
+ * 0 from a feed, where the buffer below still makes this negative.
  */
 const safeInputWindow = (
   modelInfo: ModelInfo,
@@ -1678,7 +1679,9 @@ export class ChatCompletionProcess {
       // attachedFileTokenBudget below), so the adaptive default must not balloon it.
       const urlContentBudget = maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS;
 
-      const safetyBuffer = 1000; // Emergency buffer
+      // The same figure the catalog tests hold rows to, so CI's rule cannot end up looser
+      // than what this call actually reserves. Reported as bufferTokens in the telemetry below.
+      const safetyBuffer = CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS;
       // safeMaxTokens, not the raw (possibly absent) requested maxTokens: this reserves against the
       // output budget actually in play, including the adaptive-reasoning floor above, or an adaptive
       // model could reserve less than it goes on to use and land back on the negative-window bug this

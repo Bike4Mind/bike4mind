@@ -663,7 +663,7 @@ describe('planCatalogWrites', () => {
         source: 'openai',
         modelId: 'gpt-6',
         reason:
-          'maxOutputTokens 400000 leaves no input budget in a contextWindow of 400000 (safety buffer 1000); claim refused',
+          'maxOutputTokens 400000 leaves no input budget in a contextWindow of 400000 (safety buffer 1000); maxOutputTokens dropped',
       });
     });
 
@@ -682,7 +682,7 @@ describe('planCatalogWrites', () => {
       expect(result.rows).toEqual([]);
       expect(asBase(result.rows, [seed]).get('gpt-6')?.record.maxOutputTokens).toBe(32_000);
       expect(result.dropped.map(drop => drop.reason)).toContain(
-        'maxOutputTokens 400000 leaves no input budget in a contextWindow of 400000 (safety buffer 1000); claim refused'
+        'maxOutputTokens 400000 leaves no input budget in a contextWindow of 400000 (safety buffer 1000); maxOutputTokens dropped'
       );
     });
 
@@ -703,12 +703,49 @@ describe('planCatalogWrites', () => {
       expect(result.dropped).toEqual([]);
     });
 
-    it('drops a text model whose window cannot fund even the default output cap', () => {
-      // Nothing to fall back to here, and listing a model that can only fail once selected is
-      // worse than not listing it.
+    it('catches a claim that lowers only contextWindow onto an output cap already in force', () => {
+      // The mirror case, and the one a real feed produces: the Kimi and xAI provider sources emit
+      // contextWindow and never maxOutputTokens. A window lowered to whatever the catalog already
+      // holds as the output cap is the same starving pair, arriving from the other side.
+      const seed = gpt6Seed({ maxOutputTokens: 131_072, contextWindow: 262_144 });
+      const result = plan({
+        base: asBase([], [seed]),
+        resolveDispatch: dispatchable,
+        contributions: [
+          { name: 'openai', kind: 'provider', records: [{ modelId: 'gpt-6', patch: { contextWindow: 131_072 } }] },
+        ],
+      });
+
+      expect(result.rows[0].patch).toMatchObject({ contextWindow: 131_072 });
+      expect(result.rows[0].patch).not.toHaveProperty('maxOutputTokens');
+      expect(result.dropped.map(drop => drop.reason)).toContain(
+        'maxOutputTokens 131072 leaves no input budget in a contextWindow of 131072 (safety buffer 1000); maxOutputTokens dropped'
+      );
+    });
+
+    it('clamps rather than refuses when the window cannot fund the read-path fallback', () => {
+      // Refusing here would hand the read path min(contextWindow, DEFAULT_MAX_OUTPUT_TOKENS), which
+      // starves just as badly. The model still answers at a lower output setting, so it keeps its
+      // row with a reserve that leaves room: half of what is left after the buffer.
       const result = plan({
         resolveDispatch: dispatchable,
         ...claiming({ contextWindow: 4_096, maxOutputTokens: 4_096 }),
+      });
+
+      expect(result.rows[0].patch).toMatchObject({ maxOutputTokens: 1_548 });
+      expect(4_096 - 1_548 - 1_000).toBeGreaterThan(0);
+      expect(result.dropped).toContainEqual({
+        source: 'openai',
+        modelId: 'gpt-6',
+        reason:
+          'maxOutputTokens 4096 leaves no input budget in a contextWindow of 4096 (safety buffer 1000); clamped to 1548',
+      });
+    });
+
+    it('drops a window at or under the buffer, where no reserve leaves room', () => {
+      const result = plan({
+        resolveDispatch: dispatchable,
+        ...claiming({ contextWindow: 1_000, maxOutputTokens: 1_000 }),
       });
 
       expect(result.rows).toEqual([]);
@@ -716,7 +753,7 @@ describe('planCatalogWrites', () => {
         source: 'openai',
         modelId: 'gpt-6',
         reason:
-          'contextWindow 4096 leaves no input budget for a text model even at the default output cap (safety buffer 1000)',
+          'maxOutputTokens 1000 leaves no input budget in a contextWindow of 1000 (safety buffer 1000); no reserve leaves room for a prompt',
       });
     });
   });

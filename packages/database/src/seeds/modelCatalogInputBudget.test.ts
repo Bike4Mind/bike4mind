@@ -67,7 +67,9 @@ describe('static model catalog input budget', () => {
     const overWindow = media.filter(model => (model.max_tokens ?? 0) > (model.contextWindow ?? 0));
     expect(overWindow.map(describeEntry)).toEqual([]);
 
-    // No output is reserved for media, but the safety buffer still comes off the top.
+    // No output is reserved for media, but the safety buffer still comes off the top. This holds
+    // for the adapter tables only: two provider feeds report a media window as 0 on purpose, and a
+    // discovery row outranks the seed, which is a live failure tracked separately.
     const starved = media.filter(model => (model.contextWindow ?? 0) - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS <= 0);
     expect(starved.map(describeEntry)).toEqual([]);
   });
