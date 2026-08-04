@@ -1,5 +1,5 @@
-import SortIcon from '@mui/icons-material/Sort';
 import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
+import SwapVertIcon from '@mui/icons-material/SwapVert';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { HUES } from './deckChrome';
 import type { Hue } from './deckChrome';
@@ -12,12 +12,12 @@ import type { Hue } from './deckChrome';
  */
 
 /**
- * Sort toggle icon per ACTIVE mode, so the button states what it is doing rather than only that
- * it toggles: A-Z gets the alphabet glyph, count gets the descending-bars glyph (both surfaces
- * sort count high-to-low). Keyed by the same union the surfaces hold in state.
+ * Sort toggle icon per ACTIVE mode: A-Z gets the alphabet glyph so the mode is readable from the
+ * button and not just its tooltip. Count keeps the neutral swap glyph. Keyed by the same union
+ * the surfaces hold in state.
  */
-export const SORT_MODE_ICON: Record<'count' | 'alpha', typeof SortIcon> = {
-  count: SortIcon,
+export const SORT_MODE_ICON: Record<'count' | 'alpha', typeof SwapVertIcon> = {
+  count: SwapVertIcon,
   alpha: SortByAlphaIcon,
 };
 
