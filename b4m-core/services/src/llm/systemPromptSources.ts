@@ -32,6 +32,7 @@ export type PromptSourceId =
   | 'questMaster'
   | 'organizationPrompt'
   | 'sessionPrompt'
+  | 'skills'
   | 'knowledgeRetrieval'
   | 'contextSummary'
   | 'mementos'
@@ -57,6 +58,7 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'questMaster',
   'organizationPrompt',
   'sessionPrompt',
+  'skills',
   'knowledgeRetrieval',
   'contextSummary',
   'mementos',
@@ -175,6 +177,7 @@ export const PROMPT_SOURCE_METADATA: Record<
   questMaster: { origin: 'session', name: 'quest_master' },
   organizationPrompt: { origin: 'org', name: 'organization_prompt' },
   sessionPrompt: { origin: 'session', name: 'session_prompt' },
+  skills: { origin: 'session', name: 'skills' },
   knowledgeRetrieval: { origin: 'session', name: 'knowledge_retrieval' },
   contextSummary: { origin: 'session', name: 'context_summary' },
   mementos: { origin: 'user', name: 'mementos' },

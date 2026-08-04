@@ -12,6 +12,7 @@ import {
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
+import { websocketApi } from './websocket';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -641,9 +642,11 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     handler: 'apps/client/server/cron/dataLakeBatchReconcile.handler',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
-    // dataLakeTaxonomyQueue: the stuck-batch backstop calls enqueueTaxonomyAnalysisIfWanted,
-    // which needs Resource.dataLakeTaxonomyQueue.url.
-    link: [...allSecrets, dataLakeTaxonomyQueue],
+    // dataLakeTaxonomyQueue + websocketApi: the stuck-batch backstop calls
+    // enqueueTaxonomyAnalysisIfWanted, which needs Resource.dataLakeTaxonomyQueue.url to
+    // enqueue and, on a rate-limited batch, Resource.websocket.managementEndpoint to push the
+    // live status update.
+    link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },

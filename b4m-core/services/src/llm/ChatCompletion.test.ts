@@ -31,6 +31,8 @@ import {
   type IMessage,
 } from '@bike4mind/common';
 import { ToolBuilder } from './tools/ToolBuilder';
+import { SkillsFeature } from './features/SkillsFeature';
+import type { ISkill } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
@@ -1407,6 +1409,88 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // A prompt block that describes a tool has to be gated on the BUILT tool list, not the requested
+  // one: the two diverge for auto-added tools on local models, and for anything the session denylist
+  // strips after the build. Asserted at this layer because neither the builder's own tests nor the
+  // view-registry helper can see which list the caller consulted.
+  describe('tool-conditional prompt gating', () => {
+    const imageTool = { toolSchema: { name: 'image_generation', description: 'gen', parameters: {} } };
+    const navigateTool = { toolSchema: { name: 'navigate_view', description: 'nav', parameters: {} } };
+
+    const runWithTools = async (tools: any[], disabledTools?: string[]) => {
+      mockSession.disabledTools = disabledTools;
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockClear();
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      buildToolsSpy.mockRestore();
+      buildToolPromptSpy.mockRestore();
+      return mockedBuildAndSortMessages.mock.calls.at(-1);
+    };
+
+    // Argument 9 is the builder options bag; argument 2 is the assembled system-message list.
+    const optionsPassedWithTools = async (tools: any[], disabledTools?: string[]) =>
+      (await runWithTools(tools, disabledTools))?.[8];
+    const hasViewRegistry = async (tools: any[]) =>
+      ((await runWithTools(tools))?.[1] ?? ([] as any[])).some(
+        (m: any) => typeof m?.content === 'string' && m.content.includes('# navigate_view Tool Usage')
+      );
+
+    it('reports the tool available when it survives into the built tool list', async () => {
+      expect(await optionsPassedWithTools([imageTool])).toMatchObject({ imageGenerationAvailable: true });
+    });
+
+    it('reports it unavailable when the built tool list does not carry it', async () => {
+      expect(await optionsPassedWithTools([])).toMatchObject({ imageGenerationAvailable: false });
+    });
+
+    // Availability has to be read AFTER the post-build denylist pass, not from the requested tools:
+    // a session that forbids the tool has it stripped from the built list, and reading any earlier
+    // would report it available on a turn where the model never receives it.
+    it('reports it unavailable when the session denylist strips it from the built list', async () => {
+      expect(await optionsPassedWithTools([imageTool], ['image_generation'])).toMatchObject({
+        imageGenerationAvailable: false,
+      });
+    });
+
+    it('includes the view registry when navigate_view is in the built tool list', async () => {
+      expect(await hasViewRegistry([navigateTool])).toBe(true);
+    });
+
+    // navigate_view is auto-added, so a local model has it trimmed from the built list while the
+    // requested list still names it. Gating on the requested list described a tool the model lacked.
+    it('omits the view registry when navigate_view never reached the built tool list', async () => {
+      expect(await hasViewRegistry([])).toBe(false);
+    });
+  });
+
   // `delegate_to_agent` must not be exposed to the LLM unless the user actually asked
   // for an agent. Previously the tool was auto-injected for every chat completion and
   // the model autonomously called it on benign prompts, spawning subagent runs that
@@ -1508,6 +1592,99 @@ describe('ChatCompletionProcess', () => {
         allowedAgents: [],
       });
       expect(agentStore).toBeUndefined();
+    });
+  });
+
+  // SkillsFeature computes a catalog + expanded `/skill-name` body, but the drop (#1344) was in the
+  // ASSEMBLY: the `skills` key was never spread into contextAndSystemMessages, so the model never saw
+  // it. A unit test on getContextMessages passes without the spread, so this asserts against the
+  // array actually handed to buildAndSortMessages - mirroring the assert-present/assert-absent
+  // approach requested for the artifact prompt in #1301.
+  describe('SkillsFeature context reaches the assembled system prompt (#1344)', () => {
+    const ownedSkill = (overrides: Partial<ISkill>): ISkill =>
+      ({
+        id: 's1',
+        name: 'skill',
+        description: 'A skill',
+        body: 'Body',
+        userId: 'user1', // matches mockUser.id, so it renders as trusted (no untrusted wrapping)
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        ...overrides,
+      }) as ISkill;
+
+    // Runs a full turn and returns the flattened text of the system/context messages that the
+    // assembly actually hands to buildAndSortMessages (its 2nd argument).
+    const runAndCaptureSystemText = async (params: {
+      message: string;
+      catalog?: ISkill[];
+      resolved?: ISkill[];
+    }): Promise<string> => {
+      mockDb.skills = {
+        listAccessibleInvocableForUser: vi.fn().mockResolvedValue(params.catalog ?? []),
+        findAccessibleByNamesForUser: vi.fn().mockResolvedValue(params.resolved ?? []),
+      };
+      // buildOptimizedFeatures is stubbed in beforeEach, so register the real feature under the
+      // same key the assembly reads. This exercises both phases against the live feature.
+      service.features.set('skills', new SkillsFeature(service));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: params.message }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
+
+      const body = {
+        ...startQuestParams,
+        message: params.message,
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+      await service.process({ body, logger: mockLogger });
+
+      const contextAndSystemMessages = (mockedBuildAndSortMessages.mock.calls[0]?.[1] ?? []) as IMessage[];
+      return contextAndSystemMessages
+        .map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+        .join('\n---\n');
+    };
+
+    it('spreads the catalog and the expanded /skill invocation into the system messages', async () => {
+      const systemText = await runAndCaptureSystemText({
+        message: '/greet Bob',
+        catalog: [ownedSkill({ name: 'greet', description: 'Greet someone' })],
+        resolved: [ownedSkill({ name: 'greet', body: 'Say hello to $ARGUMENTS' })],
+      });
+
+      // Model-invocable catalog (the `skill` tool's discovery surface) reaches the prompt.
+      expect(systemText).toContain('Available Skills');
+      expect(systemText).toContain('/greet');
+      // Explicit `/skill-name` expansion reaches the prompt with arguments substituted.
+      expect(systemText).toContain('Skill Invoked: /greet');
+      expect(systemText).toContain('Say hello to Bob');
+    });
+
+    it('emits no skills block when nothing is cataloged or invoked (assert-absent counterpart)', async () => {
+      const systemText = await runAndCaptureSystemText({ message: 'just chatting, no slash command' });
+
+      expect(systemText).not.toContain('Available Skills');
+      expect(systemText).not.toContain('Skill Invoked');
     });
   });
 

@@ -37,10 +37,10 @@ export async function handler() {
     db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
     logger,
     metrics: {
-      // Also backstops the taxonomy enqueue for a batch that never reached
-      // upload-complete - that path bypasses finalizeBatchIfComplete, so the daily sweep is
-      // the last chance to catch it (the read-time reconciler in batches/index.ts is the
-      // faster backstop for the same gap).
+      // Also backstops the taxonomy enqueue for a batch that never reached upload-complete
+      // NOR a terminal chunk/vectorize event (finalizeBatchIfComplete already backstops the
+      // latter case) - this daily sweep is the last chance to catch a genuinely stuck batch
+      // (the read-time reconciler in batches/index.ts is the faster backstop for the same gap).
       emitForcedTerminal: batch =>
         Promise.all([
           recordReconcilerForcedTerminal().catch(() => {}),

@@ -7,6 +7,7 @@ import {
   type CacheUsageStats,
   type ModelInfo,
 } from '@bike4mind/common';
+import { stripToolDependentMessages } from './toolPairingUtils';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
@@ -297,7 +298,8 @@ export class XAIBackend implements ICompletionBackend {
       // Remove tools when limit is hit and continue, preserving _internal settings
       await this.complete(
         model,
-        messages,
+        // Tools are going away, so the prompts that order the model to use one have to go with them.
+        stripToolDependentMessages(messages),
         {
           ...options,
           tools: undefined,

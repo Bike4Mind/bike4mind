@@ -1908,6 +1908,16 @@ export class ChatCompletionProcess {
       // have makes it emit the call as leaked JSON text in the reply.
       const blogDraftAvailable = allTools?.some(t => t.toolSchema.name === 'blog_draft') ?? false;
 
+      // Same gate, same reason, for the image prompt - except buildAndSortMessages appends that one
+      // out of sight of this assembly site, so availability has to be threaded into the builder.
+      const imageGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'image_generation') ?? false;
+
+      // navigate_view is auto-added (AUTO_ADDED_TOOL_NAMES), so the local-model trim above drops it
+      // from the built list while it stays in the requested one - the view registry below would then
+      // describe a tool the model never received.
+      const navigateViewAvailable = allTools?.some(t => t.toolSchema.name === 'navigate_view') ?? false;
+      const editImageAvailable = allTools?.some(t => t.toolSchema.name === 'edit_image') ?? false;
+
       const toolPromptMessage = await toolBuilder.buildToolPrompt({
         toolPromptId,
         hasContentTransform: (hasContentTransform ?? false) && blogDraftAvailable,
@@ -2016,11 +2026,13 @@ export class ChatCompletionProcess {
             content: getSettingsValue('AbstentionPrompt', defaultAdminSettings, ABSTENTION_PROMPT),
           },
         ],
-        // Inject view registry summary when navigate_view tool is enabled
-        viewRegistry: enabledTools.includes('navigate_view')
+        // Inject view registry summary when the navigate_view tool reached the model
+        viewRegistry: navigateViewAvailable
           ? [
               {
                 role: 'system' as const,
+                // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
+                requiresTool: 'navigate_view',
                 content: (() => {
                   // Extract current path from extraContextMessages for context-aware prompting
                   const viewCtx = extraContextMessages.find(
@@ -2044,6 +2056,10 @@ export class ChatCompletionProcess {
         questMaster: featureContextMessages['questMaster'],
         organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
         sessionPrompt: featureContextMessages['sessionPrompt'], // Per-session system prompt (product surfaces)
+        // Skills catalog (model-invocable `skill` tool discovery) + expanded `/skill-name`
+        // invocations. Grouped with the instruction-shaping blocks above and ahead of the
+        // data-context blocks below so an explicit invocation is not diluted by retrieval noise.
+        skills: featureContextMessages['skills'],
         knowledgeRetrieval: featureContextMessages['knowledgeRetrieval'], // Forced data-lake retrieval (grounding + citations)
         // Add LLM-optimized context summary if available (covers messages before verbatim window)
         contextSummary: session.contextSummary
@@ -2060,10 +2076,12 @@ export class ChatCompletionProcess {
         // generated image ("make it cartoonish"). Generated images persist as
         // bare storage keys in quest.images with no fabFile record, so without
         // this note the model can't reference them and either declines or (worse)
-        // claims success without calling a tool. Gated on edit_image being
-        // available (paired with image_generation).
+        // claims success without calling a tool. Gated on edit_image reaching the
+        // built tool list, like the two prompts above: the requested list agrees today
+        // only because edit_image is never auto-added, which is exactly the assumption
+        // that broke the view registry once navigate_view became auto-added.
         recentImages:
-          enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
+          editImageAvailable && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
             ? [
                 {
                   role: 'system' as const,
@@ -2090,7 +2108,14 @@ export class ChatCompletionProcess {
       // An explicit mode also excludes the admin templates this helper appends downstream
       // (FormatPromptTemplate, image prompt) - they are invisible from the assembly above, so the
       // source filter alone would leave them in front of a "raw" completion.
-      const buildOptions = { verbose: false, skipAdminPromptTemplates: Boolean(promptMode) };
+      //
+      // Shared with the overflow-recovery rebuild further down, so a prompt rebuilt after shedding
+      // history cannot carry different builder options than the first build.
+      const buildOptions = {
+        verbose: false,
+        skipAdminPromptTemplates: Boolean(promptMode),
+        imageGenerationAvailable,
+      };
       let messages = await buildAndSortMessages(
         previousMessages,
         contextAndSystemMessages,
