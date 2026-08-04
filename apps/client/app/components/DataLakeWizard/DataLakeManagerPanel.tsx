@@ -41,6 +41,7 @@ import {
   FOOTER_BTN_SX,
   ICON_BTN_SX,
   TREE_LIST_SX,
+  TREE_SCROLL_SX,
   hueForBranch,
   humanizeSegment,
   treeRowSx,
@@ -202,7 +203,7 @@ export default function DataLakeManagerPanel() {
         )
       ) : managerTab === 'discover' ? (
         // Public-lake catalog (store deep-link openManager('discover') or the footer button).
-        <Box sx={{ flex: 1, minWidth: 0, overflow: 'auto', px: 1 }}>
+        <Box sx={{ ...TREE_SCROLL_SX, minWidth: 0, px: 1 }}>
           <DataLakeDiscoverPanel />
         </Box>
       ) : (
@@ -422,7 +423,7 @@ function ManagerNav({
         </Tooltip>
       </Box>
 
-      <Box sx={{ flex: 1, overflow: 'auto', px: '8px' }}>
+      <Box sx={{ ...TREE_SCROLL_SX, px: '8px' }}>
         {activeLake && (
           <ListItemButton
             onClick={handleBack}
@@ -963,7 +964,7 @@ function LakeInfoPanel({
           )}
         </Box>
       </Box>
-      <Box sx={{ flex: 1, overflow: 'auto', px: 3, py: 2 }}>
+      <Box sx={{ ...TREE_SCROLL_SX, px: 3, py: 2 }}>
         {lake.description ? (
           <Typography level="body-md" sx={{ whiteSpace: 'pre-wrap' }}>
             {lake.description}

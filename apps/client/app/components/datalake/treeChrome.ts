@@ -1,3 +1,4 @@
+import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { HUES } from './deckChrome';
 import type { Hue } from './deckChrome';
 
@@ -34,12 +35,24 @@ export const treeRowSx = (hoverBg: string) =>
     '--variant-plainHoverBg': hoverBg,
   }) as const;
 
-/** Count chip rendered as bare text (no pill) to match the sidenav counters. */
+/**
+ * Count chip rendered as bare text (no pill) to match the sidenav counters.
+ * flexShrink: 0 is load-bearing - Joy's Chip label slot sets overflow:hidden + text-overflow:
+ * ellipsis, so as a shrinkable flex child a long row name would clip the digits ("360" -> "3...").
+ * Pinning it makes the name (minWidth:0 via ListItemContent) absorb all truncation instead.
+ */
 export const COUNT_CHIP_SX = {
   bgcolor: 'transparent',
+  flexShrink: 0,
   '--Chip-paddingInline': '0px',
   '--Chip-minHeight': 'auto',
 } as const;
+
+/**
+ * Scroll container sx for the tree/nav panes. Uses the same 4px thumb as the main app sidenav
+ * (layouts/Notebook/Sidenav/CombinedNotebooks) instead of the platform default bar.
+ */
+export const TREE_SCROLL_SX = { flex: 1, overflow: 'auto', ...scrollbarStyles } as const;
 
 /** List container vars shared by the tree/file lists. */
 export const TREE_LIST_SX = {

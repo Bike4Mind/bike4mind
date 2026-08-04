@@ -30,6 +30,7 @@ import {
   FOOTER_BTN_SX,
   ICON_BTN_SX,
   TREE_LIST_SX,
+  TREE_SCROLL_SX,
   hueForBranch,
   humanizeSegment,
   treeRowSx,
@@ -214,7 +215,7 @@ export default function DataLakeChatTree({
       </Box>
 
       {/* Tree / file list */}
-      <Box className="datalake-tree-list" sx={{ flex: 1, overflow: 'auto', px: '8px' }}>
+      <Box className="datalake-tree-list" sx={{ ...TREE_SCROLL_SX, px: '8px' }}>
         {/* Breadcrumb back - styled like the tree items (14px / gray[200]). */}
         {breadcrumb.length > 0 && (
           <ListItemButton
