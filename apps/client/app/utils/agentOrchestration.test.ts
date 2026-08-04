@@ -117,6 +117,7 @@ describe('buildDefaultOrchestrationProfile', () => {
       // generated-content storage, not user data.
       'image_generation',
       'edit_image',
+      'music_generation',
       'excel_generation',
       // Inline visualization artifacts - emit an <artifact> block, write nothing.
       'recharts',

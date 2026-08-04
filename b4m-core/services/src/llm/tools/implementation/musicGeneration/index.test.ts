@@ -61,11 +61,11 @@ describe('music_generation tool', () => {
     mockGetEffectiveApiKey.mockResolvedValue('el-key');
   });
 
-  it('reserves credits, generates, stores the track, and renders it inline', async () => {
+  it('gates credits, generates, stores the track, and renders it inline', async () => {
     const context = createFakeContext();
     const result = await run(context, { prompt: 'lofi study beats' });
 
-    // Credit reservation runs first (onStart) with the deterministic length + provider.
+    // Affordability gate runs first (onStart) with the deterministic length + provider.
     expect(context.onStart).toHaveBeenCalledWith('music_generation', {
       provider: 'elevenlabs',
       lengthMs: expect.any(Number),
@@ -79,8 +79,14 @@ describe('music_generation tool', () => {
     expect(filename).toMatch(/\.mp3$/);
     expect(options).toEqual({ ContentType: 'audio/mpeg' });
 
-    // Inline render: path pushed via onFinish (host appends to quest.images) + statusUpdate.
-    expect(context.onFinish).toHaveBeenCalledWith('music_generation', ['stored-key.mp3']);
+    // On success the charge is reserved via onFinish (host settles + appends to
+    // quest.images), carrying the billing params so only a delivered track is billed.
+    expect(context.onFinish).toHaveBeenCalledWith('music_generation', {
+      paths: ['stored-key.mp3'],
+      provider: 'elevenlabs',
+      lengthMs: expect.any(Number),
+      modelId: 'music_v1',
+    });
     expect(context.statusUpdate).toHaveBeenCalledWith({ images: ['stored-key.mp3'] });
     expect(result).toBe('Successfully generated music');
   });
@@ -88,12 +94,12 @@ describe('music_generation tool', () => {
   it('clamps a below-minimum length up to the provider floor', async () => {
     const context = createFakeContext();
     await run(context, { prompt: 'ambient', lengthMs: 100 });
-    const [, reserved] = (context.onStart as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, gated] = (context.onStart as ReturnType<typeof vi.fn>).mock.calls[0];
     // MIN_MUSIC_LENGTH_MS is 3000; a 100ms request must be floored, not passed through.
-    expect(reserved.lengthMs).toBe(3_000);
+    expect(gated.lengthMs).toBe(3_000);
   });
 
-  it('rejects an empty prompt without reserving credits or calling the provider', async () => {
+  it('rejects an empty prompt without gating credits or calling the provider', async () => {
     const context = createFakeContext();
     const result = await run(context, { prompt: '   ' });
     expect(result).toMatch(/non-empty music prompt/i);
@@ -101,18 +107,23 @@ describe('music_generation tool', () => {
     expect(mockGenerate).not.toHaveBeenCalled();
   });
 
-  it('fails with a generic message when no ElevenLabs key is configured', async () => {
+  it('returns a generic message and does not bill when no ElevenLabs key is configured', async () => {
     mockGetEffectiveApiKey.mockResolvedValue(undefined);
     const context = createFakeContext();
-    await expect(run(context, { prompt: 'jazz' })).rejects.toThrow(/currently unavailable/i);
+    const result = await run(context, { prompt: 'jazz' });
+    expect(result).toMatch(/currently unavailable/i);
     expect(mockGenerate).not.toHaveBeenCalled();
+    // onFinish reserves the charge; a missing key must never settle a charge.
+    expect(context.onFinish).not.toHaveBeenCalled();
   });
 
-  it('returns the provider error as the tool result instead of throwing', async () => {
+  it('returns the provider error as the tool result without throwing or billing', async () => {
     mockGenerate.mockRejectedValue(new Error('provider exploded'));
     const context = createFakeContext();
     const result = await run(context, { prompt: 'techno' });
     expect(result).toMatch(/Error: provider exploded/);
     expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
+    // A failed generation must not settle a charge - onFinish is never reached.
+    expect(context.onFinish).not.toHaveBeenCalled();
   });
 });

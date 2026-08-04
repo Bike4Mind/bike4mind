@@ -458,7 +458,36 @@ function omitBetweenTags(input: string, openTag: string, closeTag: string): stri
 
 // Generated audio (music_generation) rides quest.images alongside images/xlsx; this
 // splits it out for the inline player and excludes it from the download-chip list.
-const GENERATED_AUDIO_EXT = /\.(mp3|wav|ogg|m4a|aac|flac|webm)$/i;
+// Kept to the formats music_generation actually emits: .webm and .ogg are omitted
+// because both are predominantly video containers, so a future generated-video path
+// routed through quest.images must not be claimed here for the <audio> player.
+const GENERATED_AUDIO_EXT = /\.(mp3|wav|m4a|aac|flac)$/i;
+// Actual raster/vector images belong in the inline grid; anything else (e.g. an .xlsx
+// from excel_generation) would render as a broken <img>.
+const GENERATED_IMAGE_EXT = /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i;
+
+/**
+ * Partition the files a tool dropped into `quest.images` this turn into three disjoint
+ * buckets by extension: the inline <img> grid, inline <audio> players, and download
+ * chips (everything else - also surfaced in the Knowledge Base). Every entry lands in
+ * exactly one bucket, and `others` is the catch-all so a newly added media type degrades
+ * to a download chip rather than silently vanishing or rendering as a broken <img>.
+ */
+export function classifyGeneratedFiles(files: string[]): {
+  images: string[];
+  audio: string[];
+  others: string[];
+} {
+  const images: string[] = [];
+  const audio: string[] = [];
+  const others: string[] = [];
+  for (const file of files) {
+    if (GENERATED_IMAGE_EXT.test(file)) images.push(file);
+    else if (GENERATED_AUDIO_EXT.test(file)) audio.push(file);
+    else others.push(file);
+  }
+  return { images, audio, others };
+}
 
 // PromptReplies: top-level component (public API unchanged)
 
@@ -481,41 +510,19 @@ const PromptReplies: FC<PromptReplyProps> = ({
 
   const generatedImagesUrl = `${cdnUrl}/generated`;
   // quest.images carries every file a tool generated this turn, but not all of them are
-  // images - e.g. excel_generation drops an .xlsx in here. Only actual images belong in the
-  // inline image grid; anything else would render as a broken <img>. Split by extension and
-  // surface non-image files as download chips instead (they also appear in the Knowledge Base).
-  const images = useMemo(
-    () =>
-      generatedImagesUrl
-        ? (messageData.images ?? [])
-            .filter(image => /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(image))
-            .map(image => `${generatedImagesUrl}/${image}`)
-            .filter(Boolean)
-        : [],
-    [messageData.images, generatedImagesUrl]
-  );
-  // Audio tracks (music_generation) also ride quest.images; render them as inline
-  // players and keep them out of the download-chip list below.
-  const audio = useMemo(
-    () =>
-      generatedImagesUrl
-        ? (messageData.images ?? [])
-            .filter(file => GENERATED_AUDIO_EXT.test(file))
-            .map(file => `${generatedImagesUrl}/${file}`)
-        : [],
-    [messageData.images, generatedImagesUrl]
-  );
-  const generatedFiles = useMemo(
-    () =>
-      generatedImagesUrl
-        ? (messageData.images ?? [])
-            .filter(
-              image => !/\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(image) && !GENERATED_AUDIO_EXT.test(image)
-            )
-            .map(image => ({ name: image, url: `${generatedImagesUrl}/${image}` }))
-        : [],
-    [messageData.images, generatedImagesUrl]
-  );
+  // images - e.g. excel_generation drops an .xlsx and music_generation an audio track in
+  // here. Classify once into the inline grid, inline audio players, and download chips
+  // (non-image/-audio files, also surfaced in the Knowledge Base) so each lands in exactly
+  // one place instead of rendering as a broken <img>. See classifyGeneratedFiles.
+  const { images, audio, generatedFiles } = useMemo(() => {
+    if (!generatedImagesUrl) return { images: [], audio: [], generatedFiles: [] };
+    const buckets = classifyGeneratedFiles(messageData.images ?? []);
+    return {
+      images: buckets.images.map(image => `${generatedImagesUrl}/${image}`),
+      audio: buckets.audio.map(file => `${generatedImagesUrl}/${file}`),
+      generatedFiles: buckets.others.map(name => ({ name, url: `${generatedImagesUrl}/${name}` })),
+    };
+  }, [messageData.images, generatedImagesUrl]);
   const videos = useMemo(
     () =>
       generatedImagesUrl ? messageData.videos?.map(video => `${generatedImagesUrl}/${video}`).filter(Boolean) : [],

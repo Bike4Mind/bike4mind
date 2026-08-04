@@ -18,25 +18,13 @@ import { ToolDefinition } from '../../base/types';
 const PROVIDER: MusicGenerationVendor = 'elevenlabs';
 
 /**
- * Guard the ElevenLabs key the same way image_generation guards its provider keys:
- * a missing key must fail with a generic, non-leaking message (this string is the
- * tool observation the model sees) rather than passing `undefined` through to the
- * provider and getting an opaque 401 the ReAct loop would retry forever.
- */
-function requireApiKey(apiKey: string | undefined, logger?: Pick<Console, 'error'>): string {
-  if (!apiKey) {
-    (logger ?? console).error('[music_generation] ElevenLabs API key is not configured; refusing to dispatch');
-    throw new Error('Music generation is currently unavailable. Please try again later.');
-  }
-  return apiKey;
-}
-
-/**
  * In-chat / agent background-music generation, modeled on image_generation.
  *
- * Billing is deterministic and length-driven: `onStart` records the reserved
- * charge into the host's toolCreditsMap for end-of-quest settlement (see
- * ToolBuilder + ChatCompletionProcess), mirroring image_generation. The track is
+ * Billing is deterministic and length-driven: `onStart` is an up-front affordability
+ * gate (the host throws insufficient_credits before the paid provider call), and
+ * `onFinish` reserves the charge into the host's toolCreditsMap for end-of-quest
+ * settlement (see ToolBuilder + ChatCompletionProcess). Reserving on success rather
+ * than on start means a failed generation is never billed. The track is
  * uploaded to the generated-content bucket and pushed into `quest.images` (which
  * the client already treats as "every file a tool produced this turn"); the client
  * splits by extension so audio renders as an inline player. A browsable AUDIO copy
@@ -61,7 +49,7 @@ export const musicGenerationTool: ToolDefinition = {
       }
 
       // Clamp to the provider bounds and default when omitted, so the billed length
-      // (reserved in onStart) always equals the generated length - the deterministic
+      // (reserved in onFinish) always equals the generated length - the deterministic
       // reserve/settle contract the cost model depends on.
       const lengthMs = Math.min(
         MAX_MUSIC_LENGTH_MS,
@@ -69,14 +57,22 @@ export const musicGenerationTool: ToolDefinition = {
       );
       const modelId = DEFAULT_MUSIC_MODEL_ID;
 
-      // Reserve credits for this call (host records the length-driven charge into
-      // toolCreditsMap). MUST be the first side-effecting step, like image_generation.
+      // Affordability gate only: the host throws insufficient_credits here if the owner
+      // can't cover the length-driven charge, BEFORE the paid provider call. The actual
+      // reservation is deferred to onFinish (below) so a failed generation is never billed.
       await context.onStart?.('music_generation', { provider: PROVIDER, lengthMs, modelId, prompt });
 
       await context.statusUpdate({}, 'Composing music...');
 
       const apiKey = await getEffectiveApiKey(context.userId, { type: ApiKeyType.elevenlabs }, { db: context.db });
-      const service = aiMusicService(PROVIDER, requireApiKey(apiKey, context.logger), context.logger);
+      if (!apiKey) {
+        // Return (not throw) the generic, non-leaking message so the ReAct loop relays a
+        // clear reason and the quest survives; nothing is billed since onFinish - which
+        // reserves the charge - is never reached.
+        context.logger.error('[music_generation] ElevenLabs API key is not configured; refusing to dispatch');
+        return 'Error: Music generation is currently unavailable. Please try again later.';
+      }
+      const service = aiMusicService(PROVIDER, apiKey, context.logger);
 
       let audio: Buffer;
       let contentType: string;
@@ -111,8 +107,10 @@ export const musicGenerationTool: ToolDefinition = {
         ],
       });
 
-      // Settlement hook (host appends the path to quest.images) + inline render.
-      await context.onFinish?.('music_generation', [storedPath]);
+      // Reserve + record the charge now that generation succeeded (host settles
+      // toolCreditsMap at quest end and appends the path to quest.images). The failure
+      // paths above return before here, so an undelivered track is never billed.
+      await context.onFinish?.('music_generation', { paths: [storedPath], provider: PROVIDER, lengthMs, modelId });
       await context.statusUpdate({ images: [storedPath] });
       return 'Successfully generated music';
     },

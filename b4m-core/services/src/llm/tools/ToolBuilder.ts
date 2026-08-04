@@ -16,6 +16,7 @@ import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
 import { ToolDefinition, type ToolContext } from './base/types';
 import { validateUserCredits, validateMusicCredits } from './base/utils';
+import { estimateMusicCredits } from '../../musicCost';
 import {
   extractAndSaveEntitiesFromUserMessage,
   getConversationContextSystemMessage,
@@ -548,24 +549,50 @@ export class ToolBuilder {
           }
 
           if (toolName === 'music_generation') {
-            // Deterministic, length-driven charge (no model catalog needed, unlike
-            // image_generation). Reserve into toolCreditsMap for end-of-quest settlement.
+            // Up-front affordability gate ONLY: throw insufficient_credits before the
+            // paid provider call if the owner can't cover the length-driven charge. The
+            // reservation + usage event are deferred to onToolFinish so a failed
+            // generation is never billed (the tool returns early without calling onFinish).
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
             if (enforceCredits && !!this.deps.db.creditTransactions) {
-              const { provider, lengthMs, modelId } = data as {
-                provider: MusicGenerationVendor;
-                lengthMs: number;
-                modelId: string;
-              };
+              const { provider, lengthMs } = data as { provider: MusicGenerationVendor; lengthMs: number };
+              validateMusicCredits(this.deps.user, provider, lengthMs, this.deps.logger, organization);
+            }
+          }
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        onToolFinish: async (toolName: string, data: any) => {
+          if (toolName === 'deep_research') {
+            this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
+            quest.deepResearchState = data;
+            await saveQuest(quest);
+          }
+          if (toolName === 'music_generation') {
+            // Settle music billing HERE (not onToolStart) so only a delivered track is
+            // charged: reserve the deterministic, length-driven credits into toolCreditsMap
+            // for end-of-quest settlement and record the COGS usage event. The tool's
+            // failure paths return before calling onFinish, so nothing lands on failure.
+            // Uses estimateMusicCredits (pure, no throw) - affordability was already gated
+            // in onToolStart, so re-running the throwing validator on a delivered track
+            // would be wrong. Audio rides quest.images; the client splits by extension.
+            const { paths, provider, lengthMs, modelId } = data as {
+              paths: string[];
+              provider: MusicGenerationVendor;
+              lengthMs: number;
+              modelId: string;
+            };
+            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
+            if (enforceCredits && !!this.deps.db.creditTransactions) {
               const {
                 requiredCredits: creditsUsed,
                 usdCost,
                 billedSeconds,
-              } = validateMusicCredits(this.deps.user, provider, lengthMs, this.deps.logger, organization);
+              } = estimateMusicCredits(provider, {
+                lengthMs,
+              });
               this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
               this.deps.toolCreditsMap.set('music_generation', creditsUsed);
               quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
-              await saveQuest(quest);
               recordToolUsageEvent(
                 this.deps.db,
                 this.deps.logger,
@@ -582,18 +609,14 @@ export class ToolBuilder {
                 })
               );
             }
-          }
-        },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        onToolFinish: async (toolName: string, data: any) => {
-          if (toolName === 'deep_research') {
-            this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
-            quest.deepResearchState = data;
+            if (!quest.images) quest.images = [];
+            paths.forEach((path: string) => {
+              if (!quest.images?.includes(path)) quest.images?.push(path);
+            });
             await saveQuest(quest);
           }
-          // music_generation rides quest.images too: the client splits by extension,
-          // rendering audio as an inline player and images as the grid.
-          if (toolName === 'image_generation' || toolName === 'edit_image' || toolName === 'music_generation') {
+          // image_generation / edit_image ride quest.images too (data is the path array).
+          if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
             const generatedPaths = Array.isArray(data) ? data : [data];
             if (!quest.images) quest.images = [];
