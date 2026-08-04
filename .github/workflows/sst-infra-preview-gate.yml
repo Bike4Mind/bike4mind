@@ -36,8 +36,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
+
+          # The changesets "version packages" PR only bumps versions + CHANGELOGs.
+          # Its b4m-core/infra/package.json bump trips the infra glob below with no
+          # real infra change, so exempt the bot branch instead of forcing a
+          # throwaway preview on every release.
+          if [ "$HEAD_REF" = "changeset-release/main" ]; then
+            echo "Changesets release PR (version bumps only). Gate not applicable -> pass."
+            exit 0
+          fi
 
           # Single fetch of changed files (with patches). No `|| true`: a fetch
           # failure must redden this gate (fail closed), never silently pass.
