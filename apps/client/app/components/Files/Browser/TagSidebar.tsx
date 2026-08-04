@@ -1,4 +1,4 @@
-import { IFileTag, ITag } from '@bike4mind/common';
+import { IFileTag, IFileTagWithFileCount, ITag } from '@bike4mind/common';
 import {
   Box,
   Button,
@@ -36,7 +36,7 @@ import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import TagForm from '../../Tag/Form';
 
 interface TagSidebarProps {
-  tags: IFileTag[];
+  tags: IFileTagWithFileCount[];
   isOpen: boolean;
   onToggle: () => void;
   onTagClick: (tagName: string) => void;
@@ -770,7 +770,7 @@ interface TagGroupProps {
   title: string;
   subtitle: string;
   icon: string;
-  tags: IFileTag[];
+  tags: IFileTagWithFileCount[];
   onTagClick: (tagName: string) => void;
   onAddToSelectedFiles: (tag: IFileTag) => Promise<void>;
   hasSelectedFiles: boolean;
@@ -857,7 +857,7 @@ const TagGroup: FC<TagGroupProps> = ({
 
 // Individual Tag Item Component
 interface TagItemProps {
-  tag: IFileTag;
+  tag: IFileTagWithFileCount;
   isActive: boolean;
   onClick: () => void;
   onAddToSelectedFiles: () => Promise<void>;

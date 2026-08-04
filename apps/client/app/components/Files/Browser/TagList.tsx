@@ -1,4 +1,4 @@
-import { IFileTag, ITag } from '@bike4mind/common';
+import { IFileTag, IFileTagWithFileCount, ITag } from '@bike4mind/common';
 import { gray } from '../../../utils/themes/colors';
 import { useCreateFileTag, useDeleteFileTag, useUpdateFileTag } from '@client/app/hooks/data/tag';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
@@ -24,7 +24,7 @@ import { brand, red, redAlpha } from '@client/app/utils/themes/colors';
 import TagForm from '../../Tag/Form';
 
 interface FileBrowserTagListProps {
-  tags: IFileTag[];
+  tags: IFileTagWithFileCount[];
   onClick: (tag: string) => void;
   onOpenTagManager?: () => void;
 }
@@ -422,7 +422,7 @@ const FileBrowserTagList: FC<FileBrowserTagListProps> = ({ tags = [], onClick, o
 };
 
 const Item: FC<{
-  value: IFileTag;
+  value: IFileTagWithFileCount;
   onClick: () => void;
   onEdit: () => void;
   onDelete: () => void;

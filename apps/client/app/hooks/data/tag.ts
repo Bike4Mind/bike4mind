@@ -1,5 +1,5 @@
 import { api } from '@client/app/contexts/ApiContext';
-import { IFabFileDocument, IFileTag, ITag } from '@bike4mind/common';
+import { IFabFileDocument, IFileTag, IFileTagWithFileCount, ITag } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getErrorMessage } from '@client/app/utils/error';
 import { toast } from 'sonner';
@@ -21,7 +21,9 @@ export const useGetTagCounts = () => {
 export const useGetFileTags = () => {
   return useQuery({
     queryKey: ['file-tags'],
-    queryFn: () => api.get<IFileTag[]>('/api/files/tags').then(res => res.data),
+    // The only endpoint that carries a fileCount: the tag document stores none, so listFileTags
+    // derives it per read. Anything wanting a count has to come through this query.
+    queryFn: () => api.get<IFileTagWithFileCount[]>('/api/files/tags').then(res => res.data),
     refetchOnWindowFocus: false,
   });
 };
@@ -35,10 +37,11 @@ export const useCreateFileTag = () => {
       return result.data;
     },
     onSuccess: data => {
-      queryClient.setQueryData(['file-tags'], (prev: IFileTag[]) => [...prev, data]);
-      // The create response carries the seeded fileCount of 0, which is wrong the moment the name
-      // matches files that already exist - tag documents are auto-created by name elsewhere, and
-      // deleting one never untags the files. Invalidate the list, not just the counts endpoint.
+      // The create response carries no count - only listFileTags derives one - so the new row is
+      // seeded at 0 here. Right for a genuinely new name and wrong the moment files already carry
+      // it (tag documents are auto-created by name elsewhere, and deleting one never untags the
+      // files), which is what the invalidation below settles. The list, not just the counts endpoint.
+      queryClient.setQueryData(['file-tags'], (prev: IFileTagWithFileCount[]) => [...prev, { ...data, fileCount: 0 }]);
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       toast.success('Tag created successfully');
     },
@@ -61,9 +64,9 @@ export const useUpdateFileTag = () => {
     onSuccess: data => {
       // Merge rather than replace so the edited fields show immediately: PUT /api/files/tags/[id]
       // echoes back only what tagUpdateSchema accepted, and a wholesale swap would blank the rest
-      // of the row. This is optimistic only - a rename retags the files and can merge two tags into
-      // one, so fileCount here is a guess and the invalidation below is what settles it.
-      queryClient.setQueryData(['file-tags'], (prev: IFileTag[]) =>
+      // of the row. The response carries no count, so the merge keeps the derived one - still only
+      // optimistic, because a rename retags the files and can merge two tags into one.
+      queryClient.setQueryData(['file-tags'], (prev: IFileTagWithFileCount[]) =>
         prev.map(t => (t.id === data.id ? { ...t, ...data } : t))
       );
       // The bare prefix: invalidating ['file-tags','counts'] alone leaves the longer key matched
