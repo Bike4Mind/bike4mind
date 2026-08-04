@@ -106,6 +106,13 @@ const KNOWLEDGE_FILE_TOKEN_ALLOCATION = 0.7;
 const MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION = 0.35;
 
 /**
+ * Rounds the final safety pass may spend shrinking the payload. It has to re-measure between rounds
+ * (see the pass for why one shot overshoots), and each round costs two real tokenizer calls, so this
+ * bounds the work. Converges in one or two rounds in practice.
+ */
+const MAX_SAFETY_SHRINK_ROUNDS = 5;
+
+/**
  * Appended to attached-file content that had to be cut to fit. Without it a CSV sliced mid-row reads
  * as a complete file: the model treats the last surviving row as the final row and answers about it
  * confidently, which is indistinguishable from a correct answer unless you already hold the file.
@@ -2028,6 +2035,9 @@ export async function buildAndSortMessages(
    * so it re-judges only real attachments and replaces the note rather than stacking another. It keeps
    * the note in the payload it measures, so the ~100 tokens it costs are counted, not hidden.
    */
+  // The safety pass calls this once per shrink round, so one turn would otherwise log up to five
+  // warnings disagreeing about the counts. Only a change in what is undelivered is news.
+  let lastDeclaredCounts = '';
   const declareUndeliveredAttachments = (contentMessages: IMessage[]): IMessage[] => {
     if (attachmentsWithContent.length === 0) return contentMessages;
 
@@ -2043,12 +2053,16 @@ export async function buildAndSortMessages(
     const sliverCount = delivered.length - usable.length;
     if (droppedCount === 0 && sliverCount === 0) return contentMessages;
 
-    logger.warn(
-      `Attached content could not be delivered usefully: ${droppedCount} file(s) dropped whole and ` +
-        `${sliverCount} reduced below the ${MIN_USEFUL_ATTACHED_CONTENT_TOKENS}-token minimum worth sending. ` +
-        `Context window is too small after system instructions and history. Affected: ` +
-        attachmentsWithContent.map(attachmentLabel).join(' | ')
-    );
+    const counts = `${droppedCount}/${sliverCount}`;
+    if (counts !== lastDeclaredCounts) {
+      lastDeclaredCounts = counts;
+      logger.warn(
+        `Attached content could not be delivered usefully: ${droppedCount} file(s) dropped whole and ` +
+          `${sliverCount} reduced below the ${MIN_USEFUL_ATTACHED_CONTENT_TOKENS}-token minimum worth sending. ` +
+          `Context window is too small after system instructions and history. Affected: ` +
+          attachmentsWithContent.map(attachmentLabel).join(' | ')
+      );
+    }
     contentSqueezed = true;
     // Deliberately names no files. Which attachment was lost is not knowable here once processMessages
     // has replaced the objects, and listing all of them let the model disclaim one it did receive.
@@ -2061,7 +2075,15 @@ export async function buildAndSortMessages(
         `could not be read within this model's context window, and suggest a model with a larger context window, ` +
         `a smaller file, or a shorter conversation.`,
     };
-    return [...usable, undeliveredNote];
+    // Filtered down to `usable` this dropped everything the note is not about - URL-derived context and
+    // attachments that carried no extractable text - since neither passes isAttachment. Harmless while
+    // the allocation was the only caller, because a turn it dropped nothing on returned early above; the
+    // safety pass can now be the first stage to drop something, which makes the loss reachable.
+    const replaced = new Set(delivered.filter(isUnusableSliver));
+    return [
+      ...contentMessages.filter(message => message !== undeliveredNote && !replaced.has(message)),
+      undeliveredNote,
+    ];
   };
 
   processedContentMessages = declareUndeliveredAttachments(processedContentMessages);
@@ -2142,49 +2164,127 @@ export async function buildAndSortMessages(
     logger.warn(
       `⚠️ Final message token count (${finalTokenCount}) exceeds maxInputTokens (${maxInputTokens}). Truncating messages.`
     );
-    // If we still exceed limits, remove some processed content messages as last resort.
+    // Shrink content first, then history, re-measuring the real count each round until it fits. A
+    // single subtraction could not do the job three ways. It only ever touched content, while the
+    // overflow usually lives in history, which holds the majority of the budget. It never re-measured.
+    // And it spent a real-tokenizer overage against processMessages, which budgets in the character
+    // estimate, so on anything denser than ~3.5 chars/token - code, CSV, CJK - a pass freed a fraction
+    // of what it asked for. Each of those left the excess to reach the caller's hard throw, making the
+    // backstop the cause of the failure it exists to prevent.
     //
-    // The notice is threaded and the result recorded for the same reason: this pass can now actually
-    // cut. Before the reservation cap above, protected messages were reserved unconditionally, so the
-    // selection was never empty, the truncation fallback never fired from here, and an overflow went
-    // to the caller's hard throw instead. With the cap it shrinks - and without these two arguments it
+    // The notice is threaded and the result recorded because this pass really does cut: without them it
     // would head-slice a file with nothing appended (the fallback's hold-out for an existing upstream
-    // notice is gated on truncationNotice), then drop the cut from telemetry, so the turn that lost
-    // the most content would report wasTruncated: false. A silent truncated file presented as complete
-    // is the failure this module exists to prevent.
-    const excessTokens = finalTokenCount - maxInputTokens;
-    const reducedContentMessages = recordContentResult(
-      processMessages(
-        processedContentMessages,
-        Math.max(
-          0,
-          (await calculateTotalTokenLength(processedContentMessages, { estimateOnly: false, tokenizer })) - excessTokens
-        ),
-        { truncationNotice: CONTENT_TRUNCATION_NOTICE }
-      )
-    );
+    // notice is gated on truncationNotice), then drop the cut from telemetry, so the turn that lost the
+    // most content would report wasTruncated: false. A silent truncated file presented as complete is
+    // the failure this module exists to prevent.
+    let reducedContentMessages = processedContentMessages;
+    let currentTokenCount = finalTokenCount;
+    let lastRatio = 1;
 
-    let truncatedMessages: IMessage[];
-    if (historyEndsWithToolUse && promptHasToolResult) {
-      truncatedMessages = [
-        ...systemMessages,
-        ...processedPreviousMessages,
-        ...userPrompt,
-        ...imageMessages,
-        ...reducedContentMessages,
-      ];
-    } else {
-      truncatedMessages = [
-        ...systemMessages,
-        ...processedPreviousMessages,
-        ...imageMessages,
-        ...reducedContentMessages,
-        ...userPrompt,
-      ];
+    // The only thing that knows the assembly order, so the payload measured each round and the payload
+    // returned cannot diverge. The pairing flag is derived from the history handed in rather than read
+    // from the one above, which was fixed before this pass started shrinking. No input reaches the
+    // disagreement today - processMessages always keeps the most recent history message, and the ratio
+    // conversion only zeroes history's budget when everything else already exceeds the window - so this
+    // is not a fix for anything reachable. It is here because a closure that takes history as an
+    // argument and then reads a flag describing some other history is a trap for the next change.
+    const assemble = (content: IMessage[], history: IMessage[]): IMessage[] => {
+      const last = history[history.length - 1];
+      const endsWithToolUse =
+        last?.role === 'assistant' &&
+        Array.isArray(last.content) &&
+        last.content.some((block: any) => block.type === 'tool_use');
+      return endsWithToolUse && promptHasToolResult
+        ? [...systemMessages, ...history, ...userPrompt, ...imageMessages, ...content]
+        : [...systemMessages, ...history, ...imageMessages, ...content, ...userPrompt];
+    };
+
+    // Content is asked to give first, but a round that frees nothing hands over to history rather than
+    // retrying forever: processMessages judges against the character estimate, so content that is
+    // oversized in real tokens can still look like it fits and come back untouched.
+    let contentExhausted = reducedContentMessages.filter(message => message !== undeliveredNote).length === 0;
+    for (let round = 0; round < MAX_SAFETY_SHRINK_ROUNDS && currentTokenCount > maxInputTokens; round++) {
+      const shrinkingContent = !contentExhausted;
+      // Only system messages, images and the user prompt are left, and none is droppable here.
+      if (!shrinkingContent && processedPreviousMessages.length === 0) break;
+
+      // The undelivered note is held out of the content slice by identity so the shrink judges only real
+      // content; it stays in the assembled payload, so its cost is still measured.
+      const before = shrinkingContent
+        ? reducedContentMessages.filter(message => message !== undeliveredNote)
+        : processedPreviousMessages;
+      // Measured on the slice being cut rather than the whole payload: a prose-heavy conversation's
+      // overall ratio understates CSV density and under-trims the very slice the round is spending
+      // against. Realistic CSV runs about 2.2 chars/token against the estimator's 3.5, prose about 5.6.
+      const beforeEstimate = estimateMessagesTokens(before);
+      const beforeReal = await calculateTotalTokenLength(before, { estimateOnly: false, tokenizer });
+      lastRatio = beforeEstimate > 0 && beforeReal > 0 ? Math.min(8, Math.max(0.25, beforeReal / beforeEstimate)) : 1;
+      // Errs low on purpose: a round that under-trims is corrected by the next one, while over-trimming
+      // drops content a smaller cut would have kept.
+      const excessInEstimateTokens = Math.ceil((currentTokenCount - maxInputTokens) / lastRatio);
+      const budget = Math.max(0, beforeEstimate - excessInEstimateTokens);
+
+      if (shrinkingContent) {
+        const reduced = recordContentResult(
+          processMessages(before, budget, { truncationNotice: CONTENT_TRUNCATION_NOTICE })
+        );
+        if (reduced.length < before.length) {
+          logger.warn(
+            `Final safety pass dropped ${before.length - reduced.length} of ${before.length} ` +
+              `attached content message(s) to fit the context window.`
+          );
+        }
+        reducedContentMessages = undeliveredNote ? [...reduced, undeliveredNote] : reduced;
+      } else {
+        const reduced = processMessages(before, budget);
+        // Compared in tokens, not message count: the truncation fallback shrinks messages in place, so a
+        // count test reads "same count" as "cannot shrink", discards a real reduction, and sends the
+        // still-oversized payload to the throw.
+        if (estimateMessagesTokens(reduced.messages) >= beforeEstimate) break;
+        logger.warn(
+          `Final safety pass also reduced ${before.length} history message(s) to ${reduced.messages.length}: ` +
+            `the attached content alone could not absorb the overflow.`
+        );
+        processedPreviousMessages = recordHistoryResult(reduced);
+      }
+
+      // Re-declared every round rather than once at the end, so an attachment this pass drops is named
+      // to the model - otherwise it arrives with nothing said and the model denies the file exists, the
+      // exact failure this backstop re-entered through last time - and so the note's own ~100 tokens sit
+      // inside the count the next round works from.
+      reducedContentMessages = declareUndeliveredAttachments(reducedContentMessages);
+
+      const afterTokenCount = await calculateTotalTokenLength(
+        assemble(reducedContentMessages, processedPreviousMessages),
+        { estimateOnly: false, tokenizer }
+      );
+      const stalled = afterTokenCount >= currentTokenCount;
+      currentTokenCount = afterTokenCount;
+      if (stalled) {
+        // Content that cannot give any more hands over to history; history that cannot is the end of
+        // what this pass can do.
+        if (shrinkingContent) contentExhausted = true;
+        else break;
+      }
     }
+
+    if (currentTokenCount > maxInputTokens) {
+      // Deliberately names no single cause: this is reached from four exits (the round cap, content and
+      // history both spent, nothing droppable left, history unable to shrink) and only one of them is
+      // about system + prompt size. Images are the usual answer when nothing moved at all - they are
+      // assembled in at a flat rate and neither branch can touch them - so log the composition instead
+      // and let the reader identify which exit it was.
+      logger.warn(
+        `Final safety pass could not bring the payload under maxInputTokens (${currentTokenCount} > ${maxInputTokens}). ` +
+          `Remaining: ${systemMessages.length} system, ${processedPreviousMessages.length} history, ` +
+          `${reducedContentMessages.length} content, ${imageMessages.length} image message(s) plus the user prompt, ` +
+          `at ${lastRatio.toFixed(2)} real tokens per estimated token.`
+      );
+    }
+
     recordDebugInfo(reducedContentMessages);
     // Ensure tool_use/tool_result pairing integrity after truncation
-    return ensureToolPairingIntegrity(truncatedMessages, logger);
+    return ensureToolPairingIntegrity(assemble(reducedContentMessages, processedPreviousMessages), logger);
   }
 
   const VERBOSE_MESSAGE_BUILDING = process.env.VERBOSE_MESSAGE_BUILDING === 'true';
