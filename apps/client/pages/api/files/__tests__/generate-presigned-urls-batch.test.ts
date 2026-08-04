@@ -249,7 +249,7 @@ describe('POST /api/files/generate-presigned-urls-batch - lake targeting', () =>
     const { res } = makeRes();
 
     await expect(run({ files: [file()], dataLakeSlug: 'acme-2026', batchId: 'b1' }, res)).rejects.toThrow(
-      /must name the data lake its batch belongs to/
+      /batch is not attached to a data lake/
     );
     expect(h.createFabFile).not.toHaveBeenCalled();
   });

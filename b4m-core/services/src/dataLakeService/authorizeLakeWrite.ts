@@ -110,6 +110,11 @@ export const assertBatchBelongsToLake = (
   batch: Pick<IDataLakeBatchDocument, 'dataLakeId'>,
   lake: Pick<IDataLakeDocument, 'id'> | undefined
 ): void => {
+  // A batch with no binding is the malformed side, so saying "name the lake" would blame a caller
+  // who did name one. The other two cases really are the caller's to fix.
+  if (!batch.dataLakeId) {
+    throw new BadRequestError('This batch is not attached to a data lake');
+  }
   if (!lake || batch.dataLakeId !== lake.id) {
     throw new BadRequestError('This upload must name the data lake its batch belongs to');
   }

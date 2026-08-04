@@ -100,8 +100,11 @@ describe('assertBatchBelongsToLake - the batch decides which lake its files join
     expect(() => assertBatchBelongsToLake({ dataLakeId: LAKE.id }, undefined)).toThrow(MISMATCH);
   });
 
-  it('refuses a batch carrying no lake binding', () => {
-    expect(() => assertBatchBelongsToLake({ dataLakeId: undefined as unknown as string }, LAKE)).toThrow(MISMATCH);
+  it('names the batch, not the caller, when the batch carries no lake binding', () => {
+    // The caller did name a lake here, so telling them to name one would be a lie.
+    expect(() => assertBatchBelongsToLake({ dataLakeId: undefined as unknown as string }, LAKE)).toThrow(
+      'This batch is not attached to a data lake'
+    );
   });
 });
 

@@ -91,8 +91,14 @@ const handler = baseApi().post(async (req: Request, res) => {
       // Logged for the same reason as the meta-tag refusal above: post-deploy, a stale client
       // still sending a name-derived slug and a real regression are indistinguishable from the
       // message alone.
+      // Same encoding as the meta-tag line above, for the same reason - these ids are generated
+      // rather than user-supplied, but a log line should not depend on that staying true.
       req.logger?.warn(
-        `[dataLakes] refused an upload whose batch names another lake: batch=${batch.id} batchLake=${batch.dataLakeId} resolved=${dataLake?.id ?? 'none'}`
+        `[dataLakes] refused an upload whose batch names another lake: ${JSON.stringify({
+          batch: batch.id,
+          batchLake: batch.dataLakeId,
+          resolved: dataLake?.id ?? null,
+        })}`
       );
       throw err;
     }

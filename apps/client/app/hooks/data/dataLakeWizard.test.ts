@@ -563,6 +563,29 @@ describe('useBatchUpload rollback (#816)', () => {
     );
   });
 
+  it('keeps the friendly transport message when the presign failed with no HTTP response', async () => {
+    // A timeout or abort carries no status, so rethrowing it would surface raw axios text
+    // ("timeout of 30000ms exceeded") where the generic message is both friendlier and true.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch')
+        return Promise.reject({ isAxiosError: true, code: 'ECONNABORTED', message: 'timeout of 30000ms exceeded' });
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorKind).toBe('upload');
+    expect(progress.errorMessage).toBe(
+      'None of the files could be uploaded. This is usually a network or connection issue, not your data lake settings. Please try again.'
+    );
+  });
+
   it('presign failure (create mode): rolls back the lake and marks the batch failed', async () => {
     apiPost.mockImplementation((url: string) => {
       if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });

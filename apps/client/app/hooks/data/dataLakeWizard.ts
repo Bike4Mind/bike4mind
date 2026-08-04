@@ -543,9 +543,11 @@ export function useBatchUpload() {
           }
           // A presign refusal already says WHY (e.g. the request did not name the batch's lake),
           // and classifyUploadError surfaces a 4xx's server message - so rethrow it rather than
-          // blaming the network. Only a batch that presigned and then failed to PUT is the
-          // transport case the generic message describes.
-          throw firstPresignError ?? new Error(UPLOAD_ALL_FAILED_MESSAGE);
+          // blaming the network. Only when it carries a status: a timeout or abort has no response
+          // and would fall through to its raw axios text ("timeout of 30000ms exceeded"), where the
+          // generic transport message is both friendlier and true.
+          const refusalStatus = axios.isAxiosError(firstPresignError) ? firstPresignError.response?.status : undefined;
+          throw refusalStatus ? firstPresignError : new Error(UPLOAD_ALL_FAILED_MESSAGE);
         }
 
         // Partial or full success: the uploaded files proceed through the pipeline.
