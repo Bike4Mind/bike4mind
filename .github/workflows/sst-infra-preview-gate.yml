@@ -54,13 +54,19 @@ jobs:
           # still redden. Filtering the diff instead of short-circuiting the whole
           # PR preserves that. Same-repo predicate mirrors auto-changeset.yml.
           if [ "$IS_SAME_REPO" = "true" ] && [ "$HEAD_REF" = "changeset-release/main" ]; then
-            jq '[.[] | select((.filename == "b4m-core/infra/package.json" or .filename == "CHANGELOG.md" or (.filename | endswith("/CHANGELOG.md"))) | not)]' /tmp/pr_files_raw.json > /tmp/pr_files.json
-            echo "Release PR: excluded version-bump artifacts (b4m-core/infra/package.json, CHANGELOGs) from gate detection."
+            # Drop CHANGELOGs entirely (pure release artifacts, no deploy surface).
+            # Keep b4m-core/infra/package.json in pr_files.json so the sst-pin patch
+            # check below still inspects it; exclude it only from the path-glob input
+            # (files.txt), so its version bump does not trip the glob while a
+            # hand-pushed sst pin on that same file still reddens the gate.
+            jq '[.[] | select((.filename == "CHANGELOG.md" or (.filename | endswith("/CHANGELOG.md"))) | not)]' /tmp/pr_files_raw.json > /tmp/pr_files.json
+            jq -r '.[].filename' /tmp/pr_files.json > /tmp/files_all.txt
+            grep -v '^b4m-core/infra/package\.json$' /tmp/files_all.txt > /tmp/files.txt || true
+            echo "Release PR: excluded CHANGELOGs from detection; b4m-core/infra/package.json excluded from the path glob but still patch-inspected for sst pins."
           else
             cp /tmp/pr_files_raw.json /tmp/pr_files.json
+            jq -r '.[].filename' /tmp/pr_files.json > /tmp/files.txt
           fi
-
-          jq -r '.[].filename' /tmp/pr_files.json > /tmp/files.txt
           echo "Changed files considered:"; sed 's/^/  /' /tmp/files.txt || true
 
           applicable=0
