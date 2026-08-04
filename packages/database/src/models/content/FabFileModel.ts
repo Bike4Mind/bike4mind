@@ -792,16 +792,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return ids;
   }
 
+  async hardDeleteByIds(fabFileIds: string[]): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
+    await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds } }, { hardDelete: true } as Record<string, unknown>);
+    return fabFileIds;
+  }
+
   async hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
     // Include soft-deleted files: the phase-2 sweep must purge every member.
     const docs = await this.fabFileModel
       .find(buildDataLakeMembershipFilter(scope), { _id: 1 })
       .setOptions({ includeDeleted: true });
-    const ids = docs.map(d => d._id.toString());
-    if (ids.length === 0) return [];
-    // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
-    await this.fabFileModel.deleteMany({ _id: { $in: ids } }, { hardDelete: true } as Record<string, unknown>);
-    return ids;
+    return this.hardDeleteByIds(docs.map(d => d._id.toString()));
   }
 
   async findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {

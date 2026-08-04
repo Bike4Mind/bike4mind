@@ -13,7 +13,7 @@ interface CleanupDeletedDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'delete' | 'find'>;
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
-    fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'hardDeleteByDataLakeTag'>;
+    fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'hardDeleteByIds'>;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
   };
   retrievalIndex?: RetrievalIndexPort;
@@ -75,8 +75,11 @@ export const cleanupDeletedDataLake = async (
   // already-purged data, so a DLQ retry resumes safely.
   await inChunks(fileIds, chunkSize, id => db.fabFileChunks.deleteManyByFabFileId(id));
 
-  // 3. Hard-delete the files.
-  await db.fabFiles.hardDeleteByDataLakeTag(scope);
+  // 3. Hard-delete exactly the ids resolved above, NOT by re-running the membership predicate.
+  // Re-resolving would also destroy anything that became a member since - a file the creator
+  // tagged mid-sweep - leaving its chunks behind and its index entry unrequested. It survives
+  // this run instead, which is the recoverable direction.
+  await db.fabFiles.hardDeleteByIds(fileIds);
 
   // 4. Delete the lake's batches (chunked, same rationale as the chunk sweep above).
   const batches = await db.batches.find({ dataLakeId });

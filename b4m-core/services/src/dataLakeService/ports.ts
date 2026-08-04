@@ -1,6 +1,12 @@
 import type { DataLakeMembershipScope } from '@bike4mind/common';
 
-/** What a lifecycle sweep hands the index: the scope it ran on, and the member ids it resolved. */
+/**
+ * What a lifecycle sweep hands the index: the lake it ran on, and the member ids it resolved.
+ *
+ * `fabFileIds` is the removal set and the whole of it. `scope` says WHICH LAKE the sweep was for -
+ * useful to an implementer that partitions by lake - and must never be used to narrow, widen or
+ * second-guess the ids.
+ */
 export interface RetrievalIndexRemoval {
   scope: DataLakeMembershipScope;
   fabFileIds: string[];
@@ -16,10 +22,19 @@ export interface RetrievalIndexRemoval {
  * whole set - so a tag-keyed removal would strand a prefix-only member's entry pointing at a file
  * the phase-2 purge just hard-deleted. `fabFileIds` is passed rather than derived so an
  * implementer never has to rebuild that predicate against index metadata that may not carry the
- * owner or the tag array; the ids are exactly what the accompanying sweep resolved.
+ * owner or the tag array.
  *
- * Removal only - re-populating on unarchive/restore is the implementer's job, and the lifecycle
- * services do not call back in.
+ * DROP THE DOCUMENTS OUTRIGHT, not just from a per-lake view. Every caller is hiding or destroying
+ * the files themselves, so a file left retrievable anywhere is the failure this port exists to
+ * prevent. That is also why the ids can be a superset of what one transition flipped: archive and
+ * phase-1 delete each skip files already in the target state, but the removal covers every member
+ * the scope matches, so a re-run after a crash still converges.
+ *
+ * Wire it at all three doors or not at all - archiveDataLake, deleteDataLake, cleanupDeletedDataLake
+ * each take it separately, and a door left unwired silently keeps the old behavior.
+ *
+ * Removal only: there is no add operation, so an implementer must re-populate through its own
+ * ingest path after unarchive or restore. Those doors do not call back in.
  */
 export interface RetrievalIndexPort {
   removeForDataLake(input: RetrievalIndexRemoval): Promise<void>;

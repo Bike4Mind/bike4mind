@@ -1095,7 +1095,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
       batches: { find: vi.fn().mockResolvedValue([{ id: 'b1' }]), delete: vi.fn().mockResolvedValue(undefined) },
       fabFiles: {
         findIdsByDataLakeTag: vi.fn().mockResolvedValue(['f1', 'f2']),
-        hardDeleteByDataLakeTag: vi.fn().mockResolvedValue(['f1', 'f2']),
+        hardDeleteByIds: vi.fn().mockResolvedValue(['f1', 'f2']),
       },
       fabFileChunks: { deleteManyByFabFileId: vi.fn().mockResolvedValue(undefined) },
     },
@@ -1112,7 +1112,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     const adapters = makeAdapters('deleted');
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledTimes(2);
-    expect(adapters.db.fabFiles.hardDeleteByDataLakeTag).toHaveBeenCalled();
+    expect(adapters.db.fabFiles.hardDeleteByIds).toHaveBeenCalled();
     expect(adapters.db.batches.delete).toHaveBeenCalledWith('b1');
     expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
   });
@@ -1140,7 +1140,23 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     expect(indexRemove).toBeLessThan(
       Math.min(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder)
     );
-    expect(indexRemove).toBeLessThan(adapters.db.fabFiles.hardDeleteByDataLakeTag.mock.invocationCallOrder[0]);
+    expect(indexRemove).toBeLessThan(adapters.db.fabFiles.hardDeleteByIds.mock.invocationCallOrder[0]);
+  });
+
+  it('purges exactly the ids it announced, so a mid-sweep joiner is not destroyed unaccounted for', async () => {
+    const adapters = makeAdapters('deleted');
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValue(memberIds);
+    const retrievalIndex = indexPort();
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
+
+    // By id, never by re-running the predicate: a file tagged into the lake after the resolve
+    // would otherwise be hard-deleted with its chunks intact and the index never told.
+    expect(adapters.db.fabFiles.hardDeleteByIds).toHaveBeenCalledWith(memberIds);
+    expect(removalInput(retrievalIndex).fabFileIds).toEqual(memberIds);
+    // Resolved once and reused. Re-resolving before the purge would pass the assertions above
+    // while reopening the window they exist to close.
+    expect(adapters.db.fabFiles.findIdsByDataLakeTag).toHaveBeenCalledTimes(1);
   });
 
   it('aborts the purge with nothing destroyed when the index removal fails', async () => {
@@ -1156,7 +1172,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     // can never be reconciled. The queue retry re-runs the whole sweep, so leaving it zero-progress
     // is what makes propagating safe.
     expect(adapters.db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
-    expect(adapters.db.fabFiles.hardDeleteByDataLakeTag).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.hardDeleteByIds).not.toHaveBeenCalled();
     expect(adapters.db.batches.delete).not.toHaveBeenCalled();
     expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
   });
@@ -1174,7 +1190,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
 
     // Ordering contract: last chunk delete -> hard-delete files -> first batch delete -> lake last.
     const lastChunk = Math.max(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder);
-    const hardDelete = adapters.db.fabFiles.hardDeleteByDataLakeTag.mock.invocationCallOrder[0];
+    const hardDelete = adapters.db.fabFiles.hardDeleteByIds.mock.invocationCallOrder[0];
     const firstBatch = Math.min(...adapters.db.batches.delete.mock.invocationCallOrder);
     const lakeDelete = adapters.db.dataLakes.delete.mock.invocationCallOrder[0];
     expect(lastChunk).toBeLessThan(hardDelete);

@@ -90,6 +90,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   undeleteByDataLakeTag: vi.fn(),
   softDeleteByDataLakeTag: vi.fn(),
   hardDeleteByDataLakeTag: vi.fn(),
+  hardDeleteByIds: vi.fn(),
   findIdsByDataLakeTag: vi.fn(),
   findByUserId: vi.fn(),
 });
