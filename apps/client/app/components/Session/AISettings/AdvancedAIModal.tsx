@@ -1349,7 +1349,6 @@ const AISettingsTab: React.FC<{
   handleModelChange: (filter: 'all' | 'text' | 'image' | 'video') => void;
   isMobile: boolean;
   onViewDetails: (model: ModelInfo) => void;
-  isResearchModeFeatureEnabled: boolean;
 }> = ({
   model,
   handleModelSelection,
@@ -1358,7 +1357,6 @@ const AISettingsTab: React.FC<{
   handleModelChange,
   isMobile,
   onViewDetails,
-  isResearchModeFeatureEnabled,
 }) => {
   return (
     <Box
@@ -1372,12 +1370,10 @@ const AISettingsTab: React.FC<{
         width: { xs: '100%', sm: 'calc(100% + 20px)' },
         height: '100%',
         ...scrollbarStyles,
-        // Start the bar 16px below the header icons (they end 36px from the modal top). A
-        // track margin is the only way to shorten a native scrollbar without moving content.
-        // With tabs, this container already begins below them, so no offset is needed.
+        // The tab bar always precedes this container, so the track already starts below the
+        // header icons and needs no top offset to clear them.
         '&::-webkit-scrollbar-track': {
           background: 'transparent',
-          marginTop: isResearchModeFeatureEnabled ? 0 : '28px',
         },
       }}
     >
@@ -1390,7 +1386,6 @@ const AISettingsTab: React.FC<{
         modelFilter={modelFilter}
         onModelFilterChange={handleModelChange}
         onSettingsClick={onViewDetails}
-        isResearchModeFeatureEnabled={isResearchModeFeatureEnabled}
         stickyHeader={
           !isMobile && (
             <Stack
@@ -1399,8 +1394,9 @@ const AISettingsTab: React.FC<{
               gap="4px"
               sx={{
                 width: 'auto',
-                // Only clears the tab bar; without tabs the modal padding is already enough.
-                mt: isResearchModeFeatureEnabled ? '20px' : 0,
+                // Clears the tab bar, which is always present: AI Settings + Audio, plus
+                // Research Mode when its flag is on.
+                mt: '20px',
               }}
             >
               <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>AI Settings</Typography>
@@ -1964,9 +1960,9 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 }}
               >
                 <TabList
-                  sx={{
+                  sx={theme => ({
                     backgroundColor: 'transparent',
-                    borderBottom: theme => `1px solid ${theme.palette.divider}`,
+                    borderBottom: `1px solid ${theme.palette.divider}`,
                     // Desktop spacing lives on the title instead, so it scrolls away and the
                     // sticky search row pins right under the tabs. Mobile has no title.
                     mb: { xs: 2, sm: 0 },
@@ -1982,49 +1978,43 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                     '& .MuiTab-root': {
                       fontSize: '14px',
                       fontWeight: 400,
-                      p: 0,
+                      // Padding alone sets desktop width, so each tab is only as wide as its
+                      // label. A fixed width padded "Audio" out to match "Research Mode"; the
+                      // labels are literals here, so there is no length to defend against.
+                      paddingBlock: 0,
+                      paddingInline: '12px',
                       color: 'text.primary50',
                       flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                      // Bounds must live here: this descendant selector outranks a Tab's own sx.
-                      maxWidth: { xs: 'none', sm: '200px' },
-                      minWidth: { xs: 0, sm: '140px' },
+                      // Lets the equal-width mobile tabs shrink below their label; on desktop
+                      // flex is 0 0 auto, so this has no effect there.
+                      minWidth: 0,
+                      // The bar is pinned to 32px, so a wrapped label would break its height.
+                      whiteSpace: 'nowrap',
                       textAlign: 'center',
+                      transition: 'background 0.2s, color 0.2s',
+                      // Matches the /profile tab strip (StyledTab there): the shared sidenav
+                      // tint, plus the label coming to full strength - that strip fades its
+                      // label with opacity, but ours is colour, so the hover swaps colour.
+                      // Scoped to unselected tabs so the active one does not react. Goes
+                      // through Joy's variant var because its own :hover rule for the plain
+                      // variant outranks a bare `&:hover` here.
+                      '&:not(.Mui-selected)': {
+                        '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+                        '&:hover': {
+                          color: 'text.primary',
+                        },
+                      },
                       '&.Mui-selected': {
                         color: 'text.primary',
                       },
                     },
-                  }}
+                  })}
                 >
-                  <Tab
-                    value="ai-settings"
-                    sx={{
-                      width: 'auto',
-                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                    }}
-                  >
-                    AI Settings
-                  </Tab>
+                  <Tab value="ai-settings">AI Settings</Tab>
 
-                  {isResearchModeFeatureEnabled && (
-                    <Tab
-                      value="research-mode"
-                      sx={{
-                        width: 'auto',
-                        flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                      }}
-                    >
-                      Research Mode
-                    </Tab>
-                  )}
+                  {isResearchModeFeatureEnabled && <Tab value="research-mode">Research Mode</Tab>}
 
-                  <Tab
-                    value="audio"
-                    data-testid="ai-settings-audio-tab"
-                    sx={{
-                      width: 'auto',
-                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                    }}
-                  >
+                  <Tab value="audio" data-testid="ai-settings-audio-tab">
                     Audio
                   </Tab>
                 </TabList>
@@ -2040,7 +2030,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                       handleModelChange={handleModelChange}
                       isMobile={isMobile}
                       onViewDetails={handleViewDetails}
-                      isResearchModeFeatureEnabled={isResearchModeFeatureEnabled}
                     />
                   )}
                 </TabPanel>

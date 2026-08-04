@@ -171,7 +171,6 @@ interface ModelSelectionProps {
   modelFilter?: 'all' | 'text' | 'image' | 'video';
   onModelFilterChange?: (filter: 'all' | 'text' | 'image' | 'video') => void;
   onSettingsClick?: (model: ModelInfo) => void;
-  isResearchModeFeatureEnabled?: boolean;
   /** Rendered inside the sticky header, above the search/filter row, so it pins with it. */
   stickyHeader?: React.ReactNode;
 }
@@ -802,7 +801,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   modelFilter = 'text',
   onModelFilterChange,
   onSettingsClick,
-  isResearchModeFeatureEnabled = false,
   stickyHeader,
 }) => {
   const { isLoading, error } = useModelInfo();
@@ -1389,7 +1387,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
             flexDirection: 'column',
             gap: '8px',
             height: {
-              xs: isResearchModeFeatureEnabled ? 'calc(100dvh - 180px)' : 'calc(100dvh - 110px)',
+              // Reserves room for the tab bar, which is always present above this list.
+              xs: 'calc(100dvh - 180px)',
               sm: 'auto',
             },
             width: '100%',
