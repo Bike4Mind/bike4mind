@@ -1,6 +1,7 @@
 import {
   dayjs,
   extractSnippetMeta,
+  FORMAT_PROMPT_TEMPLATE,
   ICacheRepository,
   IChatHistoryItemRepository,
   IExtendedMessage,
@@ -1673,54 +1674,76 @@ export async function processFabFilesServer(
   return { userMessages, errorMessages };
 }
 
+/**
+ * Prepends the formatting system message. `formatPrompt` is the admin-editable
+ * `FormatPromptTemplate` value; blank falls back to FORMAT_PROMPT_TEMPLATE, the shared default this
+ * used to duplicate inline. That older inline wording ("Adhere to specific formatting requests...")
+ * read as general compliance and bled into whether the model answered at all - see the const's
+ * comment in @bike4mind/common schemas/settings.
+ */
 export function includeHardcodedSystemMessage(messages: IMessage[], formatPrompt: string): IMessage[] {
-  // Scoped to formatting ONLY. The previous wording ("Adhere to specific formatting
-  // requests...") read as a general compliance instruction and measurably degraded
-  // refusal behavior on underspecified asks (#1320: 81.1 -> 40.3 as the sole system
-  // content). Same failure shape as the artifact prompt's pre-SCOPE wording (#1296):
-  // any instruction that sounds like "comply with requests" bleeds into WHETHER to
-  // answer, not just how to format. Keep any future edit inside that boundary.
-  let format = `Formatting only - nothing here decides whether or how fully to answer. Format replies to maintain the integrity of the requested style; default to markdown for text. Preserve proper structure for poems, songs, or haikus. When the user specifies an output format (e.g. TypeScript), use that format for the parts you do answer.`;
-  if (formatPrompt) {
-    format = formatPrompt;
-  }
-
   const hardcodedSystemMessage: IMessage = {
     role: 'system',
-    content: format,
+    content: formatPrompt || FORMAT_PROMPT_TEMPLATE,
   };
 
   return [hardcodedSystemMessage, ...messages];
 }
 
-export function includeImagePromptSystemMessage(messages: IMessage[], userPrompt: string): IMessage[] {
-  const imageRelatedVerbs = [
-    'image',
-    'illustration',
-    'photo',
-    'watercolor',
-    'painting',
-    'comic book',
-    'picture',
-    'diagram',
-    'snapshot',
-    'visual',
-    'graphic',
-  ];
-  const hasImageRequest = imageRelatedVerbs.some(verb => userPrompt.toLowerCase().includes(verb));
+/**
+ * Nouns that name a picture the user wants made. Matched on word boundaries because the previous
+ * substring scan fired on any prompt merely containing one: `visual` matched "visualize", `graphic`
+ * matched "graphical". Compiled once - this runs on every turn. No `g` flag, which would carry
+ * `lastIndex` between calls and make the match depend on the previous prompt.
+ *
+ * `visual`, `graphic`, `diagram` and `snapshot` are deliberately gone rather than boundary-matched:
+ * each reads naturally about something other than a picture ("visualize this data", "a snapshot of the
+ * metrics"), and a request for a diagram or a chart is served by mermaid and artifacts, not by image
+ * generation. Plurals and `photograph` are spelled out because the substring scan matched those for
+ * free and a bare word-boundary list would silently stop firing on them.
+ *
+ * Errs toward missing a request rather than inventing one. A missed prompt costs a hint the model can
+ * still get from the tool's own schema; a wrongly matched one plants a MUST-generate-an-image order on
+ * a turn the user never asked about images.
+ */
+const IMAGE_REQUEST_PATTERN =
+  /\b(?:images?|illustrations?|photos?|photographs?|pictures?|watercolou?rs?|paintings?|comic\s+books?)\b/i;
 
-  const content = `When the user requests an image, you MUST use the image_generation tool to create it. Craft a vivid and imaginative prompt parameter for the tool based on the user's request and available context.`;
-
-  if (hasImageRequest) {
-    const imageSystemMessage: IMessage = {
-      role: 'system',
-      content: content,
-    };
-
-    return [imageSystemMessage, ...messages];
-  } else {
+/**
+ * Prepends the image-generation nudge, but only when `image_generation` actually reached the model's
+ * tool schema this turn. Pointing a model at a tool it does not have makes it emit the call as leaked
+ * JSON text in the reply, which is why the blog-workflow prompt gates the same way - see
+ * ChatCompletionProcess, where `imageGenerationAvailable` is resolved from the built tool list.
+ *
+ * That list is the truthful source for presence but says nothing about usability: a tool whose
+ * provider key is missing is still listed, and still refuses at dispatch rather than degrading, so
+ * this gate cannot cover that case (#1103).
+ *
+ * It also only decides the turn it runs on. A turn that starts with the tool and later gives it up -
+ * every backend drops tools once the tool-call budget is spent - is handled by the `requiresTool`
+ * marker set below, which `stripToolDependentMessages` acts on at those sites.
+ */
+export function includeImagePromptSystemMessage(
+  messages: IMessage[],
+  userPrompt: string,
+  imageGenerationAvailable: boolean
+): IMessage[] {
+  if (!imageGenerationAvailable) {
     return messages;
   }
+
+  if (!IMAGE_REQUEST_PATTERN.test(userPrompt)) {
+    return messages;
+  }
+
+  const imageSystemMessage: IMessage = {
+    role: 'system',
+    content: `When the user requests an image, you MUST use the image_generation tool to create it. Craft a vivid and imaginative prompt parameter for the tool based on the user's request and available context.`,
+    // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
+    requiresTool: 'image_generation',
+  };
+
+  return [imageSystemMessage, ...messages];
 }
 
 // Priority order for message retention (lower number = higher priority)
@@ -1948,6 +1971,15 @@ export async function buildAndSortMessages(
      * asking for an unadorned completion cannot exclude them any other way.
      */
     skipAdminPromptTemplates?: boolean;
+    /**
+     * Whether `image_generation` survived into the tool list handed to the model this turn. Absent
+     * means "unknown", which suppresses the image prompt: staying quiet costs a hint the model can
+     * get from the tool schema anyway, whereas ordering a tool it lacks has no recovery.
+     *
+     * Independent of `skipAdminPromptTemplates`: that decides whether the admin templates are
+     * offered at all, this decides whether the image one is honest on a turn that does get them.
+     */
+    imageGenerationAvailable?: boolean;
   } = { verbose: false }
 ): Promise<IMessage[]> {
   // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
@@ -2012,7 +2044,11 @@ export async function buildAndSortMessages(
     }
 
     if (getSettingsValue('UseImagePrompt', settings)) {
-      fabMessages = includeImagePromptSystemMessage(fabMessages, userPromptContent);
+      fabMessages = includeImagePromptSystemMessage(
+        fabMessages,
+        userPromptContent,
+        options.imageGenerationAvailable ?? false
+      );
     }
   }
 

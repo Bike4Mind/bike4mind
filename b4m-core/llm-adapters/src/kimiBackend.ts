@@ -6,6 +6,7 @@ import {
   type CacheUsageStats,
   type ModelInfo,
 } from '@bike4mind/common';
+import { stripToolDependentMessages } from './toolPairingUtils';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
@@ -193,7 +194,8 @@ export class KimiBackend implements ICompletionBackend {
       this.logger.warn(`⚠️ Max tool calls limit (${maxToolCalls}) reached. Disabling tools to prevent infinite loops.`);
       await this.complete(
         model,
-        messages,
+        // Tools are going away, so the prompts that order the model to use one have to go with them.
+        stripToolDependentMessages(messages),
         { ...options, tools: undefined, _internal: options._internal },
         callback,
         toolsUsed

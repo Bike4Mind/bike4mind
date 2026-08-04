@@ -25,10 +25,11 @@ const mocks = vi.hoisted(() => ({
   buildArtifactPublishWiring: vi.fn(() => ({ resolveExisting: vi.fn(), publish: vi.fn() })),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
+  apiDelete: vi.fn(),
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: mocks.apiGet, post: vi.fn(), delete: vi.fn() },
+  api: { get: mocks.apiGet, post: vi.fn(), delete: mocks.apiDelete },
 }));
 vi.mock('sonner', () => ({
   toast: { error: mocks.toastError, success: mocks.toastSuccess },
@@ -194,5 +195,53 @@ describe('ArtifactGallery - Share hydrates content (#147)', () => {
     // Let the first flow finish so it publishes exactly once and no pending work leaks.
     resolveFetch({ data: { content: { content: '<h1>hydrated</h1>' } } });
     await waitFor(() => expect(mocks.publishAndShare).toHaveBeenCalledTimes(1));
+  });
+});
+
+/**
+ * The category tabs count the local `artifacts` array, but the All tab renders the server's
+ * `pagination.total`. handleDelete only filtered the local array, so after a delete All kept
+ * counting the removed artifact while the category tab decremented - the two badges disagreed
+ * until an unrelated refetch.
+ */
+describe('ArtifactGallery - All badge decrements on delete', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('decrements the All total, not just the category list, when an artifact is deleted', async () => {
+    // Two artifacts on purpose, so the count lands on a visible 1 rather than 0: Joy's Badge
+    // defaults to showZero=false, so at zero it renders nothing and any negative assertion would
+    // pass simply because the badge vanished.
+    const second = { ...LIST_RESPONSE.artifacts[0], id: 'artifact_html_demo_456', title: 'Second Artifact' };
+    mocks.apiGet.mockImplementation((url: string) => {
+      if (url.startsWith('/api/artifacts/types')) return Promise.resolve({ data: TYPES_RESPONSE });
+      if (url.includes('includeContent=true')) return Promise.resolve({ data: {} });
+      if (url.startsWith('/api/artifacts')) {
+        return Promise.resolve({
+          data: { ...LIST_RESPONSE, artifacts: [...LIST_RESPONSE.artifacts, second], pagination: { total: 2 } },
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    mocks.apiDelete.mockResolvedValue({ data: { success: true } });
+    const user = userEvent.setup();
+    render(
+      <TestWrapper>
+        <ArtifactGallery />
+      </TestWrapper>
+    );
+
+    const allTab = (await screen.findAllByRole('tab'))[0];
+    await screen.findByText('My Demo Artifact');
+    expect(allTab.textContent).toContain('2');
+
+    await user.click((await screen.findAllByTestId('artifact-card-menu-btn'))[0]);
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+
+    await waitFor(() => expect(mocks.apiDelete).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByText('My Demo Artifact')).not.toBeInTheDocument());
+    // Positive assertion on a visible number: without the setTotal fix this stays at 2.
+    await waitFor(() => expect(allTab.textContent).toContain('1'));
   });
 });
