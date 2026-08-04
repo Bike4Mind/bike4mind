@@ -40,9 +40,8 @@ async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<un
  * deleteMany are no-ops on already-purged data). Fan-outs are chunked (chunkSize) so a large lake
  * stays inside the Lambda timeout. Owner or admin only.
  *
- * Retrieval-index removal is the one step deliberately allowed to abort the sweep - the reversible
- * doors tolerate a stale entry, but nothing can reconcile one whose file this call is about to
- * erase. It runs first so that choice costs no partial progress.
+ * Retrieval-index removal is the one step deliberately allowed to abort the sweep, which is why it
+ * runs first. See `strictIndexRemove` in ports.ts for that posture and what it does not cover.
  */
 export const cleanupDeletedDataLake = async (
   actor: { userId: string; isAdmin: boolean },
@@ -65,9 +64,7 @@ export const cleanupDeletedDataLake = async (
   const scope = lakeMembershipScope(existing);
   const fileIds = await db.fabFiles.findIdsByDataLakeTag(scope);
 
-  // 1. Retrieval index first, and strict. An entry left behind once the files are gone can never
-  // be reconciled, so unlike the reversible doors this one propagates - and running it before any
-  // destruction means a throw leaves zero progress for the queue's retry to trip over.
+  // 1. Retrieval index first, and strict: a throw here must cost no progress (see ports.ts).
   await strictIndexRemove(retrievalIndex, { scope, fabFileIds: fileIds });
 
   // 2. Delete chunks for every member file (covers soft-deleted files too). Chunked so a large
@@ -79,6 +76,10 @@ export const cleanupDeletedDataLake = async (
   // Re-resolving would also destroy anything that became a member since - a file the creator
   // tagged mid-sweep - leaving its chunks behind and its index entry unrequested. It survives
   // this run instead, which is the recoverable direction.
+  //
+  // The survivor is left carrying a prefix tag whose lake step 5 then deletes, and nothing
+  // reconciles that: a later lake claiming the same prefix would silently adopt it, since the
+  // create-time collision guard only compares against lakes that still exist.
   await db.fabFiles.hardDeleteByIds(fileIds);
 
   // 4. Delete the lake's batches (chunked, same rationale as the chunk sweep above).

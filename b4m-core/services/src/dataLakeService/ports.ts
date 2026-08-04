@@ -66,6 +66,13 @@ export async function bestEffortIndexRemove(
  * to be hard-deleted, so no later run can reconcile it. Call it BEFORE anything destructive, so a
  * throw leaves zero progress and the cleanup queue's retry re-runs the sweep intact. The cost is
  * that a persistently failing index wedges the lake in 'deleted', which beats half-purged.
+ *
+ * "Zero progress" covers the THROW only, and is not an absolute. If removal succeeds and a later
+ * step then fails terminally, the lake stays 'deleted' and restorable - but restoreDeletedDataLake
+ * brings the files back with their entries already dropped, and this port has no add operation to
+ * put them back. That much is progress no retry undoes; re-population is the implementer's job.
+ *
+ * This is the canonical description of both postures. Call sites point here rather than restating.
  */
 export async function strictIndexRemove(
   retrievalIndex: RetrievalIndexPort | undefined,

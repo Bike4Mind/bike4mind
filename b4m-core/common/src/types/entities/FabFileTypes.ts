@@ -617,6 +617,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Echoes back the ids it was GIVEN, not the rows it actually removed - a second call with the
    * same ids returns them again. Do not read the result as "what this call deleted"; if you need
    * that, count before and after.
+   *
+   * Ids must come from a prior repository read. They go straight into an `_id` query, so a
+   * malformed one throws a CastError partway through the delete.
    */
   hardDeleteByIds(fabFileIds: string[]): Promise<string[]>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */

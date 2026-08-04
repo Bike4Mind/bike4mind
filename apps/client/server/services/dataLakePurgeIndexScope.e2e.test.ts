@@ -139,6 +139,13 @@ describe('data lake purge index-removal scope (real repos + Mongo)', () => {
 
     // d) the stranger's same-prefix file was never a member and must survive.
     expect(await fileExists(strangerFile._id.toString())).toBe(true);
+
+    // e) the sweep's chunk step ran on the same set - a purged file with chunks left behind is
+    // the orphan this whole change is about, just in the chunk store instead of the index.
+    for (const f of [metaTagged, prefixOwned]) {
+      expect(await fabFileChunkRepository.findByFabFileId(f._id.toString())).toHaveLength(0);
+    }
+    expect(await fabFileChunkRepository.findByFabFileId(strangerFile._id.toString())).toHaveLength(1);
   });
 
   it('spares a file that became a member after the sweep resolved its ids', async () => {

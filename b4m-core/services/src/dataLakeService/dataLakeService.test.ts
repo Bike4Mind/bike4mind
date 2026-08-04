@@ -973,7 +973,7 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
   });
 });
 
-describe('archiveDataLake — retrieval-index removal', () => {
+describe('archiveDataLake - retrieval-index removal', () => {
   const makeAdapters = () => ({
     db: {
       dataLakes: {
@@ -1028,9 +1028,22 @@ describe('archiveDataLake — retrieval-index removal', () => {
     expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
     expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope);
   });
+
+  it('survives a member-id lookup that itself fails', async () => {
+    const adapters = makeAdapters();
+    // The resolver is lazy and inside the try precisely so this cannot abort a best-effort op.
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockRejectedValue(new Error('mongo down'));
+    await expect(
+      archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex: indexPort() })
+    ).resolves.toMatchObject({ status: 'archived' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Best-effort index removal failed for datalake:lake'),
+      expect.any(Error)
+    );
+  });
 });
 
-describe('deleteDataLake — phase 1 retrieval-index removal', () => {
+describe('deleteDataLake - phase 1 retrieval-index removal', () => {
   const makeAdapters = () => ({
     db: {
       dataLakes: {
@@ -1082,6 +1095,18 @@ describe('deleteDataLake — phase 1 retrieval-index removal', () => {
     await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
     expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope);
+  });
+
+  it('survives a member-id lookup that itself fails', async () => {
+    const adapters = makeAdapters();
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockRejectedValue(new Error('mongo down'));
+    await expect(
+      deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex: indexPort() })
+    ).resolves.toMatchObject({ status: 'deleted' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Best-effort index removal failed for datalake:lake'),
+      expect.any(Error)
+    );
   });
 });
 
