@@ -2051,11 +2051,14 @@ export async function buildAndSortMessages(
     // fewer loss than the last while the payload grows by another ~100-token duplicate.
     const previousNote = undeliveredNote;
     const delivered = contentMessages.filter(message => message !== previousNote && isAttachment(message));
-    const isUnusableSliver = (message: IMessage): boolean =>
-      cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS;
-    const usable = delivered.filter(message => !isUnusableSliver(message));
+    // Computed once: fileTokens re-derives the message text, and the safety pass calls this per round.
+    const replaced = new Set(
+      delivered.filter(
+        message => cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS
+      )
+    );
     const droppedCount = Math.max(0, attachmentsWithContent.length - delivered.length);
-    const sliverCount = delivered.length - usable.length;
+    const sliverCount = replaced.size;
     if (droppedCount === 0 && sliverCount === 0) return contentMessages;
 
     const counts = `${droppedCount}/${sliverCount}`;
@@ -2080,11 +2083,10 @@ export async function buildAndSortMessages(
         `could not be read within this model's context window, and suggest a model with a larger context window, ` +
         `a smaller file, or a shorter conversation.`,
     };
-    // Filtered down to `usable` this dropped everything the note is not about - URL-derived context and
-    // attachments that carried no extractable text - since neither passes isAttachment. Harmless while
-    // the allocation was the only caller, because a turn it dropped nothing on returned early above; the
-    // safety pass can now be the first stage to drop something, which makes the loss reachable.
-    const replaced = new Set(delivered.filter(isUnusableSliver));
+    // Everything except the replaced slivers and the note being superseded. Filtering down to the
+    // attachments instead also dropped what the note is not about - URL-derived context, attachments with
+    // no extractable text - which was masked while the allocation was the only caller, since a turn it
+    // dropped nothing on returned early above.
     return [...contentMessages.filter(message => message !== previousNote && !replaced.has(message)), undeliveredNote];
   };
 
@@ -2098,15 +2100,6 @@ export async function buildAndSortMessages(
       message.content.some(obj => obj.type.startsWith('image'))
   );
 
-  // Combine all messages and sort with system messages at the top
-
-  // Check if the last message in history is a tool_use
-  const lastHistoryMessage = processedPreviousMessages[processedPreviousMessages.length - 1];
-  const historyEndsWithToolUse =
-    lastHistoryMessage?.role === 'assistant' &&
-    Array.isArray(lastHistoryMessage.content) &&
-    lastHistoryMessage.content.some((block: any) => block.type === 'tool_use');
-
   // Check if the user prompt contains a tool_result
   const promptHasToolResult = userPrompt.some(
     msg =>
@@ -2115,28 +2108,29 @@ export async function buildAndSortMessages(
       msg.content.some((block: any) => block.type === 'tool_result')
   );
 
-  let messages: IMessage[];
+  /**
+   * Combines everything into the message array, system first. Sole owner of the ordering: the safety
+   * pass below re-assembles the payload several times to measure it, and a second copy of these two
+   * orderings would be free to drift from this one. Both the pairing check and the content/history it
+   * applies to are read from the arguments, since the pass rewrites both.
+   *
+   * tool_use blocks must be immediately followed by tool_result blocks, so when history ends with a
+   * tool_use and the prompt carries the matching tool_result, other context moves after the prompt to
+   * keep the pair adjacent.
+   */
+  const assemble = (content: IMessage[], history: IMessage[]): IMessage[] => {
+    const lastHistoryMessage = history[history.length - 1];
+    const historyEndsWithToolUse =
+      lastHistoryMessage?.role === 'assistant' &&
+      Array.isArray(lastHistoryMessage.content) &&
+      lastHistoryMessage.content.some((block: any) => block.type === 'tool_use');
 
-  // tool_use blocks must be immediately followed by tool_result blocks. If history ends with a
-  // tool_use and the userPrompt carries the tool_result, keep them adjacent by moving other
-  // context (files/images) after the userPrompt.
-  if (historyEndsWithToolUse && promptHasToolResult) {
-    messages = [
-      ...systemMessages, // System messages go first for instruction
-      ...processedPreviousMessages, // previous message context
-      ...userPrompt, // Tool result must follow tool use immediately
-      ...imageMessages, // Include all image messages
-      ...processedContentMessages, // fab file content (non-image messages)
-    ];
-  } else {
-    messages = [
-      ...systemMessages, // System messages go first for instruction
-      ...processedPreviousMessages, // previous message context
-      ...imageMessages, // Include all image messages
-      ...processedContentMessages, // fab file content (non-image messages)
-      ...userPrompt, // Spread the userPrompt array into the messages array
-    ];
-  }
+    return historyEndsWithToolUse && promptHasToolResult
+      ? [...systemMessages, ...history, ...userPrompt, ...imageMessages, ...content]
+      : [...systemMessages, ...history, ...imageMessages, ...content, ...userPrompt];
+  };
+
+  const messages: IMessage[] = assemble(processedContentMessages, processedPreviousMessages);
 
   // Budget loss outranks history windowing: reporting 'history-limit' whenever historyCount was
   // finite - which is nearly always - made a file the budget had silently zeroed look identical in
@@ -2166,42 +2160,15 @@ export async function buildAndSortMessages(
     logger.warn(
       `⚠️ Final message token count (${finalTokenCount}) exceeds maxInputTokens (${maxInputTokens}). Truncating messages.`
     );
-    // Shrink content first, then history, re-measuring the real count each round until it fits. A
-    // single subtraction could not do the job three ways. It only ever touched content, while the
-    // overflow usually lives in history, which holds the majority of the budget. It never re-measured.
-    // And it spent a real-tokenizer overage against processMessages, which budgets in the character
-    // estimate, so on anything denser than ~3.5 chars/token - code, CSV, CJK - a pass freed a fraction
-    // of what it asked for. Each of those left the excess to reach the caller's hard throw, making the
-    // backstop the cause of the failure it exists to prevent.
-    //
-    // The notice is threaded and the result recorded because this pass really does cut: without them it
-    // would head-slice a file with nothing appended (the fallback's hold-out for an existing upstream
-    // notice is gated on truncationNotice), then drop the cut from telemetry, so the turn that lost the
-    // most content would report wasTruncated: false. A silent truncated file presented as complete is
-    // the failure this module exists to prevent.
+    // Shrink content first, then history, re-measuring the real count each round until it fits. One
+    // subtraction cannot: the overflow usually lives in history, and an overage measured by the real
+    // tokenizer buys less than it looks like when spent against processMessages, which budgets in the
+    // character estimate. The notice and the recorder are threaded because this pass really does cut -
+    // without them it head-slices a file with nothing appended and reports wasTruncated: false.
     let reducedContentMessages = processedContentMessages;
     let currentTokenCount = finalTokenCount;
-    // Null until a round measures one, so the give-up log below cannot print a measured-looking ratio on
-    // the exits that never reached the measurement.
+    // Null until a round measures one, so the give-up log cannot print a ratio nothing measured.
     let lastRatio: number | null = null;
-
-    // The only thing that knows the assembly order, so the payload measured each round and the payload
-    // returned cannot diverge. The pairing flag is derived from the history handed in rather than read
-    // from the one above, which was fixed before this pass started shrinking. No input reaches the
-    // disagreement today - processMessages always keeps the most recent history message, and the ratio
-    // conversion only zeroes history's budget when everything else already exceeds the window - so this
-    // is not a fix for anything reachable. It is here because a closure that takes history as an
-    // argument and then reads a flag describing some other history is a trap for the next change.
-    const assemble = (content: IMessage[], history: IMessage[]): IMessage[] => {
-      const last = history[history.length - 1];
-      const endsWithToolUse =
-        last?.role === 'assistant' &&
-        Array.isArray(last.content) &&
-        last.content.some((block: any) => block.type === 'tool_use');
-      return endsWithToolUse && promptHasToolResult
-        ? [...systemMessages, ...history, ...userPrompt, ...imageMessages, ...content]
-        : [...systemMessages, ...history, ...imageMessages, ...content, ...userPrompt];
-    };
 
     // Content is asked to give first, but a round that frees nothing hands over to history rather than
     // retrying forever: processMessages judges against the character estimate, so content that is
