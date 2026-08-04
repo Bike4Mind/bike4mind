@@ -34,7 +34,7 @@ const handler = baseApi()
       // batch, the feature must actually be on.
       if (params.batchId) {
         const enabled = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
-        if (!enabled) throw new ForbiddenError('Feature not available');
+        if (!enabled) throw new ForbiddenError('Feature not available', { code: 'FEATURE_DISABLED' });
       }
 
       // Applying a lake's `datalake:*` meta-tag at creation is a WRITE into that lake - gate it

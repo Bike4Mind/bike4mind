@@ -99,9 +99,11 @@ export async function enqueueTaxonomyAnalysisIfWanted(
     );
     if (!withinDailyCap) {
       await recordTaxonomyDailyCapExceeded().catch(() => {});
-      // Real terminal status with a real message, same as any other enqueue failure - a
-      // rate-limited batch is recoverable via Re-analyze ('failed' is a legal `from` state),
-      // unlike 'none' which the review UI never surfaces and nothing can claim out of.
+      // Real terminal status with a real message, same as any other enqueue failure - unlike
+      // 'none' (which the review UI never surfaces and nothing can claim out of), 'failed' is
+      // a legal `from` state for Re-analyze, so this is recoverable once the same shared daily
+      // window resets (Re-analyze draws from the identical rate-limit key/bucket, so retrying
+      // immediately just trips the same cap again).
       const transitioned = await dataLakeBatchRepository
         .setTaxonomyStatusIfActive(batch.id, ['queued'], 'failed', {
           taxonomyError: 'Daily AI tag-suggestion limit reached - try again tomorrow',
