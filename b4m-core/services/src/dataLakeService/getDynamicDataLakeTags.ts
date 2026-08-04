@@ -6,6 +6,7 @@ import {
   type IDataLakeRepository,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { buildDatalakeTag } from './createDataLake';
 
 /**
@@ -75,9 +76,11 @@ export async function getDynamicDataLakeAccess(
 ): Promise<{ dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] }> {
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
-  // Coerce to string: the lake's organizationId/createdByUserId are String fields, but a
-  // hydrated user doc may carry ObjectIds here - an ObjectId query against a String never matches.
-  const organizationId = context.user.organizationId ? String(context.user.organizationId) : undefined;
+  // Coerce to string: the lake's organizationId/createdByUserId are String fields, but a hydrated
+  // user doc may carry an ObjectId - or a populated Organization document - here, and an
+  // ObjectId/document query against a String never matches. normalizeId handles all three shapes;
+  // plain String() would turn a populated doc into "[object Object]" (#1281 / @bike4mind/utils/normalizeId).
+  const organizationId = normalizeId(context.user.organizationId);
   const userId = context.user.id ? String(context.user.id) : undefined;
   let dynamicDataLakes: DataLakeConfig[] | undefined;
   // Ids of fetched lakes whose PERSISTED createdByUserId is this caller. Read off the raw
