@@ -73,6 +73,7 @@ describe('filterByPromptMode', () => {
     expect(kept).not.toContain('dateContext');
     expect(kept).not.toContain('artifactEmission');
     expect(kept).not.toContain('helpCenter');
+    expect(kept).not.toContain('abstention');
     expect(kept).not.toContain('toolPrompt');
     expect(kept).not.toContain('mementos');
     expect(kept).not.toContain('knowledgeRetrieval');

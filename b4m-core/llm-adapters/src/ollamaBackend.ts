@@ -6,6 +6,7 @@ import {
   type MessageContentObject,
   type ModelInfo,
 } from '@bike4mind/common';
+import { stripToolDependentMessages } from './toolPairingUtils';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -258,7 +259,9 @@ export class OllamaBackend implements ICompletionBackend {
     const formattedTools = offerTools ? this.formatTools(options.tools ?? []) : [];
     const baseRequest = {
       model,
-      messages: this.buildMessages(messages),
+      // This backend withholds tools in place rather than recursing, so the strip has to track
+      // `offerTools` here: prompts ordering the model to use a tool must not outlive the tools.
+      messages: this.buildMessages(offerTools ? messages : stripToolDependentMessages(messages)),
       options: await this.buildModelOptions(model, options),
       ...(formattedTools.length > 0 && { tools: formattedTools }),
       // Drive Ollama's reasoning from the Thinking toggle. Gated upstream by
