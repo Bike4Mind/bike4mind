@@ -54,7 +54,7 @@
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
     "weekly-insights:generate": "pnpm --filter scripts weekly-insights:generate",
     "changeset": "changeset",
-    "changeset:version": "changeset version",
+    "changeset:version": "changeset version && pnpm turbo:openapi:generate",
     "changeset:publish": "changeset publish",
     "changeset:status": "changeset status"
   },
