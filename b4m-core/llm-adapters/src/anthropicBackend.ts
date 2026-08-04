@@ -36,6 +36,11 @@ import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/co
 import { buildThinkingParams, THINKING_ANSWER_HEADROOM_TOKENS, type ThinkingConfig } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
 import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
+import {
+  createDegenerateStreamGuard,
+  DEGENERATE_STREAM_STOP_REASON,
+  type DegenerateStreamVerdict,
+} from './degenerateStreamGuard';
 
 type ExtendedMessageCreateParams = MessageCreateParamsBase &
   Partial<ThinkingConfig> & {
@@ -1098,6 +1103,12 @@ export class AnthropicBackend implements ICompletionBackend {
           let isIdleTimeout = false;
           let idleTimeoutMsForError = 0; // Store for error message
 
+          // Degeneration state, also read from the catch block. The idle timer
+          // cannot cover this case - it resets on every stream event, and a
+          // repetition loop emits events continuously - so a stream that has
+          // stopped making progress would otherwise run to the token ceiling.
+          let degenerateVerdict: DegenerateStreamVerdict | undefined;
+
           (async () => {
             // Acquire semaphore slot before the API call. Released in the finally
             // block below after the stream is fully consumed (or on any error),
@@ -1162,6 +1173,33 @@ export class AnthropicBackend implements ICompletionBackend {
               // input_json_delta events on these indices stream as text content
               // rather than being collected as a tool call.
               const responseFormatToolIndices = new Set<number>();
+
+              // Degeneration guard: watches emitted text for a stream that has
+              // stopped making progress and is just repeating itself. Aborts the
+              // same way the idle timeout does, but the abort path RESOLVES with
+              // the clean prefix rather than rejecting - the useful part of the
+              // answer is normally written before the loop starts, and throwing
+              // it away would be a worse outcome than a short reply.
+              const degenerateGuard = createDegenerateStreamGuard(options._internal?.degenerateStreamGuard);
+
+              /** Feed emitted text to the guard; abort the stream on the first verdict. */
+              const checkDegenerate = (emitted: string | undefined) => {
+                if (!emitted || degenerateVerdict) return;
+                const verdict = degenerateGuard.push(emitted);
+                if (!verdict) return;
+                degenerateVerdict = verdict;
+                // WARN, not error: this is a benign, handled abort that returns
+                // partial content - error severity would page LiveOps.
+                this.logger.warn('[AnthropicBackend] Stream aborted - output degenerated into repetition', {
+                  model,
+                  periodChars: verdict.periodChars,
+                  repeats: verdict.repeats,
+                  runChars: verdict.runChars,
+                  charsBeforeAbort: verdict.totalChars,
+                  unit: verdict.unit,
+                });
+                (stream as { controller?: AbortController }).controller?.abort?.();
+              };
 
               // Idle timeout setup for detecting streaming hangs
               // Feature flag controlled via options._internal.enableIdleTimeout
@@ -1260,6 +1298,7 @@ export class AnthropicBackend implements ICompletionBackend {
                       await cb(streamedText, { toolsUsed: toolsUsed });
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       streamedText[event.index] = event.delta.text;
+                      checkDegenerate(event.delta.text);
                       await cb(streamedText, { toolsUsed: toolsUsed });
                     } else if ('delta' in event && event.delta.type === 'input_json_delta') {
                       // response_format=json_schema: stream the tool's
@@ -1270,6 +1309,7 @@ export class AnthropicBackend implements ICompletionBackend {
                         const partial = event.delta.partial_json || '';
                         if (partial) {
                           streamedText[event.index] = partial;
+                          checkDegenerate(partial);
                           await cb(streamedText, {
                             toolsUsed,
                             responseFormatMode: 'tool_use',
@@ -1501,6 +1541,23 @@ export class AnthropicBackend implements ICompletionBackend {
                       `Anthropic API request timeout after ${requestTimeoutMs}ms - no streaming response received`
                     )
                   );
+                } else if (degenerateVerdict) {
+                  // Our own abort after the output degenerated into repetition.
+                  // Resolve rather than reject: the text emitted before the loop
+                  // started has already reached the caller through `cb` and is
+                  // normally the useful answer, so throwing an error here would
+                  // discard a good partial reply. Emit a terminal cb first (the
+                  // same shape as the clean path) so the caller learns WHY the
+                  // stream ended; DEGENERATE_STREAM_STOP_REASON is deliberately
+                  // outside CLEAN_FINISH_REASONS, so the reply renders with a
+                  // truncation notice rather than as a normal completion.
+                  this.logger.warn('[AnthropicBackend] Returning partial reply after degeneration abort', {
+                    model,
+                    charsBeforeAbort: degenerateVerdict.totalChars,
+                    repeats: degenerateVerdict.repeats,
+                  });
+                  await cb([], { toolsUsed, stopReason: DEGENERATE_STREAM_STOP_REASON });
+                  resolve();
                 } else if (isIdleTimeout) {
                   // Idle timeout - the stream was aborted due to no events being received
                   // The abort causes AbortError to be thrown, which we catch here.
