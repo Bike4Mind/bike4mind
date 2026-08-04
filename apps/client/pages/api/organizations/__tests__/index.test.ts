@@ -54,7 +54,7 @@ const create = vi.hoisted(() =>
   }))
 );
 vi.mock('@bike4mind/services', () => ({ organizationService: { search, create } }));
-vi.mock('@bike4mind/database', () => ({ organizationRepository: {} }));
+vi.mock('@bike4mind/database', () => ({ organizationRepository: {}, userRepository: {} }));
 
 import '@pages/api/organizations/index';
 

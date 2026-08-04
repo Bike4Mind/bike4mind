@@ -1,4 +1,4 @@
-import { IOrganizationDocument, IOrganizationRepository, IUserDocument } from '@bike4mind/common';
+import { IOrganizationDocument, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -16,6 +16,7 @@ type CreateParameters = z.infer<typeof createSchema>;
 interface CreateAdapters {
   db: {
     organizations: IOrganizationRepository;
+    users: Pick<IUserRepository, 'findById' | 'update'>;
   };
 }
 
@@ -63,6 +64,17 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
   };
 
   const organization = await adapters.db.organizations.create(buildOrganization);
+
+  // Give the billing owner an active-org context (#1388). The owner is intentionally NOT a
+  // `users[]` member (#1226), but org-scoped resolution derives the active org from
+  // `user.organizationId`; without it an owner-only account resolves to no org, so the #1226
+  // implicit capability hold (owner holds the org's granted types) never runs for them. Set it
+  // only when the owner has none, so we never silently switch the active org of a user who already
+  // belongs to one - multi-org owner active-org SELECTION is a separate concern (#1172).
+  const owner = billingOwnerId === user.id ? user : await adapters.db.users.findById(billingOwnerId);
+  if (owner && !owner.organizationId) {
+    await adapters.db.users.update({ id: owner.id, organizationId: organization.id });
+  }
 
   return organization;
 };
