@@ -310,10 +310,13 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
     return this.find({ ...filter, visibility, deletedAt: null });
   }
 
-  async searchByText(searchTerm: string, filter: Record<string, unknown> = {}) {
+  // Defaults to live rows only. `includeDeleted` is an explicit opt-in because this used to write
+  // `deletedAt: null` after spreading the caller's filter, which silently overrode a caller that
+  // had deliberately left it off - so a text search ignored an includeDeleted request.
+  async searchByText(searchTerm: string, filter: Record<string, unknown> = {}, includeDeleted = false) {
     return this.find({
       ...filter,
-      deletedAt: null,
+      ...(includeDeleted ? {} : { deletedAt: null }),
       $text: { $search: searchTerm },
     });
   }

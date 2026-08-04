@@ -1,10 +1,17 @@
 import { CreateFabFileRequestInputType, FileEvents, Permission } from '@bike4mind/common';
-import { adminSettingsRepository, dataLakeRepository, FabFile, User, withTransaction } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  FabFile,
+  User,
+  withTransaction,
+} from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 
@@ -23,6 +30,13 @@ const handler = baseApi()
 
       const params = createFabFileSchema.parse(req.body);
 
+      // Same feature gate as the presign siblings: when this create is bound to a data lake
+      // batch, the feature must actually be on.
+      if (params.batchId) {
+        const enabled = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
+        if (!enabled) throw new ForbiddenError('Feature not available', { code: 'FEATURE_DISABLED' });
+      }
+
       // Applying a lake's `datalake:*` meta-tag at creation is a WRITE into that lake - gate it
       // with the creator/admin check so this path can't be used to bypass the Send-to-Data-Lake
       // authorization and inject files into a lake the caller only reads.
@@ -38,6 +52,14 @@ const handler = baseApi()
         db: { dataLakes: dataLakeRepository },
         logger: req.logger,
       });
+
+      // Verify batch ownership before stamping - batchId comes from the body (IDOR otherwise).
+      // Shared with the presign routes (see assertBatchOwnership).
+      if (params.batchId) {
+        await dataLakeService.assertBatchOwnership(user.id, params.batchId, {
+          db: { batches: dataLakeBatchRepository },
+        });
+      }
 
       const result = await withTransaction(async () => {
         return fabFilesService.createFabFile(
