@@ -93,7 +93,10 @@ interface DatabaseAdapters {
   };
   adminSettings: IAdminSettingsRepository;
   fabfiles: IFabFileRepository;
-  fabfilechunks: Pick<IFabFileChunkRepository, 'findByFabFileId' | 'findVectorsByFabFileIds'>;
+  fabfilechunks: Pick<
+    IFabFileChunkRepository,
+    'findByFabFileId' | 'findVectorsByFabFileIds' | 'findTextsByFabFileId' | 'countByFabFileId'
+  >;
   mementos: IMementoRepository;
   projects: IProjectRepository;
   organizations: IOrganizationRepository;

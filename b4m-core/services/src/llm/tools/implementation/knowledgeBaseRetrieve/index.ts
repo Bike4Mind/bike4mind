@@ -15,6 +15,12 @@ interface KnowledgeBaseRetrieveParams {
 const DEFAULT_MAX_CHARS = 8000;
 const ABSOLUTE_MAX_CHARS = 16000;
 
+// Chunk paging for the per-file read below. The page cap is a backstop only: every page consumes at
+// least one row and the cursor is checked for strict advance, so ABSOLUTE_MAX_CHARS is what actually
+// ends the walk on any real file.
+const KB_RETRIEVE_CHUNK_PAGE_SIZE = 50;
+const KB_RETRIEVE_MAX_CHUNK_PAGES = 200;
+
 /**
  * A directly-fetched file is eligible for retrieval only when it is live (not deleted/
  * archived) and not retrieval-excluded. Fail-closed: any excluded file reads as
@@ -65,8 +71,11 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           return 'Knowledge base retrieval is not available at this time.';
         }
 
-        if (!context.db.fabfilechunks) {
-          context.logger.error('❌ Knowledge Retrieve: fabfilechunks repository not available');
+        // Guard the METHODS, not just the repository: a host can wire a partial `fabfilechunks` and a
+        // truthiness check would pass it straight through to a TypeError mid-retrieval.
+        const chunkRepo = context.db.fabfilechunks;
+        if (!chunkRepo?.findTextsByFabFileId || !chunkRepo?.countByFabFileId) {
+          context.logger.error('❌ Knowledge Retrieve: fabfilechunks paged text reader not available');
           return 'Knowledge base retrieval is not available at this time (chunk reader unavailable).';
         }
 
@@ -208,26 +217,66 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           for (const file of files) {
             if (totalCharsUsed >= charBudget) break;
 
-            const chunks = await context.db.fabfilechunks!.findByFabFileId(file.id);
+            const remainingBudget = charBudget - totalCharsUsed;
 
-            if (chunks.length === 0) {
+            // Page the chunks and stop as soon as this file's share of the budget is met. Reading every
+            // chunk of the file and then slicing hydrated the whole document to throw most of it away.
+            const collected: string[] = [];
+            let collectedChars = 0;
+            let chunksRead = 0;
+            let cursor: string | undefined;
+            for (let page = 0; page < KB_RETRIEVE_MAX_CHUNK_PAGES; page++) {
+              const rows = await chunkRepo.findTextsByFabFileId(file.id, {
+                limit: KB_RETRIEVE_CHUNK_PAGE_SIZE,
+                afterChunkId: cursor,
+              });
+              if (rows.length === 0) break;
+
+              const nextCursor = rows[rows.length - 1].id;
+              if (cursor !== undefined && !(nextCursor > cursor)) {
+                throw new Error(
+                  `[knowledgeBaseRetrieve] chunk cursor failed to advance past ${cursor} for file ${file.id}`
+                );
+              }
+              cursor = nextCursor;
+
+              let budgetMet = false;
+              for (const row of rows) {
+                chunksRead++;
+                collected.push(row.text);
+                // Separator included: the join below adds one newline between chunks, and omitting it
+                // here would let the assembled text overshoot the budget by the separator count.
+                collectedChars += row.text.length + (collected.length > 1 ? 1 : 0);
+                if (collectedChars >= remainingBudget) {
+                  budgetMet = true;
+                  break;
+                }
+              }
+              if (budgetMet) break;
+              if (rows.length < KB_RETRIEVE_CHUNK_PAGE_SIZE) break;
+            }
+
+            if (chunksRead === 0) {
               context.logger.log(`📖 Knowledge Retrieve: No chunks for file ${file.fileName} (${file.id})`);
               continue;
             }
 
-            // Concatenate chunk text in order
-            const fullText = chunks.map(c => c.text).join('\n');
-            const remainingBudget = charBudget - totalCharsUsed;
-            const truncated = fullText.length > remainingBudget;
-            const content = truncated ? fullText.slice(0, remainingBudget) : fullText;
+            const readText = collected.join('\n');
+            const truncated = readText.length > remainingBudget;
+            const content = truncated ? readText.slice(0, remainingBudget) : readText;
 
+            // The file's real chunk count, not the number this loop happened to read: after paging,
+            // reporting chunks-read as "Chunks" would tell the model a partial file was the whole one.
+            const totalChunks = await chunkRepo.countByFabFileId(file.id);
             const fileTags = file.tags?.map(t => t.name).join(', ') || 'none';
-            const charLabel = truncated ? `${content.length} (truncated from ${fullText.length})` : `${content.length}`;
+            const leftUnread = chunksRead < totalChunks;
+            const chunkLabel = leftUnread ? `${totalChunks} (${chunksRead} read)` : `${totalChunks}`;
+            const charLabel = truncated || leftUnread ? `${content.length} (truncated at budget)` : `${content.length}`;
 
             sections.push(
               `### ${file.fileName} (ID: ${file.id})\n` +
                 `Tags: ${fileTags}\n` +
-                `Chunks: ${chunks.length} | Characters: ${charLabel}\n` +
+                `Chunks: ${chunkLabel} | Characters: ${charLabel}\n` +
                 `---\n` +
                 content
             );
