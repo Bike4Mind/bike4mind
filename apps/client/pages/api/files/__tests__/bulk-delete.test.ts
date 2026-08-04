@@ -185,6 +185,24 @@ describe('bulk-delete - tag activity', () => {
     expect(h.touchLastActivityBy).toHaveBeenCalledTimes(2);
   });
 
+  it('skips a malformed tag entry rather than touching a nameless tag', async () => {
+    const owned = {
+      ...taggedFile('507f1f77bcf86cd799439011'),
+      tags: [
+        { name: 'invoices', strength: 0 },
+        { name: null as unknown as string, strength: 0 },
+      ],
+    };
+    h.findById.mockResolvedValue(owned);
+    h.findByIdAndUserId.mockResolvedValue(owned);
+    const { res } = makeRes();
+
+    await run([owned.id], res);
+
+    expect(h.touchLastActivityBy).toHaveBeenCalledTimes(1);
+    expect(h.touchLastActivityBy).toHaveBeenCalledWith({ name: 'invoices', userId: OWNER });
+  });
+
   it('touches nothing when the file belongs to someone else', async () => {
     const shared = { ...taggedFile('507f1f77bcf86cd799439011', 'someone-else'), users: [{ userId: OWNER }] };
     h.findById.mockResolvedValue(shared);

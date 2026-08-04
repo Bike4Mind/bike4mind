@@ -9,11 +9,13 @@ import { type MigrationFile } from './index';
  * it, while the `$pull` removal path, a whole-array tags replace on PUT /api/files/[id], and tags
  * set at file creation all left it behind, so every long-lived tag drifted.
  *
- * This is not housekeeping. Mongoose keeps a stored path it has no schema entry for and `toJSON`
- * emits it, so until this runs, a tag read through any repository method still carries its drifted
- * number - and a caller that forwards a raw tag document (the PUT /api/files/tags/[id] response,
- * which the client merges into its tag-list cache) would pass that stale value to the UI.
- * listFileTags is unaffected either way, because it spreads its own derived count last.
+ * Worth knowing why the rows have to be rewritten at all: mongoose keeps a stored path it has no
+ * schema entry for and `toJSON` emits it, so dropping the field from FileTagSchema does NOT stop an
+ * already-written value coming back out of a repository read. No client-facing surface leaks it
+ * today - listFileTags spreads its own derived count last, and the tag write routes return locally
+ * built objects rather than the stored document - so this closes the hole rather than plugging a
+ * live leak. It stays worth doing: the alternative is leaving a dead, drifted number on every tag
+ * document for the next caller that forwards one to find.
  *
  * Goes through the raw collection rather than the model on purpose: mongoose strict mode strips
  * update paths that are absent from the schema, and `fileCount` was removed from FileTagSchema in

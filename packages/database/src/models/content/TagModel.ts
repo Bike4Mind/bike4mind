@@ -110,19 +110,30 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
    * on, and this is the only thing that refreshes it once the document exists - findOrCreate sets it
    * on its own upsert, and nothing else writes it at all.
    *
-   * Best-effort rather than an invariant, and deliberately so: the toggle path and the two
-   * file-delete doors call it, but a whole-array tags replace on PUT /api/files/[id] and the data
-   * lake taxonomy writers do not, so a tag changed only through those reads as older than it is.
-   * Widening that is a behavioural change to the ordering, not a mechanical one.
+   * Best-effort rather than an invariant, and deliberately so. Only the toggle path and the two
+   * file-delete doors call it. A tag rename (tagService/update) and a tag delete
+   * (tagService/remove) both rewrite the names stored on files without it, as do a whole-array tags
+   * replace on PUT /api/files/[id], the data lake taxonomy writers, and tags set at file creation -
+   * so a tag changed only through those reads as older than it is. Widening the set of callers
+   * would change the sidebar's ordering, which is its own decision to make.
    */
   async touchLastActivityBy(by: Pick<IFileTag, 'name' | 'userId'>): Promise<void> {
+    // Both required, refused rather than skipped: building the filter conditionally meant a missing
+    // name or userId dropped that arm, and an empty filter matches the first tag in the collection -
+    // some other user's. No caller does this, so refusing costs nothing and closes the shape.
+    if (!by.name || !by.userId) {
+      console.warn('touchLastActivityBy needs both a name and a userId; ignoring', by);
+      return;
+    }
+
     try {
       // Use updateOne instead of findOne + save to avoid potential conflicts
-      const filter: Record<string, unknown> = {};
-      // Escaped for the same reason as findByFoldedNameAndUserId below: a tag name is user text,
-      // so an unescaped `a.b` also matched `axb`.
-      if (by.name) filter.name = new RegExp(`^${escapeRegex(by.name)}$`, 'i');
-      if (by.userId) filter.userId = by.userId;
+      const filter = {
+        // Escaped for the same reason as findByFoldedNameAndUserId below: a tag name is user text,
+        // so an unescaped `a.b` also matched `axb`.
+        name: new RegExp(`^${escapeRegex(by.name)}$`, 'i'),
+        userId: by.userId,
+      };
 
       const updateResult = await this.fileTagModel.updateOne(filter, {
         $set: { lastActivityAt: new Date() },

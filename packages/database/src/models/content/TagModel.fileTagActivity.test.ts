@@ -85,6 +85,29 @@ describe('FileTagRepository after the fileCount removal', () => {
       expect(await tags().countDocuments({ userId })).toBe(0);
     });
 
+    // Each arm used to be added to the filter only if truthy, so a blank one dropped out and left a
+    // broader match. Both fixtures below are chosen to be exactly what the degraded filter would
+    // have hit: drop the name and `{ userId }` alone sweeps up every tag this user owns; drop the
+    // userId and `{ name }` alone reaches into another user's.
+    it('refuses a blank name rather than touching every tag the user owns', async () => {
+      await seed('invoices', userId);
+      await seed('receipts', userId);
+
+      await fileTagRepository.touchLastActivityBy({ name: '', userId });
+
+      const touched = await tags().countDocuments({ userId, lastActivityAt: { $gt: PAST } });
+      expect(touched).toBe(0);
+    });
+
+    it('refuses a blank userId rather than reaching into another user tag', async () => {
+      await seed('invoices', 'someone-else');
+
+      await fileTagRepository.touchLastActivityBy({ name: 'invoices', userId: '' });
+
+      const other = await tags().findOne({ userId: 'someone-else' });
+      expect(other!.lastActivityAt.getTime()).toBe(PAST.getTime());
+    });
+
     it('leaves another user tag of the same name alone', async () => {
       await seed('invoices', userId);
       await seed('invoices', 'someone-else');
@@ -140,12 +163,11 @@ describe('FileTagRepository after the fileCount removal', () => {
   });
 
   // Removing the field from the schema does NOT stop an already-written one coming back out:
-  // mongoose keeps a stored path it has no schema entry for and toJSON emits it. So an un-migrated
-  // row still echoes its drifted count on every repository read, which is what makes the $unset
-  // migration load-bearing rather than housekeeping. listFileTags is unaffected either way - it
-  // spreads its own derived count over the document - but a caller that forwards a raw tag (the
-  // PUT /api/files/tags/[id] response, merged into the client's list cache) would pass the stale
-  // number straight through until the migration runs.
+  // mongoose keeps a stored path it has no schema entry for and toJSON emits it. Nothing ships that
+  // value to a client today - listFileTags spreads its own derived count last, and the tag write
+  // routes return locally built objects - so this is why the $unset migration exists rather than a
+  // live bug. Pinned because it is the non-obvious half: without the migration the dead number sits
+  // there waiting for the next caller that forwards a raw tag document.
   it('still echoes a legacy stored fileCount until the migration unsets it', async () => {
     await seed('legacy', userId, { fileCount: 999 });
 

@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { IFileTag, ITag } from '@bike4mind/common';
+import type { IFileTag, IFileTagWithFileCount, ITag } from '@bike4mind/common';
 import { AxiosError, type AxiosResponse } from 'axios';
 
 const mockPut = vi.fn();
@@ -24,7 +24,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }
 import { toast } from 'sonner';
 import { useCreateFileTag, useDeleteFileTag, useUpdateFileTag } from './tag';
 
-const CACHED_TAG = { id: 'tag-1', name: 'invoices', color: 'blue', fileCount: 7 } as IFileTag;
+const CACHED_TAG = { id: 'tag-1', name: 'invoices', color: 'blue', fileCount: 7 } as IFileTagWithFileCount;
 
 describe('file tag mutations', () => {
   let queryClient: QueryClient;
@@ -34,7 +34,7 @@ describe('file tag mutations', () => {
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
 
-  const cachedTags = () => queryClient.getQueryData<IFileTag[]>(['file-tags']) ?? [];
+  const cachedTags = () => queryClient.getQueryData<IFileTagWithFileCount[]>(['file-tags']) ?? [];
   const invalidatedKeys = () => invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
 
   beforeEach(() => {
@@ -127,10 +127,11 @@ describe('file tag mutations', () => {
   });
 
   describe('useCreateFileTag', () => {
-    // create seeds fileCount at 0, which is wrong whenever files already carry the name - tag
-    // documents get auto-created by name elsewhere, and deleting one never untags the files.
-    it('invalidates the tag list rather than trusting the seeded zero', async () => {
-      mockPost.mockResolvedValueOnce({ data: { id: 'tag-9', name: 'archive', fileCount: 0 } });
+    // The POST response carries no count - only the list query derives one - so the hook seeds its
+    // own zero. That is wrong whenever files already carry the name (tag documents get auto-created
+    // by name elsewhere, and deleting one never untags the files), hence the invalidation.
+    it('seeds the new row at zero and invalidates rather than trusting it', async () => {
+      mockPost.mockResolvedValueOnce({ data: { id: 'tag-9', name: 'archive' } });
 
       const { result } = renderHook(() => useCreateFileTag(), { wrapper });
       await act(async () => {
@@ -140,6 +141,7 @@ describe('file tag mutations', () => {
         >);
       });
 
+      expect(cachedTags().find(t => t.id === 'tag-9')?.fileCount).toBe(0);
       expect(invalidatedKeys()).toContainEqual(['file-tags']);
     });
   });
