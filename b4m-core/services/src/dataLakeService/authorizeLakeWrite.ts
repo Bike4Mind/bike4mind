@@ -1,4 +1,4 @@
-import type { AccessContext, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type { AccessContext, IDataLakeBatchDocument, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { DATALAKE_TAG_PREFIX } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { assertLakeAccess, assertLakeWritable } from './assertLakeAccess';
@@ -93,6 +93,25 @@ export const assertCanWriteDataLakeTags = async (
       // told a caller their removal was refused for the wrong reason.
       throw new BadRequestError("Only the creator can change this data lake's files");
     }
+  }
+};
+
+/**
+ * Assert that a batch and the lake a request resolved are the same lake. Every batch is created
+ * for one lake (`dataLakeId` is required on it), which makes the batch the reliable authority on
+ * where its files belong: a lake reference resolving anywhere else is a stale client value, not a
+ * second target. A caller that names no lake is refused too - its files would otherwise land in
+ * the batch of a lake they never joined.
+ *
+ * Bad request, not not-found: callers reach this only after being shown that both the lake and
+ * the batch exist and are theirs.
+ */
+export const assertBatchBelongsToLake = (
+  batch: Pick<IDataLakeBatchDocument, 'dataLakeId'>,
+  lake: Pick<IDataLakeDocument, 'id'> | undefined
+): void => {
+  if (!lake || batch.dataLakeId !== lake.id) {
+    throw new BadRequestError('This upload must name the data lake its batch belongs to');
   }
 };
 

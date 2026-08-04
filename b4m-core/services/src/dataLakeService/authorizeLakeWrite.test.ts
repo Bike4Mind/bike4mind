@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  assertBatchBelongsToLake,
   assertCanWriteDataLakeTags,
   assertMetaTagsMatchLake,
   canManageLake,
@@ -80,6 +81,27 @@ describe('assertCanWriteDataLakeTags - the same rule at the write gate', () => {
     await assertCanWriteDataLakeTags({ userId: 'file-owner', isAdmin: false }, ['notes', 'acme:q1'], adapters as never);
 
     expect(adapters.db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+});
+
+describe('assertBatchBelongsToLake - the batch decides which lake its files join', () => {
+  const MISMATCH = 'This upload must name the data lake its batch belongs to';
+
+  it('accepts a batch bound to the lake the request resolved', () => {
+    expect(() => assertBatchBelongsToLake({ dataLakeId: LAKE.id }, LAKE)).not.toThrow();
+  });
+
+  it('refuses a batch bound to a different lake', () => {
+    expect(() => assertBatchBelongsToLake({ dataLakeId: 'lake-2' }, LAKE)).toThrow(MISMATCH);
+  });
+
+  it('refuses a request that resolved no lake at all', () => {
+    // Otherwise the files land in this lake's batch while joining no lake.
+    expect(() => assertBatchBelongsToLake({ dataLakeId: LAKE.id }, undefined)).toThrow(MISMATCH);
+  });
+
+  it('refuses a batch carrying no lake binding', () => {
+    expect(() => assertBatchBelongsToLake({ dataLakeId: undefined as unknown as string }, LAKE)).toThrow(MISMATCH);
   });
 });
 

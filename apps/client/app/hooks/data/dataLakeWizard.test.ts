@@ -537,6 +537,32 @@ describe('useBatchUpload rollback (#816)', () => {
     expect(toastMock.success).not.toHaveBeenCalled();
   });
 
+  it('a refused presign reports the server reason, not a network problem', async () => {
+    // Every chunk 400ing (e.g. a stale bundle sending a reference the door now rejects) used to
+    // surface "usually a network or connection issue" while tearing the lake down.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch')
+        return Promise.reject({
+          isAxiosError: true,
+          response: { status: 400, data: { error: 'This upload must name the data lake its batch belongs to' } },
+        });
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorMessage).toBe('This upload must name the data lake its batch belongs to');
+    expect(progress.errorMessage).not.toBe(
+      'None of the files could be uploaded. This is usually a network or connection issue, not your data lake settings. Please try again.'
+    );
+  });
+
   it('presign failure (create mode): rolls back the lake and marks the batch failed', async () => {
     apiPost.mockImplementation((url: string) => {
       if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });

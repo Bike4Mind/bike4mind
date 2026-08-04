@@ -45,6 +45,11 @@ const handler = baseApi().post(async (req: Request, res) => {
     dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeSlug, await toAccessContext(req), {
       db: { dataLakes: dataLakeRepository },
     });
+    // Same rule as the batch-create door: only a draft (first batch) or active lake takes new
+    // files, so an archived/deleting one cannot be topped up through this entrance either.
+    if (dataLake.status !== 'draft' && dataLake.status !== 'active') {
+      return res.status(400).json({ error: `Cannot upload into a data lake in '${dataLake.status}' status` });
+    }
   }
   const datalakeTag = dataLake?.datalakeTag;
 
@@ -58,7 +63,16 @@ const handler = baseApi().post(async (req: Request, res) => {
   // A meta-tag the client sent must name the lake this upload is joining, not merely some lake
   // the caller may write to - which, for an admin, is all of them.
   if (dataLake && clientMetaTags.length > 0) {
-    dataLakeService.assertMetaTagsMatchLake(dataLake, clientMetaTags);
+    try {
+      dataLakeService.assertMetaTagsMatchLake(dataLake, clientMetaTags);
+    } catch (err) {
+      // Worth a log line: a spike here separates a stale client from a real regression, and the
+      // refusal message alone cannot tell an operator which lake was asked for.
+      req.logger?.warn(
+        `[dataLakes] refused an upload tagged for another lake: resolved=${dataLake.id} tags=${clientMetaTags.join(',')}`
+      );
+      throw err;
+    }
   }
 
   // Verify batch ownership before stamping/appending - batchId comes from the body,
@@ -68,14 +82,16 @@ const handler = baseApi().post(async (req: Request, res) => {
     if (!batch || batch.userId !== userId) {
       throw new NotFoundError('Batch not found');
     }
-    // Every batch is created for a lake (`dataLakeId` is required), and that binding is the
-    // authority on where its files belong. So the upload has to name that same lake: a reference
-    // resolving elsewhere is a stale client value rather than a second target - the shape that
-    // filed files into whichever lake happened to hold a name-derived slug - and no reference at
-    // all would land files in a lake's batch without joining them to the lake. Bad request, not
-    // a not-found: the caller has already been shown both objects exist and are theirs.
-    if (!dataLake || batch.dataLakeId !== dataLake.id) {
-      throw new BadRequestError('This upload must name the data lake its batch belongs to');
+    try {
+      dataLakeService.assertBatchBelongsToLake(batch, dataLake);
+    } catch (err) {
+      // Logged for the same reason as the meta-tag refusal above: post-deploy, a stale client
+      // still sending a name-derived slug and a real regression are indistinguishable from the
+      // message alone.
+      req.logger?.warn(
+        `[dataLakes] refused an upload whose batch names another lake: batch=${batch.id} batchLake=${batch.dataLakeId} resolved=${dataLake?.id ?? 'none'}`
+      );
+      throw err;
     }
   }
 
