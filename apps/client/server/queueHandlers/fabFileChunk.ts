@@ -16,17 +16,22 @@ import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { finalizeBatchIfComplete, isBatchComplete } from '@server/queueHandlers/dataLakeBatchProgress';
 import { isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
+import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from '@server/worker/chunkScan';
 import { Resource } from 'sst';
 
 const ChunkFabFilePayload = z.object({
   fabFileId: z.string(),
   userId: z.string(),
-  chunkSize: z.coerce.number().optional(),
+  // Optional soft chunk-size override in TOKENS, forwarded to the chunker as its passage
+  // target. Historically this field was sent but silently ignored (whole documents became
+  // single context-window-sized chunks - #1420); most producers now omit it and rely on
+  // the chunker's passage-granularity default.
+  chunkSize: z.coerce.number().int().positive().optional(),
 });
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
-  const { fabFileId, userId } = ChunkFabFilePayload.parse(JSON.parse(body));
+  const { fabFileId, userId, chunkSize } = ChunkFabFilePayload.parse(JSON.parse(body));
 
   const user = await User.findById(userId);
   if (!user) throw new Error(`User not found for userId: ${userId}`);
@@ -67,6 +72,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         {
           fabFileId,
           embeddingModel: defaultEmbeddingModel,
+          passageTokenTarget: chunkSize,
         },
         {
           db: {
@@ -156,9 +162,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // instead of silently completing. We still close the batch below so it
       // doesn't hang.
       logger.log(`fabFile ${fabFileId} produced 0 chunks - no extractable text`);
+      // The prefix doubles as the chunk-scan exclusion marker (see buildFabFileChunkScanFilter),
+      // so the rescue sweep never re-enqueues a file that deterministically chunks to zero.
       await FabFile.updateOne(
         { _id: fabFileId },
-        { $set: { notes: 'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).' } }
+        {
+          $set: {
+            notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX} - re-process or re-upload (e.g. image-only or unsupported content).`,
+          },
+        }
       ).catch(err => logger.error(`Failed to flag zero-chunk fabFile ${fabFileId}: ${err}`));
       // A zero-chunk file (empty / unparseable) produces no vectorize message, so it
       // would never reach a terminal batch counter and the batch would hang until the

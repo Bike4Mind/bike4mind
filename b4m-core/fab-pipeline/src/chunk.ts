@@ -28,6 +28,24 @@ export const ChunkSchema = z.object({
 });
 export type Chunk = z.infer<typeof ChunkSchema>;
 
+/**
+ * Default soft cap on chunk size, in tokens. Retrieval quality is the reason this exists:
+ * without it, chunks grow to the embedding model's context window (~6.5K tokens / ~26KB of
+ * prose), so one vector averages a whole document and cosine ranking cannot discriminate a
+ * specific fact from the rest of the file. ~512 tokens is passage granularity: large enough
+ * to carry a coherent idea, small enough that the vector is about one thing.
+ */
+export const DEFAULT_PASSAGE_TOKEN_TARGET = 512;
+/** Floor for caller-supplied passage targets; below this, chunks lose usable context. */
+export const MIN_PASSAGE_TOKEN_TARGET = 64;
+
+export interface SmartChunkerOptions {
+  /** Buffer as a percent (0-1) or absolute value (if >= 1) to subtract from maxTokens. */
+  bufferPercentOrValue?: number;
+  /** Soft target chunk size in tokens; clamped to [MIN_PASSAGE_TOKEN_TARGET, model limit]. */
+  passageTokenTarget?: number;
+}
+
 type Storage = Pick<S3Storage, 'getContentAsBuffer'>;
 
 const isEmbeddingModel = <T extends SupportedEmbeddingModel>(
@@ -50,14 +68,18 @@ export class SmartChunker {
    * @param model - The embedding model name
    * @param storage - Storage instance for file content
    * @param logger - Logger instance
-   * @param bufferPercentOrValue - Optional. Buffer as a percent (0-1) or absolute value (if >= 1) to subtract from maxTokens. Default: 0.2 (20%) or 32 tokens, whichever is greater.
+   * @param options - Either a bare number (legacy: bufferPercentOrValue) or a SmartChunkerOptions
+   *   object. Buffer default: 0.2 (20%) or 32 tokens, whichever is greater. Passage target
+   *   default: DEFAULT_PASSAGE_TOKEN_TARGET.
    */
   constructor(
     model: string,
     storage: Storage,
     private readonly logger: Logger,
-    bufferPercentOrValue?: number
+    options?: number | SmartChunkerOptions
   ) {
+    const { bufferPercentOrValue, passageTokenTarget } =
+      typeof options === 'number' ? { bufferPercentOrValue: options, passageTokenTarget: undefined } : (options ?? {});
     this.model = model;
 
     if (isEmbeddingModel(model, OpenAIEmbeddingModel)) {
@@ -81,7 +103,15 @@ export class SmartChunker {
     } else {
       buffer = Math.floor(this.bufferPercentOrValue);
     }
-    this.chunkTokenLimit = this.maxTokens - buffer;
+    // The buffered model limit is the HARD cap (an oversized chunk fails the embedding call);
+    // the passage target is a SOFT cap for retrieval granularity. The effective limit is the
+    // smaller of the two, so a caller can never configure a chunk the model would reject.
+    const hardLimit = this.maxTokens - buffer;
+    const target =
+      passageTokenTarget !== undefined && Number.isFinite(passageTokenTarget) && passageTokenTarget > 0
+        ? Math.max(Math.floor(passageTokenTarget), MIN_PASSAGE_TOKEN_TARGET)
+        : DEFAULT_PASSAGE_TOKEN_TARGET;
+    this.chunkTokenLimit = Math.min(hardLimit, target);
 
     this.storage = storage;
 
@@ -90,6 +120,7 @@ export class SmartChunker {
       maxTokens: this.maxTokens,
       chunkTokenLimit: this.chunkTokenLimit,
       bufferPercentOrValue: this.bufferPercentOrValue,
+      passageTokenTarget: target,
     });
   }
 

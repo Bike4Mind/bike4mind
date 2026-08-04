@@ -1,10 +1,11 @@
 /**
- * Safety-net scan for the RAG ingestion pipeline (self-host worker).
+ * Safety-net scan for the RAG ingestion pipeline.
  *
- * If the MinIO ObjectCreated webhook (pages/api/internal/s3/object-created.ts) is ever missed,
- * this sweep re-enqueues files that completed upload but were never chunked. Kept here (not
- * inline in main.ts) so the selection filter is unit-testable without importing the worker boot
- * graph.
+ * If the ingest event (MinIO webhook on self-host, S3 ObjectCreated on hosted) is ever missed -
+ * or auto-chunk was disabled when the file landed - this sweep re-enqueues files that completed
+ * upload but were never chunked. Consumed by the self-host worker (main.ts) and the hosted
+ * dataLakeBatchReconcile cron. Kept here so the selection filter is unit-testable without
+ * importing either boot graph.
  */
 
 /** Only rescue files older than this, to avoid racing a webhook that is about to arrive. */
@@ -23,11 +24,21 @@ export const CHUNK_SCAN_BATCH = 50;
  * re-enqueue a never-uploaded record every cycle onto a chunk handler that can only fail (its
  * bytes never arrived), poison out, and churn forever. chunkCount / isChunking exclude
  * already-chunked and in-progress files.
+ *
+ * Two more churn guards, matching how the chunk handler records a terminal outcome
+ * (fabFileChunk.ts): a file that chunked to zero gets a 'No extractable text' note, and a file
+ * whose chunking threw gets `error` set. Both are terminal for this scan - re-enqueueing them
+ * would re-fail identically every cycle; recovery for those is the explicit reprocess path,
+ * which clears the markers.
  */
+export const NO_EXTRACTABLE_TEXT_NOTE_PREFIX = 'No extractable text';
+
 export const buildFabFileChunkScanFilter = (cutoff: Date) => ({
   status: 'complete' as const,
   chunkCount: 0,
   isChunking: { $ne: true },
   createdAt: { $lt: cutoff },
   deletedAt: null,
+  notes: { $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`) },
+  error: { $in: [null, ''] },
 });

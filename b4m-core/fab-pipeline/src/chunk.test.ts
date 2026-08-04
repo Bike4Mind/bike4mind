@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import JSZip from 'jszip';
-import { SmartChunker, Chunk } from './chunk';
+import { SmartChunker, Chunk, DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from './chunk';
 import { Logger } from '@bike4mind/observability';
 
 // Minimal mock storage - chunkText doesn't use storage
@@ -196,6 +196,64 @@ describe('SmartChunker', () => {
       const content = Buffer.from('fake-audio-bytes');
       expect(await chunker.chunkFile(content, 'audio/mpeg')).toEqual([]);
       expect(await chunker.chunkFile(content, 'audio/wav')).toEqual([]);
+    });
+  });
+
+  describe('passage granularity (#1420)', () => {
+    // ~22KB of heterogeneous prose - the regression shape from the issue: a whole markdown
+    // profile that previously became ONE chunk covering 100% of the document.
+    const longDocument = Array.from(
+      { length: 400 },
+      (_, i) => `Section ${i} covers a distinct topic with its own facts and figures about subject ${i}.`
+    ).join(' ');
+
+    it('a default chunker splits a long document into passage-sized chunks, not one whole-document chunk', async () => {
+      const defaultChunker = new SmartChunker(MODEL, mockStorage, new Logger({ component: 'chunk-test' }));
+      try {
+        const chunks = await defaultChunker.chunkFile(Buffer.from(longDocument), 'text/markdown');
+
+        expect(chunks.length).toBeGreaterThan(1);
+        for (const chunk of chunks) {
+          expect(chunk.tokenCount).toBeLessThanOrEqual(DEFAULT_PASSAGE_TOKEN_TARGET);
+        }
+      } finally {
+        defaultChunker.freeEncoder();
+      }
+    });
+
+    it('honors an explicit passage target via the options object', async () => {
+      const custom = new SmartChunker(MODEL, mockStorage, new Logger({ component: 'chunk-test' }), {
+        passageTokenTarget: 128,
+      });
+      try {
+        const chunks = await (custom as any).chunkText(longDocument);
+        expect(chunks.length).toBeGreaterThan(1);
+        for (const chunk of chunks) {
+          expect(chunk.tokenCount).toBeLessThanOrEqual(128);
+        }
+      } finally {
+        custom.freeEncoder();
+      }
+    });
+
+    it('clamps a too-small passage target up to the minimum', () => {
+      const tiny = new SmartChunker(MODEL, mockStorage, new Logger({ component: 'chunk-test' }), {
+        passageTokenTarget: 10,
+      });
+      expect((tiny as any).chunkTokenLimit).toBe(MIN_PASSAGE_TOKEN_TARGET);
+    });
+
+    it('caps an oversized passage target at the buffered model limit', () => {
+      const huge = new SmartChunker(MODEL, mockStorage, new Logger({ component: 'chunk-test' }), {
+        passageTokenTarget: 999999,
+      });
+      // 8192 - max(floor(8192 * 0.2), 32) = 8192 - 1638
+      expect((huge as any).chunkTokenLimit).toBe(8192 - 1638);
+    });
+
+    it('keeps legacy numeric buffer argument behavior (still wins when tighter than the passage target)', () => {
+      // createChunker passes buffer = 8192 - 300 as a bare number: limit 300 < default 512.
+      expect((chunker as any).chunkTokenLimit).toBe(CHUNK_TOKEN_LIMIT);
     });
   });
 
