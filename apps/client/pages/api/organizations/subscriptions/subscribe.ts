@@ -10,6 +10,7 @@ import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { appendSuccessParams } from '@server/integrations/stripe/callbackUrl';
 import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
@@ -98,7 +99,9 @@ const handler = baseApi()
           },
         },
       ],
-      success_url: `${callbackUrl}${callbackUrl.includes('?') ? '&' : '?'}subscription_success=true`,
+      // Carries the Stripe session id alongside the existing success marker so the
+      // returning client can report revenue (see api/subscriptions/checkout-session.ts).
+      success_url: appendSuccessParams(callbackUrl),
       cancel_url: callbackUrl,
       subscription_data: {
         metadata,

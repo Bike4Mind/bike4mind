@@ -21,3 +21,18 @@ export function isAllowedCallbackOrigin(url: string): boolean {
     return false;
   }
 }
+
+/**
+ * Mark a checkout `success_url` so the returning client can tell a completed
+ * purchase from a cancel, and can look the charge up.
+ *
+ * `{CHECKOUT_SESSION_ID}` is a Stripe template that Stripe substitutes on
+ * redirect. It must stay literal - do NOT run this through URLSearchParams or
+ * encodeURIComponent, which would escape the braces and hand the client the
+ * placeholder instead of a session id. Consumed by
+ * app/components/stripe/StripeCheckoutSuccessHandler.tsx.
+ */
+export function appendSuccessParams(callbackUrl: string): string {
+  const separator = callbackUrl.includes('?') ? '&' : '?';
+  return `${callbackUrl}${separator}subscription_success=true&checkout_session_id={CHECKOUT_SESSION_ID}`;
+}

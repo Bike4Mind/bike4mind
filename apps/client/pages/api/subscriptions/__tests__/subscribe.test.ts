@@ -50,7 +50,10 @@ vi.mock('@client/lib/userSubscriptions/constants', () => ({
   ],
 }));
 
-vi.mock('@server/integrations/stripe/callbackUrl', () => ({ isAllowedCallbackOrigin: () => true }));
+vi.mock('@server/integrations/stripe/callbackUrl', () => ({
+  isAllowedCallbackOrigin: () => true,
+  appendSuccessParams: (url: string) => `${url}?success`,
+}));
 vi.mock('@server/utils/config', () => ({ Config: { STAGE: 'test' } }));
 
 const mockSessionsCreate = vi.fn();
