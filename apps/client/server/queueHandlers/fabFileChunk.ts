@@ -25,8 +25,10 @@ const ChunkFabFilePayload = z.object({
   // Optional soft chunk-size override in TOKENS, forwarded to the chunker as its passage
   // target. Historically this field was sent but silently ignored (whole documents became
   // single context-window-sized chunks - #1420); most producers now omit it and rely on
-  // the chunker's passage-granularity default.
-  chunkSize: z.coerce.number().int().positive().optional(),
+  // the chunker's passage-granularity default. `.catch(undefined)` fails soft: a malformed
+  // value from a legacy or hand-crafted message falls back to the default instead of turning
+  // the whole message into a DLQ poison pill.
+  chunkSize: z.coerce.number().int().positive().optional().catch(undefined),
 });
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {

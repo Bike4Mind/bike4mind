@@ -200,6 +200,14 @@ describe('SmartChunker', () => {
   });
 
   describe('passage granularity (#1420)', () => {
+    it('pins the default passage target and floor (a silent bump back toward whole-document chunks must fail CI)', () => {
+      // Every other test in this block derives its bound FROM the constant, so mutating the
+      // constant to e.g. 6000 would leave them all green. This assertion is the regression
+      // tripwire for #1420 itself.
+      expect(DEFAULT_PASSAGE_TOKEN_TARGET).toBe(512);
+      expect(MIN_PASSAGE_TOKEN_TARGET).toBe(64);
+    });
+
     // ~22KB of heterogeneous prose - the regression shape from the issue: a whole markdown
     // profile that previously became ONE chunk covering 100% of the document.
     const longDocument = Array.from(

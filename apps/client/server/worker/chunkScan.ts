@@ -10,7 +10,8 @@
 
 /** Only rescue files older than this, to avoid racing a webhook that is about to arrive. */
 export const CHUNK_SCAN_MIN_AGE_MS = 2 * 60_000;
-/** Cap files enqueued per scan pass so a large backlog is drained gradually. */
+/** Global (not per-account) cap on files enqueued per scan pass, so a large backlog - even one
+ * account's - is drained gradually without starving the run's time budget. */
 export const CHUNK_SCAN_BATCH = 50;
 
 /**
@@ -31,11 +32,12 @@ export const CHUNK_SCAN_BATCH = 50;
  * would re-fail identically every cycle; recovery for those is the explicit reprocess path,
  * which clears the markers.
  *
- * Audio and images are excluded up front: SmartChunker returns 0 chunks for both BY DESIGN
- * (audio is never vectorizable; images are passed to models as URLs), so sweeping them would
- * burn the per-run cap on no-op queue round-trips and stamp historical media files with a
- * misleading 'No extractable text' note. Query must stay in sync with isAudioMimeType and
- * SmartChunker.chunkImage.
+ * Audio, images and video are excluded up front: SmartChunker returns 0 chunks for all three
+ * BY DESIGN (audio is never vectorizable; images are passed to models as URLs; video has no
+ * extraction path and falls to the unsupported-type default), so sweeping them would burn the
+ * per-run cap on no-op queue round-trips and stamp historical media files with a misleading
+ * 'No extractable text' note. Query must stay in sync with isAudioMimeType and
+ * SmartChunker.chunkImage / chunkFile's default branch.
  */
 export const NO_EXTRACTABLE_TEXT_NOTE_PREFIX = 'No extractable text';
 
@@ -45,7 +47,7 @@ export const buildFabFileChunkScanFilter = (cutoff: Date) => ({
   isChunking: { $ne: true },
   createdAt: { $lt: cutoff },
   deletedAt: null,
-  mimeType: { $not: /^(audio|image)\// },
+  mimeType: { $not: /^(audio|image|video)\// },
   notes: { $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`) },
   error: { $in: [null, ''] },
 });

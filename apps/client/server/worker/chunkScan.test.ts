@@ -100,11 +100,12 @@ describe('buildFabFileChunkScanFilter', () => {
     expect(matches(base, filter)).toBe(true);
   });
 
-  it('skips audio and image files (0 chunks by design, not a rescue candidate)', () => {
+  it('skips audio, image, and video files (0 chunks by design, not a rescue candidate)', () => {
     const base = { status: 'complete', chunkCount: 0, isChunking: false, createdAt: old, deletedAt: null };
     expect(matches({ ...base, mimeType: 'audio/mpeg' }, filter)).toBe(false);
     expect(matches({ ...base, mimeType: 'image/png' }, filter)).toBe(false);
     expect(matches({ ...base, mimeType: 'image/svg+xml' }, filter)).toBe(false);
+    expect(matches({ ...base, mimeType: 'video/mp4' }, filter)).toBe(false);
   });
 
   it('still selects chunkable document types', () => {
