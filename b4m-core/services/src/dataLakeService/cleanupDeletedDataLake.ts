@@ -40,9 +40,9 @@ async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<un
  * deleteMany are no-ops on already-purged data). Fan-outs are chunked (chunkSize) so a large lake
  * stays inside the Lambda timeout. Owner or admin only.
  *
- * Retrieval-index removal is the one step that can abort the sweep, which is why it runs first:
- * every other door tolerates a stale entry, but nothing can reconcile one whose file this call is
- * about to erase.
+ * Retrieval-index removal is the one step deliberately allowed to abort the sweep - the reversible
+ * doors tolerate a stale entry, but nothing can reconcile one whose file this call is about to
+ * erase. It runs first so that choice costs no partial progress.
  */
 export const cleanupDeletedDataLake = async (
   actor: { userId: string; isAdmin: boolean },
