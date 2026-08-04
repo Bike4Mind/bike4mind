@@ -2,11 +2,24 @@
 
 export default $config({
   app(input) {
+    // `production` and `shared-dev` are the permanent stages: state is retained,
+    // `sst remove` is blocked, and their state is never purged. Everything else
+    // (dev, personal stages, pr#### previews) is disposable.
+    const permanent = ['production', 'shared-dev'].includes(input?.stage);
     return {
       name: process.env.SEED_APP_NAME || 'bike4mind',
-      removal: ['production', 'shared-dev'].includes(input?.stage) ? 'retain' : 'remove',
-      protect: ['production', 'shared-dev'].includes(input?.stage),
+      removal: permanent ? 'retain' : 'remove',
+      protect: permanent,
       home: 'aws',
+      // Without this SST keeps every completed snapshot forever AND every
+      // noncurrent version of the mutable current-state object. On 2026-08-04
+      // `app/bike4mind/dev.json` alone held 621,505 noncurrent versions /
+      // 8.51 TiB — 31% of the whole state bucket. Pruning runs after each
+      // successful update for that stage only. See sst/sst#6925.
+      state: {
+        retention: 30,
+        purge: !permanent,
+      },
       watch: ['infra', 'apps', 'packages', 'b4m-core'],
       providers: {
         aws: {
