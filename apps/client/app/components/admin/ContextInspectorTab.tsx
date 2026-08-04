@@ -1880,6 +1880,7 @@ export function ContextInspectorTab() {
               Min Anomaly Score
             </Typography>
             <Select size="sm" value={minAnomalyScore} onChange={(_, v) => setMinAnomalyScore(v)} placeholder="Any">
+              <Option value={0}>0 / All</Option>
               <Option value={null}>Any (&gt;0)</Option>
               <Option value={30}>30+</Option>
               <Option value={50}>50+</Option>

@@ -33,7 +33,6 @@ const handler = baseApi().get(
     // Build query - only fetch quests with context telemetry
     const query: Record<string, unknown> = {
       'promptMeta.contextTelemetry': { $exists: true },
-      'promptMeta.contextTelemetry.anomalies.anomalyScore': { $gt: 0 },
     };
 
     if (params.startDate || params.endDate) {
@@ -50,12 +49,14 @@ const handler = baseApi().get(
       query['promptMeta.contextTelemetry.model.provider'] = params.provider;
     }
 
-    if (params.minAnomalyScore) {
-      const minScore = parseInt(params.minAnomalyScore, 10);
-      // Validate parsed number to prevent NaN from breaking the query
-      if (!Number.isNaN(minScore) && minScore > 0 && minScore <= 100) {
-        query['promptMeta.contextTelemetry.anomalies.anomalyScore'] = { $gte: minScore };
-      }
+    // Score filter: absent or invalid minAnomalyScore keeps the legacy default of
+    // anomalous turns only ($gt: 0); an explicit 0 includes benign score-0 turns
+    // (no score filter); 1-100 filters to scores >= the requested minimum.
+    const minScore = params.minAnomalyScore === undefined ? NaN : parseInt(params.minAnomalyScore, 10);
+    if (Number.isNaN(minScore) || minScore < 0 || minScore > 100) {
+      query['promptMeta.contextTelemetry.anomalies.anomalyScore'] = { $gt: 0 };
+    } else if (minScore > 0) {
+      query['promptMeta.contextTelemetry.anomalies.anomalyScore'] = { $gte: minScore };
     }
 
     if (params.severity) {
