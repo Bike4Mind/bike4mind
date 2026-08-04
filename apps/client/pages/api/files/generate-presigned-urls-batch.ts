@@ -62,14 +62,16 @@ const handler = baseApi().post(async (req: Request, res) => {
 
   // A meta-tag the client sent must name the lake this upload is joining, not merely some lake
   // the caller may write to - which, for an admin, is all of them.
-  if (dataLake && clientMetaTags.length > 0) {
+  if (dataLake) {
     try {
       dataLakeService.assertMetaTagsMatchLake(dataLake, clientMetaTags);
     } catch (err) {
       // Worth a log line: a spike here separates a stale client from a real regression, and the
-      // refusal message alone cannot tell an operator which lake was asked for.
+      // refusal message alone cannot tell an operator which lake was asked for. The tags are
+      // unconstrained user input, so JSON-encode them - a newline in a tag name would otherwise
+      // forge a log line of its own.
       req.logger?.warn(
-        `[dataLakes] refused an upload tagged for another lake: resolved=${dataLake.id} tags=${clientMetaTags.join(',')}`
+        `[dataLakes] refused an upload tagged for another lake: resolved=${dataLake.id} tags=${JSON.stringify(clientMetaTags)}`
       );
       throw err;
     }
