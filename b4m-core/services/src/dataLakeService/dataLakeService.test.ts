@@ -160,6 +160,52 @@ describe('canAccessLake — entitlement-aware any-of (tag-retirement)', () => {
   });
 });
 
+describe('canAccessLake — org id shape parity with the casting collection query', () => {
+  // findAccessible matches an org lake via a Mongo query that CASTS types, so an org member
+  // whose ctx.organizationId is an ObjectId or a populated Organization doc still lands in the
+  // list. canAccessLake compares in memory, so it must reach the SAME grant for every shape -
+  // otherwise the single-lake gate 404s a lake the caller's own list returns. Each shape below
+  // stands in for the same org value the collection query matched on.
+  const orgHex = '507f1f77bcf86cd799439011';
+  const orgLake = lake({ id: 'orgLake', organizationId: orgHex, createdByUserId: 'admin' });
+
+  it('grants a same-org member when ctx.organizationId is a matching string', () => {
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: orgHex }))).toBe(true);
+  });
+
+  it('grants a same-org member when ctx.organizationId is an ObjectId', () => {
+    const objectId = { toHexString: () => orgHex } as unknown as string;
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: objectId }))).toBe(true);
+  });
+
+  it('grants a same-org member when ctx.organizationId is a populated Organization document', () => {
+    const populated = { _id: { toHexString: () => orgHex }, name: 'Acme' } as unknown as string;
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: populated }))).toBe(true);
+  });
+
+  it('still DENIES a member of a different org across every shape', () => {
+    const otherHex = '507f191e810c19729de860ea';
+    const otherObjectId = { toHexString: () => otherHex } as unknown as string;
+    const otherPopulated = { _id: { toHexString: () => otherHex } } as unknown as string;
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: otherHex }))).toBe(false);
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: otherObjectId }))).toBe(false);
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: otherPopulated }))).toBe(false);
+  });
+
+  it('fails CLOSED: a lake with a truthy-but-not-id-shaped org and no gate denies a non-owner', () => {
+    // Guards the fail-open asymmetry: private-by-default and the org-match check must both read
+    // the SAME normalized lake org id. A garbage org (normalizes to undefined) with no gate must
+    // deny a non-owner, not fall through to public.
+    const garbageOrgLake = lake({
+      id: 'garbageOrg',
+      organizationId: { not: 'an id' } as unknown as string,
+      createdByUserId: 'owner',
+    });
+    expect(canAccessLake(garbageOrgLake, ctx({ userId: 'member', organizationId: 'orgA' }))).toBe(false);
+    expect(canAccessLake(garbageOrgLake, ctx({ userId: 'owner' }))).toBe(true); // owner still in
+  });
+});
+
 describe('assertLakeAccess — not-found-style denial', () => {
   it('throws a not-found-style error for a denied non-member (does not disclose existence)', async () => {
     const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti' });

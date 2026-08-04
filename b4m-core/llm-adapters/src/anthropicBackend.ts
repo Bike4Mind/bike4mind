@@ -30,7 +30,7 @@ import {
 } from './backend';
 import { Logger } from '@bike4mind/observability';
 import { handleToolResultStreaming } from './toolStreamingHelper';
-import { ensureToolPairingIntegrity, stripAllToolBlocks } from './toolPairingUtils';
+import { ensureToolPairingIntegrity, stripAllToolBlocks, stripToolDependentMessages } from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
 import { buildThinkingParams, THINKING_ANSWER_HEADROOM_TOKENS, type ThinkingConfig } from './thinkingParams';
@@ -727,7 +727,8 @@ export class AnthropicBackend implements ICompletionBackend {
       // Don't increment toolCallCount so subsequent no-tool calls skip this check
       await this.complete(
         model,
-        messages,
+        // Tools are going away, so the prompts that order the model to use one have to go with them.
+        stripToolDependentMessages(messages),
         {
           ...options,
           tools: undefined,

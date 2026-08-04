@@ -29,8 +29,10 @@ const handler = baseApi()
       logger: console,
       // Forced-terminal is rare, so the awaited emit only costs latency on the exceptional path; the
       // stuck gauge is deliberately omitted here (it belongs on the cron's fixed cadence, not per read).
-      // Also backstops the taxonomy enqueue for a batch that never reached upload-complete -
-      // that path bypasses finalizeBatchIfComplete, so this is the only place left to catch it.
+      // Also backstops the taxonomy enqueue for a batch that never reached upload-complete NOR
+      // a terminal chunk/vectorize event (finalizeBatchIfComplete already backstops the latter
+      // case) - this is the last resort for a batch that is genuinely stuck, not just one whose
+      // upload-complete request happened to fail.
       metrics: {
         emitForcedTerminal: batch =>
           Promise.all([
