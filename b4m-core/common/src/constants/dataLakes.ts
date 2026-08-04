@@ -114,9 +114,9 @@ export const tagPrefixIssue = (
 export interface DataLakeConfig {
   id: string;
   /**
-   * URL/tag slug, unique per org. Needed by clients that resolve a lake by slug - notably
-   * the Add-files (append) upload, which sends `dataLakeSlug` so the server can stamp the
-   * lake meta-tag. Omitting it here silently broke append-mode registration.
+   * URL/tag slug, unique per org. Kept on the projection because a client holding a lake still
+   * reads it - the wizard checks its length to explain a rejected create. Uploads target a lake
+   * by id instead: the server can disambiguate a slug out from under the client.
    */
   slug: string;
   name: string;
