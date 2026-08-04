@@ -51,6 +51,15 @@ const SimplifiedChatRequestSchema = z.object({
   enableQuestMaster: z.boolean().optional(),
   enableMementos: z.boolean().optional(),
   enableAgents: z.boolean().optional(),
+  // How much of the system stack to place in front of the model. Unset keeps today's behaviour.
+  // 'raw' is the passthrough an evaluation harness needs to compare us against the bare model;
+  // 'grounded' adds data-lake retrieval only; 'surface' adds the org/session prompts on top.
+  // Retrieval itself comes from the session (forceKnowledgeRetrieval), not from this flag.
+  promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
+  // With wait, also return the per-source system prompt breakdown the completion was
+  // assembled from (promptDetails), so callers can verify what fed the model instead of
+  // inferring it from behavior.
+  includePromptDetails: z.boolean().optional(),
 });
 
 type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;
@@ -214,6 +223,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_G
         response: completedQuest.reply,
         responses: completedQuest.replies,
         createdAt: completedQuest.createdAt,
+        ...(simplifiedRequest.includePromptDetails && completedQuest.promptMeta?.context?.systemPromptDetails
+          ? { promptDetails: completedQuest.promptMeta.context.systemPromptDetails }
+          : {}),
         ...(toolMeta && { tools: toolMeta }),
         performance,
         tracking_info: {
@@ -317,6 +329,7 @@ function transformToInternalFormat(
       },
     },
     enableArtifacts: false,
+    ...(request.promptMode ? { promptMode: request.promptMode } : {}),
     ...(isToolsEnabled
       ? {
           // Legacy enableTools=true callers expect full capabilities by default.

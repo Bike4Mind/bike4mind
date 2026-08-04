@@ -293,6 +293,8 @@ export const QuestStartBodySchema = z.object({
   enableQuestMaster: z.boolean().optional(),
   enableMementos: z.boolean().optional(),
   enableArtifacts: z.boolean().optional(),
+  /** See ChatCompletionInvokeParamsSchema.promptMode - must stay in sync with it. */
+  promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
   enableAgents: z.boolean().optional(),
   enableLattice: z.boolean().optional(),
   promptMeta: PromptMetaZodSchema,

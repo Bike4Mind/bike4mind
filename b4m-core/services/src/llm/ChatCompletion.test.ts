@@ -333,6 +333,101 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // The promptMode wiring, asserted at the boundary the prompt actually crosses: the
+    // context/system array handed to buildAndSortMessages. The two cases form a discriminating
+    // pair - if the filter were unwired, the raw case would still carry the date context and the
+    // pair could not both pass. This is the "provably zero injectors" claim for API mode raw.
+    describe('promptMode', () => {
+      const mockTextModel = () => {
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            await cb(['Hi!']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      };
+
+      it('hands the full system stack to the builder when no mode is set', async () => {
+        mockTextModel();
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+        await expect(service.process({ body, logger: mockLogger })).resolves.not.toThrow();
+
+        const [, contextAndSystemMessages, , , , , , , options] = mockedBuildAndSortMessages.mock.calls[0];
+        expect(
+          contextAndSystemMessages.some(m => typeof m.content === 'string' && m.content.startsWith('Current date:'))
+        ).toBe(true);
+        expect(options).toEqual(expect.objectContaining({ skipAdminPromptTemplates: false }));
+        // The per-source breakdown persists on the quest unconditionally - not only when enhanced
+        // telemetry is enabled - so the API layer can report which prompts fed a completion.
+        const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+          promptMeta?: { context?: { systemPromptDetails?: { name: string }[] } };
+        };
+        expect(savedQuest.promptMeta?.context?.systemPromptDetails?.map(d => d.name)).toContain('date_time_context');
+      });
+
+      it('hands an EMPTY system stack to the builder under raw, and skips the admin templates', async () => {
+        mockTextModel();
+        const body = {
+          ...startQuestParams,
+          promptMode: 'raw' as const,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+        };
+
+        await expect(service.process({ body, logger: mockLogger })).resolves.not.toThrow();
+
+        const [, contextAndSystemMessages, , , , , , , options] = mockedBuildAndSortMessages.mock.calls[0];
+        expect(contextAndSystemMessages).toEqual([]);
+        expect(options).toEqual(expect.objectContaining({ skipAdminPromptTemplates: true }));
+        // The adapter appends a model-identity line to the system parameter on its own;
+        // raw has to reach through and turn that off too, or "empty stack" is off by 17 tokens.
+        const completeOpts = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2];
+        expect(completeOpts.omitIdentityReminder).toBe(true);
+      });
+
+      // Auto-added tools are OUR additions, and any attached tool also pulls the provider's
+      // server-side tool-use preamble into the request (observed live: an Anthropic completion
+      // with only auto-added tools knew the current date on a fresh raw session). The same
+      // admin user is used for both cases, so the pair discriminates on the mode alone.
+      it('suppresses auto-added tools under a mode, but not for a default request', async () => {
+        (service as any).user.isAdmin = true; // makes blog_draft auto-add fire on the default path
+        try {
+          mockTextModel();
+          const base = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+          await service.process({ body: base, logger: mockLogger });
+          const defaultTools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          expect(defaultTools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toContain('blog_draft');
+
+          mockTextModel();
+          await service.process({ body: { ...base, promptMode: 'raw' as const }, logger: mockLogger });
+          const rawTools = vi.mocked(mockedGetLlmByModel.mock.results[1].value.complete).mock.calls[0][2].tools;
+          expect(rawTools ?? []).toEqual([]);
+        } finally {
+          delete (service as any).user.isAdmin;
+        }
+      });
+    });
+
     // An empty message array means the input budget was non-positive - e.g. a model configured with
     // max output equal to its whole context window. The old guard was `if (!messages)`, which is
     // false for `[]`, so the empty prompt reached the model and it answered confidently from nothing.
@@ -408,6 +503,7 @@ describe('ChatCompletionProcess', () => {
         expect.anything(),
         expect.anything(),
         9000,
+        expect.anything(),
         expect.anything(),
         expect.anything(),
         expect.anything(),

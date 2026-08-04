@@ -1769,7 +1769,15 @@ export async function buildAndSortMessages(
   historyCount: number = 0,
   logger: Logger,
   tokenizer: ITokenizer,
-  options: { verbose: boolean } = { verbose: false }
+  options: {
+    verbose: boolean;
+    /**
+     * Skip the admin-configured templates this function appends (FormatPromptTemplate, image
+     * prompt). They are invisible from the caller's own system-message assembly, so a caller
+     * asking for an unadorned completion cannot exclude them any other way.
+     */
+    skipAdminPromptTemplates?: boolean;
+  } = { verbose: false }
 ): Promise<IMessage[]> {
   // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
   // comparison below.
@@ -1826,13 +1834,15 @@ export async function buildAndSortMessages(
   const systemMessages: IMessage[] = [];
   let systemTokenCount: number = 0;
 
-  if (getSettingsValue('UseFormatPrompt', settings)) {
-    const formatPromptTemplate = settings.FormatPromptTemplate;
-    fabMessages = includeHardcodedSystemMessage(fabMessages, formatPromptTemplate);
-  }
+  if (!options.skipAdminPromptTemplates) {
+    if (getSettingsValue('UseFormatPrompt', settings)) {
+      const formatPromptTemplate = settings.FormatPromptTemplate;
+      fabMessages = includeHardcodedSystemMessage(fabMessages, formatPromptTemplate);
+    }
 
-  if (getSettingsValue('UseImagePrompt', settings)) {
-    fabMessages = includeImagePromptSystemMessage(fabMessages, userPromptContent);
+    if (getSettingsValue('UseImagePrompt', settings)) {
+      fabMessages = includeImagePromptSystemMessage(fabMessages, userPromptContent);
+    }
   }
 
   // Artifact guidance comes from the admin-editable `ArtifactEmissionPrompt` system message that the

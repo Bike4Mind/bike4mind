@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ContextTelemetrySchema } from './contextTelemetry';
+import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
 
 /**
  * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
@@ -113,6 +113,11 @@ const PromptMetaContextSchema = z.object({
   mementoCount: z.number().optional(),
   mementoIds: z.array(z.string()).optional(),
   tokensBySource: PromptMetaTokensBySourceSchema.optional(),
+  // Per-source system prompt breakdown, derived from the tagged assembly (see
+  // services systemPromptSources). Stored on every completion - unlike contextTelemetry,
+  // which only exists when enhanced telemetry is enabled - so the API layer can report
+  // which prompts fed a completion.
+  systemPromptDetails: z.array(SystemPromptDetailSchema).optional(),
   systemPrompt: z.string().optional(),
   userPrompt: z.string().optional(),
   conversationContext: z

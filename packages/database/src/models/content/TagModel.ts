@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { IFileTag, IFileTagRepository, ITag, ITagRepository, TagType } from '@bike4mind/common';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 const options = {
   toJSON: {
@@ -109,7 +110,9 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
     try {
       // Use updateOne instead of findOne + save to avoid potential conflicts
       const filter: Record<string, unknown> = {};
-      if (by.name) filter.name = new RegExp(`^${by.name}$`, 'i');
+      // Escaped for the same reason as findByFoldedNameAndUserId below: a tag name is user text,
+      // so an unescaped `a.b` also matched `axb`.
+      if (by.name) filter.name = new RegExp(`^${escapeRegex(by.name)}$`, 'i');
       if (by.userId) filter.userId = by.userId;
 
       const updateResult = await this.fileTagModel.updateOne(filter, {
@@ -128,6 +131,28 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
 
   async findByNameAndUserId(name: string, userId: string) {
     const result = await this.fileTagModel.findOne({ name, userId });
+    return result?.toJSON() || null;
+  }
+
+  /**
+   * findByNameAndUserId under the shared collision rule (see common/utils/tagName): trimmed and case
+   * folded. Every path that mints a tag document checks this first, so one user cannot end up with
+   * two names differing only by case.
+   *
+   * Legacy data can still hold such a pair, so ordered oldest-first rather than left to whatever the
+   * scan returns: findOrCreateByNameAndUserId increments the document this picks, and an unordered
+   * read could credit a different one of the pair on each call.
+   *
+   * The regex means only the userId prefix of { userId, name } is usable as a bound, so this scans
+   * one user's tags. Same cost as incrementFileCountBy above, and small at realistic tag counts.
+   */
+  async findByFoldedNameAndUserId(name: string, userId: string) {
+    const result = await this.fileTagModel
+      .findOne({
+        name: new RegExp(`^${escapeRegex(name.trim())}$`, 'i'),
+        userId,
+      })
+      .sort({ createdAt: 1, _id: 1 });
     return result?.toJSON() || null;
   }
 
@@ -151,21 +176,31 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
     }
   }
 
+  /**
+   * Upsert a tag by name, resolving to the casing the user already holds. The upsert filter matches
+   * the name exactly, so handing it a name the user holds in some other casing minted a second
+   * document folding to the same name - the pair the count aggregate reads as two buckets while the
+   * file-list filter and the row chips read as one. Folding here rather than at the caller keeps
+   * every caller safe by default; see findByFoldedNameAndUserId for the rule.
+   */
   async findOrCreateByNameAndUserId(
     name: string,
     userId: string,
     defaultData: Partial<IFileTag>,
     incrementFileCount: number = 0
   ) {
+    const held = await this.findByFoldedNameAndUserId(name, userId);
+    const upsertName = held?.name ?? name.trim();
     try {
       const result = await this.fileTagModel.findOneAndUpdate(
-        { name, userId },
+        { name: upsertName, userId },
         {
           $inc: { fileCount: incrementFileCount || 0 },
           $set: { lastActivityAt: new Date() },
           $setOnInsert: {
             ...defaultData,
-            name,
+            // Same value as the filter: two different ones would conflict on the insert path.
+            name: upsertName,
             userId,
             type: TagType.FILE,
             createdAt: new Date(),
@@ -185,7 +220,7 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
         // Duplicate key error, tag was created by another request
         // Try to increment the existing tag
         const result = await this.fileTagModel.findOneAndUpdate(
-          { name, userId },
+          { name: upsertName, userId },
           {
             $inc: { fileCount: incrementFileCount || 0 },
             $set: { lastActivityAt: new Date() },
