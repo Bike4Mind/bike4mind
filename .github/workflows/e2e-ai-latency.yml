@@ -152,17 +152,37 @@ jobs:
         id: discover
         env:
           API_URL: ${{ steps.config.outputs.api_url }}
-          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
-          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
+          # dev reads E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper below
+          # (same-account). Preview stacks live in a SEPARATE AWS account the dev role
+          # can't `sst shell` into, so for pr<N> runs we inject it directly from this repo
+          # secret (the stable value the deployer seeds onto every stage). It is the ONLY
+          # SST value the suite needs. Same pattern as e2e-run.yml / e2e-on-label.yml.
+          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+          # Sanitized upstream (pr<digits> or the `dev` choice input); safe to branch on.
+          STAGE: ${{ steps.config.outputs.stage }}
           E2E_TEST_ID: discover-models
           AI_LATENCY_RUN: 'true'
           PW_WORKERS: '1'
           CI: 'true'
         run: |
           set -o pipefail
-          pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- \
-            pnpm --filter client exec playwright test --project=ai-latency-discover e2e/ai-latency-discover.spec.ts \
-            2>&1 | tee apps/client/playwright-output.txt
+          case "$STAGE" in
+            pr[0-9]*)
+              # Preview (cross-account): use the injected repo secret, no sst shell.
+              if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
+                echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
+                exit 1
+              fi
+              pnpm --filter client exec playwright test --project=ai-latency-discover e2e/ai-latency-discover.spec.ts \
+                2>&1 | tee apps/client/playwright-output.txt
+              ;;
+            *)
+              # dev (same account): resolve the secret from SST.
+              pnpm sst shell --stage "$STAGE" -- \
+                pnpm --filter client exec playwright test --project=ai-latency-discover e2e/ai-latency-discover.spec.ts \
+                2>&1 | tee apps/client/playwright-output.txt
+              ;;
+          esac
 
           RESULT_FILE=apps/client/e2e/test-results/ai-latency/discovered-models.json
           if [ ! -f "$RESULT_FILE" ]; then
@@ -370,8 +390,14 @@ jobs:
         id: e2e
         env:
           API_URL: ${{ steps.config.outputs.api_url }}
-          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
-          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
+          # dev reads E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper below
+          # (same-account). Preview stacks live in a SEPARATE AWS account the dev role
+          # can't `sst shell` into, so for pr<N> runs we inject it directly from this repo
+          # secret (the stable value the deployer seeds onto every stage). It is the ONLY
+          # SST value the suite needs. Same pattern as e2e-run.yml / e2e-on-label.yml.
+          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+          # Sanitized upstream (pr<digits> or the `dev` choice input); safe to branch on.
+          STAGE: ${{ steps.config.outputs.stage }}
           E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
           AI_MODEL: ${{ matrix.ai_model }}
           AI_LATENCY_RUN: 'true'
@@ -379,9 +405,23 @@ jobs:
           CI: 'true'
         run: |
           set -o pipefail
-          pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- \
-            pnpm --filter client exec playwright test e2e/${{ matrix.spec_file }}.spec.ts \
-            2>&1 | tee apps/client/playwright-output.txt
+          case "$STAGE" in
+            pr[0-9]*)
+              # Preview (cross-account): use the injected repo secret, no sst shell.
+              if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
+                echo "::error::E2E_CLEANUP_SECRET repo secret is required for preview runs"
+                exit 1
+              fi
+              pnpm --filter client exec playwright test e2e/${{ matrix.spec_file }}.spec.ts \
+                2>&1 | tee apps/client/playwright-output.txt
+              ;;
+            *)
+              # dev (same account): resolve the secret from SST.
+              pnpm sst shell --stage "$STAGE" -- \
+                pnpm --filter client exec playwright test e2e/${{ matrix.spec_file }}.spec.ts \
+                2>&1 | tee apps/client/playwright-output.txt
+              ;;
+          esac
 
       - name: Persist test results
         if: always()
