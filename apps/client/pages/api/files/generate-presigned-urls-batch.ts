@@ -5,7 +5,6 @@ import {
   DATALAKE_TAG_PREFIX,
   DATALAKE_TAG_STRENGTH,
   KnowledgeType,
-  type IDataLakeBatchDocument,
   type IDataLakeBatchFile,
   type IDataLakeDocument,
 } from '@bike4mind/common';
@@ -56,37 +55,27 @@ const handler = baseApi().post(async (req: Request, res) => {
     db: { dataLakes: dataLakeRepository },
   });
 
+  // A meta-tag the client sent must name the lake this upload is joining, not merely some lake
+  // the caller may write to - which, for an admin, is all of them.
+  if (dataLake && clientMetaTags.length > 0) {
+    dataLakeService.assertMetaTagsMatchLake(dataLake, clientMetaTags);
+  }
+
   // Verify batch ownership before stamping/appending - batchId comes from the body,
   // so without this a user could inject files into another user's batch (IDOR).
-  let batch: IDataLakeBatchDocument | null = null;
   if (data.batchId) {
-    batch = await dataLakeBatchRepository.findById(data.batchId);
+    const batch = await dataLakeBatchRepository.findById(data.batchId);
     if (!batch || batch.userId !== userId) {
       throw new NotFoundError('Batch not found');
     }
-    // The batch was bound to a lake when it was created, so it is the authority on where its
-    // files belong: a `dataLakeSlug` resolving elsewhere is a stale client value, not a second
-    // target. Without this, a slug the client derived from the lake's NAME quietly files the
-    // upload into whichever lake holds that slug. Bad request, not a not-found: the caller has
-    // already been shown both objects exist and are theirs.
-    if (dataLake && batch.dataLakeId !== dataLake.id) {
-      throw new BadRequestError('This batch belongs to a different data lake');
-    }
-  }
-
-  // A meta-tag the client sent must name the lake this upload is joining, not merely a lake the
-  // caller may write to. The batch's own lake stands in when no lake reference was sent, since
-  // that request would otherwise be gated by the write check alone - which grants an admin every
-  // lake there is.
-  if (clientMetaTags.length > 0) {
-    // `.catch`: `dataLakeId` on an old batch row need not be a well-formed id, and a cast error
-    // here would be a 500 on what is really a refusal.
-    const joining = dataLake ?? (batch ? await dataLakeRepository.findById(batch.dataLakeId).catch(() => null) : null);
-    if (batch && !joining) {
-      throw new BadRequestError('Could not confirm which data lake this upload joins');
-    }
-    if (joining) {
-      dataLakeService.assertMetaTagsMatchLake(joining, clientMetaTags);
+    // Every batch is created for a lake (`dataLakeId` is required), and that binding is the
+    // authority on where its files belong. So the upload has to name that same lake: a reference
+    // resolving elsewhere is a stale client value rather than a second target - the shape that
+    // filed files into whichever lake happened to hold a name-derived slug - and no reference at
+    // all would land files in a lake's batch without joining them to the lake. Bad request, not
+    // a not-found: the caller has already been shown both objects exist and are theirs.
+    if (!dataLake || batch.dataLakeId !== dataLake.id) {
+      throw new BadRequestError('This upload must name the data lake its batch belongs to');
     }
   }
 

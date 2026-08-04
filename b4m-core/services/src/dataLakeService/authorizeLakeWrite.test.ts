@@ -96,6 +96,12 @@ describe('assertMetaTagsMatchLake - the tag must name the lake being written to'
     expect(() => assertMetaTagsMatchLake(LAKE, ['DataLake:OrgA:Acme-2026', 'acme:legal'])).not.toThrow();
   });
 
+  it("accepts its own tag when the LAKE's stored tag is the mixed-case side", () => {
+    // Nothing lowercases `datalakeTag` on the way into Mongo, so a row can hold mixed case; only
+    // folding the payload would refuse that lake its own tag.
+    expect(() => assertMetaTagsMatchLake({ datalakeTag: 'DataLake:OrgA:Acme-2026' }, [LAKE.datalakeTag])).not.toThrow();
+  });
+
   it('accepts a payload with no meta-tag at all', () => {
     expect(() => assertMetaTagsMatchLake(LAKE, [])).not.toThrow();
     expect(() => assertMetaTagsMatchLake(LAKE, ['acme:legal', null, 42])).not.toThrow();
