@@ -73,6 +73,8 @@ import {
   MetricIndicators,
   ModelSpeed,
   NEW_BADGE_BG,
+  SpecPill,
+  formatContextWindow,
   formatNumber,
 } from './modelIndicators';
 import MetadataChip from './MetaDataChips';
@@ -469,14 +471,6 @@ const formatTrainingCutoff = (cutoff: string): string => {
 // indicators on it rather than competing with a card's own controls.
 const INDICATOR_SIZE = 32;
 
-/** One read-only spec: muted label over the value. */
-const SpecBlock: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <Box sx={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-    <Typography sx={{ color: 'text.primary50', fontSize: '12px', lineHeight: 1.4 }}>{label}</Typography>
-    <Typography sx={{ color: 'text.primary', fontSize: '14px', fontWeight: 500, lineHeight: 1.4 }}>{value}</Typography>
-  </Box>
-);
-
 const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   modelInfo,
   model,
@@ -528,7 +522,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
         sx={{
           display: 'flex',
           alignItems: 'flex-start',
-          paddingBottom: 2,
           flexDirection: 'column',
         }}
       >
@@ -543,57 +536,63 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 color: brand[800],
                 fontSize: '14px',
                 fontWeight: '500',
-                mb: 2,
+                mt: '16px',
               }}
             >
               This model shares session content with OpenAI for training purposes
             </Typography>
           )}
 
-          {/* Read-only specs on the left, capability indicators anchored right. The editable
-              Input/Output controls live in the token allocation section below, so the numbers
-              here state the model's own limits. */}
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: 2,
-              mt: 2,
-            }}
-          >
-            <Stack direction="row" useFlexGap flexWrap="wrap" sx={{ gap: '24px' }}>
-              <SpecBlock label="Context window" value={formatNumber(modelInfo.contextWindow)} />
-              <SpecBlock label="Max output" value={formatNumber(modelInfo.max_tokens)} />
-              {modelInfo.trainingCutoff && (
-                <SpecBlock label="Knowledge cutoff" value={formatTrainingCutoff(modelInfo.trainingCutoff)} />
-              )}
-            </Stack>
+          {/* Specs then capabilities in one run. The editable Input/Output controls live in the
+              token allocation section below, so the numbers here state the model's own limits.
+              Indicators are the same components as the model list, so the glyphs carry over. */}
+          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center" sx={{ mt: 2 }}>
+            {modelInfo.trainingCutoff && (
+              <SpecPill
+                label="Cutoff"
+                value={formatTrainingCutoff(modelInfo.trainingCutoff)}
+                tooltip="Model knowledge cutoff - the model has no awareness of events after this date"
+                size={INDICATOR_SIZE}
+                filled
+              />
+            )}
+            {/* Abbreviated to match the cards; the tooltips carry the exact figures, which the
+                abbreviation cannot always represent (most values are powers of two). */}
+            <SpecPill
+              label="ctx"
+              value={formatContextWindow(modelInfo.contextWindow)}
+              tooltip={`${formatNumber(modelInfo.contextWindow)} token context window`}
+              size={INDICATOR_SIZE}
+              filled
+            />
+            <SpecPill
+              label="max"
+              value={formatContextWindow(modelInfo.max_tokens)}
+              tooltip={`${formatNumber(modelInfo.max_tokens)} maximum output tokens`}
+              size={INDICATOR_SIZE}
+              filled
+            />
 
-            {/* Same components as the model list, so the glyphs carry over from there */}
-            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
-              {modelInfo.disabled ? (
-                <MetadataChip
-                  label="Unavailable"
-                  mode={mode}
-                  variant="red"
-                  tooltip={modelInfo.disabledReason ?? 'This model is currently unavailable'}
+            {modelInfo.disabled ? (
+              <MetadataChip
+                label="Unavailable"
+                mode={mode}
+                variant="red"
+                tooltip={modelInfo.disabledReason ?? 'This model is currently unavailable'}
+              />
+            ) : (
+              <>
+                <MetricIndicators
+                  priceTier={priceTierInfo}
+                  modelSpeed={modelSpeed}
+                  statsLoading={metricsLoading}
+                  size={INDICATOR_SIZE}
+                  filled
                 />
-              ) : (
-                <>
-                  <MetricIndicators
-                    priceTier={priceTierInfo}
-                    modelSpeed={modelSpeed}
-                    statsLoading={metricsLoading}
-                    size={INDICATOR_SIZE}
-                    filled
-                  />
-                  <CapabilityIndicators model={modelInfo} size={INDICATOR_SIZE} filled />
-                </>
-              )}
-            </Stack>
-          </Box>
+                <CapabilityIndicators model={modelInfo} size={INDICATOR_SIZE} filled />
+              </>
+            )}
+          </Stack>
         </Box>
       </Box>
 
@@ -604,7 +603,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
           px: 4,
           height: '1px',
           mx: 'auto',
-          mb: 2,
+          my: '20px',
         }}
       />
 
@@ -2055,7 +2054,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 )}
               </Box>
 
-              <Box sx={{ mt: 2, mb: 2 }}>
+              <Box sx={{ mt: 2 }}>
                 {(() => {
                   const shown = detailsModel ?? modelInfo;
                   if (!shown) return null;

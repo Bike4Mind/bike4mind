@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Tooltip } from '@mui/joy';
+import { Box, Tooltip, Typography } from '@mui/joy';
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
 import ConstructionIcon from '@mui/icons-material/Construction';
 import SpeedIcon from '@mui/icons-material/Speed';
@@ -23,12 +23,20 @@ export type ModelSpeed = 'fast' | 'medium' | 'slow';
 
 export const formatNumber = (num: number): string => num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
-/** Compact form for scanning, e.g. "200K". */
+/**
+ * Compact form for scanning, e.g. "200K".
+ *
+ * Truncates rather than rounds, because these values are caps: rounding up told users they
+ * had headroom they did not have (32,768 read as "33K", 65,535 as "66K"). Understating a
+ * limit is safe, overstating it is not. Most catalog values are powers of two, so some
+ * precision loss is unavoidable at this length - the exact figure lives in the tooltip.
+ */
 export const formatContextWindow = (size: number): string => {
   if (size >= 1000000) {
-    return `${(size / 1000000).toFixed(1)}M`;
+    // Truncate to one decimal: floor at 100k granularity, then shift.
+    return `${(Math.floor(size / 100000) / 10).toFixed(1)}M`;
   } else if (size >= 1000) {
-    return `${Math.round(size / 1000)}K`;
+    return `${Math.floor(size / 1000)}K`;
   }
   return formatNumber(size);
 };
@@ -92,6 +100,18 @@ const DEFAULT_INDICATOR_SIZE = 24;
 const glyphPx = (size: number) => `${Math.round((size * 2) / 3)}px`;
 const thinkingGlyphPx = (size: number) => Math.round(size * 0.75);
 
+// One frame definition behind both the round icons and the text pills, so a row mixing them
+// reads as a single set rather than two visual grammars.
+const frameSx = (size: number, filled: boolean) => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  height: `${size}px`,
+  flex: 'none',
+  boxSizing: 'border-box' as const,
+  border: 'var(--joy-palette-aiSettings-modelCard-border)',
+  ...(filled && { backgroundColor: 'var(--joy-palette-aiSettings-modelCard-background)' }),
+});
+
 // Read-only indicator. The frame is what separates these from the star and settings icons
 // sitting beside them on a card - without it, informational glyphs read as pressable.
 export const MetricIcon = ({
@@ -104,7 +124,7 @@ export const MetricIcon = ({
   label: string;
   tooltip: string;
   size?: number;
-  /** Fills the circle with the model-card surface. Off on a card, where it would be invisible. */
+  /** Fills the frame with the model-card surface. Off on a card, where it would be invisible. */
   filled?: boolean;
   children: React.ReactNode;
 }) => (
@@ -113,19 +133,41 @@ export const MetricIcon = ({
       role="img"
       aria-label={label}
       sx={{
-        display: 'inline-flex',
-        alignItems: 'center',
+        ...frameSx(size, filled),
         justifyContent: 'center',
         width: `${size}px`,
-        height: `${size}px`,
-        flex: 'none',
-        boxSizing: 'border-box',
         borderRadius: '50%',
-        border: 'var(--joy-palette-aiSettings-modelCard-border)',
-        ...(filled && { backgroundColor: 'var(--joy-palette-aiSettings-modelCard-background)' }),
       }}
     >
       {children}
+    </Box>
+  </Tooltip>
+);
+
+/**
+ * A read-only spec as a pill: short inline label plus its value. Shares the icon frame's
+ * height, border and fill, so specs and capabilities sit in one row as one set. The label is
+ * abbreviated to fit inline - the tooltip carries the full phrasing.
+ */
+export const SpecPill: React.FC<{
+  label: string;
+  value: string;
+  tooltip: string;
+  size?: number;
+  filled?: boolean;
+}> = ({ label, value, tooltip, size = DEFAULT_INDICATOR_SIZE, filled = false }) => (
+  <Tooltip title={tooltip} placement="top">
+    <Box
+      sx={{
+        ...frameSx(size, filled),
+        gap: '4px',
+        px: '12px',
+        borderRadius: `${size / 2}px`,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <Typography sx={{ color: 'text.primary50', fontSize: '12px', lineHeight: 1 }}>{label}</Typography>
+      <Typography sx={{ color: 'text.primary', fontSize: '12px', fontWeight: 500, lineHeight: 1 }}>{value}</Typography>
     </Box>
   </Tooltip>
 );
