@@ -197,9 +197,9 @@ function assertNeverElisionSignal(signal: never): never {
  * Output budget used when a caller supplies no max_tokens. Within supported output
  * limits for every configured non-reasoning model; models that reason inside the
  * output budget default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since their
- * reasoning would otherwise consume this whole budget. Distinct from the catalog's
- * DEFAULT_MAX_OUTPUT_TOKENS, which fills in a model's *capability* when its record
- * omits one.
+ * reasoning would otherwise consume this whole budget (see reasonsWithinOutputBudget
+ * for which those are). Distinct from the catalog's DEFAULT_MAX_OUTPUT_TOKENS, which
+ * fills in a model's *capability* when its record omits one.
  */
 const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
 

@@ -74,8 +74,7 @@ describe('ElevenLabsMusicGenerator', () => {
     // reservation instead of refunding it, so assert the deadline actually elapses -
     // not merely that some AbortSignal was attached.
     await expect(generator.generate('drone')).rejects.toMatchObject({ name: 'TimeoutError' });
-  }, // disarms the signal fails fast instead of stalling the suite for the default 5s. // Short ceiling: the 20ms deadline should fire instantly, so a regression that
-  2_000);
+  }, 2_000); // disarms the signal fails fast instead of stalling the suite for the default 5s. // Short ceiling: the 20ms deadline should fire instantly, so a regression that
 
   it('arms the default deadline, and that deadline fits inside the serving function budget', async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');

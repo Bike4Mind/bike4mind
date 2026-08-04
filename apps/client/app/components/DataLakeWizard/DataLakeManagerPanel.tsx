@@ -64,6 +64,7 @@ import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
 import type { EditableLake } from './DataLakeSettingsModal';
 import type { IFabFileDocument } from '@bike4mind/common';
+import { satisfiesTagPrefix } from '@bike4mind/common';
 
 type ManagerLake = NonNullable<ReturnType<typeof useDataLakes>['data']>[number];
 
@@ -299,11 +300,19 @@ function ManagerNav({
   }, [currentNodes, searchQuery, sortBy]);
 
   // Files in the lake with no prefix-matching (non-meta) tag - surfaced under "Uncategorized".
+  // Shares the server's predicate so this bucket holds exactly the files the write doors and the
+  // backfill consider uncategorized; a local copy already drifted on the bare-prefix case.
   const uncategorizedFiles = useMemo(() => {
     if (!activeLake) return [];
     const prefix = normalizePrefix(activeLake.fileTagPrefix);
     return [...articles]
-      .filter(f => !(f.tags ?? []).some(t => t.name.startsWith(prefix) && !t.name.startsWith('datalake:')))
+      .filter(
+        f =>
+          !satisfiesTagPrefix(
+            (f.tags ?? []).map(t => t.name),
+            prefix
+          )
+      )
       .sort((a, b) => a.fileName.localeCompare(b.fileName));
   }, [articles, activeLake]);
 

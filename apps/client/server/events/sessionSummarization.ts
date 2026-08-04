@@ -48,6 +48,16 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
+  // Everything downstream keys off the session's owner: it is the conjunct that stops the
+  // summary-file lookup selecting someone else's document, and the owner createFabFile stamps.
+  // Mongoose drops an undefined value from a filter, so an owner-less session would silently
+  // restore the unscoped lookup - and the acting user comes from the event on the spider and
+  // agent-run paths, so the `!user` check below does not catch it.
+  if (!session.userId) {
+    logger.warn(`Session ${sessionId} has no owner; skipping summarization`);
+    return;
+  }
+
   const user = await User.findById(userId ?? session.userId);
   if (!user) {
     logger.error(`User not found`);
@@ -189,7 +199,12 @@ export const handler = withEventContext(async (event, logger) => {
   // entire summarization - the summary text is already saved on the session.
   try {
     await withTransaction(async () => {
-      const fabfile = await fabFileRepository.findOne({ sessionId: session.id });
+      // The owner conjunct is load-bearing: a sessionId is not an ownership claim (any user can
+      // stamp one on their own file via PUT /api/files/[id]) and updateFabFile below gates on
+      // findAccessibleById, which a read share satisfies. Without it, a file merely shared with
+      // the summarizing user gets its content and tags overwritten with this summary. A miss
+      // falls through to createFabFile - a duplicate beats clobbering someone else's file.
+      const fabfile = await fabFileRepository.findOne({ sessionId: session.id, userId: session.userId });
       if (fabfile) {
         // Re-summarizing must not change which data lakes this file belongs to. The tags here are
         // the SESSION's, which never carry a `datalake:` meta-tag, and a whole-array tag write

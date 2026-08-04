@@ -26,6 +26,10 @@ const lakeFiles = [
   { id: 'f2', fileName: 'peace.md', tags: [{ name: 'lk:genre:peace' }] },
   // No prefix-matching tag -> must surface under the Uncategorized bucket.
   { id: 'f3', fileName: 'loose.md', tags: [{ name: 'datalake:mine' }] },
+  // A BARE prefix is not a category anyone can navigate to, so the server counts this file as
+  // uncategorized and the backfill stamps it. This bucket has to agree, or the file is reachable
+  // from neither the tree nor here.
+  { id: 'f4', fileName: 'bare.md', tags: [{ name: 'datalake:mine' }, { name: 'lk:' }] },
 ];
 
 const useDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
@@ -215,6 +219,10 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     // The synthetic bucket is a leaf: f3 (tagged only datalake:mine) must be reachable here.
     expect(screen.getByTestId('datalake-manager-file-f3')).toHaveTextContent('loose');
     expect(screen.queryByTestId('datalake-manager-file-f1')).not.toBeInTheDocument();
+    // f4 carries `lk:` and nothing else under the prefix. A `startsWith`-only check counts that
+    // as categorized and drops it from the bucket, which is the drift this shares the server's
+    // predicate to avoid.
+    expect(screen.getByTestId('datalake-manager-file-f4')).toHaveTextContent('bare');
   });
 
   it('clears the search when entering a lake, so a root query cannot filter its categories', async () => {

@@ -1,7 +1,7 @@
-import type { IDataLakeRepository } from '@bike4mind/common';
-import { DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
+import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import { DATALAKE_TAG_PREFIX, normalizeTagPrefix, satisfiesTagPrefix } from '@bike4mind/common';
 import { extractDataLakeMetaTags } from './authorizeLakeWrite';
-import { findCollidingPrefixLakes } from './tagPrefixCollision';
+import { collidesWithRegistryPrefix, findCollidingPrefixLakes } from './tagPrefixCollision';
 
 /**
  * Suffix stamped under a lake's `fileTagPrefix` for a file no other tag under that prefix
@@ -45,27 +45,91 @@ export type DataLakeFallbackTagger = <T extends FileTag>(
   options?: ReconcileFallbackOptions
 ) => Promise<(T | FileTag)[]>;
 
-/**
- * Does any tag already place this file under `prefix`?
- *
- * Case-SENSITIVE on purpose, unlike the meta-tag match: the consumers that decide whether the
- * file shows up under the prefix - `buildOwnershipConditions` and the tag-count aggregates -
- * build their regexes with no `i` flag, so `Acme:legal` genuinely does not satisfy `acme:`
- * for them. Lowercasing here would skip the stamp on a file those queries still see as
- * uncategorized.
- *
- * A meta-tag never satisfies a prefix (the counters exclude `datalake:*` from the tree), and
- * neither does a bare `acme:` with no suffix: that splits to `['acme', '']` and renders as an
- * unlabeled row in the tag tree, so it is not a category a user can navigate to.
- */
 const satisfiesPrefix = (tags: readonly FileTag[], prefix: string): boolean =>
-  tags.some(
-    tag =>
-      typeof tag?.name === 'string' &&
-      tag.name.startsWith(prefix) &&
-      tag.name.length > prefix.length &&
-      !tag.name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)
+  satisfiesTagPrefix(
+    tags.map(tag => tag?.name),
+    prefix
   );
+
+/**
+ * Why a lake gets no automatic content tag, or the prefix to stamp under.
+ *
+ * `overlapCheckFailed` rides along with a PERMITTED decision rather than refusing, because the
+ * two callers want opposite directions and only they can choose. The write doors stamp anyway -
+ * a diagnostic lookup must never be the thing that fails a file write, and stamping is the
+ * pre-existing behavior. A bulk backfill refuses instead: it mints across every legacy row at
+ * once, so an unverified overlap there could hand a whole lake's files to another lake's
+ * teardown. See the migration that consumes this.
+ */
+export type LakeStampDecision =
+  | { stamp: true; prefix: string; overlapCheckFailed?: boolean }
+  | {
+      stamp: false;
+      reason: 'unusable-prefix' | 'reserved-namespace' | 'prefix-overlap' | 'registry-prefix-overlap';
+      detail?: string;
+    };
+
+type StampGateLake = Pick<IDataLakeDocument, 'id' | 'name' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId'>;
+
+/**
+ * The ONE gate on "may this lake have a content tag minted for it, and under what prefix".
+ *
+ * Shared by the write-door reconciler below and the one-shot backfill migration, so the tags a
+ * backfill writes are exactly the tags the live doors would have written. Re-deriving these
+ * conditions in the migration is the drift this exists to prevent.
+ */
+export const decideStampPrefix = async (
+  lake: StampGateLake,
+  { dataLakes, logger }: { dataLakes: Pick<IDataLakeRepository, 'find'>; logger?: LakeTagAdapters['logger'] }
+): Promise<LakeStampDecision> => {
+  // An unusable prefix is dropped by the read arms and by the removal path too, so a tag built
+  // on it would be invisible to every query and swept by nothing.
+  const prefix = normalizeTagPrefix(lake.fileTagPrefix);
+  if (!prefix) return { stamp: false, reason: 'unusable-prefix' };
+
+  if (reachesMetaNamespace(prefix)) {
+    logger?.warn?.(
+      `[dataLakes] not stamping a content tag for "${lake.name}": its prefix ${prefix} reaches the reserved ${DATALAKE_TAG_PREFIX} namespace`
+    );
+    return { stamp: false, reason: 'reserved-namespace' };
+  }
+
+  // A STATIC-registry prefix is worse than a colliding dynamic one, and invisible to the query
+  // below: the registry lakes have no Mongo rows. Their read arm is an intentional ownership
+  // BYPASS (`dataLakeTagPrefixes` in buildOwnershipConditions, no owner conjunct - a shared
+  // knowledge base), so minting under one would publish this file to every user who can reach
+  // that registry lake, whoever owns it. Create already refuses such a prefix, so only rows
+  // predating that check land here.
+  if (collidesWithRegistryPrefix(lake.fileTagPrefix)) {
+    logger?.warn?.(
+      `[dataLakes] not stamping a content tag for "${lake.name}": its prefix ${prefix} overlaps a built-in data lake, so the tag would expose this file to everyone with access to that lake`
+    );
+    return { stamp: false, reason: 'registry-prefix-overlap' };
+  }
+
+  // A prefix tag on a creator-owned file is full membership of any lake sharing that prefix,
+  // including that lake's permanent delete. Minting one automatically would put this file in
+  // another lake's teardown, so decline and say so.
+  try {
+    const clashes = await findCollidingPrefixLakes({ dataLakes }, lake.fileTagPrefix, {
+      createdByUserId: lake.createdByUserId,
+      organizationId: lake.organizationId,
+      excludeLakeId: lake.id,
+    });
+    if (clashes.length > 0) {
+      const detail = clashes.map(l => `"${l.name}" (${l.fileTagPrefix})`).join(', ');
+      logger?.warn?.(
+        `[dataLakes] not stamping a content tag for "${lake.name}": its prefix ${prefix} overlaps ${detail}, so the tag would grant those lakes membership of this file`
+      );
+      return { stamp: false, reason: 'prefix-overlap', detail };
+    }
+  } catch (err) {
+    logger?.warn?.(`[dataLakes] could not check tag-prefix overlap for "${lake.name}"`, err);
+    return { stamp: true, prefix, overlapCheckFailed: true };
+  }
+
+  return { stamp: true, prefix };
+};
 
 /**
  * Reconcile a file's tag list against the data lakes it belongs to, enforcing one invariant:
@@ -101,7 +165,8 @@ const satisfiesPrefix = (tags: readonly FileTag[], prefix: string): boolean =>
  * on a creator-owned file IS lake membership - it counts toward the other lake's stats, its
  * archive sweep, and its permanent delete - so auto-minting under a shared prefix would hand one
  * lake's file to another lake's teardown. Create-time collision checks reject new overlaps, so
- * this only fires for rows predating them.
+ * this only fires for rows predating them. Both live in `decideStampPrefix`, shared with the
+ * backfill migration so the two cannot decide differently about the same lake.
  */
 export const createDataLakeFallbackTagger = ({ db, logger }: LakeTagAdapters): DataLakeFallbackTagger => {
   const lakeCache = new Map<string, Promise<{ prefix: string } | null>>();
@@ -120,41 +185,11 @@ export const createDataLakeFallbackTagger = ({ db, logger }: LakeTagAdapters): D
       // here. Skip rather than throw: a rename must not 400 over a tag it never touched.
       if (!lake) return null;
 
-      // An unusable prefix is dropped by the read arms and by the removal path too, so a tag built
-      // on it would be invisible to every query and swept by nothing.
-      const prefix = normalizeTagPrefix(lake.fileTagPrefix);
-      if (!prefix) return null;
-
-      if (reachesMetaNamespace(prefix)) {
-        logger?.warn?.(
-          `[dataLakes] not stamping a content tag for "${lake.name}": its prefix ${prefix} reaches the reserved ${DATALAKE_TAG_PREFIX} namespace`
-        );
-        return null;
-      }
-
-      // A prefix tag on a creator-owned file is full membership of any lake sharing that prefix,
-      // including that lake's permanent delete. Minting one automatically would put this file in
-      // another lake's teardown, so decline and say so. Best-effort: a failed overlap lookup must
-      // not fail the write, and stamping is the pre-existing behavior it falls back to.
-      try {
-        const clashes = await findCollidingPrefixLakes({ dataLakes: db.dataLakes }, lake.fileTagPrefix, {
-          createdByUserId: lake.createdByUserId,
-          organizationId: lake.organizationId,
-          excludeLakeId: lake.id,
-        });
-        if (clashes.length > 0) {
-          logger?.warn?.(
-            `[dataLakes] not stamping a content tag for "${lake.name}": its prefix ${prefix} overlaps ${clashes
-              .map(l => `"${l.name}" (${l.fileTagPrefix})`)
-              .join(', ')}, so the tag would grant those lakes membership of this file`
-          );
-          return null;
-        }
-      } catch (err) {
-        logger?.warn?.(`[dataLakes] could not check tag-prefix overlap for "${lake.name}"`, err);
-      }
-
-      return { prefix };
+      // Fail-OPEN on a failed overlap lookup is this door's choice, not the gate's: a diagnostic
+      // must never be the thing that fails a file write, and stamping is the pre-existing
+      // behavior it falls back to. The backfill migration reads the same flag and refuses.
+      const decision = await decideStampPrefix(lake, { dataLakes: db.dataLakes, logger });
+      return decision.stamp ? { prefix: decision.prefix } : null;
     });
     lakeCache.set(metaTag, pending);
     return pending;
