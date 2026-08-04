@@ -37,6 +37,9 @@ export function useDeleteAllFiles(options: { onSuccess?: () => void } = {}) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      // Deleting all files zeroes every tag's file count - invalidate so the tag browser
+      // doesn't keep showing stale counts (matches useDeleteFile/useBulkDeleteFiles below).
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       // The composer's pending-attachment chips are a denormalized Zustand snapshot, not
       // backed by the fabFiles query cache, so invalidation above doesn't reach them - clear
       // them explicitly or they keep rendering chips for now-deleted files (see #1279).

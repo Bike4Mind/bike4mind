@@ -124,6 +124,27 @@ describe('useDeleteAllFiles', () => {
     expect(apiDelete).toHaveBeenCalledWith('/api/files');
     expect(useSessionLayout.getState().pendingMessageFiles).toEqual([]);
   });
+
+  // Deleting all files zeroes every tag's file count, so the tag browser's cached counts go
+  // stale the same way useDeleteFile/useBulkDeleteFiles already guard against.
+  it('invalidates file-tags so per-tag counts do not go stale', async () => {
+    apiDelete.mockResolvedValue({});
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const Wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    Wrapper.displayName = 'TestQueryClientWrapper';
+
+    const { result } = renderHook(() => useDeleteAllFiles(), { wrapper: Wrapper });
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey: unknown[] })?.queryKey));
+    expect(keys).toContain(JSON.stringify(['file-tags']));
+  });
 });
 
 describe('useUpdateFabFile', () => {
