@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { assertCanWriteDataLakeTags, canManageLake, extractDataLakeMetaTags } from './authorizeLakeWrite';
+import {
+  assertCanWriteDataLakeTags,
+  assertMetaTagsMatchLake,
+  canManageLake,
+  extractDataLakeMetaTags,
+} from './authorizeLakeWrite';
 
 const LAKE = {
   id: 'lake-1',
@@ -75,6 +80,31 @@ describe('assertCanWriteDataLakeTags - the same rule at the write gate', () => {
     await assertCanWriteDataLakeTags({ userId: 'file-owner', isAdmin: false }, ['notes', 'acme:q1'], adapters as never);
 
     expect(adapters.db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+});
+
+describe('assertMetaTagsMatchLake - the tag must name the lake being written to', () => {
+  const MISMATCH = 'A data lake tag on these files names a different data lake';
+
+  it('rejects a meta-tag for another lake, even one the caller may write to', () => {
+    // The write gate passes this actor for both lakes (admin), so the disagreement itself is
+    // the only thing left to catch it.
+    expect(() => assertMetaTagsMatchLake(LAKE, ['datalake:orgb:other-lake'])).toThrow(MISMATCH);
+  });
+
+  it('accepts the lake own tag whatever case it arrives in', () => {
+    expect(() => assertMetaTagsMatchLake(LAKE, ['DataLake:OrgA:Acme-2026', 'acme:legal'])).not.toThrow();
+  });
+
+  it('accepts a payload with no meta-tag at all', () => {
+    expect(() => assertMetaTagsMatchLake(LAKE, [])).not.toThrow();
+    expect(() => assertMetaTagsMatchLake(LAKE, ['acme:legal', null, 42])).not.toThrow();
+  });
+
+  it('refuses every meta-tag when the lake has no tag of its own', () => {
+    expect(() => assertMetaTagsMatchLake({ datalakeTag: undefined as unknown as string }, [LAKE.datalakeTag])).toThrow(
+      MISMATCH
+    );
   });
 });
 

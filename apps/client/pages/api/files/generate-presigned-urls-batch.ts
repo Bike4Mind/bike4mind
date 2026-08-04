@@ -5,6 +5,7 @@ import {
   DATALAKE_TAG_PREFIX,
   DATALAKE_TAG_STRENGTH,
   KnowledgeType,
+  type IDataLakeBatchDocument,
   type IDataLakeBatchFile,
   type IDataLakeDocument,
 } from '@bike4mind/common';
@@ -57,8 +58,9 @@ const handler = baseApi().post(async (req: Request, res) => {
 
   // Verify batch ownership before stamping/appending - batchId comes from the body,
   // so without this a user could inject files into another user's batch (IDOR).
+  let batch: IDataLakeBatchDocument | null = null;
   if (data.batchId) {
-    const batch = await dataLakeBatchRepository.findById(data.batchId);
+    batch = await dataLakeBatchRepository.findById(data.batchId);
     if (!batch || batch.userId !== userId) {
       throw new NotFoundError('Batch not found');
     }
@@ -69,6 +71,17 @@ const handler = baseApi().post(async (req: Request, res) => {
     // already been shown both objects exist and are theirs.
     if (dataLake && batch.dataLakeId !== dataLake.id) {
       throw new BadRequestError('This batch belongs to a different data lake');
+    }
+  }
+
+  // A meta-tag the client sent must name the lake this upload is joining, not merely a lake the
+  // caller may write to. The batch's own lake stands in when no lake reference was sent, since
+  // that request would otherwise be gated by the write check alone - which grants an admin every
+  // lake there is.
+  if (clientMetaTags.length > 0) {
+    const joining = dataLake ?? (batch ? await dataLakeRepository.findById(batch.dataLakeId) : null);
+    if (joining) {
+      dataLakeService.assertMetaTagsMatchLake(joining, clientMetaTags);
     }
   }
 

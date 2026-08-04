@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   assertLakeWriteAccess: vi.fn(),
   findByDatalakeTag: vi.fn(),
+  lakeFindById: vi.fn(),
   getSettingsValue: vi.fn(),
   batchFindById: vi.fn(),
   appendFiles: vi.fn(),
@@ -41,7 +42,7 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   dataLakeBatchRepository: { findById: h.batchFindById, appendFiles: h.appendFiles },
-  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
+  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, findById: h.lakeFindById },
 }));
 
 // Partial: only the lake-authorization collaborators are stubbed. The fallback tagger is the
@@ -212,12 +213,13 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
   });
 });
 
-describe('POST /api/files/generate-presigned-urls-batch - batch/lake binding', () => {
+describe('POST /api/files/generate-presigned-urls-batch - lake targeting', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.getSettingsValue.mockResolvedValue(true);
     h.assertLakeWriteAccess.mockResolvedValue(LAKE);
     h.findByDatalakeTag.mockResolvedValue(LAKE);
+    h.lakeFindById.mockResolvedValue(LAKE);
     h.createFabFile.mockImplementation(async () => ({ id: `f${h.createFabFile.mock.calls.length}` }));
     h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: LAKE.id });
     h.appendFiles.mockResolvedValue(null);
@@ -261,5 +263,31 @@ describe('POST /api/files/generate-presigned-urls-batch - batch/lake binding', (
 
     expect(h.createFabFile).toHaveBeenCalledTimes(1);
     expect(h.assertLakeWriteAccess).not.toHaveBeenCalled();
+  });
+
+  it('rejects a client meta-tag that names a lake other than the one being joined', async () => {
+    const { res } = makeRes();
+
+    await expect(
+      run(
+        {
+          files: [file({ tags: [{ name: 'datalake:orgb:other-lake', strength: 1 }] })],
+          dataLakeSlug: 'acme-2026',
+        },
+        res
+      )
+    ).rejects.toThrow(/names a different data lake/);
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it("holds a client meta-tag against the batch's lake when no lake reference was sent", async () => {
+    // The write gate alone lets this through for an admin, who may write into any lake.
+    const { res } = makeRes();
+
+    await expect(
+      run({ files: [file({ tags: [{ name: 'datalake:orgb:other-lake', strength: 1 }] })], batchId: 'b1' }, res)
+    ).rejects.toThrow(/names a different data lake/);
+    expect(h.lakeFindById).toHaveBeenCalledWith(LAKE.id);
+    expect(h.createFabFile).not.toHaveBeenCalled();
   });
 });

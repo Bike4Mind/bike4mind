@@ -79,6 +79,27 @@ export const extractDataLakeMetaTags = (tagNames: readonly unknown[]): string[] 
  * the caller can't manage, is rejected - this is the check that stops a read-only member from
  * injecting a file into a lake they don't own, mirroring the creator check on the remove path.
  */
+/**
+ * Assert that every `datalake:*` meta-tag in a payload names `lake` - the lake this request has
+ * already resolved and authorized. `assertCanWriteDataLakeTags` answers "may you write there",
+ * not "is that where these files are going", so a caller who can manage two lakes (any two, for
+ * an admin) can otherwise hand one lake's upload the other lake's meta-tag.
+ *
+ * Both sides folded: `datalakeTag` is canonically lowercase but has no setter enforcing it, and
+ * an identical tag must still be recognized as identical rather than refused.
+ */
+export const assertMetaTagsMatchLake = (
+  lake: Pick<IDataLakeDocument, 'datalakeTag'>,
+  tagNames: readonly unknown[]
+): void => {
+  const expected = lake.datalakeTag?.toLowerCase();
+  for (const tag of extractDataLakeMetaTags(tagNames)) {
+    if (tag !== expected) {
+      throw new BadRequestError('A data lake tag on these files names a different data lake');
+    }
+  }
+};
+
 export const assertCanWriteDataLakeTags = async (
   actor: ManageActor,
   tagNames: readonly unknown[],
