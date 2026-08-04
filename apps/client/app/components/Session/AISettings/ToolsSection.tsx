@@ -662,25 +662,6 @@ const ToolsSection = ({
         </Box>
       )}
 
-      {/* Modal embed (no header) keeps a descriptor + inline help; the dropdown drops
-          it in favor of the header's help button. */}
-      {!onClose && (
-        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-          <Typography
-            level="body-xs"
-            sx={{ color: 'text.primary50', flex: 1, lineHeight: 1.3 }}
-            data-testid="smart-tools-descriptor"
-          >
-            Enable tools the AI can use during this conversation.
-          </Typography>
-          <ContextHelpButton
-            helpId="features/smart-tools"
-            tooltipText="Learn about Smart Tools"
-            data-testid="help-button-smart-tools"
-          />
-        </Box>
-      )}
-
       {/* Smart tools master switch. On = Smart (enabled tools + prompt-based auto-recommend),
           Off = Fast (no tools). No surface2 frame so it reads as a master control, not a tool.
           The description gains a second line only when there's non-obvious context to add
@@ -688,8 +669,7 @@ const ToolsSection = ({
       <Box
         sx={{
           display: 'flex',
-          // Center the toggle against the multi-line text on desktop; keep it top-aligned on mobile.
-          alignItems: { xs: 'flex-start', sm: 'center' },
+          alignItems: 'flex-start',
           justifyContent: 'space-between',
           gap: '24px',
           mb: '20px',
@@ -698,29 +678,36 @@ const ToolsSection = ({
         }}
       >
         <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-          <Typography level="body-sm" sx={{ color: 'text.primary', lineHeight: 1.2, mb: 0.5, fontWeight: 600 }}>
-            Smart tools
-          </Typography>
+          {/* Title, help button and description match the model title/description in the
+              settings dialog header. The dropdown skips the help button - its own header
+              already carries one. */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', mb: '4px' }}>
+            <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>Smart tools</Typography>
+            {!onClose && (
+              <ContextHelpButton
+                helpId="features/smart-tools"
+                tooltipText="Learn about Smart Tools"
+                size="sm"
+                sx={HEADER_ICON_BUTTON_SX}
+                data-testid="help-button-smart-tools"
+              />
+            )}
+          </Box>
           {toolMode === 'fast' ? (
             <>
               <Typography
-                level="body-xs"
                 data-testid="tool-mode-caption-fast"
-                sx={{ color: 'primary.500', fontSize: '0.7rem', lineHeight: 1.3 }}
+                sx={{ color: 'primary.500', fontSize: '14px', lineHeight: '1.4' }}
               >
                 No tools are currently used. AI replies are as quick as possible.
               </Typography>
-              <Typography
-                level="body-xs"
-                sx={{ color: 'text.primary50', fontSize: '0.7rem', lineHeight: 1.3, mt: 0.25 }}
-              >
+              <Typography sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4', mt: '4px' }}>
                 Turn on Smart tools to let the AI use your enabled tools.
               </Typography>
             </>
           ) : (
             <Typography
-              level="body-xs"
-              sx={{ color: 'text.primary50', fontSize: '0.7rem', lineHeight: 1.3 }}
+              sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4' }}
               data-testid={agentModeNote ? 'tool-mode-caption-smart' : undefined}
             >
               AI uses enabled tools as needed. Turn off for the fastest reply.
@@ -733,11 +720,18 @@ const ToolsSection = ({
             </Typography>
           )}
         </Box>
-        <SquareSlideToggle
-          onChange={() => setLLM({ toolMode: toolMode === 'smart' ? 'fast' : 'smart' })}
-          checked={toolMode === 'smart'}
-          data-testid="tool-mode-toggle"
-        />
+        {/* Mirrors the Research Mode toggle. flexShrink keeps the label and control intact so
+            a long description wraps instead of squeezing them. */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+          <Typography level="title-sm" sx={{ fontWeight: 'normal', fontSize: '14px', textAlign: 'right' }}>
+            Enable
+          </Typography>
+          <SquareSlideToggle
+            onChange={() => setLLM({ toolMode: toolMode === 'smart' ? 'fast' : 'smart' })}
+            checked={toolMode === 'smart'}
+            data-testid="tool-mode-toggle"
+          />
+        </Box>
       </Box>
 
       {/* Collapsible individual tools header (default expanded; collapse state persisted per-user) */}

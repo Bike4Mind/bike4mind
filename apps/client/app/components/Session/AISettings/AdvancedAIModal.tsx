@@ -603,7 +603,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
           px: 4,
           height: '1px',
           mx: 'auto',
-          my: '20px',
+          my: '28px',
         }}
       />
 
@@ -621,7 +621,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
           width: '100%',
           height: '1px',
           mx: 'auto',
-          my: 4,
+          my: '28px',
         }}
       />
 
@@ -759,7 +759,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
           width: '100%',
           height: '1px',
           mx: 'auto',
-          my: 4,
+          my: '28px',
         }}
       />
 
