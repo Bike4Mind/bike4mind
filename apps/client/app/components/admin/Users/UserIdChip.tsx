@@ -2,6 +2,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { Chip, Tooltip } from '@mui/joy';
 import React, { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 
 interface UserIdChipProps {
   userId: string;
@@ -23,7 +24,10 @@ const UserIdChip: React.FC<UserIdChipProps> = ({ userId }) => {
       clearTimeout(resetTimer.current);
       resetTimer.current = setTimeout(() => setCopied(false), 1500);
     } catch (err) {
+      // Rejects on an insecure origin or a denied permission; without this the chip is
+      // indistinguishable from a dead click.
       console.error('Failed to copy user id:', err);
+      toast.error('Could not copy the user id.');
     }
   };
 

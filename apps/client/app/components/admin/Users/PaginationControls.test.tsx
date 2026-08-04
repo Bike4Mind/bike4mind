@@ -48,6 +48,22 @@ describe('PaginationControls', () => {
     expect(screen.getByTestId('admin-page-size-select')).toHaveTextContent('10 / page');
   });
 
+  it('omits the total until the first response lands', () => {
+    // totalPages is 0 before data arrives; "Page 1 of 0" reads as an empty result set.
+    const { unmount } = render(<PaginationControls {...baseProps} currentPage={1} totalPages={0} variant="full" />, {
+      wrapper: TestWrapper,
+    });
+    expect(screen.getByText('Page 1')).toBeInTheDocument();
+    expect(screen.queryByText(/of 0/)).not.toBeInTheDocument();
+    unmount();
+
+    render(<PaginationControls {...baseProps} currentPage={1} totalPages={0} variant="compact" />, {
+      wrapper: TestWrapper,
+    });
+    expect(screen.getByText('1')).toBeInTheDocument();
+    expect(screen.queryByText(/of 0/)).not.toBeInTheDocument();
+  });
+
   it('disables the pager at both ends of the range', () => {
     const { unmount } = render(<PaginationControls {...baseProps} currentPage={1} variant="compact" />, {
       wrapper: TestWrapper,

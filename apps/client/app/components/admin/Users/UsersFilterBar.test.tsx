@@ -67,6 +67,11 @@ describe('UsersFilterBar', () => {
     render(<UsersFilterBar {...baseProps} />, { wrapper: TestWrapper });
 
     expect(screen.getByTestId('admin-users-filter-toggle')).toBeInTheDocument();
+    // Icon-only buttons need a real accessible name; Tooltip only sets aria-describedby.
+    expect(screen.getByLabelText('Open filters')).toBeInTheDocument();
+    expect(screen.getByLabelText('Create user')).toBeInTheDocument();
+    expect(screen.getByLabelText('Refresh users')).toBeInTheDocument();
+    expect(screen.getByLabelText('Download users CSV')).toBeInTheDocument();
     // The drawer owns these on mobile; rendering them here too would duplicate the testids.
     expect(screen.queryByTestId('admin-org-filter-btn')).not.toBeInTheDocument();
     expect(screen.queryByTestId('admin-sort-order-btn')).not.toBeInTheDocument();

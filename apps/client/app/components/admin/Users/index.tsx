@@ -160,7 +160,10 @@ const UsersTab: React.FC = () => {
         />
       </Box>
 
-      <MobileFiltersDrawer open={filtersDrawerOpen} onClose={() => setFiltersDrawerOpen(false)} loading={loading} />
+      {/* Mobile-only: nothing opens this on desktop, since the filter toggle is mobile-only. */}
+      {isMobile && (
+        <MobileFiltersDrawer open={filtersDrawerOpen} onClose={() => setFiltersDrawerOpen(false)} loading={loading} />
+      )}
 
       {/* Place all modals in one area */}
       <AdminProfileModal />

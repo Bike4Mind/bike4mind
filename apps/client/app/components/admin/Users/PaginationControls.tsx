@@ -26,6 +26,8 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
   variant = 'full',
 }) => {
   const isCompact = variant === 'compact';
+  // totalPages is 0 until the first response lands; "of 0" would read as an empty result set.
+  const pageLabel = totalPages > 0 ? `${currentPage} of ${totalPages}` : `${currentPage}`;
 
   const pager = (
     <Stack direction="row" spacing={0.5} alignItems="center">
@@ -40,7 +42,7 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
         <ChevronLeftIcon />
       </IconButton>
       <Typography level="body-sm" sx={{ px: 0.5, whiteSpace: 'nowrap' }}>
-        {isCompact ? `${currentPage} of ${totalPages}` : `Page ${currentPage} of ${totalPages}`}
+        {isCompact ? pageLabel : `Page ${pageLabel}`}
       </Typography>
       <IconButton
         size="sm"

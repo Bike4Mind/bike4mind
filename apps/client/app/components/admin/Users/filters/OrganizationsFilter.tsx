@@ -26,7 +26,10 @@ const OrganizationsFilter: React.FC<OrganizationsFilterProps> = ({ disabled, ful
 
   const toggleOrganization = (orgName: string) => {
     if (orgName === 'all') {
-      setParams({ orgSearch: selected.includes('all') ? [] : ['all'], page: 1 });
+      // "All" only ever selects: an empty orgSearch is reset straight back to ['all'] by the
+      // effect in ../index.tsx, so an un-toggle branch here would be dead code. Keep the two in
+      // sync if that reset ever changes.
+      setParams({ orgSearch: ['all'], page: 1 });
       return;
     }
 

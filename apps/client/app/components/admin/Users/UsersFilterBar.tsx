@@ -132,6 +132,8 @@ const UsersFilterBar: React.FC<UsersFilterBarProps> = ({
       <Tooltip title="Create User">
         <IconButton
           data-testid="admin-create-user-btn"
+          // Tooltip only sets aria-describedby, so icon-only buttons still need their own name.
+          aria-label="Create user"
           size="sm"
           variant="solid"
           color="primary"
@@ -146,6 +148,7 @@ const UsersFilterBar: React.FC<UsersFilterBarProps> = ({
     <Tooltip title="Refresh">
       <IconButton
         data-testid="admin-refresh-btn"
+        aria-label="Refresh users"
         size="sm"
         variant="outlined"
         color="neutral"
@@ -161,6 +164,7 @@ const UsersFilterBar: React.FC<UsersFilterBarProps> = ({
     <Tooltip title="Download CSV">
       <IconButton
         data-testid="admin-download-csv-btn"
+        aria-label="Download users CSV"
         size="sm"
         variant="outlined"
         color="neutral"
@@ -190,6 +194,7 @@ const UsersFilterBar: React.FC<UsersFilterBarProps> = ({
           {viewModeSelect}
           <IconButton
             data-testid="admin-users-filter-toggle"
+            aria-label="Open filters"
             size="sm"
             variant={activeFilterCount > 0 ? 'soft' : 'outlined'}
             color={activeFilterCount > 0 ? 'primary' : 'neutral'}
