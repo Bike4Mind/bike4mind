@@ -12,7 +12,7 @@ import {
   TOOL_RESULT_NOT_RECORDED,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
-import { DEFAULT_HISTORY_FETCH_LIMIT, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
+import { DEFAULT_HISTORY_FETCH_LIMIT, FORMAT_PROMPT_TEMPLATE, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
 import type { IMessage, ISessionDocument } from '@bike4mind/common';
 
 // Define ITokenizer type locally since it's in @bike4mind/utils
@@ -2632,17 +2632,11 @@ describe('unusable attachments are judged one at a time', () => {
   });
 });
 
-describe('includeHardcodedSystemMessage - format prompt scoping (#1320)', () => {
-  it('prepends the built-in scoped default when no template is stored', () => {
-    const result = includeHardcodedSystemMessage([], '');
-    expect(result).toHaveLength(1);
-    expect(result[0].role).toBe('system');
-    // The scope guard is the load-bearing part of the fix: the previous wording read as a
-    // general compliance instruction and degraded refusal behavior on underspecified asks.
-    expect(result[0].content as string).toMatch(
-      /^Formatting only - nothing here decides whether or how fully to answer/
-    );
-    expect(result[0].content as string).not.toContain('Adhere to specific formatting requests');
+describe('includeHardcodedSystemMessage - format prompt scoping', () => {
+  it('prepends the shared default when no template is stored', () => {
+    const result = includeHardcodedSystemMessage([{ role: 'user', content: 'hi' }], '');
+    expect(result[0]).toEqual({ role: 'system', content: FORMAT_PROMPT_TEMPLATE });
+    expect(result[1]).toEqual({ role: 'user', content: 'hi' });
   });
 
   it('uses the stored template verbatim when provided, prepended ahead of existing messages', () => {
@@ -2651,6 +2645,13 @@ describe('includeHardcodedSystemMessage - format prompt scoping (#1320)', () => 
     expect(result).toHaveLength(2);
     expect(result[0]).toEqual({ role: 'system', content: 'Custom template.' });
     expect(result[1]).toEqual(existing[0]);
+  });
+
+  it('keeps the default scoped to formatting so it cannot bleed into whether to answer', () => {
+    // The prior wording ("Adhere to specific formatting requests...") read as general compliance
+    // and roughly halved refusal quality when it was the only system content.
+    expect(FORMAT_PROMPT_TEMPLATE).toMatch(/^Formatting only - nothing here decides whether or how fully to answer/);
+    expect(FORMAT_PROMPT_TEMPLATE).not.toMatch(/adhere to/i);
   });
 });
 
@@ -2750,7 +2751,13 @@ describe('buildAndSortMessages - image prompt threading', () => {
   // availability says, so a raw-mode turn must not carry it even with the tool attached.
   it('injects nothing when the admin templates are skipped, even with the tool available', async () => {
     expect(
-      hasImagePrompt(await buildWithOptions({ verbose: false, imageGenerationAvailable: true, skipAdminPromptTemplates: true } as any))
+      hasImagePrompt(
+        await buildWithOptions({
+          verbose: false,
+          imageGenerationAvailable: true,
+          skipAdminPromptTemplates: true,
+        } as any)
+      )
     ).toBe(false);
   });
 });

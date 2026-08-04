@@ -1,6 +1,7 @@
 import {
   dayjs,
   extractSnippetMeta,
+  FORMAT_PROMPT_TEMPLATE,
   ICacheRepository,
   IChatHistoryItemRepository,
   IExtendedMessage,
@@ -1505,21 +1506,17 @@ export async function processFabFilesServer(
   return { userMessages, errorMessages };
 }
 
+/**
+ * Prepends the formatting system message. `formatPrompt` is the admin-editable
+ * `FormatPromptTemplate` value; blank falls back to FORMAT_PROMPT_TEMPLATE, the shared default this
+ * used to duplicate inline. That older inline wording ("Adhere to specific formatting requests...")
+ * read as general compliance and bled into whether the model answered at all - see the const's
+ * comment in @bike4mind/common schemas/settings.
+ */
 export function includeHardcodedSystemMessage(messages: IMessage[], formatPrompt: string): IMessage[] {
-  // Scoped to formatting ONLY. The previous wording ("Adhere to specific formatting
-  // requests...") read as a general compliance instruction and measurably degraded
-  // refusal behavior on underspecified asks (#1320: 81.1 -> 40.3 as the sole system
-  // content). Same failure shape as the artifact prompt's pre-SCOPE wording (#1296):
-  // any instruction that sounds like "comply with requests" bleeds into WHETHER to
-  // answer, not just how to format. Keep any future edit inside that boundary.
-  let format = `Formatting only - nothing here decides whether or how fully to answer. Format replies to maintain the integrity of the requested style; default to markdown for text. Preserve proper structure for poems, songs, or haikus. When the user specifies an output format (e.g. TypeScript), use that format for the parts you do answer.`;
-  if (formatPrompt) {
-    format = formatPrompt;
-  }
-
   const hardcodedSystemMessage: IMessage = {
     role: 'system',
-    content: format,
+    content: formatPrompt || FORMAT_PROMPT_TEMPLATE,
   };
 
   return [hardcodedSystemMessage, ...messages];

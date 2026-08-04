@@ -144,6 +144,7 @@ import {
   mapMimeTypeToArtifactType,
   ARTIFACT_EMISSION_PROMPT,
   HELP_CENTER_PROMPT,
+  ABSTENTION_PROMPT,
   ELISION_WARNING,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
@@ -2012,6 +2013,19 @@ export class ChatCompletionProcess {
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
         // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).
         helpCenter: isLocalModel ? [] : [{ role: 'system' as const, content: helpCenterContent }],
+        // Abstention licence. Counterweight to the completeness pressure the rest of the prompt
+        // applies - without it the model treats "answer fully" as unconditional and invents
+        // specifics about the user or their data rather than naming the gap. Ships on every
+        // in-app completion (not just the grounded surfaces) because that is where the pressure
+        // is; a promptMode strips it like any other prompt we author. Admin-editable via
+        // `AbstentionPrompt`; a blank value falls back to the built-in default so the licence can
+        // never be silently stripped.
+        abstention: [
+          {
+            role: 'system' as const,
+            content: getSettingsValue('AbstentionPrompt', defaultAdminSettings, ABSTENTION_PROMPT),
+          },
+        ],
         // Inject view registry summary when the navigate_view tool reached the model
         viewRegistry: navigateViewAvailable
           ? [

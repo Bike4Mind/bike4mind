@@ -25,6 +25,7 @@ export type PromptSourceId =
   | 'extraContext'
   | 'artifactEmission'
   | 'helpCenter'
+  | 'abstention'
   | 'viewRegistry'
   | 'toolPrompt'
   | 'agentDetection'
@@ -50,6 +51,7 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'extraContext',
   'artifactEmission',
   'helpCenter',
+  'abstention',
   'viewRegistry',
   'toolPrompt',
   'agentDetection',
@@ -168,6 +170,7 @@ export const PROMPT_SOURCE_METADATA: Record<
   extraContext: { origin: 'user', name: 'extra_context' },
   artifactEmission: { origin: 'admin', name: 'artifact_emission' },
   helpCenter: { origin: 'admin', name: 'help_center' },
+  abstention: { origin: 'admin', name: 'abstention' },
   viewRegistry: { origin: 'hardcoded', name: 'view_registry' },
   toolPrompt: { origin: 'admin', name: 'tool_guidance' },
   agentDetection: { origin: 'hardcoded', name: 'agent_detection' },
