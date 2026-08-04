@@ -252,6 +252,17 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     fabFileIds: string[],
     options?: { limit?: number; afterChunkId?: string }
   ): Promise<FabFileChunkVector[]>;
+  /**
+   * One page of chunk TEXT for a single file, ascending by `_id`, same exact-cursor contract as
+   * `findVectorsByFabFileIds`. Returns vectorless chunks too - a text consumer that inherited the
+   * vector filter would silently drop content.
+   */
+  findTextsByFabFileId(
+    fabFileId: string,
+    options?: { limit?: number; afterChunkId?: string }
+  ): Promise<{ id: string; text: string }[]>;
+  /** Every chunk of a file, vectorless included - lets a paging caller tell a whole file from a slice. */
+  countByFabFileId(fabFileId: string): Promise<number>;
 }
 
 /**

@@ -144,3 +144,89 @@ describe('FabFileChunkRepository.findVectorsByFabFileIds keyset paging', () => {
     expect(stages).not.toContain('"stage":"SORT"');
   });
 });
+
+/**
+ * The text reader is deliberately NOT the vector reader with a different projection: a text
+ * consumer needs every chunk, and inheriting `vector: { $exists: true, $ne: [] }` would drop
+ * content that has no embedding yet.
+ */
+describe('FabFileChunkRepository.findTextsByFabFileId', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  it('returns vectorless chunks too', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'vectorized body', tokenCount: 2, vector: [0.1, 0.2] },
+      { fabFileId: 'f1', text: 'awaiting vectorization', tokenCount: 3 },
+    ]);
+
+    const rows = await fabFileChunkRepository.findTextsByFabFileId('f1');
+
+    expect(rows.map(r => r.text)).toEqual(['vectorized body', 'awaiting vectorization']);
+  });
+
+  it('scopes to the requested file', async () => {
+    await FabFileChunk.create([
+      { fabFileId: 'mine', text: 'mine', tokenCount: 1 },
+      { fabFileId: 'theirs', text: 'theirs', tokenCount: 1 },
+    ]);
+
+    const rows = await fabFileChunkRepository.findTextsByFabFileId('mine');
+
+    expect(rows.map(r => r.text)).toEqual(['mine']);
+  });
+
+  it('pages by keyset with no gap and no duplicate', async () => {
+    await FabFileChunk.create(
+      Array.from({ length: 7 }, (_, i) => ({ fabFileId: 'f1', text: `chunk-${i}`, tokenCount: 1 }))
+    );
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const rows = await fabFileChunkRepository.findTextsByFabFileId('f1', { limit: 3, afterChunkId: cursor });
+      if (rows.length === 0) break;
+      seen.push(...rows.map(r => r.text));
+      cursor = rows[rows.length - 1].id;
+    }
+
+    expect(seen).toEqual(['chunk-0', 'chunk-1', 'chunk-2', 'chunk-3', 'chunk-4', 'chunk-5', 'chunk-6']);
+    expect(new Set(seen).size).toBe(7);
+  });
+
+  it('respects limit', async () => {
+    await FabFileChunk.create(
+      Array.from({ length: 5 }, (_, i) => ({ fabFileId: 'f1', text: `chunk-${i}`, tokenCount: 1 }))
+    );
+
+    const rows = await fabFileChunkRepository.findTextsByFabFileId('f1', { limit: 2 });
+
+    expect(rows).toHaveLength(2);
+  });
+});
+
+describe('FabFileChunkRepository.countByFabFileId', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await FabFileChunk.deleteMany({});
+  });
+
+  it('counts vectorless chunks as well, and only the requested file', async () => {
+    // This is the whole reason the method exists: a caller comparing "chunks delivered" against a
+    // count that excluded vectorless chunks would report a partial file as complete.
+    await FabFileChunk.create([
+      { fabFileId: 'f1', text: 'a', tokenCount: 1, vector: [0.1] },
+      { fabFileId: 'f1', text: 'b', tokenCount: 1, vector: [] },
+      { fabFileId: 'f1', text: 'c', tokenCount: 1 },
+      { fabFileId: 'f2', text: 'other', tokenCount: 1, vector: [0.1] },
+    ]);
+
+    expect(await fabFileChunkRepository.countByFabFileId('f1')).toBe(3);
+    expect(await fabFileChunkRepository.countByFabFileId('f2')).toBe(1);
+    expect(await fabFileChunkRepository.countByFabFileId('absent')).toBe(0);
+  });
+});

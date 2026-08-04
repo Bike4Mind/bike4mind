@@ -58,22 +58,46 @@ const MementoSchema = new Schema<IMementoDocument, IMementoModel>(
 MementoSchema.index({ userId: 1, tier: 1, weight: -1 });
 MementoSchema.index({ userId: 1, sessionId: 1 });
 MementoSchema.index({ userId: 1, tags: 1 });
+// Equality on `userId` plus a range/sort on `_id` is what makes the keyset walk in
+// `getRelevantMementos` non-blocking. None of the indexes above can serve a sort on `_id`, so the
+// planner would fall back to sorting the user's whole memento set on every page - turning a paged
+// read into something more expensive than the unbounded read it replaced. `tier` stays a residual
+// filter rather than earning a place in the key: it is absent from the query when tier is 'all'.
+MementoSchema.index({ userId: 1, _id: 1 });
 
 export const Memento =
   (mongoose.models.Memento as IMementoModel) ?? model<IMementoDocument, IMementoModel>('Memento', MementoSchema);
 export default Memento;
 
 class MementoRepository extends BaseRepository<IMementoDocument> implements IMementoRepository {
-  async findByUserId(userId: string, options: { tier?: MementoTier; select?: string }): Promise<IMementoDocument[]> {
-    const { tier, select } = options;
+  /**
+   * `limit`/`afterId` turn this into a keyset-paged read so a caller can walk a user's mementos
+   * without holding all of them at once. Both are opt-in, and `.sort({ _id: 1 })` is applied ONLY
+   * when one is supplied: the cursor is meaningless without the sort, and adding the sort
+   * unconditionally would change the plan for every existing unpaged caller.
+   */
+  async findByUserId(
+    userId: string,
+    options: { tier?: MementoTier; select?: string; limit?: number; afterId?: string }
+  ): Promise<IMementoDocument[]> {
+    const { tier, select, limit, afterId } = options;
     const filter: FilterQuery<IMementoDocument> = { userId };
     if (tier) {
       filter.tier = tier;
+    }
+    if (afterId) {
+      filter._id = { $gt: afterId };
     }
 
     const query = this.model.find(filter);
     if (select) {
       query.select(select);
+    }
+    if (limit !== undefined || afterId) {
+      query.sort({ _id: 1 });
+    }
+    if (limit !== undefined) {
+      query.limit(limit);
     }
     return query.exec();
   }
