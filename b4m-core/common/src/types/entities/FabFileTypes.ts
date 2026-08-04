@@ -611,7 +611,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * destroys rows it never accounted for.
    */
   hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
-  /** Hard-delete exactly these files, including soft-deleted ones. Returns the ids. Idempotent. */
+  /**
+   * Hard-delete exactly these files, including soft-deleted ones. Idempotent.
+   *
+   * Echoes back the ids it was GIVEN, not the rows it actually removed - a second call with the
+   * same ids returns them again. Do not read the result as "what this call deleted"; if you need
+   * that, count before and after.
+   */
   hardDeleteByIds(fabFileIds: string[]): Promise<string[]>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
