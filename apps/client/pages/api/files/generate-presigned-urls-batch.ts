@@ -13,7 +13,7 @@ import { createFabFile } from '@server/managers/fabFileManager';
 import { adminSettingsRepository, dataLakeBatchRepository, dataLakeRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { checkStorageLimit, getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Request } from 'express';
@@ -77,13 +77,14 @@ const handler = baseApi().post(async (req: Request, res) => {
     }
   }
 
-  // Verify batch ownership before stamping/appending - batchId comes from the body,
-  // so without this a user could inject files into another user's batch (IDOR).
+  // Verify batch ownership before stamping/appending - batchId comes from the body, so without
+  // this a caller could inject files into another user's batch (IDOR). Shared with the
+  // single-file presign and createFabFile routes so a future caller can't forget this check.
+  // It hands back the batch it already read, which the lake-identity check below needs.
   if (data.batchId) {
-    const batch = await dataLakeBatchRepository.findById(data.batchId);
-    if (!batch || batch.userId !== userId) {
-      throw new NotFoundError('Batch not found');
-    }
+    const batch = await dataLakeService.assertBatchOwnership(userId, data.batchId, {
+      db: { batches: dataLakeBatchRepository },
+    });
     try {
       dataLakeService.assertBatchBelongsToLake(batch, dataLake);
     } catch (err) {

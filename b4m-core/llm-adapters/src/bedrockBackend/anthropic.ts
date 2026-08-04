@@ -619,6 +619,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // Bedrock/Anthropic rejects "text content blocks must contain non-whitespace text"
     const filteredMessages = messages
       .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content !== null && m.content !== undefined)
+      // Unlike the other backends this one forwards IMessage objects into the request body largely
+      // as-is, so control-only fields have to be dropped here rather than left to the invariant that
+      // nothing sets them on a user/assistant message.
+      .map(({ requiresTool: _requiresTool, ...m }) => m)
       .map(m => {
         // Handle string content - check for empty/whitespace-only
         if (typeof m.content === 'string') {
