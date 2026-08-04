@@ -2296,6 +2296,47 @@ describe('resolveEnabledTools', () => {
     expect(result).toContain('retrieve_knowledge_content');
   });
 
+  it('skips the accessible-lake offer too when skipAutoOffers is set', () => {
+    // The prompt-mode gate must cover the lake signal, or raw-mode evals leak the tool via a lake.
+    const result = resolveEnabledTools({
+      requestTools: [],
+      hasAttachedKnowledge: false,
+      hasAccessibleDataLake: true,
+      skipAutoOffers: true,
+    });
+    expect(result).not.toContain('search_knowledge_base');
+  });
+
+  it('offers search_knowledge_base when the caller has an accessible lake (no attachment)', () => {
+    const result = resolveEnabledTools({
+      requestTools: [],
+      hasAttachedKnowledge: false,
+      hasAccessibleDataLake: true,
+    });
+    expect(result).toContain('search_knowledge_base');
+    expect(result).toContain('retrieve_knowledge_content');
+  });
+
+  it('does not offer the knowledge tool when neither attachment nor accessible lake is present', () => {
+    const result = resolveEnabledTools({
+      requestTools: ['web_search'],
+      hasAttachedKnowledge: false,
+      hasAccessibleDataLake: false,
+    });
+    expect(result).toEqual(['web_search']);
+  });
+
+  it('lets the session denylist win over the accessible-lake offer', () => {
+    const result = resolveEnabledTools({
+      requestTools: [],
+      hasAttachedKnowledge: false,
+      hasAccessibleDataLake: true,
+      sessionDisabledTools: ['search_knowledge_base'],
+    });
+    expect(result).not.toContain('search_knowledge_base');
+    expect(result).not.toContain('retrieve_knowledge_content');
+  });
+
   it('pairs edit_image for a session-forced image_generation (latent-gap fix)', () => {
     const result = resolveEnabledTools({
       requestTools: [],
