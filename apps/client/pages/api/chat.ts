@@ -227,6 +227,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_G
           ? { promptDetails: completedQuest.promptMeta.context.systemPromptDetails }
           : {}),
         ...(toolMeta && { tools: toolMeta }),
+        // The tools actually offered to the model server-side (post per-session resolution +
+        // denylist). Unlike toolMeta.effectiveTools (API-layer selection only), this reflects
+        // server-side offers like the attached-knowledge auto-offer - the signal an eval needs.
+        ...(completedQuest.promptMeta?.offeredTools ? { offeredTools: completedQuest.promptMeta.offeredTools } : {}),
         performance,
         tracking_info: {
           quest_id: completedQuest.id,

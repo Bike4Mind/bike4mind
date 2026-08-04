@@ -286,6 +286,15 @@ export const PromptMetaZodSchema = z.object({
   tokenUsage: PromptMetaTokenUsageSchema.optional(),
   context: PromptMetaContextSchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
+  /**
+   * Names of the tools actually offered to the model this turn - the final server-side
+   * `enabledTools` handed to buildTools, after per-session resolution and the denylist.
+   * Distinct from the chat response's `effectiveTools`, which reflects only the API-layer
+   * (phrase-recommender) selection and so cannot see server-side offers like the attached-
+   * knowledge auto-offer. This is the authoritative "what did the model actually get" signal
+   * for eval/measurement and for diagnosing the silent no-tool-offered state.
+   */
+  offeredTools: z.array(z.string()).optional(),
   performance: PromptMetaPerformanceSchema.optional(),
   session: PromptMetaSessionSchema.optional(),
   questId: z.string().optional(),

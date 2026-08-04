@@ -1941,10 +1941,16 @@ export class ChatCompletionProcess {
         }
       }
 
+      const offeredToolNames = allTools?.map(t => t.toolSchema.name) ?? [];
       logger.info('🔧 [Tools] allTools:', {
-        count: allTools?.length ?? 0,
-        names: allTools?.map(t => t.toolSchema.name) ?? [],
+        count: offeredToolNames.length,
+        names: offeredToolNames,
       });
+      // Record the final offered tool list for telemetry/eval. The API response's
+      // effectiveTools is the API-layer (phrase-recommender) selection only; this is what
+      // the model was actually given, so it reflects server-side offers like the attached-
+      // knowledge auto-offer above.
+      if (quest.promptMeta) quest.promptMeta.offeredTools = offeredToolNames;
 
       // For tool prompt guidance, only include MCP tools given directly to the main LLM
       // (agent-only tools like Atlassian are excluded - they're accessed via delegate_to_agent)
