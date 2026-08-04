@@ -11,6 +11,7 @@ import type {
 import { ELISION_PUBLISH_BODY, SCOPE_URL_PREFIX } from '@bike4mind/common';
 import { detectElidedSafe } from '@client/app/utils/artifactParser';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
+import { exportHref, type PublishExportFormat } from '@client/app/utils/publishExport';
 
 /** Summary row for the published-artifacts management list. */
 export interface ManagedArtifact {
@@ -66,6 +67,28 @@ export async function findPublishedByArtifact(artifactId: string): Promise<Manag
     // degrade to "not published" and let the dialog offer a plain publish-as-new.
     return null;
   }
+}
+
+/**
+ * Fetch a published artifact's content in an export format (issue #1142).
+ *
+ * Goes through the authenticated `api` client rather than a plain `<a download>`: a
+ * top-level navigation to `/p/...?export=` carries no Authorization header, so a
+ * private or org-gated artifact would answer with the loader shell (an HTML page)
+ * instead of the file. The viewer-facing surfaces use plain anchors instead, and
+ * only where the artifact re-authorizes without a credential.
+ *
+ * Callers must check `supportsExport(kind, format)` first - the server 404s a format
+ * with no faithful conversion for the kind, deliberately rather than degrading.
+ */
+export async function fetchPublishedExport(viewerPath: string, format: PublishExportFormat): Promise<string> {
+  const { data } = await api.get<string>(exportHref(viewerPath, format), {
+    // Keep the payload as the raw text it is - axios would otherwise JSON.parse a
+    // markdown/HTML body that happens to start with a JSON-looking token.
+    responseType: 'text',
+    transformResponse: [(d: unknown) => (typeof d === 'string' ? d : String(d ?? ''))],
+  });
+  return data;
 }
 
 /** Soft-delete (archive) a published artifact (owner/admin). */
@@ -270,6 +293,71 @@ export async function restorePreviousVersion(publicId: string): Promise<{ sha256
 }
 
 /**
+ * Whether a publication can be refreshed from its in-app source artifact.
+ *
+ * Bundles only, and only when `source.artifactId` is set. A `reply` snapshots an
+ * immutable chat message so there is nothing to re-read; a bundle published from
+ * outside the app (no artifactId) has no source to read back; and bundles are the
+ * only kind with the version history a refresh lands in - the same restriction the
+ * restore endpoint applies.
+ */
+export function canRefreshFromSource(a: ManagedArtifact): boolean {
+  return a.source.kind === 'bundle' && !!a.source.artifactId;
+}
+
+/** Slice of `GET /api/artifacts/{id}?includeContent=true` a refresh needs. */
+interface SourceArtifactResponse {
+  artifact?: { type?: string; title?: string };
+  content?: { content?: string };
+}
+
+/**
+ * Re-publish an existing publication from its source artifact's CURRENT content,
+ * landing a new version on the SAME `/p/...` URL.
+ *
+ * Runs the ordinary publish pipeline (upload-url -> PUT -> finalize) with the slug
+ * pinned to the existing publication, so finalize upserts a new version instead of
+ * creating a second page - and so the refreshed bytes go through the same
+ * `validateBundle` security contract and React transpile as any other publish. That
+ * reuse is the point: a bespoke "refresh" endpoint would have to restate the publish
+ * contract and could drift from it.
+ *
+ * Every field finalize's `$set` overwrites unconditionally is passed through from the
+ * current row - `visibility`, `commentPolicy`, `description`. Omitting them would not
+ * leave them alone: finalize falls back to the publish DEFAULT, which would turn a
+ * private page public and drop comments to `none`. Fields finalize never touches
+ * (`accessGate`, `discoverable`, `embedOrigins`, `shareToken`) survive on their own.
+ *
+ * The source's CURRENT title wins, since re-syncing from source is the whole point;
+ * the slug stays pinned, so the public URL never moves.
+ */
+export async function refreshPublishedFromSource(a: ManagedArtifact): Promise<PublishResult> {
+  const artifactId = a.source.artifactId;
+  if (!artifactId) throw new Error('This publication has no source artifact to refresh from');
+
+  const { data } = await api.get<SourceArtifactResponse>(
+    `/api/artifacts/${encodeURIComponent(artifactId)}?includeContent=true`
+  );
+  const type = data.artifact?.type;
+  const content = data.content?.content;
+  if (!type) throw new Error('The source artifact could not be read');
+  if (!content?.trim()) throw new Error('The source artifact has no content to publish');
+
+  return publishArtifactBundle({
+    artifactId,
+    type,
+    content,
+    title: data.artifact?.title || a.title,
+    tier: a.tier,
+    scopeId: a.scopeId,
+    slug: a.slug,
+    visibility: a.visibility,
+    commentPolicy: a.commentPolicy,
+    description: a.description,
+  });
+}
+
+/**
  * Publish an artifact as a hosted static bundle (/p/u/{userId}/{slug}) via the
  * 3-step flow: request presigned upload -> PUT index.html to S3 -> finalize.
  *
@@ -283,7 +371,12 @@ export async function publishArtifactBundle(input: {
   type: string;
   content: string;
   title: string;
-  userId: string;
+  /**
+   * The publishing user, used only as the default `scopeId` for the `user` tier.
+   * Optional when `scopeId` is passed explicitly - a refresh pins the existing scope,
+   * so it has no separate use for the caller's id.
+   */
+  userId?: string;
   /**
    * Scope tier to publish under. Defaults to `'user'` (a personal `/p/u/{userId}` page).
    * Pass `'organization'` with `scopeId` set to the org id to publish an org-scoped page
@@ -294,6 +387,12 @@ export async function publishArtifactBundle(input: {
   scopeId?: string;
   visibility?: PublishVisibility;
   commentPolicy?: CommentPolicy;
+  /**
+   * Public blurb. finalize `$set`s `description` unconditionally, so a re-publish that
+   * omits it CLEARS an existing one - pass it through when landing a new version of a
+   * publication that already has one.
+   */
+  description?: string;
   /**
    * Publish to this exact slug instead of deriving one from the title. Pass the existing
    * publication's slug to land a new VERSION of it (finalize upserts on
@@ -311,6 +410,9 @@ export async function publishArtifactBundle(input: {
 }): Promise<PublishResult> {
   const content = (input.content ?? '').trim();
   if (!content) throw new Error('This artifact has no content to publish');
+
+  const scopeId = input.scopeId ?? input.userId;
+  if (!scopeId) throw new Error('publishArtifactBundle needs either scopeId or userId to resolve the scope');
 
   // React artifacts upload their RAW JSX as index.html; the server transpiles it into a
   // self-contained inert HTML bundle at finalize (issue #21). Every other type renders to static
@@ -332,11 +434,12 @@ export async function publishArtifactBundle(input: {
   // Step 1 - request a presigned PUT for index.html.
   const { data: draft } = await api.post<UploadUrlResponse>('/api/publish/artifact/upload-url', {
     tier: input.tier ?? 'user',
-    scopeId: input.scopeId ?? input.userId,
+    scopeId,
     slug,
     title: input.title || 'Shared artifact',
     visibility: input.visibility ?? DEFAULT_SHARE_VISIBILITY,
     ...(input.commentPolicy ? { commentPolicy: input.commentPolicy } : {}),
+    ...(input.description ? { description: input.description } : {}),
     source: { kind: 'bundle', artifactId: input.artifactId, ...(isReact ? { artifactType: 'react' as const } : {}) },
     files: [{ path: 'index.html', size, mimeType: 'text/html' }],
   });
