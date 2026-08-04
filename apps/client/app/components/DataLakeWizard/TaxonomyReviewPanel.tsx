@@ -202,7 +202,7 @@ const TagCard = memo(function TagCard({ tag, prefix, onUpdate, onDelete }: TagCa
 /**
  * Review/apply panel for a batch's background AI tag suggestions. Replaces the old
  * pre-upload TaxonomyReviewStep: analysis now runs AFTER upload, so this is a standalone
- * modal opened from the Data Lakes list (`DataLakeListPanel`) rather than a wizard step -
+ * modal opened from the Data Lakes manager (`DataLakeManagerPanel`) rather than a wizard step -
  * edits live in local state here, not the wizard store, and "Apply" writes tags directly to
  * the batch's already-uploaded files via the apply-taxonomy endpoint.
  */

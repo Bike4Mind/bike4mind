@@ -62,15 +62,22 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     h.fabUpdate.mockResolvedValue(null);
   });
 
-  it('404s when the batch belongs to another user (no writes)', async () => {
+  it('rejects when the batch belongs to another user, without writing anything', async () => {
     h.findById.mockResolvedValue({ id: 'b1', userId: 'someone-else' });
     const { res } = makeRes();
-    await run({ batchId: 'b1', failedFiles: 2 }, res);
 
-    expect(res.status).toHaveBeenCalledWith(404);
+    await expect(run({ batchId: 'b1', failedFiles: 2 }, res)).rejects.toThrow(/batch not found/i);
     expect(h.incrementCounter).not.toHaveBeenCalled();
     expect(h.setStatusIfActive).not.toHaveBeenCalled();
     expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the batch does not exist, without writing anything', async () => {
+    h.findById.mockResolvedValue(null);
+    const { res } = makeRes();
+
+    await expect(run({ batchId: 'b1', failedFiles: 2 }, res)).rejects.toThrow(/batch not found/i);
+    expect(h.incrementCounter).not.toHaveBeenCalled();
   });
 
   it('increments failedFiles atomically (never a clobbering set), records names, guards status, finalizes', async () => {

@@ -34,6 +34,8 @@ import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import RestoreIcon from '@mui/icons-material/Restore';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import {
@@ -49,6 +51,7 @@ import { gray } from '@client/app/utils/themes/colors';
 import { useDataLakeFiles, useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
 import { useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import {
+  useActiveDataLakeBatches,
   useArchiveDataLake,
   useCleanupDataLake,
   useGetArchivedDataLakes,
@@ -64,7 +67,10 @@ import DataLakeArticlePanel from './DataLakeArticlePanel';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
 import type { EditableLake } from './DataLakeSettingsModal';
-import type { IFabFileDocument } from '@bike4mind/common';
+import TaxonomyReviewPanel from './TaxonomyReviewPanel';
+import FieldTooltip from '@client/app/components/help/FieldTooltip';
+import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
+import type { IDataLakeBatchDocument, IFabFileDocument } from '@bike4mind/common';
 import { satisfiesTagPrefix } from '@bike4mind/common';
 
 type ManagerLake = NonNullable<ReturnType<typeof useDataLakes>['data']>[number];
@@ -87,6 +93,26 @@ const prefixSegments = (fileTagPrefix: string) => fileTagPrefix.replace(/:+$/, '
  */
 export default function DataLakeManagerPanel() {
   const { data: dataLakes, isLoading } = useDataLakes();
+  const { data: activeBatches } = useActiveDataLakeBatches();
+  // Id only, not the batch object - `reviewingBatch` below is derived from the live, polled
+  // `activeBatches` list so a re-analyze's cache refresh flows into the open review panel
+  // instead of leaving it stuck showing pre-refresh suggestions.
+  const [reviewingBatchId, setReviewingBatchId] = useState<string | null>(null);
+  const reviewingBatch = useMemo(
+    () => activeBatches?.find(b => b.id === reviewingBatchId) ?? null,
+    [activeBatches, reviewingBatchId]
+  );
+  // One pass over the batch list, not a per-lake filter/find on every row render. Only batches
+  // whose taxonomy phase actually needs attention are kept - a lake with none just misses the
+  // map entry, which every consumer already treats the same as "nothing to show."
+  const taxonomyBatchByLakeId = useMemo(() => {
+    const map = new Map<string, IDataLakeBatchDocument>();
+    for (const batch of activeBatches ?? []) {
+      if (!batch.taxonomyStatus || batch.taxonomyStatus === 'none') continue;
+      if (!map.has(batch.dataLakeId)) map.set(batch.dataLakeId, batch);
+    }
+    return map;
+  }, [activeBatches]);
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   // Store-driven so openManager('discover') deep-links land on the public catalog; the
   // sidebar footer's Discover button flips it the same way.
@@ -179,6 +205,7 @@ export default function DataLakeManagerPanel() {
         lakes={dataLakes}
         lakesLoading={isLoading}
         lakeCount={lakeCount}
+        taxonomyBatchByLakeId={taxonomyBatchByLakeId}
         activeLake={activeLake}
         path={path}
         selectedFileId={selectedFile?.id ?? null}
@@ -196,6 +223,7 @@ export default function DataLakeManagerPanel() {
         onCreateLake={openWizard}
         isDiscovering={managerTab === 'discover'}
         onDiscover={toggleDiscover}
+        onReviewTaxonomy={setReviewingBatchId}
       />
       {activeLake ? (
         selectedFile ? (
@@ -209,7 +237,9 @@ export default function DataLakeManagerPanel() {
           <LakeInfoPanel
             lake={activeLake}
             fileCount={lakeCount(activeLake)}
+            taxonomyBatch={taxonomyBatchByLakeId.get(activeLake.id)}
             onOpenSettings={() => setEditingLakeId(activeLake.id)}
+            onReviewTaxonomy={setReviewingBatchId}
             onArchived={() => {
               setLakeId(null);
               setPath([]);
@@ -227,6 +257,15 @@ export default function DataLakeManagerPanel() {
       )}
 
       <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLakeId(null)} />
+
+      {/* Review/apply the background AI tag suggestions for a batch */}
+      {reviewingBatch && (
+        <TaxonomyReviewPanel
+          batch={reviewingBatch}
+          prefix={dataLakes?.find(l => l.id === reviewingBatch.dataLakeId)?.fileTagPrefix ?? ''}
+          onClose={() => setReviewingBatchId(null)}
+        />
+      )}
     </Box>
   );
 }
@@ -238,6 +277,8 @@ interface ManagerNavProps {
   lakesLoading: boolean;
   /** Per-lake live file count, resolved by lake membership (see lakeCount). */
   lakeCount: (lake: ManagerLake) => number | undefined;
+  /** Lake id -> its attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
+  taxonomyBatchByLakeId: Map<string, IDataLakeBatchDocument>;
   activeLake: ManagerLake | null;
   /** In-lake tag path, seeded with the lake's prefix segments (see selectLake). */
   path: string[];
@@ -251,12 +292,15 @@ interface ManagerNavProps {
   isDiscovering: boolean;
   /** Toggles the public-lake Discover catalog in the right pane. */
   onDiscover: () => void;
+  /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
+  onReviewTaxonomy: (batchId: string) => void;
 }
 
 function ManagerNav({
   lakes,
   lakesLoading,
   lakeCount,
+  taxonomyBatchByLakeId,
   activeLake,
   path,
   selectedFileId,
@@ -267,6 +311,7 @@ function ManagerNav({
   onCreateLake,
   isDiscovering,
   onDiscover,
+  onReviewTaxonomy,
 }: ManagerNavProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
@@ -477,6 +522,14 @@ function ManagerNav({
                 onToggle={() => setShowLakes(v => !v)}
                 testid="datalake-manager-lakes-section-toggle"
                 hoverBg={hoverBg}
+                infoTooltip={
+                  <FieldTooltip
+                    content={FIELD_TOOLTIPS.dataLake}
+                    placement="bottom"
+                    ariaLabel="Help: Data Lakes"
+                    data-testid="field-tooltip-data-lake-panel"
+                  />
+                }
               />
               {showLakes &&
                 (lakesLoading ? (
@@ -488,6 +541,7 @@ function ManagerNav({
                     ) : (
                       filteredLakes.map(lake => {
                         const count = lakeCount(lake);
+                        const taxonomyBatch = taxonomyBatchByLakeId.get(lake.id);
                         return (
                           <ListItem key={lake.id}>
                             <ListItemButton
@@ -508,6 +562,52 @@ function ManagerNav({
                                   {lake.name}
                                 </Typography>
                               </ListItemContent>
+                              {/* Background AI-tag suggestion indicator - an independent clock
+                                  from ingest, so this can appear well after the lake's files
+                                  are already fully uploaded/searchable. */}
+                              {(taxonomyBatch?.taxonomyStatus === 'queued' ||
+                                taxonomyBatch?.taxonomyStatus === 'analyzing') && (
+                                <Tooltip title="Suggesting tags with AI - usually ready in under a minute" size="sm">
+                                  <AutoAwesomeIcon
+                                    data-testid={`datalake-manager-taxonomy-progress-${lake.id}`}
+                                    sx={{ fontSize: 14, color: 'primary.400', flexShrink: 0 }}
+                                  />
+                                </Tooltip>
+                              )}
+                              {taxonomyBatch?.taxonomyStatus === 'ready' && (
+                                <Tooltip title="AI tag suggestions ready - click to review" size="sm">
+                                  <IconButton
+                                    size="sm"
+                                    variant="plain"
+                                    color="success"
+                                    data-testid={`datalake-manager-taxonomy-review-${lake.id}`}
+                                    onClick={e => {
+                                      e.stopPropagation();
+                                      onReviewTaxonomy(taxonomyBatch.id);
+                                    }}
+                                    sx={{ '--IconButton-size': '22px', flexShrink: 0 }}
+                                  >
+                                    <AutoAwesomeIcon sx={{ fontSize: 14 }} />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                              {taxonomyBatch?.taxonomyStatus === 'failed' && (
+                                <Tooltip title="AI tagging failed - click to view" size="sm">
+                                  <IconButton
+                                    size="sm"
+                                    variant="plain"
+                                    color="warning"
+                                    data-testid={`datalake-manager-taxonomy-failed-${lake.id}`}
+                                    onClick={e => {
+                                      e.stopPropagation();
+                                      onReviewTaxonomy(taxonomyBatch.id);
+                                    }}
+                                    sx={{ '--IconButton-size': '22px', flexShrink: 0 }}
+                                  >
+                                    <ErrorOutlineIcon sx={{ fontSize: 14 }} />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
                               {typeof count === 'number' && (
                                 <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
                                   {count}
@@ -784,12 +884,15 @@ function NavSectionHeader({
   onToggle,
   testid,
   hoverBg,
+  infoTooltip,
 }: {
   label: string;
   open: boolean;
   onToggle: () => void;
   testid: string;
   hoverBg: string;
+  /** Persistent help affordance next to the label, e.g. explaining RAG for the Lakes section. */
+  infoTooltip?: React.ReactNode;
 }) {
   return (
     <ListItemButton
@@ -811,6 +914,8 @@ function NavSectionHeader({
       <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
         {label}
       </Typography>
+      {/* Not part of the toggle - stop the click from also collapsing/expanding the section. */}
+      {infoTooltip && <Box onClick={e => e.stopPropagation()}>{infoTooltip}</Box>}
       {open ? (
         <ExpandLessIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
       ) : (
@@ -896,12 +1001,18 @@ function NavLifecycleSection({
 function LakeInfoPanel({
   lake,
   fileCount,
+  taxonomyBatch,
   onOpenSettings,
+  onReviewTaxonomy,
   onArchived,
 }: {
   lake: ManagerLake;
   fileCount: number | undefined;
+  /** This lake's attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
+  taxonomyBatch: IDataLakeBatchDocument | undefined;
   onOpenSettings: () => void;
+  /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
+  onReviewTaxonomy: (batchId: string) => void;
   /** Called after the active lake is archived, so the panel exits to root instead of the
    *  derived activeLake re-binding to a lake that just left the list (and a later restore
    *  teleporting back in). */
@@ -989,6 +1100,48 @@ function LakeInfoPanel({
           {typeof fileCount === 'number' && (
             <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
               {fileCount} {fileCount === 1 ? 'file' : 'files'}
+            </Chip>
+          )}
+          {/* Background AI-tag suggestion progress - an independent clock from ingest, so this
+              can appear well after the lake's files are already fully uploaded/searchable. */}
+          {(taxonomyBatch?.taxonomyStatus === 'queued' || taxonomyBatch?.taxonomyStatus === 'analyzing') && (
+            <Tooltip title="Usually ready in under a minute" size="sm">
+              <Chip
+                size="sm"
+                variant="soft"
+                color="primary"
+                startDecorator={<AutoAwesomeIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-taxonomy-progress-chip-${lake.id}`}
+              >
+                AI tagging&hellip;
+              </Chip>
+            </Tooltip>
+          )}
+          {taxonomyBatch?.taxonomyStatus === 'ready' && (
+            <Chip
+              size="sm"
+              variant="solid"
+              color="success"
+              startDecorator={<AutoAwesomeIcon sx={{ fontSize: 12 }} />}
+              sx={{ fontSize: '11px', cursor: 'pointer' }}
+              data-testid={`datalake-manager-taxonomy-review-chip-${lake.id}`}
+              onClick={() => onReviewTaxonomy(taxonomyBatch.id)}
+            >
+              Review AI tags
+            </Chip>
+          )}
+          {taxonomyBatch?.taxonomyStatus === 'failed' && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="warning"
+              startDecorator={<ErrorOutlineIcon sx={{ fontSize: 12 }} />}
+              sx={{ fontSize: '11px', cursor: 'pointer' }}
+              data-testid={`datalake-manager-taxonomy-failed-chip-${lake.id}`}
+              onClick={() => onReviewTaxonomy(taxonomyBatch.id)}
+            >
+              AI tagging failed
             </Chip>
           )}
         </Box>
