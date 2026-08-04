@@ -62,6 +62,18 @@ const CHARS_PER_TOKEN = 3.5;
  */
 const COSINE_SEARCH_TOP_K = 10;
 
+/**
+ * How much of one attached file the cosine scan will read, and in what size pages.
+ *
+ * Module constants rather than admin settings: unlike a data lake, an attachment is one file the
+ * user picked this turn, so there is nothing for an operator to tune per environment. The bound
+ * must stay well above COSINE_SEARCH_TOP_K - at or below it, a bounded scan of a large file would
+ * deliver as many chunks as it read and the caller could not distinguish that from a whole small
+ * file.
+ */
+const COSINE_SEARCH_MAX_CHUNKS_SCANNED = 2000;
+const COSINE_SEARCH_CHUNK_PAGE_SIZE = 200;
+
 // Emergency token limits for embedding generation
 const EMBEDDING_TOKEN_LIMITS = {
   MAX_EMBEDDING_TOKENS: 8000, // Conservative limit under 8192
@@ -948,6 +960,21 @@ export function computeCosineSimilarity(vector1: number[], vector2: number[]): n
   return dotProduct / (magnitude1 * magnitude2);
 }
 
+/** Total order for the top-K: `chunkId` breaks score ties so the result cannot depend on page arrival. */
+const compareRankedChunks = (a: { score: number; chunkId: string }, b: { score: number; chunkId: string }) =>
+  b.score - a.score || a.chunkId.localeCompare(b.chunkId);
+
+/**
+ * Similarity-select up to COSINE_SEARCH_TOP_K chunks of one attached file.
+ *
+ * Reads through the projected keyset reader in bounded pages, so peak memory is one page plus the
+ * top-K rather than the whole file - this runs once per attached file at FILE_PROCESSING_CONCURRENCY,
+ * on every completion that has attachments.
+ *
+ * `totalChunks` is the file's true chunk count, NOT what this scan read. The caller uses it to decide
+ * whether to tell the model it is holding a subset, and both the scan bound and the reader's
+ * DB-layer vectorless filter make "chunks read" smaller than "chunks in the file".
+ */
 async function cosineSearch(
   file: IFabFileDocument,
   userPromptVector: number[],
@@ -956,31 +983,106 @@ async function cosineSearch(
     logger,
   }: {
     db: {
-      fabfilechunks: Pick<IFabFileChunkRepository, 'findByFabFileId'>;
+      fabfilechunks: Pick<IFabFileChunkRepository, 'findVectorsByFabFileIds' | 'countByFabFileId'>;
     };
     logger: Logger;
   }
-): Promise<{ results: Array<{ chunkId: string; content: string; score: number }>; totalChunks: number }> {
-  const chunks = await db.fabfilechunks.findByFabFileId(file.id);
+): Promise<{
+  results: Array<{ chunkId: string; content: string; score: number }>;
+  totalChunks: number;
+  scanned: number;
+  scanTruncated: boolean;
+  skipped: { dimensionMismatch: number; nonFinite: number };
+}> {
+  const queryDim = userPromptVector.length;
+  const totalChunks = await db.fabfilechunks.countByFabFileId(file.id);
 
-  const searchResults = chunks
-    .map((chunk: any, position: number) => {
-      const score = computeCosineSimilarity(userPromptVector, chunk.vector!);
-      return { chunkId: chunk.id, content: chunk.text, score, position };
-    })
-    .filter((result: any) => result !== null);
+  const ranked: Array<{ chunkId: string; content: string; score: number; position: number }> = [];
+  let scanned = 0;
+  let scanTruncated = false;
+  let dimensionMismatch = 0;
+  let nonFinite = 0;
+  let cursor: string | undefined;
 
-  // Similarity decides WHICH chunks; document order decides how they are PRESENTED. Returning them in
-  // score order handed the model a scrambled file - even when every chunk was delivered - which is one
-  // of the ways it ends up naming a mid-file row as the last. `position` is the repository's order,
-  // which is ascending _id, i.e. the order the chunks were written.
-  //
-  // totalChunks lets the caller tell the model when it is holding a subset. Without it the top-K slice
-  // is indistinguishable from "this is the whole file".
-  const selected = [...searchResults].sort((a: any, b: any) => b.score - a.score).slice(0, COSINE_SEARCH_TOP_K);
+  // Every page consumes at least one row, so this bounds the loop even if a page somehow failed to
+  // advance the cursor. Paired with the strict-increase check below, which throws rather than spins.
+  const maxPages = Math.ceil(COSINE_SEARCH_MAX_CHUNKS_SCANNED / COSINE_SEARCH_CHUNK_PAGE_SIZE) + 1;
+
+  for (let page = 0; page < maxPages; page++) {
+    const remaining = COSINE_SEARCH_MAX_CHUNKS_SCANNED - scanned;
+    if (remaining <= 0) {
+      scanTruncated = true;
+      break;
+    }
+    // Consume at most `want`, but ask for one extra row to learn whether more exist. Without the
+    // probe, a file that exactly fills the bound is indistinguishable from one that overflows it and
+    // we would report a truncation that never happened.
+    const want = Math.min(COSINE_SEARCH_CHUNK_PAGE_SIZE, remaining);
+    const rows = await db.fabfilechunks.findVectorsByFabFileIds([file.id], {
+      limit: want + 1,
+      afterChunkId: cursor,
+    });
+    if (rows.length === 0) break;
+
+    const moreExist = rows.length > want;
+    // The probe row is past the bound: scoring it would let the page boundary decide the top-K.
+    const usable = moreExist ? rows.slice(0, want) : rows;
+
+    for (const chunk of usable) {
+      // Read order is ascending `_id`, i.e. the order the chunks were written.
+      const position = scanned;
+      scanned++;
+      // Chunks embedded under a different model score against a different space. computeCosineSimilarity
+      // returns 0 on a width mismatch, and a 0 is not a rejection: on a sparse file it still occupies a
+      // top-K slot and displaces nothing useful with nothing useful.
+      if (chunk.vector.length !== queryDim) {
+        dimensionMismatch++;
+        continue;
+      }
+      const score = computeCosineSimilarity(userPromptVector, chunk.vector);
+      // A zero-magnitude vector makes cosine NaN, and NaN fails every comparison - it would sort ahead
+      // of every real hit instead of being rejected.
+      if (!Number.isFinite(score)) {
+        nonFinite++;
+        continue;
+      }
+      ranked.push({ chunkId: chunk.id, content: chunk.text, score, position });
+    }
+
+    // Trim every page so chunk TEXT is never held for more than one page plus the top-K.
+    if (ranked.length > COSINE_SEARCH_TOP_K) {
+      ranked.sort(compareRankedChunks);
+      ranked.length = COSINE_SEARCH_TOP_K;
+    }
+
+    const nextCursor = usable[usable.length - 1].id;
+    if (cursor !== undefined && !(nextCursor > cursor)) {
+      throw new Error(
+        `[cosineSearch] chunk cursor failed to advance past ${cursor} for file ${file.id}; refusing to re-read the same page`
+      );
+    }
+    cursor = nextCursor;
+
+    if (!moreExist) break;
+  }
+
+  if (scanTruncated) {
+    logger.warn(
+      `[cosineSearch] Scanned ${scanned}/${totalChunks} chunk(s) of "${file.fileName}" before hitting the ` +
+        `${COSINE_SEARCH_MAX_CHUNKS_SCANNED}-chunk bound; selection is over the scanned prefix only.`
+    );
+  }
+
+  // `ranked` is already the top-K (the per-page trim above keeps it there), so all that is left is
+  // presentation. Similarity decides WHICH chunks; document order decides how they are PRESENTED -
+  // returning them in score order handed the model a scrambled file even when every chunk was
+  // delivered, which is one of the ways it ends up naming a mid-file row as the last.
   return {
-    results: selected.sort((a, b) => a.position - b.position).map(({ position, ...rest }) => rest),
-    totalChunks: searchResults.length,
+    results: ranked.sort((a, b) => a.position - b.position).map(({ position, ...rest }) => rest),
+    totalChunks,
+    scanned,
+    scanTruncated,
+    skipped: { dimensionMismatch, nonFinite },
   };
 }
 
@@ -1018,7 +1120,7 @@ export async function processFabFilesServer(
     logger: Logger;
     storage: BaseStorage;
     db: {
-      fabfilechunks: Pick<IFabFileChunkRepository, 'findByFabFileId'>;
+      fabfilechunks: Pick<IFabFileChunkRepository, 'findVectorsByFabFileIds' | 'countByFabFileId'>;
       fabfiles: Pick<IFabFileRepository, 'update'>;
       caches: ICacheRepository;
     };
@@ -1307,6 +1409,12 @@ export async function processFabFilesServer(
         // dropped - fall through to the raw-content path so the attachment still reaches the model.
         const canCosineSearch = file.vectorized && !!userVector && userVector.length > 0;
 
+        // Whether the cosine path actually put content in front of the model. It can select nothing
+        // even on a vectorized file - every chunk embedded under another model, say - and an attachment
+        // that silently contributes NOTHING is worse than one delivered as raw text, so anything
+        // leaving this false falls through to the raw-content read below.
+        let deliveredViaCosine = false;
+
         if (canCosineSearch) {
           // Perform cosine search for vectorized content
           sendStatusUpdate('Now doing retrieval augmented search');
@@ -1316,7 +1424,13 @@ export async function processFabFilesServer(
             await db.fabfiles.update({ id: file.id, error: null });
           }
 
-          const { results: searchResults, totalChunks } = await cosineSearch(file, userVector, { db, logger });
+          const {
+            results: searchResults,
+            totalChunks,
+            scanned,
+            scanTruncated,
+            skipped,
+          } = await cosineSearch(file, userVector, { db, logger });
 
           // Truncate search results to fit within the token budget
           const maxChars = maxTokens > 0 ? maxTokens * CHARS_PER_TOKEN : MAX_FILE_SIZE;
@@ -1344,6 +1458,7 @@ export async function processFabFilesServer(
           }
 
           if (truncatedResults.length > 0) {
+            deliveredViaCosine = true;
             // Results arrive in file order, so every chunk with none cut is the whole file and needs
             // no notice. Every chunk WITH a cut is still contiguous, and the excerpt wording ("parts
             // between them were not sent") would misdescribe it - that is a head slice reached by
@@ -1351,7 +1466,11 @@ export async function processFabFilesServer(
             // the first one alone exceeds the budget (any later overflow breaks instead), so today
             // that means a single-chunk file; the condition is written on the invariant rather than
             // on the chunk count so it stays correct if the loop learns to cut a tail.
-            const deliveredEveryChunk = totalChunks === truncatedResults.length;
+            //
+            // `totalChunks` is the file's chunk count, so this stays a claim about the FILE and not
+            // about the scan. `scanTruncated` is a separate arm because a bounded scan can hand over
+            // every chunk it read while chunks it never reached still exist.
+            const deliveredEveryChunk = !scanTruncated && totalChunks === truncatedResults.length;
             let notice = '';
             if (!deliveredEveryChunk) notice = excerptNotice(file.fileName);
             else if (anyChunkCut) notice = CONTENT_TRUNCATION_NOTICE;
@@ -1367,8 +1486,17 @@ export async function processFabFilesServer(
                     : ' as similarity-ranked excerpts; the model is told not to read them as the whole file.')
               );
             }
+          } else {
+            logger.warn(
+              `[processFabFilesServer] Cosine selection returned nothing for "${file.fileName}" ` +
+                `(chunks=${totalChunks}, scanned=${scanned}, skippedDimensionMismatch=${skipped.dimensionMismatch}, ` +
+                `skippedNonFinite=${skipped.nonFinite}, embeddingModel=${embeddingModel}). ` +
+                `Falling back to raw content so the attachment still reaches the model.`
+            );
           }
-        } else {
+        }
+
+        if (!deliveredViaCosine) {
           try {
             logger.info(
               `[processFabFilesServer] Using raw content path for "${file.fileName}" ` +
@@ -1398,7 +1526,15 @@ export async function processFabFilesServer(
               // so without this the model presents the slice as the complete file and names a mid-file
               // row as the last.
               fabContent = fabContent.substring(0, finalMaxFileSize ?? PREVIEW_CHUNK) + CONTENT_TRUNCATION_NOTICE;
-              errorMsg = `Knowledge in the workbench with the fileName ${file.fileName} is ${originalFileSize} long which exceeds ${finalMaxFileSize}. Vectorize your large file or select a model with higher context window.`;
+              // "Vectorize your large file" is false advice for a file that IS vectorized and only
+              // reached this path because nothing in it was searchable this turn. The shared prefix is
+              // deliberate: it is what the cosine branch above clears, so whichever message we set here
+              // goes away by itself once cosine selection works again.
+              errorMsg =
+                `Knowledge in the workbench with the fileName ${file.fileName} is ${originalFileSize} long which exceeds ${finalMaxFileSize}. ` +
+                (canCosineSearch
+                  ? "None of its vectorized chunks could be searched with this turn's embedding model, so it was sent as raw text and truncated. Re-vectorize it under the current embedding model, or select a model with a higher context window."
+                  : 'Vectorize your large file or select a model with higher context window.');
               errorMessages.push({
                 role: 'error',
                 content: errorMsg,

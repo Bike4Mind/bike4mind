@@ -2210,9 +2210,28 @@ describe('processFabFilesServer chunk retrieval', () => {
     vi.clearAllMocks();
   });
 
+  /**
+   * Keyset-paging stand-in for the chunk repository, implementing the REAL cursor arithmetic rather
+   * than returning a canned page per call: a page-keyed mock structurally cannot observe a wrong
+   * cursor, which is the defect paging introduces. Ids are zero-padded so lexicographic order matches
+   * insertion order, the same property a real 24-char ObjectId string has.
+   */
+  const pagedChunkRepo = (rows: Array<{ id: string; text: string; vector: number[] }>) => ({
+    findVectorsByFabFileIds: vi.fn(async (_ids: string[], opts?: { limit?: number; afterChunkId?: string }) =>
+      rows
+        .filter(r => r.vector && r.vector.length > 0)
+        .filter(r => (opts?.afterChunkId ? r.id > opts.afterChunkId : true))
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .slice(0, opts?.limit ?? rows.length)
+        .map(r => ({ id: r.id, fabFileId: 'file-1', text: r.text, vector: r.vector }))
+    ),
+    // The FILE's chunk count, vectorless included - what the caller compares "delivered" against.
+    countByFabFileId: vi.fn(async () => rows.length),
+  });
+
   const makeChunks = (count: number, charsEach: number) =>
     Array.from({ length: count }, (_, i) => ({
-      id: `chunk-${i}`,
+      id: `chunk-${String(i).padStart(4, '0')}`,
       text: `chunk-${i}-` + 'c'.repeat(Math.max(0, charsEach - `chunk-${i}-`.length)),
       // Descending similarity to the query vector [1, 0], so ranking order is chunk-0 first.
       vector: [1, i / count],
@@ -2246,7 +2265,7 @@ describe('processFabFilesServer chunk retrieval', () => {
         logger: mockLogger as any,
         storage: {} as any,
         db: {
-          fabfilechunks: { findByFabFileId: vi.fn(async () => chunks) },
+          fabfilechunks: pagedChunkRepo(chunks),
           fabfiles: { update: vi.fn() },
           caches: {} as any,
         } as any,

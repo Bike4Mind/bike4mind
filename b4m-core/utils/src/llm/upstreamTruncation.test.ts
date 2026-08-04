@@ -50,7 +50,7 @@ const embeddingFactory = {
 
 const chunks = (count: number, charsEach: number) =>
   Array.from({ length: count }, (_, i) => ({
-    id: `chunk-${i}`,
+    id: `chunk-${String(i).padStart(4, '0')}`,
     text: `chunk-${i}-` + 'c'.repeat(Math.max(0, charsEach - `chunk-${i}-`.length)),
     vector: [1, i / count],
   }));
@@ -58,10 +58,29 @@ const chunks = (count: number, charsEach: number) =>
 /** Similarity order is the REVERSE of document order, so presentation order is observable. */
 const reverseRankedChunks = (count: number, charsEach: number) =>
   Array.from({ length: count }, (_, i) => ({
-    id: `chunk-${i}`,
+    id: `chunk-${String(i).padStart(4, '0')}`,
     text: `chunk-${i}-` + 'c'.repeat(Math.max(0, charsEach - `chunk-${i}-`.length)),
     vector: [1, (count - i) / count],
   }));
+
+/**
+ * Keyset-paging stand-in for the chunk repository, implementing the REAL cursor arithmetic rather
+ * than returning a canned page per call: a page-keyed mock structurally cannot observe a wrong
+ * cursor, which is the defect paging introduces. Ids are zero-padded so lexicographic order matches
+ * insertion order, the same property a real 24-char ObjectId string has.
+ */
+const pagedChunkRepo = (rows: Array<{ id: string; text: string; vector: number[] }>) => ({
+  findVectorsByFabFileIds: vi.fn(async (_ids: string[], opts?: { limit?: number; afterChunkId?: string }) =>
+    rows
+      .filter(r => r.vector && r.vector.length > 0)
+      .filter(r => (opts?.afterChunkId ? r.id > opts.afterChunkId : true))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .slice(0, opts?.limit ?? rows.length)
+      .map(r => ({ id: r.id, fabFileId: 'file-1', text: r.text, vector: r.vector }))
+  ),
+  // The FILE's chunk count, vectorless included - what the caller compares "delivered" against.
+  countByFabFileId: vi.fn(async () => rows.length),
+});
 
 const runFabFiles = async (
   file: Record<string, unknown>,
@@ -79,7 +98,7 @@ const runFabFiles = async (
       logger: mockLogger as any,
       storage: {} as any,
       db: {
-        fabfilechunks: { findByFabFileId: vi.fn(async () => fileChunks) },
+        fabfilechunks: pagedChunkRepo(fileChunks),
         fabfiles: { update: vi.fn() },
         caches: {} as any,
       } as any,
@@ -207,7 +226,7 @@ describe('content cut before assembly is declared to the model', () => {
       // file's own text - and a quoted CSV field is ordinary. The squeeze warning then carried
       // user data into logs while the docstring claimed it could not.
       const quoted = Array.from({ length: 8 }, (_, i) => ({
-        id: `chunk-${i}`,
+        id: `chunk-${String(i).padStart(4, '0')}`,
         text: `"SECRET-FIELD-${i}",more,"ANOTHER-QUOTED-${i}"`,
         vector: [1, i / 8],
       }));
