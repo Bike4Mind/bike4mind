@@ -42,6 +42,7 @@ const handler = baseApi()
           organizations: organizationRepository,
           users: userRepository,
         },
+        logger: req.logger,
       }
     );
 

@@ -39,6 +39,7 @@ const handler = baseApi().post<Request<{}, {}, z.infer<typeof CreateDevOrgSchema
         organizations: organizationRepository,
         users: userRepository,
       },
+      logger: req.logger,
     }
   );
 

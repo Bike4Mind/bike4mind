@@ -213,6 +213,7 @@ const handler = baseApi().post(
               organizations: organizationRepository,
               users: userRepository,
             },
+            logger: req.logger,
           }
         );
       }

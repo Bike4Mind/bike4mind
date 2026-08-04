@@ -82,6 +82,7 @@ describe('POST /api/organizations/create-dev', () => {
           organizations: organizationRepository,
           users: userRepository,
         },
+        logger: mockReq.logger,
       }
     );
     expect(mockRes.status).toHaveBeenCalledWith(200);

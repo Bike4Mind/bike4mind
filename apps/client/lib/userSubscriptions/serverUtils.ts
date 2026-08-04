@@ -152,6 +152,7 @@ export const handleOrganizationSubscriptionInvoice = async (
                 organizations: organizationRepository,
                 users: userRepository,
               },
+              logger,
             }
           );
 
