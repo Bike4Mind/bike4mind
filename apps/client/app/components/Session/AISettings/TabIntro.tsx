@@ -7,7 +7,8 @@ import { Stack, Typography } from '@mui/joy';
  */
 export const TabIntro: React.FC<{
   title: string;
-  description: React.ReactNode;
+  /** Omitted where a model carries no description. */
+  description?: React.ReactNode;
   /** Sits inline after the title, e.g. a ContextHelpButton. */
   titleAdornment?: React.ReactNode;
   /** Clears the tab bar. Override with 0 where an ancestor already supplies the offset. */
@@ -18,8 +19,10 @@ export const TabIntro: React.FC<{
       <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>{title}</Typography>
       {titleAdornment}
     </Stack>
-    <Typography sx={{ color: 'text.primary50', fontSize: '14px', pr: { sm: 4 }, lineHeight: '1.4' }}>
-      {description}
-    </Typography>
+    {description && (
+      <Typography sx={{ color: 'text.primary50', fontSize: '14px', pr: { sm: 4 }, lineHeight: '1.4' }}>
+        {description}
+      </Typography>
+    )}
   </Stack>
 );

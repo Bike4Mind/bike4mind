@@ -4,6 +4,7 @@ import {
   Modal,
   ModalDialog,
   Sheet,
+  Button,
   IconButton,
   Tabs,
   TabList,
@@ -509,53 +510,8 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
           flexDirection: 'column',
         }}
       >
-        {/* Header with title and reset button */}
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            width: '100%',
-            mb: { xs: 0, sm: 2 },
-          }}
-        >
-          <Typography level="h4" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-            {modelInfo.name}
-          </Typography>
-
-          {/* Reset Button */}
-          <ResetButton
-            modelInfo={modelInfo}
-            model={model}
-            setLLM={setLLM}
-            setSpokenWords={setSpokenWords}
-            setHistoryLines={setHistoryLines}
-            isImageModel={isImageModel}
-            BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
-            INFINITE_VALUE={INFINITE_VALUE}
-            ImageModels={ImageModels}
-            tooltip="Reset all settings (temperature, tokens, spoken words, response history) to defaults"
-          />
-        </Box>
-
-        {/* Description and chips */}
+        {/* Chips and notices; the title, description and reset live in the dialog header */}
         <Box sx={{ width: '100%' }}>
-          {modelInfo.description && (
-            <Typography
-              level="body-xs"
-              sx={{
-                textAlign: 'left',
-                whiteSpace: 'normal',
-                color: 'text.primary50',
-                fontSize: '14px',
-                lineHeight: '1.4',
-                mb: 2,
-              }}
-            >
-              {modelInfo.description}
-            </Typography>
-          )}
-
           {isOpenAIModel(modelInfo.name) && (
             <Typography
               level="body-xs"
@@ -563,7 +519,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 color: brand[800],
                 fontSize: '14px',
                 fontWeight: '500',
-                mt: 1,
                 mb: 2,
               }}
             >
@@ -2088,89 +2043,66 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               height: '100%',
               display: 'flex',
               flexDirection: 'column',
-              backgroundColor: 'background.body',
               overflow: 'hidden',
               borderRadius: isMobile ? 0 : 'lg',
             }}
           >
-            {/* Header - back arrow on phone, close (X) on desktop */}
-            <Box
-              sx={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 1,
-                py: { xs: 2, sm: 1.5 },
-                px: 2,
-                width: '100%',
-                borderBottom: { sm: theme => `1px solid ${theme.palette.divider}` },
-              }}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
-                {isMobile && (
-                  <IconButton
-                    variant="plain"
-                    data-testid="model-details-back-btn"
-                    onClick={handleDetailsClose}
-                    sx={{
-                      width: '24px',
-                      height: '24px',
-                      minHeight: '24px',
-                      minWidth: 'auto',
-                      mr: 1,
-                      p: 0,
-                      '& .MuiSvgIcon-root': {
-                        fontSize: '16px',
-                      },
-                      '&:hover': {
-                        backgroundColor: 'transparent',
-                      },
-                    }}
-                  >
-                    <ArrowBackIcon />
-                  </IconButton>
-                )}
-                <Typography
-                  noWrap
-                  sx={{ color: 'text.primary', fontSize: { xs: '14px', sm: '16px' }, fontWeight: '500' }}
-                >
-                  {(detailsModel ?? modelInfo)?.name} Settings
-                </Typography>
-              </Box>
-              {!isMobile && (
-                <IconButton
-                  variant="plain"
-                  data-testid="model-details-close-btn"
-                  onClick={handleDetailsClose}
-                  sx={{
-                    width: '24px',
-                    height: '24px',
-                    minHeight: '24px',
-                    minWidth: 'auto',
-                    p: 0,
-                    '& .MuiSvgIcon-root': {
-                      fontSize: '1rem',
-                    },
-                    '&:hover': {
-                      backgroundColor: 'transparent',
-                    },
-                  }}
-                >
-                  <CloseIcon />
-                </IconButton>
-              )}
-            </Box>
-
             {/* Detail content */}
             <Box
               sx={{
                 flex: 1,
                 overflowY: 'auto',
                 p: { xs: 2, sm: 3 },
-                backgroundColor: 'background.panel2',
                 ...scrollbarStyles,
               }}
             >
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                <Button
+                  variant="plain"
+                  size="sm"
+                  data-testid="model-details-back-btn"
+                  onClick={handleDetailsClose}
+                  startDecorator={<ArrowBackIcon sx={{ fontSize: '16px' }} />}
+                  sx={{
+                    ...HEADER_ICON_BUTTON_SX,
+                    '--Button-gap': '4px',
+                    // Joy's own plain-variant :hover rule outranks the backgroundColor in
+                    // HEADER_ICON_BUTTON_SX, so the fill has to be cleared through its var.
+                    '--variant-plainHoverBg': 'transparent',
+                    '--variant-plainActiveBg': 'transparent',
+                    minHeight: 'auto',
+                    px: 0,
+                    fontSize: '14px',
+                    fontWeight: 400,
+                  }}
+                >
+                  Back to models
+                </Button>
+
+                {(detailsModel ?? modelInfo) && (
+                  <ResetButton
+                    modelInfo={(detailsModel ?? modelInfo) as ModelInfo}
+                    model={typedModel}
+                    setLLM={setLLM}
+                    setSpokenWords={setSpokenWords}
+                    setHistoryLines={setHistoryLines}
+                    isImageModel={isImageModel}
+                    BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
+                    INFINITE_VALUE={INFINITE_VALUE}
+                    ImageModels={ImageModels}
+                    tooltip="Reset all settings (temperature, tokens, spoken words, response history) to defaults"
+                  />
+                )}
+              </Box>
+
+              <Box sx={{ mt: 2, mb: 2 }}>
+                <TabIntro
+                  title={(detailsModel ?? modelInfo)?.name ?? ''}
+                  description={(detailsModel ?? modelInfo)?.description}
+                  mt={0}
+                />
+              </Box>
+
               {/* Selected Model Details */}
               <SelectedModelDetails
                 modelInfo={detailsModel ?? modelInfo}
