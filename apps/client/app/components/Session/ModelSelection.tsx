@@ -290,7 +290,7 @@ const metricIconColor = (variant: ChipVariant): string =>
 
 // Same purple the New chip used before it became a corner badge. No theme token exists for
 // it; getChipStyles hardcodes the identical value for its `purple` variant.
-const NEW_BADGE_BG = '#A52ECD';
+export const NEW_BADGE_BG = '#A52ECD';
 
 // Small label riding the card's top border. Positioning lives on the shared row in the card
 // so multiple badges line up; this only draws the pill.

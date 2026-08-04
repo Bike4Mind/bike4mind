@@ -64,7 +64,7 @@ import ToolsSection from './ToolsSection';
 import { AudioGenerationSettings } from './AudioGenerationSettings';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 
-import ModelSelection, { BEDROCK_BADGE_BG, CornerBadge, getModelBackend } from '../ModelSelection';
+import ModelSelection, { BEDROCK_BADGE_BG, CornerBadge, NEW_BADGE_BG, getModelBackend } from '../ModelSelection';
 import MetadataChip from './MetaDataChips';
 import {
   buildModelSelectionPatch,
@@ -302,7 +302,6 @@ interface SelectedModelDetailsProps {
   maxTokens: number;
   maxContextWindow: number;
   getPriceTierTooltip: (tier: string) => string;
-  isNewModel: (modelInfo: ModelInfo) => boolean;
   metricsLoading: boolean;
   modelSpeed: string | null;
   getModelSpeedVariant: (speed: 'fast' | 'medium' | 'slow') => ChipVariant;
@@ -462,7 +461,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   maxTokens,
   maxContextWindow,
   getPriceTierTooltip,
-  isNewModel,
   metricsLoading,
   modelSpeed,
   getModelSpeedVariant,
@@ -523,27 +521,8 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
             </Typography>
           )}
 
-          {/* Metadata Chips */}
+          {/* Metadata Chips; New and AWS Bedrock sit above the model name in the header */}
           <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1 }}>
-            {/* Latest Model Chip */}
-            {isNewModel(modelInfo) && (
-              <MetadataChip
-                label="New"
-                mode={mode}
-                variant="purple"
-                tooltip="This model is released in the last 3 months"
-              />
-            )}
-
-            {modelInfo.backend === ModelBackend.Bedrock && (
-              <CornerBadge
-                testId={`bedrock-badge-${modelInfo.id}`}
-                label="AWS Bedrock"
-                tooltip="Hosted on AWS Bedrock, not the provider's own API"
-                background={BEDROCK_BADGE_BG}
-              />
-            )}
-
             {/* Price Tier */}
             <MetadataChip
               label={priceTierInfo.tier}
@@ -2091,6 +2070,34 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               </Box>
 
               <Box sx={{ mt: 2, mb: 2 }}>
+                {(() => {
+                  const shown = detailsModel ?? modelInfo;
+                  if (!shown) return null;
+                  const showNew = isNewModel(shown);
+                  const showBedrock = shown.backend === ModelBackend.Bedrock;
+                  if (!showNew && !showBedrock) return null;
+                  return (
+                    <Box sx={{ display: 'flex', gap: '4px', mb: '8px' }}>
+                      {showNew && (
+                        <CornerBadge
+                          testId={`model-new-badge-${shown.id}`}
+                          label="New"
+                          tooltip="Released in the last 3 months"
+                          background={NEW_BADGE_BG}
+                        />
+                      )}
+                      {showBedrock && (
+                        <CornerBadge
+                          testId={`bedrock-badge-${shown.id}`}
+                          label="AWS Bedrock"
+                          tooltip="Hosted on AWS Bedrock, not the provider's own API"
+                          background={BEDROCK_BADGE_BG}
+                        />
+                      )}
+                    </Box>
+                  );
+                })()}
+
                 <TabIntro
                   title={(detailsModel ?? modelInfo)?.name ?? ''}
                   description={(detailsModel ?? modelInfo)?.description}
@@ -2112,7 +2119,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 maxTokens={maxTokens}
                 maxContextWindow={maxContextWindow}
                 getPriceTierTooltip={getPriceTierTooltip}
-                isNewModel={isNewModel}
                 metricsLoading={metricsLoading}
                 modelSpeed={modelSpeed}
                 getModelSpeedVariant={getModelSpeedVariant}
