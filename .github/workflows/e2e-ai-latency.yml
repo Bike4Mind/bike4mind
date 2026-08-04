@@ -79,13 +79,26 @@ jobs:
     steps:
       - name: Resolve configuration
         id: config
+        env:
+          # Dispatch inputs via env (never interpolate attacker-influenceable
+          # values into the shell). pr_number flows into the SST stage and
+          # `sst shell --stage`, so it must be digits-only. Keep in sync with
+          # the e2e-ai-latency job's Resolve configuration step.
+          PR_NUMBER: ${{ inputs.pr_number }}
+          STAGE_INPUT: ${{ inputs.stage }}
+          PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
+          STAGING_SERVER_DOMAIN: ${{ vars.STAGING_SERVER_DOMAIN }}
         run: |
-          if [ -n "${{ inputs.pr_number }}" ]; then
-            STAGE="pr${{ inputs.pr_number }}"
-            API_URL="https://app.pr${{ inputs.pr_number }}.${{ vars.PREVIEW_SERVER_DOMAIN }}"
+          if [ -n "$PR_NUMBER" ]; then
+            if ! printf '%s' "$PR_NUMBER" | grep -qE '^[0-9]+$'; then
+              echo "::error::pr_number must be digits-only; got '$PR_NUMBER'"
+              exit 1
+            fi
+            STAGE="pr${PR_NUMBER}"
+            API_URL="https://app.pr${PR_NUMBER}.${PREVIEW_SERVER_DOMAIN}"
           else
-            STAGE="${{ inputs.stage || 'dev' }}"
-            API_URL="https://app.${{ vars.STAGING_SERVER_DOMAIN }}"
+            STAGE="${STAGE_INPUT:-dev}"
+            API_URL="https://app.${STAGING_SERVER_DOMAIN}"
           fi
           echo "stage=$STAGE" >> $GITHUB_OUTPUT
           echo "api_url=$API_URL" >> $GITHUB_OUTPUT
