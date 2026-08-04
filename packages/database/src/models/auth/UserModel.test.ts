@@ -136,15 +136,17 @@ describe('authProviderDedupeKey', () => {
   it('keeps distinct the identities that would collide at the concatenation boundary without a delimiter', () => {
     // ('ab','c') and ('a','bc') both concatenate to 'abc' with no separator; only the
     // U+0000 delimiter keeps their keys distinct - remove it and both collapse to 'abc'.
-    expect(authProviderDedupeKey('ab', 'c')).not.toBe(authProviderDedupeKey('a', 'bc'));
+    // Cast: these are deliberately non-enum stand-ins - real AuthStrategy values never share
+    // a boundary prefix, so a genuine collision case cannot be built from the enum.
+    expect(authProviderDedupeKey('ab' as AuthStrategy, 'c')).not.toBe(authProviderDedupeKey('a' as AuthStrategy, 'bc'));
   });
 
   it('joins strategy and id with a single U+0000 byte', () => {
-    expect(authProviderDedupeKey('okta', 'sub-a')).toBe(`okta${NUL}sub-a`);
+    expect(authProviderDedupeKey(AuthStrategy.Okta, 'sub-a')).toBe(`okta${NUL}sub-a`);
   });
 
   it('treats a null id as an empty id', () => {
-    expect(authProviderDedupeKey('github', null)).toBe(`github${NUL}`);
+    expect(authProviderDedupeKey(AuthStrategy.Github, null)).toBe(`github${NUL}`);
   });
 });
 
