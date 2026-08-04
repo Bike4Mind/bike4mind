@@ -18,6 +18,7 @@ interface CreateAdapters {
     organizations: IOrganizationRepository;
     users: Pick<IUserRepository, 'findById' | 'update'>;
   };
+  logger?: { error: (message: string) => void };
 }
 
 export const create = async (user: IUserDocument, params: CreateParameters, adapters: CreateAdapters) => {
@@ -73,7 +74,17 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
   // belongs to one - multi-org owner active-org SELECTION is a separate concern (#1172).
   const owner = billingOwnerId === user.id ? user : await adapters.db.users.findById(billingOwnerId);
   if (owner && !owner.organizationId) {
-    await adapters.db.users.update({ id: owner.id, organizationId: organization.id });
+    // Best-effort, and intentionally NOT fatal: the org is already committed (there is no surrounding
+    // transaction at every call site), so letting a failed pointer write bubble would 500 a create
+    // that actually succeeded and leave the owner in exactly the no-active-org state this repairs.
+    // A stale pointer is recoverable - #1172 active-org selection can set it later.
+    try {
+      await adapters.db.users.update({ id: owner.id, organizationId: organization.id });
+    } catch (error) {
+      (adapters.logger ?? console).error(
+        `Organization ${organization.id} created but failed to set active-org pointer for owner ${owner.id}: ${error}`
+      );
+    }
   }
 
   return organization;

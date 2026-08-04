@@ -150,6 +150,7 @@ export const handleOrganizationSubscriptionInvoice = async (
             {
               db: {
                 organizations: organizationRepository,
+                users: userRepository,
               },
             }
           );
