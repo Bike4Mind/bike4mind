@@ -16,6 +16,15 @@ import {
 } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
+import { BoundedTopK } from '../dataLakeService';
+
+/**
+ * Page size for the memento walk, plus a backstop on the number of pages. Every page consumes at
+ * least one row and the cursor is checked for strict advance, so the page cap only ever fires on a
+ * repository that misbehaves.
+ */
+const MEMENTO_PAGE_SIZE = 200;
+const MEMENTO_MAX_PAGES = 500;
 
 /**
  * Result type for memento retrieval with similarity score
@@ -24,6 +33,14 @@ export interface RelevantMemento {
   memento: IMementoDocument;
   similarity: number;
 }
+
+/**
+ * Total order for the top-K. The id tiebreaker is load-bearing, not cosmetic: mementos now arrive
+ * page by page, so leaving equal-similarity mementos to arrival order would make the result depend
+ * on where a page boundary fell.
+ */
+const compareMementosBySimilarity = (a: RelevantMemento, b: RelevantMemento) =>
+  b.similarity - a.similarity || String(a.memento.id).localeCompare(String(b.memento.id));
 
 /**
  * Options for memento retrieval
@@ -167,41 +184,66 @@ export async function getRelevantMementos(
   logger?.debug?.('Generating embedding for prompt:', prompt.substring(0, 100));
   try {
     const promptEmbedding = await embeddingService.generateEmbedding(prompt);
-    // STEP 5: Fetch mementos from database
-    const mementos = await adapters.db.mementos.findByUserId(userId, {
-      tier: tier === 'all' ? undefined : tier,
-      select: 'summary embedding weight tags fullContent lastAccessedAt',
-    });
 
-    logger?.debug?.(`Found ${mementos.length} mementos to search through (tier: ${tier})`);
+    // STEP 5+6: Walk the user's mementos a page at a time, scoring into a fixed-size top-K.
+    //
+    // Every memento carries an embedding and its full original prompt, so reading them all at once
+    // made peak memory a function of how long the user has been using the product. Paging bounds that
+    // to one page plus topK. Coverage is unchanged - there is no scan budget here, the walk runs to
+    // the end - so which mementos get scored is exactly what it was.
+    //
+    // No `.lean()`: RelevantMemento.memento is an IMementoDocument and consumers read `memento.id`,
+    // a Mongoose virtual that a lean object does not carry.
+    const ranked = new BoundedTopK<RelevantMemento>(topK, compareMementosBySimilarity);
+    let scanned = 0;
+    let cursor: string | undefined;
 
-    if (mementos.length === 0) {
+    for (let page = 0; page < MEMENTO_MAX_PAGES; page++) {
+      const mementos = await adapters.db.mementos.findByUserId(userId, {
+        tier: tier === 'all' ? undefined : tier,
+        select: 'summary embedding weight tags fullContent lastAccessedAt',
+        limit: MEMENTO_PAGE_SIZE,
+        afterId: cursor,
+      });
+      if (mementos.length === 0) break;
+
+      const nextCursor = String(mementos[mementos.length - 1].id);
+      if (cursor !== undefined && !(nextCursor > cursor)) {
+        throw new Error(`[getRelevantMementos] memento cursor failed to advance past ${cursor} for user ${userId}`);
+      }
+      cursor = nextCursor;
+
+      for (const memento of mementos) {
+        scanned++;
+        if (!memento.embedding || memento.embedding.length === 0) {
+          logger?.warn?.(`Memento ${memento.id} missing embedding, skipping`);
+          continue;
+        }
+
+        const similarity = computeCosineSimilarity(promptEmbedding, memento.embedding);
+        // A zero-magnitude embedding makes cosine NaN, and NaN fails every comparison - it would slip
+        // past the floor below and then sort ahead of every real match.
+        if (!Number.isFinite(similarity)) {
+          logger?.warn?.(`Memento ${memento.id} scored a non-finite similarity, skipping`);
+          continue;
+        }
+        if (similarity < minSimilarity) continue;
+
+        ranked.offer({ memento, similarity });
+      }
+
+      if (mementos.length < MEMENTO_PAGE_SIZE) break;
+    }
+
+    logger?.debug?.(`Scanned ${scanned} mementos (tier: ${tier})`);
+
+    if (scanned === 0) {
       logger?.debug?.('No mementos found for user');
       return [];
     }
 
-    // STEP 6: Compute similarity scores
-    const mementosWithScores: RelevantMemento[] = mementos.reduce<RelevantMemento[]>((acc, memento) => {
-      if (!memento.embedding || memento.embedding.length === 0) {
-        logger?.warn?.(`Memento ${memento.id} missing embedding, skipping`);
-        return acc;
-      }
-
-      const similarity = computeCosineSimilarity(promptEmbedding, memento.embedding);
-
-      // Only include if above minimum threshold
-      if (similarity >= minSimilarity) {
-        acc.push({
-          memento,
-          similarity,
-        });
-      }
-
-      return acc;
-    }, []);
-
-    // STEP 7: Sort by similarity (highest first) and limit to topK
-    const sortedMementos = mementosWithScores.sort((a, b) => b.similarity - a.similarity).slice(0, topK);
+    // STEP 7: Highest similarity first
+    const sortedMementos = ranked.drain();
 
     logger?.debug?.(
       `Returning ${sortedMementos.length} relevant mementos (min similarity: ${minSimilarity}, topK: ${topK})`
@@ -215,7 +257,11 @@ export async function getRelevantMementos(
 
     return sortedMementos;
   } catch (error) {
-    logger?.warn?.('Error generating embedding for prompt, returning empty array:', error);
+    // Fail open: personal memory enriches an answer, it is not required to produce one. But the
+    // message has to name the actual failure - this block covers the whole retrieval, not just the
+    // embed call, so attributing every fault to embedding generation sends someone hunting the wrong
+    // thing (a paging fault, for instance, reads nothing like a provider error).
+    logger?.warn?.('Memento retrieval failed, continuing without personal memory:', error);
     return [];
   }
 }
