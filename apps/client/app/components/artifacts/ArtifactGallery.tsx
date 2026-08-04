@@ -124,12 +124,16 @@ async function hydrateContentOrToast(
     return null;
   }
   if (artifact.content) return artifact.content;
-  let content = '';
   try {
     const { data } = await api.get<{ content?: { content?: string } }>(
       `/api/artifacts/${encodeURIComponent(artifact.id)}?includeContent=true`
     );
-    content = data.content?.content ?? '';
+    const content = data.content?.content ?? '';
+    if (!content) {
+      toast.error(`This artifact has no content to ${action}`);
+      return null;
+    }
+    return content;
   } catch (err) {
     // A transport/auth failure is not the same as "empty content" - keep the two distinct so a
     // transient error doesn't send anyone chasing a data problem.
@@ -137,11 +141,6 @@ async function hydrateContentOrToast(
     toast.error('Could not load artifact content, please try again');
     return null;
   }
-  if (!content) {
-    toast.error(`This artifact has no content to ${action}`);
-    return null;
-  }
-  return content;
 }
 
 interface ArtifactGalleryProps {
@@ -172,7 +171,8 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
   // rejected action.
   const teamOrg = activeOrg && String(activeOrg.id) === String(currentUser?.organizationId) ? activeOrg : null;
   const { publishAndShare, modal: publishShareModal } = usePublishShare();
-  // Guard against re-entrant clicks racing two hydrations onto the single dialog/editor slot.
+  // Guard re-entrant clicks racing two hydrations onto the single dialog/editor slot. Refs, not
+  // state: the check must be synchronous and must not re-render.
   const publishingRef = useRef(false);
   const editingRef = useRef(false);
   const handlePublishArtifact = useCallback(
@@ -184,9 +184,6 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
       // The dialog detects a prior publication of this artifact (via resolveExisting) and
       // offers "update existing" (a new version) vs "publish as new". Route through
       // buildArtifactPublishWiring so the lookup and the publish share one stable id.
-      // Ignore re-entrant clicks while a hydration fetch is already in flight: there is a
-      // single share dialog, so two racing publishes would let the last-resolved one win it.
-      // A ref (not state) keeps the guard synchronous and free of re-render churn.
       if (publishingRef.current) return;
       publishingRef.current = true;
       try {
@@ -217,8 +214,8 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
   // handing it a list artifact (no `content`) opened an editor that could never save.
   const handleEditArtifact = useCallback(
     async (artifact: ArtifactWithContent) => {
-      // Deduplicates double-clicks inside the fetch window. Not a correctness guard: the editor
-      // pins its own PUT target at mount.
+      // Deduplicates double-clicks inside the fetch window. Correctness of the save target rests
+      // on the host keying the editor by artifact id, not on this guard.
       if (editingRef.current) return;
       editingRef.current = true;
       try {

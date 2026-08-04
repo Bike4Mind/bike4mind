@@ -35,6 +35,7 @@ import {
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import { type BaseArtifact } from '@bike4mind/common';
+import { type ArtifactMutationResponse } from './types';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
@@ -321,8 +322,7 @@ export const ArtifactCreator: React.FC<ArtifactCreatorProps> = ({
 
     try {
       setSaving(true);
-      // Envelope response: onSave takes response.data.artifact, never response.data.
-      const response = await api.post<{ artifact: BaseArtifact }>('/api/artifacts', formData);
+      const response = await api.post<ArtifactMutationResponse>('/api/artifacts', formData);
       const created = response.data.artifact;
 
       toast.success(`Artifact "${created.title}" created successfully!`);

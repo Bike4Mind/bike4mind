@@ -20,7 +20,7 @@ const ArtifactsDemoPage: React.FC = () => {
     setShowCreator(true);
   };
 
-  // No success toasts in these two handlers: the creator and editor each raise their own.
+  // Neither save handler toasts: the creator and editor each raise their own success toast.
   const handleArtifactSave = () => {
     setShowCreator(false);
     setRefreshKey(prev => prev + 1); // Force refresh of gallery
@@ -175,8 +175,10 @@ const ArtifactsDemoPage: React.FC = () => {
         >
           <ModalClose />
           {editingArtifact && (
-            // Keyed by id so switching artifacts reseeds the form; the editor pins its own PUT
-            // target at mount, so this is a display concern rather than a data-integrity one.
+            // Keyed by id because the editor is mount-scoped: formData and originalData are
+            // seeded once and never resync, and the PUT body is a diff against originalData. A
+            // prop swap without this remount would send artifact B's edits to artifact A. Do not
+            // remove - this is the data-integrity guard, not a display nicety.
             <ArtifactEditor
               key={editingArtifact.id}
               artifact={editingArtifact}

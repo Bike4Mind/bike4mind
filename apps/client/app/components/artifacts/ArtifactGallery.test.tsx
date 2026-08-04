@@ -94,6 +94,17 @@ async function openCardAction(user: ReturnType<typeof userEvent.setup>, testId: 
 const openShare = (user: ReturnType<typeof userEvent.setup>) => openCardAction(user, 'artifact-publish-share');
 const openEdit = (user: ReturnType<typeof userEvent.setup>) => openCardAction(user, 'artifact-edit');
 
+/** Mounts the gallery and returns the edit spy plus a driver. */
+function renderGallery() {
+  const onArtifactEdit = vi.fn();
+  render(
+    <TestWrapper>
+      <ArtifactGallery onArtifactEdit={onArtifactEdit} />
+    </TestWrapper>
+  );
+  return { onArtifactEdit, user: userEvent.setup() };
+}
+
 describe('ArtifactGallery - Share hydrates content', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -101,12 +112,7 @@ describe('ArtifactGallery - Share hydrates content', () => {
 
   it('hydrates content from the single-artifact GET and passes it to the publish wiring', async () => {
     wireApi(() => Promise.resolve({ data: { content: { content: '<h1>hydrated</h1>' } } }));
-    const user = userEvent.setup();
-    render(
-      <TestWrapper>
-        <ArtifactGallery />
-      </TestWrapper>
-    );
+    const { user } = renderGallery();
 
     await openShare(user);
 
@@ -126,12 +132,7 @@ describe('ArtifactGallery - Share hydrates content', () => {
 
   it('shows a "no content" toast and does not publish when the fetch returns empty content', async () => {
     wireApi(() => Promise.resolve({ data: { content: { content: '' } } }));
-    const user = userEvent.setup();
-    render(
-      <TestWrapper>
-        <ArtifactGallery />
-      </TestWrapper>
-    );
+    const { user } = renderGallery();
 
     await openShare(user);
 
@@ -144,12 +145,7 @@ describe('ArtifactGallery - Share hydrates content', () => {
 
   it('reports a load error (distinct from "no content") and does not publish when the fetch fails', async () => {
     wireApi(() => Promise.reject(new Error('boom')));
-    const user = userEvent.setup();
-    render(
-      <TestWrapper>
-        <ArtifactGallery />
-      </TestWrapper>
-    );
+    const { user } = renderGallery();
 
     await openShare(user);
 
@@ -169,12 +165,7 @@ describe('ArtifactGallery - Share hydrates content', () => {
       resolveFetch = res;
     });
     wireApi(() => pending);
-    const user = userEvent.setup();
-    render(
-      <TestWrapper>
-        <ArtifactGallery />
-      </TestWrapper>
-    );
+    const { user } = renderGallery();
 
     await openShare(user); // first click: hydration fetch starts and stays pending
     await openShare(user); // second click while in flight: should be ignored by the guard
@@ -197,13 +188,7 @@ describe('ArtifactGallery - Edit hydrates content', () => {
 
   it('hydrates content and hands the artifact to onArtifactEdit with it', async () => {
     wireApi(() => Promise.resolve({ data: { content: { content: '<h1>hydrated</h1>' } } }));
-    const onArtifactEdit = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <TestWrapper>
-        <ArtifactGallery onArtifactEdit={onArtifactEdit} />
-      </TestWrapper>
-    );
+    const { onArtifactEdit, user } = renderGallery();
 
     await openEdit(user);
 
@@ -217,74 +202,44 @@ describe('ArtifactGallery - Edit hydrates content', () => {
 
   it('refuses to open the editor when the artifact has no content', async () => {
     wireApi(() => Promise.resolve({ data: { content: { content: '' } } }));
-    const onArtifactEdit = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <TestWrapper>
-        <ArtifactGallery onArtifactEdit={onArtifactEdit} />
-      </TestWrapper>
-    );
+    const { onArtifactEdit, user } = renderGallery();
 
     await openEdit(user);
 
-    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('This artifact has no content to edit'), {
-      timeout: 5000,
-    });
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('This artifact has no content to edit'));
     expect(onArtifactEdit).not.toHaveBeenCalled();
   });
 
   it('reports a load error (distinct from "no content") and does not open the editor', async () => {
     wireApi(() => Promise.reject(new Error('boom')));
-    const onArtifactEdit = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <TestWrapper>
-        <ArtifactGallery onArtifactEdit={onArtifactEdit} />
-      </TestWrapper>
-    );
+    const { onArtifactEdit, user } = renderGallery();
 
     await openEdit(user);
 
-    await waitFor(
-      () => expect(mocks.toastError).toHaveBeenCalledWith('Could not load artifact content, please try again'),
-      { timeout: 5000 }
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith('Could not load artifact content, please try again')
     );
     expect(mocks.toastError).not.toHaveBeenCalledWith('This artifact has no content to edit');
     expect(onArtifactEdit).not.toHaveBeenCalled();
   });
 
-  // This branch was silently regressed once by moving the id check behind a content short-circuit,
-  // and no test caught it - hence pinning it here. The helper is shared, so this covers the
-  // publish path's use of the same guard.
+  // The guard lives in the shared helper, so this covers the publish path's use of it too.
   it('refuses an artifact with no stable id before attempting any hydration', async () => {
     // Carries content as well as an empty id: that combination is what slips past a guard placed
     // after the content short-circuit, so this pins the guard's order, not just its existence.
     const idless = { ...LIST_RESPONSE.artifacts[0], id: '', content: '<h1>already here</h1>' };
-    // A hydration attempt rejects rather than falling through, so the no-fetch claim cannot pass
-    // for the wrong reason.
+    // Hydration rejects rather than falling through, so a guard placed too late would surface the
+    // load-error toast instead - which is what makes the assertion below prove no fetch happened.
     wireApi(() => Promise.reject(new Error('should not hydrate an id-less artifact')), {
       ...LIST_RESPONSE,
       artifacts: [idless],
     });
-    const onArtifactEdit = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <TestWrapper>
-        <ArtifactGallery onArtifactEdit={onArtifactEdit} />
-      </TestWrapper>
-    );
+    const { onArtifactEdit, user } = renderGallery();
 
     await openEdit(user);
 
-    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('This artifact has no stable id to edit'), {
-      timeout: 5000,
-    });
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('This artifact has no stable id to edit'));
     expect(onArtifactEdit).not.toHaveBeenCalled();
-    // No hydration attempted: an empty id would have fetched the list endpoint by accident.
-    const hydrationCalls = mocks.apiGet.mock.calls.filter(
-      ([url]: [string]) => typeof url === 'string' && url.includes('includeContent=true')
-    );
-    expect(hydrationCalls).toHaveLength(0);
   });
 
   it('ignores a re-entrant Edit click while a hydration fetch is already in flight', async () => {
@@ -293,21 +248,14 @@ describe('ArtifactGallery - Edit hydrates content', () => {
       resolveFetch = res;
     });
     wireApi(() => pending as Promise<{ data: unknown }>);
-    const onArtifactEdit = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <TestWrapper>
-        <ArtifactGallery onArtifactEdit={onArtifactEdit} />
-      </TestWrapper>
-    );
+    const { onArtifactEdit, user } = renderGallery();
 
     await openEdit(user); // first click: hydration starts and stays pending
     await openEdit(user); // second click while in flight: must be dropped
 
     resolveFetch({ data: { content: { content: '<h1>hydrated</h1>' } } });
 
-    // The outcome that matters: one editor opened, not two. Without the guard both clicks resolve
-    // off the same pending promise and this fires twice.
-    await waitFor(() => expect(onArtifactEdit).toHaveBeenCalledTimes(1), { timeout: 5000 });
+    // Without the guard both clicks resolve off the same pending promise and this fires twice.
+    await waitFor(() => expect(onArtifactEdit).toHaveBeenCalledTimes(1));
   });
 });

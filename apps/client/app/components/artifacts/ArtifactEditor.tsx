@@ -38,7 +38,7 @@ import {
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import { type BaseArtifact } from '@bike4mind/common';
-import { type ArtifactWithContent } from './types';
+import { type ArtifactWithContent, type ArtifactMutationResponse } from './types';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import Editor from 'react-simple-code-editor';
@@ -149,9 +149,11 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
     metadata: artifact.metadata || {},
   });
 
-  // Pinned at mount so the PUT target and the diffed body always describe the same artifact: the
-  // body is derived from mount-time state, so reading a live `artifact.id` could target a
-  // different artifact than the edits belong to.
+  // Pinned at mount alongside originalData so the PUT target matches the state the body was
+  // diffed from. Redundant while every host keys this component by artifact id, but it keeps a
+  // host that forgets from saving one artifact's edits onto another.
+  //
+  // Also see: formData/originalData below are seeded once and never resync on prop change.
   const [artifactId] = useState(artifact.id);
 
   // Track original values for change detection
@@ -280,8 +282,7 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
       if (JSON.stringify(formData.metadata) !== JSON.stringify(originalData.metadata))
         changedFields.metadata = formData.metadata;
 
-      // Envelope response: onSave takes response.data.artifact, never response.data.
-      const response = await api.put<{ artifact: BaseArtifact }>(`/api/artifacts/${artifactId}`, changedFields);
+      const response = await api.put<ArtifactMutationResponse>(`/api/artifacts/${artifactId}`, changedFields);
       const updated = response.data.artifact;
 
       toast.success(`Artifact "${updated.title}" updated successfully!`);
@@ -364,7 +365,13 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
         <Stack direction="row" spacing={1}>
           {hasChanges && (
             <Tooltip title="Revert all changes">
-              <Button variant="outlined" color="neutral" startDecorator={<UndoIcon />} onClick={handleRevert}>
+              <Button
+                variant="outlined"
+                color="neutral"
+                startDecorator={<UndoIcon />}
+                onClick={handleRevert}
+                data-testid="artifact-editor-revert-btn"
+              >
                 Revert
               </Button>
             </Tooltip>

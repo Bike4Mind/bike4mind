@@ -16,19 +16,21 @@ const mocks = vi.hoisted(() => ({
   apiPut: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
+  toastInfo: vi.fn(),
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: mocks.apiGet, put: mocks.apiPut, post: vi.fn(), delete: vi.fn() },
 }));
 vi.mock('sonner', () => ({
-  toast: { error: mocks.toastError, success: mocks.toastSuccess },
+  toast: { error: mocks.toastError, success: mocks.toastSuccess, info: mocks.toastInfo },
 }));
 vi.mock('@client/app/components/help', () => ({
   ContextHelpButton: () => null,
 }));
 
 import { ArtifactEditor } from './ArtifactEditor';
+import { type ArtifactWithContent } from './types';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -42,6 +44,9 @@ const TYPES_RESPONSE = {
 
 const EXISTING = {
   id: 'artifact_1',
+  userId: 'u1',
+  createdAt: new Date('2026-01-01'),
+  updatedAt: new Date('2026-01-01'),
   type: 'html' as const,
   title: 'Original Title',
   content: '<h1>hi</h1>',
@@ -55,7 +60,7 @@ const EXISTING = {
   // otherwise make them differ from originalData and land in the PUT body.
   permissions: { canRead: [], canWrite: [], canDelete: [], isPublic: false, inheritFromProject: true },
   metadata: {},
-};
+} satisfies ArtifactWithContent;
 
 // Server-returned title differs from the typed text so the assertions pin the response value.
 const TYPED_TITLE = 'Typed Rename';
@@ -69,7 +74,7 @@ async function renameAndSave() {
   const user = userEvent.setup();
   render(
     <TestWrapper>
-      <ArtifactEditor artifact={EXISTING as never} onSave={onSave} />
+      <ArtifactEditor artifact={EXISTING} onSave={onSave} />
     </TestWrapper>
   );
 
@@ -109,5 +114,33 @@ describe('ArtifactEditor - update success notification', () => {
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave).toHaveBeenCalledWith(UPDATED);
+  });
+});
+
+describe('ArtifactEditor - revert', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('restores the original title and saves nothing', async () => {
+    mocks.apiGet.mockResolvedValue({ data: TYPES_RESPONSE });
+    const user = userEvent.setup();
+    render(
+      <TestWrapper>
+        <ArtifactEditor artifact={EXISTING} onSave={vi.fn()} />
+      </TestWrapper>
+    );
+
+    const title = await screen.findByTestId('artifact-editor-title-input');
+    await user.clear(title);
+    await user.type(title, TYPED_TITLE);
+    expect(title).toHaveValue(TYPED_TITLE);
+
+    // Revert is rendered only while hasChanges is true, so this find doubles as that assertion.
+    await user.click(await screen.findByTestId('artifact-editor-revert-btn'));
+
+    await waitFor(() => expect(title).toHaveValue(EXISTING.title));
+    expect(mocks.toastInfo).toHaveBeenCalledWith('Changes reverted');
+    expect(mocks.apiPut).not.toHaveBeenCalled();
   });
 });
