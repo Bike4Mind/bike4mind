@@ -194,7 +194,8 @@ describe('toggleTags - data lake meta-tags', () => {
 
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
-    // No other lake door touches the registry; counting only here produced drift.
+    // A meta-tag is lake membership, not an entry in the user's own tag list, and no other lake
+    // door touches the registry either.
     expect(adapters.db.fileTags.touchLastActivityBy).not.toHaveBeenCalled();
   });
 

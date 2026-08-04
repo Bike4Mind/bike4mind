@@ -107,8 +107,13 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
 
   /**
    * Marks a tag as just used. `lastActivityAt` is what the sidebar's recent/default ordering sorts
-   * on, and nothing else refreshes it after the document is created, so every path that changes
-   * which files carry a tag has to come through here.
+   * on, and this is the only thing that refreshes it once the document exists - findOrCreate sets it
+   * on its own upsert, and nothing else writes it at all.
+   *
+   * Best-effort rather than an invariant, and deliberately so: the toggle path and the two
+   * file-delete doors call it, but a whole-array tags replace on PUT /api/files/[id] and the data
+   * lake taxonomy writers do not, so a tag changed only through those reads as older than it is.
+   * Widening that is a behavioural change to the ordering, not a mechanical one.
    */
   async touchLastActivityBy(by: Pick<IFileTag, 'name' | 'userId'>): Promise<void> {
     try {
