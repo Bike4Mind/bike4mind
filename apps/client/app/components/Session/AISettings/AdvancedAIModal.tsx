@@ -2011,11 +2011,34 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               sx={{
                 flex: 1,
                 overflowY: 'auto',
-                p: { xs: 2, sm: 3 },
+                pt: 0,
+                px: { xs: 2, sm: 3 },
+                pb: { xs: 2, sm: 3 },
                 ...scrollbarStyles,
               }}
             >
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+              <Box
+                sx={{
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 1,
+                  // Breaks out of the container's side padding so the background covers edge to
+                  // edge as content scrolls under. Nothing to compensate vertically - the
+                  // container has no top padding.
+                  mx: { xs: '-16px', sm: '-24px' },
+                  px: { xs: '16px', sm: '24px' },
+                  py: '16px',
+                  backgroundColor: 'background.surface',
+                  // Same token as the dialog's own outline: ModalDialog carries no explicit
+                  // border, so its window edge is Joy's outlined-variant border.
+                  borderBottom: '1px solid',
+                  borderColor: 'neutral.outlinedBorder',
+                }}
+              >
                 <Button
                   variant="plain"
                   size="sm"
@@ -2054,7 +2077,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 )}
               </Box>
 
-              <Box sx={{ mt: 2 }}>
+              <Box sx={{ mt: '24px' }}>
                 {(() => {
                   const shown = detailsModel ?? modelInfo;
                   if (!shown) return null;

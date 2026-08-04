@@ -34,6 +34,7 @@ import type { BoxProps } from '@mui/joy';
 import SwitchSelector from '@client/app/components/common/fields/SwitchSelector';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
+import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
 import { B4MLLMTools, IMcpServerDocument, classifyQueryComplexity } from '@bike4mind/common';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
@@ -266,6 +267,9 @@ const ToolsSection = ({
     isPending: isLoadingMcpServers,
     isFetching: isFetchingMcpServers,
   } = useMcpServers();
+
+  // Must stay above the unsupported-model early return further down, which cuts off hooks.
+  const isMobile = useIsMobile();
 
   const { isFeatureEnabled: checkFeatureEnabled, isAdminFeatureEnabled } = useFeatureEnabled();
   const isQuestMasterFeatureEnabled = checkFeatureEnabled('enableQuestMaster');
@@ -612,6 +616,16 @@ const ToolsSection = ({
         : 'This request may auto-route to Agent mode, which runs a fixed toolset. Greyed-out Smart Tools below would then be ignored.'
       : null;
 
+  // One instance, placed differently per breakpoint: on the title row on mobile, in the
+  // labelled group on the right on desktop. Rendering it twice would duplicate its test id.
+  const modeToggle = (
+    <SquareSlideToggle
+      onChange={() => setLLM({ toolMode: toolMode === 'smart' ? 'fast' : 'smart' })}
+      checked={toolMode === 'smart'}
+      data-testid="tool-mode-toggle"
+    />
+  );
+
   return (
     <>
       {/* Sticky header (dropdown only): title + help on the left, close on the right.
@@ -681,7 +695,7 @@ const ToolsSection = ({
           {/* Title, help button and description match the model title/description in the
               settings dialog header. The dropdown skips the help button - its own header
               already carries one. */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', mb: '4px' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', mb: { xs: '16px', sm: '4px' } }}>
             <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>Smart tools</Typography>
             {!onClose && (
               <ContextHelpButton
@@ -692,6 +706,9 @@ const ToolsSection = ({
                 data-testid="help-button-smart-tools"
               />
             )}
+            {/* Mobile parks the toggle here so the description gets the full width below,
+                instead of being squeezed into a narrow column beside it. */}
+            {isMobile && <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>{modeToggle}</Box>}
           </Box>
           {toolMode === 'fast' ? (
             <>
@@ -720,18 +737,16 @@ const ToolsSection = ({
             </Typography>
           )}
         </Box>
-        {/* Mirrors the Research Mode toggle. flexShrink keeps the label and control intact so
-            a long description wraps instead of squeezing them. */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
-          <Typography level="title-sm" sx={{ fontWeight: 'normal', fontSize: '14px', textAlign: 'right' }}>
-            Enable
-          </Typography>
-          <SquareSlideToggle
-            onChange={() => setLLM({ toolMode: toolMode === 'smart' ? 'fast' : 'smart' })}
-            checked={toolMode === 'smart'}
-            data-testid="tool-mode-toggle"
-          />
-        </Box>
+        {/* Desktop only: the labelled group, mirroring the Research Mode toggle. flexShrink
+            keeps it intact so a long description wraps instead of squeezing it. */}
+        {!isMobile && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+            <Typography level="title-sm" sx={{ fontWeight: 'normal', fontSize: '14px', textAlign: 'right' }}>
+              Enable
+            </Typography>
+            {modeToggle}
+          </Box>
+        )}
       </Box>
 
       {/* Collapsible individual tools header (default expanded; collapse state persisted per-user) */}
