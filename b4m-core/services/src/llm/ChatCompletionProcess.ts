@@ -78,6 +78,7 @@ import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { LATTICE_TOOL_NAMES } from './tools';
+import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -539,12 +540,19 @@ export interface ResolveEnabledToolsInput {
   /** True when the session has documents attached (`session.knowledgeIds`). */
   hasAttachedKnowledge: boolean;
   /**
-   * Skip OUR server-side auto-offers (step 2, the attached-knowledge offer). Set for any
-   * `promptMode`, matching the auto-add gate at the request-parse site (`if (!parsedBody.promptMode)`):
-   * auto-adds are our additions, not the caller's, and attaching a tool also pulls the provider's
-   * tool-use preamble into the request - so a mode-driven eval, above all `raw` (the bare-model
-   * control arm), must not get surprise tools. Caller-selected and session-forced tools are
-   * unaffected; only step 2 is gated.
+   * True when the caller can retrieve from at least one data lake - their own, their org's, or a
+   * shared/entitlement-gated lake they hold the gate for - independent of what's attached to this
+   * session. See `userHasAccessibleKnowledgeLake`. Low-stakes offering signal only; the knowledge
+   * tool re-resolves the authoritative retrieval scope fresh at execution.
+   */
+  hasAccessibleDataLake?: boolean;
+  /**
+   * Skip OUR server-side auto-offers (step 2, the knowledge offer). Set for any `promptMode`,
+   * matching the auto-add gate at the request-parse site (`if (!parsedBody.promptMode)`): auto-adds
+   * are our additions, not the caller's, and attaching a tool also pulls the provider's tool-use
+   * preamble into the request - so a mode-driven eval, above all `raw` (the bare-model control
+   * arm), must not get surprise tools. Caller-selected and session-forced tools are unaffected;
+   * only step 2 is gated.
    */
   skipAutoOffers?: boolean;
 }
@@ -553,11 +561,12 @@ export interface ResolveEnabledToolsInput {
  * Single owner for the final tool-offer list handed to `buildTools`. The step order is
  * deliberate:
  *   1. session-forced union     - a surface can guarantee a tool is offered.
- *   2. attached-knowledge offer - documents attached => make them reachable via the
- *      knowledge-base tool. Attaching files is a far stronger retrieval signal than any
- *      phrase match, and offering a tool is cheap (the model may decline) whereas
- *      withholding it is unrecoverable. Skipped when `skipAutoOffers` is set (prompt-mode
- *      requests), since the offer is our addition, not the caller's.
+ *   2. knowledge offer         - offer the knowledge-base tool when the caller has retrievable
+ *      knowledge: documents attached to THIS session (hasAttachedKnowledge) OR a data lake they
+ *      can reach (hasAccessibleDataLake). Attaching files / having a lake is a far stronger
+ *      retrieval signal than any phrase match, and offering a tool is cheap (the model may
+ *      decline) whereas withholding it is unrecoverable. Skipped when `skipAutoOffers` is set
+ *      (prompt-mode requests), since the offer is our addition, not the caller's.
  *   3. companion pairing        - a tool useless without its partner rides along
  *      (search_knowledge_base -> retrieve_knowledge_content, image_generation ->
  *      edit_image). Runs AFTER the union/offer so session-forced and auto-offered tools
@@ -568,6 +577,11 @@ export interface ResolveEnabledToolsInput {
  *      in (deny search_knowledge_base => retrieve_knowledge_content must not ride along),
  *      and AFTER pairing so a denied companion can't ride in on a surviving trigger (keep
  *      image_generation but deny edit_image). The final filter is the authoritative last word.
+ *
+ * Containment note for curated surfaces: this is a UNION plus a denylist, never an allowlist.
+ * `sessionDisabledTools` is the only thing that subtracts, so a surface that wants the knowledge
+ * tool kept out must deny it explicitly - carrying no attached documents is no longer sufficient,
+ * since `hasAccessibleDataLake` offers it to any caller who can reach a lake.
  */
 export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   const denied = new Set(input.sessionDisabledTools ?? []);
@@ -577,7 +591,11 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
     if (!tools.includes(tool)) tools.push(tool);
   }
 
-  if (!input.skipAutoOffers && input.hasAttachedKnowledge && !tools.includes('search_knowledge_base')) {
+  if (
+    !input.skipAutoOffers &&
+    (input.hasAttachedKnowledge || input.hasAccessibleDataLake) &&
+    !tools.includes('search_knowledge_base')
+  ) {
     tools.push('search_knowledge_base');
   }
 
@@ -647,6 +665,8 @@ export class ChatCompletionProcess {
   public entitlementKeys: string[] = [];
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
+  /** Per-turn memo for the accessible-owned-lake offering check (see userHasAccessibleKnowledgeLake). */
+  private hasAccessibleKnowledgeLakeMemo: boolean | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
   private imageProcessorLambdaName?: string;
@@ -738,6 +758,40 @@ export class ChatCompletionProcess {
       this.entitlementsResolved = true;
     }
     return this.entitlementKeys;
+  }
+
+  /**
+   * Coarse offering signal: can the caller retrieve from at least one data lake - their own,
+   * their org's, OR a shared/entitlement-gated lake they hold the gate for? Uses `dataLakeTags`
+   * from the shared access resolver, which is ALREADY access-filtered (tag / entitlement /
+   * ownership), so a shared lake only counts for a user who can actually reach it - offering the
+   * search tool to entitled users is the intent. Memoized per turn (the DB lookup runs at most once).
+   *
+   * Offering-only and low-stakes: the knowledge tool re-resolves the authoritative retrieval
+   * scope fresh at execution (never cached), so a FALSE POSITIVE here can only offer a tool that
+   * returns nothing. A true positive does change what the model can pull into context, but only
+   * from lakes the caller was already authorized to read - this signal never widens that set.
+   */
+  public async userHasAccessibleKnowledgeLake(): Promise<boolean> {
+    if (this.hasAccessibleKnowledgeLakeMemo === undefined) {
+      try {
+        const entitlementKeys = await this.resolveEntitlementKeys();
+        const { dataLakeTags } = await getDynamicDataLakeAccess({
+          db: this.db,
+          user: this.user,
+          entitlementKeys,
+        });
+        this.hasAccessibleKnowledgeLakeMemo = dataLakeTags.length > 0;
+      } catch (err) {
+        // Never break a chat turn over an offering hint - degrade to "no lake" (the tool simply
+        // isn't auto-offered), matching the entitlement-resolution fail-safe above.
+        this.logger.warn(
+          `[dataLakes] accessible-lake offering check failed; not auto-offering: ${(err as Error)?.message}`
+        );
+        this.hasAccessibleKnowledgeLakeMemo = false;
+      }
+    }
+    return this.hasAccessibleKnowledgeLakeMemo;
   }
 
   private async initializeProcessContext(
@@ -1156,23 +1210,30 @@ export class ChatCompletionProcess {
       }
       quest.status = 'running';
 
-      // Finalize the tool-offer list in one place: union the session's forced tools,
-      // offer the knowledge-base tool when documents are attached, pair companion tools,
-      // and apply the session denylist last (so a curated "approved sources only" surface
-      // still wins). `enabledTools` is the array reference handed to buildTools, so splice
-      // the result back in place rather than reassigning the binding.
+      // Finalize the tool-offer list in one place: union the session's forced tools, offer the
+      // knowledge-base tool when the caller has retrievable knowledge (documents attached to this
+      // session OR one of their own data lakes), pair companion tools, and apply the session
+      // denylist last (so a curated "approved sources only" surface still wins). `enabledTools`
+      // is the array reference handed to buildTools, so splice the result back in place rather
+      // than reassigning the binding.
       const hasAttachedKnowledge = (session.knowledgeIds?.length ?? 0) > 0;
+      // Any promptMode is an eval/passthrough that must not receive our server-side offers.
+      const skipAutoOffers = Boolean(promptMode);
+      // Only pay the accessible-lake lookup when it could change the offer: not skipped
+      // (prompt-mode), and attached knowledge hasn't already triggered the offer anyway.
+      const hasAccessibleDataLake =
+        skipAutoOffers || hasAttachedKnowledge ? false : await this.userHasAccessibleKnowledgeLake();
       const resolvedTools = resolveEnabledTools({
         requestTools: enabledTools,
         sessionEnabledTools: Array.isArray(session.enabledTools) ? session.enabledTools : undefined,
         sessionDisabledTools: Array.isArray(session.disabledTools) ? session.disabledTools : undefined,
         hasAttachedKnowledge,
-        // Any promptMode is an eval/passthrough that must not receive our server-side offers.
-        skipAutoOffers: Boolean(promptMode),
+        hasAccessibleDataLake,
+        skipAutoOffers,
       });
       enabledTools.splice(0, enabledTools.length, ...resolvedTools);
 
-      // The invisible-failure warning ("knowledge attached but no knowledge tool offered")
+      // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
       // moved to after buildTools, where the authoritative post-build tool list is known.
 
       // Generic per-session integration isolation: a curated-surface session (e.g. /opti)
@@ -1963,19 +2024,31 @@ export class ChatCompletionProcess {
       // knowledge auto-offer above.
       if (quest.promptMeta) quest.promptMeta.offeredTools = offeredToolNames;
 
-      // Loud warning for the invisible failure mode: knowledge attached but no knowledge tool
-      // survived into the final offered set. Checked here against offeredToolNames (not at
-      // resolveEnabledTools) because this is the authoritative post-build list - it sees the
-      // post-build denylist pass, the Ollama auto-added trim, and tools injected inside
-      // buildTools, none of which the pre-build enabledTools filter can. Skipped under promptMode,
-      // where withholding the offer is deliberate (see skipAutoOffers), not a failure. Silent
-      // otherwise means the model answers from its weights while the user believes their attached
-      // documents were consulted.
-      if (hasAttachedKnowledge && !promptMode) {
+      // Loud warning for the invisible failure mode: the caller has retrievable knowledge
+      // (attached documents OR an accessible lake) but no knowledge tool survived into the final
+      // offered set. Checked here against offeredToolNames (not at resolveEnabledTools) because
+      // this is the authoritative post-build list - it sees the post-build denylist pass, the
+      // Ollama auto-added trim, and tools injected inside buildTools, none of which the pre-build
+      // enabledTools filter can. Skipped under promptMode, where withholding the offer is
+      // deliberate (see skipAutoOffers), not a failure. Silent otherwise means the model answers
+      // from its weights while the user believes their knowledge was consulted.
+      // The lake signal is held to a stricter bar than attached documents. The warning speaks to a
+      // user belief that their knowledge was consulted, and attaching documents creates that belief
+      // where merely owning a lake does not. So for the lake-only case we warn on an UNEXPECTED
+      // disappearance and stay quiet when the tool is absent BY CONFIGURATION: a session that
+      // denies it, or a model offered no tools at all. Without this, every turn of every
+      // lake-holding caller on a non-tool model logs a warning and drowns the real case.
+      const knowledgeToolWithheldByConfig =
+        (Array.isArray(session.disabledTools) && session.disabledTools.includes('search_knowledge_base')) ||
+        offeredToolNames.length === 0;
+      if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !promptMode) {
+        const source = hasAttachedKnowledge
+          ? `${session.knowledgeIds!.length} attached document(s)`
+          : 'an accessible data lake';
         if (!offeredToolNames.includes('search_knowledge_base')) {
           this.logger.warn(
-            `[knowledge] session ${session.id} has ${session.knowledgeIds!.length} attached document(s) but ` +
-              `search_knowledge_base is not offered - the answer will come from model weights, not the documents.`
+            `[knowledge] session ${session.id} has ${source} but search_knowledge_base is not offered - ` +
+              `the answer will come from model weights, not the knowledge.`
           );
         } else if (!offeredToolNames.includes('retrieve_knowledge_content')) {
           // Search survived but its companion did not (e.g. a denylist stripped retrieve): the
