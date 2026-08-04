@@ -86,10 +86,10 @@ const handler = baseApi({ auth: false }).post(
 
       if (enableAutoChunk) {
         try {
+          // No chunkSize: the chunker's passage-granularity default applies (#1420).
           await sendToQueue(Resource.fabFileChunkQueue.url, {
             fabFileId: metadata._id,
             userId: metadata.userId,
-            chunkSize: '1000',
           });
           req.logger.info(`Enqueued FabFile for chunking: ${metadata.id}`);
         } catch (error) {

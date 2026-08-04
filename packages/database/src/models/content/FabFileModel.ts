@@ -1077,6 +1077,11 @@ FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 // Content hash deduplication lookups
 FabFileSchema.index({ contentHash: 1, userId: 1 });
 
+// Un-chunked rescue sweep (buildFabFileChunkScanFilter: self-host worker scan + the hosted
+// dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily
+// sweep is a collection scan, since almost every file has chunkCount > 0.
+FabFileSchema.index({ status: 1, chunkCount: 1, deletedAt: 1, createdAt: 1 });
+
 // Batch file queries
 FabFileSchema.index({ batchId: 1 });
 

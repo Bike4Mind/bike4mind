@@ -94,7 +94,6 @@ describe('POST /api/internal/s3/object-created', () => {
     expect(sendToQueueMock).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
       fabFileId: 'ff1',
       userId: 'u1',
-      chunkSize: '1000',
     });
     expect(res.status).toHaveBeenCalledWith(200);
   });
