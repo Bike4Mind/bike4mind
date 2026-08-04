@@ -1,4 +1,6 @@
 import {
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  DEFAULT_MAX_OUTPUT_TOKENS,
   FIELD_GROUPS,
   FIELD_GROUP_OF,
   ModelRecordWrite,
@@ -226,6 +228,51 @@ function usableFields(
   return usable;
 }
 
+/**
+ * A text model whose output reserve eats its whole context window leaves safeInputWindow
+ * (ChatCompletionProcess) a non-positive input budget, and the chat path then refuses to build a
+ * prompt at all. The static tables are held to that by modelCatalogInputBudget.test.ts, but
+ * maxOutputTokens is in the feed-claimable `limits` group and a discovery row outranks the seed, so
+ * a fetched claim could put the failure back with those tables still clean.
+ *
+ * Refusing the field rather than clamping it hands the decision to the read path: a feed that
+ * reports its whole window as output has told us nothing about the real cap, and
+ * DEFAULT_MAX_OUTPUT_TOKENS is already what toModelInfo means by "unknown". Note mergeRows resolves
+ * per GROUP, not per key, so the value in force survives only when the refused field was this row's
+ * only `limits` claim; alongside a contextWindow claim the row wins the group and that fallback
+ * applies instead.
+ *
+ * `unfixable` marks the case with no fallback left - a window too small to fund even the default cap
+ * - where listing a model that can only fail once selected is worse than not listing it.
+ */
+function starvedByOutputClaim(
+  draft: Record<string, unknown>,
+  contributed: Map<string, unknown>
+): { reason: string; unfixable: boolean } | null {
+  if (draft.type !== 'text' || !contributed.has('maxOutputTokens')) return null;
+  const contextWindow = draft.contextWindow;
+  const maxOutputTokens = draft.maxOutputTokens;
+  if (typeof contextWindow !== 'number' || typeof maxOutputTokens !== 'number') return null;
+
+  const starves = (output: number) => contextWindow - output - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS <= 0;
+  if (!starves(maxOutputTokens)) return null;
+
+  if (starves(Math.min(contextWindow, DEFAULT_MAX_OUTPUT_TOKENS))) {
+    return {
+      reason:
+        `contextWindow ${contextWindow} leaves no input budget for a text model even at the default ` +
+        `output cap (safety buffer ${CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS})`,
+      unfixable: true,
+    };
+  }
+  return {
+    reason:
+      `maxOutputTokens ${maxOutputTokens} leaves no input budget in a contextWindow of ${contextWindow} ` +
+      `(safety buffer ${CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS}); claim refused`,
+    unfixable: false,
+  };
+}
+
 type PlanOneResult = { entry: CatalogDiffEntry; row: IModelCatalogRowInput } | { unchanged: true } | { reason: string };
 
 function planOne(
@@ -251,11 +298,25 @@ function planOne(
     }
   }
 
+  const outputClaim = starvedByOutputClaim(draft, contributed);
+  let claimsMaxOutput = contributed.has('maxOutputTokens');
+  if (outputClaim) {
+    if (outputClaim.unfixable) return { reason: outputClaim.reason };
+    dropped.push({
+      source: candidate.sourceOfField.get('maxOutputTokens') ?? candidate.sourceNames.join('+'),
+      modelId: candidate.modelId,
+      reason: outputClaim.reason,
+    });
+    delete draft.maxOutputTokens;
+    claimsMaxOutput = false;
+  }
+
   const ownedGroups = new Set<FieldGroup>();
   for (const key of contributed.keys()) {
     // A refused lifecycle block is not a claim: an ownedGroups entry no field
     // backs is overclaiming, which the row schema rejects at append time.
     if (key === 'lifecycle' && !claimsLifecycle) continue;
+    if (key === 'maxOutputTokens' && !claimsMaxOutput) continue;
     const group = FIELD_GROUP_OF[key as keyof ModelRecord];
     if (group) ownedGroups.add(group);
   }

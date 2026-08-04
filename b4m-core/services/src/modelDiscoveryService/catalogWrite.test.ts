@@ -632,6 +632,95 @@ describe('planCatalogWrites', () => {
     expect(alone.diff[0].blockedBy).toEqual(['no-trusted-price']);
   });
 
+  // A text row whose output reserve eats its whole context window makes safeInputWindow
+  // non-positive, and the chat path then refuses to build a prompt at all. The static tables are
+  // held to that by modelCatalogInputBudget.test.ts; these cover the feed, which outranks them.
+  describe('maxOutputTokens that would starve the input budget', () => {
+    const claiming = (patch: DiscoveredModel['patch']) => ({
+      contributions: [{ name: 'openai' as const, kind: 'provider' as const, records: [gpt6(patch)] }],
+    });
+    const gpt6Seed = (patch: Record<string, unknown>) =>
+      seedRow(
+        {
+          id: 'gpt-6',
+          vendor: 'openai',
+          backend: ModelBackend.OpenAI,
+          type: 'text',
+          name: 'GPT-6',
+          contextWindow: 400_000,
+          ...patch,
+        },
+        ['identity', 'limits']
+      );
+
+    it('refuses the claim and reports it, keeping the rest of the record', () => {
+      const result = plan({ resolveDispatch: dispatchable, ...claiming({ maxOutputTokens: 400_000 }) });
+
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0].patch).not.toHaveProperty('maxOutputTokens');
+      expect(result.rows[0].patch).toMatchObject({ contextWindow: 400_000 });
+      expect(result.dropped).toContainEqual({
+        source: 'openai',
+        modelId: 'gpt-6',
+        reason:
+          'maxOutputTokens 400000 leaves no input budget in a contextWindow of 400000 (safety buffer 1000); claim refused',
+      });
+    });
+
+    it('leaves the value in force standing when the starving claim was the only limits field', () => {
+      // Refusing the field also un-claims the group, so nothing is appended and the seed's own
+      // figure stays in force. Clamping instead would append a row and overwrite it.
+      const seed = gpt6Seed({ maxOutputTokens: 32_000 });
+      const result = plan({
+        base: asBase([], [seed]),
+        resolveDispatch: dispatchable,
+        contributions: [
+          { name: 'openai', kind: 'provider', records: [{ modelId: 'gpt-6', patch: { maxOutputTokens: 400_000 } }] },
+        ],
+      });
+
+      expect(result.rows).toEqual([]);
+      expect(asBase(result.rows, [seed]).get('gpt-6')?.record.maxOutputTokens).toBe(32_000);
+      expect(result.dropped.map(drop => drop.reason)).toContain(
+        'maxOutputTokens 400000 leaves no input budget in a contextWindow of 400000 (safety buffer 1000); claim refused'
+      );
+    });
+
+    it('persists a claim that leaves room, and says nothing', () => {
+      const result = plan({ resolveDispatch: dispatchable, ...claiming({ maxOutputTokens: 128_000 }) });
+
+      expect(result.rows[0].patch).toMatchObject({ maxOutputTokens: 128_000 });
+      expect(result.dropped).toEqual([]);
+    });
+
+    it('leaves a media claim alone, where max output is the prompt-length limit', () => {
+      const result = plan({
+        resolveDispatch: dispatchable,
+        ...claiming({ type: 'image', contextWindow: 10_000, maxOutputTokens: 10_000 }),
+      });
+
+      expect(result.rows[0].patch).toMatchObject({ maxOutputTokens: 10_000 });
+      expect(result.dropped).toEqual([]);
+    });
+
+    it('drops a text model whose window cannot fund even the default output cap', () => {
+      // Nothing to fall back to here, and listing a model that can only fail once selected is
+      // worse than not listing it.
+      const result = plan({
+        resolveDispatch: dispatchable,
+        ...claiming({ contextWindow: 4_096, maxOutputTokens: 4_096 }),
+      });
+
+      expect(result.rows).toEqual([]);
+      expect(result.dropped).toContainEqual({
+        source: 'openai',
+        modelId: 'gpt-6',
+        reason:
+          'contextWindow 4096 leaves no input budget for a text model even at the default output cap (safety buffer 1000)',
+      });
+    });
+  });
+
   it('distrusts two aggregators that disagree beyond the tolerance', () => {
     const result = plan({
       resolveDispatch: dispatchable,
