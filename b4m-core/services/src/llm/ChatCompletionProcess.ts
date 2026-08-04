@@ -2030,6 +2030,10 @@ export class ChatCompletionProcess {
         questMaster: featureContextMessages['questMaster'],
         organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
         sessionPrompt: featureContextMessages['sessionPrompt'], // Per-session system prompt (product surfaces)
+        // Skills catalog (model-invocable `skill` tool discovery) + expanded `/skill-name`
+        // invocations. Grouped with the instruction-shaping blocks above and ahead of the
+        // data-context blocks below so an explicit invocation is not diluted by retrieval noise.
+        skills: featureContextMessages['skills'],
         knowledgeRetrieval: featureContextMessages['knowledgeRetrieval'], // Forced data-lake retrieval (grounding + citations)
         // Add LLM-optimized context summary if available (covers messages before verbatim window)
         contextSummary: session.contextSummary
