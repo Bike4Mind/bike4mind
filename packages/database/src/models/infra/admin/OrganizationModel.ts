@@ -214,6 +214,14 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * quantity, so it must never run for a Stripe-billed org - a raise it doesn't know about would be
    * force-reverted by the next `customer.subscription.updated` webhook. `applyPartnerRuleMembership`
    * routes Stripe-billed orgs to `addMemberIfUnderCeiling` instead.
+   *
+   * NOTE (unbounded by decision, #1239): the raise has no upper cap - blocking a legitimate partner
+   * signup was judged the worse outcome, and every raise is alerted + audited instead. Known edge,
+   * deliberately not handled here: nothing clamps against `ORGANIZATION_SUBSCRIPTION_MAX_SEATS`, so
+   * an org grown past it has a `validateSeatChange` floor above that maximum and `setSeats` then
+   * rejects every value until members are removed. Reachable today without this path (`addMember`
+   * fills to `seats`, and `force` bypasses the ceiling), so it is a pre-existing wedge this method
+   * can reach unattended rather than one it introduces. Clamp here if that ever bites.
    */
   async addMemberRaisingSeats(
     organizationId: string,

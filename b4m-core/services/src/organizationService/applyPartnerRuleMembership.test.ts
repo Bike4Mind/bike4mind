@@ -57,6 +57,31 @@ describe('applyPartnerRuleMembership', () => {
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
   });
 
+  it('reports the seat range from the atomic PRE-IMAGE, not the earlier read (concurrent raise)', async () => {
+    // Guards the fix for the reported race: deriving previousSeats/newSeats from the top-of-function
+    // findById makes two racers report OVERLAPPING ranges (2->3 and 2->4), so an operator
+    // reconciling seat growth double-counts the 2->3 interval. The two mocks must therefore
+    // disagree, or the test cannot tell the two sources apart.
+    db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
+    // Stale read: what this caller saw before a concurrent signup landed.
+    db.organizations.findById.mockResolvedValue({
+      ...cloneDeep(org),
+      seats: 2,
+      users: [{ userId: 'a' }, { userId: 'b' }],
+    });
+    // Atomic pre-image: a racer already added a third member and raised seats to 3.
+    db.organizations.addMemberRaisingSeats.mockResolvedValue({
+      ...cloneDeep(org),
+      seats: 3,
+      users: [{ userId: 'a' }, { userId: 'b' }, { userId: 'racer' }],
+    });
+
+    const result = await run();
+
+    // From the pre-image: 3 -> max(3, 3 + 1) = 4. From the stale read it would be 2 -> 3.
+    expect(result).toEqual({ added: true, reason: 'added-seat-raised', previousSeats: 3, newSeats: 4 });
+  });
+
   it('adds a Stripe-billed org member that fits WITHOUT raising the ceiling', async () => {
     db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
     const fits = { ...cloneDeep(stripeOrg), seats: 5, users: [{ userId: 'a' }] };
