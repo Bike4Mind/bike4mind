@@ -28,6 +28,19 @@ export default function DataLakeDiscoverPanel() {
 
   return (
     <Box data-testid="datalake-discover-panel">
+      {/* The mode has to name itself: the sidebar keeps listing the user's OWN lakes, so without
+          this the right pane silently becomes a different, cross-app data set. */}
+      <Box sx={{ mb: 2 }}>
+        <Typography level="title-sm" data-testid="datalake-discover-title">
+          Discover public data lakes
+        </Typography>
+        <Typography level="body-xs" color="neutral" sx={{ mt: 0.5 }}>
+          Lakes that other people have published, from across the app. Read-only: a public lake is already available to
+          the assistant, so there is nothing to subscribe to - open one to preview its files. Your own lakes stay in the
+          sidebar.
+        </Typography>
+      </Box>
+
       <Input
         size="sm"
         placeholder="Search public data lakes"
