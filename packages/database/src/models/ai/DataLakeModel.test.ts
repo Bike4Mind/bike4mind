@@ -659,11 +659,13 @@ describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId - list-surface q
     expect(attention.files).toBeUndefined();
   });
 
-  it('orders most-recently-updated first and caps a large backlog at 50', async () => {
+  it('orders most-recently-updated first and caps a large backlog', async () => {
     // A user with no exit path for old suggestions (no dismiss yet) can accumulate an
     // unbounded backlog - seed past the cap and confirm both the order and the bound.
+    // Uses an explicit small `limit` override (production default is 500) so the test
+    // stays fast without seeding hundreds of documents.
     const batches = [];
-    for (let i = 0; i < 55; i++) {
+    for (let i = 0; i < 6; i++) {
       batches.push(await seed('ready'));
       // Force each create's updatedAt strictly later than the last (timestamps:true otherwise
       // collapses same-millisecond creates to an unstable order).
@@ -674,11 +676,19 @@ describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId - list-surface q
       );
     }
 
-    const attention = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
-    expect(attention).toHaveLength(50);
+    const attention = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1', 5);
+    expect(attention).toHaveLength(5);
     // Most recently updated (highest i, seeded last) comes first.
-    expect(attention[0].id).toBe(batches[54].id);
+    expect(attention[0].id).toBe(batches[5].id);
     expect(attention.map(b => b.id)).not.toContain(batches[0].id);
+  });
+
+  it('defaults the cap to 500 when no limit is given', async () => {
+    await seed('ready');
+    const attention = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
+    // A single seeded batch just confirms the default path runs without a limit arg;
+    // the cap-enforcement itself is covered by the explicit-limit test above.
+    expect(attention).toHaveLength(1);
   });
 });
 

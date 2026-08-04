@@ -4,6 +4,7 @@ import type {
   IDataLakeDocument,
   IDataLakeRepository,
   IDataLakeBatchDocument,
+  IDataLakeBatchSummary,
   IDataLakeBatchRepository,
   IDataLakeBatchFile,
   BatchFileStatus,
@@ -439,7 +440,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     super(batchModel);
   }
 
-  async findActiveByUserId(userId: string): Promise<IDataLakeBatchDocument[]> {
+  async findActiveByUserId(userId: string): Promise<IDataLakeBatchSummary[]> {
     // Excludes `files`: this feeds the batches-list poll, which only ever renders counters and
     // status - never the per-file manifest. A batch with thousands of files turns that manifest
     // into a multi-MB response on its own; there is no reason to pay for it here.
@@ -449,10 +450,10 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
         status: { $in: BATCH_NON_TERMINAL_STATUSES },
       })
       .select('-files');
-    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
-  async findActiveByDataLakeId(dataLakeId: string): Promise<IDataLakeBatchDocument[]> {
+  async findActiveByDataLakeId(dataLakeId: string): Promise<IDataLakeBatchSummary[]> {
     // Both callers (archive/delete-lake teardown) only read `.id` to cancel batches - same
     // payload-size reasoning as findActiveByUserId.
     const results = await this.batchModel
@@ -461,7 +462,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
         status: { $in: BATCH_NON_TERMINAL_STATUSES },
       })
       .select('-files');
-    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
   async findStuck(cutoff: Date, limit = 500): Promise<IDataLakeBatchDocument[]> {
@@ -578,16 +579,19 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);
   }
 
-  async findTaxonomyAttentionByUserId(userId: string): Promise<IDataLakeBatchDocument[]> {
+  async findTaxonomyAttentionByUserId(userId: string, limit = 500): Promise<IDataLakeBatchSummary[]> {
     // Unlike findActiveByUserId's ingest-active set (self-limiting - a batch leaves it as soon
     // as ingest reaches a terminal status), a 'ready'/'failed' taxonomy batch has no such exit
     // until it's applied, re-analyzed, or dismissed - so without a bound this list only grows.
     // Most-recently-updated first and capped so a user who never clears old suggestions still
-    // gets a fast, bounded response instead of their entire unbounded history - 50 comfortably
-    // covers a real backlog while staying cheap; there's no caller today that would need to
-    // override it, unlike findStuck/findStuckTaxonomy's cron-vs-read-time split. `files` is
-    // excluded for the same reason as findActiveByUserId: this is a list view, never a
-    // per-file read.
+    // gets a fast, bounded response instead of their entire unbounded history. The cap is global
+    // per-user, but the UI derives one chip per LAKE from it - a cap too close to a realistic
+    // per-lake backlog could starve a quiet lake's chip behind a couple of busy ones, so this
+    // defaults high (matching findStuckTaxonomy's default) rather than tight; `limit` is
+    // overridable for tests. The real fix for unbounded growth is the planned "dismiss" action -
+    // once shipped, this cap stops being load-bearing since old suggestions get an exit path.
+    // `files` is excluded for the same reason as findActiveByUserId: this is a list view, never
+    // a per-file read.
     const results = await this.batchModel
       .find({
         userId,
@@ -595,24 +599,23 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       })
       .select('-files')
       .sort({ updatedAt: -1 })
-      .limit(50);
-    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+      .limit(limit);
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
-  async findActiveTaxonomyByUserId(userId: string): Promise<IDataLakeBatchDocument[]> {
-    // Separate from findTaxonomyAttentionByUserId's newest-50 cap: that cap serves the list
-    // response, but the read-time reconciler needs the FULL non-terminal working set regardless
-    // of recency - a batch stuck in 'analyzing' for hours has an old updatedAt and would
-    // otherwise be pushed out of the top-50 before the reconciler ever sees it. 'ready'/'failed'
-    // are excluded here (unlike the attention set) since they're already terminal and irrelevant
-    // to stuck-job detection.
+  async findActiveTaxonomyByUserId(userId: string): Promise<IDataLakeBatchSummary[]> {
+    // Separate from findTaxonomyAttentionByUserId's cap: that cap serves the list response, but
+    // the read-time reconciler needs the FULL non-terminal working set regardless of recency - a
+    // batch stuck in 'analyzing' for hours has an old updatedAt and would otherwise be pushed out
+    // before the reconciler ever sees it. 'ready'/'failed' are excluded here (unlike the
+    // attention set) since they're already terminal and irrelevant to stuck-job detection.
     const results = await this.batchModel
       .find({
         userId,
         taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES },
       })
       .select('-files');
-    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 }
 

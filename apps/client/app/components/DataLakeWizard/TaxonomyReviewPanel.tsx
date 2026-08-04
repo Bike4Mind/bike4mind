@@ -21,7 +21,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { memo, useEffect, useState } from 'react';
-import type { IDataLakeBatchDocument, TaxonomyTag } from '@bike4mind/common';
+import type { IDataLakeBatchSummary, TaxonomyTag } from '@bike4mind/common';
 import { useApplyTaxonomySuggestions, useReanalyzeTaxonomy } from '@client/app/hooks/data/dataLakes';
 
 // Confidence tier helpers
@@ -211,7 +211,7 @@ export default function TaxonomyReviewPanel({
   prefix,
   onClose,
 }: {
-  batch: IDataLakeBatchDocument;
+  batch: IDataLakeBatchSummary;
   /** The lake's fixed tag prefix (fetched separately - the batch doc doesn't carry it). */
   prefix: string;
   onClose: () => void;

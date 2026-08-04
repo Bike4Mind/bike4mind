@@ -43,7 +43,7 @@ const handler = baseApi()
     });
     // taxonomyActive is the non-terminal working set only (not the capped/sorted list-response
     // set - see findActiveTaxonomyByUserId), so a batch stuck for hours is never excluded here
-    // just because it's not among the user's 50 most-recently-updated.
+    // just because it's not among the user's most-recently-updated attention batches.
     await dataLakeService.reconcileStuckTaxonomy(taxonomyActive, dataLakeService.DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS, {
       db: { batches: dataLakeBatchRepository },
       logger: console,
