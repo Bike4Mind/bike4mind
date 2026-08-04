@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AuthStrategy } from '@bike4mind/common';
-import { User } from './UserModel';
+import { User, authProviderDedupeKey } from './UserModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 describe('UserModel authProviders', () => {
@@ -120,6 +120,31 @@ describe('UserModel authProviders', () => {
       expect(reloaded?.authProviders).toHaveLength(1);
       expect(reloaded?.authProviders![0].accessToken).toBe('fresh');
     });
+  });
+});
+
+describe('authProviderDedupeKey', () => {
+  // Pure-function coverage for the dedupe delimiter. The model-level
+  // "keeps distinct identities" test cannot exercise this: AuthStrategy is a
+  // fixed enum whose values never share a boundary prefix, so no two schema-valid
+  // identities can collide under concatenation. This is where the delimiter earns
+  // its keep, and where CI would catch its removal.
+  const NUL = String.fromCharCode(0);
+
+  it('keeps distinct the identities that would collide at the concatenation boundary without a delimiter', () => {
+    // ('ab','c') and ('a','bc') both concatenate to 'abc' with no separator;
+    // only the U+0000 delimiter keeps their dedupe keys distinct.
+    expect('ab' + 'c').toBe('a' + 'bc'); // the raw collision the delimiter prevents
+    expect(authProviderDedupeKey('ab', 'c')).not.toBe(authProviderDedupeKey('a', 'bc'));
+  });
+
+  it('joins strategy and id with a single U+0000 byte', () => {
+    expect(authProviderDedupeKey('okta', 'sub-a')).toBe(`okta${NUL}sub-a`);
+  });
+
+  it('treats a null or undefined id as an empty id', () => {
+    expect(authProviderDedupeKey('github', null)).toBe(`github${NUL}`);
+    expect(authProviderDedupeKey('github', undefined)).toBe(authProviderDedupeKey('github', null));
   });
 });
 
