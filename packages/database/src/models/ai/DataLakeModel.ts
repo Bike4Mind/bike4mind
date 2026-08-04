@@ -440,10 +440,15 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   }
 
   async findActiveByUserId(userId: string): Promise<IDataLakeBatchDocument[]> {
-    const results = await this.batchModel.find({
-      userId,
-      status: { $in: BATCH_NON_TERMINAL_STATUSES },
-    });
+    // Excludes `files`: this feeds the batches-list poll, which only ever renders counters and
+    // status - never the per-file manifest. A batch with thousands of files turns that manifest
+    // into a multi-MB response on its own; there is no reason to pay for it here.
+    const results = await this.batchModel
+      .find({
+        userId,
+        status: { $in: BATCH_NON_TERMINAL_STATUSES },
+      })
+      .select('-files');
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);
   }
 
@@ -570,10 +575,23 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   }
 
   async findTaxonomyAttentionByUserId(userId: string): Promise<IDataLakeBatchDocument[]> {
-    const results = await this.batchModel.find({
-      userId,
-      taxonomyStatus: { $in: TAXONOMY_ATTENTION_STATUSES },
-    });
+    // Unlike findActiveByUserId's ingest-active set (self-limiting - a batch leaves it as soon
+    // as ingest reaches a terminal status), a 'ready'/'failed' taxonomy batch has no such exit
+    // until it's applied, re-analyzed, or dismissed - so without a bound this list only grows.
+    // Most-recently-updated first and capped so a user who never clears old suggestions still
+    // gets a fast, bounded response instead of their entire unbounded history - 50 comfortably
+    // covers a real backlog while staying cheap; there's no caller today that would need to
+    // override it, unlike findStuck/findStuckTaxonomy's cron-vs-read-time split. `files` is
+    // excluded for the same reason as findActiveByUserId: this is a list view, never a
+    // per-file read.
+    const results = await this.batchModel
+      .find({
+        userId,
+        taxonomyStatus: { $in: TAXONOMY_ATTENTION_STATUSES },
+      })
+      .select('-files')
+      .sort({ updatedAt: -1 })
+      .limit(50);
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);
   }
 }

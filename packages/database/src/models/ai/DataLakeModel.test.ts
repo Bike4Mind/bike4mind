@@ -602,6 +602,24 @@ describe('DataLakeBatchRepository.findStuckTaxonomy - global cross-user stale sc
   });
 });
 
+describe('DataLakeBatchRepository.findActiveByUserId - list-surface query', () => {
+  setupMongoTest();
+
+  it('excludes the per-file manifest - this is a list view, never a per-file read', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      status: 'processing',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt' }],
+    } as never);
+
+    const [active] = await dataLakeBatchRepository.findActiveByUserId('u1');
+    // A `.select('-files')` exclusion omits the key entirely (not an empty array) - this
+    // asserts the projection is actually active, not just that the field happens to be empty.
+    expect(active.files).toBeUndefined();
+  });
+});
+
 describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId - list-surface query', () => {
   setupMongoTest();
 
@@ -625,6 +643,42 @@ describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId - list-surface q
     await seed('ready', 'u2');
     const attention = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
     expect(attention).toHaveLength(1);
+  });
+
+  it('excludes the per-file manifest - this is a list view, never a per-file read', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'ready',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt' }],
+    } as never);
+
+    const [attention] = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
+    // A `.select('-files')` exclusion omits the key entirely (not an empty array) - this
+    // asserts the projection is actually active, not just that the field happens to be empty.
+    expect(attention.files).toBeUndefined();
+  });
+
+  it('orders most-recently-updated first and caps a large backlog at 50', async () => {
+    // A user with no exit path for old suggestions (no dismiss yet) can accumulate an
+    // unbounded backlog - seed past the cap and confirm both the order and the bound.
+    const batches = [];
+    for (let i = 0; i < 55; i++) {
+      batches.push(await seed('ready'));
+      // Force each create's updatedAt strictly later than the last (timestamps:true otherwise
+      // collapses same-millisecond creates to an unstable order).
+      await mongoose.models.DataLakeBatch.updateOne(
+        { _id: batches[i].id },
+        { $set: { updatedAt: new Date(2024, 0, 1, 0, 0, i) } },
+        { timestamps: false }
+      );
+    }
+
+    const attention = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
+    expect(attention).toHaveLength(50);
+    // Most recently updated (highest i, seeded last) comes first.
+    expect(attention[0].id).toBe(batches[54].id);
+    expect(attention.map(b => b.id)).not.toContain(batches[0].id);
   });
 });
 
