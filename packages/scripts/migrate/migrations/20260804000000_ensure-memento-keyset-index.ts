@@ -6,9 +6,10 @@ import { type MigrationFile } from './index';
  *
  * Memento retrieval pages a user's mementos with a keyset cursor (`userId` equality + sort on
  * `_id`) so scoring no longer holds every memento - each carrying an embedding and its full
- * content - in memory at once. None of the pre-existing memento indexes can serve a sort on
- * `_id`, so without this the planner sorts the user's whole memento set once per page, which is
- * more expensive than the unbounded read the paging replaced.
+ * content - in memory at once. No pre-existing memento index ends in `_id`, so none can hold the
+ * `userId` bound and deliver `_id` order at the same time; without this the planner either sorts the
+ * user's whole memento set once per page or falls back to `_id_` and scans across every user. Both
+ * cost more than the unbounded read the paging replaced.
  *
  * Idempotent: createIndexes is a no-op for indexes that already exist, and it builds every index
  * the schema declares (the three pre-existing ones included, harmlessly). `down` is one-way -

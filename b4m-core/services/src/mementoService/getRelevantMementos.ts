@@ -19,9 +19,10 @@ import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { BoundedTopK } from '../dataLakeService';
 
 /**
- * Page size for the memento walk, plus a backstop on the number of pages. Every page consumes at
- * least one row and the cursor is checked for strict advance, so the page cap only ever fires on a
- * repository that misbehaves.
+ * Page size for the memento walk, and a ceiling on how many pages it will take. The ceiling IS a
+ * coverage budget, not merely a loop guard: a user holding more than PAGE_SIZE * MAX_PAGES mementos
+ * gets scored on a prefix. That is far past any real account, but it is reported rather than assumed
+ * away, because a scan that quietly stops short is the failure this whole change exists to remove.
  */
 const MEMENTO_PAGE_SIZE = 200;
 const MEMENTO_MAX_PAGES = 500;
@@ -189,14 +190,15 @@ export async function getRelevantMementos(
     //
     // Every memento carries an embedding and its full original prompt, so reading them all at once
     // made peak memory a function of how long the user has been using the product. Paging bounds that
-    // to one page plus topK. Coverage is unchanged - there is no scan budget here, the walk runs to
-    // the end - so which mementos get scored is exactly what it was.
+    // to one page plus topK, and the walk runs to the end of the user's mementos for any account
+    // short of the page ceiling - so in practice which mementos get scored is what it always was.
     //
     // No `.lean()`: RelevantMemento.memento is an IMementoDocument and consumers read `memento.id`,
     // a Mongoose virtual that a lean object does not carry.
     const ranked = new BoundedTopK<RelevantMemento>(topK, compareMementosBySimilarity);
     let scanned = 0;
     let cursor: string | undefined;
+    let coverageTruncated = false;
 
     for (let page = 0; page < MEMENTO_MAX_PAGES; page++) {
       const mementos = await adapters.db.mementos.findByUserId(userId, {
@@ -233,6 +235,17 @@ export async function getRelevantMementos(
       }
 
       if (mementos.length < MEMENTO_PAGE_SIZE) break;
+      // A full last page means more rows remain; if that was the final allowed page, the walk is
+      // stopping on the budget rather than on the data.
+      if (page === MEMENTO_MAX_PAGES - 1) coverageTruncated = true;
+    }
+
+    if (coverageTruncated) {
+      logger?.warn?.(
+        `Memento retrieval scanned ${scanned} memento(s) for user ${userId} and stopped on the ` +
+          `${MEMENTO_PAGE_SIZE * MEMENTO_MAX_PAGES}-memento page ceiling; the returned matches are over that ` +
+          `prefix, not the whole set.`
+      );
     }
 
     logger?.debug?.(`Scanned ${scanned} mementos (tier: ${tier})`);

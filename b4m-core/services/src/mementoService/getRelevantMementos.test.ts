@@ -136,6 +136,33 @@ describe('getRelevantMementos pages instead of loading every memento', () => {
 
     expect(findByUserId).toHaveBeenCalledTimes(1);
   });
+
+  it('says so when it stops on the page ceiling rather than on the data', async () => {
+    // The ceiling is a coverage budget, not just a loop guard, so hitting it has to be visible - a scan
+    // that quietly stops short is the failure this whole change removes. Simulated by a reader that
+    // always returns a full page, which is what an over-ceiling corpus looks like from in here.
+    const endless = vi.fn(async (_userId: string, opts: { limit?: number; afterId?: string }) => {
+      const start = opts.afterId ? Number(opts.afterId.split('-')[1]) + 1 : 0;
+      return Array.from({ length: opts.limit ?? PAGE_SIZE }, (_, i) => ({
+        id: `mem-${String(start + i).padStart(9, '0')}`,
+        summary: `fact-${start + i}`,
+        embedding: [1, 0],
+      }));
+    });
+
+    const out = await run(endless as never, 3);
+
+    expect(out).toHaveLength(3);
+    const warned = logger.warn.mock.calls.map(c => String(c[0])).join('\n');
+    expect(warned).toContain('page ceiling');
+  });
+
+  it('stays silent about the ceiling on a corpus that fits', async () => {
+    await run(pagedMementos(mementoRows(PAGE_SIZE + 10)));
+
+    const warned = logger.warn.mock.calls.map(c => String(c[0])).join('\n');
+    expect(warned).not.toContain('page ceiling');
+  });
 });
 
 describe('getRelevantMementos rejects unusable embeddings', () => {

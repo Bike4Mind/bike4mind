@@ -15,9 +15,8 @@ interface KnowledgeBaseRetrieveParams {
 const DEFAULT_MAX_CHARS = 8000;
 const ABSOLUTE_MAX_CHARS = 16000;
 
-// Chunk paging for the per-file read below. The page cap is a backstop only: every page consumes at
-// least one row and the cursor is checked for strict advance, so ABSOLUTE_MAX_CHARS is what actually
-// ends the walk on any real file.
+// Chunk paging for the per-file read below. The character budget is what normally ends the walk; the
+// page cap is a backstop for a file of many near-empty chunks, which would satisfy no budget.
 const KB_RETRIEVE_CHUNK_PAGE_SIZE = 50;
 const KB_RETRIEVE_MAX_CHUNK_PAGES = 200;
 

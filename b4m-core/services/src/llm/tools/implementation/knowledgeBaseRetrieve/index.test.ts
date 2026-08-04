@@ -403,7 +403,7 @@ describe('retrieve_knowledge_content - group-shared access (Path A)', () => {
  * The chunk read is paged and stops at the file's share of the char budget. Before this it read every
  * chunk of the file and then sliced, hydrating a whole document to throw most of it away.
  */
-describe('retrieve_knowledge_content — bounded chunk read', () => {
+describe('retrieve_knowledge_content bounds its chunk read', () => {
   const bigChunks = (count: number, charsEach: number) =>
     Array.from({ length: count }, (_, i) => ({
       id: `chunk-${String(i).padStart(6, '0')}`,

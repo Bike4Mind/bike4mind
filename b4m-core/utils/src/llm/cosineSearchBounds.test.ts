@@ -118,7 +118,7 @@ describe('the attachment cosine scan is bounded', () => {
     const consumed = repo.findVectorsByFabFileIds.mock.calls.length;
     // ceil(2000/200) pages of work, plus at most one more that finds the budget spent.
     expect(consumed).toBeLessThanOrEqual(Math.ceil(MAX_SCANNED / PAGE_SIZE) + 1);
-    // And it never asked for a row past the bound: every page's limit is page-size + one probe row.
+    // And it never asked for a row past the bound: a page's limit is at most page-size plus the probe.
     for (const call of repo.findVectorsByFabFileIds.mock.calls) {
       expect(call[1]?.limit).toBeLessThanOrEqual(PAGE_SIZE + 1);
     }
@@ -236,26 +236,46 @@ describe('unusable chunks never silently zero the attachment', () => {
     expect(text).not.toContain('NAN-CHUNK');
   });
 
-  it('falls back to raw content when nothing in the file is searchable', async () => {
-    // Every chunk embedded at another width. Before this, the file contributed NOTHING: the chunks
-    // all scored 0, were filtered, and no message was pushed.
+  it('hands over the file head unranked when nothing can be scored', async () => {
+    // Every chunk embedded at another width, so no chunk is comparable. The text is still good, and
+    // it must reach the model rather than being dropped for want of a score.
     const all = rows(3, () => [0.1, 0.2, 0.3]);
 
     const { text, errorMessages } = await run(pagedRepo(all));
 
-    expect(text).toContain('RAW-FILE-BODY');
+    expect(text).toContain('body-0');
+    expect(text).toContain('body-2');
     expect(errorMessages).toEqual([]);
+  });
+
+  it('does not depend on the raw reader for a format the raw reader cannot decode', async () => {
+    // The load-bearing case for keeping the head: PPTX and XML are chunkable but getFileContent
+    // throws on them, so routing an unscoreable-but-chunked file through raw content delivers nothing
+    // at all - and the cosine arm has already cleared the file's error, so it reads as healthy.
+    mockGetFileContent.mockRejectedValue(new Error('Unsupported file type: application/vnd.openxmlformats'));
+    const all = rows(3, () => [0.1, 0.2, 0.3]);
+
+    const { text } = await run(pagedRepo(all));
+
+    expect(text).toContain('body-0');
+  });
+
+  it('falls back to raw content only when the file yielded no chunk at all', async () => {
+    // Marked vectorized but the reader sees nothing: there is no head to hand over, so raw content is
+    // the only route left.
+    const { text } = await run(pagedRepo([]));
+
+    expect(text).toContain('RAW-FILE-BODY');
   });
 
   it('does not tell the operator to vectorize a file that is already vectorized', async () => {
     // The raw-content arm's advice is written for an unvectorized file. Reaching it by fall-through
     // has to say what actually happened, or it sends someone chasing a vectorizing failure that
-    // never occurred.
+    // never occurred. Driven through the no-chunks route, which is the one that still reaches raw.
     mockGetFileContent.mockResolvedValue('X'.repeat(50_000));
-    const all = rows(3, () => [0.1, 0.2, 0.3]);
     const fileUpdate = vi.fn();
 
-    const { errorMessages } = await run(pagedRepo(all), { maxTokens: 1000, fileUpdate });
+    const { errorMessages } = await run(pagedRepo([]), { maxTokens: 1000, fileUpdate });
 
     const messages = errorMessages.map(m => String(m.content)).join('\n');
     expect(messages).toContain('exceeds');

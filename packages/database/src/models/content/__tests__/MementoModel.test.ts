@@ -93,8 +93,8 @@ describe('MementoRepository.findByUserId keyset paging', () => {
   setupMongoTest();
 
   it('leaves an unpaged read unsorted and unlimited', async () => {
-    // The eight existing callers pass neither option and must be unaffected: applying sort({_id:1})
-    // unconditionally would change their query plan.
+    // The other callers (userMementoMemoryStore, the memory-by-kind route) pass neither option and
+    // must be unaffected: applying sort({_id:1}) unconditionally would change their query plan.
     await memento('u1', 'first');
     await memento('u1', 'second');
     await memento('u1', 'third');
@@ -142,12 +142,19 @@ describe('MementoRepository.findByUserId keyset paging', () => {
   });
 
   it('serves the paged walk from an index with no in-memory sort', async () => {
-    // Without { userId: 1, _id: 1 } the planner sorts the user's whole memento set on every page,
-    // which is more expensive than the unbounded read the paging replaced.
-    for (let i = 0; i < 5; i++) await memento('u1', `m-${i}`);
+    // The shape asserted here is the one production actually issues: getRelevantMementos defaults
+    // tier to HOT and pages with a cursor, so `tier` is present as a residual filter and `_id` carries
+    // both the range and the sort. Asserting the tier-less shape would leave the real query unpinned,
+    // and `{ userId: 1, tier: 1, weight: -1 }` is a competing candidate whose plan needs a SORT.
+    for (let i = 0; i < 60; i++) await memento('u1', `m-${i}`);
     await Memento.ensureIndexes();
+    const [first] = await mementoRepository.findByUserId('u1', { limit: 1 });
 
-    const plan = await Memento.collection.find({ userId: 'u1' }).sort({ _id: 1 }).limit(3).explain('queryPlanner');
+    const plan = await Memento.collection
+      .find({ userId: 'u1', tier: MementoTier.HOT, _id: { $gt: first._id } })
+      .sort({ _id: 1 })
+      .limit(3)
+      .explain('queryPlanner');
 
     const stages = JSON.stringify(plan.queryPlanner.winningPlan);
     // Name the index: with only `_id_` present the planner satisfies sort({_id:1}) by an _id scan

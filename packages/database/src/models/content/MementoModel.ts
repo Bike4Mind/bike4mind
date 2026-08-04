@@ -59,10 +59,12 @@ MementoSchema.index({ userId: 1, tier: 1, weight: -1 });
 MementoSchema.index({ userId: 1, sessionId: 1 });
 MementoSchema.index({ userId: 1, tags: 1 });
 // Equality on `userId` plus a range/sort on `_id` is what makes the keyset walk in
-// `getRelevantMementos` non-blocking. None of the indexes above can serve a sort on `_id`, so the
-// planner would fall back to sorting the user's whole memento set on every page - turning a paged
-// read into something more expensive than the unbounded read it replaced. `tier` stays a residual
-// filter rather than earning a place in the key: it is absent from the query when tier is 'all'.
+// `getRelevantMementos` non-blocking. None of the indexes above ends in `_id`, so none can hold the
+// `userId` bound AND deliver `_id` order; the planner's alternative is `_id_`, which gives the order
+// but scans the collection tail across every user. Either way the paged read ends up costing more
+// than the unbounded read it replaced - a blocking sort per page, or a scan of everyone's rows.
+// `tier` stays a residual filter rather than earning a place in the key: it is absent from the query
+// when tier is 'all'.
 MementoSchema.index({ userId: 1, _id: 1 });
 
 export const Memento =
