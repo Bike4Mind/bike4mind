@@ -192,6 +192,37 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
+   * Atomically add a member and raise the seat ceiling to fit, in ONE updateOne
+   * (aggregation pipeline) - the domain-signup auto-add path (#1239). Concurrency-safe by
+   * construction:
+   *  - the `users.userId != member` filter is idempotent (a racing duplicate add matches no
+   *    doc and returns null), and
+   *  - `seats` is raised with `$max` to the real POST-add member count (`$size users + 1`),
+   *    never blindly incremented - so N racing joins land N members with `seats` equal to that
+   *    count, never a double-raise past it.
+   * Returns the updated org, or null if the user is already a member (the guard) or the org is
+   * gone. `$$NOW` stamps `updatedAt` since a pipeline update bypasses Mongoose's timestamp hook.
+   */
+  async addMemberRaisingSeats(
+    organizationId: string,
+    member: IOrganizationDocument['users'][number]
+  ): Promise<IOrganizationDocument | null> {
+    return this.organizationModel.findOneAndUpdate(
+      { _id: organizationId, 'users.userId': { $ne: member.userId } },
+      [
+        {
+          $set: {
+            users: { $concatArrays: ['$users', [member]] },
+            seats: { $max: ['$seats', { $add: [{ $size: '$users' }, 1] }] },
+            updatedAt: '$$NOW',
+          },
+        },
+      ],
+      { new: true }
+    );
+  }
+
+  /**
    * Search for organizations with filtering, sorting, and pagination
    *
    * @param options - Search options

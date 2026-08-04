@@ -179,6 +179,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     shareable: createMockShareableRepository<IOrganizationDocument>(),
     search: vi.fn(),
     findByStripeCustomerId: vi.fn(),
+    addMemberRaisingSeats: vi.fn(),
     findIdsAdministeredBy: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),

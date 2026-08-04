@@ -7,7 +7,14 @@ import { IOrganizationRepository, IUserDocument, IUserRepository, Permission } f
  */
 export type ApplyPartnerRuleMembershipResult = {
   added: boolean;
-  reason: 'added' | 'unverified' | 'user-missing' | 'org-missing' | 'already-member' | 'at-capacity';
+  // 'added-seat-raised' (#1239): the org was at capacity and the seat ceiling was raised to admit
+  // the domain-verified user (vs a plain 'added' that fit under the existing ceiling). The signup
+  // caller fires the human alert + audit off this reason. There is no longer an 'at-capacity'
+  // outcome - the auto-add path raises to fit rather than rejecting.
+  reason: 'added' | 'added-seat-raised' | 'unverified' | 'user-missing' | 'org-missing' | 'already-member';
+  /** Seat ceiling before/after the add; present on an 'added' or 'added-seat-raised' outcome. */
+  previousSeats?: number;
+  newSeats?: number;
 };
 
 interface ApplyPartnerRuleMembershipParams {
@@ -35,8 +42,9 @@ interface ApplyPartnerRuleMembershipAdapters {
  * unverified address could land inside a partner's private org.
  *
  * Idempotent and additive: an existing member is never duplicated, and this never removes
- * anyone. Respects the org's seat cap (no silent overfill); at capacity it no-ops and the
- * caller logs, rather than forcing a billing change the admin didn't consent to per-signup.
+ * anyone. At capacity it raises the seat ceiling to admit the user rather than rejecting a
+ * legit domain signup at the door (#1239); the caller is responsible for the resulting alert +
+ * audit so the billing owner's grown seat count is never a silent change.
  */
 export async function applyPartnerRuleMembership(
   { userId, organizationId }: ApplyPartnerRuleMembershipParams,
@@ -63,19 +71,39 @@ export async function applyPartnerRuleMembership(
     return { added: false, reason: 'already-member' };
   }
 
-  if (organization.users.length >= organization.seats) {
-    logger?.info(
-      `Partner-rule auto-add skipped: organization ${organizationId} is at capacity (${organization.seats} seats)`
-    );
-    return { added: false, reason: 'at-capacity' };
+  // Atomic add + raise the seat ceiling to fit (#1239): a domain-verified signup is never
+  // rejected at capacity (Ken's call - blocking a legit partner user at the door is the worst
+  // outcome). `addMemberRaisingSeats` is race-safe (idempotent on a duplicate; raises seats only
+  // to the real post-add member count), so concurrent signups can't double-raise.
+  const previousSeats = organization.seats;
+  const updated = await db.organizations.addMemberRaisingSeats(organizationId, {
+    userId,
+    permissions: [Permission.read],
+  });
+  if (!updated) {
+    // Lost the race: a concurrent signup already added this user. Ensure their org pointer is set
+    // (mirrors the already-member repair above) and report it as such rather than a fresh add.
+    if (user.organizationId !== organizationId) {
+      await db.users.update({ id: userId, organizationId } as Partial<IUserDocument>);
+    }
+    return { added: false, reason: 'already-member' };
   }
-
-  organization.users.push({ userId, permissions: [Permission.read] });
-  await db.organizations.update(organization);
 
   // Partial update - see the stale-doc note above.
   await db.users.update({ id: userId, organizationId } as Partial<IUserDocument>);
 
-  logger?.info(`Partner-rule auto-added user ${userId} to organization ${organizationId}`);
-  return { added: true, reason: 'added' };
+  const seatCeilingRaised = updated.seats > previousSeats;
+  // Logged here for the CloudWatch trail; the human ALERT + audit record fire at the signup caller
+  // off the 'added-seat-raised' reason, so this core service stays free of Slack/audit ports.
+  logger?.info(
+    seatCeilingRaised
+      ? `Partner-rule raised organization ${organizationId} seat ceiling ${previousSeats} -> ${updated.seats} to admit user ${userId}`
+      : `Partner-rule auto-added user ${userId} to organization ${organizationId}`
+  );
+  return {
+    added: true,
+    reason: seatCeilingRaised ? 'added-seat-raised' : 'added',
+    previousSeats,
+    newSeats: updated.seats,
+  };
 }

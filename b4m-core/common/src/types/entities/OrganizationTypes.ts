@@ -94,6 +94,17 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   findByStripeCustomerId(stripeCustomerId: string): Promise<IOrganizationDocument | null>;
 
   /**
+   * Atomically add a member and raise the seat ceiling to fit, in a single update (#1239).
+   * Race-safe: idempotent on a duplicate add (returns null), and raises `seats` only to the
+   * post-add member count (never a double-raise). Returns the updated org, or null if the user
+   * is already a member or the org is gone. Used by the domain-signup auto-add path.
+   */
+  addMemberRaisingSeats(
+    organizationId: string,
+    member: IOrganizationDocument['users'][number]
+  ): Promise<IOrganizationDocument | null>;
+
+  /**
    * IDs of every organization the user administers (billing owner or manager).
    *
    * @param userId - The user ID

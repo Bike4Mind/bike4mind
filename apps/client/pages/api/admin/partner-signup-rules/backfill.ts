@@ -68,16 +68,21 @@ const handler = baseApi().post(
       });
     }
 
-    const tally = { added: 0, alreadyMember: 0, atCapacity: 0, unverified: 0, failed: 0 };
+    // `seatRaised` counts adds that also lifted the org's seat ceiling (#1239): a full org no longer
+    // rejects a domain candidate, it raises to fit. It's a subset of `added`, surfaced separately so
+    // the admin sees how much the backfill grew the seat count. The admin already sees this tally, so
+    // the per-signup Slack alert is intentionally NOT fired for a deliberate bulk backfill.
+    const tally = { added: 0, seatRaised: 0, alreadyMember: 0, unverified: 0, failed: 0 };
     for (const candidate of candidates) {
       try {
         const result = await organizationService.applyPartnerRuleMembership(
           { userId: candidate.id, organizationId: rule.organizationId },
           { db: { users: userRepository, organizations: organizationRepository }, logger: req.logger }
         );
-        if (result.added) tally.added += 1;
-        else if (result.reason === 'already-member') tally.alreadyMember += 1;
-        else if (result.reason === 'at-capacity') tally.atCapacity += 1;
+        if (result.added) {
+          tally.added += 1;
+          if (result.reason === 'added-seat-raised') tally.seatRaised += 1;
+        } else if (result.reason === 'already-member') tally.alreadyMember += 1;
         else tally.unverified += 1; // 'unverified' | 'org-missing' | 'user-missing' - candidate was verified, so effectively a skip
       } catch (error) {
         tally.failed += 1;
