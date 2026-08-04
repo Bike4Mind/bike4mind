@@ -79,7 +79,12 @@ const handler = baseApi().post(async (req: Request, res) => {
   // that request would otherwise be gated by the write check alone - which grants an admin every
   // lake there is.
   if (clientMetaTags.length > 0) {
-    const joining = dataLake ?? (batch ? await dataLakeRepository.findById(batch.dataLakeId) : null);
+    // `.catch`: `dataLakeId` on an old batch row need not be a well-formed id, and a cast error
+    // here would be a 500 on what is really a refusal.
+    const joining = dataLake ?? (batch ? await dataLakeRepository.findById(batch.dataLakeId).catch(() => null) : null);
+    if (batch && !joining) {
+      throw new BadRequestError('Could not confirm which data lake this upload joins');
+    }
     if (joining) {
       dataLakeService.assertMetaTagsMatchLake(joining, clientMetaTags);
     }

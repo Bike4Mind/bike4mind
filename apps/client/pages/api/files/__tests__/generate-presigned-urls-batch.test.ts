@@ -290,4 +290,16 @@ describe('POST /api/files/generate-presigned-urls-batch - lake targeting', () =>
     expect(h.lakeFindById).toHaveBeenCalledWith(LAKE.id);
     expect(h.createFabFile).not.toHaveBeenCalled();
   });
+
+  it("refuses the meta-tag rather than honoring it when the batch's lake cannot be resolved", async () => {
+    // Falling through to the write gate here would reopen the hole: that gate grants an admin
+    // every lake, so it would honor the tag.
+    h.lakeFindById.mockResolvedValue(null);
+    const { res } = makeRes();
+
+    await expect(
+      run({ files: [file({ tags: [{ name: 'datalake:orgb:other-lake', strength: 1 }] })], batchId: 'b1' }, res)
+    ).rejects.toThrow(/Could not confirm which data lake/);
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
 });
