@@ -27,6 +27,12 @@ describe('escapeCsvCell', () => {
     }
   );
 
+  it('leaves a leading CR harmless by flattening it to a space before the guard', () => {
+    // Not apostrophe-prefixed, and does not need to be: a leading space stops Excel and Sheets
+    // evaluating the cell. This pins the flatten-then-guard order the guard depends on.
+    expect(escapeCsvCell('\r=SUM(A1)')).toBe('" =SUM(A1)"');
+  });
+
   it('renders null and undefined as empty cells', () => {
     expect(escapeCsvCell(null)).toBe('""');
     expect(escapeCsvCell(undefined)).toBe('""');
