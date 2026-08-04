@@ -296,6 +296,33 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  describe('userHasAccessibleKnowledgeLake (offering signal)', () => {
+    it('memoizes a NEGATIVE result - one lookup per turn, not one per call', async () => {
+      // The `=== undefined` sentinel is what makes a false result stick. A falsy check would
+      // re-run the DB lookup every turn for every caller who has no lake - the common case.
+      const findLakes = vi.fn().mockResolvedValue([]);
+      (service as any).hasAccessibleKnowledgeLakeMemo = undefined;
+      (service as any).db = { dataLakes: { findActiveByUserTagsAndEntitlements: findLakes } };
+      (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+
+      expect(await service.userHasAccessibleKnowledgeLake()).toBe(false);
+      expect(await service.userHasAccessibleKnowledgeLake()).toBe(false);
+      expect(findLakes).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails SAFE to false and warns when the lookup throws - never breaks the turn', async () => {
+      (service as any).hasAccessibleKnowledgeLakeMemo = undefined;
+      // No db at all: the access resolver dereferences `db.dataLakes` and throws.
+      (service as any).db = undefined;
+      (service as any).logger = { warn: vi.fn() };
+
+      await expect(service.userHasAccessibleKnowledgeLake()).resolves.toBe(false);
+      expect((service as any).logger.warn).toHaveBeenCalled();
+    });
+  });
+
   describe('process', () => {
     it('should process a quest successfully', async () => {
       mockedGetLlmByModel.mockReturnValue({

@@ -577,6 +577,11 @@ export interface ResolveEnabledToolsInput {
  *      in (deny search_knowledge_base => retrieve_knowledge_content must not ride along),
  *      and AFTER pairing so a denied companion can't ride in on a surviving trigger (keep
  *      image_generation but deny edit_image). The final filter is the authoritative last word.
+ *
+ * Containment note for curated surfaces: this is a UNION plus a denylist, never an allowlist.
+ * `sessionDisabledTools` is the only thing that subtracts, so a surface that wants the knowledge
+ * tool kept out must deny it explicitly - carrying no attached documents is no longer sufficient,
+ * since `hasAccessibleDataLake` offers it to any caller who can reach a lake.
  */
 export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   const denied = new Set(input.sessionDisabledTools ?? []);
@@ -763,8 +768,9 @@ export class ChatCompletionProcess {
    * search tool to entitled users is the intent. Memoized per turn (the DB lookup runs at most once).
    *
    * Offering-only and low-stakes: the knowledge tool re-resolves the authoritative retrieval
-   * scope fresh at execution (never cached), so a false positive here can only offer a tool that
-   * returns nothing - it can never widen what a call may read.
+   * scope fresh at execution (never cached), so a FALSE POSITIVE here can only offer a tool that
+   * returns nothing. A true positive does change what the model can pull into context, but only
+   * from lakes the caller was already authorized to read - this signal never widens that set.
    */
   public async userHasAccessibleKnowledgeLake(): Promise<boolean> {
     if (this.hasAccessibleKnowledgeLakeMemo === undefined) {
@@ -2026,7 +2032,16 @@ export class ChatCompletionProcess {
       // enabledTools filter can. Skipped under promptMode, where withholding the offer is
       // deliberate (see skipAutoOffers), not a failure. Silent otherwise means the model answers
       // from its weights while the user believes their knowledge was consulted.
-      if ((hasAttachedKnowledge || hasAccessibleDataLake) && !promptMode) {
+      // The lake signal is held to a stricter bar than attached documents. The warning speaks to a
+      // user belief that their knowledge was consulted, and attaching documents creates that belief
+      // where merely owning a lake does not. So for the lake-only case we warn on an UNEXPECTED
+      // disappearance and stay quiet when the tool is absent BY CONFIGURATION: a session that
+      // denies it, or a model offered no tools at all. Without this, every turn of every
+      // lake-holding caller on a non-tool model logs a warning and drowns the real case.
+      const knowledgeToolWithheldByConfig =
+        (Array.isArray(session.disabledTools) && session.disabledTools.includes('search_knowledge_base')) ||
+        offeredToolNames.length === 0;
+      if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !promptMode) {
         const source = hasAttachedKnowledge
           ? `${session.knowledgeIds!.length} attached document(s)`
           : 'an accessible data lake';
