@@ -9,6 +9,7 @@ import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { formatBytes } from '@client/app/utils/folderTreeParser';
 import DataLakeViewer from './DataLakeViewer';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
+import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 
 /**
  * Discover surface: browse public data lakes shared by anyone across the app. Read-only -
@@ -78,14 +79,25 @@ export default function DataLakeDiscoverPanel() {
           ))}
         </Stack>
       ) : lakes.length === 0 ? (
-        <Box sx={{ textAlign: 'center', py: 4 }} data-testid="datalake-discover-empty">
-          <DataLakeIcon sx={{ fontSize: 40, opacity: 0.3, mb: 1 }} />
-          <Typography level="body-sm" color="neutral">
-            {debouncedSearch
-              ? `No public data lakes match "${debouncedSearch}".`
-              : 'No public data lakes yet. Once someone makes a lake public, it shows up here.'}
-          </Typography>
-        </Box>
+        <DataLakeEmptyState
+          icon={<DataLakeIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />}
+          title={debouncedSearch ? 'No matches' : 'No public data lakes yet'}
+          // py because this sits in the scroll flow under the header, not in a pane it can fill.
+          sx={{ py: 6 }}
+          data-testid="datalake-discover-empty"
+        >
+          {debouncedSearch ? (
+            <>
+              Nothing published matches &quot;{debouncedSearch}&quot;.
+              <br /> Try a shorter or different term.
+            </>
+          ) : (
+            <>
+              Once someone makes a lake public,
+              <br /> it shows up here for everyone to browse.
+            </>
+          )}
+        </DataLakeEmptyState>
       ) : (
         <>
           <Typography level="body-xs" color="neutral" sx={{ mb: 1 }} data-testid="datalake-discover-count">
