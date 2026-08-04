@@ -462,9 +462,10 @@ describe('ChatCompletionProcess', () => {
       await expect(service.process({ body, logger: mockLogger })).rejects.toThrow(/no input budget/);
     });
 
-    // Image and video entries set max_tokens equal to contextWindow across every backend in the repo -
-    // both are the prompt-length limit, since these models return media rather than tokens. Reserving
-    // that as output left no input room, so the guard above rejected a request that fits fine.
+    // A media entry's max_tokens is a prompt-length limit, not an output budget, since these models
+    // return media rather than tokens. Most rows set it equal to contextWindow; Gemini's image rows
+    // set it lower. Reserving it as output left no input room, so the guard above rejected a request
+    // that fits fine.
     it('does not reserve text output on an image model, whose max_tokens is not an output budget', async () => {
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {

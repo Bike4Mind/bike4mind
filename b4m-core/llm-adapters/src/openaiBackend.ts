@@ -795,6 +795,11 @@ export class OpenAIBackend implements ICompletionBackend {
           "OpenAI's original GPT-4 model. Legacy model good for basic tasks and content generation, but newer models offer better capabilities.",
       },
       // OpenAI Image Models
+      //
+      // max_tokens equals contextWindow on purpose here: both are the prompt-length limit,
+      // and max_tokens is never sent to the image API. Do not "correct" it to a smaller
+      // output reserve - safeInputWindow (ChatCompletionProcess) skips the reserve for media
+      // types precisely because there is no token output to reserve.
       {
         id: ImageModels.GPT_IMAGE_1,
         type: 'image',
