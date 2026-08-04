@@ -2,10 +2,16 @@
 
 export default $config({
   app(input) {
-    // `production` and `shared-dev` are the permanent stages: state is retained,
-    // `sst remove` is blocked, and their state is never purged. Everything else
-    // (dev, personal stages, pr#### previews) is disposable.
+    // `production` and `shared-dev` are the permanent stages: state is retained and
+    // `sst remove` is blocked.
     const permanent = ['production', 'shared-dev'].includes(input?.stage);
+    // Purge is narrower than `permanent` on purpose. It runs SST's Purge() on a
+    // successful `sst remove`, which deletes the stage's secrets AND its encryption
+    // passphrase — unrecoverable (sst/sst#6593). `dev` is the shared STAGING box
+    // (see isStagingStage / PRODUCTION_STAGES in infra/constants.ts), so it is
+    // excluded even though `sst remove` is not blocked there. Only genuinely
+    // ephemeral stages — personal stages and pr#### previews — are purgeable.
+    const purgeable = !permanent && input?.stage !== 'dev';
     return {
       name: process.env.SEED_APP_NAME || 'bike4mind',
       removal: permanent ? 'retain' : 'remove',
@@ -18,7 +24,7 @@ export default $config({
       // successful update for that stage only. See sst/sst#6925.
       state: {
         retention: 30,
-        purge: !permanent,
+        purge: purgeable,
       },
       watch: ['infra', 'apps', 'packages', 'b4m-core'],
       providers: {
