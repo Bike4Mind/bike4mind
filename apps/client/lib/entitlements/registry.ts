@@ -140,6 +140,12 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // capability map, #1178), so `optihashi:pro` is the single product-level grant
   // and group membership decides what you reach within it. The tag rows were
   // already inert in open core (no gate here ever read the keys).
+  // INTENDED CONSEQUENCE (deliberate, not a regression): removing the rows also
+  // drops `opti-compute` / `opti-hardware` from `allKnownEntitlementKeys()`, so
+  // `UserPermissions.tsx` no longer classifies them as managed - a leftover
+  // `opti-compute` tag now renders as a removable custom-tag chip in the admin
+  // Users panel (with no Product Access control, because the tier is retired).
+  // That is how an operator strips the inert leftover; see UserPermissions.test.tsx.
   // [DELETION-FOOTPRINT] Overwatch comp grant: the `overwatch` tag bridges to
   // `overwatch:pro`. Admin-only gate was a stopgap before the entitlement model
   // existed (Open Core M0). No Stripe price yet; granted-only initially. Removed
