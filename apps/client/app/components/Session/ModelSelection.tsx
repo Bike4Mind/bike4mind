@@ -28,13 +28,6 @@ import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettin
 import GridViewOutlinedIcon from '@mui/icons-material/GridViewOutlined';
 import ViewListOutlinedIcon from '@mui/icons-material/ViewListOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import SpeedIcon from '@mui/icons-material/Speed';
-import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
-import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
-import ConstructionIcon from '@mui/icons-material/Construction';
-// Named for tools, but this is the thinking glyph: ToolsSection renders it on the Thinking
-// row and ToolIndicators uses it as tool-indicator-thinking.
-import SupportsToolsIcon from '@client/app/components/svgs/SupportsToolsIcon';
 import { useNavigate } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
@@ -50,19 +43,24 @@ import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import {
-  ChipVariant,
   getModelPriceTier,
   isOpenAIModel,
-  getModelSpeedVariant,
-  getModelSpeedTooltip,
   getModelSpeedFromStats,
-  getPriceTierTooltip,
   isNewModel,
 } from '@client/app/utils/aiSettingsUtils';
 import MetadataChip from './AISettings/MetaDataChips';
+import {
+  BEDROCK_BADGE_BG,
+  CapabilityIndicators,
+  CornerBadge,
+  MetricIndicators,
+  NEW_BADGE_BG,
+  formatContextWindow,
+  formatNumber,
+} from './AISettings/modelIndicators';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { isImageModel } from '@client/app/utils/commands';
-import { green, greenAlpha, orange, red } from '@client/app/utils/themes/colors';
+import { green, greenAlpha } from '@client/app/utils/themes/colors';
 import { useFavoriteModels } from '@client/app/hooks/useFavoriteModels';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 
@@ -108,13 +106,6 @@ const getBackendLogo = (backend: string): string | null => {
 
   return logoMap[backend] || null;
 };
-
-// Marks a card as AWS Bedrock-hosted. Deliberately separate from getBackendLogo() above: that
-// map returns provider logos (OpenAI, Anthropic, ...) keyed by who authored the model, whereas
-// this marks the hosting platform - any provider's model can be Bedrock-hosted, so it's a
-// different axis, not another entry. Amazon Bedrock's own teal, so the badge reads as the
-// platform rather than as another status colour.
-export const BEDROCK_BADGE_BG = '#01A88D';
 
 // Global image cache to prevent re-requests
 const imageCache = new Map<string, string>();
@@ -174,21 +165,6 @@ interface ModelSelectionProps {
   /** Rendered inside the sticky header, above the search/filter row, so it pins with it. */
   stickyHeader?: React.ReactNode;
 }
-
-// Format large numbers with commas
-const formatNumber = (num: number): string => {
-  return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-};
-
-// Format context window size nicely (e.g., "200K" instead of "200000")
-const formatContextWindow = (size: number): string => {
-  if (size >= 1000000) {
-    return `${(size / 1000000).toFixed(1)}M`;
-  } else if (size >= 1000) {
-    return `${Math.round(size / 1000)}K`;
-  }
-  return formatNumber(size);
-};
 
 // Section label for models running on the operator's own hardware (self-host).
 export const SELF_HOSTED_BACKEND = 'Local / Self-Hosted';
@@ -281,76 +257,6 @@ const sortBackendsByPriority = (backends: string[]): string[] =>
 
 // Layout of the model list: roomy cards in a 2-up grid, or compact single-column rows.
 export type ModelViewMode = 'grid' | 'list';
-
-// Cost and speed render as icon-only chips in a neutral frame, so the glyph says which
-// dimension and its colour says the value. Reuses the existing tier/speed variants as the
-// scale rather than a second set of thresholds.
-const metricIconColor = (variant: ChipVariant): string =>
-  variant === 'green' ? green[800] : variant === 'yellow' ? orange[450] : red[400];
-
-// Same purple the New chip used before it became a corner badge. No theme token exists for
-// it; getChipStyles hardcodes the identical value for its `purple` variant.
-export const NEW_BADGE_BG = '#A52ECD';
-
-// Small label riding the card's top border. Positioning lives on the shared row in the card
-// so multiple badges line up; this only draws the pill.
-export const CornerBadge = ({
-  testId,
-  label,
-  tooltip,
-  background,
-}: {
-  testId: string;
-  label: string;
-  tooltip: string;
-  background: string;
-}) => (
-  <Tooltip title={tooltip} placement="top">
-    <Box
-      data-testid={testId}
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        height: '20px',
-        px: '6px',
-        borderRadius: '4px',
-        backgroundColor: background,
-        color: '#FFFFFF',
-        fontSize: '12px',
-        fontWeight: 600,
-        lineHeight: 1,
-        whiteSpace: 'nowrap',
-      }}
-    >
-      {label}
-    </Box>
-  </Tooltip>
-);
-
-// Read-only indicator. The frame is what separates these from the star and settings icons
-// sitting beside them - without it, informational glyphs read as pressable. Borrows the
-// card's own border shorthand so the frames, the card and the row divider stay in step.
-const MetricIcon = ({ label, tooltip, children }: { label: string; tooltip: string; children: React.ReactNode }) => (
-  <Tooltip title={tooltip} placement="top">
-    <Box
-      role="img"
-      aria-label={label}
-      sx={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: '24px',
-        height: '24px',
-        flex: 'none',
-        boxSizing: 'border-box',
-        borderRadius: '50%',
-        border: 'var(--joy-palette-aiSettings-modelCard-border)',
-      }}
-    >
-      {children}
-    </Box>
-  </Tooltip>
-);
 
 const ModelOption = React.memo(
   ({
@@ -502,57 +408,10 @@ const ModelOption = React.memo(
     );
 
     const metricIndicators = (
-      <>
-        <MetricIcon label={`${priceTierInfo.tier} cost`} tooltip={getPriceTierTooltip(priceTierInfo.tier)}>
-          <AttachMoneyIcon
-            sx={{
-              fontSize: '16px',
-              color: metricIconColor(priceTierInfo.variant),
-              // The $ glyph is drawn 0.59 units left of centre inside its own 24-unit viewBox
-              // (ink spans x 6.32..16.50), so centring the <svg> still leaves it visibly left
-              // in a round frame. Divided by 24 in em so it tracks fontSize. Speed and the
-              // capability glyphs measure centred and are deliberately left alone.
-              transform: 'translateX(calc(0.59em / 24))',
-            }}
-          />
-        </MetricIcon>
-
-        {!statsLoading && modelSpeed && (
-          <MetricIcon
-            label={`${modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)} speed`}
-            tooltip={getModelSpeedTooltip(modelSpeed)}
-          >
-            <SpeedIcon sx={{ fontSize: '16px', color: metricIconColor(getModelSpeedVariant(modelSpeed)) }} />
-          </MetricIcon>
-        )}
-      </>
+      <MetricIndicators priceTier={priceTierInfo} modelSpeed={modelSpeed} statsLoading={statsLoading} />
     );
 
-    // Capabilities are present-or-absent, so they stay neutral: no colour to imply a scale
-    // that doesn't exist. Absence of the icon is the "no" state.
-    const capabilityIndicators = (
-      <>
-        {model.supportsVision && (
-          <MetricIcon label="Vision" tooltip="Able to understand images">
-            <VisibilityOutlinedIcon sx={{ fontSize: '16px', color: 'text.tertiary' }} />
-          </MetricIcon>
-        )}
-
-        {model.can_think && (
-          <MetricIcon label="Thinking" tooltip="Reasons step-by-step before responding">
-            {/* 18px where the others are 16: this glyph carries far more detail than the
-                MUI icons, so it needs the extra couple of px to stay legible. */}
-            <SupportsToolsIcon width={18} height={18} fill="var(--joy-palette-text-tertiary)" />
-          </MetricIcon>
-        )}
-
-        {model.supportsTools && (
-          <MetricIcon label="Tools" tooltip="Able to use a growing list of tools">
-            <ConstructionIcon sx={{ fontSize: '16px', color: 'text.tertiary' }} />
-          </MetricIcon>
-        )}
-      </>
-    );
+    const capabilityIndicators = <CapabilityIndicators model={model} />;
 
     const metadataChips = (
       <Stack

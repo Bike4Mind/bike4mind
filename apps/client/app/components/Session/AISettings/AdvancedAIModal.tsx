@@ -1,4 +1,5 @@
 import React, { ChangeEvent, startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import dayjs from 'dayjs';
 import {
   Box,
   Modal,
@@ -64,7 +65,16 @@ import ToolsSection from './ToolsSection';
 import { AudioGenerationSettings } from './AudioGenerationSettings';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 
-import ModelSelection, { BEDROCK_BADGE_BG, CornerBadge, NEW_BADGE_BG, getModelBackend } from '../ModelSelection';
+import ModelSelection, { getModelBackend } from '../ModelSelection';
+import {
+  BEDROCK_BADGE_BG,
+  CapabilityIndicators,
+  CornerBadge,
+  MetricIndicators,
+  ModelSpeed,
+  NEW_BADGE_BG,
+  formatNumber,
+} from './modelIndicators';
 import MetadataChip from './MetaDataChips';
 import {
   buildModelSelectionPatch,
@@ -83,7 +93,7 @@ import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { api } from '@client/app/contexts/ApiContext';
 import { MobileTopBar } from '@client/app/components/MobileTopBar';
-import { brand, grayAlpha, green, orange } from '@client/app/utils/themes/colors';
+import { brand, grayAlpha } from '@client/app/utils/themes/colors';
 
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
@@ -303,7 +313,7 @@ interface SelectedModelDetailsProps {
   maxContextWindow: number;
   getPriceTierTooltip: (tier: string) => string;
   metricsLoading: boolean;
-  modelSpeed: string | null;
+  modelSpeed: ModelSpeed | null;
   getModelSpeedVariant: (speed: 'fast' | 'medium' | 'slow') => ChipVariant;
   getModelSpeedTooltip: (speed: 'fast' | 'medium' | 'slow') => string;
   INFINITE_VALUE: number;
@@ -448,6 +458,25 @@ const ResetButton: React.FC<{
   );
 };
 
+// Catalog cutoffs are ISO dates whose day is always 01, i.e. month precision - so rendering
+// the raw "2024-04-01" implies a day the data does not have.
+const formatTrainingCutoff = (cutoff: string): string => {
+  const parsed = dayjs(cutoff);
+  return parsed.isValid() ? parsed.format('MMM YYYY') : cutoff;
+};
+
+// Larger than the model list's 24px: this screen has the room, and they are the only
+// indicators on it rather than competing with a card's own controls.
+const INDICATOR_SIZE = 32;
+
+/** One read-only spec: muted label over the value. */
+const SpecBlock: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <Box sx={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+    <Typography sx={{ color: 'text.primary50', fontSize: '12px', lineHeight: 1.4 }}>{label}</Typography>
+    <Typography sx={{ color: 'text.primary', fontSize: '14px', fontWeight: 500, lineHeight: 1.4 }}>{value}</Typography>
+  </Box>
+);
+
 const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   modelInfo,
   model,
@@ -521,93 +550,50 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
             </Typography>
           )}
 
-          {/* Metadata Chips; New and AWS Bedrock sit above the model name in the header */}
-          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1 }}>
-            {/* Price Tier */}
-            <MetadataChip
-              label={priceTierInfo.tier}
-              startDecorator={
-                <Box
-                  sx={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: '50%',
-                    backgroundColor:
-                      priceTierInfo.variant === 'green'
-                        ? green[800]
-                        : priceTierInfo.variant === 'yellow'
-                          ? orange[450]
-                          : 'red',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '10px',
-                    fontWeight: 'bold',
-                    color: 'common.white',
-                    mr: '4px',
-                    p: 0.5,
-                  }}
-                >
-                  $
-                </Box>
-              }
-              tooltip={getPriceTierTooltip(priceTierInfo.tier)}
-              variant={priceTierInfo.variant}
-              isMaximum={false}
-              mode={mode}
-            />
-
-            {/* Speed Chip - based on performance data */}
-            {!metricsLoading &&
-              modelSpeed &&
-              (modelSpeed === 'fast' || modelSpeed === 'medium' || modelSpeed === 'slow') && (
-                <MetadataChip
-                  label={modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)}
-                  mode={mode}
-                  variant={getModelSpeedVariant(modelSpeed)}
-                  tooltip={getModelSpeedTooltip(modelSpeed)}
-                />
+          {/* Read-only specs on the left, capability indicators anchored right. The editable
+              Input/Output controls live in the token allocation section below, so the numbers
+              here state the model's own limits. */}
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 2,
+              mt: 2,
+            }}
+          >
+            <Stack direction="row" useFlexGap flexWrap="wrap" sx={{ gap: '24px' }}>
+              <SpecBlock label="Context window" value={formatNumber(modelInfo.contextWindow)} />
+              <SpecBlock label="Max output" value={formatNumber(modelInfo.max_tokens)} />
+              {modelInfo.trainingCutoff && (
+                <SpecBlock label="Knowledge cutoff" value={formatTrainingCutoff(modelInfo.trainingCutoff)} />
               )}
+            </Stack>
 
-            <MetadataChip
-              label={`${modelInfo.max_tokens} max`}
-              mode={mode}
-              tooltip="Maximum Output Tokens"
-              variant={modelInfo.max_tokens === maxTokens ? 'green' : 'default'}
-              isMaximum={modelInfo.max_tokens === maxTokens}
-            />
-
-            <MetadataChip
-              label={`${
-                modelInfo.contextWindow >= 1000000
-                  ? `${(modelInfo.contextWindow / 1000000).toFixed(1)}M`
-                  : modelInfo.contextWindow >= 1000
-                    ? `${Math.round(modelInfo.contextWindow / 1000)}K`
-                    : modelInfo.contextWindow
-              } ctx`}
-              mode={mode}
-              tooltip="Context Window Size"
-              variant={modelInfo.contextWindow === maxContextWindow ? 'green' : 'default'}
-              isMaximum={modelInfo.contextWindow === maxContextWindow}
-            />
-
-            {modelInfo.trainingCutoff && (
-              <MetadataChip
-                label={modelInfo.trainingCutoff}
-                mode={mode}
-                tooltip="Model Knowledge Cut-off"
-                variant="default"
-              />
-            )}
-
-            {modelInfo.supportsVision && (
-              <MetadataChip label="Vision" mode={mode} tooltip="Able to understand images" variant="blue" />
-            )}
-
-            {modelInfo.supportsTools && (
-              <MetadataChip label="Tools" mode={mode} tooltip="Able to use a growing list of tools" variant="blue" />
-            )}
-          </Stack>
+            {/* Same components as the model list, so the glyphs carry over from there */}
+            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
+              {modelInfo.disabled ? (
+                <MetadataChip
+                  label="Unavailable"
+                  mode={mode}
+                  variant="red"
+                  tooltip={modelInfo.disabledReason ?? 'This model is currently unavailable'}
+                />
+              ) : (
+                <>
+                  <MetricIndicators
+                    priceTier={priceTierInfo}
+                    modelSpeed={modelSpeed}
+                    statsLoading={metricsLoading}
+                    size={INDICATOR_SIZE}
+                    filled
+                  />
+                  <CapabilityIndicators model={modelInfo} size={INDICATOR_SIZE} filled />
+                </>
+              )}
+            </Stack>
+          </Box>
         </Box>
       </Box>
 
