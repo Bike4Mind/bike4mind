@@ -260,8 +260,8 @@ const messageContentText = (message: IMessage): string =>
 /**
  * Must charge images the same flat rate as calculateTotalTokenLength, so the two measures stay
  * comparable: stringifying base64 as text here would make an image-carrying turn read as millions of
- * tokens against a real count that charges a flat rate. Nothing at present divides one by the other -
- * the rework in #1164 reintroduces that conversion, and depends on this rate matching.
+ * tokens against a real count that charges a flat rate. The final safety pass divides one measure by the
+ * other to convert its overage between them, so an image-carrying turn depends on these rates matching.
  */
 const estimateMessageTokens = (message: IMessage): number => {
   const imageCount = Array.isArray(message.content) ? message.content.filter(isImageBlock).length : 0;
@@ -2024,32 +2024,33 @@ export async function buildAndSortMessages(
   const attachmentsWithContent = nonImageMessages.filter(isAttachment);
   let undeliveredNote: IMessage | null = null;
 
+  // Only a change in what is undelivered is news: the safety pass calls the declaration once per shrink
+  // round, so one turn would otherwise log up to five warnings disagreeing about the counts.
+  let lastDeclaredCounts = '';
+
   /**
    * Replaces attachments that arrived too small to be recognised as file content, and declares any
-   * dropped whole, with one message saying so. Runs after the allocation below, the only stage that
-   * currently shrinks content. The final safety pass can also drop an attachment the allocation had
-   * delivered, and does not re-run this - so on that path the file reaches the model undeclared. That
-   * gap is tracked in #1164 along with the rest of the safety pass rework.
+   * dropped whole, with one message saying so. Called by both stages that shrink content: the
+   * allocation below, and the final safety pass after it, which can drop an attachment the allocation
+   * had delivered.
    *
-   * Idempotent by design, so a second call is safe to add there: its own note is excluded by identity,
-   * so it re-judges only real attachments and replaces the note rather than stacking another. It keeps
-   * the note in the payload it measures, so the ~100 tokens it costs are counted, not hidden.
+   * Idempotent, which is what makes the per-round call safe: the note it produced last time is
+   * excluded by identity, so it re-judges only real attachments and replaces that note rather than
+   * stacking another. It keeps the note in the payload it measures, so the ~100 tokens it costs are
+   * counted, not hidden.
    */
-  // The safety pass calls this once per shrink round, so one turn would otherwise log up to five
-  // warnings disagreeing about the counts. Only a change in what is undelivered is news.
-  let lastDeclaredCounts = '';
   const declareUndeliveredAttachments = (contentMessages: IMessage[]): IMessage[] => {
     if (attachmentsWithContent.length === 0) return contentMessages;
 
-    // Counted on the same footing as attachmentsWithContent - same isAttachment predicate on both
-    // sides. An attachment carrying no extractable text, or a URL-derived message, is absent from
-    // both: counting either as delivered let it stand in for a sibling that was dropped, and the drop
-    // then went undeclared.
-    // Held before the reassignment below, because the note is what identifies the previous round's note
-    // for removal. Comparing against the new object instead leaves the old one in place, and since a
-    // stale note passes isAttachment it then counts as a delivered file, so each round declares one
-    // fewer loss than the last while the payload grows by another ~100-token duplicate.
+    // Read before the reassignment below, because identity is what retires the previous round's note.
+    // Comparing against the new object leaves the old one in place, and a stale note passes isAttachment
+    // and so counts as a delivered file - each round then declares one fewer loss than the last, while
+    // the payload grows by another ~100-token duplicate of the same sentence.
     const previousNote = undeliveredNote;
+    // Counted on the same footing as attachmentsWithContent - same isAttachment predicate on both sides.
+    // An attachment carrying no extractable text, or a URL-derived message, is absent from both:
+    // counting either as delivered let it stand in for a sibling that was dropped, and the drop then
+    // went undeclared.
     const delivered = contentMessages.filter(message => message !== previousNote && isAttachment(message));
     // Computed once: fileTokens re-derives the message text, and the safety pass calls this per round.
     const replaced = new Set(
