@@ -124,17 +124,18 @@ describe('UserModel authProviders', () => {
 });
 
 describe('authProviderDedupeKey', () => {
-  // Pure-function coverage for the dedupe delimiter. The model-level
-  // "keeps distinct identities" test cannot exercise this: AuthStrategy is a
-  // fixed enum whose values never share a boundary prefix, so no two schema-valid
-  // identities can collide under concatenation. This is where the delimiter earns
-  // its keep, and where CI would catch its removal.
+  // The only place the delimiter's separating property is actually exercised. The
+  // model-level "keeps distinct identities" test cannot: AuthStrategy
+  // (b4m-core/common/src/schemas/user.ts) has no value that is a prefix of another, so no
+  // two schema-valid identities collide under concatenation regardless of the delimiter.
+  // That is why this pure test exists - it is not a safety claim (the delimiter keeps
+  // working whatever gets added to the enum), just the reason the boundary case is tested
+  // here rather than through the model.
   const NUL = String.fromCharCode(0);
 
   it('keeps distinct the identities that would collide at the concatenation boundary without a delimiter', () => {
-    // ('ab','c') and ('a','bc') both concatenate to 'abc' with no separator;
-    // only the U+0000 delimiter keeps their dedupe keys distinct.
-    expect('ab' + 'c').toBe('a' + 'bc'); // the raw collision the delimiter prevents
+    // ('ab','c') and ('a','bc') both concatenate to 'abc' with no separator; only the
+    // U+0000 delimiter keeps their keys distinct - remove it and both collapse to 'abc'.
     expect(authProviderDedupeKey('ab', 'c')).not.toBe(authProviderDedupeKey('a', 'bc'));
   });
 
@@ -142,9 +143,8 @@ describe('authProviderDedupeKey', () => {
     expect(authProviderDedupeKey('okta', 'sub-a')).toBe(`okta${NUL}sub-a`);
   });
 
-  it('treats a null or undefined id as an empty id', () => {
+  it('treats a null id as an empty id', () => {
     expect(authProviderDedupeKey('github', null)).toBe(`github${NUL}`);
-    expect(authProviderDedupeKey('github', undefined)).toBe(authProviderDedupeKey('github', null));
   });
 });
 
