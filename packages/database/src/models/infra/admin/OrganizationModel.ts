@@ -193,22 +193,34 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
 
   /**
    * Atomically add a member and raise the seat ceiling to fit, in ONE updateOne
-   * (aggregation pipeline) - the domain-signup auto-add path (#1239). Concurrency-safe by
-   * construction:
+   * (aggregation pipeline) - the domain-signup auto-add path for orgs NOT billed through Stripe
+   * (#1239). Concurrency-safe by construction:
    *  - the `users.userId != member` filter is idempotent (a racing duplicate add matches no
    *    doc and returns null), and
-   *  - `seats` is raised with `$max` to the real POST-add member count (`$size users + 1`),
-   *    never blindly incremented - so N racing joins land N members with `seats` equal to that
-   *    count, never a double-raise past it.
-   * Returns the updated org, or null if the user is already a member (the guard) or the org is
-   * gone. `$$NOW` stamps `updatedAt` since a pipeline update bypasses Mongoose's timestamp hook.
+   *  - `seats` is raised with `$max` to the real POST-add member count (`$size users + 1`,
+   *    the same `users.length` accounting `addMember` uses), never blindly incremented - so N
+   *    racing joins land N members with `seats` equal to that count, never a double-raise past it.
+   *
+   * `deletedAt: null` keeps the write off a soft-deleted org: the softDeletePlugin only hooks
+   * `find`/`findOne`, not `findOneAndUpdate`, so without this a delete landing between the caller's
+   * read and this write would grow a dead org's ceiling.
+   *
+   * Returns the PRE-image ({ new: false }) - the caller derives before/after seats from this one
+   * atomically-matched document rather than from an earlier read, so two racers can't report
+   * overlapping ranges. Null means the user is already a member (the guard) or the org is gone.
+   * `$$NOW` stamps `updatedAt` since a pipeline update bypasses Mongoose's timestamp hook.
+   *
+   * NOTE (Stripe): this deliberately does NOT touch `subscriptions.quantity` or Stripe's billed
+   * quantity, so it must never run for a Stripe-billed org - a raise it doesn't know about would be
+   * force-reverted by the next `customer.subscription.updated` webhook. `applyPartnerRuleMembership`
+   * routes Stripe-billed orgs to `addMemberIfUnderCeiling` instead.
    */
   async addMemberRaisingSeats(
     organizationId: string,
     member: IOrganizationDocument['users'][number]
   ): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
-      { _id: organizationId, 'users.userId': { $ne: member.userId } },
+      { _id: organizationId, deletedAt: null, 'users.userId': { $ne: member.userId } },
       [
         {
           $set: {
@@ -218,7 +230,42 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
           },
         },
       ],
-      { new: true }
+      { new: false }
+    );
+  }
+
+  /**
+   * Atomically add a member ONLY if it fits under the current seat ceiling, never raising it - the
+   * domain-signup auto-add path for Stripe-billed orgs (#1239). Raising a Stripe org's ceiling out
+   * of band would desync the billed quantity and get force-reverted by the next subscription
+   * webhook, so such an org keeps its ceiling and a candidate past it is rejected (the caller then
+   * alerts an admin to add seats through the billing-aware path).
+   *
+   * The `$expr` capacity guard (`$size users < seats`, the same `users.length < seats` accounting
+   * `addMember` uses) is evaluated inside the atomic match, so the fit check can't race the write.
+   * Returns the PRE-image ({ new: false }); null means already a member, org gone, OR at capacity -
+   * the caller re-reads to tell those apart.
+   */
+  async addMemberIfUnderCeiling(
+    organizationId: string,
+    member: IOrganizationDocument['users'][number]
+  ): Promise<IOrganizationDocument | null> {
+    return this.organizationModel.findOneAndUpdate(
+      {
+        _id: organizationId,
+        deletedAt: null,
+        'users.userId': { $ne: member.userId },
+        $expr: { $lt: [{ $size: '$users' }, '$seats'] },
+      },
+      [
+        {
+          $set: {
+            users: { $concatArrays: ['$users', [member]] },
+            updatedAt: '$$NOW',
+          },
+        },
+      ],
+      { new: false }
     );
   }
 

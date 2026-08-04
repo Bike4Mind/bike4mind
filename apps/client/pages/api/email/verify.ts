@@ -17,7 +17,10 @@ import { AuthEvents } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
-import { notifySeatCeilingRaised } from '@server/organizations/notifySeatCeilingRaised';
+import {
+  notifySeatCeilingRaised,
+  notifyPartnerSignupBlockedAtCapacity,
+} from '@server/organizations/notifySeatCeilingRaised';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
 import { z } from 'zod';
 
@@ -218,13 +221,25 @@ const handler = baseApi({ auth: false })
                 {
                   organizationId: partnerOrganizationId,
                   userId: userBeforeVerify.id,
-                  previousSeats: result.previousSeats!,
-                  newSeats: result.newSeats!,
+                  previousSeats: result.previousSeats,
+                  newSeats: result.newSeats,
                   trigger: 'email-verification',
                 },
                 req.logger
               );
             }
+          } else if (result.reason === 'at-capacity') {
+            // Stripe-billed org at capacity; its ceiling isn't auto-raised, so alert an admin to add
+            // seats and admit this stranded partner user. Best-effort, never throws.
+            await notifyPartnerSignupBlockedAtCapacity(
+              {
+                organizationId: partnerOrganizationId,
+                userId: userBeforeVerify.id,
+                seats: result.seats,
+                trigger: 'email-verification',
+              },
+              req.logger
+            );
           } else if (result.reason === 'org-missing') {
             // Surfaces a misconfiguration (dangling org ref) without failing verification.
             req.logger.warn(

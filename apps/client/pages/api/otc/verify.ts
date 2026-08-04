@@ -19,7 +19,10 @@ import {
 import { creditService, userService, organizationService, authSessionService } from '@bike4mind/services';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
-import { notifySeatCeilingRaised } from '@server/organizations/notifySeatCeilingRaised';
+import {
+  notifySeatCeilingRaised,
+  notifyPartnerSignupBlockedAtCapacity,
+} from '@server/organizations/notifySeatCeilingRaised';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -397,13 +400,25 @@ const handler = baseApi({ auth: false })
               {
                 organizationId: partnerOrganizationId,
                 userId: newUser.id,
-                previousSeats: result.previousSeats!,
-                newSeats: result.newSeats!,
+                previousSeats: result.previousSeats,
+                newSeats: result.newSeats,
                 trigger: 'otc-signup',
               },
               req.logger
             );
           }
+        } else if (result.reason === 'at-capacity') {
+          // A Stripe-billed org was full and its ceiling isn't auto-raised; alert an admin to add
+          // seats so this stranded partner user can be admitted. Best-effort, never throws.
+          await notifyPartnerSignupBlockedAtCapacity(
+            {
+              organizationId: partnerOrganizationId,
+              userId: newUser.id,
+              seats: result.seats,
+              trigger: 'otc-signup',
+            },
+            req.logger
+          );
         } else if (result.reason === 'org-missing') {
           req.logger.warn(
             `Partner-rule org membership not applied for OTC user ${newUser.id} ` +

@@ -180,6 +180,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     search: vi.fn(),
     findByStripeCustomerId: vi.fn(),
     addMemberRaisingSeats: vi.fn(),
+    addMemberIfUnderCeiling: vi.fn(),
     findIdsAdministeredBy: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),

@@ -5,7 +5,9 @@ import { cloneDeep } from 'lodash';
 
 describe('applyPartnerRuleMembership', () => {
   const verifiedUser = { id: 'user-id', name: 'Test User', email: 'test@partner.com', emailVerified: true };
+  // No stripeCustomerId => a non-Stripe (admin-granted) org, which raises the seat ceiling to fit.
   const org = { id: 'org-id', name: 'Partner Org', seats: 5, users: [] as Array<{ userId: string }> };
+  const stripeOrg = { ...org, stripeCustomerId: 'cus_123' };
 
   let db: any;
   let logger: any;
@@ -14,7 +16,11 @@ describe('applyPartnerRuleMembership', () => {
     vi.clearAllMocks();
     db = {
       users: { findById: vi.fn(), update: vi.fn() },
-      organizations: { findById: vi.fn(), addMemberRaisingSeats: vi.fn() },
+      organizations: {
+        findById: vi.fn(),
+        addMemberRaisingSeats: vi.fn(),
+        addMemberIfUnderCeiling: vi.fn(),
+      },
     };
     logger = { info: vi.fn() };
   });
@@ -24,11 +30,8 @@ describe('applyPartnerRuleMembership', () => {
   it('adds a verified user that fits under the ceiling as a read-permission member and sets organizationId', async () => {
     db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
     db.organizations.findById.mockResolvedValue(cloneDeep(org));
-    // Fits under the existing ceiling: seats unchanged.
-    db.organizations.addMemberRaisingSeats.mockResolvedValue({
-      ...cloneDeep(org),
-      users: [{ userId: 'user-id', permissions: [Permission.read] }],
-    });
+    // addMemberRaisingSeats returns the PRE-image (users empty, seats 5); fits, so seats unchanged.
+    db.organizations.addMemberRaisingSeats.mockResolvedValue(cloneDeep(org));
 
     const result = await run();
 
@@ -37,26 +40,66 @@ describe('applyPartnerRuleMembership', () => {
       userId: 'user-id',
       permissions: [Permission.read],
     });
+    expect(db.organizations.addMemberIfUnderCeiling).not.toHaveBeenCalled();
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
   });
 
   it('raises the seat ceiling to admit a user at capacity instead of rejecting (#1239)', async () => {
     db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
-    db.organizations.findById.mockResolvedValue({
-      ...cloneDeep(org),
-      seats: 2,
-      users: [{ userId: 'a' }, { userId: 'b' }],
-    });
-    // Atomic op raised seats 2 -> 3 to fit the third member.
-    db.organizations.addMemberRaisingSeats.mockResolvedValue({
-      ...cloneDeep(org),
-      seats: 3,
-      users: [{ userId: 'a' }, { userId: 'b' }, { userId: 'user-id', permissions: [Permission.read] }],
-    });
+    const full = { ...cloneDeep(org), seats: 2, users: [{ userId: 'a' }, { userId: 'b' }] };
+    db.organizations.findById.mockResolvedValue(full);
+    // PRE-image: 2 members, seats 2. The service derives newSeats = max(2, 2 + 1) = 3.
+    db.organizations.addMemberRaisingSeats.mockResolvedValue(cloneDeep(full));
 
     const result = await run();
 
     expect(result).toEqual({ added: true, reason: 'added-seat-raised', previousSeats: 2, newSeats: 3 });
+    expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
+  });
+
+  it('adds a Stripe-billed org member that fits WITHOUT raising the ceiling', async () => {
+    db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
+    const fits = { ...cloneDeep(stripeOrg), seats: 5, users: [{ userId: 'a' }] };
+    db.organizations.findById.mockResolvedValue(fits);
+    db.organizations.addMemberIfUnderCeiling.mockResolvedValue(cloneDeep(fits));
+
+    const result = await run();
+
+    expect(result).toEqual({ added: true, reason: 'added', previousSeats: 5, newSeats: 5 });
+    expect(db.organizations.addMemberIfUnderCeiling).toHaveBeenCalledWith('org-id', {
+      userId: 'user-id',
+      permissions: [Permission.read],
+    });
+    // A Stripe org's ceiling is never raised out of band.
+    expect(db.organizations.addMemberRaisingSeats).not.toHaveBeenCalled();
+    expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
+  });
+
+  it('rejects with at-capacity (no write) when a full Stripe-billed org cannot fit the user', async () => {
+    db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
+    const full = { ...cloneDeep(stripeOrg), seats: 2, users: [{ userId: 'a' }, { userId: 'b' }] };
+    // Top-of-function read, then the re-read after the atomic add matches nothing.
+    db.organizations.findById.mockResolvedValue(full);
+    db.organizations.addMemberIfUnderCeiling.mockResolvedValue(null);
+
+    const result = await run();
+
+    expect(result).toEqual({ added: false, reason: 'at-capacity', seats: 2 });
+    expect(db.organizations.addMemberRaisingSeats).not.toHaveBeenCalled();
+    expect(db.users.update).not.toHaveBeenCalled();
+  });
+
+  it('reports already-member when a Stripe-billed add loses the race to a concurrent signup', async () => {
+    db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
+    // First read: user absent. addMemberIfUnderCeiling returns null (raced). Re-read: user now present.
+    db.organizations.findById
+      .mockResolvedValueOnce({ ...cloneDeep(stripeOrg), seats: 5, users: [{ userId: 'a' }] })
+      .mockResolvedValueOnce({ ...cloneDeep(stripeOrg), seats: 5, users: [{ userId: 'a' }, { userId: 'user-id' }] });
+    db.organizations.addMemberIfUnderCeiling.mockResolvedValue(null);
+
+    const result = await run();
+
+    expect(result).toEqual({ added: false, reason: 'already-member' });
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
   });
 
@@ -68,6 +111,7 @@ describe('applyPartnerRuleMembership', () => {
     expect(result).toEqual({ added: false, reason: 'unverified' });
     expect(db.organizations.findById).not.toHaveBeenCalled();
     expect(db.organizations.addMemberRaisingSeats).not.toHaveBeenCalled();
+    expect(db.organizations.addMemberIfUnderCeiling).not.toHaveBeenCalled();
     expect(db.users.update).not.toHaveBeenCalled();
   });
 
@@ -110,14 +154,29 @@ describe('applyPartnerRuleMembership', () => {
 
   it('reports already-member (and repairs the pointer) when the atomic add loses a race', async () => {
     // findById saw an open seat, but a concurrent signup added this user first, so the atomic
-    // guarded update matched no doc and returned null. Must not report a fresh add.
+    // guarded update matched no doc and returned null. The re-read shows the user is now a member.
     db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
-    db.organizations.findById.mockResolvedValue(cloneDeep(org));
+    db.organizations.findById
+      .mockResolvedValueOnce(cloneDeep(org))
+      .mockResolvedValueOnce({ ...cloneDeep(org), users: [{ userId: 'user-id' }] });
     db.organizations.addMemberRaisingSeats.mockResolvedValue(null);
 
     const result = await run();
 
     expect(result).toEqual({ added: false, reason: 'already-member' });
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
+  });
+
+  it('does NOT write an org pointer when the org was hard-deleted between read and atomic add (#P3)', async () => {
+    db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
+    // Present at the top read, gone by the re-read after the add matched nothing.
+    db.organizations.findById.mockResolvedValueOnce(cloneDeep(org)).mockResolvedValueOnce(null);
+    db.organizations.addMemberRaisingSeats.mockResolvedValue(null);
+
+    const result = await run();
+
+    expect(result).toEqual({ added: false, reason: 'org-missing' });
+    // Never point the user at an org that vanished mid-flight.
+    expect(db.users.update).not.toHaveBeenCalled();
   });
 });
