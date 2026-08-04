@@ -87,7 +87,10 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setDescription(lake.description);
       setRequiredUserTag(lake.requiredUserTag);
       setRequiredEntitlement(lake.requiredEntitlement);
-      setSystemPrompt(lake.systemPrompt);
+      // Defensive fallback: the type promises a string, but a caller that forgets to
+      // normalize a server response missing this field would otherwise set state to
+      // undefined and crash the character-count helper text below (`.trim()` on undefined).
+      setSystemPrompt(lake.systemPrompt ?? '');
     }
     // Intentional id-keying: seed once per lake, not on every live-object refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
