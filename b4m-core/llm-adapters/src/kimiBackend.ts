@@ -88,7 +88,10 @@ export class KimiBackend implements ICompletionBackend {
         name: 'Kimi K2.7 Code',
         backend: ModelBackend.Kimi,
         contextWindow: 262144,
-        max_tokens: 262144,
+        // Half the window, deliberately, and the same output ceiling the K3 row above
+        // carries. At the full 262144 the server's context - output - buffer went
+        // negative, which empties the prompt; every K2.x row has to keep it positive.
+        max_tokens: 131072,
         can_stream: true,
         pricing: {
           // $0.95 / 1M in, $4 / 1M out, $0.19 / 1M cache read.
@@ -109,7 +112,7 @@ export class KimiBackend implements ICompletionBackend {
         name: 'Kimi K2.7 Code (High Speed)',
         backend: ModelBackend.Kimi,
         contextWindow: 262144,
-        max_tokens: 262144,
+        max_tokens: 131072,
         can_stream: true,
         pricing: {
           // Same model on faster infrastructure at 2x the rate: $1.90 / $8.00.
@@ -130,7 +133,7 @@ export class KimiBackend implements ICompletionBackend {
         name: 'Kimi K2.6',
         backend: ModelBackend.Kimi,
         contextWindow: 262144,
-        max_tokens: 262144,
+        max_tokens: 131072,
         can_stream: true,
         pricing: {
           // $0.95 / 1M in, $4 / 1M out, $0.16 / 1M cache read.
@@ -151,7 +154,7 @@ export class KimiBackend implements ICompletionBackend {
         name: 'Kimi K2.5',
         backend: ModelBackend.Kimi,
         contextWindow: 262144,
-        max_tokens: 262144,
+        max_tokens: 131072,
         can_stream: true,
         pricing: {
           // $0.60 / 1M in, $3 / 1M out, $0.10 / 1M cache read.
