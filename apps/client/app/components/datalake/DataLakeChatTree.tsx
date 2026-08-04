@@ -29,10 +29,12 @@ import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
   ICON_BTN_SX,
+  TREE_BACK_STICKY_SX,
   TREE_LIST_SX,
   TREE_SCROLL_SX,
   hueForBranch,
   humanizeSegment,
+  treeBackRowSx,
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
 import type { IFabFileDocument } from '@bike4mind/common';
@@ -216,31 +218,22 @@ export default function DataLakeChatTree({
 
       {/* Tree / file list */}
       <Box className="datalake-tree-list" sx={{ ...TREE_SCROLL_SX, px: '8px' }}>
-        {/* Breadcrumb back - styled like the tree items (14px / gray[200]). */}
+        {/* Breadcrumb back - styled like the tree items (14px / gray[200]), pinned while scrolling. */}
         {breadcrumb.length > 0 && (
-          <ListItemButton
-            onClick={() => onNavigate(breadcrumb.slice(0, -1))}
-            data-testid="datalake-back"
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              px: '8px',
-              mb: '4px',
-              height: '32px',
-              minHeight: '32px',
-              borderRadius: '8px',
-              transition: 'background 0.15s',
-              '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
-            }}
-          >
-            <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
-            <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
-              {breadcrumb.length === 1
-                ? 'All Categories'
-                : humanizeSegment(breadcrumb[breadcrumb.length - 2], breadcrumb.length - 2)}
-            </Typography>
-          </ListItemButton>
+          <Box sx={TREE_BACK_STICKY_SX}>
+            <ListItemButton
+              onClick={() => onNavigate(breadcrumb.slice(0, -1))}
+              data-testid="datalake-back"
+              sx={treeBackRowSx(theme.palette.notebooklist.hoverBg)}
+            >
+              <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
+              <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
+                {breadcrumb.length === 1
+                  ? 'All Categories'
+                  : humanizeSegment(breadcrumb[breadcrumb.length - 2], breadcrumb.length - 2)}
+              </Typography>
+            </ListItemButton>
+          </Box>
         )}
         {isError ? (
           <Box sx={{ p: 2, textAlign: 'center' }} data-testid="datalake-error">

@@ -54,6 +54,37 @@ export const COUNT_CHIP_SX = {
  */
 export const TREE_SCROLL_SX = { flex: 1, overflow: 'auto', ...scrollbarStyles } as const;
 
+/**
+ * Wrapper that pins the breadcrumb back row to the top of its scroll pane, so going up a level
+ * stays reachable in a long branch. Mirrors the sidenav's pinned nav: an opaque backdrop in the
+ * card's own surface colour lets rows scroll UNDER it rather than through it. The 4px gap below
+ * the row lives here rather than on the button, so no sliver of moving content shows in it.
+ *
+ * Only needed where the back row is INSIDE the scroll container (the in-chat tree and the manager
+ * nav). DataLakeTree/DataLakeViewer render theirs as a sibling above the scroll pane already.
+ */
+export const TREE_BACK_STICKY_SX = {
+  position: 'sticky',
+  top: 0,
+  zIndex: 2,
+  backgroundColor: 'background.surface2',
+  pb: '4px',
+} as const;
+
+/** Breadcrumb back row, sized to match the folder/file rows above it. */
+export const treeBackRowSx = (hoverBg: string) =>
+  ({
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    px: '8px',
+    height: '32px',
+    minHeight: '32px',
+    borderRadius: '8px',
+    transition: 'background 0.15s',
+    '--variant-plainHoverBg': hoverBg,
+  }) as const;
+
 /** List container vars shared by the tree/file lists. */
 export const TREE_LIST_SX = {
   py: 0,

@@ -40,10 +40,12 @@ import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
   ICON_BTN_SX,
+  TREE_BACK_STICKY_SX,
   TREE_LIST_SX,
   TREE_SCROLL_SX,
   hueForBranch,
   humanizeSegment,
+  treeBackRowSx,
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
 import { brandAlpha, gray } from '@client/app/utils/themes/colors';
@@ -425,27 +427,14 @@ function ManagerNav({
 
       <Box sx={{ ...TREE_SCROLL_SX, px: '8px' }}>
         {activeLake && (
-          <ListItemButton
-            onClick={handleBack}
-            data-testid="datalake-manager-back"
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              px: '8px',
-              mb: '4px',
-              height: '32px',
-              minHeight: '32px',
-              borderRadius: '8px',
-              transition: 'background 0.15s',
-              '--variant-plainHoverBg': hoverBg,
-            }}
-          >
-            <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
-            <Typography noWrap sx={rowTypographySx}>
-              {backLabel}
-            </Typography>
-          </ListItemButton>
+          <Box sx={TREE_BACK_STICKY_SX}>
+            <ListItemButton onClick={handleBack} data-testid="datalake-manager-back" sx={treeBackRowSx(hoverBg)}>
+              <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
+              <Typography noWrap sx={rowTypographySx}>
+                {backLabel}
+              </Typography>
+            </ListItemButton>
+          </Box>
         )}
 
         {!activeLake ? (
