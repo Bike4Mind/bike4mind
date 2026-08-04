@@ -183,4 +183,17 @@ describe('resolveRetrievalLakeScope', () => {
       entitlementKeys: [],
     });
   });
+
+  it('normalizes a populated-document organizationId at the seam (#1343)', async () => {
+    // A .populate('organizationId') upstream would hand req.user a full Organization doc. It must
+    // reach the shared resolver as its hex string, not "[object Object]", mirroring toAccessContext.
+    const populatedOrg = { _id: { toHexString: () => 'org-hex' }, name: 'Acme' } as unknown as string;
+    await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: ['Opti'], organizationId: populatedOrg }));
+
+    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
+      db: { dataLakes: dataLakeRepository },
+      user: { id: 'u1', tags: ['Opti'], organizationId: 'org-hex' },
+      entitlementKeys: [],
+    });
+  });
 });
