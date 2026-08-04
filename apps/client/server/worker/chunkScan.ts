@@ -30,6 +30,12 @@ export const CHUNK_SCAN_BATCH = 50;
  * whose chunking threw gets `error` set. Both are terminal for this scan - re-enqueueing them
  * would re-fail identically every cycle; recovery for those is the explicit reprocess path,
  * which clears the markers.
+ *
+ * Audio and images are excluded up front: SmartChunker returns 0 chunks for both BY DESIGN
+ * (audio is never vectorizable; images are passed to models as URLs), so sweeping them would
+ * burn the per-run cap on no-op queue round-trips and stamp historical media files with a
+ * misleading 'No extractable text' note. Query must stay in sync with isAudioMimeType and
+ * SmartChunker.chunkImage.
  */
 export const NO_EXTRACTABLE_TEXT_NOTE_PREFIX = 'No extractable text';
 
@@ -39,6 +45,7 @@ export const buildFabFileChunkScanFilter = (cutoff: Date) => ({
   isChunking: { $ne: true },
   createdAt: { $lt: cutoff },
   deletedAt: null,
+  mimeType: { $not: /^(audio|image)\// },
   notes: { $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`) },
   error: { $in: [null, ''] },
 });
