@@ -6,6 +6,7 @@ import {
   DATALAKE_TAG_STRENGTH,
   KnowledgeType,
   type IDataLakeBatchFile,
+  type IDataLakeDocument,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createFabFile } from '@server/managers/fabFileManager';
@@ -39,13 +40,13 @@ const handler = baseApi().post(async (req: Request, res) => {
   // Look up data lake for meta-tag injection. Uploading into a lake is a WRITE, so enforce the
   // creator/admin gate (not just read access) - otherwise a read-only member could inject files.
   // Not-found-style denial when unreadable; manage-denied when readable but not owned.
-  let datalakeTag: string | undefined;
+  let dataLake: IDataLakeDocument | undefined;
   if (data.dataLakeSlug) {
-    const dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeSlug, await toAccessContext(req), {
+    dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeSlug, await toAccessContext(req), {
       db: { dataLakes: dataLakeRepository },
     });
-    datalakeTag = dataLake.datalakeTag;
   }
+  const datalakeTag = dataLake?.datalakeTag;
 
   // Defense-in-depth: a caller could also smuggle a `datalake:*` meta-tag for a DIFFERENT lake
   // through per-file tags. Gate every such tag with the same write check.
@@ -60,6 +61,14 @@ const handler = baseApi().post(async (req: Request, res) => {
     const batch = await dataLakeBatchRepository.findById(data.batchId);
     if (!batch || batch.userId !== userId) {
       throw new NotFoundError('Batch not found');
+    }
+    // The batch was bound to a lake when it was created, so it is the authority on where its
+    // files belong: a `dataLakeSlug` resolving elsewhere is a stale client value, not a second
+    // target. Without this, a slug the client derived from the lake's NAME quietly files the
+    // upload into whichever lake holds that slug. Bad request, not a not-found: the caller has
+    // already been shown both objects exist and are theirs.
+    if (dataLake && batch.dataLakeId !== dataLake.id) {
+      throw new BadRequestError('This batch belongs to a different data lake');
     }
   }
 

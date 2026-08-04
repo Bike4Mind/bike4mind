@@ -114,7 +114,7 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     h.assertLakeWriteAccess.mockResolvedValue(LAKE);
     h.findByDatalakeTag.mockResolvedValue(LAKE);
     h.createFabFile.mockImplementation(async () => ({ id: `f${h.createFabFile.mock.calls.length}` }));
-    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1' });
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: LAKE.id });
     h.appendFiles.mockResolvedValue(null);
   });
 
@@ -209,5 +209,57 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
 
     const persisted = (h.createFabFile.mock.calls[0][0] as { tags: { name: string; strength: number }[] }).tags;
     expect(persisted.find(t => t.name === 'datalake:orga:acme-2026')?.strength).toBe(1.0);
+  });
+});
+
+describe('POST /api/files/generate-presigned-urls-batch - batch/lake binding', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue(true);
+    h.assertLakeWriteAccess.mockResolvedValue(LAKE);
+    h.findByDatalakeTag.mockResolvedValue(LAKE);
+    h.createFabFile.mockImplementation(async () => ({ id: `f${h.createFabFile.mock.calls.length}` }));
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: LAKE.id });
+    h.appendFiles.mockResolvedValue(null);
+  });
+
+  it('refuses files whose batch belongs to a lake other than the one the reference resolves to', async () => {
+    // The wizard used to send a slug derived from the lake's NAME, which on a collision resolves
+    // to the lake that already held it - so the batch pointed at the new lake while the files
+    // were tagged into someone else's. The batch's binding is the authority.
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: 'lake-2' });
+    const { res } = makeRes();
+
+    await expect(run({ files: [file()], dataLakeSlug: 'acme-2026', batchId: 'b1' }, res)).rejects.toThrow(
+      /different data lake/
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('refuses a batch that carries no lake binding at all', async () => {
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1' });
+    const { res } = makeRes();
+
+    await expect(run({ files: [file()], dataLakeSlug: 'acme-2026', batchId: 'b1' }, res)).rejects.toThrow(
+      /different data lake/
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('presigns when the batch and the lake reference agree', async () => {
+    const { res } = makeRes();
+    await run({ files: [file()], dataLakeSlug: 'acme-2026', batchId: 'b1' }, res);
+
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+    expect(h.appendFiles).toHaveBeenCalled();
+  });
+
+  it('leaves a batch upload with no lake reference alone', async () => {
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: 'lake-2' });
+    const { res } = makeRes();
+    await run({ files: [file()], batchId: 'b1' }, res);
+
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+    expect(h.assertLakeWriteAccess).not.toHaveBeenCalled();
   });
 });
