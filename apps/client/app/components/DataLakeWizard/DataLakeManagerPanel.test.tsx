@@ -173,6 +173,21 @@ describe('DataLakeManagerPanel - root view', () => {
     // The lifecycle accordions are unaffected.
     expect(screen.getByTestId('datalake-archived-section')).toBeInTheDocument();
   });
+
+  // The icon names the ACTIVE mode rather than just advertising a toggle, so it has to swap with
+  // the state - a static glyph left the current sort readable only from the tooltip.
+  it('swaps the sort icon to the alphabet glyph when toggled to A-Z', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const toggle = screen.getByTestId('datalake-manager-sort-toggle');
+    expect(toggle).toHaveAttribute('data-sort', 'count');
+    expect(screen.getByTestId('SortIcon')).toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('data-sort', 'alpha');
+    expect(screen.getByTestId('SortByAlphaIcon')).toBeInTheDocument();
+    expect(screen.queryByTestId('SortIcon')).not.toBeInTheDocument();
+  });
 });
 
 describe('DataLakeManagerPanel - lake navigation', () => {

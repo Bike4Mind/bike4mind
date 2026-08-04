@@ -1,3 +1,5 @@
+import SortIcon from '@mui/icons-material/Sort';
+import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { HUES } from './deckChrome';
 import type { Hue } from './deckChrome';
@@ -8,6 +10,16 @@ import type { Hue } from './deckChrome';
  * the sizing constants, row styling, and tag-namespace display names live here.
  * Row/hover styling mirrors the main app sidenav (layouts/Notebook/Sidenav).
  */
+
+/**
+ * Sort toggle icon per ACTIVE mode, so the button states what it is doing rather than only that
+ * it toggles: A-Z gets the alphabet glyph, count gets the descending-bars glyph (both surfaces
+ * sort count high-to-low). Keyed by the same union the surfaces hold in state.
+ */
+export const SORT_MODE_ICON: Record<'count' | 'alpha', typeof SortIcon> = {
+  count: SortIcon,
+  alpha: SortByAlphaIcon,
+};
 
 /** Shared sizing for the tree's 32px controls (header icons + footer buttons). */
 export const CONTROL_SX = { borderRadius: '6px' } as const;

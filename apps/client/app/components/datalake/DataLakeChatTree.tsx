@@ -15,7 +15,6 @@ import {
   useTheme,
 } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
-import SwapVertIcon from '@mui/icons-material/SwapVert';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -29,6 +28,7 @@ import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
   ICON_BTN_SX,
+  SORT_MODE_ICON,
   TREE_BACK_STICKY_SX,
   TREE_LIST_SX,
   TREE_SCROLL_SX,
@@ -83,6 +83,7 @@ export default function DataLakeChatTree({
   const isDark = theme.palette.mode === 'dark';
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'count' | 'alpha'>('count');
+  const SortModeIcon = SORT_MODE_ICON[sortBy];
 
   const currentNodes = useMemo(() => getNodesAtPath(tree, breadcrumb), [tree, breadcrumb]);
 
@@ -211,7 +212,7 @@ export default function DataLakeChatTree({
             data-sort={sortBy}
             sx={{ ...ICON_BTN_SX, flexShrink: 0 }}
           >
-            <SwapVertIcon sx={{ fontSize: 18 }} />
+            <SortModeIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Tooltip>
       </Box>
