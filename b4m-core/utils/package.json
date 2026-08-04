@@ -79,6 +79,16 @@
         "default": "./dist/escapeRegex.cjs"
       }
     },
+    "./normalizeId": {
+      "import": {
+        "types": "./dist/normalizeId.d.mts",
+        "default": "./dist/normalizeId.mjs"
+      },
+      "require": {
+        "types": "./dist/normalizeId.d.cts",
+        "default": "./dist/normalizeId.cjs"
+      }
+    },
     "./retrievalExclusion": {
       "import": {
         "types": "./dist/retrievalExclusion.d.mts",
