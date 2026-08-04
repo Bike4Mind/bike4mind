@@ -3036,6 +3036,30 @@ describe('the safety pass on paths the primary allocation does not reach', () =>
     );
   });
 
+  it('declares the loss once, however many rounds the pass spends', async () => {
+    // The pass re-declares every round so the note tracks what it has dropped so far, which only works if
+    // the call replaces the previous note instead of appending another. Appending is worse than a stale
+    // note: each copy costs about 100 tokens the pass is trying to free, and a stale note itself passes
+    // the delivered-attachment predicate, so every extra copy claims one fewer lost file than the last -
+    // ending with the model told one file is missing when three are.
+    const result = await buildAndSortMessages(
+      history(40, 1000),
+      [attachment('a.csv', 3000), attachment('b.csv', 3000), attachment('c.csv', 3000)],
+      [{ role: 'user', content: 'Summarize the attached files' }],
+      12000,
+      {},
+      20,
+      mockLogger as any,
+      tokenizerAt(1.5)
+    );
+
+    const text = delivered(result);
+    expect(text.split('could not be included in this request').length - 1).toBe(1);
+    // The surviving note has to state the real number, not what is left after stale copies were counted
+    // as delivered files.
+    expect(text).toContain('3 attached file(s) could not be included');
+  });
+
   it('logs the composition when nothing left is droppable, rather than returning quietly', async () => {
     // Images are assembled in at a flat rate and neither branch can touch them, so an overflow made of
     // images cannot be shrunk. The caller's hard throw is reachable from more than the composer, so the

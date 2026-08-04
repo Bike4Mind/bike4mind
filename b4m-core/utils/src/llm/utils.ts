@@ -2045,7 +2045,12 @@ export async function buildAndSortMessages(
     // sides. An attachment carrying no extractable text, or a URL-derived message, is absent from
     // both: counting either as delivered let it stand in for a sibling that was dropped, and the drop
     // then went undeclared.
-    const delivered = contentMessages.filter(message => message !== undeliveredNote && isAttachment(message));
+    // Held before the reassignment below, because the note is what identifies the previous round's note
+    // for removal. Comparing against the new object instead leaves the old one in place, and since a
+    // stale note passes isAttachment it then counts as a delivered file, so each round declares one
+    // fewer loss than the last while the payload grows by another ~100-token duplicate.
+    const previousNote = undeliveredNote;
+    const delivered = contentMessages.filter(message => message !== previousNote && isAttachment(message));
     const isUnusableSliver = (message: IMessage): boolean =>
       cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS;
     const usable = delivered.filter(message => !isUnusableSliver(message));
@@ -2080,10 +2085,7 @@ export async function buildAndSortMessages(
     // the allocation was the only caller, because a turn it dropped nothing on returned early above; the
     // safety pass can now be the first stage to drop something, which makes the loss reachable.
     const replaced = new Set(delivered.filter(isUnusableSliver));
-    return [
-      ...contentMessages.filter(message => message !== undeliveredNote && !replaced.has(message)),
-      undeliveredNote,
-    ];
+    return [...contentMessages.filter(message => message !== previousNote && !replaced.has(message)), undeliveredNote];
   };
 
   processedContentMessages = declareUndeliveredAttachments(processedContentMessages);
@@ -2179,7 +2181,9 @@ export async function buildAndSortMessages(
     // the failure this module exists to prevent.
     let reducedContentMessages = processedContentMessages;
     let currentTokenCount = finalTokenCount;
-    let lastRatio = 1;
+    // Null until a round measures one, so the give-up log below cannot print a measured-looking ratio on
+    // the exits that never reached the measurement.
+    let lastRatio: number | null = null;
 
     // The only thing that knows the assembly order, so the payload measured each round and the payload
     // returned cannot diverge. The pairing flag is derived from the history handed in rather than read
@@ -2219,8 +2223,8 @@ export async function buildAndSortMessages(
       const beforeEstimate = estimateMessagesTokens(before);
       const beforeReal = await calculateTotalTokenLength(before, { estimateOnly: false, tokenizer });
       lastRatio = beforeEstimate > 0 && beforeReal > 0 ? Math.min(8, Math.max(0.25, beforeReal / beforeEstimate)) : 1;
-      // Errs low on purpose: a round that under-trims is corrected by the next one, while over-trimming
-      // drops content a smaller cut would have kept.
+      // No overshoot allowance on top of the conversion: a round that frees too little is corrected by
+      // the next one, while asking for more than the overage drops content a smaller cut would have kept.
       const excessInEstimateTokens = Math.ceil((currentTokenCount - maxInputTokens) / lastRatio);
       const budget = Math.max(0, beforeEstimate - excessInEstimateTokens);
 
@@ -2277,8 +2281,10 @@ export async function buildAndSortMessages(
       logger.warn(
         `Final safety pass could not bring the payload under maxInputTokens (${currentTokenCount} > ${maxInputTokens}). ` +
           `Remaining: ${systemMessages.length} system, ${processedPreviousMessages.length} history, ` +
-          `${reducedContentMessages.length} content, ${imageMessages.length} image message(s) plus the user prompt, ` +
-          `at ${lastRatio.toFixed(2)} real tokens per estimated token.`
+          `${reducedContentMessages.length} content, ${imageMessages.length} image message(s) plus the user prompt` +
+          (lastRatio === null
+            ? ', with nothing shrinkable to measure.'
+            : `, at ${lastRatio.toFixed(2)} real tokens per estimated token.`)
       );
     }
 
