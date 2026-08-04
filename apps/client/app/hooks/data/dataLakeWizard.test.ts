@@ -33,6 +33,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefine
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
 import { useBatchUpload, useRemoveFileFromDataLake } from './dataLakeWizard';
+import { slugifyDataLakeName } from './dataLakeSlug';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
 const mountHook = <T>(hook: () => T) => {
@@ -340,6 +341,62 @@ describe('useBatchUpload onError', () => {
     act(() => opts.action.onClick());
 
     await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('useBatchUpload lake targeting', () => {
+  beforeEach(() => {
+    apiPost.mockReset();
+    apiPut.mockClear();
+    apiDelete.mockClear();
+    uploadFileToUrlMock.mockReset();
+    uploadFileToUrlMock.mockResolvedValue(undefined);
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  const presignedLakeRef = () =>
+    (postCall('/api/files/generate-presigned-urls-batch')?.[1] as { dataLakeSlug: string }).dataLakeSlug;
+
+  it('uploads into the lake it just created, not the lake the name slugifies to', async () => {
+    // The server disambiguates a colliding slug, so a name-derived slug can resolve to a
+    // lake that already existed - another user's, for an admin who may write to it. Only
+    // the id the create call returned identifies the new lake.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1', slug: 'test-lake-1' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch') return Promise.resolve({ data: { files: [] } });
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/api/files/generate-presigned-urls-batch', expect.anything())
+    );
+
+    expect(presignedLakeRef()).toBe('lake1');
+    expect(presignedLakeRef()).not.toBe(slugifyDataLakeName(useDataLakeWizardStore.getState().config.name));
+    expect(presignedLakeRef()).toBe((postCall('/api/data-lakes/batches')?.[1] as { dataLakeId: string }).dataLakeId);
+  });
+
+  it('uploads into the target lake in append mode', async () => {
+    installApiPostRouter();
+    seedWizard({ targetLake: { id: 'existing1', slug: 'existing-slug' } });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/api/files/generate-presigned-urls-batch', expect.anything())
+    );
+
+    expect(presignedLakeRef()).toBe('existing1');
   });
 });
 

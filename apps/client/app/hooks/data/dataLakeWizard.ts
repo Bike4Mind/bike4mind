@@ -321,8 +321,6 @@ export function useBatchUpload() {
 
       // Ensure tag prefix ends with ':'
       const tagPrefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : config.tagPrefix + ':';
-      // Append mode reuses the target lake's slug; create mode derives it from the name.
-      const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
 
       // Step 1: Create the data lake; skipped in append mode (upload into the existing lake).
       let dataLakeId: string;
@@ -334,7 +332,9 @@ export function useBatchUpload() {
         const organizationId = activeOrgId();
         const dataLakeRes = await api.post<{ id: string }>('/api/data-lakes', {
           name: config.name,
-          slug,
+          // The slug we ask for. The server disambiguates it against lakes in scope, so the
+          // created lake's real slug can differ - everything downstream keys off the id.
+          slug: slugifyDataLakeName(config.name),
           description: config.description || undefined,
           fileTagPrefix: tagPrefix,
           requiredUserTag: config.requiredUserTag || undefined,
@@ -418,7 +418,11 @@ export function useBatchUpload() {
                 // later, post-upload, once the background job's suggestions are reviewed.
                 tags: folderTagForFile(f.relativePath, tagPrefix),
               })),
-              dataLakeSlug: slug,
+              // The lake id, never a slug derived from the name: on a name collision the server
+              // creates the lake under a disambiguated slug, and the name-derived one still
+              // resolves - to the lake that was already there, possibly another user's. The
+              // route accepts either form.
+              dataLakeSlug: dataLakeId,
               // Correlate every uploaded file to its batch so the pipeline
               // (objectCreated -> chunk -> vectorize) updates batch progress and the
               // batch can complete. Also populates the batch manifest server-side.
