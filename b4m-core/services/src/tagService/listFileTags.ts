@@ -1,4 +1,4 @@
-import { IFabFileRepository, IFileTagRepository } from '@bike4mind/common';
+import { IFabFileRepository, IFileTagRepository, IFileTagWithFileCount } from '@bike4mind/common';
 import { matchTagDocument } from './tagName';
 
 interface TagListFileTagsParams {
@@ -14,10 +14,12 @@ interface TagListFileTagsAdapters {
 }
 
 /**
- * Lists a user's file tags with `fileCount` recomputed from live `FabFile.tags` rather than read
- * off the tag document. The stored counter is only maintained by fabFileService/toggleTags and the
- * file-delete routes, so every other writer (the `$pull` removal path, a whole-array tags replace
- * on PUT /api/files/[id], tags set at creation) leaves it permanently drifted.
+ * Lists a user's file tags, computing `fileCount` from live `FabFile.tags` on every read. The tag
+ * document stores no count of its own: a stored counter has to be maintained by every writer that
+ * touches a file's tags, and several never did (the `$pull` removal path, a whole-array tags replace
+ * on PUT /api/files/[id], tags set at creation), so it drifted permanently. This is the only place
+ * a `fileCount` comes from, which is why the return type is `IFileTagWithFileCount` and a tag read
+ * through any other repository method has none.
  *
  * Uses the same aggregate and the same options as GET /api/files/tags/counts, which backs the tag
  * tree - the two surfaces must stay in sync or the sidebar badge and the tag card disagree for the
@@ -28,7 +30,7 @@ export const listFileTags = async (
   userId: string,
   params: TagListFileTagsParams,
   adapters: TagListFileTagsAdapters
-) => {
+): Promise<IFileTagWithFileCount[]> => {
   const { db } = adapters;
 
   const [fileTags, tagCounts] = await Promise.all([

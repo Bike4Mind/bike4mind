@@ -62,7 +62,6 @@ export const create = async (userId: string, parameters: TagCreateParameters, ad
     userId,
     ...params,
     name,
-    fileCount: 0,
     lastActivityAt: new Date(),
     createdAt: new Date(),
     updatedAt: new Date(),

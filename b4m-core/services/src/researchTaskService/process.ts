@@ -43,10 +43,7 @@ interface ResearchTaskProcessAdapters {
     transaction: <T>(fn: () => Promise<T>) => Promise<T>;
     researchTasks: IResearchTaskRepository;
     fabFiles: Pick<IFabFileRepository, 'create' | 'findById' | 'update' | 'shareable'>;
-    fileTags: Pick<
-      IFileTagRepository,
-      'findByIdAndUserId' | 'create' | 'findByFoldedNameAndUserId' | 'incrementFileCountByIds'
-    >;
+    fileTags: Pick<IFileTagRepository, 'findByIdAndUserId' | 'create' | 'findByFoldedNameAndUserId'>;
     users: Pick<IUserRepository, 'findById'>;
     adminSettings: IAdminSettingsRepository;
     researchDatas: IResearchDataRepository;
