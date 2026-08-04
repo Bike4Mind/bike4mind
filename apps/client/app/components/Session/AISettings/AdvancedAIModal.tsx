@@ -63,7 +63,7 @@ import ToolsSection from './ToolsSection';
 import { AudioGenerationSettings } from './AudioGenerationSettings';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 
-import ModelSelection from '../ModelSelection';
+import ModelSelection, { getModelBackend } from '../ModelSelection';
 import MetadataChip from './MetaDataChips';
 import {
   buildModelSelectionPatch,
@@ -76,7 +76,6 @@ import {
   getPriceTierTooltip,
   getTopUsedModelsFromStats,
   isNewModel,
-  isOpenAIModel,
 } from '@client/app/utils/aiSettingsUtils';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
@@ -303,7 +302,6 @@ interface SelectedModelDetailsProps {
   maxTokens: number;
   maxContextWindow: number;
   getPriceTierTooltip: (tier: string) => string;
-  isOpenAIModel: (modelName: string) => boolean;
   isNewModel: (modelInfo: ModelInfo) => boolean;
   isPopular: boolean;
   metricsLoading: boolean;
@@ -465,7 +463,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   maxTokens,
   maxContextWindow,
   getPriceTierTooltip,
-  isOpenAIModel,
   isNewModel,
   isPopular,
   metricsLoading,
@@ -512,7 +509,9 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
       >
         {/* Chips and notices; the title, description and reset live in the dialog header */}
         <Box sx={{ width: '100%' }}>
-          {isOpenAIModel(modelInfo.name) && (
+          {/* Same test the picker groups by, so the notice can never disagree with the
+              provider section a model is filed under. A name-only check missed Sora. */}
+          {getModelBackend(modelInfo) === 'OpenAI' && (
             <Typography
               level="body-xs"
               sx={{
@@ -2117,7 +2116,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 maxTokens={maxTokens}
                 maxContextWindow={maxContextWindow}
                 getPriceTierTooltip={getPriceTierTooltip}
-                isOpenAIModel={isOpenAIModel}
                 isNewModel={isNewModel}
                 isPopular={isPopular}
                 metricsLoading={metricsLoading}
