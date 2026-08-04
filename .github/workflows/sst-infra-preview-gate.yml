@@ -37,23 +37,31 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.head_ref }}
+          IS_SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           set -euo pipefail
 
-          # The changesets "version packages" PR only bumps versions + CHANGELOGs.
-          # Its b4m-core/infra/package.json bump trips the infra glob below with no
-          # real infra change, so exempt the bot branch instead of forcing a
-          # throwaway preview on every release.
-          if [ "$HEAD_REF" = "changeset-release/main" ]; then
-            echo "Changesets release PR (version bumps only). Gate not applicable -> pass."
-            exit 0
-          fi
-
           # Single fetch of changed files (with patches). No `|| true`: a fetch
           # failure must redden this gate (fail closed), never silently pass.
-          gh api "repos/$REPO/pulls/$PR/files" --paginate > /tmp/pr_files.json
+          gh api "repos/$REPO/pulls/$PR/files" --paginate > /tmp/pr_files_raw.json
+
+          # The changesets "version packages" PR bumps versions + CHANGELOGs; its
+          # b4m-core/infra/package.json bump trips the infra glob below with no real
+          # infra change. Exempt those ARTIFACTS on a same-repo release PR rather
+          # than trusting the branch name: `github.head_ref` is attacker-chosen on a
+          # fork (this public repo takes external PRs), and the release branch is
+          # long-lived and human-pushed -- so a real infra change riding it must
+          # still redden. Filtering the diff instead of short-circuiting the whole
+          # PR preserves that. Same-repo predicate mirrors auto-changeset.yml.
+          if [ "$IS_SAME_REPO" = "true" ] && [ "$HEAD_REF" = "changeset-release/main" ]; then
+            jq '[.[] | select((.filename == "b4m-core/infra/package.json" or .filename == "CHANGELOG.md" or (.filename | endswith("/CHANGELOG.md"))) | not)]' /tmp/pr_files_raw.json > /tmp/pr_files.json
+            echo "Release PR: excluded version-bump artifacts (b4m-core/infra/package.json, CHANGELOGs) from gate detection."
+          else
+            cp /tmp/pr_files_raw.json /tmp/pr_files.json
+          fi
+
           jq -r '.[].filename' /tmp/pr_files.json > /tmp/files.txt
-          echo "Changed files:"; sed 's/^/  /' /tmp/files.txt || true
+          echo "Changed files considered:"; sed 's/^/  /' /tmp/files.txt || true
 
           applicable=0
           reason=""
