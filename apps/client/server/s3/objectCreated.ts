@@ -14,6 +14,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getFilesStorage } from '@server/utils/storage';
 import { moderateUploadedFile } from '@server/s3/moderateUploadedFile';
+import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { sendToQueue } from '@server/utils/sqs';
 import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
@@ -193,6 +194,9 @@ export const func = withContext(async (event, context, logger) => {
         logger.error(`Error updating batch progress for batchId ${metadata.batchId}: ${error}`);
       }
     }
+
+    // Now that the bytes are in storage, the lakes this file's meta-tags name can count it.
+    await recomputeStatsForUploadedFile(metadata, { logger });
 
     const enableKnowledgeAutoChunk = await adminSettingsRepository.getSettingsValue('enableAutoChunk');
 

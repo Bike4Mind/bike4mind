@@ -7,7 +7,6 @@ const h = vi.hoisted(() => ({
   findByDatalakeTag: vi.fn(),
   batchFindById: vi.fn(),
   getSettingsValue: vi.fn(),
-  recomputeStatsForLakeTags: vi.fn(),
 }));
 
 // Single-method chain: the route only calls `.use(...).post(...)`, and the ability check in
@@ -17,9 +16,6 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
-  recomputeStatsForLakeTags: h.recomputeStatsForLakeTags,
-}));
 vi.mock('@server/utils/browserUploadUrl', () => ({ resolveBrowserUploadUrl: (_id: string, url: string) => url }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(async () => 'https://s3.test/put') }),
@@ -119,27 +115,6 @@ describe('POST /api/files/createFabFile - data-lake tags', () => {
 
     expect(h.fabFileCreate.mock.calls[0][0]).not.toHaveProperty('tags');
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
-  });
-
-  it('recomputes the lake when content lands straight into it (#1342)', async () => {
-    // This door reaches no batch and no membership service. Without the recompute the lake's
-    // counts stay stale and it never leaves 'draft', so it never appears in Discover.
-    const { res } = makeRes();
-    await run(body({ content: 'hello', tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
-
-    expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith(
-      expect.arrayContaining(['datalake:orga:acme-2026']),
-      expect.anything()
-    );
-  });
-
-  it('does not recompute a presign-style create, whose bytes are not in storage yet', async () => {
-    // No content means the service mints a presignedUrl and the upload has not happened.
-    // Activation is one-way, so counting that row could park an empty lake in Discover forever.
-    const { res } = makeRes();
-    await run(body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
-
-    expect(h.recomputeStatsForLakeTags).not.toHaveBeenCalled();
   });
 });
 
