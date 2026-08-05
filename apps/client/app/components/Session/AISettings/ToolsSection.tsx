@@ -46,7 +46,7 @@ import { useChatInput } from '@client/app/hooks/useChatInput';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { commandHandlers } from '@client/app/components/Session/SessionBottom/sessionBottomConstants';
 import { isImageModel, isVideoModel, type CommandKey } from '@client/app/utils/commands';
-import { gray, green } from '@client/app/utils/themes/colors';
+import { brand, gray, green } from '@client/app/utils/themes/colors';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import DeepResearchConfigModal from './DeepResearchConfigModal';
 import ImageGenerationModelSelectionModal from './ImageGenerationModelSelectionModal';
@@ -260,6 +260,7 @@ interface ToolsSectionProps {
 
 const ToolsSection = ({
   tools: propTools,
+  model: propModel,
   setTools,
   columns = 2,
   onModalOpenChange,
@@ -279,8 +280,11 @@ const ToolsSection = ({
   const enabledMcpServers = useLLM(state => state.enabledMcpServers);
   const { setState: setLLM } = useLLM;
   const { settings: userSettings, updatePreferences } = useUserSettings();
-  const showIndividualTools = !userSettings.toolsCatalogCollapsed;
-  const showFunTools = userSettings.showFunTools;
+  // Forced shut while previewing: the point is what the model supports, not a browsable catalogue,
+  // and the rows are inert anyway. Deliberately not persisted - the user's own expand/collapse
+  // preference has to survive a look at another model.
+  const showIndividualTools = !readOnly && !userSettings.toolsCatalogCollapsed;
+  const showFunTools = !readOnly && userSettings.showFunTools;
   const {
     data: mcpServersData = [],
     isPending: isLoadingMcpServers,
@@ -303,7 +307,13 @@ const ToolsSection = ({
   const toolAvailability = serverConfig?.toolAvailability;
   const tools = propTools ?? contextTools;
   const theme = useTheme();
-  const model = useLLM(s => s.model);
+  // The `model` prop was declared but never read, so both callers' values were ignored and this
+  // panel always described the ACTIVE model. That is right for the composer dropdown, which passes
+  // nothing, but wrong for the settings dialog, which can be previewing a model that is not
+  // running - it showed "does not support tools" for a tool-capable model whenever an image model
+  // happened to be selected.
+  const activeModel = useLLM(s => s.model);
+  const model = propModel ?? activeModel;
   const { data: modelInfoRepo } = useModelInfo();
   const modelInfo = useMemo(() => modelInfoRepo?.find(m => m.id === model), [model, modelInfoRepo]);
 
@@ -492,7 +502,9 @@ const ToolsSection = ({
     // liveAI off there's no injection, so a complex draft WOULD auto-route and
     // the tools should still grey. Uses the same isImageModel/isVideoModel
     // predicates the send path uses, keeping the two in lockstep.
-    if (liveAI && (isImageModel(model) || isVideoModel(model))) return false;
+    // activeModel, not the resolved one: this predicts what the NEXT SEND will do, and the send
+    // always runs the model that is actually selected, never one being previewed.
+    if (liveAI && (isImageModel(activeModel) || isVideoModel(activeModel))) return false;
     // Session file / agent context isn't available in this component, so those
     // args are passed empty - omitting them can only lower the score, never
     // raise it, so it won't grey spuriously on that account. (The tools /
@@ -512,7 +524,7 @@ const ToolsSection = ({
     chatDraft,
     tools,
     researchMode,
-    model,
+    activeModel,
     liveAI,
     isAgentsEnabled,
     autoRouteEnabled,
@@ -723,8 +735,7 @@ const ToolsSection = ({
           justifyContent: 'space-between',
           gap: '24px',
           mb: '20px',
-          pl: '4px',
-          pr: '12px',
+          opacity: readOnly ? 0.6 : 1,
         }}
       >
         <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
@@ -742,39 +753,51 @@ const ToolsSection = ({
                 data-testid="help-button-smart-tools"
               />
             )}
-            {stackHeader && <Box sx={{ display: 'flex', ml: 'auto' }}>{toggleGroup}</Box>}
+            {stackHeader && !readOnly && <Box sx={{ display: 'flex', ml: 'auto' }}>{toggleGroup}</Box>}
           </Box>
-          {toolMode === 'fast' ? (
-            <>
+          {!readOnly &&
+            (toolMode === 'fast' ? (
+              <>
+                <Typography
+                  data-testid="tool-mode-caption-fast"
+                  sx={{ color: 'primary.500', fontSize: '14px', lineHeight: '1.4' }}
+                >
+                  No tools are currently used. AI replies are as quick as possible.
+                </Typography>
+                <Typography sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4', mt: '4px' }}>
+                  Turn on Smart tools to let the AI use your enabled tools.
+                </Typography>
+              </>
+            ) : (
               <Typography
-                data-testid="tool-mode-caption-fast"
-                sx={{ color: 'primary.500', fontSize: '14px', lineHeight: '1.4' }}
+                sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4' }}
+                data-testid={agentModeNote ? 'tool-mode-caption-smart' : undefined}
               >
-                No tools are currently used. AI replies are as quick as possible.
+                AI uses enabled tools as needed. Off is fastest.
+                {agentModeNote && (
+                  <>
+                    <br />
+                    {agentModeNote}
+                  </>
+                )}
               </Typography>
-              <Typography sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4', mt: '4px' }}>
-                Turn on Smart tools to let the AI use your enabled tools.
-              </Typography>
-            </>
-          ) : (
-            <Typography
-              sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4' }}
-              data-testid={agentModeNote ? 'tool-mode-caption-smart' : undefined}
-            >
-              AI uses enabled tools as needed. Off is fastest.
-              {agentModeNote && (
-                <>
-                  <br />
-                  {agentModeNote}
-                </>
-              )}
-            </Typography>
-          )}
+            ))}
         </Box>
         {/* Wide hosts only: the group sits in its own column, mirroring the Research Mode
             toggle. Narrow ones moved it onto the title row above. */}
-        {!stackHeader && toggleGroup}
+        {!stackHeader && !readOnly && toggleGroup}
       </Box>
+
+      {readOnly && (
+        <Typography
+          data-testid="tools-readonly-note"
+          // Full strength: it is the way out of this state, so it must not read as dimmed content.
+          // That is why the opacity sits on the blocks around it - a child cannot undo a parent's.
+          sx={{ color: brand[800], fontSize: '14px', fontWeight: '500', lineHeight: 1.4, mt: '-8px', mb: '20px' }}
+        >
+          These are the tools this model supports. Use this model to adjust them.
+        </Typography>
+      )}
 
       {/* Collapsible individual tools header (default expanded; collapse state persisted per-user) */}
       <Box
@@ -796,6 +819,7 @@ const ToolsSection = ({
           cursor: 'pointer',
           py: 0.5,
           mb: showIndividualTools ? 1 : 0,
+          opacity: readOnly ? 0.6 : 1,
           userSelect: 'none',
           '&:hover .tools-collapsible-title, &:hover .tools-collapsible-chevron': { color: 'text.primary' },
         }}
@@ -803,7 +827,7 @@ const ToolsSection = ({
         <Typography
           className="tools-collapsible-title"
           level="body-xs"
-          sx={{ fontSize: '13px', color: 'text.tertiary', transition: 'color 0.3s', ml: '4px' }}
+          sx={{ fontSize: '13px', color: 'text.tertiary', transition: 'color 0.3s', ml: '8px' }}
         >
           Individual tools{pinnedCount > 0 ? ` (${pinnedCount} pinned)` : ''}
         </Typography>
@@ -1456,6 +1480,7 @@ const ToolsSection = ({
             py: 0.5,
             mt: '20px',
             mb: showFunTools ? 1 : '12px',
+            opacity: readOnly ? 0.6 : 1,
             userSelect: 'none',
             '&:hover .tools-collapsible-title, &:hover .tools-collapsible-chevron': { color: 'text.primary' },
           }}
@@ -1463,7 +1488,7 @@ const ToolsSection = ({
           <Typography
             className="tools-collapsible-title"
             level="body-xs"
-            sx={{ fontSize: '13px', color: 'text.tertiary', transition: 'color 0.3s', ml: '4px' }}
+            sx={{ fontSize: '13px', color: 'text.tertiary', transition: 'color 0.3s', ml: '8px' }}
           >
             Fun & Novelty{funPinnedCount > 0 ? ` (${funPinnedCount} pinned)` : ''}
           </Typography>

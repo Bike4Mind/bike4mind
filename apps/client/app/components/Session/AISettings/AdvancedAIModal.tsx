@@ -194,8 +194,7 @@ const ReasoningEffortSelector: React.FC<{
   model: ModelName;
   commonInputStyles: typeof commonInputStyles;
   mode: 'dark' | 'light';
-  readOnly?: boolean;
-}> = ({ model, commonInputStyles, mode, readOnly = false }) => {
+}> = ({ model, commonInputStyles, mode }) => {
   const isGPT52 = GPT5_2_MODEL_IDS.has(model);
   const options = isGPT52
     ? [...BASE_REASONING_EFFORT_OPTIONS.map(o => (o.value === 'high' ? { ...o, label: 'High' } : o)), XHIGH_OPTION]
@@ -243,7 +242,6 @@ const ReasoningEffortSelector: React.FC<{
         <Select
           value={currentValue}
           onChange={handleChange}
-          disabled={readOnly}
           indicator={<KeyboardArrowDownIcon />}
           sx={{
             ...commonInputStyles(mode || 'light'),
@@ -460,7 +458,9 @@ const ResetButton: React.FC<{
           sx={{
             fontWeight: '400',
             fontSize: { xs: '12px', sm: '14px' },
-            color: 'text.primary',
+            // Explicit, so it has to follow the disabled state itself - Joy's disabled colour on
+            // the button cannot win against a colour set on the label.
+            color: disabled ? 'text.tertiary' : 'text.primary',
           }}
         >
           Reset
@@ -715,7 +715,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
           {/* inert rather than a `disabled` prop on each of the ~28 rows: it removes the whole
               subtree from pointer AND keyboard interaction in one place, and ToolsSection is shared
               with the composer dropdown, which must keep working normally. */}
-          <Box inert={readOnly || undefined} sx={{ opacity: readOnly ? 0.6 : 1 }}>
+          <Box inert={readOnly || undefined}>
             <ToolsSection
               tools={tools}
               setTools={newTools => setLLM({ tools: newTools })}
@@ -737,255 +737,406 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
         </>
       )}
 
-      {/* Advanced Settings */}
-      <Box sx={{ p: 0 }}>
-        {/* Plain flex row, not a Grid container: `spacing` puts negative margins on the
+      {/* Same inert + dimmed treatment the tools block above gets, so the whole read-only state
+          reads as one thing. Replaces per-control `disabled`, which greyed these with Joy's own
+          disabled palette and so never matched the tools rows beside them. */}
+      <Box inert={readOnly || undefined}>
+        {/* Advanced Settings */}
+        <Box sx={{ p: 0 }}>
+          {/* Plain flex row, not a Grid container: `spacing` puts negative margins on the
             container and compensating padding on Grid *items*, and these children are not items -
             so the title and Reset hung outside the dialog's content box on both edges. */}
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: 1,
-            mb: '32px',
-          }}
-        >
-          <Typography level="body-sm" sx={commonTextTitleStyles}>
-            Advanced Settings
-          </Typography>
-          {/* Core Tools */}
           <Box
             sx={{
               display: 'flex',
-              flexWrap: 'wrap',
-              gap: '20px',
-              mb: 0,
+              flexDirection: 'row',
+              justifyContent: 'space-between',
               alignItems: 'center',
-              fontSize: '14px',
+              gap: 1,
+              mb: '32px',
+              opacity: readOnly ? 0.6 : 1,
             }}
           >
-            {/* Label before control throughout, matching the Smart tools and Research Mode
+            <Typography level="body-sm" sx={commonTextTitleStyles}>
+              Advanced Settings
+            </Typography>
+            {/* Core Tools. Hidden entirely while previewing: these are session-wide switches and a
+                reset, none of which mean anything for a model you are not running. */}
+            {!readOnly && (
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '20px',
+                  mb: 0,
+                  alignItems: 'center',
+                  fontSize: '14px',
+                }}
+              >
+                {/* Label before control throughout, matching the Smart tools and Research Mode
                 toggles. */}
-            {/* AI Toggle */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-              <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                AI
-              </Typography>
-              <Checkbox
-                checked={liveAI}
-                onChange={() => setLiveAI(!liveAI)}
-                disabled={voiceOver || readOnly}
-                title="Use AI"
-                color="success"
-                variant="outlined"
-                sx={liveAI ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
-              />
-            </Box>
-
-            {/* Stream Toggle */}
-            {!isImageModel(model) && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                  Stream
-                </Typography>
-                <Checkbox
-                  checkedIcon={<CheckIcon sx={{ color: 'success.main' }} />}
-                  checked={stream}
-                  onChange={() => setStream(!stream)}
-                  disabled={voiceOver || readOnly}
-                  title={stream ? 'Streaming responses' : 'Not streaming'}
-                  color="success"
-                  variant="outlined"
-                  sx={stream ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
-                />
-              </Box>
-            )}
-
-            {/* Quest Master Toggle */}
-            {isQuestMasterFeatureEnabled && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                  Quest Master
-                </Typography>
-                {/* Wraps the control alone. Around the whole pair it fired from the label too and
-                    centred itself across both, which read as belonging to neither. The native
-                    `title` came off the checkbox with it - it duplicated this one. */}
-                <Tooltip title="Enable Quest Master">
+                {/* AI Toggle */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
+                  <Typography level="body-sm" sx={{ flexGrow: 0 }}>
+                    AI
+                  </Typography>
                   <Checkbox
-                    checked={isQuestMasterEnabled}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setLLM({ isQuestMasterEnabled: e.target.checked })
-                    }
-                    disabled={readOnly}
+                    checked={liveAI}
+                    onChange={() => setLiveAI(!liveAI)}
+                    disabled={voiceOver}
+                    title="Use AI"
                     color="success"
                     variant="outlined"
-                    sx={isQuestMasterEnabled ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
+                    sx={liveAI ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
                   />
-                </Tooltip>
-              </Box>
-            )}
+                </Box>
 
-            {/* Sits with the controls it resets. Everything handleReset touches - the token
+                {/* Stream Toggle */}
+                {!isImageModel(model) && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
+                    <Typography level="body-sm" sx={{ flexGrow: 0 }}>
+                      Stream
+                    </Typography>
+                    <Checkbox
+                      checkedIcon={<CheckIcon sx={{ color: 'success.main' }} />}
+                      checked={stream}
+                      onChange={() => setStream(!stream)}
+                      disabled={voiceOver}
+                      title={stream ? 'Streaming responses' : 'Not streaming'}
+                      color="success"
+                      variant="outlined"
+                      sx={stream ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
+                    />
+                  </Box>
+                )}
+
+                {/* Quest Master Toggle */}
+                {isQuestMasterFeatureEnabled && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
+                    <Typography level="body-sm" sx={{ flexGrow: 0 }}>
+                      Quest Master
+                    </Typography>
+                    {/* Wraps the control alone. Around the whole pair it fired from the label too and
+                    centred itself across both, which read as belonging to neither. The native
+                    `title` came off the checkbox with it - it duplicated this one. */}
+                    <Tooltip title="Enable Quest Master">
+                      <Checkbox
+                        checked={isQuestMasterEnabled}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                          setLLM({ isQuestMasterEnabled: e.target.checked })
+                        }
+                        color="success"
+                        variant="outlined"
+                        sx={isQuestMasterEnabled ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
+                      />
+                    </Tooltip>
+                  </Box>
+                )}
+
+                {/* Sits with the controls it resets. Everything handleReset touches - the token
                 allocation below, temperature, spoken words, response history - lives in this
                 section; tools are deliberately not among them, which is why this is not a
                 whole-dialog reset. */}
-            <ResetButton
-              modelInfo={modelInfo}
-              model={model}
-              setLLM={setLLM}
-              setSpokenWords={setSpokenWords}
-              setHistoryLines={setHistoryLines}
-              isImageModel={isImageModel}
-              BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
-              INFINITE_VALUE={INFINITE_VALUE}
-              ImageModels={ImageModels}
-              disabled={readOnly}
-              tooltip="Reset advanced settings (temperature, tokens, spoken words, response history) to defaults"
-            />
+                <ResetButton
+                  modelInfo={modelInfo}
+                  model={model}
+                  setLLM={setLLM}
+                  setSpokenWords={setSpokenWords}
+                  setHistoryLines={setHistoryLines}
+                  isImageModel={isImageModel}
+                  BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
+                  INFINITE_VALUE={INFINITE_VALUE}
+                  ImageModels={ImageModels}
+                  disabled={readOnly}
+                  tooltip="Reset advanced settings (temperature, tokens, spoken words, response history) to defaults"
+                />
+              </Box>
+            )}
           </Box>
-        </Box>
 
-        {readOnly && (
-          <Typography
-            level="body-sm"
-            data-testid="advanced-settings-readonly-note"
-            sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: 1.4, mt: '-16px', mb: '24px' }}
-          >
-            These are the settings this model supports. Use this model to adjust them.
-          </Typography>
-        )}
+          {readOnly && (
+            <Typography
+              level="body-sm"
+              data-testid="advanced-settings-readonly-note"
+              // Full strength on purpose: it is the instruction for getting out of this state, so it
+              // must not read as part of the dimmed content. Hence the dimming sits on the blocks
+              // around it rather than on the wrapper - a child cannot undo a parent's opacity.
+              sx={{
+                color: brand[800],
+                fontSize: '14px',
+                fontWeight: '500',
+                lineHeight: 1.4,
+                mt: '-16px',
+                mb: '24px',
+              }}
+            >
+              These are the settings this model supports. Use this model to adjust them.
+            </Typography>
+          )}
 
-        {/* An output-token budget only means something for chat models. Image, video and
+          {/* An output-token budget only means something for chat models. Image, video and
             transcription entries carry placeholder context values in the catalog (every Flux and
             gpt-image row is a flat 10000/10000), so the slider would edit a number nothing reads.
             Gated on the catalog's own type rather than isImageModel(), which name-matches a
             hardcoded list. */}
-        {modelInfo.type === 'text' && (
-          <Box sx={{ p: 0, mb: '28px' }}>
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: '12px',
-              }}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                {/* A control label inside Advanced Settings, not a section heading, so it sits a
+          {modelInfo.type === 'text' && (
+            <Box sx={{ p: 0, mb: '28px', opacity: readOnly ? 0.6 : 1 }}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '12px',
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  {/* A control label inside Advanced Settings, not a section heading, so it sits a
                     step below the shared 16px title size. */}
-                <Typography level="body-sm" sx={{ ...commonTextTitleStyles, fontSize: '14px' }}>
-                  Max output tokens
-                </Typography>
-                <FieldTooltip
-                  ariaLabel="Help: Output tokens"
-                  content={FIELD_TOOLTIPS.maxTokensOutput}
-                  data-testid="field-tooltip-output-tokens"
-                />
-              </Box>
-              {/* A read-out, not a field - the slider owns this value. Shown against the model's
+                  <Typography level="body-sm" sx={{ ...commonTextTitleStyles, fontSize: '14px' }}>
+                    Max output tokens
+                  </Typography>
+                  <FieldTooltip
+                    ariaLabel="Help: Output tokens"
+                    content={FIELD_TOOLTIPS.maxTokensOutput}
+                    data-testid="field-tooltip-output-tokens"
+                  />
+                </Box>
+                {/* A read-out, not a field - the slider owns this value. Shown against the model's
                   own ceiling, because without it the slider's fill is unreadable: a full bar is 8K
                   on gemini-2.5-pro and 128K on gpt-5.6-luna. Only the live value is emphasised; the
                   ceiling is fixed per model, so it recedes. */}
-              <Typography
-                level="body-sm"
-                sx={{ fontSize: '14px', whiteSpace: 'nowrap' }}
-                data-testid="token-allocation-output"
-              >
-                <Box component="span" sx={{ color: brand[800], fontWeight: 'bold' }}>
-                  {formatTokenCount(outputTokens)}
-                </Box>
-                <Box component="span" sx={{ color: 'text.tertiary', fontWeight: 400 }}>
-                  {' / '}
-                  {formatTokenCount(outputCeiling)}
-                </Box>
-              </Typography>
-            </Box>
-            <Box sx={{ position: 'relative', width: '100%' }}>
-              {/* No valueLabelDisplay: the bubble is centred on the thumb, so at max value half of
+                <Typography
+                  level="body-sm"
+                  sx={{ fontSize: '14px', whiteSpace: 'nowrap' }}
+                  data-testid="token-allocation-output"
+                >
+                  <Box component="span" sx={{ color: readOnly ? 'text.tertiary' : brand[800], fontWeight: 'bold' }}>
+                    {formatTokenCount(outputTokens)}
+                  </Box>
+                  <Box component="span" sx={{ color: 'text.tertiary', fontWeight: 400 }}>
+                    {' / '}
+                    {formatTokenCount(outputCeiling)}
+                  </Box>
+                </Typography>
+              </Box>
+              <Box sx={{ position: 'relative', width: '100%' }}>
+                {/* No valueLabelDisplay: the bubble is centred on the thumb, so at max value half of
                   it sat past the container's right edge. With overflowY auto the browser resolves
                   overflowX to auto as well, so hovering there produced a horizontal scrollbar
                   across the whole dialog. The read-out above tracks the drag anyway. */}
-              <Slider
-                aria-label="Max output tokens"
-                value={outputTokens}
-                min={MIN_OUTPUT_TOKENS}
-                max={outputCeiling}
-                step={256}
-                disabled={readOnly}
-                onChange={(_, newValue) => {
-                  if (typeof newValue === 'number') {
-                    setLLM({ max_tokens: newValue });
-                  }
-                }}
-                disableSwap
-                sx={{
-                  '--Slider-trackSize': '8px',
-                  '--Slider-thumbSize': '16px',
-                  '--Slider-thumbWidth': '16px',
-                  width: '100%',
-                  '& .MuiSlider-mark': {
-                    display: 'none',
-                  },
-                  '& .MuiSlider-markLabel': {
-                    display: 'none',
-                  },
-                  '& .MuiSlider-track': {
-                    backgroundColor: 'primary.main',
-                  },
-                  '& .MuiSlider-thumb': {
-                    backgroundColor: 'primary.main',
-                  },
-                }}
-              />
-            </Box>
-            {/* The effect of the setting, not a second control: the reserved budget is what the
+                <Slider
+                  aria-label="Max output tokens"
+                  value={outputTokens}
+                  min={MIN_OUTPUT_TOKENS}
+                  max={outputCeiling}
+                  step={256}
+                  onChange={(_, newValue) => {
+                    if (typeof newValue === 'number') {
+                      setLLM({ max_tokens: newValue });
+                    }
+                  }}
+                  disableSwap
+                  sx={{
+                    '--Slider-trackSize': '8px',
+                    '--Slider-thumbSize': '16px',
+                    '--Slider-thumbWidth': '16px',
+                    width: '100%',
+                    '& .MuiSlider-mark': {
+                      display: 'none',
+                    },
+                    '& .MuiSlider-markLabel': {
+                      display: 'none',
+                    },
+                    // The filled bar carries the value, so it goes inert with everything else -
+                    // primary blue on a dimmed row still read as the one live control.
+                    '& .MuiSlider-track': {
+                      backgroundColor: readOnly ? 'text.tertiary' : 'primary.main',
+                    },
+                    // No handle while previewing: there is nothing to drag, and a handle reads as
+                    // grabbable however it is coloured. The filled bar still shows the value.
+                    '& .MuiSlider-thumb': readOnly ? { display: 'none' } : { backgroundColor: 'primary.main' },
+                  }}
+                />
+              </Box>
+              {/* The effect of the setting, not a second control: the reserved budget is what the
                 remainder is left over from, which is also where the context total now lives. */}
-            <Typography
-              level="body-sm"
-              data-testid="token-allocation-input-note"
-              // Negative top margin closes the gap left by the Slider's own bottom padding.
-              sx={{ color: 'text.primary50', fontSize: '12px', lineHeight: 1.4, mt: '-12px' }}
-            >
-              Reserved from the {formatTokenCount(contextWindow)} token context window, leaving{' '}
-              {formatTokenCount(inputTokens)} for input.
-            </Typography>
-          </Box>
-        )}
+              <Typography
+                level="body-sm"
+                data-testid="token-allocation-input-note"
+                // Negative top margin closes the gap left by the Slider's own bottom padding.
+                sx={{ color: 'text.primary50', fontSize: '12px', lineHeight: 1.4, mt: '-12px' }}
+              >
+                Reserved from the {formatTokenCount(contextWindow)} token context window, leaving{' '}
+                {formatTokenCount(inputTokens)} for input.
+              </Typography>
+            </Box>
+          )}
 
-        {/* Temperature and Randomness Settings */}
-        <Grid container spacing={2} sx={{ fontSize: '14px' }}>
-          {/* Temperature - hidden for models that reject the parameter */}
-          {!NO_TEMPERATURE_MODELS.has(model) && (
+          {/* Temperature and Randomness Settings */}
+          <Grid container spacing={2} sx={{ fontSize: '14px', opacity: readOnly ? 0.6 : 1 }}>
+            {/* Temperature - hidden for models that reject the parameter */}
+            {!NO_TEMPERATURE_MODELS.has(model) && (
+              <Grid xs={12} md={6}>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    justifyContent: { xs: 'flex-start', sm: 'flex-end' },
+                    alignItems: 'center',
+                    pb: { xs: 0, sm: 2 },
+                    gap: '20px',
+                  }}
+                >
+                  <Box
+                    sx={{
+                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 0.5,
+                    }}
+                  >
+                    <Typography level="body-sm">Temperature</Typography>
+                    <FieldTooltip
+                      ariaLabel="Help: Temperature"
+                      content={
+                        FIXED_TEMPERATURE_MODELS.has(model)
+                          ? FIELD_TOOLTIPS.fixedTemperature
+                          : FIELD_TOOLTIPS.temperature
+                      }
+                      data-testid="field-tooltip-temperature"
+                    />
+                  </Box>
+                  <Input
+                    sx={{
+                      ...commonInputStyles(mode || 'light'),
+                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
+                    }}
+                    size="sm"
+                    variant="outlined"
+                    color="primary"
+                    type="number"
+                    value={FIXED_TEMPERATURE_MODELS.has(model) ? 1.0 : temperature}
+                    onChange={handleTemperatureChange}
+                    disabled={FIXED_TEMPERATURE_MODELS.has(model)}
+                    slotProps={{
+                      input: {
+                        min: 0,
+                        max: 2,
+                        step: 0.1,
+                      },
+                    }}
+                  />
+                </Box>
+              </Grid>
+            )}
+
+            {!isImageModel(model) && (
+              <Grid xs={12} md={6}>
+                <Grid
+                  xs={6}
+                  sx={{
+                    display: 'flex',
+                    gap: '20px',
+                    alignItems: 'center',
+                    justifyContent: { xs: 'flex-start', sm: 'flex-end' },
+                  }}
+                >
+                  <Box
+                    sx={{
+                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 0.5,
+                    }}
+                  >
+                    <Typography level="body-sm">Response History</Typography>
+                    <FieldTooltip
+                      ariaLabel="Help: Response History"
+                      content={FIELD_TOOLTIPS.responseHistory}
+                      data-testid="field-tooltip-response-history"
+                    />
+                  </Box>
+                  <Select
+                    value={historyLines}
+                    onChange={(_, newValue) => newValue && setHistoryLines(Number(newValue))}
+                    indicator={<KeyboardArrowDownIcon />}
+                    sx={{
+                      ...commonInputStyles(mode || 'light'),
+                      minWidth: { xs: 'auto', sm: '6rem' },
+                      height: 32,
+                      p: 1,
+                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
+                      '& .MuiSelect-button': {
+                        textAlign: 'center',
+                        paddingBlock: '4px',
+                        fontSize: '0.875rem',
+                      },
+                      '& .MuiSelect-indicator': {
+                        color: 'var(--joy-palette-text-tertiary)',
+                        transition: '0.2s',
+                        width: '20px',
+                        height: '20px',
+                      },
+                      '& .MuiSelect-endDecorator': {
+                        marginRight: '4px',
+                      },
+                      '&[aria-expanded="true"] .MuiSelect-indicator': {
+                        transform: 'rotate(180deg)',
+                      },
+                      '&:hover': {
+                        borderColor: 'var(--joy-palette-neutral-400)',
+                      },
+                      '&.Mui-focused': {
+                        borderColor: 'var(--joy-palette-primary-500)',
+                        boxShadow: '0 0 0 3px var(--joy-palette-primary-200)',
+                      },
+                    }}
+                    slotProps={{
+                      button: {
+                        sx: {
+                          whiteSpace: 'nowrap',
+                          justifyContent: 'center',
+                        },
+                      },
+                      listbox: {
+                        sx: {
+                          '& .MuiOption-root': {
+                            justifyContent: 'center',
+                            fontSize: '0.875rem',
+                          },
+                        },
+                      },
+                    }}
+                  >
+                    <Option value={1}>1</Option>
+                    <Option value={2}>2</Option>
+                    <Option value={3}>3</Option>
+                    <Option value={5}>5</Option>
+                    <Option value={8}>8</Option>
+                    <Option value={13}>13</Option>
+                    <Option value={21}>21</Option>
+                    <Option value={34}>34</Option>
+                    <Option value={INFINITE_VALUE}>∞</Option>
+                  </Select>
+                </Grid>
+              </Grid>
+            )}
+
+            {/* Spoken Words */}
             <Grid xs={12} md={6}>
               <Box
                 sx={{
                   display: 'flex',
                   justifyContent: { xs: 'flex-start', sm: 'flex-end' },
                   alignItems: 'center',
-                  pb: { xs: 0, sm: 2 },
                   gap: '20px',
                 }}
               >
-                <Box
-                  sx={{
-                    flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 0.5,
-                  }}
-                >
-                  <Typography level="body-sm">Temperature</Typography>
-                  <FieldTooltip
-                    ariaLabel="Help: Temperature"
-                    content={
-                      FIXED_TEMPERATURE_MODELS.has(model) ? FIELD_TOOLTIPS.fixedTemperature : FIELD_TOOLTIPS.temperature
-                    }
-                    data-testid="field-tooltip-temperature"
-                  />
-                </Box>
+                <Tooltip title="Maximum number of words to speak in voice responses">
+                  <Typography level="body-sm" sx={{ textAlign: 'left', flex: { xs: '1 1 0%', sm: '0 0 auto' } }}>
+                    Spoken Words
+                  </Typography>
+                </Tooltip>
                 <Input
                   sx={{
                     ...commonInputStyles(mode || 'light'),
@@ -995,226 +1146,36 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   variant="outlined"
                   color="primary"
                   type="number"
-                  value={FIXED_TEMPERATURE_MODELS.has(model) ? 1.0 : temperature}
-                  onChange={handleTemperatureChange}
-                  disabled={readOnly || FIXED_TEMPERATURE_MODELS.has(model)}
+                  value={spokenWords}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                    const value = parseInt(e.target.value);
+                    if (!isNaN(value) && value >= 0) {
+                      setSpokenWords(value);
+                    }
+                  }}
                   slotProps={{
                     input: {
                       min: 0,
-                      max: 2,
-                      step: 0.1,
+                      step: 10,
                     },
                   }}
                 />
               </Box>
             </Grid>
-          )}
 
-          {!isImageModel(model) && (
-            <Grid xs={12} md={6}>
-              <Grid
-                xs={6}
-                sx={{
-                  display: 'flex',
-                  gap: '20px',
-                  alignItems: 'center',
-                  justifyContent: { xs: 'flex-start', sm: 'flex-end' },
-                }}
-              >
-                <Box
-                  sx={{
-                    flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 0.5,
-                  }}
-                >
-                  <Typography level="body-sm">Response History</Typography>
-                  <FieldTooltip
-                    ariaLabel="Help: Response History"
-                    content={FIELD_TOOLTIPS.responseHistory}
-                    data-testid="field-tooltip-response-history"
-                  />
-                </Box>
-                <Select
-                  value={historyLines}
-                  onChange={(_, newValue) => newValue && setHistoryLines(Number(newValue))}
-                  disabled={readOnly}
-                  indicator={<KeyboardArrowDownIcon />}
-                  sx={{
-                    ...commonInputStyles(mode || 'light'),
-                    minWidth: { xs: 'auto', sm: '6rem' },
-                    height: 32,
-                    p: 1,
-                    flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                    '& .MuiSelect-button': {
-                      textAlign: 'center',
-                      paddingBlock: '4px',
-                      fontSize: '0.875rem',
-                    },
-                    '& .MuiSelect-indicator': {
-                      color: 'var(--joy-palette-text-tertiary)',
-                      transition: '0.2s',
-                      width: '20px',
-                      height: '20px',
-                    },
-                    '& .MuiSelect-endDecorator': {
-                      marginRight: '4px',
-                    },
-                    '&[aria-expanded="true"] .MuiSelect-indicator': {
-                      transform: 'rotate(180deg)',
-                    },
-                    '&:hover': {
-                      borderColor: 'var(--joy-palette-neutral-400)',
-                    },
-                    '&.Mui-focused': {
-                      borderColor: 'var(--joy-palette-primary-500)',
-                      boxShadow: '0 0 0 3px var(--joy-palette-primary-200)',
-                    },
-                  }}
-                  slotProps={{
-                    button: {
-                      sx: {
-                        whiteSpace: 'nowrap',
-                        justifyContent: 'center',
-                      },
-                    },
-                    listbox: {
-                      sx: {
-                        '& .MuiOption-root': {
-                          justifyContent: 'center',
-                          fontSize: '0.875rem',
-                        },
-                      },
-                    },
-                  }}
-                >
-                  <Option value={1}>1</Option>
-                  <Option value={2}>2</Option>
-                  <Option value={3}>3</Option>
-                  <Option value={5}>5</Option>
-                  <Option value={8}>8</Option>
-                  <Option value={13}>13</Option>
-                  <Option value={21}>21</Option>
-                  <Option value={34}>34</Option>
-                  <Option value={INFINITE_VALUE}>∞</Option>
-                </Select>
-              </Grid>
-            </Grid>
-          )}
-
-          {/* Spoken Words */}
-          <Grid xs={12} md={6}>
-            <Box
-              sx={{
-                display: 'flex',
-                justifyContent: { xs: 'flex-start', sm: 'flex-end' },
-                alignItems: 'center',
-                gap: '20px',
-              }}
-            >
-              <Tooltip title="Maximum number of words to speak in voice responses">
-                <Typography level="body-sm" sx={{ textAlign: 'left', flex: { xs: '1 1 0%', sm: '0 0 auto' } }}>
-                  Spoken Words
-                </Typography>
-              </Tooltip>
-              <Input
-                sx={{
-                  ...commonInputStyles(mode || 'light'),
-                  flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                }}
-                size="sm"
-                variant="outlined"
-                color="primary"
-                type="number"
-                value={spokenWords}
-                disabled={readOnly}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                  const value = parseInt(e.target.value);
-                  if (!isNaN(value) && value >= 0) {
-                    setSpokenWords(value);
-                  }
-                }}
-                slotProps={{
-                  input: {
-                    min: 0,
-                    step: 10,
-                  },
-                }}
-              />
-            </Box>
+            {/* Reasoning Effort - only for reasoning-capable models */}
+            {REASONING_SUPPORTED_MODELS.has(model) && (
+              <ReasoningEffortSelector model={model} commonInputStyles={commonInputStyles} mode={mode} />
+            )}
           </Grid>
+        </Box>
 
-          {/* Reasoning Effort - only for reasoning-capable models */}
-          {REASONING_SUPPORTED_MODELS.has(model) && (
-            <ReasoningEffortSelector
-              model={model}
-              commonInputStyles={commonInputStyles}
-              mode={mode}
-              readOnly={readOnly}
-            />
-          )}
-        </Grid>
-      </Box>
-
-      {/* Image Model Settings, with the Templates panel below */}
-      {isImageModel(model) && (
-        <>
-          <Grid container spacing={2} sx={{ px: 1, mb: 2 }}>
-            {imageSettings.map(setting => (
-              <Grid key={setting.label} xs={12} md={6}>
-                <Box
-                  sx={{
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                    alignItems: 'center',
-                    gap: '20px',
-                  }}
-                >
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Typography level="body-sm">{setting.label}</Typography>
-                    {setting.tooltip && <FieldTooltip ariaLabel={`Help: ${setting.label}`} content={setting.tooltip} />}
-                  </Box>
-                  <Box sx={{ minWidth: '120px' }}>
-                    {setting.type === 'select' && (
-                      <Select
-                        value={setting.value}
-                        onChange={(_, newValue) => setting.onChange(newValue)}
-                        disabled={readOnly}
-                        indicator={<KeyboardArrowDownIcon />}
-                        sx={commonSelectStyles(mode || 'light')}
-                      >
-                        {setting.options?.map(option => (
-                          <Option key={option.value} value={option.value}>
-                            {option.label}
-                          </Option>
-                        ))}
-                      </Select>
-                    )}
-                    {setting.type === 'input' && (
-                      <Input
-                        sx={commonInputStyles(mode || 'light')}
-                        size="sm"
-                        variant="outlined"
-                        color="primary"
-                        disabled={readOnly}
-                        value={setting.value}
-                        {...setting.inputProps}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                          const value = e.target.value === '' ? undefined : parseInt(e.target.value);
-                          if (value !== undefined) {
-                            setting.onChange(value);
-                          }
-                        }}
-                      />
-                    )}
-                  </Box>
-                </Box>
-              </Grid>
-            ))}
-            {isBflImageModel(model) && (
-              <>
-                <Grid xs={12} md={6}>
+        {/* Image Model Settings, with the Templates panel below */}
+        {isImageModel(model) && (
+          <>
+            <Grid container spacing={2} sx={{ px: 1, mb: 2, opacity: readOnly ? 0.6 : 1 }}>
+              {imageSettings.map(setting => (
+                <Grid key={setting.label} xs={12} md={6}>
                   <Box
                     sx={{
                       display: 'flex',
@@ -1224,120 +1185,170 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                     }}
                   >
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Typography level="body-sm" sx={{ textAlign: 'right' }}>
-                        Prompt Upsampling
-                      </Typography>
-                      <FieldTooltip ariaLabel="Help: Prompt Upsampling" content={FIELD_TOOLTIPS.promptEnhancement} />
+                      <Typography level="body-sm">{setting.label}</Typography>
+                      {setting.tooltip && (
+                        <FieldTooltip ariaLabel={`Help: ${setting.label}`} content={setting.tooltip} />
+                      )}
                     </Box>
                     <Box sx={{ minWidth: '120px' }}>
-                      <Switch
-                        checked={prompt_upsampling ?? false}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                          setLLM({ prompt_upsampling: e.target.checked })
-                        }
-                        disabled={readOnly}
-                        color={prompt_upsampling ? 'success' : 'neutral'}
-                      />
+                      {setting.type === 'select' && (
+                        <Select
+                          value={setting.value}
+                          onChange={(_, newValue) => setting.onChange(newValue)}
+                          indicator={<KeyboardArrowDownIcon />}
+                          sx={commonSelectStyles(mode || 'light')}
+                        >
+                          {setting.options?.map(option => (
+                            <Option key={option.value} value={option.value}>
+                              {option.label}
+                            </Option>
+                          ))}
+                        </Select>
+                      )}
+                      {setting.type === 'input' && (
+                        <Input
+                          sx={commonInputStyles(mode || 'light')}
+                          size="sm"
+                          variant="outlined"
+                          color="primary"
+                          value={setting.value}
+                          {...setting.inputProps}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                            const value = e.target.value === '' ? undefined : parseInt(e.target.value);
+                            if (value !== undefined) {
+                              setting.onChange(value);
+                            }
+                          }}
+                        />
+                      )}
                     </Box>
                   </Box>
                 </Grid>
-                <Grid xs={12} md={6}>
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      justifyContent: 'flex-end',
-                      alignItems: 'center',
-                      gap: '20px',
-                    }}
-                  >
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Typography level="body-sm" sx={{ textAlign: 'right' }}>
-                        Safety Tolerance: {safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
-                      </Typography>
-                      <FieldTooltip ariaLabel="Help: Safety Tolerance" content={FIELD_TOOLTIPS.safetyTolerance} />
+              ))}
+              {isBflImageModel(model) && (
+                <>
+                  <Grid xs={12} md={6}>
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        justifyContent: 'flex-end',
+                        alignItems: 'center',
+                        gap: '20px',
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Typography level="body-sm" sx={{ textAlign: 'right' }}>
+                          Prompt Upsampling
+                        </Typography>
+                        <FieldTooltip ariaLabel="Help: Prompt Upsampling" content={FIELD_TOOLTIPS.promptEnhancement} />
+                      </Box>
+                      <Box sx={{ minWidth: '120px' }}>
+                        <Switch
+                          checked={prompt_upsampling ?? false}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                            setLLM({ prompt_upsampling: e.target.checked })
+                          }
+                          color={prompt_upsampling ? 'success' : 'neutral'}
+                        />
+                      </Box>
                     </Box>
-                    <Box sx={{ minWidth: '120px' }}>
-                      <Input
-                        sx={commonInputStyles(mode || 'light')}
-                        size="sm"
-                        variant="outlined"
-                        color="primary"
-                        type="number"
+                  </Grid>
+                  <Grid xs={12} md={6}>
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        justifyContent: 'flex-end',
+                        alignItems: 'center',
+                        gap: '20px',
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Typography level="body-sm" sx={{ textAlign: 'right' }}>
+                          Safety Tolerance: {safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
+                        </Typography>
+                        <FieldTooltip ariaLabel="Help: Safety Tolerance" content={FIELD_TOOLTIPS.safetyTolerance} />
+                      </Box>
+                      <Box sx={{ minWidth: '120px' }}>
+                        <Input
+                          sx={commonInputStyles(mode || 'light')}
+                          size="sm"
+                          variant="outlined"
+                          color="primary"
+                          type="number"
+                          value={safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                            setLLM({ safety_tolerance: parseInt(e.target.value) })
+                          }
+                          slotProps={{
+                            input: {
+                              min: BFL_SAFETY_TOLERANCE.MIN,
+                              max: BFL_SAFETY_TOLERANCE.MAX,
+                              step: 1,
+                            },
+                          }}
+                        />
+                      </Box>
+                    </Box>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, pt: 2 }}>
+                      <Box
+                        sx={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          px: 1,
+                        }}
+                      >
+                        <Typography level="body-xs" sx={{ color: 'text.secondary', fontWeight: 500 }}>
+                          🛡️ Family-friendly
+                        </Typography>
+                        <Typography level="body-xs" sx={{ color: 'text.secondary', fontWeight: 500 }}>
+                          🌶️ Creative & Spicy
+                        </Typography>
+                      </Box>
+                      <Slider
+                        aria-label="Safety Tolerance"
                         value={safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
-                        disabled={readOnly}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                          setLLM({ safety_tolerance: parseInt(e.target.value) })
-                        }
-                        slotProps={{
-                          input: {
-                            min: BFL_SAFETY_TOLERANCE.MIN,
-                            max: BFL_SAFETY_TOLERANCE.MAX,
-                            step: 1,
+                        min={BFL_SAFETY_TOLERANCE.MIN}
+                        max={BFL_SAFETY_TOLERANCE.MAX}
+                        step={1}
+                        onChange={(_, newValue) => {
+                          if (typeof newValue === 'number') {
+                            setLLM({ safety_tolerance: newValue });
+                          }
+                        }}
+                        valueLabelDisplay="auto"
+                        marks={[
+                          { value: 0, label: '🛡️ Safe' },
+                          { value: 2, label: '📝 Mild' },
+                          { value: 4, label: '🎨 Balanced' },
+                          { value: 6, label: '🌶️ Spicy' },
+                        ]}
+                        sx={{
+                          '--Slider-trackSize': '6px',
+                          '--Slider-thumbSize': '14px',
+                          '--Slider-thumbWidth': '14px',
+                          '& .MuiSlider-mark': {
+                            display: 'block',
+                            height: '8px',
+                            width: '2px',
+                            backgroundColor: 'var(--joy-palette-neutral-400)',
+                          },
+                          '& .MuiSlider-markLabel': {
+                            fontSize: '0.75rem',
+                            fontWeight: 500,
+                            marginTop: '8px',
                           },
                         }}
                       />
                     </Box>
-                  </Box>
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, pt: 2 }}>
-                    <Box
-                      sx={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        px: 1,
-                      }}
-                    >
-                      <Typography level="body-xs" sx={{ color: 'text.secondary', fontWeight: 500 }}>
-                        🛡️ Family-friendly
-                      </Typography>
-                      <Typography level="body-xs" sx={{ color: 'text.secondary', fontWeight: 500 }}>
-                        🌶️ Creative & Spicy
-                      </Typography>
-                    </Box>
-                    <Slider
-                      aria-label="Safety Tolerance"
-                      value={safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
-                      min={BFL_SAFETY_TOLERANCE.MIN}
-                      max={BFL_SAFETY_TOLERANCE.MAX}
-                      step={1}
-                      disabled={readOnly}
-                      onChange={(_, newValue) => {
-                        if (typeof newValue === 'number') {
-                          setLLM({ safety_tolerance: newValue });
-                        }
-                      }}
-                      valueLabelDisplay="auto"
-                      marks={[
-                        { value: 0, label: '🛡️ Safe' },
-                        { value: 2, label: '📝 Mild' },
-                        { value: 4, label: '🎨 Balanced' },
-                        { value: 6, label: '🌶️ Spicy' },
-                      ]}
-                      sx={{
-                        '--Slider-trackSize': '6px',
-                        '--Slider-thumbSize': '14px',
-                        '--Slider-thumbWidth': '14px',
-                        '& .MuiSlider-mark': {
-                          display: 'block',
-                          height: '8px',
-                          width: '2px',
-                          backgroundColor: 'var(--joy-palette-neutral-400)',
-                        },
-                        '& .MuiSlider-markLabel': {
-                          fontSize: '0.75rem',
-                          fontWeight: 500,
-                          marginTop: '8px',
-                        },
-                      }}
-                    />
-                  </Box>
-                </Grid>
-              </>
-            )}
-          </Grid>
-          <ImageTemplatePanel />
-        </>
-      )}
+                  </Grid>
+                </>
+              )}
+            </Grid>
+            <ImageTemplatePanel />
+          </>
+        )}
+      </Box>
 
       {/* Bottom padding to match left panel spacing */}
       <Box sx={{ pb: 4 }} />
