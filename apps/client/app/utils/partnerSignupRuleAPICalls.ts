@@ -50,6 +50,11 @@ export type BackfillPreview = {
   organizationId: string;
   domain: string;
   matched: number;
+  /** Current seat ceiling and the projected ceiling after commit (#1239 - the seat blast radius). */
+  seats: number;
+  projectedSeats: number;
+  /** Stripe-billed orgs keep their ceiling (candidates past it are rejected, never silently billed). */
+  stripeBilled: boolean;
   sample: Array<{ id: string; email?: string; name: string }>;
 };
 
@@ -59,7 +64,10 @@ export type BackfillResult = {
   domain: string;
   matched: number;
   added: number;
+  /** Adds that also raised the org's seat ceiling (subset of `added`, non-Stripe orgs only). */
+  seatRaised: number;
   alreadyMember: number;
+  /** Candidates a full Stripe-billed org couldn't admit without an out-of-band (billed) seat raise. */
   atCapacity: number;
   unverified: number;
   failed: number;

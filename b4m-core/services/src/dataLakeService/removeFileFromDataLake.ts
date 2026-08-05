@@ -63,9 +63,11 @@ interface RemoveFileFromDataLakeAdapters {
  * `removeFileFromLake` in lakeMembership.ts, shared with the tag-toggle door so both doors clear
  * the same signals.
  *
- * No per-file retrieval-index call: RetrievalIndexPort exposes only removeByDataLakeTag,
- * which would de-index the ENTIRE lake, and it has no implementer here (bestEffortIndexRemove
- * no-ops without one). Removal is enforced by Mongo tag state, so it takes effect on the next
+ * No retrieval-index call, though RetrievalIndexPort could now express a per-file removal: the
+ * file is leaving the lake, not being deleted, so dropping its index entry would over-remove and
+ * strip it from its OWNER's retrieval everywhere else. That is why the lifecycle doors call the
+ * port and this one does not - they destroy or hide the file, this one only unpicks membership.
+ * That membership removal is enforced by Mongo tag state, so it takes effect on the next
  * read - immediately and completely for the single-lake browse, today the only reader that sets
  * restrictToDataLake. Every other lake reader (the aggregate lake browse, lake semantic search,
  * the chat KB tools) still matches the prefix within the VIEWER's access, so the file's OWNER

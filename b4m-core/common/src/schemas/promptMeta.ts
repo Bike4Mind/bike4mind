@@ -286,6 +286,17 @@ export const PromptMetaZodSchema = z.object({
   tokenUsage: PromptMetaTokenUsageSchema.optional(),
   context: PromptMetaContextSchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
+  /**
+   * Names of the tools actually offered to the model this turn - the output of `buildTools`
+   * (`allTools`), after the post-build denylist pass and the Ollama auto-added trim. This is a
+   * superset of the resolved `enabledTools`: it also includes MCP server tools and the
+   * auto-injected `delegate_to_agent`, neither of which ever appears in `enabledTools`. Distinct
+   * from the chat response's `effectiveTools`, which reflects only the API-layer (phrase-
+   * recommender) selection and so cannot see server-side offers like the attached-knowledge
+   * auto-offer. This is the authoritative "what did the model actually get" signal for
+   * eval/measurement and for diagnosing the silent no-tool-offered state.
+   */
+  offeredTools: z.array(z.string()).optional(),
   performance: PromptMetaPerformanceSchema.optional(),
   session: PromptMetaSessionSchema.optional(),
   questId: z.string().optional(),
