@@ -226,8 +226,10 @@ export const TransferCreditTransaction = BaseCreditTransaction.extend({
  * IMPORTANT: When adding a new transaction type here, you MUST also update:
  * 1. packages/database/src/models/billing/CreditTransactionModel.ts - Add to the `type` enum
  * 2. packages/database/src/models/billing/CreditTransactionModel.ts - Add any new fields to schema
- * 3. b4m-core/services/src/creditService/subtractCredits.ts - Add handler in switch statement
- * 4. apps/client/app/components/ProfileModal/CreditAnalyticsTabContent.tsx - Add filtering and display logic
+ * 3. b4m-core/services/src/creditService/subtractCredits.ts - Add a handler for a deduct type
+ * 4. b4m-core/services/src/creditService/addCredits.ts - Add a handler for an add type; without one
+ *    the new type falls through that branch chain and is written as `generic_add`
+ * 5. apps/client/app/components/ProfileModal/CreditAnalyticsTabContent.tsx - Add filtering and display logic
  *
  * Failure to sync these files will cause validation errors in MongoDB.
  */
@@ -487,8 +489,8 @@ type Expect<T extends true> = T;
 /**
  * Compile-time guard: metadata values must stay `unknown`. `Record<string, any>` here silently
  * disables checking for every consumer of the published declarations, so re-loosening it should
- * break the build rather than rely on review. Same mechanism and reason as the guards in
- * modelCatalog.ts - test files are outside tsconfig's include, so it lives in src.
+ * break the build rather than rely on review. Same kind of guard, and the same placement reason, as
+ * the ones in modelCatalog.ts - test files are outside tsconfig's include, so it lives in src.
  *
  * Interim: the general fix is a lint rule banning `z.any()` in entity schemas, which would retire
  * this. Do not replicate it per field.
