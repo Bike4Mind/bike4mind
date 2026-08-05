@@ -354,6 +354,7 @@ export const SettingKeySchema = z.enum([
   'EnableContextTelemetry',
   'contextTelemetryAlerts',
   'ContextVerbatimWindowFraction',
+  'CorpusRetrievalMinInlineTokensPerDoc',
 
   // SRE AGENT SETTINGS
   'sreAgentConfig',
@@ -3545,6 +3546,17 @@ export const settingsMap = {
       'Fraction of a model usable input budget (context window minus reserved output) kept as verbatim conversation history before older turns are summarized into working memory. Lower = compact sooner (cheaper, less verbatim detail); higher = keep more raw history.',
     category: 'AI',
     order: 121,
+  }),
+  CorpusRetrievalMinInlineTokensPerDoc: makeNumberSetting({
+    key: 'CorpusRetrievalMinInlineTokensPerDoc',
+    name: 'Corpus Retrieval Min Inline Tokens Per Doc',
+    defaultValue: 0,
+    min: 0,
+    max: 100000,
+    description:
+      'When a session has a large RETRIEVABLE knowledge corpus attached, stop force-inlining it and let the offered search_knowledge_base tool fetch the relevant docs on demand, IF the even-split inline depth (attached-content budget / retrievable doc count) would fall below this many tokens per doc. 0 disables (always inline). Only documents the retrieval tool can actually reach are ever deferred; other attachments always inline.',
+    category: 'AI',
+    order: 122,
   }),
   sreAgentConfig: makeObjectSetting({
     key: 'sreAgentConfig',

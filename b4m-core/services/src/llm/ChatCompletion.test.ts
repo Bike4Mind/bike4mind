@@ -3,6 +3,7 @@ import {
   ChatCompletionProcess,
   addPairedTool,
   resolveEnabledTools,
+  shouldDeferCorpusToRetrieval,
   computeSettlementDelta,
   clampFraction,
   dropOldestHistoryTurn,
@@ -21,6 +22,7 @@ import {
   getLlmWithFallback,
   usdToCredits,
   usdToCreditsStochastic,
+  getSettingsValue,
 } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import {
@@ -128,6 +130,7 @@ const mockedIsOverloadedError = vi.mocked(isOverloadedError);
 const mockedGetLlmWithFallback = vi.mocked(getLlmWithFallback);
 const mockedUsdToCredits = vi.mocked(usdToCredits);
 const mockedUsdToCreditsStochastic = vi.mocked(usdToCreditsStochastic);
+const mockedGetSettingsValue = vi.mocked(getSettingsValue);
 const mockedCalculateTotalTokenLength = vi.mocked(calculateTotalTokenLength);
 
 const mockDb = {};
@@ -301,7 +304,7 @@ describe('ChatCompletionProcess', () => {
       // The `=== undefined` sentinel is what makes a false result stick. A falsy check would
       // re-run the DB lookup every turn for every caller who has no lake - the common case.
       const findLakes = vi.fn().mockResolvedValue([]);
-      (service as any).hasAccessibleKnowledgeLakeMemo = undefined;
+      (service as any).accessibleDataLakeAccessMemo = undefined;
       (service as any).db = { dataLakes: { findActiveByUserTagsAndEntitlements: findLakes } };
       (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
       (service as any).entitlementsResolved = false;
@@ -313,12 +316,147 @@ describe('ChatCompletionProcess', () => {
     });
 
     it('fails SAFE to false and warns when the lookup throws - never breaks the turn', async () => {
-      (service as any).hasAccessibleKnowledgeLakeMemo = undefined;
+      (service as any).accessibleDataLakeAccessMemo = undefined;
       // No db at all: the access resolver dereferences `db.dataLakes` and throws.
       (service as any).db = undefined;
       (service as any).logger = { warn: vi.fn() };
 
       await expect(service.userHasAccessibleKnowledgeLake()).resolves.toBe(false);
+      expect((service as any).logger.warn).toHaveBeenCalled();
+    });
+  });
+
+  describe('resolveCorpusInlinePlan (defer only the tool-retrievable corpus subset)', () => {
+    // The suite mocks @bike4mind/utils wholesale (getSettingsValue -> vi.fn() -> undefined). Restore
+    // the production-equivalent numeric coercion so the threshold read behaves realistically here.
+    beforeEach(() => {
+      mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+        settings?.[key] !== undefined ? Number(settings[key]) : undefined) as typeof getSettingsValue);
+    });
+    afterEach(() => {
+      mockedGetSettingsValue.mockReset();
+    });
+
+    // Helper: partition knowledge ids into deferred vs inlined for a given lake/threshold setup.
+    const runPlan = async (opts: {
+      files: Array<{ id: string; tags: Array<{ name: string }> }>;
+      dataLakeTags: string[];
+      threshold: string | undefined;
+      attachedFileTokenBudget: number;
+      skipAutoOffers?: boolean;
+    }) => {
+      // Seed the per-turn access memo directly (getAccessibleDataLakeAccess returns it when set),
+      // so the plan uses these tags without exercising the DB-backed resolver.
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: opts.dataLakeTags,
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+      };
+      (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+      (service as any).db = { fabfiles: { getAccessibleFiles: vi.fn().mockResolvedValue(opts.files) } };
+      return (service as any).resolveCorpusInlinePlan({
+        sessionKnowledgeIds: opts.files.map(f => f.id),
+        attachedFileTokenBudget: opts.attachedFileTokenBudget,
+        skipAutoOffers: opts.skipAutoOffers ?? false,
+        defaultAdminSettings: opts.threshold ? { CorpusRetrievalMinInlineTokensPerDoc: opts.threshold } : {},
+      });
+    };
+
+    const lakeFiles = (n: number, tag = 'datalake:corpus') =>
+      Array.from({ length: n }, (_, i) => ({ id: `k${i}`, tags: [{ name: tag }] }));
+
+    it('defers the whole corpus when every doc is lake-tagged and the split goes shallow', async () => {
+      const plan = await runPlan({
+        files: lakeFiles(40),
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000, // 4000/40 = 100 < 500
+      });
+      expect(plan.deferredToRetrieval).toBe(true);
+      expect(plan.deferredKnowledgeIds).toHaveLength(40);
+      expect(plan.retrievableCount).toBe(40);
+    });
+
+    it('excludes non-lake-tagged attachments from the deferred set (core regression guard)', async () => {
+      const files = [...lakeFiles(30), { id: 'personal1', tags: [{ name: 'notes' }] }, { id: 'personal2', tags: [] }];
+      const plan = await runPlan({
+        files,
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000, // 4000/30 = 133 < 500
+      });
+      expect(plan.deferredToRetrieval).toBe(true);
+      expect(plan.retrievableCount).toBe(30);
+      expect(plan.deferredKnowledgeIds).toHaveLength(30);
+      expect(plan.deferredKnowledgeIds).not.toContain('personal1');
+      expect(plan.deferredKnowledgeIds).not.toContain('personal2');
+    });
+
+    it('defers nothing when the caller has no accessible lake (nothing is retrievable)', async () => {
+      const plan = await runPlan({
+        files: lakeFiles(40),
+        dataLakeTags: [],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.deferredKnowledgeIds).toHaveLength(0);
+    });
+
+    it('keeps a small corpus inlined (per-doc share stays above the floor)', async () => {
+      const plan = await runPlan({
+        files: lakeFiles(3),
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000, // 4000/3 = 1333 >= 500
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.deferredKnowledgeIds).toHaveLength(0);
+      expect(plan.retrievableCount).toBe(3);
+    });
+
+    it('defers nothing when the threshold is unset (feature off = today behavior)', async () => {
+      const plan = await runPlan({
+        files: lakeFiles(40),
+        dataLakeTags: ['datalake:corpus'],
+        threshold: undefined,
+        attachedFileTokenBudget: 4000,
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.deferredKnowledgeIds).toHaveLength(0);
+    });
+
+    it('defers nothing under promptMode (skipAutoOffers) and never reads files', async () => {
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      const getAccessibleFiles = vi.fn();
+      (service as any).db = { fabfiles: { getAccessibleFiles } };
+      const plan = await (service as any).resolveCorpusInlinePlan({
+        sessionKnowledgeIds: ['k0', 'k1'],
+        attachedFileTokenBudget: 4000,
+        skipAutoOffers: true,
+        defaultAdminSettings: { CorpusRetrievalMinInlineTokensPerDoc: '500' },
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.deferredKnowledgeIds).toHaveLength(0);
+      expect(getAccessibleFiles).not.toHaveBeenCalled();
+    });
+
+    it('fails SAFE (inline all) and warns when the file read throws', async () => {
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: ['datalake:corpus'],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+      };
+      (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+      (service as any).db = { fabfiles: { getAccessibleFiles: vi.fn().mockRejectedValue(new Error('db down')) } };
+      (service as any).logger = { warn: vi.fn() };
+      const plan = await (service as any).resolveCorpusInlinePlan({
+        sessionKnowledgeIds: ['k0'],
+        attachedFileTokenBudget: 4000,
+        skipAutoOffers: false,
+        defaultAdminSettings: { CorpusRetrievalMinInlineTokensPerDoc: '500' },
+      });
+      expect(plan.deferredKnowledgeIds).toHaveLength(0);
       expect((service as any).logger.warn).toHaveBeenCalled();
     });
   });
@@ -2393,6 +2531,41 @@ describe('resolveEnabledTools', () => {
     });
     const twice = resolveEnabledTools({ requestTools: once, hasAttachedKnowledge: true });
     expect(twice).toEqual(once);
+  });
+});
+
+describe('shouldDeferCorpusToRetrieval (per-doc even-split depth floor)', () => {
+  it('is OFF (never defers) when the threshold is 0, regardless of size', () => {
+    expect(
+      shouldDeferCorpusToRetrieval({ retrievableCount: 40, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 0 })
+    ).toBe(false);
+  });
+
+  it('defers when the per-doc split falls below the floor (large corpus)', () => {
+    // 4000 / 40 = 100 < 500
+    expect(
+      shouldDeferCorpusToRetrieval({ retrievableCount: 40, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 500 })
+    ).toBe(true);
+  });
+
+  it('keeps a small corpus inlined (per-doc split stays above the floor)', () => {
+    // 4000 / 3 = 1333 >= 500
+    expect(
+      shouldDeferCorpusToRetrieval({ retrievableCount: 3, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 500 })
+    ).toBe(false);
+  });
+
+  it('treats the floor as strict (depth exactly equal to the floor stays inlined)', () => {
+    // 1000 / 2 = 500, not < 500
+    expect(
+      shouldDeferCorpusToRetrieval({ retrievableCount: 2, attachedFileTokenBudget: 1000, minInlineTokensPerDoc: 500 })
+    ).toBe(false);
+  });
+
+  it('never defers when nothing is retrievable', () => {
+    expect(
+      shouldDeferCorpusToRetrieval({ retrievableCount: 0, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 500 })
+    ).toBe(false);
   });
 });
 
