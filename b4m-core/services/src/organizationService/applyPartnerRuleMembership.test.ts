@@ -192,6 +192,20 @@ describe('applyPartnerRuleMembership', () => {
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
   });
 
+  it('rejects with at-capacity (no write) when a non-Stripe org is clamped at the seat ceiling (#1424)', async () => {
+    db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
+    // Non-Stripe org already at the maximum: the clamped addMemberRaisingSeats matches no doc and
+    // returns null, and the re-read still shows the user absent -> at-capacity, not already-member.
+    const full = { ...cloneDeep(org), seats: 100, users: [{ userId: 'a' }, { userId: 'b' }] };
+    db.organizations.findById.mockResolvedValue(full);
+    db.organizations.addMemberRaisingSeats.mockResolvedValue(null);
+
+    const result = await run();
+
+    expect(result).toEqual({ added: false, reason: 'at-capacity', seats: 100 });
+    expect(db.users.update).not.toHaveBeenCalled();
+  });
+
   it('does NOT write an org pointer when the org was hard-deleted between read and atomic add (#P3)', async () => {
     db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId: null });
     // Present at the top read, gone by the re-read after the add matched nothing.
