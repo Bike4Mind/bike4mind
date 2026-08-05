@@ -229,8 +229,9 @@ const handler = baseApi({ auth: false })
               );
             }
           } else if (result.reason === 'at-capacity') {
-            // Stripe-billed org at capacity; its ceiling isn't auto-raised, so alert an admin to add
-            // seats and admit this stranded partner user. Best-effort, never throws.
+            // Org at capacity with no auto-raise: a Stripe-billed org (ceiling not raised out of band)
+            // or a non-Stripe org already at MAX_SEATS (the raise is clamped there, #1424). Alert an
+            // admin to add seats and admit this stranded partner user. Best-effort, never throws.
             await notifyPartnerSignupBlockedAtCapacity(
               {
                 organizationId: partnerOrganizationId,
