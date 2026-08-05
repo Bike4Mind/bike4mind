@@ -30,6 +30,12 @@ import { getErrorMessage, sanitizeErrorMessage } from '@client/app/utils/error';
 
 interface OrganizationGroupsListProps {
   organization: WithId<IOrganizationDocument>;
+  /**
+   * Copy for the no-groups-yet state. Defaults to the customer-page wording, which tells the reader
+   * to contact a Bike4Mind administrator. The admin panel must override it: there the reader IS that
+   * administrator and the control that grants types sits directly above this list.
+   */
+  emptyStateMessage?: string;
 }
 
 /**
@@ -40,7 +46,10 @@ interface OrganizationGroupsListProps {
  * members; the write-path invariant is enforced server-side, so this component assumes the caller
  * has already gated visibility.
  */
-export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({ organization }) => {
+export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
+  organization,
+  emptyStateMessage = 'No group types have been granted to this organization yet. Contact your Bike4Mind administrator to enable them.',
+}) => {
   const queryClient = useQueryClient();
   const orgId = organization.id;
 
@@ -49,8 +58,9 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({ organi
     queryKey: ['organizations', orgId, 'groups'],
     queryFn: () => fetchOrganizationGroups(orgId),
     // Personal orgs cannot be granted group types (enforced server-side), so there is nothing to
-    // fetch. The customer route never renders this for a personal org and the admin card returns
-    // early for one; this guard keeps the component self-safe regardless of caller.
+    // fetch. Both current callers also guard upstream. Note this alone does NOT make the component
+    // self-safe: a disabled query reports status 'pending' (fetchStatus 'idle') in react-query v5,
+    // so isPending stays true - hence the explicit personal-org early return before the render.
     enabled: !organization.personal,
   });
 
@@ -106,6 +116,10 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({ organi
 
   const groups = groupsQuery.data ?? [];
 
+  // Render nothing for a personal org rather than the permanent "Loading groups..." a disabled
+  // query would otherwise produce. Makes the guard above actually self-safe for any future caller.
+  if (organization.personal) return null;
+
   return (
     <Stack spacing={1}>
       <Typography level="title-md" startDecorator={<GroupWorkOutlinedIcon fontSize="small" />}>
@@ -127,8 +141,7 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({ organi
         </Typography>
       ) : groups.length === 0 ? (
         <Typography level="body-sm" color="neutral" data-testid="org-groups-empty">
-          No group types have been granted to this organization yet. Contact your Bike4Mind administrator to enable
-          them.
+          {emptyStateMessage}
         </Typography>
       ) : (
         groups.map(group => (

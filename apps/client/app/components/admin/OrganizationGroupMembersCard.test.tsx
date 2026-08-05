@@ -64,6 +64,18 @@ describe('OrganizationGroupMembersCard', () => {
     expect(fetchOrganizationGroups).not.toHaveBeenCalled();
   });
 
+  it('points the admin at the Group Types card above instead of telling them to contact an admin', async () => {
+    // The shared list's default empty-state copy is customer-facing ("Contact your Bike4Mind
+    // administrator"). In this panel the reader IS that administrator, so the card overrides it.
+    // This is the first-visit state for any org with no granted types.
+    fetchOrganizationGroups.mockResolvedValue([]);
+    renderCard(org);
+
+    const empty = await screen.findByTestId('org-groups-empty');
+    expect(empty).toHaveTextContent('Grant one in the Group Types card above');
+    expect(empty).not.toHaveTextContent('Contact your Bike4Mind administrator');
+  });
+
   it('renders the shared groups list with a member-assignment picker', async () => {
     fetchOrganizationGroups.mockResolvedValue([
       { id: 'g1', name: 'Sales', type: 'sales', organizationId: 'org1', memberIds: ['u1'], memberCount: 1 },

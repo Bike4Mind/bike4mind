@@ -17,7 +17,15 @@ const OrganizationGroupMembersCard: FC<{ org: WithId<IOrganizationDocument> }> =
 
   return (
     <Card variant="outlined" sx={{ p: 2, mt: 2 }} data-testid="org-group-members-card">
-      <OrganizationGroupsList organization={org} />
+      {/*
+        Override the empty-state copy: the shared default tells the reader to contact a Bike4Mind
+        administrator, but here the reader IS one and the Group Types card that grants them is
+        directly above. This is also the first-visit state for any org without types.
+      */}
+      <OrganizationGroupsList
+        organization={org}
+        emptyStateMessage="No group types have been granted to this organization yet. Grant one in the Group Types card above to provision a group."
+      />
     </Card>
   );
 };
