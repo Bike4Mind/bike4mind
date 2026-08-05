@@ -3,6 +3,7 @@ export * from './groupTypes';
 export * from './insufficientCredits';
 export * from './validation';
 export * from './apikey';
+export * from './agentQuest';
 export * from './models';
 export * from './modelPriceCatalog';
 export * from './modelCatalog';
