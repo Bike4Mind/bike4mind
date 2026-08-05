@@ -28,6 +28,12 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
   const isCompact = variant === 'compact';
   // totalPages is 0 until the first response lands; "of 0" would read as an empty result set.
   const pageLabel = totalPages > 0 ? `${currentPage} of ${totalPages}` : `${currentPage}`;
+  // A limit persisted under admin-user-tab-01 can outlive a change to the option list. Joy renders
+  // an empty button when the value matches no Option (renderValue is never called), so keep the
+  // active limit in the list rather than trying to patch the label.
+  const limitOptions = pageLimitOptions.includes(currentLimit)
+    ? pageLimitOptions
+    : [...pageLimitOptions, currentLimit].sort((a, b) => a - b);
 
   const pager = (
     <Stack direction="row" spacing={0.5} alignItems="center">
@@ -59,17 +65,19 @@ const PaginationControls: React.FC<PaginationControlsProps> = ({
 
   const pageSizeSelect = (
     <Select
-      data-testid="admin-page-size-select"
+      // Suffixed per variant: both pagers mount together on desktop, so a shared testid would
+      // resolve to two elements and trip Playwright's strict mode.
+      data-testid={`admin-page-size-select-${variant}`}
       size="sm"
       value={currentLimit}
       onChange={(_, value) => {
         if (value) onLimitChange(value);
       }}
       sx={{ minWidth: 104 }}
-      renderValue={option => <Box component="span">{option?.value} / page</Box>}
+      renderValue={option => <Box component="span">{option?.value ?? currentLimit} / page</Box>}
       slotProps={{ listbox: { placement: isCompact ? 'top' : 'bottom' } }}
     >
-      {pageLimitOptions.map(limit => (
+      {limitOptions.map(limit => (
         <Option key={limit} value={limit}>
           {limit} / page
         </Option>

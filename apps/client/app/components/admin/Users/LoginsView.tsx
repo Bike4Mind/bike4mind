@@ -36,6 +36,8 @@ const LoginsView: React.FC<LoginsViewProps> = ({ user }) => {
       <Tooltip title="Tap for Last Login Details">
         <Chip
           data-testid="admin-user-logins-chip"
+          // The count alone announces as a bare number; Tooltip only sets aria-describedby.
+          aria-label={`${logins} logins, view last login details`}
           size="sm"
           variant="soft"
           color={isAlert ? 'danger' : 'success'}

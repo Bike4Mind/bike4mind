@@ -27,7 +27,7 @@ describe('PaginationControls', () => {
 
     expect(screen.getByText('Page 2 of 4')).toBeInTheDocument();
     expect(screen.getByText('37 users')).toBeInTheDocument();
-    expect(screen.getByTestId('admin-page-size-select')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-page-size-select-full')).toBeInTheDocument();
   });
 
   it('keeps the page size picker but drops the total count in the compact variant', () => {
@@ -35,17 +35,39 @@ describe('PaginationControls', () => {
 
     expect(screen.getByText('2 of 4')).toBeInTheDocument();
     // Compact is the only pager on phones, so page size has to stay reachable here.
-    expect(screen.getByTestId('admin-page-size-select')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-page-size-select-compact')).toBeInTheDocument();
     expect(screen.queryByText('37 users')).not.toBeInTheDocument();
   });
 
   it('shows the active page size in both variants', () => {
     const { unmount } = render(<PaginationControls {...baseProps} variant="compact" />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('admin-page-size-select')).toHaveTextContent('10 / page');
+    expect(screen.getByTestId('admin-page-size-select-compact')).toHaveTextContent('10 / page');
     unmount();
 
     render(<PaginationControls {...baseProps} variant="full" />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('admin-page-size-select')).toHaveTextContent('10 / page');
+    expect(screen.getByTestId('admin-page-size-select-full')).toHaveTextContent('10 / page');
+  });
+
+  it('keeps each pager addressable when both mount together, as they do on desktop', () => {
+    // A shared testid across variants resolves to two elements and trips Playwright strict mode.
+    render(
+      <>
+        <PaginationControls {...baseProps} variant="full" />
+        <PaginationControls {...baseProps} variant="compact" />
+      </>,
+      { wrapper: TestWrapper }
+    );
+
+    expect(screen.getAllByTestId('admin-page-size-select-full')).toHaveLength(1);
+    expect(screen.getAllByTestId('admin-page-size-select-compact')).toHaveLength(1);
+  });
+
+  it('falls back to the current limit when it is not one of the options', () => {
+    // A limit persisted under admin-user-tab-01 can outlive a change to PAGE_LIMIT_OPTIONS;
+    // without the fallback the control reads as a bare " / page".
+    render(<PaginationControls {...baseProps} currentLimit={15} variant="full" />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('admin-page-size-select-full')).toHaveTextContent('15 / page');
   });
 
   it('omits the total until the first response lands', () => {
