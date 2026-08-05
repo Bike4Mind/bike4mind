@@ -378,7 +378,6 @@ const ResetButton: React.FC<{
   height?: string;
   top?: string;
   right?: string;
-  disabled?: boolean;
 }> = ({
   modelInfo,
   model,
@@ -391,7 +390,6 @@ const ResetButton: React.FC<{
   ImageModels,
   tooltip = 'Reset all settings to defaults',
   height = '32px',
-  disabled = false,
 }) => {
   const handleReset = () => {
     const defaultMaxTokens = computeDefaultMaxTokens(modelInfo);
@@ -430,7 +428,6 @@ const ResetButton: React.FC<{
         size="sm"
         variant="outlined"
         onClick={handleReset}
-        disabled={disabled}
         sx={{
           p: 1,
           borderRadius: '6px',
@@ -458,9 +455,7 @@ const ResetButton: React.FC<{
           sx={{
             fontWeight: '400',
             fontSize: { xs: '12px', sm: '14px' },
-            // Explicit, so it has to follow the disabled state itself - Joy's disabled colour on
-            // the button cannot win against a colour set on the label.
-            color: disabled ? 'text.tertiary' : 'text.primary',
+            color: 'text.primary',
           }}
         >
           Reset
@@ -847,7 +842,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
                   INFINITE_VALUE={INFINITE_VALUE}
                   ImageModels={ImageModels}
-                  disabled={readOnly}
                   tooltip="Reset advanced settings (temperature, tokens, spoken words, response history) to defaults"
                 />
               </Box>
