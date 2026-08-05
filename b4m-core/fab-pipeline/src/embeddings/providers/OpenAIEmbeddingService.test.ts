@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { OpenAIEmbeddingModel } from '@bike4mind/common';
+import { EmbeddingAuthError, isEmbeddingAuthError } from '../EmbeddingErrors';
 
 // Controllable stub for the OpenAI client's embeddings.create call.
 const createMock = vi.fn();
@@ -59,6 +60,14 @@ describe('OpenAIEmbeddingService 401 handling', () => {
     await expect(svc.generateEmbedding('hello')).rejects.toThrow(/401 Unauthorized/);
     await expect(svc.generateEmbedding('hello')).rejects.toThrow(/OLLAMA_BASE_URL/);
     await expect(svc.generateEmbedding('hello')).rejects.toThrow(/original: Incorrect API key provided/);
+  });
+
+  it('throws a typed EmbeddingAuthError on a 401 so callers can distinguish auth from transient', async () => {
+    createMock.mockRejectedValue(new MockAuthenticationError('Incorrect API key provided: sk-xxx'));
+    const svc = new OpenAIEmbeddingService(REAL_KEY, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    const err = await svc.generateEmbedding('hello').catch((e: unknown) => e);
+    expect(isEmbeddingAuthError(err)).toBe(true);
+    expect((err as EmbeddingAuthError).provider).toBe('openai');
   });
 
   it('generateEmbeddingBatch wraps a 401 rather than falling back to individual calls', async () => {

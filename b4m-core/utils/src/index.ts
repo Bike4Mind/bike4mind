@@ -3,6 +3,9 @@ export {
   SmartChunker,
   ChunkSchema,
   type Chunk,
+  type SmartChunkerOptions,
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  MIN_PASSAGE_TOKEN_TARGET,
   // ingest
   URL_REGEX,
   detectURLs,

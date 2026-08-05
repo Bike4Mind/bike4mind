@@ -13,7 +13,7 @@ import {
 import { NotFoundError } from '@server/utils/errors';
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
-import { ChunkSchema, EmbeddingFactory, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
+import { ChunkSchema, EmbeddingFactory, resolveEmbeddingConfig, isEmbeddingAuthError } from '@bike4mind/fab-pipeline';
 import { apiKeyService, embeddingCacheService } from '@bike4mind/services';
 import { finalizeBatchIfComplete, isBatchComplete } from '@server/queueHandlers/dataLakeBatchProgress';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
@@ -278,12 +278,29 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // the batch can transition out of 'processing' state when all files are accounted for.
     // Use atomic mark-failed to prevent double-counting on SQS retries.
     const errorMessage = err instanceof Error ? err.message : String(err);
+    // The stored message surfaces to the end user on the file. An embedding-auth failure carries
+    // operator instructions (set OPENAI_API_KEY / OLLAMA_BASE_URL) that a user can neither see nor
+    // act on, so persist user-safe copy instead. The advice differs by file kind: a turn-attached
+    // file falls back to its raw content in chat (see processFabFilesServer / canCosineSearch), so
+    // it is still usable there; a data-lake file (batchId set) is retrieved only by cosine search
+    // over its chunks, so with no vectors it is simply unfindable until re-indexed. The full
+    // operator detail still goes to the logs below. Other failures (e.g. oversized chunk) keep
+    // their specific, user-actionable message.
+    const isAuthFailure = isEmbeddingAuthError(err);
+    const storedError = isAuthFailure
+      ? existingFabFile.batchId
+        ? 'This file could not be indexed for semantic search because the embedding service was unavailable. It will not be found by knowledge search until it is re-indexed.'
+        : 'This file could not be indexed for semantic search because the embedding service was unavailable. You can still ask about it directly in chat.'
+      : errorMessage;
+    if (isAuthFailure) {
+      logger.warn(`Vectorization failed for ${fabFileId} (embedding auth): ${errorMessage}`);
+    }
     // markFailedIfNotAlready is the file-level idempotency guard: only the first
     // failure increments the counter, so SQS redelivery of a failed message is a no-op.
-    const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, errorMessage);
+    const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, storedError);
     if (existingFabFile.batchId && isFirstFailure) {
       try {
-        await dataLakeBatchRepository.updateFileStatus(existingFabFile.batchId, fabFileId, 'failed', errorMessage);
+        await dataLakeBatchRepository.updateFileStatus(existingFabFile.batchId, fabFileId, 'failed', storedError);
         const batch = await dataLakeBatchRepository.incrementCounter(existingFabFile.batchId, 'failedFiles');
         await finalizeBatchIfComplete(batch, logger);
 

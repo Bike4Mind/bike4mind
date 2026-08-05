@@ -1,4 +1,4 @@
-import type { IDataLakeBatchRepository } from '@bike4mind/common';
+import type { IDataLakeBatchDocument, IDataLakeBatchRepository } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
 /**
@@ -9,14 +9,18 @@ import { NotFoundError } from '@bike4mind/utils';
  * file that gets sampled into that user's inference prompt (billed to them) or has its tags
  * rewritten by apply. `NotFoundError` either way (missing vs. not-yours) so a probe can't
  * distinguish "doesn't exist" from "exists but isn't mine."
+ *
+ * Returns the batch it read, so a caller that also needs the document (e.g. the batch-presign door
+ * checking the batch's lake against the one the request named) does not read it a second time.
  */
 export const assertBatchOwnership = async (
   userId: string,
   batchId: string,
   { db }: { db: { batches: Pick<IDataLakeBatchRepository, 'findById'> } }
-): Promise<void> => {
+): Promise<IDataLakeBatchDocument> => {
   const batch = await db.batches.findById(batchId);
   if (!batch || batch.userId !== userId) {
     throw new NotFoundError('Batch not found');
   }
+  return batch;
 };

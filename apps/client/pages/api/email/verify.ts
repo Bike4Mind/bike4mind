@@ -17,6 +17,10 @@ import { AuthEvents } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
+import {
+  notifySeatCeilingRaised,
+  notifyPartnerSignupBlockedAtCapacity,
+} from '@server/organizations/notifySeatCeilingRaised';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
 import { z } from 'zod';
 
@@ -211,8 +215,33 @@ const handler = baseApi({ auth: false })
             req.logger.info(
               `Partner-rule org membership: added verified user ${userBeforeVerify.id} to org ${partnerOrganizationId}`
             );
-          } else if (result.reason === 'org-missing' || result.reason === 'at-capacity') {
-            // Surfaces a misconfiguration (dangling org ref / full org) without failing verification.
+            if (result.reason === 'added-seat-raised') {
+              // Membership + raise already committed; the alert/audit is best-effort and never throws.
+              await notifySeatCeilingRaised(
+                {
+                  organizationId: partnerOrganizationId,
+                  userId: userBeforeVerify.id,
+                  previousSeats: result.previousSeats,
+                  newSeats: result.newSeats,
+                  trigger: 'email-verification',
+                },
+                req.logger
+              );
+            }
+          } else if (result.reason === 'at-capacity') {
+            // Stripe-billed org at capacity; its ceiling isn't auto-raised, so alert an admin to add
+            // seats and admit this stranded partner user. Best-effort, never throws.
+            await notifyPartnerSignupBlockedAtCapacity(
+              {
+                organizationId: partnerOrganizationId,
+                userId: userBeforeVerify.id,
+                seats: result.seats,
+                trigger: 'email-verification',
+              },
+              req.logger
+            );
+          } else if (result.reason === 'org-missing') {
+            // Surfaces a misconfiguration (dangling org ref) without failing verification.
             req.logger.warn(
               `Partner-rule org membership not applied for user ${userBeforeVerify.id} ` +
                 `(org ${partnerOrganizationId}): ${result.reason}`

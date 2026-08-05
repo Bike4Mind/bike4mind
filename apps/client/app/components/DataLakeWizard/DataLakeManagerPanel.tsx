@@ -20,7 +20,6 @@ import {
   useTheme,
 } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
-import SwapVertIcon from '@mui/icons-material/SwapVert';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -42,11 +41,16 @@ import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
   ICON_BTN_SX,
+  SORT_MODE_ICON,
+  TREE_BACK_STICKY_SX,
   TREE_LIST_SX,
+  TREE_SCROLL_SX,
   hueForBranch,
   humanizeSegment,
+  treeBackRowSx,
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
+import type { TreeSortMode } from '@client/app/components/datalake/treeChrome';
 import { gray } from '@client/app/utils/themes/colors';
 import { useDataLakeFiles, useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
 import { useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
@@ -249,7 +253,7 @@ export default function DataLakeManagerPanel() {
         )
       ) : managerTab === 'discover' ? (
         // Public-lake catalog (store deep-link openManager('discover') or the footer button).
-        <Box sx={{ flex: 1, minWidth: 0, overflow: 'auto', px: 1 }}>
+        <Box sx={{ ...TREE_SCROLL_SX, minWidth: 0, px: 1 }}>
           <DataLakeDiscoverPanel />
         </Box>
       ) : (
@@ -318,7 +322,8 @@ function ManagerNav({
   const hoverBg = theme.palette.notebooklist.hoverBg;
   const borderColor = isDark ? gray[800] : gray[200];
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'count' | 'alpha'>('count');
+  const [sortBy, setSortBy] = useState<TreeSortMode>('count');
+  const SortModeIcon = SORT_MODE_ICON[sortBy];
 
   // Root accordions: active lakes open by default; the lifecycle lists stay collapsed (their
   // queries only fire once expanded, same as the old right-pane sections).
@@ -482,34 +487,21 @@ function ManagerNav({
             data-sort={sortBy}
             sx={{ ...ICON_BTN_SX, flexShrink: 0 }}
           >
-            <SwapVertIcon sx={{ fontSize: 18 }} />
+            <SortModeIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Tooltip>
       </Box>
 
-      <Box sx={{ flex: 1, overflow: 'auto', px: '8px' }}>
+      <Box sx={{ ...TREE_SCROLL_SX, px: '8px' }}>
         {activeLake && (
-          <ListItemButton
-            onClick={handleBack}
-            data-testid="datalake-manager-back"
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              px: '8px',
-              mb: '4px',
-              height: '32px',
-              minHeight: '32px',
-              borderRadius: '8px',
-              transition: 'background 0.15s',
-              '--variant-plainHoverBg': hoverBg,
-            }}
-          >
-            <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
-            <Typography noWrap sx={rowTypographySx}>
-              {backLabel}
-            </Typography>
-          </ListItemButton>
+          <Box sx={TREE_BACK_STICKY_SX}>
+            <ListItemButton onClick={handleBack} data-testid="datalake-manager-back" sx={treeBackRowSx(hoverBg)}>
+              <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
+              <Typography noWrap sx={rowTypographySx}>
+                {backLabel}
+              </Typography>
+            </ListItemButton>
+          </Box>
         )}
 
         {!activeLake ? (
@@ -1146,7 +1138,7 @@ function LakeInfoPanel({
           )}
         </Box>
       </Box>
-      <Box sx={{ flex: 1, overflow: 'auto', px: 3, py: 2 }}>
+      <Box sx={{ ...TREE_SCROLL_SX, px: 3, py: 2 }}>
         {lake.description ? (
           <Typography level="body-md" sx={{ whiteSpace: 'pre-wrap' }}>
             {lake.description}

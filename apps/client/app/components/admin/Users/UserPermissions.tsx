@@ -5,10 +5,11 @@ import { Button, FormHelperText, FormLabel, Input, Radio, RadioGroup, Stack, Too
 import React, { useState } from 'react';
 
 /**
- * Comp tags that grant a product entitlement (e.g. `opti`, `opti-compute`) -
- * these have their own dedicated grant/revoke control in the Product Access
- * section, so the freeform "Custom Tags" list below hides them to avoid two
- * controls editing the same tag.
+ * Comp tags that grant a product entitlement (e.g. `opti`) - these have their
+ * own dedicated grant/revoke control in the Product Access section, so the
+ * freeform "Custom Tags" list below hides them to avoid two controls editing
+ * the same tag. Derived from the live registry, so a RETIRED tag (e.g. the
+ * former `opti-compute`, #1237) is intentionally no longer hidden here.
  */
 const PRODUCT_GRANT_TAGS = allKnownEntitlementKeys()
   .map(grantTagForEntitlement)

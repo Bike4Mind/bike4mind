@@ -252,6 +252,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         id: { type: String, required: false },
       },
     ],
+    offeredTools: [{ type: String, required: false }],
     performance: {
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },

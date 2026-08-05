@@ -9,6 +9,7 @@ import {
   liveOpsTriageQueue,
   deepAgentWakeQueue,
   dataLakeTaxonomyQueue,
+  fabFileChunkQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
@@ -645,8 +646,9 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     // dataLakeTaxonomyQueue + websocketApi: the stuck-batch backstop calls
     // enqueueTaxonomyAnalysisIfWanted, which needs Resource.dataLakeTaxonomyQueue.url to
     // enqueue and, on a rate-limited batch, Resource.websocket.managementEndpoint to push the
-    // live status update.
-    link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi],
+    // live status update. fabFileChunkQueue: the un-chunked rescue sweep (#1420) re-enqueues
+    // complete-but-never-chunked files for chunking.
+    link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
