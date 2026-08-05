@@ -24,6 +24,7 @@ import {
   usdToCreditsStochastic,
   getSettingsValue,
 } from '@bike4mind/utils';
+import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
@@ -349,12 +350,18 @@ describe('ChatCompletionProcess', () => {
         chunkCount?: number;
         vectorizedChunkCount?: number;
         embeddingModel?: string;
+        fileName?: string;
+        vectorized?: boolean;
+        deletedAt?: Date;
+        archivedAt?: Date;
       }>;
       dataLakeTags: string[];
       threshold: string | undefined;
       attachedFileTokenBudget: number;
       skipAutoOffers?: boolean;
+      knowledgeSearchDisabled?: boolean;
       queryEmbeddingModel?: string;
+      retrievalFilter?: RetrievalExclusionOptions;
     }) => {
       // Seed the per-turn access memo directly (getAccessibleDataLakeAccess returns it when set),
       // so the plan uses these tags without exercising the DB-backed resolver.
@@ -369,6 +376,8 @@ describe('ChatCompletionProcess', () => {
         sessionKnowledgeIds: opts.files.map(f => f.id),
         attachedFileTokenBudget: opts.attachedFileTokenBudget,
         skipAutoOffers: opts.skipAutoOffers ?? false,
+        knowledgeSearchDisabled: opts.knowledgeSearchDisabled ?? false,
+        retrievalFilter: opts.retrievalFilter ?? {},
         defaultAdminSettings: {
           ...(opts.threshold ? { CorpusRetrievalMinInlineTokensPerDoc: opts.threshold } : {}),
           // The query embedding model; a doc is retrievable only if embedded under the same one.
@@ -389,6 +398,8 @@ describe('ChatCompletionProcess', () => {
         chunkCount: 2,
         vectorizedChunkCount: 2,
         embeddingModel: 'model-A',
+        fileName: `k${i}.md`,
+        vectorized: true,
         ...over,
       }));
 
@@ -405,7 +416,14 @@ describe('ChatCompletionProcess', () => {
     });
 
     it('excludes non-lake-tagged attachments from the deferred set (core regression guard)', async () => {
-      const files = [...lakeFiles(30), { id: 'personal1', tags: [{ name: 'notes' }] }, { id: 'personal2', tags: [] }];
+      // The non-lake fixtures carry the fully-retrievable shape so the TAG is the only thing that
+      // differs. Given bare `{id, tags}` they were already excluded by the vectorization and
+      // embedding-model conjuncts, and this test passed with `lakeTagged &&` deleted from the gate.
+      const files = [
+        ...lakeFiles(30),
+        ...lakeFiles(1, 'notes', { id: 'personal1' }),
+        ...lakeFiles(1, 'datalake:corpus', { id: 'personal2', tags: [] }),
+      ];
       const plan = await runPlan({
         files,
         dataLakeTags: ['datalake:corpus'],
@@ -417,6 +435,70 @@ describe('ChatCompletionProcess', () => {
       expect(plan.deferredKnowledgeIds).toHaveLength(30);
       expect(plan.deferredKnowledgeIds).not.toContain('personal1');
       expect(plan.deferredKnowledgeIds).not.toContain('personal2');
+    });
+
+    // The plan and the knowledge tool must agree on reachability. Both cases below are docs that
+    // pass every OTHER gate (lake-tagged, chunk counts complete, matching embedding model) yet the
+    // tool would refuse to return, so deferring them would strand their content silently.
+    it('excludes a doc the session retrieval-exclusion MARKER hides from the tool', async () => {
+      const files = [
+        ...lakeFiles(39),
+        ...lakeFiles(1, 'datalake:corpus', { id: 'marked', fileName: 'MARK - contract.pdf' }),
+      ];
+      const plan = await runPlan({
+        files,
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000, // 4000/39 = 102 < 500, so deferral still fires
+        retrievalFilter: { excludeFilenameMarkers: ['mark'] },
+      });
+      expect(plan.deferredToRetrieval).toBe(true);
+      expect(plan.retrievableCount).toBe(39);
+      expect(plan.deferredKnowledgeIds).not.toContain('marked');
+
+      // Positive control: identical corpus, filter removed. Proves the assertion above is the
+      // filter's doing and not some other gate quietly excluding the fixture.
+      const unfiltered = await runPlan({
+        files,
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+      });
+      expect(unfiltered.retrievableCount).toBe(40);
+      expect(unfiltered.deferredKnowledgeIds).toContain('marked');
+    });
+
+    it('excludes an unflagged doc under retrievalVectorizedOnly, which the chunk-count gate misses', async () => {
+      // `vectorizedOnly` reads the `vectorized` BOOLEAN; the retrievability gate reads the chunk
+      // counts. A doc with complete counts but the flag unset passes one and fails the other, so
+      // this is the arm the chunk-count check does NOT subsume.
+      const files = [...lakeFiles(39), ...lakeFiles(1, 'datalake:corpus', { id: 'unflagged', vectorized: false })];
+      const plan = await runPlan({
+        files,
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        retrievalFilter: { vectorizedOnly: true },
+      });
+      expect(plan.retrievableCount).toBe(39);
+      expect(plan.deferredKnowledgeIds).not.toContain('unflagged');
+    });
+
+    it('excludes soft-deleted and archived docs, which the tool also refuses to return', async () => {
+      const files = [
+        ...lakeFiles(38),
+        ...lakeFiles(1, 'datalake:corpus', { id: 'gone', deletedAt: new Date() }),
+        ...lakeFiles(1, 'datalake:corpus', { id: 'shelved', archivedAt: new Date() }),
+      ];
+      const plan = await runPlan({
+        files,
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+      });
+      expect(plan.retrievableCount).toBe(38);
+      expect(plan.deferredKnowledgeIds).not.toContain('gone');
+      expect(plan.deferredKnowledgeIds).not.toContain('shelved');
     });
 
     it('defers nothing when the caller has no accessible lake (nothing is retrievable)', async () => {
@@ -515,6 +597,33 @@ describe('ChatCompletionProcess', () => {
         attachedFileTokenBudget: 4000,
         skipAutoOffers: true,
         defaultAdminSettings: { CorpusRetrievalMinInlineTokensPerDoc: '500' },
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.deferredKnowledgeIds).toHaveLength(0);
+      expect(getAccessibleFiles).not.toHaveBeenCalled();
+    });
+
+    it('defers nothing when the session denylist forbids the knowledge-search tool', async () => {
+      // `session.disabledTools` is applied to the built tool list AFTER this plan runs, so a
+      // corpus deferred here would be handed to a tool that is then stripped - losing it outright.
+      // Seed the lake memo and a real file set: without them the no-lake / empty-corpus early
+      // returns catch this case first and the test passes with the denylist guard DELETED.
+      const files = lakeFiles(40);
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: ['datalake:corpus'],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+      };
+      (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+      const getAccessibleFiles = vi.fn().mockResolvedValue(files);
+      (service as any).db = { fabfiles: { getAccessibleFiles } };
+      const plan = await (service as any).resolveCorpusInlinePlan({
+        sessionKnowledgeIds: files.map(f => f.id),
+        attachedFileTokenBudget: 4000, // 4000/40 = 100 < 500: would defer all 40 but for the guard
+        skipAutoOffers: false,
+        knowledgeSearchDisabled: true,
+        retrievalFilter: {},
+        defaultAdminSettings: { CorpusRetrievalMinInlineTokensPerDoc: '500', defaultEmbeddingModel: 'model-A' },
       });
       expect(plan.deferredToRetrieval).toBe(false);
       expect(plan.deferredKnowledgeIds).toHaveLength(0);

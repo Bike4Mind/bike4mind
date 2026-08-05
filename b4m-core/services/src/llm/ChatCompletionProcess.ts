@@ -64,7 +64,11 @@ import {
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
-import { toRetrievalFilter, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
+import {
+  isRetrievalExcluded,
+  toRetrievalFilter,
+  type RetrievalExclusionOptions,
+} from '@bike4mind/utils/retrievalExclusion';
 import {
   resolveOutputMaxTokens,
   getAvailableModels,
@@ -281,6 +285,15 @@ const MIN_ATTACHED_CONTENT_SHARE = 0.15;
  * doc count, so the threshold auto-scales with the model's window through attachedFileTokenBudget.
  */
 const CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC = 0;
+
+/**
+ * The tool deferral hands the corpus to. A literal because the name is declared inline in the
+ * tool's definition (llm/tools/implementation/knowledgeBaseSearch) with no exported constant.
+ * Deferring while this tool is denied strands the corpus with no reader, and a rename would
+ * un-guard that path silently - so exported, and pinned against the real name by a test rather
+ * than by this comment.
+ */
+export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
 
 /**
  * Fraction of the space ACTUALLY AVAILABLE FOR HISTORY (safe input minus the
@@ -884,7 +897,11 @@ export class ChatCompletionProcess {
     sessionKnowledgeIds: string[];
     attachedFileTokenBudget: number;
     skipAutoOffers: boolean;
+    /** `session.disabledTools` includes the knowledge-search tool - see the guard below. */
+    knowledgeSearchDisabled: boolean;
     defaultAdminSettings: Record<string, string>;
+    /** The SAME filter the knowledge tools are built with - see the retrievability comment below. */
+    retrievalFilter: RetrievalExclusionOptions;
   }): Promise<{
     deferredKnowledgeIds: string[];
     attachedCount: number;
@@ -892,7 +909,14 @@ export class ChatCompletionProcess {
     deferredToRetrieval: boolean;
     minInlineTokensPerDoc: number;
   }> {
-    const { sessionKnowledgeIds, attachedFileTokenBudget, skipAutoOffers, defaultAdminSettings } = input;
+    const {
+      sessionKnowledgeIds,
+      attachedFileTokenBudget,
+      skipAutoOffers,
+      knowledgeSearchDisabled,
+      defaultAdminSettings,
+      retrievalFilter,
+    } = input;
     const attachedCount = sessionKnowledgeIds.length;
 
     // getSettingsValue coerces via the setting's Zod schema, so this is a number (0 by default).
@@ -913,6 +937,11 @@ export class ChatCompletionProcess {
     // promptMode is an eval/passthrough surface where the tool is NOT offered - deferring there
     // would strand the corpus with no retrieval path. Symmetric with the tool-offer gate.
     if (skipAutoOffers) return noDefer;
+    // Same reasoning one step further: `session.disabledTools` wins over every other tool gate
+    // (including the post-build denylist pass, which runs AFTER this plan), so deferring to a
+    // denied tool loses the corpus outright. Read from the session rather than the resolved tool
+    // list because the list is filtered again downstream of this call.
+    if (knowledgeSearchDisabled) return noDefer;
     if (minInlineTokensPerDoc <= 0 || attachedCount === 0) return noDefer;
 
     try {
@@ -944,7 +973,14 @@ export class ChatCompletionProcess {
           // this onto isForeignEmbeddingModel - that loosens the gate to defer unlabeled docs the
           // semantic arm may not actually reach, which is the content-losing direction.
           const sameVectorSpace = Boolean(queryEmbeddingModel) && file.embeddingModel === queryEmbeddingModel;
-          return lakeTagged && fullyVectorized && sameVectorSpace;
+          // The tool is built with `retrievalFilter: toRetrievalFilter(session)` and enforces it on
+          // BOTH arms, so a doc the filter excludes is unreachable however well vectorized it is.
+          // Checking the same predicate here is what stops the two lists diverging - the gap this
+          // closes was a lake-tagged, fully-vectorized doc matching a session exclusion marker being
+          // deferred and then dropped by the tool, losing it silently. Mirrors `isLiveVisibleFile` in
+          // knowledgeBaseRetrieve, which is the canonical "can the tool reach this file" predicate.
+          const liveAndReachable = !file.deletedAt && !file.archivedAt && !isRetrievalExcluded(file, retrievalFilter);
+          return lakeTagged && fullyVectorized && sameVectorSpace && liveAndReachable;
         })
         .map(file => file.id);
 
@@ -2022,7 +2058,13 @@ export class ChatCompletionProcess {
         sessionKnowledgeIds: session.knowledgeIds ?? [],
         attachedFileTokenBudget,
         skipAutoOffers,
+        knowledgeSearchDisabled:
+          Array.isArray(session.disabledTools) && session.disabledTools.includes(KNOWLEDGE_SEARCH_TOOL_NAME),
         defaultAdminSettings,
+        // The same mapping the tool build uses below, so the session -> filter translation cannot
+        // drift between them. Narrower than "the two agree": reachability also depends on the tool
+        // surviving the denylist, which is what knowledgeSearchDisabled above covers.
+        retrievalFilter: toRetrievalFilter(session),
       });
 
       const dataSources = await this.buildDataSources({
