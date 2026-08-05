@@ -9,6 +9,7 @@ interface ApplyTaxonomySuggestionsAdapters {
     fabFiles: Pick<IFabFileRepository, 'findByBatchId' | 'bulkUpdateTags'>;
   };
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
+  metrics?: { recordTagsApplySkipped: (count: number) => Promise<void> };
 }
 
 /**
@@ -39,7 +40,7 @@ export const applyTaxonomySuggestions = async (
   actor: { userId: string; isAdmin: boolean },
   batchId: string,
   acceptedTags: TaxonomyTag[],
-  { db, logger }: ApplyTaxonomySuggestionsAdapters
+  { db, logger, metrics }: ApplyTaxonomySuggestionsAdapters
 ): Promise<{ success: true; filesUpdated: number }> => {
   const batch = await db.batches.findById(batchId);
   if (!batch) throw new NotFoundError('Batch not found');
@@ -116,10 +117,13 @@ export const applyTaxonomySuggestions = async (
       // bulkUpdateTags' optimistic-concurrency check lost the race for `skipped` of them (see
       // its doc comment). Not an error - the concurrent writer's change legitimately wins - but
       // otherwise invisible: filesUpdated just reaches the caller as a smaller-than-expected
-      // number with no signal why.
+      // number with no signal why. Log carries batchId for grepping one occurrence; the metric
+      // (deliberately dimensionless, matching this file's low-cardinality convention) is the
+      // aggregate rate an alarm could eventually watch.
       logger?.warn(
         `applyTaxonomySuggestions: ${skipped}/${updates.length} file(s) skipped on batch ${batchId} - tags changed since read`
       );
+      await metrics?.recordTagsApplySkipped(skipped).catch(() => {});
     }
 
     const finalized = await db.batches.setTaxonomyStatusIfActive(batchId, ['applying'], 'applied');

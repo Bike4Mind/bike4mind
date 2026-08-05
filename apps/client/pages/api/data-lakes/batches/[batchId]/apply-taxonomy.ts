@@ -5,6 +5,7 @@ import { dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '
 import { dataLakeService } from '@bike4mind/services';
 import { ApplyTaxonomyRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
+import { recordTaxonomyTagsApplySkipped } from '@server/utils/cloudwatch';
 
 // The guarded 'ready' -> 'applying' claim already means only one apply per completed
 // analysis can succeed, but a rejected call still costs a batch + lake lookup, and this
@@ -28,6 +29,7 @@ const handler = baseApi()
       {
         db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
         logger: console,
+        metrics: { recordTagsApplySkipped: recordTaxonomyTagsApplySkipped },
       }
     );
 

@@ -67,6 +67,7 @@ const makeAdapters = (opts?: {
     },
   },
   logger: { warn: vi.fn() },
+  metrics: { recordTagsApplySkipped: vi.fn().mockResolvedValue(undefined) },
 });
 
 describe('applyTaxonomySuggestions', () => {
@@ -240,9 +241,10 @@ describe('applyTaxonomySuggestions', () => {
     );
 
     expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('1/2'));
+    expect(adapters.metrics.recordTagsApplySkipped).toHaveBeenCalledWith(1);
   });
 
-  it('does not warn when every matched file was actually updated', async () => {
+  it('does not warn or record a metric when every matched file was actually updated', async () => {
     const adapters = makeAdapters({
       files: [file({ tags: [{ name: 'acme:legal', strength: 1 }] })],
     });
@@ -255,6 +257,7 @@ describe('applyTaxonomySuggestions', () => {
     );
 
     expect(adapters.logger.warn).not.toHaveBeenCalled();
+    expect(adapters.metrics.recordTagsApplySkipped).not.toHaveBeenCalled();
   });
 
   it('keeps a genuinely suggested tag even after its suffix was edited by the reviewer', async () => {
