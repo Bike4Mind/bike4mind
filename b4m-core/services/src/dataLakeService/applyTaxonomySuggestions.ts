@@ -28,6 +28,11 @@ interface ApplyTaxonomySuggestionsAdapters {
  * pre-upload behavior this replaces).
  *
  * No lake-stats recompute: tags don't change lake membership/fileCount/totalSizeBytes.
+ *
+ * `filesUpdated` can be less than the number of matched files: bulkUpdateTags applies
+ * optimistic concurrency per file, so one mutated by something else between the read below and
+ * the write (a direct tag edit, a lake-membership pull, another apply) is silently skipped
+ * rather than having its concurrent change clobbered by a merge computed from stale data.
  */
 export const applyTaxonomySuggestions = async (
   actor: { userId: string; isAdmin: boolean },
@@ -91,7 +96,16 @@ export const applyTaxonomySuggestions = async (
         if (current === undefined || t.strength > current) merged.set(t.name, t.strength);
       }
 
-      return [{ id: file.id, tags: Array.from(merged, ([name, strength]) => ({ name, strength })) }];
+      return [
+        {
+          id: file.id,
+          tags: Array.from(merged, ([name, strength]) => ({ name, strength })),
+          // The exact snapshot this merge was computed from - bulkUpdateTags uses it for
+          // optimistic concurrency, so a file mutated by something else since this read is
+          // skipped rather than clobbered by a merge that's now stale.
+          expectedTags: existingTags,
+        },
+      ];
     });
 
     const filesUpdated = await db.fabFiles.bulkUpdateTags(updates);

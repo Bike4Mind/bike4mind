@@ -205,6 +205,23 @@ describe('applyTaxonomySuggestions', () => {
     expect(adapters.db.fabFiles.bulkUpdateTags).toHaveBeenCalledWith([]);
   });
 
+  it("passes each file's pre-merge tags snapshot as expectedTags, for bulkUpdateTags' optimistic concurrency check", async () => {
+    const existingTags = [{ name: 'acme:legal', strength: 1 }];
+    const adapters = makeAdapters({
+      files: [file({ tags: existingTags })],
+    });
+
+    await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
+    expect(updates[0].expectedTags).toEqual(existingTags);
+  });
+
   it('keeps a genuinely suggested tag even after its suffix was edited by the reviewer', async () => {
     const adapters = makeAdapters({
       files: [file({ tags: [] })],

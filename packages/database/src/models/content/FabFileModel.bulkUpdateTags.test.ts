@@ -48,8 +48,9 @@ describe('FabFileRepository.bulkUpdateTags', () => {
           { name: 'acme:legal', strength: 1 },
           { name: 'acme:type:contract', strength: 0.9 },
         ],
+        expectedTags: [{ name: 'acme:legal', strength: 1 }],
       },
-      { id: b.id, tags: [{ name: 'acme:finance', strength: 0.8 }] },
+      { id: b.id, tags: [{ name: 'acme:finance', strength: 0.8 }], expectedTags: [] },
     ]);
 
     expect(modifiedCount).toBe(2);
@@ -61,5 +62,80 @@ describe('FabFileRepository.bulkUpdateTags', () => {
   it('is a no-op for an empty update list', async () => {
     const modifiedCount = await fabFileRepository.bulkUpdateTags([]);
     expect(modifiedCount).toBe(0);
+  });
+
+  it('skips a file whose tags changed since expectedTags was read, instead of clobbering the concurrent change', async () => {
+    const a = await FabFile.create({
+      userId,
+      fileName: 'a.txt',
+      mimeType: 'text/plain',
+      type: KnowledgeType.FILE,
+      filePath: 'a.txt',
+      tags: [{ name: 'acme:legal', strength: 1 }],
+    });
+
+    // Simulates a concurrent writer (e.g. a direct tag edit) landing after this caller's read.
+    await fabFileRepository.update({
+      id: a.id,
+      tags: [
+        { name: 'acme:legal', strength: 1 },
+        { name: 'user:added', strength: 1 },
+      ],
+    });
+
+    const modifiedCount = await fabFileRepository.bulkUpdateTags([
+      {
+        id: a.id,
+        tags: [
+          { name: 'acme:legal', strength: 1 },
+          { name: 'acme:type:contract', strength: 0.9 },
+        ],
+        expectedTags: [{ name: 'acme:legal', strength: 1 }], // stale - no longer matches stored tags
+      },
+    ]);
+
+    expect(modifiedCount).toBe(0);
+    const fresh = await fabFileRepository.findById(a.id);
+    // The concurrent writer's tag survives untouched - not overwritten by the stale merge.
+    expect(fresh?.tags?.map(t => t.name).sort()).toEqual(['acme:legal', 'user:added']);
+  });
+
+  it('applies the write when expectedTags matches, alongside a sibling op that is skipped', async () => {
+    const a = await FabFile.create({
+      userId,
+      fileName: 'a.txt',
+      mimeType: 'text/plain',
+      type: KnowledgeType.FILE,
+      filePath: 'a.txt',
+      tags: [{ name: 'acme:legal', strength: 1 }],
+    });
+    const b = await FabFile.create({
+      userId,
+      fileName: 'b.txt',
+      mimeType: 'text/plain',
+      type: KnowledgeType.FILE,
+      filePath: 'b.txt',
+      tags: [],
+    });
+
+    // Only `a` drifts from its snapshot; `b` stays untouched, so its op should still apply.
+    await fabFileRepository.update({ id: a.id, tags: [{ name: 'user:added', strength: 1 }] });
+
+    const modifiedCount = await fabFileRepository.bulkUpdateTags([
+      {
+        id: a.id,
+        tags: [
+          { name: 'acme:legal', strength: 1 },
+          { name: 'acme:type:contract', strength: 0.9 },
+        ],
+        expectedTags: [{ name: 'acme:legal', strength: 1 }],
+      },
+      { id: b.id, tags: [{ name: 'acme:finance', strength: 0.8 }], expectedTags: [] },
+    ]);
+
+    expect(modifiedCount).toBe(1);
+    const [freshA, freshB] = await Promise.all([fabFileRepository.findById(a.id), fabFileRepository.findById(b.id)]);
+    expect(freshA?.tags?.map(t => t.name)).toEqual(['user:added']); // untouched by the skipped op
+    expect(freshB?.tags?.map(t => t.name)).toEqual(['acme:finance']); // applied normally
   });
 });

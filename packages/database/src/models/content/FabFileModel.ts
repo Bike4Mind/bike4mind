@@ -640,13 +640,22 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
-  async bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number> {
+  async bulkUpdateTags(
+    updates: {
+      id: string;
+      tags: { name: string; strength: number }[];
+      expectedTags: { name: string; strength: number }[];
+    }[]
+  ): Promise<number> {
     if (updates.length === 0) return 0;
 
+    // `tags: expectedTags` is an exact, order-sensitive array match (Mongo array-equality
+    // semantics) - ANY concurrent change (add/remove/reorder) makes this op a no-op rather
+    // than overwriting with a merge computed from data that's no longer current.
     const result = await this.fabFileModel.bulkWrite(
-      updates.map(({ id, tags }) => ({
+      updates.map(({ id, tags, expectedTags }) => ({
         updateOne: {
-          filter: { _id: convertId(id) },
+          filter: { _id: convertId(id), tags: expectedTags },
           update: { $set: { tags } },
         },
       })),
