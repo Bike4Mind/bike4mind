@@ -218,6 +218,14 @@ jobs:
           echo "skill_file=$DEST" >> "$GITHUB_OUTPUT"
           echo "bot-review skill fetched ($(wc -l < "$DEST") lines) from b4m-devtools@main"
 
+      - name: Record review start time
+        id: review_start
+        if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
+        run: |
+          # Watermark for the "was a review actually posted?" check below. Taken a
+          # second early so a review posted in the same second still compares >=.
+          echo "at=$(date -u -d '1 second ago' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Run /bot-review
         id: bot_review
         if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
@@ -260,18 +268,103 @@ jobs:
             # review was posted. The 100-file size guard caps the upper bound.
             --max-turns 80
 
+      - name: Verify a review was actually posted
+        id: review_posted
+        # The completeness assertion is "a review is visible on the PR", NOT "the
+        # process exited 0". A run can end its turn without posting anything and
+        # still report success (observed: 18 turns, is_error false, 0 reviews
+        # posted), which left the author with a green check and no review.
+        # FAIL-CLOSED: an API error resolves to "not posted", because the whole
+        # point of this step is to never claim a review happened without evidence.
+        if: always() && (steps.bot_review.outcome == 'success' || steps.bot_review.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BOT_REVIEW_LOGIN: 'claude[bot]'
+          SINCE: ${{ steps.review_start.outputs.at }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          emit() { echo "review_posted: $1"; echo "posted=$1" >> "$GITHUB_OUTPUT"; exit 0; }
+
+          if [ -z "$SINCE" ]; then
+            echo "::warning::no review start watermark; treating as no review posted"
+            emit false
+          fi
+
+          # Counts entries authored by the bot at or after the watermark. Both
+          # timestamps are UTC `...Z` of fixed width, so a string compare is a
+          # correct time compare. Prints nothing and returns 1 on API failure.
+          count_since() {
+            local out
+            out=$(gh api --paginate "$1" --jq "$2" 2>&1) || { echo "::warning::gh api $1 failed: $out" >&2; return 1; }
+            printf '%s\n' "$out" | grep -c . || true
+          }
+
+          SEL_REVIEW=".[] | select(.user.login==\"${BOT_REVIEW_LOGIN}\" and .submitted_at != null and .submitted_at >= \"${SINCE}\") | .id"
+          SEL_COMMENT=".[] | select(.user.login==\"${BOT_REVIEW_LOGIN}\" and .created_at >= \"${SINCE}\") | .id"
+
+          REVIEWS=$(count_since "repos/${REPO}/pulls/${PR}/reviews" "$SEL_REVIEW") || emit false
+          INLINE=$(count_since "repos/${REPO}/pulls/${PR}/comments" "$SEL_COMMENT") || emit false
+          ISSUE=$(count_since "repos/${REPO}/issues/${PR}/comments" "$SEL_COMMENT") || emit false
+          echo "review_posted: reviews=$REVIEWS inline=$INLINE comments=$ISSUE since=$SINCE"
+
+          if [ $((REVIEWS + INLINE + ISSUE)) -gt 0 ]; then emit true; else emit false; fi
+
+      - name: Redact and upload review transcript
+        id: transcript
+        # Retained only when something went wrong, so a no-post run can be
+        # diagnosed at all (the workflow log keeps only the init/result blocks).
+        # The transcript quotes this PUBLIC repo's own diff, which is fine, but it
+        # also contains the bot-review skill fetched from the PRIVATE b4m-devtools
+        # repo — and artifacts on a public repo are world-downloadable. So the
+        # skill's own text is stripped first, and the upload is abandoned entirely
+        # if a fingerprint of it survives. Short retention: this is a debugging
+        # aid, not a record.
+        if: always() && (steps.bot_review.outcome == 'failure' || (steps.bot_review.outcome == 'success' && steps.review_posted.outputs.posted != 'true'))
+        env:
+          EXECUTION_FILE: ${{ steps.bot_review.outputs.execution_file }}
+          SKILL_FILE: ${{ steps.skill_fetch.outputs.skill_file }}
+          DEST: ${{ runner.temp }}/review-transcript-redacted.json
+        run: |
+          set -uo pipefail
+          if [ -z "$EXECUTION_FILE" ] || [ ! -s "$EXECUTION_FILE" ]; then
+            echo "::warning::no execution output file to upload"
+            echo "uploadable=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! python3 "${GITHUB_WORKSPACE}/.github/scripts/redact-review-transcript.py" \
+                 "$EXECUTION_FILE" "$SKILL_FILE" "$DEST"; then
+            echo "::warning::transcript redaction failed; not uploading"
+            echo "uploadable=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "uploadable=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload review transcript
+        if: always() && steps.transcript.outputs.uploadable == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-transcript-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/review-transcript-redacted.json
+          retention-days: 7
+
       - name: Report incomplete review
-        # Fires only when the review step actually ran and failed (e.g.
-        # error_max_turns, API error) — not when the size guard skipped it
-        # (outcome == 'skipped'), which posts its own comment. Without this,
-        # a failed run leaves only a red ✗ in Checks with no signal on the PR.
-        if: always() && steps.bot_review.outcome == 'failure'
+        # Fires when the review step actually ran and either failed (e.g.
+        # error_max_turns, API error) or finished without leaving a review on the
+        # PR — not when the size guard skipped it (outcome == 'skipped'), which
+        # posts its own comment. Without this, such a run leaves the author with
+        # nothing on the PR, and in the no-post case a green check as well.
+        if: always() && (steps.bot_review.outcome == 'failure' || (steps.bot_review.outcome == 'success' && steps.review_posted.outputs.posted != 'true'))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
-            --body "🤖 Automated review did not complete — the run errored or exhausted its turn budget, so no review was posted. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details. Re-apply the \`bot-review\` label to retry, or request a human reviewer."
+            --body "🤖 Automated review did not complete — no review from this run was detected on the PR (the run errored, exhausted its turn budget, or ended without posting). See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details; a redacted transcript is attached to it as an artifact when one was captured. Re-apply the \`bot-review\` label to retry, or request a human reviewer."
+          # Red the job too. A success-with-no-post used to leave a green check,
+          # which reads as "the review happened" - the failure mode this guards.
+          exit 1
 
       - name: Report skill-fetch failure
         # Fail loud + visible: if the skill couldn't be fetched we skipped the review
