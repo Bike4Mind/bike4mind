@@ -13,6 +13,7 @@ import { listOwn } from './listOwn';
 import { listPendingUsers } from './listPendingUsers';
 import { revokeAccess } from './revokeAccess';
 import { leave } from './leave';
+import { clearActiveOrganization } from './clearActiveOrganization';
 import { setOrganizationGroupTypes } from './setOrganizationGroupTypes';
 import {
   assignUserToGroup,
@@ -43,6 +44,7 @@ export {
   listPendingUsers,
   revokeAccess,
   leave,
+  clearActiveOrganization,
   setOrganizationGroupTypes,
   assignUserToGroup,
   assertCanManageOrgGroups,
