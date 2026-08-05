@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Box, Typography } from '@mui/joy';
+import type { SxProps } from '@mui/joy/styles/types';
 import { brandAlpha } from '@client/app/utils/themes/colors';
 
 interface DataLakeEmptyStateProps {
@@ -8,8 +9,8 @@ interface DataLakeEmptyStateProps {
   title: string;
   /** Body copy. Accepts nodes so callers can break a line where it reads best. */
   children: ReactNode;
-  /** Merged last, e.g. `py` when the state is a block rather than a pane that fills its parent. */
-  sx?: Record<string, unknown>;
+  /** Merged after the base styles, e.g. `py` when the state is a block rather than a filling pane. */
+  sx?: SxProps;
   'data-testid'?: string;
 }
 
@@ -28,18 +29,22 @@ export default function DataLakeEmptyState({
   return (
     <Box
       data-testid={testId}
-      sx={{
-        flex: 1,
-        minWidth: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        px: 4,
-        color: 'text.tertiary',
-        textAlign: 'center',
-        ...sx,
-      }}
+      sx={[
+        {
+          flex: 1,
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          px: 4,
+          color: 'text.tertiary',
+          textAlign: 'center',
+        },
+        // Composed as an array, not spread: SxProps also permits a theme callback and an array,
+        // and spreading either into an object literal drops the styles silently.
+        ...(Array.isArray(sx) ? sx : [sx]),
+      ]}
     >
       <Box
         sx={{
