@@ -39,6 +39,15 @@ export const isSessionActivatablePromptId = (promptId: string | undefined): bool
  * the generic prompt and injects nothing in its place - leaving the session with neither.
  *
  * Whitespace-only `systemPromptText` does not count, matching how the completion path resolves it.
+ *
+ * LIMIT, because "leaving the session with neither" reads broader than what this closes: the check
+ * is allowlist MEMBERSHIP, which is not the same question as "will resolve to content". An
+ * allowlisted id whose registry record an admin has DISABLED still passes here (so the generic
+ * prompt is suppressed) while the loader returns null (so nothing is injected) - the same
+ * no-prompt-at-all outcome, reached a different way. A static predicate cannot see a runtime
+ * disable; closing that would mean the route deciding suppression from the RESOLVED prompt rather
+ * than from the id, which the route cannot do since resolution happens in the completion path.
+ * Unreachable while no surface sets `systemPromptId`; revisit when one does.
  */
 export const hasAuthoredSessionPrompt = (session: {
   systemPromptText?: string;

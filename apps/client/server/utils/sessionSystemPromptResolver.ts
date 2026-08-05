@@ -14,6 +14,15 @@ import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePr
  *
  * Returns null for an id the session is not allowed to activate, and for an unknown or
  * admin-disabled prompt - `ChatCompletionProcess` treats null as "no authored prompt".
+ *
+ * DELIBERATELY UNCACHED. This does two Mongo reads (`findByPromptId` + `getActiveContent`) per
+ * call, and `ChatCompletionProcess` calls it once per turn for a session that has a
+ * `systemPromptId`. That costs nothing today because no surface sets that field, so there is no hot
+ * path to protect yet and a cache here would only add an admin-edit staleness window for no gain.
+ * When a surface does start setting it, this becomes a per-turn double read and wants the same
+ * treatment `loadBaseIdentitySystemPromptMessages` already applies for the identity prompt: a
+ * short-TTL in-process cache, best-effort, correctness never depending on it (see the comment above
+ * `identityPromptCache` in `systemPrompts/loader.ts`). Keyed by promptId rather than single-slot.
  */
 export const loadSystemPromptById = async (promptId: string): Promise<string | null> => {
   if (!isSessionActivatablePromptId(promptId)) return null;
