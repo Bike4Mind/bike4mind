@@ -625,143 +625,158 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
         }}
       />
 
-      {/* Token Allocation Section with Context Window Info - Full Width */}
-      <Box sx={{ p: 0 }}>
-        <Box
-          sx={{ display: isMobile ? 'block' : 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '20px' }}
-        >
-          {/* Context */}
-          <Box sx={{ display: 'flex', mb: { xs: 2, sm: 0 }, alignItems: 'center', gap: '3px', flexShrink: 0 }}>
-            <Typography level="body-sm" sx={commonTextTitleStyles}>
-              Context -{' '}
-            </Typography>
-            <Typography
-              level="body-sm"
-              sx={{ fontWeight: 'bold', color: brand[800], fontSize: '16px', whiteSpace: 'nowrap' }}
-            >
-              {(modelInfo?.contextWindow ?? 0).toLocaleString().replace(/,/g, ' ')}
-            </Typography>
-          </Box>
-
-          {/* Input */}
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '20px' }}>
+      {/* An output-token budget only means something for chat models. Image, video and
+          transcription entries carry placeholder context values in the catalog (every Flux and
+          gpt-image row is a flat 10000/10000), so the slider edited a number nothing reads.
+          Gated on the catalog's own type rather than isImageModel(), which name-matches a
+          hardcoded list and would read the selected model instead of the one on screen. */}
+      {modelInfo.type === 'text' && (
+        <>
+          <Box sx={{ p: 0 }}>
             <Box
               sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                justifyContent: { xs: 'flex-start', sm: 'flex-end' },
+                display: isMobile ? 'block' : 'flex',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '20px',
               }}
             >
-              <Typography level="body-sm">Input</Typography>
-              <FieldTooltip
-                ariaLabel="Help: Input tokens"
-                content={FIELD_TOOLTIPS.maxTokensInput}
-                data-testid="field-tooltip-input-tokens"
-              />
-              <Input
-                size="sm"
-                variant="outlined"
-                value={((modelInfo?.contextWindow ?? 0) - (max_tokens ?? 4096)).toLocaleString().replace(/,/g, ' ')}
-                sx={{
-                  ...commonInputStyles(mode || 'light'),
-                  fontSize: { xs: '12px', sm: '14px' },
-                  width: { xs: '80px', sm: 'auto' },
-                }}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                  const rawValue = e.target.value.replace(/\s/g, '');
-                  const inputTokens = parseInt(rawValue, 10);
-                  if (!isNaN(inputTokens) && inputTokens >= 0) {
-                    const contextWindow = modelInfo?.contextWindow ?? 0;
-                    const newMaxTokens = Math.max(
-                      4096,
-                      Math.min(contextWindow - inputTokens, modelInfo?.max_tokens ?? 16384)
-                    );
-                    setLLM({ max_tokens: newMaxTokens });
-                  }
-                }}
-              />
-            </Box>
+              {/* Context */}
+              <Box sx={{ display: 'flex', mb: { xs: 2, sm: 0 }, alignItems: 'center', gap: '3px', flexShrink: 0 }}>
+                <Typography level="body-sm" sx={commonTextTitleStyles}>
+                  Context -{' '}
+                </Typography>
+                <Typography
+                  level="body-sm"
+                  sx={{ fontWeight: 'bold', color: brand[800], fontSize: '16px', whiteSpace: 'nowrap' }}
+                >
+                  {(modelInfo?.contextWindow ?? 0).toLocaleString().replace(/,/g, ' ')}
+                </Typography>
+              </Box>
 
-            {/* Output */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography level="body-sm">Output</Typography>
-              <FieldTooltip
-                ariaLabel="Help: Output tokens"
-                content={FIELD_TOOLTIPS.maxTokensOutput}
-                data-testid="field-tooltip-output-tokens"
-              />
-              <Input
-                size="sm"
-                variant="outlined"
-                value={(max_tokens ?? 4096).toLocaleString().replace(/,/g, ' ')}
-                sx={{
-                  ...commonInputStyles(mode || 'light'),
-                  fontSize: { xs: '12px', sm: '14px' },
-                  width: { xs: '80px', sm: 'auto' },
-                }}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                  const rawValue = e.target.value.replace(/\s/g, '');
-                  const outputTokens = parseInt(rawValue, 10);
-                  if (
-                    !isNaN(outputTokens) &&
-                    outputTokens >= 4096 &&
-                    outputTokens <= (modelInfo?.max_tokens ?? 16384)
-                  ) {
-                    setLLM({ max_tokens: outputTokens });
+              {/* Input */}
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '20px' }}>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    justifyContent: { xs: 'flex-start', sm: 'flex-end' },
+                  }}
+                >
+                  <Typography level="body-sm">Input</Typography>
+                  <FieldTooltip
+                    ariaLabel="Help: Input tokens"
+                    content={FIELD_TOOLTIPS.maxTokensInput}
+                    data-testid="field-tooltip-input-tokens"
+                  />
+                  <Input
+                    size="sm"
+                    variant="outlined"
+                    value={((modelInfo?.contextWindow ?? 0) - (max_tokens ?? 4096)).toLocaleString().replace(/,/g, ' ')}
+                    sx={{
+                      ...commonInputStyles(mode || 'light'),
+                      fontSize: { xs: '12px', sm: '14px' },
+                      width: { xs: '80px', sm: 'auto' },
+                    }}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                      const rawValue = e.target.value.replace(/\s/g, '');
+                      const inputTokens = parseInt(rawValue, 10);
+                      if (!isNaN(inputTokens) && inputTokens >= 0) {
+                        const contextWindow = modelInfo?.contextWindow ?? 0;
+                        const newMaxTokens = Math.max(
+                          4096,
+                          Math.min(contextWindow - inputTokens, modelInfo?.max_tokens ?? 16384)
+                        );
+                        setLLM({ max_tokens: newMaxTokens });
+                      }
+                    }}
+                  />
+                </Box>
+
+                {/* Output */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography level="body-sm">Output</Typography>
+                  <FieldTooltip
+                    ariaLabel="Help: Output tokens"
+                    content={FIELD_TOOLTIPS.maxTokensOutput}
+                    data-testid="field-tooltip-output-tokens"
+                  />
+                  <Input
+                    size="sm"
+                    variant="outlined"
+                    value={(max_tokens ?? 4096).toLocaleString().replace(/,/g, ' ')}
+                    sx={{
+                      ...commonInputStyles(mode || 'light'),
+                      fontSize: { xs: '12px', sm: '14px' },
+                      width: { xs: '80px', sm: 'auto' },
+                    }}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                      const rawValue = e.target.value.replace(/\s/g, '');
+                      const outputTokens = parseInt(rawValue, 10);
+                      if (
+                        !isNaN(outputTokens) &&
+                        outputTokens >= 4096 &&
+                        outputTokens <= (modelInfo?.max_tokens ?? 16384)
+                      ) {
+                        setLLM({ max_tokens: outputTokens });
+                      }
+                    }}
+                  />
+                </Box>
+              </Box>
+            </Box>
+            <Box sx={{ position: 'relative', width: '100%', marginBottom: '-20px' }}>
+              <Slider
+                aria-label="Token Allocation"
+                value={max_tokens ?? Math.min(4096, Math.floor((modelInfo?.contextWindow ?? 8192) / 2))}
+                min={Math.max(1024, Math.min(2048, Math.floor((modelInfo?.contextWindow ?? 8192) / 4)))}
+                max={modelInfo?.max_tokens ?? 16384}
+                step={256}
+                onChange={(_, newValue) => {
+                  if (typeof newValue === 'number') {
+                    setLLM({ max_tokens: newValue });
                   }
+                }}
+                disableSwap
+                valueLabelDisplay="auto"
+                valueLabelFormat={value => `${value.toLocaleString().replace(/,/g, ' ')}`}
+                sx={{
+                  '--Slider-trackSize': '8px',
+                  '--Slider-thumbSize': '16px',
+                  '--Slider-thumbWidth': '16px',
+                  '--Slider-valueLabelArrowSize': '10px',
+                  width: '100%',
+                  '& .MuiSlider-mark': {
+                    display: 'none',
+                  },
+                  '& .MuiSlider-markLabel': {
+                    display: 'none',
+                  },
+                  '& .MuiSlider-track': {
+                    backgroundColor: 'primary.main',
+                  },
+                  '& .MuiSlider-thumb': {
+                    backgroundColor: 'primary.main',
+                  },
                 }}
               />
             </Box>
           </Box>
-        </Box>
-        <Box sx={{ position: 'relative', width: '100%', marginBottom: '-20px' }}>
-          <Slider
-            aria-label="Token Allocation"
-            value={max_tokens ?? Math.min(4096, Math.floor((modelInfo?.contextWindow ?? 8192) / 2))}
-            min={Math.max(1024, Math.min(2048, Math.floor((modelInfo?.contextWindow ?? 8192) / 4)))}
-            max={modelInfo?.max_tokens ?? 16384}
-            step={256}
-            onChange={(_, newValue) => {
-              if (typeof newValue === 'number') {
-                setLLM({ max_tokens: newValue });
-              }
-            }}
-            disableSwap
-            valueLabelDisplay="auto"
-            valueLabelFormat={value => `${value.toLocaleString().replace(/,/g, ' ')}`}
+
+          {/* Paired with the section so hiding it does not leave two dividers stacked against
+              the one that already closes ToolsSection above. */}
+          <Divider
             sx={{
-              '--Slider-trackSize': '8px',
-              '--Slider-thumbSize': '16px',
-              '--Slider-thumbWidth': '16px',
-              '--Slider-valueLabelArrowSize': '10px',
+              backgroundColor: grayAlpha[150][20],
               width: '100%',
-              '& .MuiSlider-mark': {
-                display: 'none',
-              },
-              '& .MuiSlider-markLabel': {
-                display: 'none',
-              },
-              '& .MuiSlider-track': {
-                backgroundColor: 'primary.main',
-              },
-              '& .MuiSlider-thumb': {
-                backgroundColor: 'primary.main',
-              },
+              height: '1px',
+              mx: 'auto',
+              my: '28px',
             }}
           />
-        </Box>
-      </Box>
-
-      <Divider
-        sx={{
-          backgroundColor: grayAlpha[150][20],
-          width: '100%',
-          height: '1px',
-          mx: 'auto',
-          my: '28px',
-        }}
-      />
+        </>
+      )}
 
       {/* Advanced Settings */}
       <Box sx={{ p: 0 }}>
