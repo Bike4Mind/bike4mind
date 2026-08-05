@@ -50,14 +50,14 @@ case "${1:-}" in
   --changed)
     base="${2:-}"
     if [ -n "$base" ] && git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
-      list_cmd=(git diff --name-only -z --diff-filter=ACM "${base}...HEAD" -- '*.ts' '*.tsx')
+      list_cmd=(git diff --name-only -z --diff-filter=ACMR "${base}...HEAD" -- '*.ts' '*.tsx')
     else
       echo "check-no-control-bytes: base '${base}' unresolvable, scanning all tracked files." >&2
       list_cmd=("${all_cmd[@]}")
     fi
     ;;
   ''|--staged)
-    list_cmd=(git diff --cached --name-only -z --diff-filter=ACM -- '*.ts' '*.tsx')
+    list_cmd=(git diff --cached --name-only -z --diff-filter=ACMR -- '*.ts' '*.tsx')
     staged=1
     ;;
   *)
@@ -74,6 +74,8 @@ export CB_STAGED="$staged"
 # is treated as a failure rather than a pass.
 if ! hits=$(
   "${list_cmd[@]}" | perl -0 -ne '
+    # Compiled once, not re-parsed per file.
+    BEGIN { $::RE = qr/$ENV{CB_PATTERN}/ }
     my $f = $_;
     $f =~ s/\0\z//;
     next if $f eq "";
@@ -88,9 +90,19 @@ if ! hits=$(
       open($fh, "<", $f) or exit 3;
     }
     binmode($fh);
-    my $data = do { local $/; <$fh> };
+    # Read in bounded chunks rather than slurping, so a large generated .ts cannot balloon
+    # memory. The pattern is a single-byte character class, so no match can straddle a chunk
+    # boundary. Read to EOF even after a hit: closing a `git show` pipe early would make
+    # close() report the resulting SIGPIPE as a failure and mask the finding.
+    my $found = 0;
+    while (1) {
+      my $n = read($fh, my $buf, 65536);
+      defined($n) or exit 3;
+      last if $n == 0;
+      $found = 1 if $buf =~ $::RE;
+    }
     close($fh) or exit 3;
-    print "$f\n" if defined($data) && $data =~ /$ENV{CB_PATTERN}/;
+    print "$f\n" if $found;
   '
 ); then
   echo "check-no-control-bytes: file listing or scan failed, failing closed." >&2
