@@ -51,24 +51,17 @@ export const archiveDataLake = async (
   const activeBatches = await db.batches.findActiveByDataLakeId(dataLakeId);
   await Promise.all(activeBatches.map(b => db.batches.markTerminalIfActive(b.id, 'cancelled')));
 
-  // Step 2: transitional state (crash-visible), carrying the stamp this sweep keys its batch to so
-  // unarchive can reverse it and nothing else. Mirrors deleteDataLake - see the reasoning there for
-  // why a live mark is reused and why the one undefined case stays unmarked. Reuse matters more on
-  // this axis: the sweep below skips rows that already carry archivedAt, so after
-  // archive -> delete -> restore -> re-archive a freshly minted mark would name none of the rows
-  // still holding the earlier stamp.
-  const stamp = existing.filesArchivedAt ?? (existing.status === 'archiving' ? undefined : new Date());
-  await db.dataLakes.update({ id: dataLakeId, status: 'archiving', ...(stamp ? { filesArchivedAt: stamp } : {}) });
+  // Step 2: transitional state (crash-visible).
+  await db.dataLakes.update({ id: dataLakeId, status: 'archiving' });
 
   // Step 3: soft-hide files + best-effort index removal. The scope covers prefix-tagged
   // members too, so a file that never got the meta-tag no longer stays browsable here.
   // Archive hides files, so a colliding sibling lake loses its prefix-tagged files from every
-  // browse (they filter archivedAt: null). Unarchiving now returns only the rows this lake's own
-  // sweep stamped, so a sibling no longer steals them back - the trade is that a shared row stays
-  // hidden until whichever lake stamped it unarchives.
+  // browse (they filter archivedAt: null) - and unarchiving either lake brings back BOTH lakes'
+  // archived files, since the flip matches on archivedAt alone.
   await warnOnPrefixCollision(db, existing, logger);
   const scope = lakeMembershipScope(existing);
-  await db.fabFiles.archiveByDataLakeTag(scope, stamp);
+  await db.fabFiles.archiveByDataLakeTag(scope);
   // Same scope the sweep ran on. findIdsByDataLakeTag is the id source rather than the flip's
   // count because it reports every member whatever its archived/deleted state, so a re-run after
   // a crashed attempt still hands the index the full set.

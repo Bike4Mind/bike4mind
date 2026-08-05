@@ -590,22 +590,21 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * carry only the membership tag and over-counts multi-tagged ones.
    */
   countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>>;
-  // ── The teardown/restore pair is STAMP-KEYED. A sweep takes `at` and writes that one value to
-  // every row it flips; the caller records it on the lake and passes it back as `stampedAt` to act
-  // on exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a lower bound, which
-  // would also match a file the creator deleted during the deleted window (the per-file routes
-  // stamp `deletedAt` too) and revive it on restore. Omitting `stampedAt` matches every stamped
-  // row: the pre-mark behavior, and the fallback for a lake torn down before the mark existed. ──
+  // ── The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
+  // to every row it flips; it records the stamp on the lake and restore passes it back as
+  // `stampedAt` to reverse exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a
+  // lower bound, which would also match a file the creator deleted during the deleted window (the
+  // per-file delete routes stamp `deletedAt` too) and revive it on restore. Omitting `stampedAt`
+  // matches every stamped row: the pre-mark behavior, and the fallback for a lake torn down before
+  // the mark existed. The archive axis is deliberately NOT stamped - archiveByDataLakeTag is the
+  // only writer of a non-null archivedAt, so no independently-archived file exists to protect. ──
 
-  /** Soft-archive (reversible) all live member files, stamped `at`. Returns affected count. */
-  archiveByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<number>;
-  /** Reverse archive for member files stamped `stampedAt` (all archived members when omitted). */
-  unarchiveByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<number>;
-  /**
-   * Archived member files stamped `stampedAt` - used by the unarchive dedup pass, whose loser is
-   * HARD-deleted, so passing the stamp is what keeps an independently archived file out of range.
-   */
-  findArchivedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
+  /** Soft-archive (reversible) all live member files. Returns affected count. */
+  archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
+  /** Reverse archive for all archived member files. */
+  unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
+  /** Archived member files - used by the unarchive dedup pass. */
+  findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]>;
   /** Soft-deleted member files stamped `stampedAt` - used by the deleted->active restore dedup pass. */
   findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
   /**

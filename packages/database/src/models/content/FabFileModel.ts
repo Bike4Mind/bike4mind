@@ -742,35 +742,39 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return Object.fromEntries(scopes.map((scope, i) => [scope.datalakeTag, counts[i]]));
   }
 
-  // The teardown/restore pair below is stamp-keyed. A caller passes `at` to write one shared stamp
-  // across every row a sweep flips, records that value on the lake, and later passes it back as
-  // `stampedAt` to act on exactly that batch. Equality, not a range: a lower bound would also match
-  // a file the creator deleted DURING the deleted window (the per-file routes stamp `deletedAt`
-  // too), and those deletions are the creator's to keep, not the teardown's to reverse. Omitting
-  // `stampedAt` matches every stamped row, which is the pre-mark behavior and the fallback for a
-  // lake torn down before the mark existed.
+  // The delete/restore pair below is stamp-keyed. Phase-1 delete passes `at` to write one shared
+  // stamp across every row it flips, records that value on the lake, and restore passes it back as
+  // `stampedAt` to reverse exactly that batch. Equality, not a range: a lower bound would also match
+  // a file the creator deleted DURING the deleted window (the per-file delete routes stamp
+  // `deletedAt` too), and those deletions are the creator's to keep, not the teardown's to reverse.
+  // Omitting `stampedAt` matches every stamped row, which is the pre-mark behavior and the fallback
+  // for a lake torn down before the mark existed.
+  //
+  // The archive axis deliberately stays unstamped: `archiveByDataLakeTag` is the only writer of a
+  // non-null `archivedAt`, so there is no independently-archived file to protect, and bounding it
+  // would strand any row still holding a stamp its lake no longer names.
 
-  async archiveByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<number> {
+  async archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
     const result = await this.fabFileModel.updateMany(
       { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null },
-      { $set: { archivedAt: at } }
+      { $set: { archivedAt: new Date() } }
     );
     return result.modifiedCount;
   }
 
-  async unarchiveByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<number> {
+  async unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
     const result = await this.fabFileModel.updateMany(
-      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: stampedAt ?? { $ne: null } },
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: { $ne: null } },
       { $set: { archivedAt: null } }
     );
     return result.modifiedCount;
   }
 
-  async findArchivedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]> {
+  async findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: null,
-      archivedAt: stampedAt ?? { $ne: null },
+      archivedAt: { $ne: null },
     });
     return result.map(d => d.toJSON());
   }

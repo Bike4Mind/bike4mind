@@ -100,15 +100,13 @@ export interface IDataLake {
    * The exact `deletedAt` stamp phase-1 delete wrote on this lake's members, so restore can
    * un-delete that batch and nothing else. Not a time window: it is matched by EQUALITY, which is
    * what keeps a file the creator deleted independently - before OR during the deleted window -
-   * from riding back in. Non-null means the batch has not been reversed yet, so a re-run of a
-   * crashed teardown reuses it rather than minting a second batch; restore clears it.
+   * from riding back in. Claimed set-if-unset, so two overlapping teardowns agree on one stamp
+   * instead of the loser recording a mark no row carries; restore clears it.
    *
    * Absent on a lake torn down before this field existed, which restores unbounded (the old
    * behavior) rather than restoring nothing.
    */
   filesDeletedAt?: Date | null;
-  /** The archive-axis twin of `filesDeletedAt`, written by archive and cleared by unarchive. */
-  filesArchivedAt?: Date | null;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
@@ -168,6 +166,13 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
   setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null>;
+  /**
+   * Claim `filesDeletedAt` for a phase-1 teardown: writes `at` only if the lake carries no stamp,
+   * and returns the stamp now in force - the existing one when a concurrent teardown or a crashed
+   * prior attempt already claimed it. Callers must sweep with the RETURNED value, not their own,
+   * or they stamp rows under a mark the lake does not name. Null only if the lake vanished.
+   */
+  claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────

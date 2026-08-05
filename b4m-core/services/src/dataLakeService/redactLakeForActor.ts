@@ -67,7 +67,6 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   lastSyncAt: 'reader',
   // Teardown bookkeeping: of no use to a reader, and it reports when the owner tore the lake down.
   filesDeletedAt: 'withheld',
-  filesArchivedAt: 'withheld',
 };
 
 /**

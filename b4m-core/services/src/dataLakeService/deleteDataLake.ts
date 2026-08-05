@@ -11,7 +11,7 @@ import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 
 interface DeleteDataLakeAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find' | 'claimFilesDeletedAt'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findIdsByDataLakeTag'>;
   };
@@ -50,19 +50,20 @@ export const deleteDataLake = async (
   await Promise.all(activeBatches.map(b => db.batches.markTerminalIfActive(b.id, 'cancelled')));
 
   // The stamp this teardown keys its batch to, recorded on the lake so restore can un-delete these
-  // rows and only these rows. A mark that is already live is REUSED, so a re-run after a crash
-  // stamps into the same batch instead of orphaning the first attempt's rows outside the window.
+  // rows and only these rows. Claimed set-if-unset and swept with whatever comes BACK, so a re-run
+  // after a crash and a concurrent second teardown both fold into the first attempt's batch rather
+  // than recording a mark no row carries.
   //
-  // undefined for one case: a lake already sitting in 'deleting' with no mark, which means a
-  // teardown that started before this field existed. Its rows carry a stamp nothing
-  // recorded, so leaving the mark unset keeps restore unbounded (the old behavior) instead of
-  // bounding it to a stamp those rows do not have, which would strand them deleted.
-  const stamp = existing.filesDeletedAt ?? (existing.status === 'deleting' ? undefined : new Date());
+  // Skipped for one case: a lake already sitting in 'deleting' with no mark, which means a teardown
+  // that started before this field existed. Its rows carry a stamp nothing recorded, so leaving the
+  // mark unset keeps restore unbounded (the old behavior) instead of bounding it to a stamp those
+  // rows do not have, which would strand them deleted.
+  const preMarkSweepInFlight = existing.status === 'deleting' && !existing.filesDeletedAt;
+  const stamp = preMarkSweepInFlight
+    ? undefined
+    : ((await db.dataLakes.claimFilesDeletedAt(dataLakeId, new Date())) ?? undefined);
 
-  // Same write that flags the transitional state, so the mark can never be newer than the rows it
-  // names: a crash between the two leaves an empty batch a re-run completes, where the reverse order
-  // would leave stamped rows no mark points at.
-  await db.dataLakes.update({ id: dataLakeId, status: 'deleting', ...(stamp ? { filesDeletedAt: stamp } : {}) });
+  await db.dataLakes.update({ id: dataLakeId, status: 'deleting' });
 
   await warnOnPrefixCollision(db, existing, logger);
   const scope = lakeMembershipScope(existing);

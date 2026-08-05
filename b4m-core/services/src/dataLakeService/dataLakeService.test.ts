@@ -979,7 +979,7 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
     // The dedup probe stays on the bare meta-tag: it decides which copy gets hard-deleted, and
     // fileTagPrefix is not unique, so a widened probe could nominate another lake's file.
     expect(fabFiles.findByContentHashesInDataLake).toHaveBeenCalledWith(['h1', 'h2'], 'datalake:lake');
-    expect(fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+    expect(fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope);
     expect(fabFiles.deleteManyInIds).toHaveBeenCalledWith(['a1']);
     expect(result.skippedDuplicates).toBe(1);
     expect(result.restoredCount).toBe(1);
@@ -1085,7 +1085,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
     const adapters = makeAdapters();
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
-    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope);
   });
 
   it('survives a member-id lookup that itself fails', async () => {
@@ -1111,6 +1111,7 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
           .fn()
           .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
         find: vi.fn().mockResolvedValue([]),
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
       },
       batches: {
         findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
@@ -1179,8 +1180,9 @@ describe('teardown stamp bookkeeping', () => {
         update: vi
           .fn()
           .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
-        setStats: vi.fn().mockResolvedValue(undefined),
         find: vi.fn().mockResolvedValue([]),
+        // The real claim echoes back the stamp in force, which is the offered one when unclaimed.
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
       },
       batches: {
         findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
@@ -1188,9 +1190,7 @@ describe('teardown stamp bookkeeping', () => {
       },
       fabFiles: {
         softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
-        archiveByDataLakeTag: vi.fn().mockResolvedValue(2),
         findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
-        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
       },
     },
   });
@@ -1204,11 +1204,8 @@ describe('teardown stamp bookkeeping', () => {
       },
       fabFiles: {
         findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
-        findArchivedByDataLakeTag: vi.fn().mockResolvedValue([]),
         findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
         undeleteByDataLakeTag: vi.fn().mockResolvedValue(2),
-        unarchiveByDataLakeTag: vi.fn().mockResolvedValue(2),
-        deleteManyInIds: vi.fn().mockResolvedValue(undefined),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 2, totalSizeBytes: 20 }),
       },
     },
@@ -1217,32 +1214,36 @@ describe('teardown stamp bookkeeping', () => {
   const owner = { userId: 'owner', isAdmin: false };
 
   describe('deleteDataLake', () => {
-    it('records the stamp in the write that flags the transitional state, before the sweep runs', async () => {
+    it('claims the stamp before it sweeps', async () => {
       const adapters = teardownAdapters(lake());
       await deleteDataLake(owner, 'lake1', adapters);
 
-      const update = adapters.db.dataLakes.update;
-      expect(update.mock.calls[0][0]).toEqual({ id: 'lake1', status: 'deleting', filesDeletedAt: expect.any(Date) });
-      // Reference identity, not a matching value: two separately minted Dates would leave the mark
-      // pointing at an instant no row carries, and equality matching would then restore nothing.
+      const claim = adapters.db.dataLakes.claimFilesDeletedAt;
       const sweep = adapters.db.fabFiles.softDeleteByDataLakeTag;
-      expect(sweep.mock.calls[0][1]).toBe(update.mock.calls[0][0].filesDeletedAt);
-      expect(update.mock.invocationCallOrder[0]).toBeLessThan(sweep.mock.invocationCallOrder[0]);
+      expect(claim).toHaveBeenCalledWith('lake1', expect.any(Date));
+      expect(claim.mock.invocationCallOrder[0]).toBeLessThan(sweep.mock.invocationCallOrder[0]);
     });
 
-    it('settles to deleted without restamping', async () => {
+    it('sweeps with the stamp the claim RETURNED, not the one it offered', async () => {
+      // The race: a concurrent teardown already holds the mark, so the claim hands this one the
+      // winner's stamp. Sweeping with its own Date instead would stamp rows under a mark the lake
+      // does not name, and the restore keyed to that mark reverses nothing - permanently.
+      const adapters = teardownAdapters(lake());
+      adapters.db.dataLakes.claimFilesDeletedAt = vi.fn().mockResolvedValue(RECORDED);
+
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      const offered = adapters.db.dataLakes.claimFilesDeletedAt.mock.calls[0][1];
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][1]).toBe(RECORDED);
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][1]).not.toBe(offered);
+    });
+
+    it('settles to deleted without touching the stamp', async () => {
       const adapters = teardownAdapters(lake());
       await deleteDataLake(owner, 'lake1', adapters);
 
+      expect(adapters.db.dataLakes.update.mock.calls[0][0]).toEqual({ id: 'lake1', status: 'deleting' });
       expect(adapters.db.dataLakes.update.mock.calls[1][0]).toEqual({ id: 'lake1', status: 'deleted' });
-    });
-
-    it('reuses the stamp a crashed attempt already recorded', async () => {
-      const adapters = teardownAdapters(lake({ status: 'deleting', filesDeletedAt: RECORDED }));
-      await deleteDataLake(owner, 'lake1', adapters);
-
-      expect(adapters.db.dataLakes.update.mock.calls[0][0].filesDeletedAt).toBe(RECORDED);
-      expect(adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][1]).toBe(RECORDED);
     });
 
     it('leaves a teardown that predates the stamp unmarked, so its restore stays unbounded', async () => {
@@ -1251,7 +1252,7 @@ describe('teardown stamp bookkeeping', () => {
       const adapters = teardownAdapters(lake({ status: 'deleting' }));
       await deleteDataLake(owner, 'lake1', adapters);
 
-      expect(adapters.db.dataLakes.update.mock.calls[0][0]).toEqual({ id: 'lake1', status: 'deleting' });
+      expect(adapters.db.dataLakes.claimFilesDeletedAt).not.toHaveBeenCalled();
       expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
     });
   });
@@ -1281,39 +1282,6 @@ describe('teardown stamp bookkeeping', () => {
 
       expect(adapters.db.fabFiles.findDeletedByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
       expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, [], undefined);
-    });
-  });
-
-  describe('archiveDataLake / unarchiveDataLake', () => {
-    it('records the archive stamp in the transitional write and hands the sweep that Date', async () => {
-      const adapters = teardownAdapters(lake());
-      await archiveDataLake(owner, 'lake1', adapters);
-
-      const update = adapters.db.dataLakes.update;
-      expect(update.mock.calls[0][0]).toEqual({ id: 'lake1', status: 'archiving', filesArchivedAt: expect.any(Date) });
-      expect(adapters.db.fabFiles.archiveByDataLakeTag.mock.calls[0][1]).toBe(update.mock.calls[0][0].filesArchivedAt);
-    });
-
-    it('reuses a live archive stamp, so a re-archive after a delete round trip still names its rows', async () => {
-      // archiveByDataLakeTag skips rows already carrying archivedAt, so a fresh stamp here would
-      // name nothing and the unarchive would silently restore zero files.
-      const adapters = teardownAdapters(lake({ filesArchivedAt: RECORDED }));
-      await archiveDataLake(owner, 'lake1', adapters);
-
-      expect(adapters.db.fabFiles.archiveByDataLakeTag.mock.calls[0][1]).toBe(RECORDED);
-    });
-
-    it('hands the stamp to the dedup read that hard-deletes, and clears it on settle', async () => {
-      const adapters = reversalAdapters(lake({ status: 'archived', filesArchivedAt: RECORDED }));
-      await unarchiveDataLake(owner, 'lake1', adapters);
-
-      expect(adapters.db.fabFiles.findArchivedByDataLakeTag).toHaveBeenCalledWith(lakeScope, RECORDED);
-      expect(adapters.db.fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, RECORDED);
-      expect(adapters.db.dataLakes.update.mock.calls.at(-1)?.[0]).toEqual({
-        id: 'lake1',
-        status: 'active',
-        filesArchivedAt: null,
-      });
     });
   });
 });
