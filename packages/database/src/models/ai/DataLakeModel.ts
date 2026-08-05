@@ -444,24 +444,29 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     // Excludes `files`: this feeds the batches-list poll, which only ever renders counters and
     // status - never the per-file manifest. A batch with thousands of files turns that manifest
     // into a multi-MB response on its own; there is no reason to pay for it here.
+    // Also excludes `taxonomySuggestions.fileAssignments`: ingest (`status`) and taxonomy
+    // (`taxonomyStatus`) are independent clocks - taxonomy analysis starts as soon as the browser
+    // upload phase finishes, not gated on chunk/vectorize - so a batch can reach
+    // `taxonomyStatus: 'applied'` (fileAssignments populated, never cleared) while still showing
+    // up here with `status` non-terminal. Matches IDataLakeBatchSummary's contract.
     const results = await this.batchModel
       .find({
         userId,
         status: { $in: BATCH_NON_TERMINAL_STATUSES },
       })
-      .select('-files');
+      .select('-files -taxonomySuggestions.fileAssignments');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
   async findActiveByDataLakeId(dataLakeId: string): Promise<IDataLakeBatchSummary[]> {
     // Both callers (archive/delete-lake teardown) only read `.id` to cancel batches - same
-    // payload-size reasoning as findActiveByUserId.
+    // payload-size reasoning as findActiveByUserId, including the fileAssignments exclusion.
     const results = await this.batchModel
       .find({
         dataLakeId,
         status: { $in: BATCH_NON_TERMINAL_STATUSES },
       })
-      .select('-files');
+      .select('-files -taxonomySuggestions.fileAssignments');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 

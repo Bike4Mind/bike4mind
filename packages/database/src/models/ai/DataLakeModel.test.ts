@@ -618,6 +618,25 @@ describe('DataLakeBatchRepository.findActiveByUserId - list-surface query', () =
     // asserts the projection is actually active, not just that the field happens to be empty.
     expect(active.files).toBeUndefined();
   });
+
+  it('excludes taxonomySuggestions.fileAssignments - ingest and taxonomy are independent clocks, so an applied-taxonomy batch can still be ingest-active', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      status: 'processing',
+      taxonomyStatus: 'applied',
+      taxonomySuggestions: {
+        tags: [{ suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' }],
+        fileAssignments: [{ relativePath: 'a.txt', suggestedTags: [{ name: 'acme:type:invoice', strength: 0.9 }] }],
+      },
+    } as never);
+
+    const [active] = await dataLakeBatchRepository.findActiveByUserId('u1');
+    expect(active.taxonomySuggestions?.tags).toEqual([
+      { suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' },
+    ]);
+    expect(active.taxonomySuggestions?.fileAssignments).toBeUndefined();
+  });
 });
 
 describe('DataLakeBatchRepository.findActiveByDataLakeId - teardown-scan query', () => {
@@ -633,6 +652,22 @@ describe('DataLakeBatchRepository.findActiveByDataLakeId - teardown-scan query',
 
     const [active] = await dataLakeBatchRepository.findActiveByDataLakeId('lake1');
     expect(active.files).toBeUndefined();
+  });
+
+  it('excludes taxonomySuggestions.fileAssignments too', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      status: 'processing',
+      taxonomyStatus: 'applied',
+      taxonomySuggestions: {
+        tags: [{ suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' }],
+        fileAssignments: [{ relativePath: 'a.txt', suggestedTags: [{ name: 'acme:type:invoice', strength: 0.9 }] }],
+      },
+    } as never);
+
+    const [active] = await dataLakeBatchRepository.findActiveByDataLakeId('lake1');
+    expect(active.taxonomySuggestions?.fileAssignments).toBeUndefined();
   });
 
   it('scopes to the requesting lake only', async () => {

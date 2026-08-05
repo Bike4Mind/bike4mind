@@ -53,6 +53,9 @@ const handler = baseApi()
       dataLakeBatchRepository.findActiveByUserId(userId),
       dataLakeBatchRepository.findTaxonomyAttentionByUserId(userId),
     ]);
+    // Spread order matters: a batch present in both sets keeps whichever copy is spread last.
+    // Both finders currently project the same fields, so this is not load-bearing for shape
+    // today, but if that symmetry is ever broken again, freshTaxonomyAttention must stay last.
     const byId = new Map([...freshIngestActive, ...freshTaxonomyAttention].map(b => [b.id, b]));
     return res.json({ data: Array.from(byId.values()) });
   })

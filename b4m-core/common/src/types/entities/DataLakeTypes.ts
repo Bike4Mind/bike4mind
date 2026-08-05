@@ -262,12 +262,15 @@ export interface IDataLakeBatch {
 export interface IDataLakeBatchDocument extends IDataLakeBatch, IMongoDocument {}
 
 /**
- * Shape returned by the list-surface/reconciler-input queries below, which all project out the
- * per-file manifest for response-size reasons - `files` is genuinely absent at runtime, not just
- * empty, so this type (rather than `IDataLakeBatchDocument`) is what should flow to any consumer
- * of those results, both server- and client-side.
+ * Shape returned by the list-surface/reconciler-input queries below, which all project out both
+ * the per-file manifest and `taxonomySuggestions.fileAssignments` for response-size reasons -
+ * neither is genuinely present at runtime, not just empty, so this type (rather than
+ * `IDataLakeBatchDocument`) is what should flow to any consumer of those results, both server-
+ * and client-side.
  */
-export type IDataLakeBatchSummary = Omit<IDataLakeBatchDocument, 'files'>;
+export type IDataLakeBatchSummary = Omit<IDataLakeBatchDocument, 'files' | 'taxonomySuggestions'> & {
+  taxonomySuggestions?: Omit<TaxonomyTagSet, 'fileAssignments'>;
+};
 
 export type BatchCounterField = 'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'skippedFiles';
 
