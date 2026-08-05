@@ -188,7 +188,7 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     const { pipeline: stages } = buildUserActivityPipeline({
       startDate: '2026-07-21',
       endDate: '2026-07-21',
-      page: 1,
+      skip: 0,
       limit: 25,
     });
 

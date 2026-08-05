@@ -26,6 +26,13 @@ import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
 } from '@server/analytics/userActivityQuery';
+import {
+  asWindow,
+  buildWindow,
+  sliceWindow,
+  windowCoversPage,
+  windowRowsFor,
+} from '@server/analytics/userActivityCache';
 
 dayjs.extend(isSameOrBefore);
 
@@ -35,9 +42,23 @@ dayjs.extend(isSameOrBefore);
 // its Lambda budget is 60s, so it is sized to this route rather than copied from elsewhere.
 const AGGREGATION_MAX_TIME_MS = 45000;
 
+/**
+ * Both dates are interpolated into `new Date(`${date}T00:00:00.000Z`)`. Unvalidated, anything
+ * unparseable produced an Invalid Date, which serializes to epoch 0 and silently widened the
+ * window to all time - a far heavier query than the caller asked for. The refine rejects a
+ * well-shaped but unreal date (2026-02-30), which ISO parsing rejects outright.
+ */
+const IsoDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a YYYY-MM-DD date')
+  .refine(value => {
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
+  }, 'Not a calendar date');
+
 const CounterLogsQuerySchema = z.object({
-  startDate: z.string(),
-  endDate: z.string(),
+  startDate: IsoDateSchema,
+  endDate: IsoDateSchema,
   events: z
     .string()
     .optional()
@@ -184,20 +205,20 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
       return sendMaybeGzip(req, res, response);
     } else {
-      // Page-scoped key: the pre-pagination key omitted page/limit/search, so any change
-      // of page would have been served the first page's cached body.
+      // Filter-scoped, NOT page-scoped: the entry holds a window of the sorted result set, so
+      // every page of one filter set shares it and costs one aggregation between them
+      // (userActivityCache.ts). `limit` stays out of the key for the same reason - the window is
+      // sliced to whatever page size asks for it.
       //
       // Each segment is percent-encoded before joining. counterName/userEmail are free text,
       // so a raw ':' in one segment would otherwise shift the delimiter and let two different
       // filter sets collide - e.g. counterName='a:b' + userEmail='c' vs counterName='a' +
       // userEmail='b:c' - serving one admin the other's rows and total for the full hour.
       const cacheKey = [
-        'logs:v2',
+        'logs:v3',
         ...[
           startDate,
           endDate,
-          String(page),
-          String(limit),
           events?.join(',') ?? '',
           orgs?.join(',') ?? '',
           excludeOrgs?.join(',') ?? '',
@@ -207,17 +228,29 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         ].map(encodeURIComponent),
       ].join(':');
 
+      const skip = (page - 1) * limit;
+
       const cachedResult = await cacheRepository.findByKey(cacheKey);
-      if (cachedResult) {
-        const cached = cachedResult.result as { rows: unknown[]; total: number };
-        return sendMaybeGzip(req, res, { logs: cached.rows, total: cached.total, page, limit });
+      const cachedWindow = asWindow(cachedResult?.result);
+      if (cachedWindow && windowCoversPage(cachedWindow, skip, limit)) {
+        return sendMaybeGzip(req, res, {
+          logs: sliceWindow(cachedWindow, skip, limit),
+          total: cachedWindow.total,
+          page,
+          limit,
+        });
       }
+
+      // A window that the byte budget already cut short cannot be grown by re-fetching it, so a
+      // page beyond it is fetched alone rather than re-materializing the same truncated window.
+      const windowRows = cachedWindow?.truncated ? null : windowRowsFor(skip, limit, cachedWindow?.rows.length);
 
       const { pipeline, facetStages } = buildUserActivityPipeline({
         startDate,
         endDate,
-        page,
-        limit,
+        // A cacheable window always starts at 0 so any earlier page can be sliced out of it.
+        skip: windowRows === null ? skip : 0,
+        limit: windowRows ?? limit,
         events,
         orgs,
         excludeOrgs,
@@ -236,21 +269,29 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         allowDiskUse: true,
         maxTimeMS: AGGREGATION_MAX_TIME_MS,
       });
-      const rows = facet?.rows ?? [];
+      const fetched: unknown[] = facet?.rows ?? [];
       const total = facet?.total?.[0]?.value ?? 0;
 
-      // Cache the result with 1 hour expiry
+      if (windowRows === null) {
+        return sendMaybeGzip(req, res, { logs: fetched, total, page, limit });
+      }
+
+      const cacheEntry = buildWindow(fetched, total);
+
+      // Cache the window with 1 hour expiry
       try {
         await cacheRepository.createOrUpdate({
           key: cacheKey,
-          result: { rows, total },
+          result: cacheEntry,
           expiresAt: new Date(Date.now() + 3600000), // 1 hour from now
         });
       } catch (error) {
         console.error('Failed to cache logs: %s', error);
       }
 
-      return sendMaybeGzip(req, res, { logs: rows, total, page, limit });
+      // Sliced from what was fetched, not from the cache entry: the byte budget only bounds what is
+      // stored, and this page was materialized whether or not it survived the trim.
+      return sendMaybeGzip(req, res, { logs: fetched.slice(skip, skip + limit), total, page, limit });
     }
   } catch (error) {
     if (error instanceof z.ZodError) {
