@@ -1854,19 +1854,43 @@ export function ContextInspectorTab() {
             <Typography level="body-sm" sx={{ mb: 0.5 }}>
               Start Date
             </Typography>
-            <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} size="sm" />
+            <Input
+              type="date"
+              value={startDate}
+              onChange={e => {
+                setStartDate(e.target.value);
+                setPage(0);
+              }}
+              size="sm"
+            />
           </Grid>
           <Grid xs={6} md={2}>
             <Typography level="body-sm" sx={{ mb: 0.5 }}>
               End Date
             </Typography>
-            <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} size="sm" />
+            <Input
+              type="date"
+              value={endDate}
+              onChange={e => {
+                setEndDate(e.target.value);
+                setPage(0);
+              }}
+              size="sm"
+            />
           </Grid>
           <Grid xs={6} md={2}>
             <Typography level="body-sm" sx={{ mb: 0.5 }}>
               Provider
             </Typography>
-            <Select size="sm" value={provider} onChange={(_, v) => setProvider(v)} placeholder="All Providers">
+            <Select
+              size="sm"
+              value={provider}
+              onChange={(_, v) => {
+                setProvider(v);
+                setPage(0);
+              }}
+              placeholder="All Providers"
+            >
               <Option value={null}>All Providers</Option>
               {data?.stats?.providers?.map(p => (
                 <Option key={p} value={p}>
@@ -1879,7 +1903,15 @@ export function ContextInspectorTab() {
             <Typography level="body-sm" sx={{ mb: 0.5 }}>
               Min Anomaly Score
             </Typography>
-            <Select size="sm" value={minAnomalyScore} onChange={(_, v) => setMinAnomalyScore(v)} placeholder="Any">
+            <Select
+              size="sm"
+              value={minAnomalyScore}
+              onChange={(_, v) => {
+                setMinAnomalyScore(v);
+                setPage(0);
+              }}
+              placeholder="Any"
+            >
               <Option value={null}>Any (&gt;0)</Option>
               <Option value={0}>0 / All</Option>
               <Option value={30}>30+</Option>
@@ -1891,7 +1923,15 @@ export function ContextInspectorTab() {
             <Typography level="body-sm" sx={{ mb: 0.5 }}>
               Severity
             </Typography>
-            <Select size="sm" value={severity} onChange={(_, v) => setSeverity(v)} placeholder="All">
+            <Select
+              size="sm"
+              value={severity}
+              onChange={(_, v) => {
+                setSeverity(v);
+                setPage(0);
+              }}
+              placeholder="All"
+            >
               <Option value={null}>All</Option>
               <Option value="critical">Critical</Option>
               <Option value="high">High</Option>
@@ -1903,7 +1943,15 @@ export function ContextInspectorTab() {
             <Typography level="body-sm" sx={{ mb: 0.5 }}>
               Anomaly Type
             </Typography>
-            <Select size="sm" value={anomalyType} onChange={(_, v) => setAnomalyType(v)} placeholder="All">
+            <Select
+              size="sm"
+              value={anomalyType}
+              onChange={(_, v) => {
+                setAnomalyType(v);
+                setPage(0);
+              }}
+              placeholder="All"
+            >
               <Option value={null}>All</Option>
               <Option value="context_overflow">Context Overflow</Option>
               <Option value="high_truncation">High Truncation</Option>
