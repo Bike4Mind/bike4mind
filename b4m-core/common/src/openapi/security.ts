@@ -65,10 +65,12 @@ export const ALL_API_KEY_SCOPES: string[] = Object.values(ApiKeyScope);
  * `x-required-scopes`. OR semantics: a key needs ANY ONE of the listed scopes
  * (auth.ts gates with `requiredScopes.some(...)`), not all of them.
  *
- * Only `createCompletion` is listed: `sseRoute.ts` -> `verifyApiKey` enforces
- * these. `executeTool` is intentionally ABSENT - its handler is JWT-only and
- * checks no scope, so publishing a scope requirement there would advertise a
- * gate that does not exist.
+ * Only `createCompletion` is listed here: it is a hand-registered legacy
+ * operation. Contract-based operations (e.g. sendChatMessage) carry their scopes
+ * on the contract itself and are merged in at document-build time, so they are
+ * NOT duplicated here. `executeTool` is intentionally ABSENT - its handler is
+ * JWT-only and checks no scope, so publishing a scope requirement there would
+ * advertise a gate that does not exist.
  */
 export const REQUIRED_SCOPES = {
   createCompletion: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],

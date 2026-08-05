@@ -9,6 +9,7 @@ import ability from '@server/auth/ability';
 import { Request, Response, NextFunction } from 'express';
 import { ApiKeyUsageManager } from '@server/managers/apiKeyUsageManager';
 import { getClientIp } from '@server/utils/ip';
+import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
 
 /**
@@ -33,9 +34,13 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[]) => {
       return next();
     }
 
-    const apiKey =
-      (req.headers['x-api-key'] as string) ||
-      (req.headers.authorization?.startsWith('ApiKey ') ? req.headers.authorization.substring(7) : null);
+    // Accept every form the OpenAPI spec advertises: `x-api-key`, `Authorization:
+    // ApiKey <key>`, AND `Authorization: Bearer b4m_<key>` (the canonical form).
+    // Reuse extractApiKeyFromHeaders so this stays the single source of truth for
+    // key extraction - a Bearer JWT (no b4m_ prefix) returns null here and falls
+    // through to JWT auth. Previously only x-api-key/ApiKey were accepted, so every
+    // documented Bearer sample 401'd.
+    const apiKey = extractApiKeyFromHeaders(req.headers);
 
     if (!apiKey) {
       return next(); // Let it fall through to normal auth failure

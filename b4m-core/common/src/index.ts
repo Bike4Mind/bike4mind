@@ -18,6 +18,10 @@ export * from './soundPricing';
 export * from './musicGeneration';
 export * from './schemas/sora';
 export * from './schemas';
+// Transport-agnostic API endpoint contracts. Pure data (no `.openapi()`), so
+// safe to import in any runtime. The OpenAPI layer (./openapi) is deliberately
+// NOT exported here - it runs extendZodWithOpenApi and is generate-time only.
+export * from './api-contract';
 export * from './constants/user';
 export * from './constants/organization';
 export * from './constants/dataLakes';
