@@ -47,6 +47,9 @@ export type ReaderDataLake = Pick<IDataLakeDocument, (typeof READER_LAKE_FIELDS)
  * do, being a list of strings a new field can simply never join. The document-only keys
  * (`id`/`createdAt`/`updatedAt`) are not `IDataLake` fields and stay out; a test pins this against
  * `READER_LAKE_FIELDS` so the two cannot drift.
+ *
+ * `withheld` is reader-scope only - the field is absent from `READER_LAKE_FIELDS`, not hidden from
+ * everyone. An editor is served the whole document, so this map says nothing about what they see.
  */
 export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld'> = {
   name: 'reader',

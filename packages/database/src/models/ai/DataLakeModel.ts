@@ -70,8 +70,10 @@ const DataLakeSchema = new mongoose.Schema(
     totalSizeBytes: { type: Number, default: 0 },
     lastSyncAt: { type: Date },
     // Teardown batch key (see IDataLake.filesDeletedAt): the exact stamp phase-1 delete wrote on
-    // the lake's member files, matched by equality on restore. No index - the lakes collection is
-    // tiny, and it is only ever read from a lake already in hand.
+    // the lake's member files, matched by equality on restore. Set only through
+    // claimFilesDeletedAt, never a plain update - a stamp written past the claim can name a batch
+    // no sweep ever wrote, and the restore keyed to it reverses nothing. Restore clears it to null.
+    // No index - the lakes collection is tiny, and it is only ever read from a lake already in hand.
     filesDeletedAt: { type: Date },
   },
   {
