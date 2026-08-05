@@ -42,7 +42,7 @@ const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocume
         }),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 3, totalSizeBytes: 99 }),
       },
-      fileTags: { incrementFileCountBy: vi.fn() },
+      fileTags: { touchLastActivityBy: vi.fn() },
       dataLakes: {
         findByDatalakeTag: vi.fn().mockResolvedValue(lakeDoc),
         setStats: vi.fn(),
@@ -68,7 +68,7 @@ describe('toggleTags - ordinary tags', () => {
 
     // Not lowercased: the old whole-array rewrite stored `mixedcase`, silently recasing the tag.
     expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['MixedCase']);
-    expect(adapters.db.fileTags.incrementFileCountBy).toHaveBeenCalledWith({ name: 'MixedCase', userId: 'owner' }, 1);
+    expect(adapters.db.fileTags.touchLastActivityBy).toHaveBeenCalledWith({ name: 'MixedCase', userId: 'owner' });
   });
 
   it('removes a present tag by its STORED spelling, not the caller spelling', async () => {
@@ -76,11 +76,11 @@ describe('toggleTags - ordinary tags', () => {
 
     await run(adapters, { ids: ['f1'], tags: ['foo'] });
 
-    // The pull is case-sensitive, so passing the caller's `foo` would remove nothing while the
-    // tag count was still decremented.
+    // The pull is case-sensitive, so passing the caller's `foo` would remove nothing while the tag
+    // was still marked as used.
     expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['Foo']);
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
-    expect(adapters.db.fileTags.incrementFileCountBy).toHaveBeenCalledWith({ name: 'foo', userId: 'owner' }, -1);
+    expect(adapters.db.fileTags.touchLastActivityBy).toHaveBeenCalledWith({ name: 'foo', userId: 'owner' });
   });
 
   it('removes every stored casing of the tag at once', async () => {
@@ -103,8 +103,10 @@ describe('toggleTags - ordinary tags', () => {
 
     expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['shared']);
     expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f2', ['shared']);
-    // One on, one off: the registry count nets out, so it must not be written at all.
-    expect(adapters.db.fileTags.incrementFileCountBy).not.toHaveBeenCalled();
+    // One on, one off. The old registry counter netted these to zero and wrote nothing; a timestamp
+    // has no such cancellation - the user acted on `shared`, so it is marked used exactly once.
+    expect(adapters.db.fileTags.touchLastActivityBy).toHaveBeenCalledTimes(1);
+    expect(adapters.db.fileTags.touchLastActivityBy).toHaveBeenCalledWith({ name: 'shared', userId: 'owner' });
   });
 
   it('returns freshly re-read documents rather than the pre-write snapshot', async () => {
@@ -125,10 +127,10 @@ describe('toggleTags - ordinary tags', () => {
 
     await run(adapters, { ids: ['f1'], tags: ['foo', 'FOO'] });
 
-    // The second pass would read the same pre-write snapshot, write again, and count the tag
-    // twice for one stored entry.
+    // The second pass would read the same pre-write snapshot and write again, toggling the tag
+    // straight back off.
     expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledTimes(1);
-    expect(adapters.db.fileTags.incrementFileCountBy).toHaveBeenCalledWith({ name: 'foo', userId: 'owner' }, 1);
+    expect(adapters.db.fileTags.touchLastActivityBy).toHaveBeenCalledWith({ name: 'foo', userId: 'owner' });
   });
 
   it('refuses the whole call when any requested file is inaccessible', async () => {
@@ -192,8 +194,9 @@ describe('toggleTags - data lake meta-tags', () => {
 
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
-    // No other lake door touches the registry; counting only here produced drift.
-    expect(adapters.db.fileTags.incrementFileCountBy).not.toHaveBeenCalled();
+    // A meta-tag is lake membership, not an entry in the user's own tag list, and no other lake
+    // door touches the registry either.
+    expect(adapters.db.fileTags.touchLastActivityBy).not.toHaveBeenCalled();
   });
 
   it('resolves a mixed-case meta-tag from the caller to its real lake', async () => {

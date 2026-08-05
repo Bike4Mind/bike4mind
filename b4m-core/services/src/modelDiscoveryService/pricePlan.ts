@@ -602,7 +602,8 @@ function diverges(a: DiscoveredPrice, b: DiscoveredPrice, tolerance: number): bo
   if (left.length !== right.length) return true;
 
   return left.some(
-    (bracket, index) => bracket.aboveTokens !== right[index].aboveTokens || ratesDiverge(bracket, right[index], tolerance)
+    (bracket, index) =>
+      bracket.aboveTokens !== right[index].aboveTokens || ratesDiverge(bracket, right[index], tolerance)
   );
 }
 

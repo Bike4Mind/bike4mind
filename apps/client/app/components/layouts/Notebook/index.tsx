@@ -70,7 +70,7 @@ const pulseBorder = keyframes`
 const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }) => {
   const openSideNav = useNotebookLayout(s => s.openSideNav);
   const isMobile = useIsMobile();
-  const isImpersonating = useAccessToken(s => s.returnToken);
+  const isImpersonating = useAccessToken(s => s.impersonating);
   const layout = useSessionLayout(s => s.layout);
 
   // Global keyboard shortcuts

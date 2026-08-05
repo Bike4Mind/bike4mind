@@ -24,6 +24,7 @@ import {
 import { resolveGroupTypesForUser } from './resolveGroupTypesForUser';
 import type { GroupTypeResolutionOverride } from './resolveGroupTypesForUser';
 import { resolveCapabilitiesForUser, userHasCapability } from './resolveCapabilitiesForUser';
+import type { GroupTypeCapabilityMap } from './resolveCapabilitiesForUser';
 
 export {
   search,
@@ -55,3 +56,4 @@ export {
 
 export type { SearchParameters };
 export type { GroupTypeResolutionOverride };
+export type { GroupTypeCapabilityMap };

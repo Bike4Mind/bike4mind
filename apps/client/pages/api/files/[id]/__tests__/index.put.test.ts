@@ -84,20 +84,25 @@ const makeRes = () => {
   return { res, json };
 };
 
-const req = (body: unknown) =>
+// The route 404s a non-round-tripping id before anything else runs, so the fixture id has to be
+// a real 24-hex ObjectId string rather than a readable slug.
+const FILE_ID = '507f1f77bcf86cd799439011';
+
+const req = (body: unknown, id: string = FILE_ID) =>
   ({
     method: 'PUT',
     user: { id: 'u1', isAdmin: false },
     ability: {},
-    query: { id: 'file-1' },
+    query: { id },
     body,
     logger: { updateMetadata: vi.fn(), error: vi.fn(), warn: vi.fn() },
   }) as never;
 
-const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);
+const run = (body: unknown, res: unknown, id?: string) =>
+  (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, id), res);
 
 const fabFile = (overrides: Record<string, unknown> = {}) => ({
-  id: 'file-1',
+  id: FILE_ID,
   userId: 'u1',
   fileName: 'notes.txt',
   mimeType: 'text/plain',
@@ -144,7 +149,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
 
   it('stamps the lake prefix when the update keeps the meta-tag with no tag under that prefix', async () => {
     h.findAccessibleById.mockResolvedValue(fabFile({ tags: [{ name: META, strength: 1 }] }));
-    makeStatefulFabFile({ id: 'file-1', userId: 'u1', tags: [{ name: META, strength: 1 }] });
+    makeStatefulFabFile({ id: FILE_ID, userId: 'u1', tags: [{ name: META, strength: 1 }] });
     const { res, json } = makeRes();
 
     await run({ tags: [{ name: META, strength: 1 }] }, res);
@@ -168,7 +173,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
       })
     );
     makeStatefulFabFile({
-      id: 'file-1',
+      id: FILE_ID,
       userId: 'u1',
       tags: [
         { name: META, strength: 1 },
@@ -183,7 +188,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     // since as far as tagsToPersist is concerned the lake is still current) so removeFileFromLake
     // can still see the file as a member and pull BOTH atomically. The route's final response -
     // what a client actually observes - is what matters here, not that intermediate array.
-    expect(h.pullTagsByFabFileId).toHaveBeenCalledWith('file-1', [META, 'acme:uncategorized']);
+    expect(h.pullTagsByFabFileId).toHaveBeenCalledWith(FILE_ID, [META, 'acme:uncategorized']);
     expect(json.mock.calls[0][0].tags).toEqual([]);
   });
 
@@ -216,5 +221,17 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     expect(h.findByDatalakeTag).toHaveBeenCalled();
     const persisted = h.update.mock.calls[0][0] as { tags?: { name: string }[] };
     expect(persisted.tags).toBeUndefined();
+  });
+
+  it('404s a malformed id before the lake write gate or any persistence runs', async () => {
+    const { res } = makeRes();
+
+    // 'file-not-real' is 13 characters, so it fails isValid outright; the round trip in the guard
+    // is what additionally catches a 12-character string, which isValid accepts and then coerces.
+    await run({ tags: [{ name: META, strength: 1 }] }, res, 'file-not-real');
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(h.findByDatalakeTag).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
   });
 });

@@ -42,6 +42,18 @@ const SystemPromptSourceSchema = subSchema({
   enabled: { type: Boolean, required: false },
 });
 
+// Per-source system prompt breakdown derived from the tagged assembly (see
+// services systemPromptSources). Declared or Mongoose strict mode silently strips
+// it on save; the API's includePromptDetails and any DB read depend on it persisting.
+// Kept in sync with SystemPromptDetailSchema in @bike4mind/common contextTelemetry.
+const SystemPromptDetailSubSchema = subSchema({
+  source: { type: String, required: false },
+  name: { type: String, required: false },
+  tokenCount: { type: Number, required: false },
+  wasIncluded: { type: Boolean, required: false },
+  exclusionReason: { type: String, required: false },
+});
+
 const ArtifactSchema = subSchema({
   // No enum: writers emit internal artifact types and can fall back to a raw MIME string.
   // Kept in sync with PromptMetaArtifactSchema, which is deliberately open for the same reason.
@@ -191,6 +203,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       mementoCount: { type: Number, required: false },
       mementoIds: [{ type: String, required: false }],
       systemPromptSources: { type: [SystemPromptSourceSchema], required: false, default: undefined },
+      systemPromptDetails: { type: [SystemPromptDetailSubSchema], required: false, default: undefined },
       dedupedSystemPrompts: { type: [String], required: false, default: undefined },
       totalSystemPromptCount: { type: Number, required: false },
       duplicateSystemPromptCount: { type: Number, required: false },
@@ -239,6 +252,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         id: { type: String, required: false },
       },
     ],
+    offeredTools: [{ type: String, required: false }],
     performance: {
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },

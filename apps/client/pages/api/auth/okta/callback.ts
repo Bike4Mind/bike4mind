@@ -22,7 +22,7 @@ import { getOktaConfigWithFallback, exchangeCodeForTokens, fetchUserInfo } from 
 import { verifyStateToken } from '@server/auth/jwtStateStore';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
 import { OKTA_STATE_AUDIENCE, OktaStatePayload } from '@server/auth/oktaConstants';
-import { issueSessionForRequest } from '@server/auth/issueSession';
+import { issueBrowserSession } from '@server/auth/issueSession';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents, AuthStrategy } from '@bike4mind/common';
@@ -347,11 +347,11 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     }
 
     // Generate our session tokens (distinct from the Okta IdP accessToken/refreshToken above).
-    const session = await issueSessionForRequest(req, user.id, {
+    const session = await issueBrowserSession(req, res, user.id, {
       createdVia: 'okta',
       tokenVersion: user.tokenVersion ?? 0,
     });
-    const tokens = { accessToken: session.accessToken, refreshToken: session.refreshToken };
+    const tokens = { accessToken: session.accessToken };
 
     // Log successful OAuth login
     await logEvent({
@@ -382,7 +382,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     // Redirect to the application with tokens in URL fragment (not query string)
     // Using fragments prevents tokens from being logged in server access logs,
     // sent in Referer headers, or stored in browser history as query params
-    const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&refreshToken=${tokens.refreshToken}&userId=${user.id}`;
+    const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}`;
     return res.redirect(redirectUrl);
   } catch (error) {
     Logger.error('[Okta Callback] Processing error:', error);

@@ -211,7 +211,9 @@ const handler = baseApi().post(
           {
             db: {
               organizations: organizationRepository,
+              users: userRepository,
             },
+            logger: req.logger,
           }
         );
       }

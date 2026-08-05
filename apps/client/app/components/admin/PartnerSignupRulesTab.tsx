@@ -180,8 +180,9 @@ export default function PartnerSignupRulesTab() {
       setBackfillTarget(null);
       toast.success(
         `Backfill complete: ${result.added} added` +
+          (result.seatRaised ? `, ${result.seatRaised} seat${result.seatRaised === 1 ? '' : 's'} added` : '') +
           (result.alreadyMember ? `, ${result.alreadyMember} already members` : '') +
-          (result.atCapacity ? `, ${result.atCapacity} skipped (org full)` : '') +
+          (result.atCapacity ? `, ${result.atCapacity} at capacity (Stripe org - add seats)` : '') +
           (result.failed ? `, ${result.failed} failed` : '')
       );
     },
@@ -633,6 +634,19 @@ export default function PartnerSignupRulesTab() {
               <Typography level="title-md">
                 {backfillPreview?.matched ?? 0} user{(backfillPreview?.matched ?? 0) === 1 ? '' : 's'} will be added
               </Typography>
+              {backfillPreview && (
+                <Typography
+                  level="body-sm"
+                  sx={{ mt: 0.5, color: 'text.secondary' }}
+                  data-testid="partner-rule-backfill-seat-impact"
+                >
+                  {backfillPreview.stripeBilled
+                    ? `Stripe-billed org: seat ceiling stays at ${backfillPreview.seats}; candidates past it are rejected (add seats to admit them).`
+                    : backfillPreview.projectedSeats > backfillPreview.seats
+                      ? `Seat ceiling: ${backfillPreview.seats} -> ${backfillPreview.projectedSeats} (raised to fit)`
+                      : `Seat ceiling: ${backfillPreview.seats} (unchanged; everyone fits under it)`}
+                </Typography>
+              )}
               {!!backfillPreview?.sample.length && (
                 <Stack spacing={0.25} sx={{ mt: 1, maxHeight: 180, overflow: 'auto' }}>
                   {backfillPreview.sample.map(user => (

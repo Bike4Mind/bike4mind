@@ -356,12 +356,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async countByUserIdAndTag(userId: string, tag: string): Promise<number> {
+    if (!tag) return 0;
+    // Anchored and escaped for the same reason as removeTagByUserId, which queries this same
+    // tags.name data: unanchored, `test` counted every file carrying `testing` too.
     const result = await this.fabFileModel.countDocuments({
       userId,
       deletedAt: null,
       tags: {
         $elemMatch: {
-          name: { $regex: new RegExp(tag, 'i') },
+          name: new RegExp(`^${escapeRegex(tag)}$`, 'i'),
         },
       },
     });
@@ -606,24 +609,34 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async removeTagByUserId(userId: string, tag: string): Promise<number> {
+    if (!tag) return 0;
+    // Anchored, not a substring match: unanchored, removing `test` also stripped `testing` and
+    // `unit-test` off every file. Escaped because a tag name is user-chosen and can carry regex
+    // metacharacters. Case-insensitive so a `Foo` document also clears files carrying `foo`.
+    const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
+    // No deletedAt conjunct, unlike most reads here: a soft-deleted file that kept the name would
+    // resurrect a tag document that no longer exists the moment it is undeleted.
     const result = await this.fabFileModel.updateMany(
       {
         userId,
-        deletedAt: null,
         tags: {
           $elemMatch: {
-            name: { $regex: new RegExp(tag, 'i') },
+            name: nameRegex,
           },
         },
       },
       {
         $pull: {
           tags: {
-            name: { $regex: new RegExp(tag, 'i') },
+            name: nameRegex,
           },
         },
       }
     );
+    // Same reasoning as pullTagsByFabFileId: a primaryTag naming a tag the file no longer carries
+    // later fails the data-lake write gate on PUT /api/files/[id]. Separate filtered write because
+    // a plain update cannot clear a field conditionally on its own value.
+    await this.fabFileModel.updateMany({ userId, primaryTag: nameRegex }, { $unset: { primaryTag: '' } });
     return result.modifiedCount;
   }
 
@@ -779,16 +792,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return ids;
   }
 
+  async hardDeleteByIds(fabFileIds: string[]): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
+    await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds } }, { hardDelete: true } as Record<string, unknown>);
+    return fabFileIds;
+  }
+
   async hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
     // Include soft-deleted files: the phase-2 sweep must purge every member.
     const docs = await this.fabFileModel
       .find(buildDataLakeMembershipFilter(scope), { _id: 1 })
       .setOptions({ includeDeleted: true });
-    const ids = docs.map(d => d._id.toString());
-    if (ids.length === 0) return [];
-    // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
-    await this.fabFileModel.deleteMany({ _id: { $in: ids } }, { hardDelete: true } as Record<string, unknown>);
-    return ids;
+    return this.hardDeleteByIds(docs.map(d => d._id.toString()));
   }
 
   async findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
@@ -799,17 +815,96 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number> {
+    if (!tag || !newTag) return 0;
+    // Anchored and escaped for the same reason as removeTagByUserId: unanchored, renaming `q1`
+    // also rewrote `q1-draft`.
+    const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
+    // `$[elem]` and not `$`: the first-positional operator updates only the FIRST matching element
+    // per document, so a file carrying the name twice kept one stale copy.
+    // No deletedAt conjunct - see removeTagByUserId; an undelete must not revive the old name.
     const result = await this.fabFileModel.updateMany(
       {
         userId,
-        deletedAt: null,
-        'tags.name': { $regex: new RegExp(tag, 'i') },
+        'tags.name': nameRegex,
       },
       {
         $set: {
-          'tags.$.name': newTag,
+          'tags.$[elem].name': newTag,
         },
-      }
+      },
+      { arrayFilters: [{ 'elem.name': nameRegex }] }
+    );
+    // Renamed rather than cleared: unlike a delete, the tag still exists under its new name, so
+    // the file's primary label should follow it.
+    await this.fabFileModel.updateMany({ userId, primaryTag: nameRegex }, { $set: { primaryTag: newTag } });
+    return result.modifiedCount;
+  }
+
+  async dedupeTagByUserId(userId: string, name: string): Promise<number> {
+    if (!name) return 0;
+    const folded = name.toLowerCase();
+    // An aggregation-pipeline update, which is NOT the read-modify-write that pullTagsByFabFileId
+    // rejects: the array is rebuilt from the document's own value server-side inside one atomic
+    // per-document write, so there is no snapshot round trip for a concurrent writer to lose.
+    // Same mechanism as StockPortfolioRepository.executeBuy.
+    //
+    // `$ifNull` guards throughout: `tags` is declared as [Object] with no sub-schema, and legacy
+    // rows carry elements with a missing or non-string `name` - six other call sites defend the
+    // same shape. Without the guard one bad element decides the whole user's dedupe.
+    const isMatch = (expr: unknown) => ({ $eq: [{ $toLower: { $ifNull: [expr, ''] } }, folded] });
+    const result = await this.fabFileModel.updateMany(
+      {
+        userId,
+        // Index-eligible prefilter first, then the $expr narrows to documents that genuinely carry
+        // the name more than once, so the write set stays small.
+        'tags.name': new RegExp(`^${escapeRegex(name)}$`, 'i'),
+        $expr: {
+          $gt: [
+            {
+              $size: {
+                $filter: {
+                  input: { $ifNull: ['$tags', []] },
+                  as: 't',
+                  cond: isMatch('$$t.name'),
+                },
+              },
+            },
+            1,
+          ],
+        },
+      },
+      [
+        {
+          $set: {
+            tags: {
+              $reduce: {
+                input: { $ifNull: ['$tags', []] },
+                initialValue: [],
+                in: {
+                  $cond: {
+                    if: isMatch('$$this.name'),
+                    // Keep the FIRST match, normalized to the passed casing, and drop later ones.
+                    // $mergeObjects rather than a rebuilt {name, strength} so `strength` and any
+                    // field this schema does not declare survive.
+                    then: {
+                      $cond: {
+                        if: {
+                          $anyElementTrue: {
+                            $map: { input: '$$value', as: 'kept', in: isMatch('$$kept.name') },
+                          },
+                        },
+                        then: '$$value',
+                        else: { $concatArrays: ['$$value', [{ $mergeObjects: ['$$this', { name }] }]] },
+                      },
+                    },
+                    else: { $concatArrays: ['$$value', ['$$this']] },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ]
     );
     return result.modifiedCount;
   }
@@ -981,6 +1076,11 @@ FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
 FabFileSchema.index({ contentHash: 1, userId: 1 });
+
+// Un-chunked rescue sweep (buildFabFileChunkScanFilter: self-host worker scan + the hosted
+// dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily
+// sweep is a collection scan, since almost every file has chunkCount > 0.
+FabFileSchema.index({ status: 1, chunkCount: 1, deletedAt: 1, createdAt: 1 });
 
 // Batch file queries
 FabFileSchema.index({ batchId: 1 });

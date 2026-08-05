@@ -1,6 +1,7 @@
 import {
   dayjs,
   extractSnippetMeta,
+  FORMAT_PROMPT_TEMPLATE,
   ICacheRepository,
   IChatHistoryItemRepository,
   IExtendedMessage,
@@ -104,6 +105,13 @@ const KNOWLEDGE_FILE_TOKEN_ALLOCATION = 0.7;
  * so over-reserving costs nothing and this only binds when content genuinely wants more.
  */
 const MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION = 0.35;
+
+/**
+ * Rounds the final safety pass may spend shrinking the payload. It has to re-measure between rounds
+ * (see the pass for why one shot overshoots), and each round costs two real tokenizer calls, so this
+ * bounds the work. Converges in one or two rounds in practice.
+ */
+const MAX_SAFETY_SHRINK_ROUNDS = 5;
 
 /**
  * Appended to attached-file content that had to be cut to fit. Without it a CSV sliced mid-row reads
@@ -253,8 +261,8 @@ const messageContentText = (message: IMessage): string =>
 /**
  * Must charge images the same flat rate as calculateTotalTokenLength, so the two measures stay
  * comparable: stringifying base64 as text here would make an image-carrying turn read as millions of
- * tokens against a real count that charges a flat rate. Nothing at present divides one by the other -
- * the rework in #1164 reintroduces that conversion, and depends on this rate matching.
+ * tokens against a real count that charges a flat rate. The final safety pass divides one measure by the
+ * other to convert its overage between them, so an image-carrying turn depends on these rates matching.
  */
 const estimateMessageTokens = (message: IMessage): number => {
   const imageCount = Array.isArray(message.content) ? message.content.filter(isImageBlock).length : 0;
@@ -1076,10 +1084,14 @@ export async function processFabFilesServer(
       logger
     );
   } catch (error) {
+    // Pass a string, not the Error object: the structured logger serializes a raw Error to `{}`,
+    // which drops exactly the reason (401 vs rate limit vs network) an operator needs in this
+    // degraded-mode line. Keep the class name too - for an EmbeddingAuthError it is the cheapest
+    // signal that this is a credential problem rather than a timeout.
     logger.warn(
       `[processFabFilesServer] Query embedding failed (${selectedEmbeddingModel}); ` +
         'falling back to raw file content for this turn.',
-      error
+      error instanceof Error ? `${error.name}: ${error.message}` : String(error)
     );
   }
 
@@ -1505,54 +1517,76 @@ export async function processFabFilesServer(
   return { userMessages, errorMessages };
 }
 
+/**
+ * Prepends the formatting system message. `formatPrompt` is the admin-editable
+ * `FormatPromptTemplate` value; blank falls back to FORMAT_PROMPT_TEMPLATE, the shared default this
+ * used to duplicate inline. That older inline wording ("Adhere to specific formatting requests...")
+ * read as general compliance and bled into whether the model answered at all - see the const's
+ * comment in @bike4mind/common schemas/settings.
+ */
 export function includeHardcodedSystemMessage(messages: IMessage[], formatPrompt: string): IMessage[] {
-  // Scoped to formatting ONLY. The previous wording ("Adhere to specific formatting
-  // requests...") read as a general compliance instruction and measurably degraded
-  // refusal behavior on underspecified asks (#1320: 81.1 -> 40.3 as the sole system
-  // content). Same failure shape as the artifact prompt's pre-SCOPE wording (#1296):
-  // any instruction that sounds like "comply with requests" bleeds into WHETHER to
-  // answer, not just how to format. Keep any future edit inside that boundary.
-  let format = `Formatting only - nothing here decides whether or how fully to answer. Format replies to maintain the integrity of the requested style; default to markdown for text. Preserve proper structure for poems, songs, or haikus. When the user specifies an output format (e.g. TypeScript), use that format for the parts you do answer.`;
-  if (formatPrompt) {
-    format = formatPrompt;
-  }
-
   const hardcodedSystemMessage: IMessage = {
     role: 'system',
-    content: format,
+    content: formatPrompt || FORMAT_PROMPT_TEMPLATE,
   };
 
   return [hardcodedSystemMessage, ...messages];
 }
 
-export function includeImagePromptSystemMessage(messages: IMessage[], userPrompt: string): IMessage[] {
-  const imageRelatedVerbs = [
-    'image',
-    'illustration',
-    'photo',
-    'watercolor',
-    'painting',
-    'comic book',
-    'picture',
-    'diagram',
-    'snapshot',
-    'visual',
-    'graphic',
-  ];
-  const hasImageRequest = imageRelatedVerbs.some(verb => userPrompt.toLowerCase().includes(verb));
+/**
+ * Nouns that name a picture the user wants made. Matched on word boundaries because the previous
+ * substring scan fired on any prompt merely containing one: `visual` matched "visualize", `graphic`
+ * matched "graphical". Compiled once - this runs on every turn. No `g` flag, which would carry
+ * `lastIndex` between calls and make the match depend on the previous prompt.
+ *
+ * `visual`, `graphic`, `diagram` and `snapshot` are deliberately gone rather than boundary-matched:
+ * each reads naturally about something other than a picture ("visualize this data", "a snapshot of the
+ * metrics"), and a request for a diagram or a chart is served by mermaid and artifacts, not by image
+ * generation. Plurals and `photograph` are spelled out because the substring scan matched those for
+ * free and a bare word-boundary list would silently stop firing on them.
+ *
+ * Errs toward missing a request rather than inventing one. A missed prompt costs a hint the model can
+ * still get from the tool's own schema; a wrongly matched one plants a MUST-generate-an-image order on
+ * a turn the user never asked about images.
+ */
+const IMAGE_REQUEST_PATTERN =
+  /\b(?:images?|illustrations?|photos?|photographs?|pictures?|watercolou?rs?|paintings?|comic\s+books?)\b/i;
 
-  const content = `When the user requests an image, you MUST use the image_generation tool to create it. Craft a vivid and imaginative prompt parameter for the tool based on the user's request and available context.`;
-
-  if (hasImageRequest) {
-    const imageSystemMessage: IMessage = {
-      role: 'system',
-      content: content,
-    };
-
-    return [imageSystemMessage, ...messages];
-  } else {
+/**
+ * Prepends the image-generation nudge, but only when `image_generation` actually reached the model's
+ * tool schema this turn. Pointing a model at a tool it does not have makes it emit the call as leaked
+ * JSON text in the reply, which is why the blog-workflow prompt gates the same way - see
+ * ChatCompletionProcess, where `imageGenerationAvailable` is resolved from the built tool list.
+ *
+ * That list is the truthful source for presence but says nothing about usability: a tool whose
+ * provider key is missing is still listed, and still refuses at dispatch rather than degrading, so
+ * this gate cannot cover that case (#1103).
+ *
+ * It also only decides the turn it runs on. A turn that starts with the tool and later gives it up -
+ * every backend drops tools once the tool-call budget is spent - is handled by the `requiresTool`
+ * marker set below, which `stripToolDependentMessages` acts on at those sites.
+ */
+export function includeImagePromptSystemMessage(
+  messages: IMessage[],
+  userPrompt: string,
+  imageGenerationAvailable: boolean
+): IMessage[] {
+  if (!imageGenerationAvailable) {
     return messages;
   }
+
+  if (!IMAGE_REQUEST_PATTERN.test(userPrompt)) {
+    return messages;
+  }
+
+  const imageSystemMessage: IMessage = {
+    role: 'system',
+    content: `When the user requests an image, you MUST use the image_generation tool to create it. Craft a vivid and imaginative prompt parameter for the tool based on the user's request and available context.`,
+    // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
+    requiresTool: 'image_generation',
+  };
+
+  return [imageSystemMessage, ...messages];
 }
 
 // Priority order for message retention (lower number = higher priority)
@@ -1772,7 +1806,24 @@ export async function buildAndSortMessages(
   historyCount: number = 0,
   logger: Logger,
   tokenizer: ITokenizer,
-  options: { verbose: boolean } = { verbose: false }
+  options: {
+    verbose: boolean;
+    /**
+     * Skip the admin-configured templates this function appends (FormatPromptTemplate, image
+     * prompt). They are invisible from the caller's own system-message assembly, so a caller
+     * asking for an unadorned completion cannot exclude them any other way.
+     */
+    skipAdminPromptTemplates?: boolean;
+    /**
+     * Whether `image_generation` survived into the tool list handed to the model this turn. Absent
+     * means "unknown", which suppresses the image prompt: staying quiet costs a hint the model can
+     * get from the tool schema anyway, whereas ordering a tool it lacks has no recovery.
+     *
+     * Independent of `skipAdminPromptTemplates`: that decides whether the admin templates are
+     * offered at all, this decides whether the image one is honest on a turn that does get them.
+     */
+    imageGenerationAvailable?: boolean;
+  } = { verbose: false }
 ): Promise<IMessage[]> {
   // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
   // comparison below.
@@ -1829,13 +1880,19 @@ export async function buildAndSortMessages(
   const systemMessages: IMessage[] = [];
   let systemTokenCount: number = 0;
 
-  if (getSettingsValue('UseFormatPrompt', settings)) {
-    const formatPromptTemplate = settings.FormatPromptTemplate;
-    fabMessages = includeHardcodedSystemMessage(fabMessages, formatPromptTemplate);
-  }
+  if (!options.skipAdminPromptTemplates) {
+    if (getSettingsValue('UseFormatPrompt', settings)) {
+      const formatPromptTemplate = settings.FormatPromptTemplate;
+      fabMessages = includeHardcodedSystemMessage(fabMessages, formatPromptTemplate);
+    }
 
-  if (getSettingsValue('UseImagePrompt', settings)) {
-    fabMessages = includeImagePromptSystemMessage(fabMessages, userPromptContent);
+    if (getSettingsValue('UseImagePrompt', settings)) {
+      fabMessages = includeImagePromptSystemMessage(
+        fabMessages,
+        userPromptContent,
+        options.imageGenerationAvailable ?? false
+      );
+    }
   }
 
   // Artifact guidance comes from the admin-editable `ArtifactEmissionPrompt` system message that the
@@ -2007,38 +2064,54 @@ export async function buildAndSortMessages(
   const attachmentsWithContent = nonImageMessages.filter(isAttachment);
   let undeliveredNote: IMessage | null = null;
 
+  // Only a change in what is undelivered is news: the safety pass calls the declaration once per shrink
+  // round, so one turn would otherwise log up to five warnings disagreeing about the counts.
+  let lastDeclaredCounts = '';
+
   /**
    * Replaces attachments that arrived too small to be recognised as file content, and declares any
-   * dropped whole, with one message saying so. Runs after the allocation below, the only stage that
-   * currently shrinks content. The final safety pass can also drop an attachment the allocation had
-   * delivered, and does not re-run this - so on that path the file reaches the model undeclared. That
-   * gap is tracked in #1164 along with the rest of the safety pass rework.
+   * dropped whole, with one message saying so. Called by both stages that shrink content: the
+   * allocation below, and the final safety pass after it, which can drop an attachment the allocation
+   * had delivered.
    *
-   * Idempotent by design, so a second call is safe to add there: its own note is excluded by identity,
-   * so it re-judges only real attachments and replaces the note rather than stacking another. It keeps
-   * the note in the payload it measures, so the ~100 tokens it costs are counted, not hidden.
+   * Idempotent, which is what makes the per-round call safe: the note it produced last time is
+   * excluded by identity, so it re-judges only real attachments and replaces that note rather than
+   * stacking another. It keeps the note in the payload it measures, so the ~100 tokens it costs are
+   * counted, not hidden.
    */
   const declareUndeliveredAttachments = (contentMessages: IMessage[]): IMessage[] => {
     if (attachmentsWithContent.length === 0) return contentMessages;
 
-    // Counted on the same footing as attachmentsWithContent - same isAttachment predicate on both
-    // sides. An attachment carrying no extractable text, or a URL-derived message, is absent from
-    // both: counting either as delivered let it stand in for a sibling that was dropped, and the drop
-    // then went undeclared.
-    const delivered = contentMessages.filter(message => message !== undeliveredNote && isAttachment(message));
-    const isUnusableSliver = (message: IMessage): boolean =>
-      cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS;
-    const usable = delivered.filter(message => !isUnusableSliver(message));
+    // Read before the reassignment below, because identity is what retires the previous round's note.
+    // Comparing against the new object leaves the old one in place, and a stale note passes isAttachment
+    // and so counts as a delivered file - each round then declares one fewer loss than the last, while
+    // the payload grows by another ~100-token duplicate of the same sentence.
+    const previousNote = undeliveredNote;
+    // Counted on the same footing as attachmentsWithContent - same isAttachment predicate on both sides.
+    // An attachment carrying no extractable text, or a URL-derived message, is absent from both:
+    // counting either as delivered let it stand in for a sibling that was dropped, and the drop then
+    // went undeclared.
+    const delivered = contentMessages.filter(message => message !== previousNote && isAttachment(message));
+    // Computed once: fileTokens re-derives the message text, and the safety pass calls this per round.
+    const replaced = new Set(
+      delivered.filter(
+        message => cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS
+      )
+    );
     const droppedCount = Math.max(0, attachmentsWithContent.length - delivered.length);
-    const sliverCount = delivered.length - usable.length;
+    const sliverCount = replaced.size;
     if (droppedCount === 0 && sliverCount === 0) return contentMessages;
 
-    logger.warn(
-      `Attached content could not be delivered usefully: ${droppedCount} file(s) dropped whole and ` +
-        `${sliverCount} reduced below the ${MIN_USEFUL_ATTACHED_CONTENT_TOKENS}-token minimum worth sending. ` +
-        `Context window is too small after system instructions and history. Affected: ` +
-        attachmentsWithContent.map(attachmentLabel).join(' | ')
-    );
+    const counts = `${droppedCount}/${sliverCount}`;
+    if (counts !== lastDeclaredCounts) {
+      lastDeclaredCounts = counts;
+      logger.warn(
+        `Attached content could not be delivered usefully: ${droppedCount} file(s) dropped whole and ` +
+          `${sliverCount} reduced below the ${MIN_USEFUL_ATTACHED_CONTENT_TOKENS}-token minimum worth sending. ` +
+          `Context window is too small after system instructions and history. Affected: ` +
+          attachmentsWithContent.map(attachmentLabel).join(' | ')
+      );
+    }
     contentSqueezed = true;
     // Deliberately names no files. Which attachment was lost is not knowable here once processMessages
     // has replaced the objects, and listing all of them let the model disclaim one it did receive.
@@ -2051,7 +2124,11 @@ export async function buildAndSortMessages(
         `could not be read within this model's context window, and suggest a model with a larger context window, ` +
         `a smaller file, or a shorter conversation.`,
     };
-    return [...usable, undeliveredNote];
+    // Everything except the replaced slivers and the note being superseded. Filtering down to the
+    // attachments instead also dropped what the note is not about - URL-derived context, attachments with
+    // no extractable text - which was masked while the allocation was the only caller, since a turn it
+    // dropped nothing on returned early above.
+    return [...contentMessages.filter(message => message !== previousNote && !replaced.has(message)), undeliveredNote];
   };
 
   processedContentMessages = declareUndeliveredAttachments(processedContentMessages);
@@ -2064,15 +2141,6 @@ export async function buildAndSortMessages(
       message.content.some(obj => obj.type.startsWith('image'))
   );
 
-  // Combine all messages and sort with system messages at the top
-
-  // Check if the last message in history is a tool_use
-  const lastHistoryMessage = processedPreviousMessages[processedPreviousMessages.length - 1];
-  const historyEndsWithToolUse =
-    lastHistoryMessage?.role === 'assistant' &&
-    Array.isArray(lastHistoryMessage.content) &&
-    lastHistoryMessage.content.some((block: any) => block.type === 'tool_use');
-
   // Check if the user prompt contains a tool_result
   const promptHasToolResult = userPrompt.some(
     msg =>
@@ -2081,28 +2149,29 @@ export async function buildAndSortMessages(
       msg.content.some((block: any) => block.type === 'tool_result')
   );
 
-  let messages: IMessage[];
+  /**
+   * Combines everything into the message array, system first. Sole owner of the ordering: the safety
+   * pass below re-assembles the payload several times to measure it, and a second copy of these two
+   * orderings would be free to drift from this one. Both the pairing check and the content/history it
+   * applies to are read from the arguments, since the pass rewrites both.
+   *
+   * tool_use blocks must be immediately followed by tool_result blocks, so when history ends with a
+   * tool_use and the prompt carries the matching tool_result, other context moves after the prompt to
+   * keep the pair adjacent.
+   */
+  const assemble = (content: IMessage[], history: IMessage[]): IMessage[] => {
+    const lastHistoryMessage = history[history.length - 1];
+    const historyEndsWithToolUse =
+      lastHistoryMessage?.role === 'assistant' &&
+      Array.isArray(lastHistoryMessage.content) &&
+      lastHistoryMessage.content.some((block: any) => block.type === 'tool_use');
 
-  // tool_use blocks must be immediately followed by tool_result blocks. If history ends with a
-  // tool_use and the userPrompt carries the tool_result, keep them adjacent by moving other
-  // context (files/images) after the userPrompt.
-  if (historyEndsWithToolUse && promptHasToolResult) {
-    messages = [
-      ...systemMessages, // System messages go first for instruction
-      ...processedPreviousMessages, // previous message context
-      ...userPrompt, // Tool result must follow tool use immediately
-      ...imageMessages, // Include all image messages
-      ...processedContentMessages, // fab file content (non-image messages)
-    ];
-  } else {
-    messages = [
-      ...systemMessages, // System messages go first for instruction
-      ...processedPreviousMessages, // previous message context
-      ...imageMessages, // Include all image messages
-      ...processedContentMessages, // fab file content (non-image messages)
-      ...userPrompt, // Spread the userPrompt array into the messages array
-    ];
-  }
+    return historyEndsWithToolUse && promptHasToolResult
+      ? [...systemMessages, ...history, ...userPrompt, ...imageMessages, ...content]
+      : [...systemMessages, ...history, ...imageMessages, ...content, ...userPrompt];
+  };
+
+  const messages: IMessage[] = assemble(processedContentMessages, processedPreviousMessages);
 
   // Budget loss outranks history windowing: reporting 'history-limit' whenever historyCount was
   // finite - which is nearly always - made a file the budget had silently zeroed look identical in
@@ -2132,49 +2201,104 @@ export async function buildAndSortMessages(
     logger.warn(
       `⚠️ Final message token count (${finalTokenCount}) exceeds maxInputTokens (${maxInputTokens}). Truncating messages.`
     );
-    // If we still exceed limits, remove some processed content messages as last resort.
-    //
-    // The notice is threaded and the result recorded for the same reason: this pass can now actually
-    // cut. Before the reservation cap above, protected messages were reserved unconditionally, so the
-    // selection was never empty, the truncation fallback never fired from here, and an overflow went
-    // to the caller's hard throw instead. With the cap it shrinks - and without these two arguments it
-    // would head-slice a file with nothing appended (the fallback's hold-out for an existing upstream
-    // notice is gated on truncationNotice), then drop the cut from telemetry, so the turn that lost
-    // the most content would report wasTruncated: false. A silent truncated file presented as complete
-    // is the failure this module exists to prevent.
-    const excessTokens = finalTokenCount - maxInputTokens;
-    const reducedContentMessages = recordContentResult(
-      processMessages(
-        processedContentMessages,
-        Math.max(
-          0,
-          (await calculateTotalTokenLength(processedContentMessages, { estimateOnly: false, tokenizer })) - excessTokens
-        ),
-        { truncationNotice: CONTENT_TRUNCATION_NOTICE }
-      )
-    );
+    // Shrink content first, then history, re-measuring the real count each round until it fits. One
+    // subtraction cannot: the overflow usually lives in history, and an overage measured by the real
+    // tokenizer buys less than it looks like when spent against processMessages, which budgets in the
+    // character estimate. The notice and the recorder are threaded because this pass really does cut -
+    // without them it head-slices a file with nothing appended and reports wasTruncated: false.
+    let reducedContentMessages = processedContentMessages;
+    let currentTokenCount = finalTokenCount;
+    // Null until a round measures one, so the give-up log cannot print a ratio nothing measured.
+    let lastRatio: number | null = null;
 
-    let truncatedMessages: IMessage[];
-    if (historyEndsWithToolUse && promptHasToolResult) {
-      truncatedMessages = [
-        ...systemMessages,
-        ...processedPreviousMessages,
-        ...userPrompt,
-        ...imageMessages,
-        ...reducedContentMessages,
-      ];
-    } else {
-      truncatedMessages = [
-        ...systemMessages,
-        ...processedPreviousMessages,
-        ...imageMessages,
-        ...reducedContentMessages,
-        ...userPrompt,
-      ];
+    // Content is asked to give first, but a round that frees nothing hands over to history rather than
+    // retrying forever: processMessages judges against the character estimate, so content that is
+    // oversized in real tokens can still look like it fits and come back untouched.
+    let contentExhausted = reducedContentMessages.filter(message => message !== undeliveredNote).length === 0;
+    for (let round = 0; round < MAX_SAFETY_SHRINK_ROUNDS && currentTokenCount > maxInputTokens; round++) {
+      const shrinkingContent = !contentExhausted;
+      // Only system messages, images and the user prompt are left, and none is droppable here.
+      if (!shrinkingContent && processedPreviousMessages.length === 0) break;
+
+      // The undelivered note is held out of the content slice by identity so the shrink judges only real
+      // content; it stays in the assembled payload, so its cost is still measured.
+      const before = shrinkingContent
+        ? reducedContentMessages.filter(message => message !== undeliveredNote)
+        : processedPreviousMessages;
+      // Measured on the slice being cut rather than the whole payload: a prose-heavy conversation's
+      // overall ratio understates CSV density and under-trims the very slice the round is spending
+      // against. Realistic CSV runs about 2.2 chars/token against the estimator's 3.5, prose about 5.6.
+      const beforeEstimate = estimateMessagesTokens(before);
+      const beforeReal = await calculateTotalTokenLength(before, { estimateOnly: false, tokenizer });
+      lastRatio = beforeEstimate > 0 && beforeReal > 0 ? Math.min(8, Math.max(0.25, beforeReal / beforeEstimate)) : 1;
+      // No overshoot allowance on top of the conversion: a round that frees too little is corrected by
+      // the next one, while asking for more than the overage drops content a smaller cut would have kept.
+      const excessInEstimateTokens = Math.ceil((currentTokenCount - maxInputTokens) / lastRatio);
+      const budget = Math.max(0, beforeEstimate - excessInEstimateTokens);
+
+      if (shrinkingContent) {
+        const reduced = recordContentResult(
+          processMessages(before, budget, { truncationNotice: CONTENT_TRUNCATION_NOTICE })
+        );
+        if (reduced.length < before.length) {
+          logger.warn(
+            `Final safety pass dropped ${before.length - reduced.length} of ${before.length} ` +
+              `attached content message(s) to fit the context window.`
+          );
+        }
+        reducedContentMessages = undeliveredNote ? [...reduced, undeliveredNote] : reduced;
+      } else {
+        const reduced = processMessages(before, budget);
+        // Compared in tokens, not message count: the truncation fallback shrinks messages in place, so a
+        // count test reads "same count" as "cannot shrink", discards a real reduction, and sends the
+        // still-oversized payload to the throw.
+        if (estimateMessagesTokens(reduced.messages) >= beforeEstimate) break;
+        logger.warn(
+          `Final safety pass also reduced ${before.length} history message(s) to ${reduced.messages.length}: ` +
+            `the attached content alone could not absorb the overflow.`
+        );
+        processedPreviousMessages = recordHistoryResult(reduced);
+      }
+
+      // Re-declared every round rather than once at the end, so an attachment this pass drops is named
+      // to the model - otherwise it arrives with nothing said and the model denies the file exists, the
+      // exact failure this backstop re-entered through last time - and so the note's own ~100 tokens sit
+      // inside the count the next round works from.
+      reducedContentMessages = declareUndeliveredAttachments(reducedContentMessages);
+
+      const afterTokenCount = await calculateTotalTokenLength(
+        assemble(reducedContentMessages, processedPreviousMessages),
+        { estimateOnly: false, tokenizer }
+      );
+      const stalled = afterTokenCount >= currentTokenCount;
+      currentTokenCount = afterTokenCount;
+      if (stalled) {
+        // Content that cannot give any more hands over to history; history that cannot is the end of
+        // what this pass can do.
+        if (shrinkingContent) contentExhausted = true;
+        else break;
+      }
     }
+
+    if (currentTokenCount > maxInputTokens) {
+      // Deliberately names no single cause: this is reached from four exits (the round cap, content and
+      // history both spent, nothing droppable left, history unable to shrink) and only one of them is
+      // about system + prompt size. Images are the usual answer when nothing moved at all - they are
+      // assembled in at a flat rate and neither branch can touch them - so log the composition instead
+      // and let the reader identify which exit it was.
+      logger.warn(
+        `Final safety pass could not bring the payload under maxInputTokens (${currentTokenCount} > ${maxInputTokens}). ` +
+          `Remaining: ${systemMessages.length} system, ${processedPreviousMessages.length} history, ` +
+          `${reducedContentMessages.length} content, ${imageMessages.length} image message(s) plus the user prompt` +
+          (lastRatio === null
+            ? ', with nothing shrinkable to measure.'
+            : `, at ${lastRatio.toFixed(2)} real tokens per estimated token.`)
+      );
+    }
+
     recordDebugInfo(reducedContentMessages);
     // Ensure tool_use/tool_result pairing integrity after truncation
-    return ensureToolPairingIntegrity(truncatedMessages, logger);
+    return ensureToolPairingIntegrity(assemble(reducedContentMessages, processedPreviousMessages), logger);
   }
 
   const VERBOSE_MESSAGE_BUILDING = process.env.VERBOSE_MESSAGE_BUILDING === 'true';

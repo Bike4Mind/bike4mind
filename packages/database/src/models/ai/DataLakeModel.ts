@@ -4,6 +4,7 @@ import type {
   IDataLakeDocument,
   IDataLakeRepository,
   IDataLakeBatchDocument,
+  IDataLakeBatchSummary,
   IDataLakeBatchRepository,
   IDataLakeBatchFile,
   BatchFileStatus,
@@ -439,20 +440,34 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     super(batchModel);
   }
 
-  async findActiveByUserId(userId: string): Promise<IDataLakeBatchDocument[]> {
-    const results = await this.batchModel.find({
-      userId,
-      status: { $in: BATCH_NON_TERMINAL_STATUSES },
-    });
-    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+  async findActiveByUserId(userId: string): Promise<IDataLakeBatchSummary[]> {
+    // Excludes `files`: this feeds the batches-list poll, which only ever renders counters and
+    // status - never the per-file manifest. A batch with thousands of files turns that manifest
+    // into a multi-MB response on its own; there is no reason to pay for it here.
+    // Also excludes `taxonomySuggestions.fileAssignments`: ingest (`status`) and taxonomy
+    // (`taxonomyStatus`) are independent clocks - taxonomy analysis starts as soon as the browser
+    // upload phase finishes, not gated on chunk/vectorize - so a batch can reach
+    // `taxonomyStatus: 'applied'` (fileAssignments populated, never cleared) while still showing
+    // up here with `status` non-terminal. Matches IDataLakeBatchSummary's contract.
+    const results = await this.batchModel
+      .find({
+        userId,
+        status: { $in: BATCH_NON_TERMINAL_STATUSES },
+      })
+      .select('-files -taxonomySuggestions.fileAssignments');
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
-  async findActiveByDataLakeId(dataLakeId: string): Promise<IDataLakeBatchDocument[]> {
-    const results = await this.batchModel.find({
-      dataLakeId,
-      status: { $in: BATCH_NON_TERMINAL_STATUSES },
-    });
-    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+  async findActiveByDataLakeId(dataLakeId: string): Promise<IDataLakeBatchSummary[]> {
+    // Both callers (archive/delete-lake teardown) only read `.id` to cancel batches - same
+    // payload-size reasoning as findActiveByUserId, including the fileAssignments exclusion.
+    const results = await this.batchModel
+      .find({
+        dataLakeId,
+        status: { $in: BATCH_NON_TERMINAL_STATUSES },
+      })
+      .select('-files -taxonomySuggestions.fileAssignments');
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 
   async findStuck(cutoff: Date, limit = 500): Promise<IDataLakeBatchDocument[]> {
@@ -569,12 +584,51 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);
   }
 
-  async findTaxonomyAttentionByUserId(userId: string): Promise<IDataLakeBatchDocument[]> {
-    const results = await this.batchModel.find({
-      userId,
-      taxonomyStatus: { $in: TAXONOMY_ATTENTION_STATUSES },
-    });
-    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+  async findTaxonomyAttentionByUserId(userId: string, limit = 500): Promise<IDataLakeBatchSummary[]> {
+    // Unlike findActiveByUserId's ingest-active set (self-limiting - a batch leaves it as soon
+    // as ingest reaches a terminal status), a 'ready'/'failed' taxonomy batch has no such exit
+    // until it's applied, re-analyzed, or dismissed - so without a bound this list only grows.
+    // Most-recently-updated first and capped so a user who never clears old suggestions still
+    // gets a fast, bounded response instead of their entire unbounded history. The cap is global
+    // per-user, but the UI derives one chip per LAKE from it - a cap too close to a realistic
+    // per-lake backlog could starve a quiet lake's chip behind a couple of busy ones, so this
+    // defaults high (matching findStuckTaxonomy's default) rather than tight; `limit` is
+    // overridable for tests. The real fix for unbounded growth is the planned "dismiss" action -
+    // once shipped, this cap stops being load-bearing since old suggestions get an exit path.
+    // `files` is excluded for the same reason as findActiveByUserId: this is a list view, never
+    // a per-file read. `taxonomySuggestions.fileAssignments` (up to maxTotal=50 per-file entries
+    // from runTaxonomyInference's sampling) is excluded too - only `tags` is ever read by any
+    // list/chip consumer; the one caller that needs fileAssignments (applyTaxonomySuggestions)
+    // does its own findById, so dropping it here costs that path nothing.
+    const results = await this.batchModel
+      .find({
+        userId,
+        taxonomyStatus: { $in: TAXONOMY_ATTENTION_STATUSES },
+      })
+      .select('-files -taxonomySuggestions.fileAssignments')
+      .sort({ updatedAt: -1 })
+      .limit(limit);
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
+  }
+
+  async findActiveTaxonomyByUserId(userId: string): Promise<IDataLakeBatchSummary[]> {
+    // Separate from findTaxonomyAttentionByUserId's cap: that cap serves the list response, but
+    // the read-time reconciler needs the FULL non-terminal working set regardless of recency - a
+    // batch stuck in 'analyzing' for hours has an old updatedAt and would otherwise be pushed out
+    // before the reconciler ever sees it. 'ready'/'failed' are excluded here (unlike the
+    // attention set) since they're already terminal and irrelevant to stuck-job detection.
+    // No explicit limit: the set is queued/analyzing/applying only, and the 10-minute reconciler
+    // this feeds is what drains it, so - unlike the attention set, which has no exit until
+    // applied/dismissed - it's self-limiting without a cap. `files` and
+    // `taxonomySuggestions.fileAssignments` are excluded for the same reason as
+    // findTaxonomyAttentionByUserId; the reconciler only reads taxonomyStatus/taxonomyStartedAt/id.
+    const results = await this.batchModel
+      .find({
+        userId,
+        taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES },
+      })
+      .select('-files -taxonomySuggestions.fileAssignments');
+    return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 }
 

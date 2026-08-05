@@ -4,7 +4,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { Request } from 'express';
 import qs from 'qs';
-import { organizationRepository } from '@bike4mind/database';
+import { organizationRepository, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
 import { toSafeOrganization, toSafeOrganizations } from '@bike4mind/common';
 
@@ -40,7 +40,9 @@ const handler = baseApi()
       {
         db: {
           organizations: organizationRepository,
+          users: userRepository,
         },
+        logger: req.logger,
       }
     );
 

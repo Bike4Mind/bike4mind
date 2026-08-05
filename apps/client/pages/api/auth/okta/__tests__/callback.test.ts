@@ -44,11 +44,10 @@ const mockVerifyState = vi.fn();
 vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: (...a: any[]) => mockVerifyState(...a) }));
 
 // Remaining leaf collaborators. Mock the session helper directly (rather than @bike4mind/services)
-// so the test never pulls the real services barrel -- the callback now mints via issueSessionForRequest.
+// so the test never pulls the real services barrel -- the callback mints via issueBrowserSession,
+// which also sets the refresh cookie (so no refresh token appears in the redirect fragment).
 vi.mock('@server/auth/issueSession', () => ({
-  issueSessionForRequest: vi
-    .fn()
-    .mockResolvedValue({ accessToken: 'jwt-access', refreshToken: 'jwt-refresh', sid: 'sid' }),
+  issueBrowserSession: vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' }),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));

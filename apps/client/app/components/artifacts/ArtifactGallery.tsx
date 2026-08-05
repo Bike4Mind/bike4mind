@@ -284,8 +284,10 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
         if (projectId) params.append('projectId', projectId);
         if (sessionId) params.append('sessionId', sessionId);
 
-        const endpoint = searchQuery ? '/api/artifacts/search' : '/api/artifacts';
-        const response = await api.get<ArtifactListResponse>(`${endpoint}?${params}`);
+        // /api/artifacts handles `search` itself. The dedicated search route wants the term as `q`
+        // and hardcodes its own sort, so routing there both failed to parse and discarded the sort
+        // the user picked.
+        const response = await api.get<ArtifactListResponse>(`/api/artifacts?${params}`);
 
         if (reset) {
           setArtifacts(response.data.artifacts);
@@ -371,6 +373,9 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
     try {
       await api.delete(`/api/artifacts/${artifactId}`);
       setArtifacts(prev => prev.filter(a => a.id !== artifactId));
+      // The category tabs count the local list, but the All tab shows the server's
+      // pagination total - without this it keeps counting the artifact just deleted.
+      setTotal(prev => Math.max(0, prev - 1));
       toast.success('Artifact deleted successfully');
     } catch (error: any) {
       toast.error(error.message || 'Failed to delete artifact');

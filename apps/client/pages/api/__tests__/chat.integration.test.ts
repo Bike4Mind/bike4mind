@@ -26,6 +26,7 @@ const {
   mockFindById,
   mockRateLimit,
   mockInvoke,
+  mockProcess,
   mockGetSettingsMap,
   mockResolveDefaultChatModel,
   mockIsChatModelUsable,
@@ -34,6 +35,7 @@ const {
   mockFindById: vi.fn(),
   mockRateLimit: vi.fn(),
   mockInvoke: vi.fn(),
+  mockProcess: vi.fn(),
   mockGetSettingsMap: vi.fn(),
   mockResolveDefaultChatModel: vi.fn(),
   mockIsChatModelUsable: vi.fn(),
@@ -87,8 +89,14 @@ vi.mock('@bike4mind/services', async orig => {
     prefetchedOrganization = undefined;
     invoke = (...a: unknown[]) => mockInvoke(...a);
   }
+  // The wait=true path constructs this directly; the async-path tests never reach it.
+  class MockChatCompletionProcess {
+    pipelinePhases = undefined;
+    process = (...a: unknown[]) => mockProcess(...a);
+  }
   return {
     ...actual,
+    ChatCompletionProcess: MockChatCompletionProcess,
     userApiKeyService: {
       ...(actual.userApiKeyService as object),
       validateUserApiKey: (...a: unknown[]) => mockValidate(...a),
@@ -315,5 +323,66 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(res._getStatusCode()).toBe(200);
       expect(invokedParams().max_tokens).toBeUndefined();
     });
+  });
+});
+
+describe('POST /api/chat (integration - wait path promptDetails exposure)', () => {
+  // What process() leaves on the in-memory quest; the route must surface it only on request.
+  const DETAILS = [{ source: 'hardcoded', name: 'date_time_context', tokenCount: 12, wasIncluded: true }];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSettingsMap.mockResolvedValue({});
+    mockInvoke.mockResolvedValue({
+      id: 'quest-2',
+      status: 'done',
+      reply: 'hi',
+      replies: ['hi'],
+      createdAt: new Date('2026-08-03T00:00:00Z'),
+      promptMeta: { context: { systemPromptDetails: DETAILS } },
+    });
+    mockProcess.mockResolvedValue(undefined);
+    mockFindById.mockReturnValue(
+      Promise.resolve({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false })
+    );
+    mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
+    mockResolveDefaultChatModel.mockResolvedValue({ model: 'test-default-model' });
+    mockIsChatModelUsable.mockReturnValue(true);
+    mockValidate.mockResolvedValue({
+      isValid: true,
+      keyId: 'k1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+  });
+
+  it('returns the per-source breakdown when includePromptDetails is set', async () => {
+    const { req, res } = fire({
+      body: { message: 'hello', sessionId: 'sess-1', wait: true, includePromptDetails: true },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().promptDetails).toEqual(DETAILS);
+  });
+
+  it('omits the breakdown without the flag, keeping the response shape unchanged', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).not.toHaveProperty('promptDetails');
+  });
+
+  it('accepts promptMode: raw at the HTTP boundary', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', promptMode: 'raw' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBeGreaterThanOrEqual(200);
+    expect(res._getStatusCode()).toBeLessThan(300);
+  });
+
+  it('rejects an unknown promptMode with 422 and a named field, not a 5xx', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', promptMode: 'nonsense' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
   });
 });

@@ -261,11 +261,22 @@ export interface IDataLakeBatch {
 
 export interface IDataLakeBatchDocument extends IDataLakeBatch, IMongoDocument {}
 
+/**
+ * Shape returned by the list-surface/reconciler-input queries below, which all project out both
+ * the per-file manifest and `taxonomySuggestions.fileAssignments` for response-size reasons -
+ * neither is genuinely present at runtime, not just empty, so this type (rather than
+ * `IDataLakeBatchDocument`) is what should flow to any consumer of those results, both server-
+ * and client-side.
+ */
+export type IDataLakeBatchSummary = Omit<IDataLakeBatchDocument, 'files' | 'taxonomySuggestions'> & {
+  taxonomySuggestions?: Omit<TaxonomyTagSet, 'fileAssignments'>;
+};
+
 export type BatchCounterField = 'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'skippedFiles';
 
 export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatchDocument> {
-  findActiveByUserId(userId: string): Promise<IDataLakeBatchDocument[]>;
-  findActiveByDataLakeId(dataLakeId: string): Promise<IDataLakeBatchDocument[]>;
+  findActiveByUserId(userId: string): Promise<IDataLakeBatchSummary[]>;
+  findActiveByDataLakeId(dataLakeId: string): Promise<IDataLakeBatchSummary[]>;
   /**
    * Global cross-user scan for the reconciler cron: non-terminal batches whose `updatedAt` is
    * older than `cutoff`, oldest-first. `limit` caps a huge backlog per run so the cron stays
@@ -328,9 +339,19 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * Batches whose `taxonomyStatus` is in `TAXONOMY_ATTENTION_STATUSES` - running or awaiting
    * review/dismissal. Deliberately independent of `status` (ingest phase): the common case is
    * an already-'completed' batch whose taxonomy phase is still 'analyzing', which
-   * findActiveByUserId's status-based filter would miss entirely.
+   * findActiveByUserId's status-based filter would miss entirely. `files` is excluded, and the
+   * result is capped (default 500, overridable - see the class implementation for why) to the
+   * most-recently-updated - sized for the list-response use case, NOT suitable as reconciler
+   * input (see `findActiveTaxonomyByUserId`).
    */
-  findTaxonomyAttentionByUserId(userId: string): Promise<IDataLakeBatchDocument[]>;
+  findTaxonomyAttentionByUserId(userId: string, limit?: number): Promise<IDataLakeBatchSummary[]>;
+  /**
+   * Per-user counterpart to `findStuckTaxonomy`: the full non-terminal (`queued`/`analyzing`/
+   * `applying`) taxonomy working set for one user, unbounded and unsorted. Use this - not
+   * `findTaxonomyAttentionByUserId` - as reconciler input, since that method's capped/sorted
+   * result would silently exclude exactly the stale, stuck batches a reconciler exists to find.
+   */
+  findActiveTaxonomyByUserId(userId: string): Promise<IDataLakeBatchSummary[]>;
 }
 
 // ── AI Taxonomy Inference ───────────────────────────────────────────────────

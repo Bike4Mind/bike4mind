@@ -54,7 +54,7 @@
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
     "weekly-insights:generate": "pnpm --filter scripts weekly-insights:generate",
     "changeset": "changeset",
-    "changeset:version": "changeset version",
+    "changeset:version": "changeset version && pnpm turbo:openapi:generate",
     "changeset:publish": "changeset publish",
     "changeset:status": "changeset status"
   },
@@ -91,7 +91,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
-    "sst": "4.14.1"
+    "sst": "4.17.1"
   },
   "overrides": {
     "canvas": "../_EXCLUDED_"

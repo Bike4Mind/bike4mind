@@ -151,3 +151,40 @@ describe('OpenAIBackend.formatMessages — caller system consolidation (#8844)',
     expect(formatted.some(m => JSON.stringify(m.content ?? '').includes(ORG_GUARD))).toBe(false);
   });
 });
+
+// The bare-completion contract (API promptMode raw): with omitIdentityReminder set, the
+// backend must synthesize nothing - no helpful-assistant preamble, no identity line - so a
+// request with no caller system messages carries no system message at all. Same contract
+// the two Anthropic-family backends honor.
+describe('OpenAIBackend.formatMessages - omitIdentityReminder', () => {
+  const backend = new OpenAIBackend('test-key');
+
+  it('emits NO system message when the caller omits the reminder and supplies no system messages', () => {
+    const formatted = formatMessages(backend, [{ role: 'user', content: 'hi' }], false, ChatModels.GPT5, {
+      omitIdentityReminder: true,
+    });
+
+    expect(formatted.some(m => m.role === 'system')).toBe(false);
+  });
+
+  it('passes caller system text through verbatim, with nothing synthesized around it', () => {
+    const formatted = formatMessages(
+      backend,
+      [
+        { role: 'system', content: ORG_GUARD },
+        { role: 'user', content: 'hi' },
+      ],
+      false,
+      ChatModels.GPT5,
+      { omitIdentityReminder: true }
+    );
+
+    expect(leadSystemText(formatted)).toBe(ORG_GUARD);
+  });
+
+  it('still synthesizes the preamble by default, so product traffic is unchanged', () => {
+    const formatted = formatMessages(backend, [{ role: 'user', content: 'hi' }], false, ChatModels.GPT5, {});
+
+    expect(leadSystemText(formatted)).toContain('You are a helpful assistant');
+  });
+});

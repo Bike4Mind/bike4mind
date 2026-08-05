@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
+import { resolveOwnedApiKey } from './resolveOwnedApiKey';
 
 const updateEmbedKeySchema = z.object({
   keyId: z.string(),
@@ -48,10 +49,11 @@ export interface UpdateEmbedKeyResult {
  * other key (mirrors the create-side coherence invariant). Absent fields are
  * left untouched; `allowedOrigins: []` explicitly clears the allow-list.
  *
- * Resolvable by the key's minter OR by an admin of the org the key is billed to
- * (owner or manager), mirroring the org-admin-aware LIST route - so an org admin
- * can configure any key billed to an org they administer, not just keys they
- * minted. The org-admin lookup is lazy: the minter path pays no extra query.
+ * Scoped by resolveOwnedApiKey (the key's minter, or an admin of the org it is
+ * billed to), so an org admin can configure any key billed to an org they
+ * administer, not just keys they minted. The [id] route resolves the branding
+ * owner through that same function, which is what keeps its white-label gate
+ * from ever being narrower than this write.
  */
 export const updateEmbedKey = async (
   userId: string,
@@ -61,11 +63,7 @@ export const updateEmbedKey = async (
   const { db } = adapters;
   const params = secureParameters(parameters, updateEmbedKeySchema);
 
-  let apiKey = await db.userApiKeys.findByUserIdAndId(userId, params.keyId);
-  if (!apiKey) {
-    const administeredOrgIds = await db.organizations.findIdsAdministeredBy(userId);
-    apiKey = await db.userApiKeys.findByOrganizationIdsAndId(administeredOrgIds, params.keyId);
-  }
+  const apiKey = await resolveOwnedApiKey(userId, params.keyId, { db });
   if (!apiKey) {
     throw new NotFoundError('API key not found');
   }

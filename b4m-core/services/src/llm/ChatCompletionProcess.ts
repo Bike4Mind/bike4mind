@@ -78,6 +78,7 @@ import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { LATTICE_TOOL_NAMES } from './tools';
+import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -115,6 +116,14 @@ import { AgentDetectionFeature } from './features/AgentDetectionFeature';
 import { SkillsFeature } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { buildContextOverflowMessage } from './contextOverflowMessage';
+import {
+  buildTaggedContextMessages,
+  filterByPromptMode,
+  filterFeaturesByPromptMode,
+  resolveForcedRetrieval,
+  toPromptDetails,
+  type PromptSourceId,
+} from './systemPromptSources';
 import { buildInsufficientCreditsMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import { deductCreditsWithOrgSupport, subtractCredits } from '../creditService';
@@ -128,6 +137,7 @@ import {
 import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail } from '@bike4mind/common';
 import { buildAlwaysOnFloorDetails } from './systemPromptFloorTelemetry';
 import { resolveArtifactsEnabled } from './artifactGating';
+import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
   detectAgentMentions,
@@ -135,6 +145,7 @@ import {
   mapMimeTypeToArtifactType,
   ARTIFACT_EMISSION_PROMPT,
   HELP_CENTER_PROMPT,
+  ABSTENTION_PROMPT,
   ELISION_WARNING,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
@@ -195,9 +206,9 @@ function assertNeverElisionSignal(signal: never): never {
  * Output budget used when a caller supplies no max_tokens. Within supported output
  * limits for every configured non-reasoning model; models that reason inside the
  * output budget default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since their
- * reasoning would otherwise consume this whole budget. Distinct from the catalog's
- * DEFAULT_MAX_OUTPUT_TOKENS, which fills in a model's *capability* when its record
- * omits one.
+ * reasoning would otherwise consume this whole budget (see reasonsWithinOutputBudget
+ * for which those are). Distinct from the catalog's DEFAULT_MAX_OUTPUT_TOKENS, which
+ * fills in a model's *capability* when its record omits one.
  */
 const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
 
@@ -519,12 +530,93 @@ export function addPairedTool<T extends string>(tools: readonly T[], trigger: T,
   return [...tools];
 }
 
+export interface ResolveEnabledToolsInput {
+  /** Tools already assembled for this request: client selection + server auto-adds. */
+  requestTools: string[];
+  /** `session.enabledTools` - tools a surface forces on regardless of the client toggle. */
+  sessionEnabledTools?: string[];
+  /** `session.disabledTools` - tools a curated surface forbids. Wins over everything else. */
+  sessionDisabledTools?: string[];
+  /** True when the session has documents attached (`session.knowledgeIds`). */
+  hasAttachedKnowledge: boolean;
+  /**
+   * True when the caller can retrieve from at least one data lake - their own, their org's, or a
+   * shared/entitlement-gated lake they hold the gate for - independent of what's attached to this
+   * session. See `userHasAccessibleKnowledgeLake`. Low-stakes offering signal only; the knowledge
+   * tool re-resolves the authoritative retrieval scope fresh at execution.
+   */
+  hasAccessibleDataLake?: boolean;
+  /**
+   * Skip OUR server-side auto-offers (step 2, the knowledge offer). Set for any `promptMode`,
+   * matching the auto-add gate at the request-parse site (`if (!parsedBody.promptMode)`): auto-adds
+   * are our additions, not the caller's, and attaching a tool also pulls the provider's tool-use
+   * preamble into the request - so a mode-driven eval, above all `raw` (the bare-model control
+   * arm), must not get surprise tools. Caller-selected and session-forced tools are unaffected;
+   * only step 2 is gated.
+   */
+  skipAutoOffers?: boolean;
+}
+
 /**
- * Tools this process auto-adds server-side regardless of user selection (see the
- * auto-add pushes in the request-parse method: blog_publish/blog_edit/blog_draft
- * for admins, navigate_view, skill). Small local (Ollama) models get confused by
- * tools they didn't ask for, so these are trimmed for that backend unless the user
- * explicitly enabled them. Keep this list in sync with those auto-add sites.
+ * Single owner for the final tool-offer list handed to `buildTools`. The step order is
+ * deliberate:
+ *   1. session-forced union     - a surface can guarantee a tool is offered.
+ *   2. knowledge offer         - offer the knowledge-base tool when the caller has retrievable
+ *      knowledge: documents attached to THIS session (hasAttachedKnowledge) OR a data lake they
+ *      can reach (hasAccessibleDataLake). Attaching files / having a lake is a far stronger
+ *      retrieval signal than any phrase match, and offering a tool is cheap (the model may
+ *      decline) whereas withholding it is unrecoverable. Skipped when `skipAutoOffers` is set
+ *      (prompt-mode requests), since the offer is our addition, not the caller's.
+ *   3. companion pairing        - a tool useless without its partner rides along
+ *      (search_knowledge_base -> retrieve_knowledge_content, image_generation ->
+ *      edit_image). Runs AFTER the union/offer so session-forced and auto-offered tools
+ *      get paired too; pairing used to run at request-parse time, before the union, so
+ *      anything added later was silently left unpaired.
+ *   4. session denylist wraps pairing - a curated surface ("approved sources only") wins.
+ *      We strip denied tools BEFORE pairing so a denied trigger can't drag its companion
+ *      in (deny search_knowledge_base => retrieve_knowledge_content must not ride along),
+ *      and AFTER pairing so a denied companion can't ride in on a surviving trigger (keep
+ *      image_generation but deny edit_image). The final filter is the authoritative last word.
+ *
+ * Containment note for curated surfaces: this is a UNION plus a denylist, never an allowlist.
+ * `sessionDisabledTools` is the only thing that subtracts, so a surface that wants the knowledge
+ * tool kept out must deny it explicitly - carrying no attached documents is no longer sufficient,
+ * since `hasAccessibleDataLake` offers it to any caller who can reach a lake.
+ */
+export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
+  const denied = new Set(input.sessionDisabledTools ?? []);
+  const tools = [...input.requestTools];
+
+  for (const tool of input.sessionEnabledTools ?? []) {
+    if (!tools.includes(tool)) tools.push(tool);
+  }
+
+  if (
+    !input.skipAutoOffers &&
+    (input.hasAttachedKnowledge || input.hasAccessibleDataLake) &&
+    !tools.includes('search_knowledge_base')
+  ) {
+    tools.push('search_knowledge_base');
+  }
+
+  const survivors = tools.filter(tool => !denied.has(tool));
+  let paired = addPairedTool(survivors, 'image_generation', 'edit_image');
+  paired = addPairedTool(paired, 'search_knowledge_base', 'retrieve_knowledge_content');
+  return paired.filter(tool => !denied.has(tool));
+}
+
+/**
+ * Tools this process auto-adds server-side regardless of user selection. Two auto-add sites feed
+ * this: the request-parse method (blog_publish/blog_edit/blog_draft for admins, navigate_view,
+ * skill) and `resolveEnabledTools` (the attached-knowledge offer). Small local (Ollama) models get
+ * confused by tools they didn't ask for, so the names in this list are trimmed for that backend
+ * unless the user explicitly enabled them. Keep this list in sync with those auto-add sites.
+ *
+ * Deliberately NOT listed: search_knowledge_base / retrieve_knowledge_content. Attaching a
+ * document is itself an explicit user signal that the docs should be used, unlike the genuinely
+ * unrequested capabilities above - so the attached-knowledge offer must survive the Ollama trim,
+ * which is the whole point of the feature for local models. Listing them here would silently
+ * defeat it.
  */
 export const AUTO_ADDED_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit', 'navigate_view', 'skill'];
 
@@ -573,6 +665,8 @@ export class ChatCompletionProcess {
   public entitlementKeys: string[] = [];
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
+  /** Per-turn memo for the accessible-owned-lake offering check (see userHasAccessibleKnowledgeLake). */
+  private hasAccessibleKnowledgeLakeMemo: boolean | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
   private imageProcessorLambdaName?: string;
@@ -666,6 +760,40 @@ export class ChatCompletionProcess {
     return this.entitlementKeys;
   }
 
+  /**
+   * Coarse offering signal: can the caller retrieve from at least one data lake - their own,
+   * their org's, OR a shared/entitlement-gated lake they hold the gate for? Uses `dataLakeTags`
+   * from the shared access resolver, which is ALREADY access-filtered (tag / entitlement /
+   * ownership), so a shared lake only counts for a user who can actually reach it - offering the
+   * search tool to entitled users is the intent. Memoized per turn (the DB lookup runs at most once).
+   *
+   * Offering-only and low-stakes: the knowledge tool re-resolves the authoritative retrieval
+   * scope fresh at execution (never cached), so a FALSE POSITIVE here can only offer a tool that
+   * returns nothing. A true positive does change what the model can pull into context, but only
+   * from lakes the caller was already authorized to read - this signal never widens that set.
+   */
+  public async userHasAccessibleKnowledgeLake(): Promise<boolean> {
+    if (this.hasAccessibleKnowledgeLakeMemo === undefined) {
+      try {
+        const entitlementKeys = await this.resolveEntitlementKeys();
+        const { dataLakeTags } = await getDynamicDataLakeAccess({
+          db: this.db,
+          user: this.user,
+          entitlementKeys,
+        });
+        this.hasAccessibleKnowledgeLakeMemo = dataLakeTags.length > 0;
+      } catch (err) {
+        // Never break a chat turn over an offering hint - degrade to "no lake" (the tool simply
+        // isn't auto-offered), matching the entitlement-resolution fail-safe above.
+        this.logger.warn(
+          `[dataLakes] accessible-lake offering check failed; not auto-offering: ${(err as Error)?.message}`
+        );
+        this.hasAccessibleKnowledgeLakeMemo = false;
+      }
+    }
+    return this.hasAccessibleKnowledgeLakeMemo;
+  }
+
   private async initializeProcessContext(
     body: z.infer<typeof QuestStartBodySchema>,
     logger: Logger,
@@ -721,40 +849,48 @@ export class ChatCompletionProcess {
       timezone: userTimezone,
     } = parsedBody;
 
-    // Pair tools that are useless without their companion. The UI exposes single toggles
-    // ("Image Generation", "Knowledge Base Search") that imply the paired capability.
-    let finalEnabledTools: string[] = addPairedTool(enabledTools, 'image_generation', 'edit_image');
-    finalEnabledTools = addPairedTool(finalEnabledTools, 'search_knowledge_base', 'retrieve_knowledge_content');
+    // Companion pairing now runs once in `resolveEnabledTools` (see process()), after the
+    // per-session union and attached-knowledge offer, so session-forced and auto-offered
+    // tools get paired too. Here we only copy the request selection so the auto-adds below
+    // don't mutate `parsedBody.tools`.
+    const finalEnabledTools: string[] = [...enabledTools];
     let hasContentTransform = false;
 
-    // Auto-add blog_publish tool if user has blog integration configured (admin-only for now)
-    if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_publish')) {
-      finalEnabledTools.push('blog_publish');
-    }
+    // Auto-added capabilities are OUR additions, not the caller's, so a prompt mode skips this
+    // whole block - and not only for prompt hygiene: attaching any tool also pulls the provider's
+    // server-side tool-use preamble into the request (observed live: a completion whose only tools
+    // were auto-added knew the current date on a fresh raw-mode session). Tools the caller sent
+    // explicitly are caller intent and stay, mode or not.
+    if (!parsedBody.promptMode) {
+      // Auto-add blog_publish tool if user has blog integration configured (admin-only for now)
+      if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_publish')) {
+        finalEnabledTools.push('blog_publish');
+      }
 
-    // Auto-add blog_edit tool if user has blog integration configured (admin-only for now)
-    if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_edit')) {
-      finalEnabledTools.push('blog_edit');
-    }
+      // Auto-add blog_edit tool if user has blog integration configured (admin-only for now)
+      if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_edit')) {
+        finalEnabledTools.push('blog_edit');
+      }
 
-    // Auto-add blog_draft tool for admin users (used by Content Publishing Studio)
-    if (this.user.isAdmin && !enabledTools.includes('blog_draft')) {
-      finalEnabledTools.push('blog_draft');
-      hasContentTransform = true;
-    }
+      // Auto-add blog_draft tool for admin users (used by Content Publishing Studio)
+      if (this.user.isAdmin && !enabledTools.includes('blog_draft')) {
+        finalEnabledTools.push('blog_draft');
+        hasContentTransform = true;
+      }
 
-    if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
-      finalEnabledTools.push('navigate_view');
-    }
+      if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
+        finalEnabledTools.push('navigate_view');
+      }
 
-    // Auto-add the `skill` LLM tool when the host has wired a skill repository.
-    // Skills are user-defined instruction templates and there's no separate
-    // toggle for them in the UI - gating purely on db.skills being present
-    // keeps callers without skill support unaffected. SkillsFeature still
-    // surfaces the catalog into the system prompt so the LLM knows what's
-    // invocable.
-    if (this.db.skills && !finalEnabledTools.includes('skill')) {
-      finalEnabledTools.push('skill');
+      // Auto-add the `skill` LLM tool when the host has wired a skill repository.
+      // Skills are user-defined instruction templates and there's no separate
+      // toggle for them in the UI - gating purely on db.skills being present
+      // keeps callers without skill support unaffected. SkillsFeature still
+      // surfaces the catalog into the system prompt so the LLM knows what's
+      // invocable.
+      if (this.db.skills && !finalEnabledTools.includes('skill')) {
+        finalEnabledTools.push('skill');
+      }
     }
 
     // Auto-add Lattice tools when Lattice feature is enabled
@@ -862,7 +998,7 @@ export class ChatCompletionProcess {
     let enableQuestMaster = initialEnableQuestMaster;
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
-    const { questId, sessionId } = parsedBody;
+    const { questId, sessionId, promptMode } = parsedBody;
 
     // Variables to store actual timing durations
     let actualArtifactProcessingDuration = 0;
@@ -1074,28 +1210,31 @@ export class ChatCompletionProcess {
       }
       quest.status = 'running';
 
-      // Generic per-session tool defaults: a session may carry tools that must
-      // always be offered to the model, unioned with the per-request selection.
-      // Lets a product surface guarantee grounded retrieval (or other tools)
-      // regardless of the client's Smart/Fast toggle. No product-specific branch
-      // in core - mirrors the generic `session.systemPromptText` capability.
-      if (Array.isArray(session.enabledTools)) {
-        for (const tool of session.enabledTools) {
-          if (!enabledTools.includes(tool)) enabledTools.push(tool);
-        }
-      }
+      // Finalize the tool-offer list in one place: union the session's forced tools, offer the
+      // knowledge-base tool when the caller has retrievable knowledge (documents attached to this
+      // session OR one of their own data lakes), pair companion tools, and apply the session
+      // denylist last (so a curated "approved sources only" surface still wins). `enabledTools`
+      // is the array reference handed to buildTools, so splice the result back in place rather
+      // than reassigning the binding.
+      const hasAttachedKnowledge = (session.knowledgeIds?.length ?? 0) > 0;
+      // Any promptMode is an eval/passthrough that must not receive our server-side offers.
+      const skipAutoOffers = Boolean(promptMode);
+      // Only pay the accessible-lake lookup when it could change the offer: not skipped
+      // (prompt-mode), and attached knowledge hasn't already triggered the offer anyway.
+      const hasAccessibleDataLake =
+        skipAutoOffers || hasAttachedKnowledge ? false : await this.userHasAccessibleKnowledgeLake();
+      const resolvedTools = resolveEnabledTools({
+        requestTools: enabledTools,
+        sessionEnabledTools: Array.isArray(session.enabledTools) ? session.enabledTools : undefined,
+        sessionDisabledTools: Array.isArray(session.disabledTools) ? session.disabledTools : undefined,
+        hasAttachedKnowledge,
+        hasAccessibleDataLake,
+        skipAutoOffers,
+      });
+      enabledTools.splice(0, enabledTools.length, ...resolvedTools);
 
-      // Generic per-session tool denylist: strip tools the session forbids, even if
-      // the request or a global auto-add (e.g. navigate_view) included them. Lets a
-      // product surface enforce an approved toolset ("curated sources only" -> no web
-      // search). Applied last so it wins over every other tool source. Mutates in
-      // place since `enabledTools` is the array reference passed to buildTools.
-      if (Array.isArray(session.disabledTools) && session.disabledTools.length > 0) {
-        const denied = new Set(session.disabledTools);
-        for (let i = enabledTools.length - 1; i >= 0; i--) {
-          if (denied.has(enabledTools[i])) enabledTools.splice(i, 1);
-        }
-      }
+      // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
+      // moved to after buildTools, where the authoritative post-build tool list is known.
 
       // Generic per-session integration isolation: a curated-surface session (e.g. /opti)
       // can suppress the user's personal integrations so it runs only its server-owned
@@ -1203,13 +1342,18 @@ export class ChatCompletionProcess {
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
         enableQuestMaster || false,
-        enableMementos || false,
+        // Tri-state, deliberately NOT coerced: explicit false is the caller's memory
+        // opt-out and must stay distinguishable from absence (#1319, resolveMementoGates).
+        enableMementos,
         enableAgents || false,
         projectId,
-        optimizedFeatureList,
+        // Not built at all under a prompt mode, rather than built and filtered later: these
+        // features have side effects (memory writes, reply replacement) that outlive the prompt.
+        filterFeaturesByPromptMode(optimizedFeatureList, promptMode),
         organization,
         session.systemPromptText,
-        session.forceKnowledgeRetrieval,
+        // A mode overrides the session flag in both directions; see resolveForcedRetrieval.
+        resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval),
         session.retrievalTags,
         session.citationStyle,
         toRetrievalFilter(session)
@@ -1869,10 +2013,52 @@ export class ChatCompletionProcess {
         }
       }
 
+      const offeredToolNames = allTools?.map(t => t.toolSchema.name) ?? [];
       logger.info('🔧 [Tools] allTools:', {
-        count: allTools?.length ?? 0,
-        names: allTools?.map(t => t.toolSchema.name) ?? [],
+        count: offeredToolNames.length,
+        names: offeredToolNames,
       });
+      // Record the final offered tool list for telemetry/eval. The API response's
+      // effectiveTools is the API-layer (phrase-recommender) selection only; this is what
+      // the model was actually given, so it reflects server-side offers like the attached-
+      // knowledge auto-offer above.
+      if (quest.promptMeta) quest.promptMeta.offeredTools = offeredToolNames;
+
+      // Loud warning for the invisible failure mode: the caller has retrievable knowledge
+      // (attached documents OR an accessible lake) but no knowledge tool survived into the final
+      // offered set. Checked here against offeredToolNames (not at resolveEnabledTools) because
+      // this is the authoritative post-build list - it sees the post-build denylist pass, the
+      // Ollama auto-added trim, and tools injected inside buildTools, none of which the pre-build
+      // enabledTools filter can. Skipped under promptMode, where withholding the offer is
+      // deliberate (see skipAutoOffers), not a failure. Silent otherwise means the model answers
+      // from its weights while the user believes their knowledge was consulted.
+      // The lake signal is held to a stricter bar than attached documents. The warning speaks to a
+      // user belief that their knowledge was consulted, and attaching documents creates that belief
+      // where merely owning a lake does not. So for the lake-only case we warn on an UNEXPECTED
+      // disappearance and stay quiet when the tool is absent BY CONFIGURATION: a session that
+      // denies it, or a model offered no tools at all. Without this, every turn of every
+      // lake-holding caller on a non-tool model logs a warning and drowns the real case.
+      const knowledgeToolWithheldByConfig =
+        (Array.isArray(session.disabledTools) && session.disabledTools.includes('search_knowledge_base')) ||
+        offeredToolNames.length === 0;
+      if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !promptMode) {
+        const source = hasAttachedKnowledge
+          ? `${session.knowledgeIds!.length} attached document(s)`
+          : 'an accessible data lake';
+        if (!offeredToolNames.includes('search_knowledge_base')) {
+          this.logger.warn(
+            `[knowledge] session ${session.id} has ${source} but search_knowledge_base is not offered - ` +
+              `the answer will come from model weights, not the knowledge.`
+          );
+        } else if (!offeredToolNames.includes('retrieve_knowledge_content')) {
+          // Search survived but its companion did not (e.g. a denylist stripped retrieve): the
+          // model can locate passages but cannot read their text. See addPairedTool.
+          this.logger.warn(
+            `[knowledge] session ${session.id} offers search_knowledge_base without ` +
+              `retrieve_knowledge_content - the model can locate passages but cannot read them.`
+          );
+        }
+      }
 
       // For tool prompt guidance, only include MCP tools given directly to the main LLM
       // (agent-only tools like Atlassian are excluded - they're accessed via delegate_to_agent)
@@ -1885,6 +2071,16 @@ export class ChatCompletionProcess {
       // trimmed from their schemas above, and telling a model to call a tool it does not
       // have makes it emit the call as leaked JSON text in the reply.
       const blogDraftAvailable = allTools?.some(t => t.toolSchema.name === 'blog_draft') ?? false;
+
+      // Same gate, same reason, for the image prompt - except buildAndSortMessages appends that one
+      // out of sight of this assembly site, so availability has to be threaded into the builder.
+      const imageGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'image_generation') ?? false;
+
+      // navigate_view is auto-added (AUTO_ADDED_TOOL_NAMES), so the local-model trim above drops it
+      // from the built list while it stays in the requested one - the view registry below would then
+      // describe a tool the model never received.
+      const navigateViewAvailable = allTools?.some(t => t.toolSchema.name === 'navigate_view') ?? false;
+      const editImageAvailable = allTools?.some(t => t.toolSchema.name === 'edit_image') ?? false;
 
       const toolPromptMessage = await toolBuilder.buildToolPrompt({
         toolPromptId,
@@ -1969,23 +2165,38 @@ export class ChatCompletionProcess {
 
       // Extracted so the overflow-guard safety net below can rebuild with a trimmed
       // history without duplicating this (long, order-sensitive) system/context block.
-      const contextAndSystemMessages: IMessage[] = [
-        dateTimeContext, // Always provide current date/time awareness
-        ...extraContextMessages, // Add extra context messages from external sources at the top
+      const taggedContextMessages = buildTaggedContextMessages({
+        dateContext: [dateTimeContext], // Always provide current date/time awareness
+        extraContext: extraContextMessages, // Extra context messages from external sources, at the top
         // Artifact emission guidance. Without this, correct <artifact> usage
         // is left to the model's defaults and large HTML/code can leak into the chat
         // body as raw markup. Gated on the same effective flag as extraction, so a turn is
         // never told to emit artifacts that the post-processing below will not extract.
-        ...(artifactsEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : []),
+        artifactEmission: artifactsEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : [],
         // Help-center awareness. Makes the model aware of the in-app
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
         // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).
-        ...(isLocalModel ? [] : [{ role: 'system' as const, content: helpCenterContent }]),
-        // Inject view registry summary when navigate_view tool is enabled
-        ...(enabledTools.includes('navigate_view')
+        helpCenter: isLocalModel ? [] : [{ role: 'system' as const, content: helpCenterContent }],
+        // Abstention licence. Counterweight to the completeness pressure the rest of the prompt
+        // applies - without it the model treats "answer fully" as unconditional and invents
+        // specifics about the user or their data rather than naming the gap. Ships on every
+        // in-app completion (not just the grounded surfaces) because that is where the pressure
+        // is; a promptMode strips it like any other prompt we author. Admin-editable via
+        // `AbstentionPrompt`; a blank value falls back to the built-in default so the licence can
+        // never be silently stripped.
+        abstention: [
+          {
+            role: 'system' as const,
+            content: getSettingsValue('AbstentionPrompt', defaultAdminSettings, ABSTENTION_PROMPT),
+          },
+        ],
+        // Inject view registry summary when the navigate_view tool reached the model
+        viewRegistry: navigateViewAvailable
           ? [
               {
                 role: 'system' as const,
+                // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
+                requiresTool: 'navigate_view',
                 content: (() => {
                   // Extract current path from extraContextMessages for context-aware prompting
                   const viewCtx = extraContextMessages.find(
@@ -2003,52 +2214,72 @@ export class ChatCompletionProcess {
                 })(),
               },
             ]
-          : []),
-        ...(toolPromptMessage ? [toolPromptMessage] : []), // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
-        ...(featureContextMessages['agentDetection'] ?? []), // Add agent system prompts
-        ...(featureContextMessages['questMaster'] ?? []),
-        ...(featureContextMessages['organizationPrompt'] ?? []), // Add team-wide system prompt
-        ...(featureContextMessages['sessionPrompt'] ?? []), // Per-session system prompt (product surfaces)
-        ...(featureContextMessages['knowledgeRetrieval'] ?? []), // Forced data-lake retrieval (grounding + citations)
+          : [],
+        toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
+        agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
+        questMaster: featureContextMessages['questMaster'],
+        organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
+        sessionPrompt: featureContextMessages['sessionPrompt'], // Per-session system prompt (product surfaces)
+        // Skills catalog (model-invocable `skill` tool discovery) + expanded `/skill-name`
+        // invocations. Grouped with the instruction-shaping blocks above and ahead of the
+        // data-context blocks below so an explicit invocation is not diluted by retrieval noise.
+        skills: featureContextMessages['skills'],
+        knowledgeRetrieval: featureContextMessages['knowledgeRetrieval'], // Forced data-lake retrieval (grounding + citations)
         // Add LLM-optimized context summary if available (covers messages before verbatim window)
-        ...(session.contextSummary
+        contextSummary: session.contextSummary
           ? [
               {
                 role: 'system' as const,
                 content: `[Context from earlier in this conversation]\n${session.contextSummary}`,
               },
             ]
-          : []),
-        ...(featureContextMessages['mementos'] ?? []),
-        ...(featureContextMessages['project'] ?? []),
+          : [],
+        mementos: featureContextMessages['mementos'],
+        project: featureContextMessages['project'],
         // Recently generated images - gives the model a handle to edit a prior
         // generated image ("make it cartoonish"). Generated images persist as
         // bare storage keys in quest.images with no fabFile record, so without
         // this note the model can't reference them and either declines or (worse)
-        // claims success without calling a tool. Gated on edit_image being
-        // available (paired with image_generation).
-        ...(enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
-          ? [
-              {
-                role: 'system' as const,
-                content: [
-                  '# Recently generated images',
-                  '',
-                  'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
-                  '',
-                  ...cacheInfo.recentGeneratedImages!.map(
-                    img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
-                  ),
-                  '',
-                  'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
-                ].join('\n'),
-              },
-            ]
-          : []),
-        ...urlMessages,
-        ...fabMessages,
-      ];
+        // claims success without calling a tool. Gated on edit_image reaching the
+        // built tool list, like the two prompts above: the requested list agrees today
+        // only because edit_image is never auto-added, which is exactly the assumption
+        // that broke the view registry once navigate_view became auto-added.
+        recentImages:
+          editImageAvailable && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
+            ? [
+                {
+                  role: 'system' as const,
+                  content: [
+                    '# Recently generated images',
+                    '',
+                    'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
+                    '',
+                    ...cacheInfo.recentGeneratedImages!.map(
+                      img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
+                    ),
+                    '',
+                    'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
+                  ].join('\n'),
+                },
+              ]
+            : [],
+        urls: urlMessages,
+        attachedFiles: fabMessages,
+      });
+      const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
+      const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
+      // An explicit mode also excludes the admin templates this helper appends downstream
+      // (FormatPromptTemplate, image prompt) - they are invisible from the assembly above, so the
+      // source filter alone would leave them in front of a "raw" completion.
+      //
+      // Shared with the overflow-recovery rebuild further down, so a prompt rebuilt after shedding
+      // history cannot carry different builder options than the first build.
+      const buildOptions = {
+        verbose: false,
+        skipAdminPromptTemplates: Boolean(promptMode),
+        imageGenerationAvailable,
+      };
       let messages = await buildAndSortMessages(
         previousMessages,
         contextAndSystemMessages,
@@ -2057,7 +2288,8 @@ export class ChatCompletionProcess {
         defaultAdminSettings,
         historyCount,
         logger,
-        this.tokenizer
+        this.tokenizer,
+        buildOptions
       );
       // The length check is the part that matters: buildAndSortMessages returns an EMPTY ARRAY when
       // the input budget is non-positive, and `!messages` is false for `[]`, so an empty prompt used
@@ -2202,7 +2434,8 @@ export class ChatCompletionProcess {
               defaultAdminSettings,
               historyCount,
               logger,
-              this.tokenizer
+              this.tokenizer,
+              buildOptions
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
             messages = rebuilt;
@@ -2245,107 +2478,50 @@ export class ChatCompletionProcess {
         logger.warn(`📊 Failed to calculate token breakdown:`, tokenBreakdownError);
       }
 
+      // Per-source breakdown, derived from the same tagged list the prompt was assembled
+      // from (see systemPromptSources) rather than re-listed by hand here. The hand-written
+      // version this replaces covered a third of the sources and reported a `session_summary`
+      // row built from `session.summary`, a field the assembled prompt never carried - it
+      // carries `session.contextSummary`. Sources appended downstream by buildAndSortMessages
+      // (FormatPromptTemplate, image prompt) are still not represented here. The two always-on
+      // floor sources come from systemPromptFloorTelemetry, which owns those rows outright -
+      // including the wasIncluded:false inventory rows a derivation from the admitted stack
+      // cannot produce; inclusion is read off the admitted stack rather than the raw settings
+      // gates, so a promptMode that strips a block reports it excluded instead of billed (#810).
+      //
+      // Persisted on the quest for every completion - unlike contextTelemetry, which exists
+      // only when enhanced telemetry is on - so the API layer can report which prompts fed a
+      // completion instead of leaving callers to infer it from behavior. Guarded: a counting
+      // failure must degrade to a missing breakdown, never a failed completion.
+      let systemPromptDetails: SystemPromptDetail[] | undefined;
+      try {
+        const floorSources: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
+        systemPromptDetails = await toPromptDetails(
+          admittedContextMessages.filter(t => !floorSources.includes(t.source)),
+          messages => calculateTotalTokenLength(messages, tokenCalcOptions)
+        );
+        const admitted = (source: PromptSourceId) => admittedContextMessages.some(t => t.source === source);
+        systemPromptDetails.push(
+          ...(await buildAlwaysOnFloorDetails(
+            {
+              artifactEmissionEnabled: admitted('artifactEmission'),
+              artifactEmissionContent,
+              // The helper models exactly one exclusion ("local model"); a mode that strips
+              // the help-center block must surface the same way: excluded, zero tokens.
+              isLocalModel: !admitted('helpCenter'),
+              helpCenterContent,
+            },
+            content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
+          ))
+        );
+        quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
+      } catch (detailsError) {
+        logger.warn(`📊 Failed to derive system prompt details:`, detailsError);
+      }
+
       // Feed breakdown into telemetry builder for detailed system prompt tracking
-      if (telemetryBuilder) {
+      if (telemetryBuilder && systemPromptDetails) {
         try {
-          // Build system prompt details for telemetry
-          const systemPromptDetails: SystemPromptDetail[] = [];
-
-          // Date/time context (hardcoded)
-          if (dateTimeContext) {
-            const dtTokens = await calculateTotalTokenLength([dateTimeContext], tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'hardcoded',
-              name: 'date_time_context',
-              tokenCount: dtTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Tool prompt (admin/hardcoded)
-          if (toolPromptMessage) {
-            const toolTokens = await calculateTotalTokenLength([toolPromptMessage], tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'admin',
-              name: 'tool_guidance',
-              tokenCount: toolTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Agent detection prompts
-          const agentMessages = featureContextMessages['agentDetection'] ?? [];
-          if (agentMessages.length > 0) {
-            const agentTokens = await calculateTotalTokenLength(agentMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'hardcoded',
-              name: 'agent_detection',
-              tokenCount: agentTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Quest master prompts
-          const qmMessages = featureContextMessages['questMaster'] ?? [];
-          if (qmMessages.length > 0) {
-            const qmTokens = await calculateTotalTokenLength(qmMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'session',
-              name: 'quest_master',
-              tokenCount: qmTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Organization prompts
-          const orgMessages = featureContextMessages['organizationPrompt'] ?? [];
-          if (orgMessages.length > 0) {
-            const orgTokens = await calculateTotalTokenLength(orgMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'org',
-              name: 'organization_prompt',
-              tokenCount: orgTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Session summary
-          if (session.summary) {
-            const summaryMsg = [
-              { role: 'system' as const, content: `Previous conversation summary:\n${session.summary}` },
-            ];
-            const summaryTokens = await calculateTotalTokenLength(summaryMsg, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'session',
-              name: 'session_summary',
-              tokenCount: summaryTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Project prompts
-          const projectMessages = featureContextMessages['project'] ?? [];
-          if (projectMessages.length > 0) {
-            const projectTokens = await calculateTotalTokenLength(projectMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'project',
-              name: 'project_context',
-              tokenCount: projectTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Always-on floor blocks (artifact-emission, help-center) billed on every basic
-          // turn. Previously invisible inside the systemPrompts residual; itemized here so
-          // the fixed prompt cost is auditable in the Context Inspector (#810).
-          systemPromptDetails.push(
-            ...(await buildAlwaysOnFloorDetails(
-              { artifactEmissionEnabled: artifactsEnabled, artifactEmissionContent, isLocalModel, helpCenterContent },
-              content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
-            ))
-          );
-
-          // Calculate total system prompt tokens
           const systemPromptTokensTotal = systemPromptDetails.reduce((sum, p) => sum + p.tokenCount, 0);
 
           telemetryBuilder.setSystemPrompts({
@@ -2622,6 +2798,9 @@ export class ChatCompletionProcess {
               }
             : undefined,
         tools: allTools,
+        // raw promises an empty system parameter; the adapters append a model-identity
+        // line on their own, so the promise has to be threaded down to them.
+        ...(promptMode === 'raw' ? { omitIdentityReminder: true } : {}),
       };
 
       // Check if Research Mode is enabled and handle parallel processing
@@ -4740,7 +4919,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   private async buildOptimizedFeatures(
     adminSettings: Record<string, string>,
     enableQuestMaster: boolean,
-    enableMementos: boolean,
+    enableMementos: boolean | undefined,
     enableAgents: boolean,
     projectId?: string,
     optimizedFeatureList: featureNames[] = [],
@@ -4772,29 +4951,30 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.features.set('contextSummarization', new ContextSummarizationFeature(this));
     }
 
-    // Conditional features - only build if requested AND enabled. Mementos runs when V1 is on
-    // (admin + request flag) OR when the user has opted into V2, so V2 works independently of V1
-    // (the two are mutually exclusive at inject time - MementoFeature picks which).
+    // Conditional features - only build if requested AND enabled. Memento gating for BOTH
+    // pipelines lives in resolveMementoGates (#1319): V1 needs explicit request intent plus
+    // the admin setting; V2 rides the per-user opt-in but an explicit `enableMementos: false`
+    // from the caller now disables it too - on the read side (the feature is never registered,
+    // so nothing injects) and the write side (the flags below never fire). The two remain
+    // mutually exclusive at inject time - MementoFeature picks which.
     //
     // MUST go through isExperimentalFeatureEnabled: `preferences.experimentalFeatures` is a Mongoose
     // Map at runtime, so reading it with dot access silently yields undefined and the feature never
     // runs. That is exactly the bug this line used to have - V2 memory was never injected into a
     // prompt even for a user who had opted in.
     const enableMementosV2 = isExperimentalFeatureEnabled(this.user, 'enableMementosV2');
-    if (
-      optimizedFeatureList.includes('mementos') &&
-      ((enableMementos && adminSettingsEnableMementos) || enableMementosV2)
-    ) {
-      this.logger.log(`  - Enabling Mementos feature${enableMementosV2 ? ' (V2 opt-in)' : ''}`);
-      // Resolve the WRITE gates here, where both the admin setting and the per-user opt-in are in
-      // scope, and hand them to the feature. V1 writes only when it is fully on (request flag AND admin
-      // setting); V2 writes on the opt-in. Without this, the completion event carried no flags and the
-      // subscriber defaulted V1 on - so chat kept writing V1 mementos for a V2 user even with V1 off.
+    const mementoGates = resolveMementoGates(enableMementos, Boolean(adminSettingsEnableMementos), enableMementosV2);
+    if (optimizedFeatureList.includes('mementos') && (mementoGates.v1 || mementoGates.v2)) {
+      this.logger.log(`  - Enabling Mementos feature${mementoGates.v2 ? ' (V2 opt-in)' : ''}`);
+      // Resolve the WRITE gates here, where the request flag, admin setting, and per-user opt-in
+      // are all in scope, and hand them to the feature. Without explicit flags, the completion
+      // event carried none and the subscriber defaulted V1 on - so chat kept writing V1 mementos
+      // for a V2 user even with V1 off.
       this.features.set(
         'mementos',
         new MementoFeature(this, {
-          writeV1: Boolean(enableMementos && adminSettingsEnableMementos),
-          writeV2: enableMementosV2,
+          writeV1: mementoGates.v1,
+          writeV2: mementoGates.v2,
         })
       );
     }

@@ -2,6 +2,7 @@ export * from './create';
 export * from './getSystemUser';
 export * from './list';
 export * from './rateLimit';
+export * from './resolveOwnedApiKey';
 export * from './revoke';
 export * from './rotate';
 export * from './spendCap';
