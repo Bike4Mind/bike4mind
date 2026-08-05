@@ -119,3 +119,28 @@ export function sessionSlug(sessionId: string | null | undefined): string {
   const animalIndex = Math.floor(hash / ADJECTIVES.length) % ANIMALS.length;
   return `${ADJECTIVES[hash % ADJECTIVES.length]}-${ANIMALS[animalIndex]}`;
 }
+
+/**
+ * Actor displayName for a session-scoped presence reporter. THE convention, not
+ * one surface's preference: ensureActor upserts on (userId, kind, displayName),
+ * so two reporters covering the same session must compose the identical string
+ * or that session gets two actors, two roster rows and two cursors. That is
+ * exactly what happened while the hook named itself `Claude Code (slug)` and the
+ * bridge named the same session `${workspace} (slug)` - and since the bridge is
+ * itself hooks-driven, running both is the expected configuration, not an edge
+ * case.
+ *
+ * Derived from the session id ALONE, which is what makes agreement possible:
+ * - The workspace cannot appear here. The hook withholds it below disclosure
+ *   tier 1, so including it would make an actor's IDENTITY depend on a privacy
+ *   setting - one session would split into two actors when the tier changed.
+ *   The workspace already travels as projected roster detail, where surfaces
+ *   render it next to the name.
+ * - No client name either ("Claude Code"): presence has to stay
+ *   surface-agnostic, so a human at a plain terminal and an agent on a map read
+ *   as one recognizable actor rather than one client's shape emulated by the
+ *   rest.
+ */
+export function sessionActorName(sessionId: string | null | undefined): string {
+  return sessionSlug(sessionId);
+}

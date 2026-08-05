@@ -51,6 +51,11 @@ const MALFORMED_DISCLOSURE = 0;
  *  dependency-free and cannot import it. */
 const DEFAULT_CHANNEL_NAME = 'agents';
 
+/** Must match PRESENCE_PAYLOAD_SCHEMA_NAME and PRESENCE_SURFACES in
+ *  b4m-core/hearth/src/presence.ts, which presence.test.ts pins. */
+const PAYLOAD_SCHEMA = 'hearth.presence@1';
+const SURFACE = 'claude-code-hook';
+
 /**
  * UNSET means the default tier. SET-BUT-UNPARSEABLE means the minimum, because
  * a garbage value is a misconfiguration and the safe reading of a broken
@@ -187,9 +192,14 @@ process.stdin.on('end', async () => {
     // One actor per session. That is what makes presence rows distinguishable,
     // gives each reader an independent cursor, and yields a stable per-session
     // color downstream - all three followed from the single collapsed actor.
-    const label = B4M_HEARTH_LABEL || `Claude Code (${slug})`;
+    //
+    // The slug ALONE, matching sessionActorName in b4m-core/hearth/src/identity.ts:
+    // the cc-bridge covers these same sessions and ensureActor upserts on
+    // displayName, so any disagreement splits one session into two actors. See
+    // that function for why neither the workspace nor a client name belongs here.
+    const label = B4M_HEARTH_LABEL || slug;
 
-    const payload = { hook_event_name: eventName, session_id: sessionId, slug };
+    const payload = { hook_event_name: eventName, session_id: sessionId, slug, surface: SURFACE };
     const workspace = typeof hook.cwd === 'string' && hook.cwd ? basename(hook.cwd) : undefined;
     if (tier >= 1 && workspace) payload.workspace = workspace;
     const activity = activityOf(hook);
@@ -202,7 +212,7 @@ process.stdin.on('end', async () => {
         ...(B4M_HEARTH_CHANNEL ? { channelId: B4M_HEARTH_CHANNEL } : { channelName: DEFAULT_CHANNEL_NAME }),
         kind: 'presence',
         human: { text: describe({ label, tier, workspace, activity }), format: 'text' },
-        machine: { schema: 'hearth.claude-code-hook@1', payload },
+        machine: { schema: PAYLOAD_SCHEMA, payload },
         refs: {},
         // Self-identify as an agent actor. Without this the hook resolved to the
         // account's HUMAN actor, so every heartbeat rendered as if the person

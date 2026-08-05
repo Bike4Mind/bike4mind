@@ -122,15 +122,19 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
       expect(body.kind).toBe('presence');
 
       const machine = body.machine as { schema: string; payload: Record<string, unknown> };
-      expect(machine.schema).toBe('hearth.claude-code-hook@1');
+      expect(machine.schema).toBe('hearth.presence@1');
       // Default tier is 2: identity + workspace basename + activity state.
+      // `surface` is a constant reporter tag, so it discloses nothing about the
+      // environment and travels at every tier.
       expect(Object.keys(machine.payload).sort()).toEqual([
         'activity',
         'hook_event_name',
         'session_id',
         'slug',
+        'surface',
         'workspace',
       ]);
+      expect(machine.payload.surface).toBe('claude-code-hook');
 
       // No content-bearing field survives anywhere in the wire body.
       const wire = JSON.stringify(body);
@@ -143,10 +147,12 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
   }, 15000);
 
   it('discloses exactly the documented field set at each tier', async () => {
+    // `surface` is present at every tier: it is a constant naming the reporter,
+    // so it discloses nothing about the session's environment.
     const expectedKeys: Record<string, string[]> = {
-      '0': ['hook_event_name', 'session_id', 'slug'],
-      '1': ['hook_event_name', 'session_id', 'slug', 'workspace'],
-      '2': ['activity', 'hook_event_name', 'session_id', 'slug', 'workspace'],
+      '0': ['hook_event_name', 'session_id', 'slug', 'surface'],
+      '1': ['hook_event_name', 'session_id', 'slug', 'surface', 'workspace'],
+      '2': ['activity', 'hook_event_name', 'session_id', 'slug', 'surface', 'workspace'],
     };
 
     for (const [tier, keys] of Object.entries(expectedKeys)) {
@@ -175,8 +181,8 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
   }, 30000);
 
   it('clamps an out-of-range or malformed tier into range, never wider than the max', async () => {
-    const TIER_2 = ['activity', 'hook_event_name', 'session_id', 'slug', 'workspace'];
-    const TIER_0 = ['hook_event_name', 'session_id', 'slug'];
+    const TIER_2 = ['activity', 'hook_event_name', 'session_id', 'slug', 'surface', 'workspace'];
+    const TIER_0 = ['hook_event_name', 'session_id', 'slug', 'surface'];
     // Above the max clamps to the max; below zero clamps to the minimum;
     // unparseable resolves to the MINIMUM, because a broken privacy setting must
     // fail closed. Only genuinely unset gets the default (asserted separately).
@@ -267,7 +273,10 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
     expect(other.slug).not.toBe(first.slug);
     // Always an agent actor, never the account's human actor.
     expect(first.actor.kind).toBe('agent');
-    expect(first.actor.displayName).toBe(`Claude Code (${first.slug})`);
+    // The slug alone, matching sessionActorName, which the cc-bridge also uses:
+    // the two reporters cover the same sessions, and ensureActor upserts on
+    // displayName, so disagreeing here splits one session into two actors.
+    expect(first.actor.displayName).toBe(first.slug);
     // Readable rather than hex.
     expect(first.slug).toMatch(/^[a-z]+-[a-z]+$/);
   }, 30000);
