@@ -60,6 +60,8 @@ import {
   ITokenizer,
   getLastBuildDebugInfo,
   getSettingsByNames,
+  attachedContentExtractionBudget,
+  safeInputWindow,
 } from '@bike4mind/utils';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
@@ -215,49 +217,16 @@ function assertNeverElisionSignal(signal: never): never {
 const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
 
 /**
- * Usable input window: the context window less the output this request will reserve, less a safety
- * buffer. Deliberately NOT clamped at zero - the empty-prompt guard depends on seeing a non-positive
- * budget for a genuinely misconfigured text model.
- *
- * Image and video models return media rather than tokens, and every image backend here sets
- * max_tokens equal to contextWindow because both are the prompt-length limit, so reserving it as
- * output left no room for the prompt itself. Two callers need this figure - the assembly budget and
- * the verbatim-history window - and they must not drift apart.
- */
-const safeInputWindow = (modelInfo: ModelInfo, requestedMaxTokens: number, safetyBuffer = 1000): number => {
-  const contextLimit = modelInfo.contextWindow ?? 200000;
-  const modelMaxOutput = modelInfo.max_tokens ?? 16384;
-  const returnsMedia = modelInfo.type === 'image' || modelInfo.type === 'video';
-  const reservedOutput = returnsMedia ? 0 : Math.min(requestedMaxTokens, modelMaxOutput);
-  return contextLimit - reservedOutput - safetyBuffer;
-};
-
-/**
  * Share of the context budget this file assumes history will take when sizing a history count. It
  * does NOT mirror how buildAndSortMessages splits the budget: that depends on historyCount, giving
  * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise.
  */
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
-/**
- * Share of the usable input window that attached-file content may be EXTRACTED into.
- * Kept a minority share so conversational history, which is what users notice losing
- * first, keeps the majority. See attachedFileTokenBudget at its only use site.
- *
- * Three different stages, easily confused. HISTORY_BUDGET_PERCENTAGE above sizes the
- * history MESSAGE COUNT before anything is fetched. Two constants in utils.ts govern
- * ASSEMBLY, trimming an already-extracted set to fit: KNOWLEDGE_FILE_TOKEN_ALLOCATION for
- * an unwindowed request, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION as the floor for a windowed
- * one. This constant governs EXTRACTION - how much is read off disk at all - and is held
- * below the assembly share on purpose.
- */
-const ATTACHED_CONTENT_SHARE = 0.35;
-/**
- * Floor for the attached-content budget, as a share of the raw input window. Applies
- * when subtracting SYSTEM_PROMPT_RESERVE would drive the budget to zero, which a small
- * local model does routinely. See attachedFileTokenBudget for why zero is the dangerous
- * value rather than the safe one.
- */
-const MIN_ATTACHED_CONTENT_SHARE = 0.15;
+// Three stages decide how much attached content survives, and they are easily confused.
+// HISTORY_BUDGET_PERCENTAGE above sizes the history MESSAGE COUNT before anything is fetched. The other
+// two now live together in @bike4mind/utils contextBudget, because the ordering between them is what
+// matters: EXTRACTION reads content off disk, ASSEMBLY trims what was read, and extraction has to stay
+// at or below the assembly floor or the floor is unreachable.
 
 /**
  * Fraction of the space ACTUALLY AVAILABLE FOR HISTORY (safe input minus the
@@ -1807,26 +1776,18 @@ export class ChatCompletionProcess {
       // answers silently shrank your own retrieval. Deriving it from the input window
       // instead means a large-context model can actually use one.
       //
-      // Held below the assembly budget on purpose. Extraction estimates at
-      // CHARS_PER_TOKEN while assembly re-counts with the real tokenizer, so leaving
-      // headroom keeps anything extracted from being dropped again downstream.
+      // Meant to sit below the assembly budget, because extraction estimates at CHARS_PER_TOKEN while
+      // assembly re-counts with the real tokenizer, so headroom keeps anything extracted from being
+      // dropped again downstream. It does on the small windows that matter, but not universally: see
+      // contextBudget, where the flat-reserve-versus-percentage-buffer crossover is spelled out.
       //
-      // The floor is load-bearing, not defensive. On a small local model the reserve
-      // subtraction goes negative, and a budget of 0 does NOT mean "send nothing" to
-      // processFabFilesServer - it means "no budget given", which restores a flat
-      // per-file cap applied once per file. Three files would then be handed more
-      // content than the whole input window. Flooring at a share of the raw window
-      // keeps the per-file division in effect, and assembly trims from there.
-      // Outer clamp is not redundant: on a tiny context window maxSafeInputTokens is
-      // itself negative (contextLimit - output cap - buffer), so both inner terms are
-      // negative and a negative budget would reach processFabFilesServer.
-      const attachedFileTokenBudget = Math.max(
-        0,
-        Math.max(
-          Math.floor(maxSafeInputTokens * MIN_ATTACHED_CONTENT_SHARE),
-          Math.floor((maxSafeInputTokens - SYSTEM_PROMPT_RESERVE) * ATTACHED_CONTENT_SHARE)
-        )
-      );
+      // SYSTEM_PROMPT_RESERVE is bounded to a share of the window inside this helper. Flat, it was
+      // most of an 8k-class budget, which collapsed the formula onto its emergency floor and
+      // head-sliced a 4k character file to ~2.6k before assembly could apply its own floor - so the
+      // floor was unreachable and raising it changed nothing. Bounded at the use site rather than at
+      // the constant because the history sizing above also reads it, where a smaller reserve would
+      // fetch MORE history to compete with the file.
+      const attachedFileTokenBudget = attachedContentExtractionBudget(maxSafeInputTokens, SYSTEM_PROMPT_RESERVE);
 
       const dataSources = await this.buildDataSources({
         defaultAdminSettings,

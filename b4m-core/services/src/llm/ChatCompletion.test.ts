@@ -55,7 +55,11 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
     }),
   };
 });
-vi.mock('@bike4mind/utils', () => ({
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  // The context-budget helpers are pure arithmetic the assembly path reads directly, so they keep
+  // their real implementations - stubbing them would make every budget figure below undefined and
+  // silently disable the guards that depend on a real window.
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   calculateTotalTokenLength: vi.fn(),
   buildAndSortMessages: vi.fn(),
   fetchAndProcessPreviousMessages: vi.fn(),

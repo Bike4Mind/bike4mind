@@ -1,3 +1,4 @@
+import { assemblyTokenBuffer, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION } from './contextBudget';
 import {
   dayjs,
   extractSnippetMeta,
@@ -70,41 +71,15 @@ const EMBEDDING_TOKEN_LIMITS = {
 };
 
 // Context Management Constants
-/**
- * Floor for the context-overflow buffer, used when 5% of the context window is under 1000 tokens.
- * Covers token-estimation error (10-20% between estimate and tokenizer), special-token and
- * formatting overhead (role tags, separators), and output headroom.
- */
-const MIN_TOKEN_BUFFER = 1000;
-
-/**
- * Fraction of the context window reserved as buffer (5%).
- * Covers token-count drift between estimate and encoder and special tokens (BOS, EOS, role
- * markers), and keeps input+output from exactly hitting the context limit.
- */
-const TOKEN_BUFFER_PERCENTAGE = 0.05;
+// The buffer and the attached-content floor live in ./contextBudget so the extraction stage can be
+// checked against the same figures rather than a second copy of them.
 
 /**
  * Share of the token budget given to knowledge/fab files when history + files overflow: 70% files,
  * 30% history. Users attach files expecting them used; history can be pruned more aggressively.
- * Applies only when history is unlimited; a windowed historyCount uses the floor below.
+ * Applies only when history is unlimited; a windowed historyCount uses the floor from contextBudget.
  */
 const KNOWLEDGE_FILE_TOKEN_ALLOCATION = 0.7;
-
-/**
- * Smallest share of the token budget an explicitly attached file is guaranteed when a finite
- * historyCount is set. History used to have absolute priority here, so a long conversation silently
- * pushed the file the user just attached out of context entirely and the model answered as though no
- * file existed.
- *
- * 0.35 is the largest share that still leaves history the clear majority, which the user did not ask
- * to give up, while sitting at or above the per-file budget attachments effectively got already on
- * every model class of 8k context and up - so it raises the floor without cutting what a file
- * receives today. A fraction rather than a token count, so the reserve can never exceed the budget on
- * a small context window. The exact figure is not load-bearing: unused reserve flows back to history,
- * so over-reserving costs nothing and this only binds when content genuinely wants more.
- */
-const MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION = 0.35;
 
 /**
  * Retention priority for the two system messages this module injects itself, for
@@ -1894,8 +1869,8 @@ export async function buildAndSortMessages(
   }
 
   let tokenBudget: number = maxInputTokens;
-  // Token buffer; see MIN_TOKEN_BUFFER and TOKEN_BUFFER_PERCENTAGE for rationale.
-  const bufferTokenBudget: number = Math.max(MIN_TOKEN_BUFFER, Math.floor(maxInputTokens * TOKEN_BUFFER_PERCENTAGE));
+  // Token buffer; see MIN_TOKEN_BUFFER and TOKEN_BUFFER_PERCENTAGE in ./contextBudget for rationale.
+  const bufferTokenBudget: number = assemblyTokenBuffer(maxInputTokens);
   tokenBudget = tokenBudget - bufferTokenBudget;
 
   let userPromptContent: string = '';
@@ -2079,11 +2054,10 @@ export async function buildAndSortMessages(
     // The floor is `contentReserve`, a share of the PRE-system budget, which is the whole point: taking
     // it out of the post-system remainder made the file's share depend on how much the system stack
     // spent, and on an 8k window that left it a third of what the model could actually have carried.
-    // Clamped to what survived, since an oversized high-priority system message can leave the
-    // remainder below the reserve and processMessages must never be handed more budget than exists.
-    const contentBudget = !(tokenBudget > 0)
-      ? 0
-      : Math.min(tokenBudget, Math.max(contentReserve, tokenBudget - totalPreviousTokens));
+    //
+    // Needs no clamp to `tokenBudget`: the cap holds systemTokenCount at or below
+    // preSystemBudget - contentReserve, so what survives here is never less than the reserve.
+    const contentBudget = !(tokenBudget > 0) ? 0 : Math.max(contentReserve, tokenBudget - totalPreviousTokens);
 
     // Content first: history's budget depends on what content actually used.
     processedContentMessages = recordContentResult(

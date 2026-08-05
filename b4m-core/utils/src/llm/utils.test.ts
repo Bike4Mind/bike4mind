@@ -2761,6 +2761,114 @@ describe('allocation under a production-shaped system-prompt load', () => {
   });
 });
 
+// Which system messages survive a squeeze, and in what order they are sent. Before this the answer to
+// both was "assembly position", so a caller's org prompt lost to whatever happened to precede it.
+describe('system-message retention under a capped budget', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const sysOf = (tokens: number, tag: string): IMessage => ({
+    role: 'system',
+    content: `${tag}:` + 'S'.repeat(Math.max(0, tokens * 3.5 - tag.length - 1)),
+  });
+  const ask: IMessage[] = [{ role: 'user', content: 'hello' }];
+  const tagsIn = (result: IMessage[]) =>
+    result.filter(m => m.role === 'system').map(m => (m.content as string).split(':')[0]);
+
+  it('sends survivors in assembly order, not in priority order', async () => {
+    const first = sysOf(100, 'first');
+    const second = sysOf(100, 'second');
+    const third = sysOf(100, 'third');
+    // Priorities deliberately disagree with assembly order; all three fit, so nothing is dropped and
+    // only the ordering is under test. Reordering the payload would cost the Anthropic cached prefix.
+    const priority = new Map<IMessage, number>([
+      [first, 2],
+      [second, 0],
+      [third, 1],
+    ]);
+
+    const result = await buildAndSortMessages(
+      [],
+      [first, second, third],
+      ask,
+      20_000,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, systemMessagePriority: m => priority.get(m) }
+    );
+
+    expect(tagsIn(result)).toEqual(['first', 'second', 'third']);
+  });
+
+  it('skips an oversized prompt and still admits a smaller one behind it', async () => {
+    const oversized = sysOf(6000, 'oversized');
+    const small = sysOf(50, 'small');
+    // Priority puts the oversized one first, which is exactly the case the old `break` mishandled: it
+    // stopped at the first message over budget and discarded everything after it.
+    const priority = new Map<IMessage, number>([
+      [oversized, 0],
+      [small, 1],
+    ]);
+
+    const result = await buildAndSortMessages(
+      [],
+      [oversized, small],
+      ask,
+      6000,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, systemMessagePriority: m => priority.get(m) }
+    );
+
+    expect(tagsIn(result)).toEqual(['small']);
+  });
+
+  it('drops the lowest-priority prompt first when they cannot all fit', async () => {
+    const keep = sysOf(2000, 'keep');
+    const shed = sysOf(2000, 'shed');
+    const priority = new Map<IMessage, number>([
+      [keep, 10],
+      [shed, 30],
+    ]);
+
+    // Room for one of the two, so the choice between them is the whole assertion.
+    const result = await buildAndSortMessages(
+      [],
+      [shed, keep],
+      ask,
+      3600,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, systemMessagePriority: m => priority.get(m) }
+    );
+
+    expect(tagsIn(result)).toEqual(['keep']);
+  });
+
+  // The reserve only exists to protect an attachment, so a turn without one must not pay for it. This
+  // is the pair of assertions that pins the condition in both directions.
+  it('caps system instructions only when the turn carries an attachment', async () => {
+    const heavy = () => sysOf(4000, 'heavy');
+    const run = (fabMessages: IMessage[]) =>
+      buildAndSortMessages([], fabMessages, ask, 6000, {}, 20, mockLogger as any, createMockTokenizer());
+
+    const withoutAttachment = await run([heavy()]);
+    const withAttachment = await run([heavy(), { role: 'user', content: 'id,fruit\n' + 'r,apple\n'.repeat(50) }]);
+
+    // ~4,990 of pre-system budget, so 4,000 tokens of instructions fit when nothing is reserved.
+    expect(tagsIn(withoutAttachment)).toEqual(['heavy']);
+    // With a file present the cap falls to ~3,244 and the same stack no longer fits.
+    expect(tagsIn(withAttachment)).toEqual([]);
+  });
+});
+
 // Two attachments each cut to an unusable fragment: summing them hides the case, because the total
 // clears the threshold while neither file individually says anything.
 describe('unusable attachments are judged one at a time', () => {
