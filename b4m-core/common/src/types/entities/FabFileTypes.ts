@@ -83,6 +83,16 @@ export interface IFabFile {
   fileNameLower?: string;
 
   fileSize: number;
+  /**
+   * Characters of TEXT this file extracts to, as opposed to its byte size. Absent until something has
+   * actually extracted it.
+   *
+   * The two are only comparable for text/csv/md; a PDF or DOCX of a given byte size can extract to
+   * almost any length, which is why a caller wanting to know whether a file fits a model's context
+   * cannot infer it from `fileSize`. Written through by the context dry-run route the composer calls,
+   * so the second question about the same file is free.
+   */
+  extractedCharCount?: number;
   /** This is the path to the file in the storage bucket. Eg: `fab-files/1234.json` */
   filePath?: string;
   mimeType: string;

@@ -981,6 +981,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     userId: { type: String, required: true },
     fileName: { type: String, required: true },
     fileSize: { type: Number },
+    // Extracted TEXT length, not bytes; see IFabFile. Absent until something extracts the file.
+    extractedCharCount: { type: Number, required: false },
     filePath: { type: String },
     mimeType: { type: String },
     type: { type: String, enum: Object.values(KnowledgeType), required: true },
