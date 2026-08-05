@@ -244,6 +244,12 @@ interface ToolsSectionProps {
   toolContainerSx?: BoxProps['sx'];
   onClose?: () => void;
   /**
+   * The host is previewing a model that is not the active one. These are all shared session
+   * settings, so nothing here may be changed - and, critically, the two normalizing effects below
+   * must not fire either: they would reconfigure the RUNNING model to suit the previewed one.
+   */
+  readOnly?: boolean;
+  /**
    * Parks the mode toggle on the title row so the description gets the full width below,
    * instead of wrapping in a narrow column beside it. For hosts too narrow to afford the
    * side-by-side layout - the composer dropdown is 500px against the settings dialog's 820px.
@@ -260,6 +266,7 @@ const ToolsSection = ({
   toolContainerSx,
   onClose,
   stackedHeader = false,
+  readOnly = false,
 }: ToolsSectionProps = {}) => {
   // Use props if provided, otherwise use context
   const contextTools = useLLM(state => state.tools);
@@ -555,13 +562,15 @@ const ToolsSection = ({
 
   // Todo: Turn off and hide other tools that are not supported by the other models
   useEffect(() => {
+    if (readOnly) return;
     if (!modelInfo?.supportsTools) {
       setLLM({ tools: [] });
     }
-  }, [modelInfo?.supportsTools, setLLM]);
+  }, [modelInfo?.supportsTools, setLLM, readOnly]);
 
   // Disable thinking when switching to a non-thinking model
   useEffect(() => {
+    if (readOnly) return;
     if (!modelSupportsThinking && thinking?.enabled) {
       setLLM({
         thinking: {
@@ -570,7 +579,7 @@ const ToolsSection = ({
         },
       });
     }
-  }, [modelSupportsThinking, thinking?.enabled, thinking?.budget_tokens, setLLM]);
+  }, [modelSupportsThinking, thinking?.enabled, thinking?.budget_tokens, setLLM, readOnly]);
 
   if (!modelInfo?.supportsTools) {
     return (

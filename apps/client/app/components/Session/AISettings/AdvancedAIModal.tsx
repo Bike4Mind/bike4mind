@@ -194,7 +194,8 @@ const ReasoningEffortSelector: React.FC<{
   model: ModelName;
   commonInputStyles: typeof commonInputStyles;
   mode: 'dark' | 'light';
-}> = ({ model, commonInputStyles, mode }) => {
+  readOnly?: boolean;
+}> = ({ model, commonInputStyles, mode, readOnly = false }) => {
   const isGPT52 = GPT5_2_MODEL_IDS.has(model);
   const options = isGPT52
     ? [...BASE_REASONING_EFFORT_OPTIONS.map(o => (o.value === 'high' ? { ...o, label: 'High' } : o)), XHIGH_OPTION]
@@ -242,6 +243,7 @@ const ReasoningEffortSelector: React.FC<{
         <Select
           value={currentValue}
           onChange={handleChange}
+          disabled={readOnly}
           indicator={<KeyboardArrowDownIcon />}
           sx={{
             ...commonInputStyles(mode || 'light'),
@@ -303,6 +305,13 @@ const ReasoningEffortSelector: React.FC<{
 };
 
 interface SelectedModelDetailsProps {
+  /**
+   * The screen is showing a model that is not the active one. Every field below is a shared
+   * setting, so editing one would reconfigure the running model rather than this one - the
+   * controls stay visible so you can see what the model offers, but they are inert until
+   * "Use this model" makes it yours.
+   */
+  readOnly?: boolean;
   modelInfo: ModelInfo | null;
   model: ModelName;
   setLLM: (updates: Partial<LLMContextProps>) => void;
@@ -371,6 +380,7 @@ const ResetButton: React.FC<{
   height?: string;
   top?: string;
   right?: string;
+  disabled?: boolean;
 }> = ({
   modelInfo,
   model,
@@ -383,6 +393,7 @@ const ResetButton: React.FC<{
   ImageModels,
   tooltip = 'Reset all settings to defaults',
   height = '32px',
+  disabled = false,
 }) => {
   const handleReset = () => {
     const defaultMaxTokens = computeDefaultMaxTokens(modelInfo);
@@ -421,6 +432,7 @@ const ResetButton: React.FC<{
         size="sm"
         variant="outlined"
         onClick={handleReset}
+        disabled={disabled}
         sx={{
           p: 1,
           borderRadius: '6px',
@@ -520,6 +532,7 @@ const PLAIN_FRAME_CHECKBOX_SX = {
 const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   modelInfo,
   model,
+  readOnly = false,
   setLLM,
   setSpokenWords,
   setHistoryLines,
@@ -571,13 +584,30 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
     // The tools section is hidden outright for these models, so this line is the only
     // thing that explains the absence.
     ...(modelInfo.supportsTools ? [] : ['Selected AI model does not support tools']),
+    // Both of these used to render inside Advanced Settings with this exact styling, which put
+    // the same kind of message in two places. They are statements about the model, so they
+    // belong with the others.
+    ...(model === ImageModels.GPT_IMAGE_1
+      ? [
+          'This model has specific parameter constraints. Some settings like Style are not available, and invalid parameters will be automatically adjusted to compatible values.',
+        ]
+      : []),
+    ...(isKontextModel
+      ? [
+          'This model transforms existing images. Either upload an image to the workbench or use a recently generated image from this conversation, then describe how you want it changed.',
+        ]
+      : []),
   ];
 
   // Token allocation read-outs. max_tokens is the output budget, bounded by the model's own
   // ceiling - never a share of the context window. The server reserves the whole budget out of
   // the window when it computes maxSafeInputTokens (see aiSettingsUtils), so the remainder is
   // what prompt + history actually get.
-  const outputTokens = max_tokens ?? 4096;
+  // While previewing, the stored budget belongs to the ACTIVE model and can sit outside this
+  // model's range entirely (128000 against gemini-2.5-pro's 8192 ceiling, which would also make
+  // the input remainder negative). Show the default that selecting it would apply instead - that
+  // is genuinely what you get, since buildModelSelectionPatch recomputes it on every switch.
+  const outputTokens = readOnly ? computeDefaultMaxTokens(modelInfo) : (max_tokens ?? 4096);
   const outputCeiling = modelInfo.max_tokens ?? 16384;
   const contextWindow = modelInfo.contextWindow ?? 0;
   const inputTokens = Math.max(0, contextWindow - outputTokens);
@@ -682,13 +712,19 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
           other surface to say it on. */}
       {modelInfo.supportsTools && (
         <>
-          <ToolsSection
-            tools={tools}
-            setTools={newTools => setLLM({ tools: newTools })}
-            model={model}
-            onRollDice={onRollDice}
-            columns={isMobile ? 1 : 2}
-          />
+          {/* inert rather than a `disabled` prop on each of the ~28 rows: it removes the whole
+              subtree from pointer AND keyboard interaction in one place, and ToolsSection is shared
+              with the composer dropdown, which must keep working normally. */}
+          <Box inert={readOnly || undefined} sx={{ opacity: readOnly ? 0.6 : 1 }}>
+            <ToolsSection
+              tools={tools}
+              setTools={newTools => setLLM({ tools: newTools })}
+              model={model}
+              onRollDice={onRollDice}
+              columns={isMobile ? 1 : 2}
+              readOnly={readOnly}
+            />
+          </Box>
           <Divider
             sx={{
               backgroundColor: grayAlpha[150][20],
@@ -740,7 +776,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               <Checkbox
                 checked={liveAI}
                 onChange={() => setLiveAI(!liveAI)}
-                disabled={voiceOver}
+                disabled={voiceOver || readOnly}
                 title="Use AI"
                 color="success"
                 variant="outlined"
@@ -758,7 +794,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   checkedIcon={<CheckIcon sx={{ color: 'success.main' }} />}
                   checked={stream}
                   onChange={() => setStream(!stream)}
-                  disabled={voiceOver}
+                  disabled={voiceOver || readOnly}
                   title={stream ? 'Streaming responses' : 'Not streaming'}
                   color="success"
                   variant="outlined"
@@ -782,6 +818,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                       setLLM({ isQuestMasterEnabled: e.target.checked })
                     }
+                    disabled={readOnly}
                     color="success"
                     variant="outlined"
                     sx={isQuestMasterEnabled ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
@@ -804,22 +841,28 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
               INFINITE_VALUE={INFINITE_VALUE}
               ImageModels={ImageModels}
+              disabled={readOnly}
               tooltip="Reset advanced settings (temperature, tokens, spoken words, response history) to defaults"
             />
           </Box>
         </Box>
 
+        {readOnly && (
+          <Typography
+            level="body-sm"
+            data-testid="advanced-settings-readonly-note"
+            sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: 1.4, mt: '-16px', mb: '24px' }}
+          >
+            These are the settings this model supports. Use this model to adjust them.
+          </Typography>
+        )}
+
         {/* An output-token budget only means something for chat models. Image, video and
             transcription entries carry placeholder context values in the catalog (every Flux and
-            gpt-image row is a flat 10000/10000), so the slider edited a number nothing reads.
+            gpt-image row is a flat 10000/10000), so the slider would edit a number nothing reads.
             Gated on the catalog's own type rather than isImageModel(), which name-matches a
-            hardcoded list and would read the selected model instead of the one on screen.
-
-            Also hidden while previewing a model you have not selected: max_tokens is a single
-            global value belonging to the active model, so pairing it with a previewed model's
-            contextWindow renders a split that is not real - Input can even go negative, and the
-            slider's value can fall outside its own max. "Use this model" brings it back. */}
-        {modelInfo.type === 'text' && modelInfo.id === model && (
+            hardcoded list. */}
+        {modelInfo.type === 'text' && (
           <Box sx={{ p: 0, mb: '28px' }}>
             <Box
               sx={{
@@ -871,6 +914,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 min={MIN_OUTPUT_TOKENS}
                 max={outputCeiling}
                 step={256}
+                disabled={readOnly}
                 onChange={(_, newValue) => {
                   if (typeof newValue === 'number') {
                     setLLM({ max_tokens: newValue });
@@ -909,40 +953,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               {formatTokenCount(inputTokens)} for input.
             </Typography>
           </Box>
-        )}
-
-        {/* GPT-Image-1 Model Info */}
-        {model === ImageModels.GPT_IMAGE_1 && (
-          <Typography
-            level="body-xs"
-            sx={{
-              color: brand[800],
-              fontSize: '14px',
-              fontWeight: '500',
-              mt: 2,
-              mb: 2,
-            }}
-          >
-            This model has specific parameter constraints. Some settings like Style are not available, and invalid
-            parameters will be automatically adjusted to compatible values.
-          </Typography>
-        )}
-
-        {/* Kontext Model Info */}
-        {isKontextModel && (
-          <Typography
-            level="body-xs"
-            sx={{
-              color: brand[800],
-              fontSize: '14px',
-              fontWeight: '500',
-              mt: 2,
-              mb: 2,
-            }}
-          >
-            This model transforms existing images. Either upload an image to the workbench or use a recently generated
-            image from this conversation, then describe how you want it changed.
-          </Typography>
         )}
 
         {/* Temperature and Randomness Settings */}
@@ -987,7 +997,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   type="number"
                   value={FIXED_TEMPERATURE_MODELS.has(model) ? 1.0 : temperature}
                   onChange={handleTemperatureChange}
-                  disabled={FIXED_TEMPERATURE_MODELS.has(model)}
+                  disabled={readOnly || FIXED_TEMPERATURE_MODELS.has(model)}
                   slotProps={{
                     input: {
                       min: 0,
@@ -1029,6 +1039,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 <Select
                   value={historyLines}
                   onChange={(_, newValue) => newValue && setHistoryLines(Number(newValue))}
+                  disabled={readOnly}
                   indicator={<KeyboardArrowDownIcon />}
                   sx={{
                     ...commonInputStyles(mode || 'light'),
@@ -1117,6 +1128,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 color="primary"
                 type="number"
                 value={spokenWords}
+                disabled={readOnly}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                   const value = parseInt(e.target.value);
                   if (!isNaN(value) && value >= 0) {
@@ -1135,7 +1147,12 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
 
           {/* Reasoning Effort - only for reasoning-capable models */}
           {REASONING_SUPPORTED_MODELS.has(model) && (
-            <ReasoningEffortSelector model={model} commonInputStyles={commonInputStyles} mode={mode} />
+            <ReasoningEffortSelector
+              model={model}
+              commonInputStyles={commonInputStyles}
+              mode={mode}
+              readOnly={readOnly}
+            />
           )}
         </Grid>
       </Box>
@@ -1163,6 +1180,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                       <Select
                         value={setting.value}
                         onChange={(_, newValue) => setting.onChange(newValue)}
+                        disabled={readOnly}
                         indicator={<KeyboardArrowDownIcon />}
                         sx={commonSelectStyles(mode || 'light')}
                       >
@@ -1179,6 +1197,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                         size="sm"
                         variant="outlined"
                         color="primary"
+                        disabled={readOnly}
                         value={setting.value}
                         {...setting.inputProps}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1216,6 +1235,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                           setLLM({ prompt_upsampling: e.target.checked })
                         }
+                        disabled={readOnly}
                         color={prompt_upsampling ? 'success' : 'neutral'}
                       />
                     </Box>
@@ -1244,6 +1264,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                         color="primary"
                         type="number"
                         value={safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
+                        disabled={readOnly}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                           setLLM({ safety_tolerance: parseInt(e.target.value) })
                         }
@@ -1279,6 +1300,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                       min={BFL_SAFETY_TOLERANCE.MIN}
                       max={BFL_SAFETY_TOLERANCE.MAX}
                       step={1}
+                      disabled={readOnly}
                       onChange={(_, newValue) => {
                         if (typeof newValue === 'number') {
                           setLLM({ safety_tolerance: newValue });
@@ -1634,7 +1656,21 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   const modelSpeed = getModelSpeedFromStats(modelInfo?.id ?? '', stats?.avgResponseTime ?? {});
   const isResearchModeFeatureEnabled = userSettings.experimentalFeatures?.enableResearchMode === true;
 
-  const isKontextModel = isKontextImageModel(model);
+  // Model detail dialog. `modelDetailsOpen` is lifted to the shared store so the
+  // composer Templates button can open it directly; `detailsModel` (which model's
+  // header/metadata to show) stays local. Declared here because everything below keys off it.
+  const [detailsModel, setDetailsModel] = useState<ModelInfo | null>(null);
+
+  // The model the details screen is about, versus `model`, which is the session's ACTIVE one.
+  // They differ whenever you open a model you have not selected, and every control that
+  // describes or configures a model has to follow this one - otherwise the screen shows one
+  // model's name over another model's settings.
+  const shownModel = (detailsModel?.id ?? model) as ModelName;
+  // Previewing: the settings on screen belong to a model that is not running, and they are all
+  // shared fields, so editing them would silently reconfigure the active model instead.
+  const isPreviewingModel = shownModel !== model;
+
+  const isKontextModel = isKontextImageModel(shownModel);
 
   const { maxContextWindow, maxTokens } = useMemo(() => {
     if (!modelInfoRepo) return { maxContextWindow: 0, maxTokens: 0 };
@@ -1697,9 +1733,9 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
             {
               label: 'Image Size',
               type: 'select' as const,
-              value: size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(model)].defaultSize,
+              value: size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(shownModel)].defaultSize,
               onChange: (value: OpenAIImageSize | null) => value && setLLM({ size: value }),
-              options: getAvailableSizes(model).map(s => ({ value: s, label: s })),
+              options: getAvailableSizes(shownModel).map(s => ({ value: s, label: s })),
               tooltip: FIELD_TOOLTIPS.imageSize,
             },
           ]),
@@ -1710,7 +1746,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         value: quality,
         onChange: (value: OpenAIImageQuality | null) => value && setLLM({ quality: value }),
         options:
-          model === ImageModels.GPT_IMAGE_1
+          shownModel === ImageModels.GPT_IMAGE_1
             ? [
                 { value: 'low', label: 'Low' },
                 { value: 'medium', label: 'Medium' },
@@ -1721,7 +1757,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 { value: 'hd', label: 'HD' },
               ],
       },
-      ...(model !== ImageModels.GPT_IMAGE_1 && !isBflImageModel(model)
+      ...(shownModel !== ImageModels.GPT_IMAGE_1 && !isBflImageModel(shownModel)
         ? [
             {
               label: 'Style',
@@ -1744,7 +1780,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         inputProps: { type: 'number', placeholder: 'Random' },
       },
       // Width/Height are BFL-specific parameters; GPT Image models use the Image Size dropdown instead
-      ...(!isKontextModel && isBflImageModel(model)
+      ...(!isKontextModel && isBflImageModel(shownModel)
         ? [
             {
               label: 'Width',
@@ -1798,13 +1834,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         ],
       },
     ],
-    [model, isKontextModel, size, quality, style, seed, width, height, aspect_ratio, output_format, setLLM]
+    [shownModel, isKontextModel, size, quality, style, seed, width, height, aspect_ratio, output_format, setLLM]
   );
-
-  // Model detail dialog. `modelDetailsOpen` is lifted to the shared store so the
-  // composer Templates button can open it directly; `detailsModel` (which model's
-  // header/metadata to show) stays local.
-  const [detailsModel, setDetailsModel] = useState<ModelInfo | null>(null);
 
   const handleViewDetails = (model: ModelInfo) => {
     setDetailsModel(model);
@@ -2206,7 +2237,10 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               {/* Selected Model Details */}
               <SelectedModelDetails
                 modelInfo={detailsModel ?? modelInfo}
-                model={typedModel}
+                // The previewed model, not the session's active one: every gate inside keys off
+                // this, so the screen shows the control set belonging to the model it names.
+                model={shownModel}
+                readOnly={isPreviewingModel}
                 setLLM={setLLM}
                 setSpokenWords={setSpokenWords}
                 historyLines={historyLines}
