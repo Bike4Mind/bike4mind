@@ -14,7 +14,7 @@ const ModelName = 'MemoryPrincipalKey';
  * master secret before it lands here. This model just holds and, on request, forgets it.
  */
 export interface IMemoryPrincipalKey extends IMongoDocument {
-  principalKind: 'user' | 'agent' | 'org' | 'system';
+  principalKind: 'user' | 'agent' | 'org' | 'system' | 'lake';
   principalId: string;
   ownerUserId: string;
   /** The (possibly envelope-wrapped) data-encryption key, base64. Opaque here. */
@@ -25,7 +25,7 @@ interface IMemoryPrincipalKeyModel extends Model<IMemoryPrincipalKey> {}
 
 const MemoryPrincipalKeySchema = new Schema<IMemoryPrincipalKey>(
   {
-    principalKind: { type: String, enum: ['user', 'agent', 'org', 'system'], required: true },
+    principalKind: { type: String, enum: ['user', 'agent', 'org', 'system', 'lake'], required: true },
     principalId: { type: String, required: true },
     ownerUserId: { type: String, required: true },
     dek: { type: String, required: true },

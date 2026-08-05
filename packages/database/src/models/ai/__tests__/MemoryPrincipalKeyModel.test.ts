@@ -46,4 +46,10 @@ describe('MemoryPrincipalKeyRepository', () => {
     await memoryPrincipalKeyRepository.destroy('user', 'u1');
     expect(await memoryPrincipalKeyRepository.findDek('user', 'u2')).toBe('dek-2'); // u2 untouched
   });
+
+  it('mints and reads back a key for a lake-kind principal (schema enum admits the new principal)', async () => {
+    const dek = await memoryPrincipalKeyRepository.getOrCreate('lake', 'lake:corpus', 'owner1', 'dek-lake');
+    expect(dek).toBe('dek-lake');
+    expect(await memoryPrincipalKeyRepository.findDek('lake', 'lake:corpus')).toBe('dek-lake');
+  });
 });

@@ -16,12 +16,12 @@ const ModelName = 'MemoryLedgerEvent';
  */
 
 export type MemoryEventKind = 'assert' | 'affirm' | 'retract';
-export type MemoryPrincipalKind = 'user' | 'agent' | 'org' | 'system';
+export type MemoryPrincipalKind = 'user' | 'agent' | 'org' | 'system' | 'lake';
 export type MemoryEvidenceTier = 'engineering-proxy' | 'engineering-scaled' | 'external-facing' | 'human-reviewed';
 export type MemorySalience = 'hot' | 'warm' | 'cold';
 
 const MEMORY_EVENT_KINDS: MemoryEventKind[] = ['assert', 'affirm', 'retract'];
-const MEMORY_PRINCIPAL_KINDS: MemoryPrincipalKind[] = ['user', 'agent', 'org', 'system'];
+const MEMORY_PRINCIPAL_KINDS: MemoryPrincipalKind[] = ['user', 'agent', 'org', 'system', 'lake'];
 const MEMORY_EVIDENCE_TIERS: MemoryEvidenceTier[] = [
   'engineering-proxy',
   'engineering-scaled',
