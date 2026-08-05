@@ -43,6 +43,12 @@ fi
 all_cmd=(git ls-files -z -- '*.ts' '*.tsx')
 staged=
 
+# --diff-filter must include R (and C): git detects renames by default and emits a
+# rename-plus-edit as ONE R<score> record, which a bare ACM filter drops -- so `git mv a.ts
+# b.ts` plus a control-byte edit used to commit clean. C covers the same shape when copy
+# detection is enabled. Same filter set as .husky/check-help-content.sh.
+# Note --name-only emits only the NEW path for R/C records, so no stale old path is handed to
+# `git show` in staged mode.
 case "${1:-}" in
   --all)
     list_cmd=("${all_cmd[@]}")
@@ -50,14 +56,14 @@ case "${1:-}" in
   --changed)
     base="${2:-}"
     if [ -n "$base" ] && git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
-      list_cmd=(git diff --name-only -z --diff-filter=ACMR "${base}...HEAD" -- '*.ts' '*.tsx')
+      list_cmd=(git diff --name-only -z --diff-filter=ACMRC "${base}...HEAD" -- '*.ts' '*.tsx')
     else
       echo "check-no-control-bytes: base '${base}' unresolvable, scanning all tracked files." >&2
       list_cmd=("${all_cmd[@]}")
     fi
     ;;
   ''|--staged)
-    list_cmd=(git diff --cached --name-only -z --diff-filter=ACMR -- '*.ts' '*.tsx')
+    list_cmd=(git diff --cached --name-only -z --diff-filter=ACMRC -- '*.ts' '*.tsx')
     staged=1
     ;;
   *)
