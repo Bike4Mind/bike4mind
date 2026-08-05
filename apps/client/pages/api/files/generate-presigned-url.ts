@@ -16,6 +16,7 @@ import { getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
 import { createFabFile } from '@server/managers/fabFileManager';
 import { baseApi } from '@server/middlewares/baseApi';
 import { logEvent } from '@server/utils/analyticsLog';
+import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { FileEvents } from '@bike4mind/common';
 import { checkStorageLimit } from '@bike4mind/utils';
 import { Resource } from 'sst';
@@ -130,6 +131,14 @@ const handler = baseApi().post(
           metadata: { id: file.id, url: presignedUrl, expiry: expires },
         },
         { ability: req.ability }
+      );
+
+      // Same reasoning as createFabFile: the row carrying the lake's meta-tag is a member from
+      // the moment it exists, whether or not the browser follows through on the upload, and no
+      // other pass on this door would notice.
+      await recomputeStatsForLakeTags(
+        tags.map(tag => tag.name),
+        { logger: req.logger }
       );
 
       return res.json({ url: presignedUrl, fileId: file.id, fileKey });

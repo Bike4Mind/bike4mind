@@ -9,7 +9,7 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { recomputeStatsForDeletedFiles } from '@server/dataLakes/recomputeStatsForDeletedFiles';
+import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
 import { FileEvents } from '@bike4mind/common';
@@ -138,7 +138,7 @@ const handler = baseApi()
 
     // After every delete transaction has committed, so the aggregation sees each `deletedAt`.
     if (deletedFileTagNames.length > 0) {
-      await recomputeStatsForDeletedFiles(deletedFileTagNames, { logger: req.logger });
+      await recomputeStatsForLakeTags(deletedFileTagNames, { logger: req.logger });
     }
 
     const parts: string[] = [];

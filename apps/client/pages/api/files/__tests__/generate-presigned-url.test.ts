@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   findByDatalakeTag: vi.fn(),
   batchFindById: vi.fn(),
   getSettingsValue: vi.fn(),
+  recomputeStatsForLakeTags: vi.fn(),
 }));
 
 // The route calls `baseApi().post(...)` directly, with no `.use(...)` in the chain.
@@ -24,6 +25,9 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: vi.fn(async () =
 // The assertion point: whatever tags reach here are what gets persisted on the FabFile.
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
+  recomputeStatsForLakeTags: h.recomputeStatsForLakeTags,
+}));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
@@ -84,6 +88,25 @@ describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
     vi.clearAllMocks();
     h.findByDatalakeTag.mockResolvedValue(LAKE);
     h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
+  });
+
+  it('recomputes the lake, so a presigned upload into a draft one activates it (#1342)', async () => {
+    // The row carrying the meta-tag is a lake member the moment it exists, and this door reaches
+    // no batch and no membership service - nothing else here would count it.
+    const { res } = makeRes();
+    await run(body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
+
+    expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith(
+      expect.arrayContaining(['datalake:orga:acme-2026']),
+      expect.anything()
+    );
+  });
+
+  it('hands the recompute no lake tag when the upload joins none', async () => {
+    const { res } = makeRes();
+    await run(body(), res);
+
+    expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith([], expect.anything());
   });
 
   it('stamps the lake prefix when a lake meta-tag arrives with no tag under that prefix', async () => {

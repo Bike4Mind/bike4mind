@@ -14,6 +14,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
+import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 
 const createFabFileSchema = fabFilesService.createFabFileSchema;
 
@@ -91,6 +92,15 @@ const handler = baseApi()
       await logEvent(
         { userId: user.id, type: FileEvents.CREATE_FILE, metadata: { fileId: result.id } },
         { ability: req.ability }
+      );
+
+      // A file created straight into a lake is a membership change no batch and no membership
+      // service sees, so this door owns the lake's counts - and, through them, the draft->active
+      // transition that puts the lake in Discover. After the transaction, so the aggregate reads
+      // the committed row.
+      await recomputeStatsForLakeTags(
+        tags.map(tag => tag.name),
+        { logger: req.logger }
       );
 
       // Route the browser's upload via the shared resolver: hosted keeps the direct S3 presign;
