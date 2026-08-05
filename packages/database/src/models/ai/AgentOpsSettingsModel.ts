@@ -36,6 +36,12 @@ export interface IAgentOpsSettingsRepository {
   incrementGenerationCount(): Promise<void>;
 }
 
+/**
+ * Named model IDs used as defaults in this file. Deliberately NOT a schema `enum` constraint:
+ * the selectable set is the live model catalog, validated at the agent-ops-settings endpoint, so
+ * pinning it here again would make every newly shipped model unsaveable until someone remembered
+ * to add it. The historical values below are kept because documents may still hold them.
+ */
 export enum AgentOpsLlmModel {
   // Modern models
   CLAUDE_FABLE_5 = 'claude-fable-5',
@@ -53,9 +59,7 @@ export enum AgentOpsLlmModel {
   GROK_4_5 = 'grok-4.5',
   GPT_4O = 'gpt-4o',
   GPT_4O_MINI = 'gpt-4o-mini',
-  // Deprecated - kept for Mongoose validation of existing DB documents. Entries here must
-  // never be removed: an existing settings doc pinned to one would fail validation on read.
-  // resolveDeprecatedModelId upgrades them at call time instead.
+  // Retired upstream. resolveDeprecatedModelId upgrades a document still pinned to one at call time.
   GROK_3 = 'grok-3',
   CLAUDE_SONNET_4 = 'claude-sonnet-4-20250514',
   GPT_4_TURBO = 'gpt-4-turbo',
@@ -107,7 +111,6 @@ const AgentOpsSettingsSchema = new Schema(
   {
     generationLlmModel: {
       type: String,
-      enum: Object.values(AgentOpsLlmModel),
       required: true,
       default: AgentOpsLlmModel.CLAUDE_OPUS_4_6,
     },
