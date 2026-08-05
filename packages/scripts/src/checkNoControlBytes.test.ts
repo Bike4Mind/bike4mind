@@ -53,6 +53,15 @@ function write(dir: string, name: string, contents: string) {
   fs.writeFileSync(path.join(dir, name), Buffer.from(contents, 'binary'));
 }
 
+/** A PATH containing only git, so the guard can list files but not scan them. */
+function makeStubBin(): string {
+  const stubBin = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-guard-bin-'));
+  sandboxes.push(stubBin);
+  const gitPath = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+  fs.symlinkSync(gitPath, path.join(stubBin, 'git'));
+  return stubBin;
+}
+
 function runGuard(dir: string, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
   const r = spawnSync(BASH, [GUARD, ...args], {
     cwd: dir,
@@ -167,6 +176,20 @@ describe('check-no-control-bytes.sh', () => {
       expect(r.status).toBe(0);
       expect(r.stderr).not.toContain("Can't open");
     });
+
+    // Skipping the missing path must not abort the scan: a sibling in the same invocation
+    // still has to be checked, or one deleted file would mask every later violation.
+    it('keeps scanning siblings after skipping a missing path', () => {
+      const { dir } = makeRepo();
+      write(dir, 'gone.ts', 'export const gone = 1;\n');
+      write(dir, 'zz-bad.ts', 'export const bad = 1;\x00\n');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'add two files');
+      fs.rmSync(path.join(dir, 'gone.ts'));
+      const r = runGuard(dir, ['--all']);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('zz-bad.ts');
+    });
   });
 
   it('fails closed when perl is unavailable rather than reporting clean', () => {
@@ -174,14 +197,103 @@ describe('check-no-control-bytes.sh', () => {
     write(dir, 'nul.ts', 'export const bad = 1;\x00\n');
     git(dir, 'add', 'nul.ts');
 
-    // A PATH holding only git: the guard can still list files but cannot scan them.
-    const stubBin = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-guard-bin-'));
-    sandboxes.push(stubBin);
-    const gitPath = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
-    fs.symlinkSync(gitPath, path.join(stubBin, 'git'));
-
+    const stubBin = makeStubBin();
     const r = runGuard(dir, ['--all'], { PATH: stubBin });
     expect(r.status).toBe(1);
     expect(`${r.stdout}${r.stderr}`).toContain('perl not found');
+  });
+
+  // Distinct from "perl not found": perl exists, so the command -v check passes, but the
+  // scan itself dies. That must not read as a clean tree either.
+  it('fails closed when perl exists but exits non-zero', () => {
+    const { dir } = makeRepo();
+    write(dir, 'nul.ts', 'export const bad = 1;\x00\n');
+    git(dir, 'add', 'nul.ts');
+
+    const stubBin = makeStubBin();
+    const stub = path.join(stubBin, 'perl');
+    fs.writeFileSync(stub, '#!/bin/sh\nexit 3\n');
+    fs.chmodSync(stub, 0o755);
+
+    const r = runGuard(dir, ['--all'], { PATH: stubBin });
+    expect(r.status).not.toBe(0);
+    expect(`${r.stdout}${r.stderr}`).toContain('failing closed');
+  });
+
+  it('fails closed when the file listing fails, rather than passing an empty list', () => {
+    // Outside any git repo, so `git ls-files` errors. A process substitution would hide that
+    // and yield a bogus clean pass; the pipeline must surface it.
+    const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-guard-norepo-'));
+    sandboxes.push(notARepo);
+    const r = runGuard(notARepo, ['--all']);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('failing closed');
+  });
+
+  it('rejects an unknown option instead of silently scanning staged files', () => {
+    const { dir } = makeRepo();
+    const r = runGuard(dir, ['--chagned']);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("unknown option '--chagned'");
+    expect(r.stderr).toContain('usage:');
+  });
+
+  describe('security: filenames must never reach perl @ARGV', () => {
+    // perl -n wraps the body in `while (<>)`, and the diamond operator does a magic
+    // 2-argument open on @ARGV entries, so a file merely NAMED `|cmd.ts` would run `cmd`.
+    // That is code execution from the same careless-contributor case this guard exists for.
+    const hostile = '|touch PWNED;.ts';
+
+    it('does not execute a command embedded in a filename', () => {
+      const { dir } = makeRepo();
+      write(dir, hostile, 'export const x = 1;\n');
+      git(dir, 'add', '-A');
+      const r = runGuard(dir);
+      expect(r.status).toBe(0);
+      expect(fs.existsSync(path.join(dir, 'PWNED'))).toBe(false);
+    });
+
+    it('still scans a file whose name begins with a pipe', () => {
+      const { dir } = makeRepo();
+      write(dir, hostile, 'export const x = 1;\x00\n');
+      git(dir, 'add', '-A');
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(hostile);
+      expect(fs.existsSync(path.join(dir, 'PWNED'))).toBe(false);
+    });
+
+    it('does not treat a file named "-" as stdin', () => {
+      const { dir } = makeRepo();
+      write(dir, '-.ts', 'export const x = 1;\x00\n');
+      git(dir, 'add', '-A');
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('-.ts');
+    });
+  });
+
+  it('scans a non-ASCII path that git would otherwise C-quote', () => {
+    // With core.quotePath on (git's default), a non-ASCII path is emitted as
+    // "caf\303\251.ts" -- quotes included -- which names no real file. The -z listing
+    // avoids the quoting entirely.
+    const { dir } = makeRepo();
+    git(dir, 'config', 'core.quotePath', 'true');
+    write(dir, 'café.ts', 'export const bad = 1;\x00\n');
+    git(dir, 'add', '-A');
+    const r = runGuard(dir);
+    expect(r.status).toBe(1);
+  });
+
+  it('reads the staged blob, not the worktree copy', () => {
+    // Stage a bad blob, then clean the file on disk without re-staging. The commit would
+    // still carry the bad blob, so scanning the worktree copy would wave it through.
+    const { dir } = makeRepo();
+    write(dir, 'f.ts', 'export const bad = 1;\x00\n');
+    git(dir, 'add', 'f.ts');
+    write(dir, 'f.ts', 'export const clean = 1;\n');
+    const r = runGuard(dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('f.ts');
   });
 });
