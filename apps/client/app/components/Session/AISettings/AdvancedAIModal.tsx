@@ -95,7 +95,7 @@ import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { api } from '@client/app/contexts/ApiContext';
 import { MobileTopBar } from '@client/app/components/MobileTopBar';
-import { brand, grayAlpha } from '@client/app/utils/themes/colors';
+import { brand, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/colors';
 
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
@@ -422,9 +422,6 @@ const ResetButton: React.FC<{
         onClick={handleReset}
         sx={{
           p: 1,
-          position: { xs: 'absolute', sm: 'relative' },
-          top: { xs: 12, sm: 'auto' },
-          right: { xs: 16, sm: 'auto' },
           borderRadius: '6px',
           width: 'auto',
           height: `${height} !important`,
@@ -470,6 +467,39 @@ const formatTrainingCutoff = (cutoff: string): string => {
 // Larger than the model list's 24px: this screen has the room, and they are the only
 // indicators on it rather than competing with a card's own controls.
 const INDICATOR_SIZE = 32;
+
+/**
+ * Checked-state frame for the Advanced Settings checkboxes, matching the composer's Agent-mode
+ * button: green border at 75% over a 10% green fill instead of Joy's solid green.
+ *
+ * Requires the checkbox to be pinned to `variant="outlined"` - Joy otherwise swaps to `solid`
+ * on check, and these vars only feed the outlined variant. Set as CSS vars rather than
+ * backgroundColor/borderColor because Joy resolves the variant through them, so a plain value
+ * in sx is ignored. Keep in sync with AgentModeToggleButton.
+ */
+const AGENT_FRAME_CHECKBOX_SX = {
+  '--variant-outlinedColor': green[800],
+  '--variant-outlinedBorder': `${green[800]}BF`, // BF = 75%
+  '--variant-outlinedHoverBorder': `${green[800]}BF`,
+  '--variant-outlinedBg': greenAlpha[800][10],
+  '--variant-outlinedHoverBg': greenAlpha[800][10],
+  '--variant-outlinedActiveBg': greenAlpha[800][10],
+} as const;
+
+/**
+ * Unchecked frame: the same border token the Reset button sitting beside these carries, so the
+ * whole row reads as one set of controls, and the model list/grid card hover fill.
+ *
+ * The hover border is pinned to the resting value - Joy would otherwise tint it toward the
+ * success palette on hover, which reads as a half-checked state. Active matches hover so a
+ * click does not flash a third colour on the way to checked.
+ */
+const PLAIN_FRAME_CHECKBOX_SX = {
+  '--variant-outlinedBorder': 'var(--joy-palette-border-light)',
+  '--variant-outlinedHoverBorder': 'var(--joy-palette-border-light)',
+  '--variant-outlinedHoverBg': 'var(--joy-palette-aiSettings-modelCard-hoverBackground)',
+  '--variant-outlinedActiveBg': 'var(--joy-palette-aiSettings-modelCard-hoverBackground)',
+} as const;
 
 const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   modelInfo,
@@ -646,14 +676,118 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
         </>
       )}
 
-      {/* An output-token budget only means something for chat models. Image, video and
-          transcription entries carry placeholder context values in the catalog (every Flux and
-          gpt-image row is a flat 10000/10000), so the slider edited a number nothing reads.
-          Gated on the catalog's own type rather than isImageModel(), which name-matches a
-          hardcoded list and would read the selected model instead of the one on screen. */}
-      {modelInfo.type === 'text' && (
-        <>
-          <Box sx={{ p: 0 }}>
+      {/* Advanced Settings */}
+      <Box sx={{ p: 0 }}>
+        <Grid
+          container
+          spacing={1}
+          sx={{
+            flexGrow: 1,
+            display: 'flex',
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            mb: 2,
+          }}
+        >
+          <Typography level="body-sm" sx={commonTextTitleStyles}>
+            Advanced Settings
+          </Typography>
+          {/* Core Tools */}
+          <Box
+            sx={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '20px',
+              mb: 0,
+              alignItems: 'center',
+              fontSize: '14px',
+            }}
+          >
+            {/* Label before control throughout, matching the Smart tools and Research Mode
+                toggles. */}
+            {/* AI Toggle */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
+              <Typography level="body-sm" sx={{ flexGrow: 0 }}>
+                AI
+              </Typography>
+              <Checkbox
+                checked={liveAI}
+                onChange={() => setLiveAI(!liveAI)}
+                disabled={voiceOver}
+                title="Use AI"
+                color="success"
+                variant="outlined"
+                sx={liveAI ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
+              />
+            </Box>
+
+            {/* Stream Toggle */}
+            {!isImageModel(model) && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
+                <Typography level="body-sm" sx={{ flexGrow: 0 }}>
+                  Stream
+                </Typography>
+                <Checkbox
+                  checkedIcon={<CheckIcon sx={{ color: 'success.main' }} />}
+                  checked={stream}
+                  onChange={() => setStream(!stream)}
+                  disabled={voiceOver}
+                  title={stream ? 'Streaming responses' : 'Not streaming'}
+                  color="success"
+                  variant="outlined"
+                  sx={stream ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
+                />
+              </Box>
+            )}
+
+            {/* Quest Master Toggle */}
+            {isQuestMasterFeatureEnabled && (
+              <Tooltip title="Enable Quest Master">
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
+                  <Typography level="body-sm" sx={{ flexGrow: 0 }}>
+                    Quest Master
+                  </Typography>
+                  <Checkbox
+                    checked={isQuestMasterEnabled}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                      setLLM({ isQuestMasterEnabled: e.target.checked })
+                    }
+                    title="Enable Quest Master"
+                    color="success"
+                    variant="outlined"
+                    sx={isQuestMasterEnabled ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
+                  />
+                </Box>
+              </Tooltip>
+            )}
+
+            {/* Sits with the controls it resets. Everything handleReset touches - the token
+                allocation below, temperature, spoken words, response history - lives in this
+                section; tools are deliberately not among them, which is why this is not a
+                whole-dialog reset. */}
+            <ResetButton
+              modelInfo={modelInfo}
+              model={model}
+              setLLM={setLLM}
+              setSpokenWords={setSpokenWords}
+              setHistoryLines={setHistoryLines}
+              isImageModel={isImageModel}
+              BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
+              INFINITE_VALUE={INFINITE_VALUE}
+              ImageModels={ImageModels}
+              tooltip="Reset advanced settings (temperature, tokens, spoken words, response history) to defaults"
+            />
+          </Box>
+        </Grid>
+
+        {/* An output-token budget only means something for chat models. Image, video and
+            transcription entries carry placeholder context values in the catalog (every Flux and
+            gpt-image row is a flat 10000/10000), so the slider edited a number nothing reads.
+            Gated on the catalog's own type rather than isImageModel(), which name-matches a
+            hardcoded list and would read the selected model instead of the one on screen. */}
+        {modelInfo.type === 'text' && (
+          <Box sx={{ p: 0, mb: '28px' }}>
             <Box
               sx={{
                 display: isMobile ? 'block' : 'flex',
@@ -784,100 +918,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               />
             </Box>
           </Box>
-
-          {/* Paired with the section so hiding it does not leave two dividers stacked against
-              the one that already closes ToolsSection above. */}
-          <Divider
-            sx={{
-              backgroundColor: grayAlpha[150][20],
-              width: '100%',
-              height: '1px',
-              mx: 'auto',
-              my: '28px',
-            }}
-          />
-        </>
-      )}
-
-      {/* Advanced Settings */}
-      <Box sx={{ p: 0 }}>
-        <Grid
-          container
-          spacing={1}
-          sx={{
-            flexGrow: 1,
-            display: 'flex',
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            mb: 2,
-          }}
-        >
-          <Typography level="body-sm" sx={commonTextTitleStyles}>
-            Advanced Settings
-          </Typography>
-          {/* Core Tools */}
-          <Box
-            sx={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 1,
-              mb: 0,
-              alignItems: 'center',
-              fontSize: '14px',
-            }}
-          >
-            {/* AI Toggle */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-              <Checkbox
-                checked={liveAI}
-                onChange={() => setLiveAI(!liveAI)}
-                disabled={voiceOver}
-                title="Use AI"
-                color="success"
-              />
-              <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                AI
-              </Typography>
-            </Box>
-
-            {/* Stream Toggle */}
-            {!isImageModel(model) && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                <Checkbox
-                  checkedIcon={<CheckIcon sx={{ color: 'success.main' }} />}
-                  checked={stream}
-                  onChange={() => setStream(!stream)}
-                  disabled={voiceOver}
-                  title={stream ? 'Streaming responses' : 'Not streaming'}
-                  color="success"
-                />
-                <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                  Stream
-                </Typography>
-              </Box>
-            )}
-
-            {/* Quest Master Toggle */}
-            {isQuestMasterFeatureEnabled && (
-              <Tooltip title="Enable Quest Master">
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                  <Checkbox
-                    checked={isQuestMasterEnabled}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setLLM({ isQuestMasterEnabled: e.target.checked })
-                    }
-                    title="Enable Quest Master"
-                    color="success"
-                  />
-                  <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                    Quest Master
-                  </Typography>
-                </Box>
-              </Tooltip>
-            )}
-          </Box>
-        </Grid>
+        )}
 
         {/* GPT-Image-1 Model Info */}
         {model === ImageModels.GPT_IMAGE_1 && (
@@ -2096,21 +2137,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 >
                   Back to models
                 </Button>
-
-                {(detailsModel ?? modelInfo) && (
-                  <ResetButton
-                    modelInfo={(detailsModel ?? modelInfo) as ModelInfo}
-                    model={typedModel}
-                    setLLM={setLLM}
-                    setSpokenWords={setSpokenWords}
-                    setHistoryLines={setHistoryLines}
-                    isImageModel={isImageModel}
-                    BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
-                    INFINITE_VALUE={INFINITE_VALUE}
-                    ImageModels={ImageModels}
-                    tooltip="Reset all settings (temperature, tokens, spoken words, response history) to defaults"
-                  />
-                )}
               </Box>
 
               <Box sx={{ mt: '24px' }}>
