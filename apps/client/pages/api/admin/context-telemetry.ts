@@ -50,12 +50,15 @@ const handler = baseApi().get(
     }
 
     // Score filter: absent or invalid minAnomalyScore keeps the legacy default of
-    // anomalous turns only ($gt: 0); an explicit 0 includes benign score-0 turns
-    // (no score filter); 1-100 filters to scores >= the requested minimum.
+    // anomalous turns only ($gt: 0); an explicit 0-100 filters to scores >= the
+    // requested minimum, so 0 includes benign turns. The 0 case deliberately uses
+    // $gte: 0 rather than dropping the predicate: every path then hits the same
+    // anomalyScore key (index-ready), and legacy docs lacking the anomalies
+    // sub-object stay excluded (TelemetryEntryCard reads anomalies.* unguarded).
     const minScore = params.minAnomalyScore === undefined ? NaN : parseInt(params.minAnomalyScore, 10);
     if (Number.isNaN(minScore) || minScore < 0 || minScore > 100) {
       query['promptMeta.contextTelemetry.anomalies.anomalyScore'] = { $gt: 0 };
-    } else if (minScore > 0) {
+    } else {
       query['promptMeta.contextTelemetry.anomalies.anomalyScore'] = { $gte: minScore };
     }
 
@@ -96,11 +99,19 @@ const handler = baseApi().get(
           avgResponseTime: { $avg: '$promptMeta.contextTelemetry.performance.totalResponseTimeMs' },
           providers: { $addToSet: '$promptMeta.contextTelemetry.model.provider' },
           models: { $addToSet: '$promptMeta.contextTelemetry.model.modelId' },
-          // Only push non-null severity values
+          // Only count severity for real anomalies (must stay in sync with the
+          // totalAnomalies condition above): benign turns are stored as severity
+          // 'low' (there is no benign tier), so with minAnomalyScore=0 they would
+          // otherwise swamp the distribution.
           severityCounts: {
             $push: {
               $cond: [
-                { $ne: ['$promptMeta.contextTelemetry.anomalies.severity', null] },
+                {
+                  $and: [
+                    { $ne: ['$promptMeta.contextTelemetry.anomalies.severity', null] },
+                    { $ne: ['$promptMeta.contextTelemetry.anomalies.primaryAnomaly', 'none'] },
+                  ],
+                },
                 '$promptMeta.contextTelemetry.anomalies.severity',
                 '$$REMOVE',
               ],

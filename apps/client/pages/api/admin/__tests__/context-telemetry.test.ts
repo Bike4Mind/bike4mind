@@ -80,15 +80,33 @@ describe('GET /api/admin/context-telemetry', () => {
     expect(findQuery()[SCORE_PATH]).toEqual({ $gt: 0 });
   });
 
-  it('drops the score filter entirely when minAnomalyScore=0', async () => {
+  it('widens to benign score-0 turns when minAnomalyScore=0', async () => {
     const { promise } = run({ minAnomalyScore: '0' });
     await promise;
     const query = findQuery();
-    expect(query[SCORE_PATH]).toBeUndefined();
+    // $gte: 0 rather than a dropped predicate, so every path filters on the same
+    // anomalyScore key and legacy docs without the anomalies sub-object stay out
+    expect(query[SCORE_PATH]).toEqual({ $gte: 0 });
     expect(query['promptMeta.contextTelemetry']).toEqual({ $exists: true });
     // total and stats must reflect the same widened filter as the entry list
     expect(mockCount).toHaveBeenCalledWith(query);
     expect(mockAggregate.mock.calls[0][0][0]).toEqual({ $match: query });
+  });
+
+  it('excludes benign turns from the severity distribution', async () => {
+    const { promise } = run({ minAnomalyScore: '0' });
+    await promise;
+    const groupStage = (mockAggregate.mock.calls[0][0] as Record<string, unknown>[])[1] as {
+      $group: { severityCounts: { $push: { $cond: unknown[] } } };
+    };
+    // benign turns are stored as severity 'low', so the distribution must only
+    // describe real anomalies — same condition totalAnomalies uses
+    expect(groupStage.$group.severityCounts.$push.$cond[0]).toEqual({
+      $and: [
+        { $ne: ['$promptMeta.contextTelemetry.anomalies.severity', null] },
+        { $ne: ['$promptMeta.contextTelemetry.anomalies.primaryAnomaly', 'none'] },
+      ],
+    });
   });
 
   it('filters to scores at or above the requested minimum', async () => {
