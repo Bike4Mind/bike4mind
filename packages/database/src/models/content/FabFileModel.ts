@@ -652,10 +652,22 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // `tags: expectedTags` is an exact, order-sensitive array match (Mongo array-equality
     // semantics) - ANY concurrent change (add/remove/reorder) makes this op a no-op rather
     // than overwriting with a merge computed from data that's no longer current.
+    //
+    // `tags` is a schema-less [Object] array with no default enforced on legacy rows (see the
+    // $ifNull guards in dedupeTagByUserId above), so "no tags" can be stored as `null`, an
+    // absent field, or `[]`. A caller's `file.tags ?? []` read collapses all three to `[]`
+    // before it ever reaches expectedTags, so an exact-array filter of `{ tags: [] }` would
+    // never match the null/missing cases and permanently strand those files. Match all three
+    // storage forms as equivalent to an empty snapshot, mirroring the read side.
     const result = await this.fabFileModel.bulkWrite(
       updates.map(({ id, tags, expectedTags }) => ({
         updateOne: {
-          filter: { _id: convertId(id), tags: expectedTags },
+          filter: {
+            _id: convertId(id),
+            ...(expectedTags.length === 0
+              ? { $or: [{ tags: [] }, { tags: null }, { tags: { $exists: false } }] }
+              : { tags: expectedTags }),
+          },
           update: { $set: { tags } },
         },
       })),

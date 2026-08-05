@@ -138,4 +138,49 @@ describe('FabFileRepository.bulkUpdateTags', () => {
     expect(freshA?.tags?.map(t => t.name)).toEqual(['user:added']); // untouched by the skipped op
     expect(freshB?.tags?.map(t => t.name)).toEqual(['acme:finance']); // applied normally
   });
+
+  // Legacy rows can store "no tags" as a missing/null field rather than `[]` (see the
+  // $ifNull guards in dedupeTagByUserId) - a caller's `file.tags ?? []` read collapses all
+  // three to `[]` before it ever becomes expectedTags, so the write-side filter has to treat
+  // them as equivalent too, or these files could never receive tags again.
+  it('applies the write when tags is a missing field, not just [], for an empty expectedTags snapshot', async () => {
+    const a = await FabFile.create({
+      userId,
+      fileName: 'a.txt',
+      mimeType: 'text/plain',
+      type: KnowledgeType.FILE,
+      filePath: 'a.txt',
+      tags: [],
+    });
+    // Simulates a legacy row: strip the field entirely, bypassing the schema default.
+    await FabFile.updateOne({ _id: a._id }, { $unset: { tags: '' } });
+
+    const modifiedCount = await fabFileRepository.bulkUpdateTags([
+      { id: a.id, tags: [{ name: 'acme:legal', strength: 1 }], expectedTags: [] },
+    ]);
+
+    expect(modifiedCount).toBe(1);
+    const fresh = await fabFileRepository.findById(a.id);
+    expect(fresh?.tags?.map(t => t.name)).toEqual(['acme:legal']);
+  });
+
+  it('applies the write when tags is explicitly null, not just [], for an empty expectedTags snapshot', async () => {
+    const a = await FabFile.create({
+      userId,
+      fileName: 'a.txt',
+      mimeType: 'text/plain',
+      type: KnowledgeType.FILE,
+      filePath: 'a.txt',
+      tags: [],
+    });
+    await FabFile.updateOne({ _id: a._id }, { $set: { tags: null } });
+
+    const modifiedCount = await fabFileRepository.bulkUpdateTags([
+      { id: a.id, tags: [{ name: 'acme:legal', strength: 1 }], expectedTags: [] },
+    ]);
+
+    expect(modifiedCount).toBe(1);
+    const fresh = await fabFileRepository.findById(a.id);
+    expect(fresh?.tags?.map(t => t.name)).toEqual(['acme:legal']);
+  });
 });
