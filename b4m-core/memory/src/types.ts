@@ -3,11 +3,13 @@
  *
  * The DRY seam of Mementos 2.0: memory belongs to a PRINCIPAL (whose memory / which scope),
  * independent of the ACTOR that authored any given event. A principal is a user, an agent, an
- * org, or the system - all fold from one substrate. These shapes generalize what the DeepAgent
- * Charter/Episode model already ships for agents; user mementos plug in behind the same types.
+ * org, the system, or a data lake - all fold from one substrate. These shapes generalize what the
+ * DeepAgent Charter/Episode model already ships for agents; user mementos plug in behind the same
+ * types. A `lake` principal is a data lake as a memory scope - the same substrate, a different
+ * principal; nothing produces or consumes a lake profile yet (its fold arrives with #1440).
  */
 
-export type PrincipalKind = 'user' | 'agent' | 'org' | 'system';
+export type PrincipalKind = 'user' | 'agent' | 'org' | 'system' | 'lake';
 
 export interface Principal {
   kind: PrincipalKind;
