@@ -96,6 +96,15 @@ export const updateFabFile = async (
 
     fabFile.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
     fabFile.fileUrlExpireAt = new Date(Date.now() + EXPIRE_IN_SECONDS * 1000);
+
+    // The bytes just changed, so any cached extracted length now describes the previous content.
+    // Cleared here rather than second-guessed at the read: this is the one place content is rewritten
+    // in place, and a stale count would leave the pre-send attachment warning silent about a file that
+    // no longer fits - the failure mode that warning exists to prevent.
+    //
+    // null, NOT undefined: the repository writes through `$set`, and an undefined value is stripped
+    // from the update rather than clearing the stored field, so the stale number would survive.
+    fabFile.extractedCharCount = null;
   }
 
   // A tag replacement can join or leave a data lake, which is more than an array write: leaving

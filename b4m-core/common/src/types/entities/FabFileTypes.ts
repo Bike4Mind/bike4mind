@@ -91,8 +91,12 @@ export interface IFabFile {
    * almost any length, which is why a caller wanting to know whether a file fits a model's context
    * cannot infer it from `fileSize`. Written through by the context dry-run route the composer calls,
    * so the second question about the same file is free.
+   *
+   * Explicitly nullable: an in-place content update sets it to null to invalidate the measurement, and
+   * null rather than undefined because the repository's `$set` strips undefined and would leave the
+   * stale number in place. Readers must treat null as "not measured", not as zero characters.
    */
-  extractedCharCount?: number;
+  extractedCharCount?: number | null;
   /** This is the path to the file in the storage bucket. Eg: `fab-files/1234.json` */
   filePath?: string;
   mimeType: string;

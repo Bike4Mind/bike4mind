@@ -157,6 +157,11 @@ function AttachmentBanner({
   return (
     <Box
       data-testid="attachment-fit-warning"
+      // Announced, unlike the session meter beside it: this one's entire purpose is to reach the user
+      // BEFORE they send, and a warning a screen reader never speaks does not do that. 'polite' rather
+      // than 'assertive' so it waits for a pause instead of interrupting mid-compose.
+      role="status"
+      aria-live="polite"
       sx={{
         display: 'flex',
         alignItems: 'flex-start',

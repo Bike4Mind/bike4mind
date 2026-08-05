@@ -227,6 +227,20 @@ describe('POST /api/ai/context-dry-run', () => {
     expect(body.files[0].measured).toBe('extracted');
   });
 
+  // An in-place content edit nulls the cached count (undefined would be stripped by the repository's
+  // $set and leave the stale number). Null must read as "not measured", never as zero characters -
+  // zero would report full delivery and leave the banner silent about a file that no longer fits.
+  it('re-measures a file whose cached count was invalidated by an edit', async () => {
+    mockListFabFiles.mockResolvedValue([file({ extractedCharCount: null })]);
+    mockGetFileContent.mockResolvedValue(csv(40_000));
+
+    const { body } = await run({ ...LLAMA_8K, fileIds: ['f1'] });
+
+    expect(mockGetFileContent).toHaveBeenCalledTimes(1);
+    expect(body.files[0].extractedChars).toBe(40_000);
+    expect(body.files[0].deliveredFraction).toBeLessThan(1);
+  });
+
   // A dry run must not shape later real completions. The pipeline features that would - mementos
   // writing durable user memory, context summarization writing session.contextSummary - are not
   // reachable from here, and this fails if a future edit wires them in.
