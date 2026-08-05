@@ -18,8 +18,18 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
     super(model);
   }
 
+  /**
+   * Returns the entry only while it is still live. The `expiresAt` TTL index is what eventually
+   * deletes the row, but Mongo's TTL monitor runs about once a minute, so without this guard an
+   * entry stayed readable for up to ~60s past its own expiry - a stale report served as fresh, a
+   * closed rate-limit window read as open. Callers that need the expired document itself (to
+   * report a window's reset time, say) must query the model directly.
+   *
+   * A row with no `expiresAt` at all never expires - the TTL index ignores it too - so it stays
+   * readable.
+   */
   async findByKey(key: string) {
-    return this.findOne({ key });
+    return this.findOne({ key, $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }] });
   }
 
   async deleteByKey(key: string) {
