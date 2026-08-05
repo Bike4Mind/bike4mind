@@ -285,6 +285,64 @@ describe('check-no-control-bytes.sh', () => {
     expect(r.status).toBe(1);
   });
 
+  describe('renames', () => {
+    // Git detects renames by default and emits them as a single R<score> record. R is not in
+    // ACM, so an ACM filter drops the record entirely and a rename-plus-edit commits clean.
+    // Enough lines that git scores the change as a rename rather than delete-plus-add.
+    const body = Array.from({ length: 5 }, (_, i) => `export const v${i} = ${i};`).join('\n') + '\n';
+
+    function repoWithCommittedFile() {
+      const { dir } = makeRepo();
+      write(dir, 'a.ts', body);
+      git(dir, 'add', 'a.ts');
+      git(dir, 'commit', '-q', '-m', 'add a.ts');
+      return dir;
+    }
+
+    it('catches a control byte added during a rename, in staged mode', () => {
+      const dir = repoWithCommittedFile();
+      git(dir, 'mv', 'a.ts', 'b.ts');
+      fs.appendFileSync(path.join(dir, 'b.ts'), Buffer.from('export const bad = 9;\x00\n', 'binary'));
+      git(dir, 'add', '-A');
+      // Guard against the fixture silently not being a rename any more.
+      expect(git(dir, 'diff', '--cached', '--name-status')).toMatch(/^R/);
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('b.ts');
+    });
+
+    it('catches a control byte added during a rename, in --changed mode', () => {
+      const dir = repoWithCommittedFile();
+      const base = git(dir, 'rev-parse', 'HEAD');
+      git(dir, 'mv', 'a.ts', 'b.ts');
+      fs.appendFileSync(path.join(dir, 'b.ts'), Buffer.from('export const bad = 9;\x00\n', 'binary'));
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'rename and add a NUL');
+      const r = runGuard(dir, ['--changed', base]);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('b.ts');
+    });
+
+    it('passes a clean rename', () => {
+      const dir = repoWithCommittedFile();
+      git(dir, 'mv', 'a.ts', 'b.ts');
+      git(dir, 'add', '-A');
+      expect(runGuard(dir).status).toBe(0);
+    });
+  });
+
+  it('finds a control byte beyond the first read chunk', () => {
+    // Content is read in bounded chunks rather than slurped, so a hit late in a large file
+    // must still be found. 176KB spans three 64KB chunks.
+    const { dir } = makeRepo();
+    write(dir, 'big.ts', 'export const pad = 1;\n'.repeat(8000) + 'export const bad = 2;\x00\n');
+    expect(fs.statSync(path.join(dir, 'big.ts')).size).toBeGreaterThan(65536 * 2);
+    git(dir, 'add', 'big.ts');
+    const r = runGuard(dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('big.ts');
+  });
+
   it('reads the staged blob, not the worktree copy', () => {
     // Stage a bad blob, then clean the file on disk without re-staging. The commit would
     // still carry the bad blob, so scanning the worktree copy would wave it through.
