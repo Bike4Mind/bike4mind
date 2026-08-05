@@ -193,6 +193,17 @@
           },
           "enableAgents": {
             "type": "boolean"
+          },
+          "promptMode": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "grounded",
+              "surface"
+            ]
+          },
+          "includePromptDetails": {
+            "type": "boolean"
           }
         },
         "required": [

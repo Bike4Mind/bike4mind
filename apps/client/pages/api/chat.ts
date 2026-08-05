@@ -175,6 +175,9 @@ const handler = nextRouteForContract(chatContract, {
       response: completedQuest.reply,
       responses: completedQuest.replies,
       createdAt: completedQuest.createdAt,
+      ...(simplifiedRequest.includePromptDetails && completedQuest.promptMeta?.context?.systemPromptDetails
+        ? { promptDetails: completedQuest.promptMeta.context.systemPromptDetails }
+        : {}),
       ...(toolMeta && { tools: toolMeta }),
       performance,
       tracking_info: {
@@ -279,6 +282,7 @@ function transformToInternalFormat(
       },
     },
     enableArtifacts: false,
+    ...(request.promptMode ? { promptMode: request.promptMode } : {}),
     ...(isToolsEnabled
       ? {
           // Legacy enableTools=true callers expect full capabilities by default.
