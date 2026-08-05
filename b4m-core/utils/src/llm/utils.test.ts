@@ -2691,10 +2691,11 @@ describe('allocation under a production-shaped system-prompt load', () => {
     );
   });
 
-  it('truncates a 4k file on an 8k model and says so, rather than faking the tail', async () => {
-    // QA attached exactly this and expected the trailing marker. It cannot arrive: after 1.5k of system
-    // instructions the content share is around 900 tokens, so roughly 2.9k of 4k characters is the
-    // ceiling. What matters is that the cut is declared.
+  it('delivers a 4k file whole on an 8k model under a full system load', async () => {
+    // QA attached exactly this and expected the trailing marker. It used to be unreachable: the content
+    // floor was a share of what survived the system stack, about 900 tokens, so ~2.9k of 4k characters
+    // was the ceiling. The floor is now a share of the pre-system budget - ~1,445 tokens against the
+    // file's ~1,143 - so the whole file fits and the marker arrives.
     const tokenizer = createMockTokenizer();
 
     const result = await buildAndSortMessages(
@@ -2713,17 +2714,22 @@ describe('allocation under a production-shaped system-prompt load', () => {
     );
     expect(delivered).toBeDefined();
     const text = delivered!.content as string;
-    expect(text).toContain(NOTICE);
-    expect(text).not.toContain('FINAL_ROW_MARKER');
+    expect(text).toContain('FINAL_ROW_MARKER: apricot');
+    expect(text).not.toContain(NOTICE);
+    // The system load fits alongside it rather than being traded away for the file.
+    expect(result.some(m => m.role === 'system')).toBe(true);
+    // Nothing was lost, so nothing should be reported as lost.
+    expect(mockLogger.warn).not.toHaveBeenCalled();
     expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
       LLAMA_8K_INPUT_BUDGET
     );
   });
 
-  it('states the file could not be included rather than sending an unusable sliver', async () => {
-    // GPT-4's 4k output reserve leaves so little that the file's share collapses to a few dozen tokens.
-    // A fragment that small does not read as a truncated file - it reads as no file, and the model then
-    // tells the user it cannot see attachments at all. That is the failure this replaces.
+  it('sheds system instructions rather than the file when both cannot fit', async () => {
+    // GPT-4's 4k output reserve leaves ~2,081 tokens to divide. The file's floor is 35% of that, and
+    // system instructions are capped at the remaining 65% (~1,353), which this 1,500-token load exceeds
+    // - so it is dropped deliberately and the file still arrives usefully cut rather than being
+    // declared undeliverable. The trade is the point: the user attached the file.
     const tokenizer = createMockTokenizer();
 
     const result = await buildAndSortMessages(
@@ -2737,17 +2743,21 @@ describe('allocation under a production-shaped system-prompt load', () => {
       tokenizer
     );
 
-    const note = result.find(
-      m => typeof m.content === 'string' && (m.content as string).includes('could not be included')
+    const delivered = result.find(
+      m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color')
     );
-    expect(note).toBeDefined();
-    // The model must not be left free to report the file as absent.
-    expect(note!.content as string).toContain('do not tell the user that no file was provided');
-    // And no unusable fragment of the CSV is sent alongside it.
-    expect(result.some(m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color'))).toBe(
-      false
+    expect(delivered).toBeDefined();
+    // Cut, and said so - a silent cut is the failure this area exists to prevent.
+    expect(delivered!.content as string).toContain(NOTICE);
+    // Not the pre-fix outcome, where the file's share collapsed and it was declared undeliverable.
+    expect(
+      result.some(m => typeof m.content === 'string' && (m.content as string).includes('could not be included'))
+    ).toBe(false);
+    expect(result.some(m => m.role === 'system')).toBe(false);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('No system instructions fit the budget'));
+    expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+      GPT4_8K_INPUT_BUDGET
     );
-    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('could not be delivered usefully'));
   });
 });
 
@@ -2774,11 +2784,14 @@ describe('unusable attachments are judged one at a time', () => {
     }));
     const bigCsv = (tag: string) => ({ role: 'user' as const, content: `${tag},col\n` + 'r,1\n'.repeat(3000) });
 
+    // 2200 rather than the 3096 this used at first: raising the content floor to a share of the
+    // pre-system budget lifted both files clear of the usability threshold, so the sliver case this
+    // test exists for now needs a genuinely smaller window to reach.
     const result = await buildAndSortMessages(
       history,
       [{ role: 'system', content: 'S'.repeat(1500 * 3.5) }, bigCsv('alpha'), bigCsv('bravo')],
       [{ role: 'user', content: 'What do the attached files contain?' }],
-      3096,
+      2200,
       {},
       20,
       mockLogger as any,
