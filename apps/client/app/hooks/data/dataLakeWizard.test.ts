@@ -33,6 +33,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefine
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
 import { useBatchUpload, useRemoveFileFromDataLake } from './dataLakeWizard';
+import { slugifyDataLakeName } from './dataLakeSlug';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
 const mountHook = <T>(hook: () => T) => {
@@ -343,6 +344,62 @@ describe('useBatchUpload onError', () => {
   });
 });
 
+describe('useBatchUpload lake targeting', () => {
+  beforeEach(() => {
+    apiPost.mockReset();
+    apiPut.mockClear();
+    apiDelete.mockClear();
+    uploadFileToUrlMock.mockReset();
+    uploadFileToUrlMock.mockResolvedValue(undefined);
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  const presignedLakeRef = () =>
+    (postCall('/api/files/generate-presigned-urls-batch')?.[1] as { dataLakeSlug: string }).dataLakeSlug;
+
+  it('uploads into the lake it just created, not the lake the name slugifies to', async () => {
+    // The server disambiguates a colliding slug, so a name-derived slug can resolve to a
+    // lake that already existed - another user's, for an admin who may write to it. Only
+    // the id the create call returned identifies the new lake.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1', slug: 'test-lake-1' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch') return Promise.resolve({ data: { files: [] } });
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/api/files/generate-presigned-urls-batch', expect.anything())
+    );
+
+    expect(presignedLakeRef()).toBe('lake1');
+    expect(presignedLakeRef()).not.toBe(slugifyDataLakeName(useDataLakeWizardStore.getState().config.name));
+    expect(presignedLakeRef()).toBe((postCall('/api/data-lakes/batches')?.[1] as { dataLakeId: string }).dataLakeId);
+  });
+
+  it('uploads into the target lake in append mode', async () => {
+    installApiPostRouter();
+    seedWizard({ targetLake: { id: 'existing1', slug: 'existing-slug' } });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/api/files/generate-presigned-urls-batch', expect.anything())
+    );
+
+    expect(presignedLakeRef()).toBe('existing1');
+  });
+});
+
 describe('useBatchUpload rollback (#816)', () => {
   beforeEach(() => {
     apiPost.mockReset();
@@ -478,6 +535,55 @@ describe('useBatchUpload rollback (#816)', () => {
     // Never reconciled through the outcome branch, so upload-complete is not called.
     expect(postCall('/api/data-lakes/batches/upload-complete')).toBeUndefined();
     expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  it('a refused presign reports the server reason, not a network problem', async () => {
+    // Every chunk 400ing (e.g. a stale bundle sending a reference the door now rejects) used to
+    // surface "usually a network or connection issue" while tearing the lake down.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch')
+        return Promise.reject({
+          isAxiosError: true,
+          response: { status: 400, data: { error: 'This upload must name the data lake its batch belongs to' } },
+        });
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorMessage).toBe('This upload must name the data lake its batch belongs to');
+    expect(progress.errorMessage).not.toBe(
+      'None of the files could be uploaded. This is usually a network or connection issue, not your data lake settings. Please try again.'
+    );
+  });
+
+  it('keeps the friendly transport message when the presign failed with no HTTP response', async () => {
+    // A timeout or abort carries no status, so rethrowing it would surface raw axios text
+    // ("timeout of 30000ms exceeded") where the generic message is both friendlier and true.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch')
+        return Promise.reject({ isAxiosError: true, code: 'ECONNABORTED', message: 'timeout of 30000ms exceeded' });
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorKind).toBe('upload');
+    expect(progress.errorMessage).toBe(
+      'None of the files could be uploaded. This is usually a network or connection issue, not your data lake settings. Please try again.'
+    );
   });
 
   it('presign failure (create mode): rolls back the lake and marks the batch failed', async () => {

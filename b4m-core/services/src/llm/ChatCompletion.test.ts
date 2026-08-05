@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   ChatCompletionProcess,
   addPairedTool,
+  resolveEnabledTools,
   computeSettlementDelta,
   clampFraction,
   dropOldestHistoryTurn,
@@ -292,6 +293,33 @@ describe('ChatCompletionProcess', () => {
       (service as any).entitlementsResolved = false;
       (service as any).entitlementKeys = [];
       expect(await service.resolveEntitlementKeys()).toEqual([]);
+    });
+  });
+
+  describe('userHasAccessibleKnowledgeLake (offering signal)', () => {
+    it('memoizes a NEGATIVE result - one lookup per turn, not one per call', async () => {
+      // The `=== undefined` sentinel is what makes a false result stick. A falsy check would
+      // re-run the DB lookup every turn for every caller who has no lake - the common case.
+      const findLakes = vi.fn().mockResolvedValue([]);
+      (service as any).hasAccessibleKnowledgeLakeMemo = undefined;
+      (service as any).db = { dataLakes: { findActiveByUserTagsAndEntitlements: findLakes } };
+      (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+
+      expect(await service.userHasAccessibleKnowledgeLake()).toBe(false);
+      expect(await service.userHasAccessibleKnowledgeLake()).toBe(false);
+      expect(findLakes).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails SAFE to false and warns when the lookup throws - never breaks the turn', async () => {
+      (service as any).hasAccessibleKnowledgeLakeMemo = undefined;
+      // No db at all: the access resolver dereferences `db.dataLakes` and throws.
+      (service as any).db = undefined;
+      (service as any).logger = { warn: vi.fn() };
+
+      await expect(service.userHasAccessibleKnowledgeLake()).resolves.toBe(false);
+      expect((service as any).logger.warn).toHaveBeenCalled();
     });
   });
 
@@ -2240,6 +2268,130 @@ describe('addPairedTool', () => {
       'image_generation',
       'edit_image',
     ]);
+  });
+});
+
+describe('resolveEnabledTools', () => {
+  it('offers search_knowledge_base (and pairs retrieve) when knowledge is attached', () => {
+    const result = resolveEnabledTools({ requestTools: [], hasAttachedKnowledge: true });
+    expect(result).toContain('search_knowledge_base');
+    expect(result).toContain('retrieve_knowledge_content');
+  });
+
+  it('does not duplicate search_knowledge_base when the request already has it', () => {
+    const result = resolveEnabledTools({
+      requestTools: ['search_knowledge_base'],
+      hasAttachedKnowledge: true,
+    });
+    expect(result.filter(t => t === 'search_knowledge_base')).toHaveLength(1);
+  });
+
+  it('lets the session denylist win over the attached-knowledge offer', () => {
+    const result = resolveEnabledTools({
+      requestTools: [],
+      hasAttachedKnowledge: true,
+      sessionDisabledTools: ['search_knowledge_base'],
+    });
+    expect(result).not.toContain('search_knowledge_base');
+    // retrieve rides on search's pairing, so it must not survive alone either.
+    expect(result).not.toContain('retrieve_knowledge_content');
+  });
+
+  it('leaves the tool list untouched when no knowledge is attached', () => {
+    const result = resolveEnabledTools({ requestTools: ['web_search'], hasAttachedKnowledge: false });
+    expect(result).toEqual(['web_search']);
+  });
+
+  it('skips the attached-knowledge offer when skipAutoOffers is set (prompt-mode eval)', () => {
+    const result = resolveEnabledTools({
+      requestTools: [],
+      hasAttachedKnowledge: true,
+      skipAutoOffers: true,
+    });
+    expect(result).not.toContain('search_knowledge_base');
+    expect(result).not.toContain('retrieve_knowledge_content');
+  });
+
+  it('still honors caller-selected knowledge tools under skipAutoOffers', () => {
+    // skipAutoOffers gates only OUR offer; a tool the caller explicitly sent stays and still pairs.
+    const result = resolveEnabledTools({
+      requestTools: ['search_knowledge_base'],
+      hasAttachedKnowledge: true,
+      skipAutoOffers: true,
+    });
+    expect(result).toContain('search_knowledge_base');
+    expect(result).toContain('retrieve_knowledge_content');
+  });
+
+  it('skips the accessible-lake offer too when skipAutoOffers is set', () => {
+    // The prompt-mode gate must cover the lake signal, or raw-mode evals leak the tool via a lake.
+    const result = resolveEnabledTools({
+      requestTools: [],
+      hasAttachedKnowledge: false,
+      hasAccessibleDataLake: true,
+      skipAutoOffers: true,
+    });
+    expect(result).not.toContain('search_knowledge_base');
+  });
+
+  it('offers search_knowledge_base when the caller has an accessible lake (no attachment)', () => {
+    const result = resolveEnabledTools({
+      requestTools: [],
+      hasAttachedKnowledge: false,
+      hasAccessibleDataLake: true,
+    });
+    expect(result).toContain('search_knowledge_base');
+    expect(result).toContain('retrieve_knowledge_content');
+  });
+
+  it('does not offer the knowledge tool when neither attachment nor accessible lake is present', () => {
+    const result = resolveEnabledTools({
+      requestTools: ['web_search'],
+      hasAttachedKnowledge: false,
+      hasAccessibleDataLake: false,
+    });
+    expect(result).toEqual(['web_search']);
+  });
+
+  it('lets the session denylist win over the accessible-lake offer', () => {
+    const result = resolveEnabledTools({
+      requestTools: [],
+      hasAttachedKnowledge: false,
+      hasAccessibleDataLake: true,
+      sessionDisabledTools: ['search_knowledge_base'],
+    });
+    expect(result).not.toContain('search_knowledge_base');
+    expect(result).not.toContain('retrieve_knowledge_content');
+  });
+
+  it('pairs edit_image for a session-forced image_generation (latent-gap fix)', () => {
+    const result = resolveEnabledTools({
+      requestTools: [],
+      sessionEnabledTools: ['image_generation'],
+      hasAttachedKnowledge: false,
+    });
+    expect(result).toContain('image_generation');
+    expect(result).toContain('edit_image');
+  });
+
+  it('strips a denied companion (edit_image) even when its trigger stays', () => {
+    const result = resolveEnabledTools({
+      requestTools: ['image_generation'],
+      hasAttachedKnowledge: false,
+      sessionDisabledTools: ['edit_image'],
+    });
+    expect(result).toContain('image_generation');
+    expect(result).not.toContain('edit_image');
+  });
+
+  it('is idempotent on its own output', () => {
+    const once = resolveEnabledTools({
+      requestTools: ['web_search'],
+      sessionEnabledTools: ['image_generation'],
+      hasAttachedKnowledge: true,
+    });
+    const twice = resolveEnabledTools({ requestTools: once, hasAttachedKnowledge: true });
+    expect(twice).toEqual(once);
   });
 });
 
