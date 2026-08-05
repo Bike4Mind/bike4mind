@@ -74,7 +74,7 @@ import type { EditableLake } from './DataLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
-import type { IDataLakeBatchDocument, IFabFileDocument } from '@bike4mind/common';
+import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
 import { satisfiesTagPrefix } from '@bike4mind/common';
 
 type ManagerLake = NonNullable<ReturnType<typeof useDataLakes>['data']>[number];
@@ -110,7 +110,7 @@ export default function DataLakeManagerPanel() {
   // whose taxonomy phase actually needs attention are kept - a lake with none just misses the
   // map entry, which every consumer already treats the same as "nothing to show."
   const taxonomyBatchByLakeId = useMemo(() => {
-    const map = new Map<string, IDataLakeBatchDocument>();
+    const map = new Map<string, IDataLakeBatchSummary>();
     for (const batch of activeBatches ?? []) {
       if (!batch.taxonomyStatus || batch.taxonomyStatus === 'none') continue;
       if (!map.has(batch.dataLakeId)) map.set(batch.dataLakeId, batch);
@@ -282,7 +282,7 @@ interface ManagerNavProps {
   /** Per-lake live file count, resolved by lake membership (see lakeCount). */
   lakeCount: (lake: ManagerLake) => number | undefined;
   /** Lake id -> its attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
-  taxonomyBatchByLakeId: Map<string, IDataLakeBatchDocument>;
+  taxonomyBatchByLakeId: Map<string, IDataLakeBatchSummary>;
   activeLake: ManagerLake | null;
   /** In-lake tag path, seeded with the lake's prefix segments (see selectLake). */
   path: string[];
@@ -1001,7 +1001,7 @@ function LakeInfoPanel({
   lake: ManagerLake;
   fileCount: number | undefined;
   /** This lake's attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
-  taxonomyBatch: IDataLakeBatchDocument | undefined;
+  taxonomyBatch: IDataLakeBatchSummary | undefined;
   onOpenSettings: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
