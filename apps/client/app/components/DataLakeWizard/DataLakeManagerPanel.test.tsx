@@ -210,6 +210,21 @@ describe('DataLakeManagerPanel - root view', () => {
     expect(screen.getByTestId('datalake-archived-section')).toBeInTheDocument();
   });
 
+  // A-Z names itself with the alphabet glyph, so the mode is readable from the button and not
+  // only from the tooltip; count keeps the neutral swap glyph.
+  it('swaps the sort icon to the alphabet glyph when toggled to A-Z', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const toggle = screen.getByTestId('datalake-manager-sort-toggle');
+    expect(toggle).toHaveAttribute('data-sort', 'count');
+    expect(screen.getByTestId('SwapVertIcon')).toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('data-sort', 'alpha');
+    expect(screen.getByTestId('SortByAlphaIcon')).toBeInTheDocument();
+    expect(screen.queryByTestId('SwapVertIcon')).not.toBeInTheDocument();
+  });
+
   it('shows a persistent info icon next to the Data Lakes header that reveals the RAG explanation on hover', async () => {
     const user = userEvent.setup();
     renderPanel();
