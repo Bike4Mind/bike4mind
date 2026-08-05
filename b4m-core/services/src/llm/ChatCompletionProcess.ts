@@ -219,14 +219,18 @@ const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
 /**
  * Share of the context budget this file assumes history will take when sizing a history count. It
  * does NOT mirror how buildAndSortMessages splits the budget: that depends on historyCount, giving
- * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise.
+ * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise - a floor measured
+ * against the budget BEFORE system instructions are charged to it, so it does not shrink as the system
+ * stack grows.
  */
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
 // Three stages decide how much attached content survives, and they are easily confused.
 // HISTORY_BUDGET_PERCENTAGE above sizes the history MESSAGE COUNT before anything is fetched. The other
-// two now live together in @bike4mind/utils contextBudget, because the ordering between them is what
-// matters: EXTRACTION reads content off disk, ASSEMBLY trims what was read, and extraction has to stay
-// at or below the assembly floor or the floor is unreachable.
+// two now live together in @bike4mind/utils contextBudget, because the relationship between them is
+// what matters: EXTRACTION reads content off disk, ASSEMBLY trims what was read, and when extraction
+// is the smaller of the two the assembly floor is what a file actually gets. On a small window that
+// held only after the reserve was bounded; above ~80k it does not hold at all, and contextBudget spells
+// out why that is tolerable there.
 
 /**
  * Fraction of the space ACTUALLY AVAILABLE FOR HISTORY (safe input minus the
@@ -2494,9 +2498,11 @@ export class ChatCompletionProcess {
           messages => calculateTotalTokenLength(messages, tokenCalcOptions),
           deliveredMessages
         );
-        // Reaching the model, not merely being assembled: the two floor rows below report inclusion the
-        // same way every other row now does, or a budget-dropped block would still read as billed.
-        const admitted = (source: PromptSourceId) =>
+        // Two different questions, and the floor rows need both: whether the gates admitted a block at
+        // all, and whether it survived the budget. Collapsing them would report a block the window could
+        // not fit as though an admin had switched it off.
+        const admitted = (source: PromptSourceId) => admittedContextMessages.some(t => t.source === source);
+        const delivered = (source: PromptSourceId) =>
           admittedContextMessages.some(t => t.source === source && deliveredMessages.has(t.message));
         systemPromptDetails.push(
           ...(await buildAlwaysOnFloorDetails(
@@ -2507,6 +2513,8 @@ export class ChatCompletionProcess {
               // the help-center block must surface the same way: excluded, zero tokens.
               isLocalModel: !admitted('helpCenter'),
               helpCenterContent,
+              artifactEmissionDelivered: delivered('artifactEmission'),
+              helpCenterDelivered: delivered('helpCenter'),
             },
             content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
           ))

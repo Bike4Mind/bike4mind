@@ -15,6 +15,14 @@ export type AlwaysOnFloorInput = {
   isLocalModel: boolean;
   /** Resolved HelpCenterPrompt (or its default). */
   helpCenterContent: string;
+  /**
+   * Whether each block survived into the payload, which is not the same question as whether it was
+   * enabled: the input budget can drop an enabled block to make room for an attachment. Kept separate
+   * so the two are reported with the reason that actually applies rather than both as 'disabled'.
+   * Omitted means "not known", and an enabled block is then assumed delivered.
+   */
+  artifactEmissionDelivered?: boolean;
+  helpCenterDelivered?: boolean;
 };
 
 /**
@@ -41,22 +49,32 @@ export async function buildAlwaysOnFloorDetails(
 ): Promise<SystemPromptDetail[]> {
   const details: SystemPromptDetail[] = [];
 
-  const artifactIncluded = input.artifactEmissionEnabled;
+  // A block that was switched off and one the budget could not fit are both excluded, but for reasons a
+  // reader has to be able to tell apart: one is configuration, the other is a context window too small
+  // to hold everything the turn asked for.
+  const exclusionReason = (enabled: boolean, delivered: boolean) =>
+    !enabled ? ('disabled' as const) : delivered ? undefined : ('token_limit' as const);
+
+  const artifactEnabled = input.artifactEmissionEnabled;
+  const artifactIncluded = artifactEnabled && (input.artifactEmissionDelivered ?? true);
+  const artifactReason = exclusionReason(artifactEnabled, artifactIncluded);
   details.push({
     source: 'admin',
     name: 'artifact_emission',
     tokenCount: artifactIncluded ? await countTokens(input.artifactEmissionContent) : 0,
     wasIncluded: artifactIncluded,
-    ...(artifactIncluded ? {} : { exclusionReason: 'disabled' as const }),
+    ...(artifactReason ? { exclusionReason: artifactReason } : {}),
   });
 
-  const helpCenterIncluded = !input.isLocalModel;
+  const helpCenterEnabled = !input.isLocalModel;
+  const helpCenterIncluded = helpCenterEnabled && (input.helpCenterDelivered ?? true);
+  const helpCenterReason = exclusionReason(helpCenterEnabled, helpCenterIncluded);
   details.push({
     source: 'admin',
     name: 'help_center',
     tokenCount: helpCenterIncluded ? await countTokens(input.helpCenterContent) : 0,
     wasIncluded: helpCenterIncluded,
-    ...(helpCenterIncluded ? {} : { exclusionReason: 'disabled' as const }),
+    ...(helpCenterReason ? { exclusionReason: helpCenterReason } : {}),
   });
 
   return details;

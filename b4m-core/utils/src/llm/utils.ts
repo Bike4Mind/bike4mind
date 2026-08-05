@@ -59,8 +59,8 @@ const CHARS_PER_TOKEN = 3.5;
  * 10 is borrowed from rankChunksForFiles' topK default, but note the two caps differ in shape: that
  * one is global across every file in the search, this one is PER FILE, so a multi-file attachment can
  * yield more chunks here. What bounds the payload is the per-file character budget applied to these
- * results (maxChars in processFabFilesServer), not this count - though that budget is derived from
- * the model's OUTPUT token limit, which is its own separate defect.
+ * results (maxChars in processFabFilesServer), not this count - and that budget now derives from the
+ * model's input window rather than its output limit; see attachedContentExtractionBudget.
  */
 const COSINE_SEARCH_TOP_K = 10;
 
@@ -1938,8 +1938,9 @@ export async function buildAndSortMessages(
     !(preSystemBudget > 0) || nonImageMessages.length === 0
       ? 0
       : Math.floor(preSystemBudget * MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION);
-  // System instructions keep at least the complement of the content floor, so they can be squeezed but
-  // never starved by an attachment.
+  // The cap never falls below the complement of the content floor, so an attachment can squeeze the
+  // system budget but not shrink it without limit. It says nothing about any individual message: one
+  // larger than the cap is still dropped whole, which the warning below reports.
   const systemTokenCap = Math.max(0, preSystemBudget - contentReserve);
 
   const systemCandidates = fabMessages.filter(message => message.role === 'system');

@@ -137,9 +137,9 @@ export function assemblyTokenBuffer(maxInputTokens: number): number {
 /**
  * Tokens attached content is guaranteed at ASSEMBLY on a windowed request.
  *
- * Ignores the user's prompt, which the real builder also subtracts, so this reads slightly high. That
- * is the safe direction for the comparison below: it can only make the invariant harder to satisfy,
- * never mask a violation.
+ * Ignores the user's prompt, which the real builder also subtracts, so this reads slightly HIGH - the
+ * optimistic direction. A caller comparing a file against it right at the boundary should allow for the
+ * prompt; the checks here carry hundreds of tokens of margin, well clear of one.
  */
 export function attachedContentAssemblyFloor(maxInputTokens: number): number {
   const preSystemBudget = maxInputTokens - assemblyTokenBuffer(maxInputTokens);
