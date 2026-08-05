@@ -1,6 +1,5 @@
 import { z } from 'zod';
-import { secureParameters, ForbiddenError } from '@bike4mind/utils';
-import { IUserDocument, IUserRepository } from '@bike4mind/common';
+import { IUserDocument, IUserRepository, secureParameters, ForbiddenError } from '@bike4mind/common';
 
 const clearActiveOrganizationSchema = z.object({
   userId: z.string().min(1),
@@ -21,9 +20,16 @@ interface ClearActiveOrganizationAdapters {
  * up pointed at an unfunded org gets "insufficient credits" with no way out - `leave` refuses the
  * owner and only ever removes a member row, never the owner's pointer.
  *
+ * Cost of clearing is wider than balance: the same pointer also gates org-scoped reads and writes -
+ * org-tier artifact visibility, publishing to org scope, the data-lake access context, and
+ * knowledgeBaseSearch all key off it - so clearing drops the caller's org-scoped access too, not
+ * just their spend. Still the right trade against being unable to spend at all, but callers must
+ * not treat it as a balance-only reset (e.g. no UI affordance built on the narrower promise).
+ *
  * Clears the pointer ONLY - no membership, group, or ownership change - so it is safe for an owner
  * or a plain member, and idempotent (clearing an already-null pointer is a harmless no-op write).
- * It does NOT separate the field's two overloaded meanings; that is #1172's active-org work.
+ * There is no automatic re-set path: restoring the pointer, and separating the field's two
+ * overloaded meanings, is #1172's active-org work.
  *
  * authz: the user themselves, or a platform admin clearing another user's pointer.
  */
