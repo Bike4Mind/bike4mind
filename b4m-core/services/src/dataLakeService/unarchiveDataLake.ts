@@ -26,6 +26,10 @@ interface UnarchiveDataLakeAdapters {
  * Restores an archived data lake with a dedup pass: if a file was re-uploaded while
  * the lake was archived, the live copy wins and the archived duplicate is discarded
  * (not restored). Owner or admin only. Uses transitional 'restoring' state.
+ *
+ * Scoped to the batch archive recorded in `filesArchivedAt`, so a file the creator archived on
+ * their own is neither un-archived here nor eligible for the dedup pass's hard delete. A lake
+ * archived before that field existed has no mark and reverses unbounded, as it always did.
  */
 export const unarchiveDataLake = async (
   actor: { userId: string; isAdmin: boolean },
@@ -51,7 +55,11 @@ export const unarchiveDataLake = async (
 
   // Dedup pass: a LIVE (non-archived, non-deleted) file with the same hash means the
   // file was re-uploaded while archived - the live copy wins.
-  const archived = await db.fabFiles.findArchivedByDataLakeTag(scope);
+  // Bounded to the batch archive recorded. Load-bearing on this axis, not just tidiness: the loser
+  // of the comparison below is HARD-deleted, so an unbounded read would nominate a file the creator
+  // archived on their own for destruction the moment its contentHash collided with a live member.
+  const stampedAt = existing.filesArchivedAt ?? undefined;
+  const archived = await db.fabFiles.findArchivedByDataLakeTag(scope, stampedAt);
   const archivedHashes = archived.map(f => f.contentHash).filter((h): h is string => !!h);
 
   let skippedDuplicates = 0;
@@ -71,9 +79,10 @@ export const unarchiveDataLake = async (
   }
 
   // Restore the remaining archived files (the non-duplicates).
-  const restoredCount = await db.fabFiles.unarchiveByDataLakeTag(scope);
+  const restoredCount = await db.fabFiles.unarchiveByDataLakeTag(scope, stampedAt);
 
-  await db.dataLakes.update({ id: dataLakeId, status: 'active' });
+  // Explicit null, not undefined, which mongoose would drop and leave the spent mark in place.
+  await db.dataLakes.update({ id: dataLakeId, status: 'active', filesArchivedAt: null });
   await recomputeLakeStats(existing, { db });
 
   return { restoredCount, skippedDuplicates };
