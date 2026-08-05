@@ -19,6 +19,7 @@ export * from './musicGeneration';
 export * from './schemas/sora';
 export * from './schemas';
 export * from './constants/user';
+export * from './constants/organization';
 export * from './constants/dataLakes';
 export * from './constants/jupyter';
 export * from './constants/systemUsers';
