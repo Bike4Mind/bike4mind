@@ -11,8 +11,6 @@ export const FIELD_TOOLTIPS = {
     'Average credits consumed per day over your recent activity. Use this to estimate how long your balance will last.',
   temperature: 'Controls randomness: lower values are more deterministic, higher values are more creative.',
   fixedTemperature: 'This model only supports temperature 1.0.',
-  maxTokensInput:
-    'Tokens reserved for your prompt and conversation history. Increasing this leaves fewer tokens for the response.',
   maxTokensOutput:
     'Maximum tokens the model can generate in a single response. Higher values allow longer answers but cost more credits.',
   responseHistory: 'How many recent messages from this conversation are sent back to the model as context.',

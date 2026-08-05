@@ -469,6 +469,16 @@ const formatTrainingCutoff = (cutoff: string): string => {
 // indicators on it rather than competing with a card's own controls.
 const INDICATOR_SIZE = 32;
 
+// Space thousands separators, matching the Context total these two numbers split.
+const formatTokenCount = (tokens: number): string => tokens.toLocaleString().replace(/,/g, ' ');
+
+/**
+ * Floor for the output-token slider. Replaces `max(1024, min(2048, ctx / 4))`, whose other two
+ * branches were dead for any window of 8192 or more - i.e. every current model - so the floor was
+ * 2048 by accident rather than by intent. Now the slider is the only control here, so it says so.
+ */
+const MIN_OUTPUT_TOKENS = 2048;
+
 /**
  * Checked-state frame for the Advanced Settings checkboxes, matching the composer's Agent-mode
  * button: green border at 75% over a 10% green fill instead of Joy's solid green.
@@ -562,6 +572,15 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
     // thing that explains the absence.
     ...(modelInfo.supportsTools ? [] : ['Selected AI model does not support tools']),
   ];
+
+  // Token allocation read-outs. max_tokens is the output budget, bounded by the model's own
+  // ceiling - never a share of the context window. The server reserves the whole budget out of
+  // the window when it computes maxSafeInputTokens (see aiSettingsUtils), so the remainder is
+  // what prompt + history actually get.
+  const outputTokens = max_tokens ?? 4096;
+  const outputCeiling = modelInfo.max_tokens ?? 16384;
+  const contextWindow = modelInfo.contextWindow ?? 0;
+  const inputTokens = Math.max(0, contextWindow - outputTokens);
 
   return (
     <>
@@ -684,16 +703,17 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
 
       {/* Advanced Settings */}
       <Box sx={{ p: 0 }}>
-        <Grid
-          container
-          spacing={1}
+        {/* Plain flex row, not a Grid container: `spacing` puts negative margins on the
+            container and compensating padding on Grid *items*, and these children are not items -
+            so the title and Reset hung outside the dialog's content box on both edges. */}
+        <Box
           sx={{
-            flexGrow: 1,
             display: 'flex',
             flexDirection: 'row',
             justifyContent: 'space-between',
             alignItems: 'center',
-            mb: 2,
+            gap: 1,
+            mb: '32px',
           }}
         >
           <Typography level="body-sm" sx={commonTextTitleStyles}>
@@ -787,7 +807,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               tooltip="Reset advanced settings (temperature, tokens, spoken words, response history) to defaults"
             />
           </Box>
-        </Grid>
+        </Box>
 
         {/* An output-token budget only means something for chat models. Image, video and
             transcription entries carry placeholder context values in the catalog (every Flux and
@@ -803,103 +823,53 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
           <Box sx={{ p: 0, mb: '28px' }}>
             <Box
               sx={{
-                display: isMobile ? 'block' : 'flex',
+                display: 'flex',
+                alignItems: 'center',
                 justifyContent: 'space-between',
                 flexWrap: 'wrap',
-                gap: '20px',
+                gap: '12px',
               }}
             >
-              {/* Context */}
-              <Box sx={{ display: 'flex', mb: { xs: 2, sm: 0 }, alignItems: 'center', gap: '3px', flexShrink: 0 }}>
-                <Typography level="body-sm" sx={commonTextTitleStyles}>
-                  Context -{' '}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                {/* A control label inside Advanced Settings, not a section heading, so it sits a
+                    step below the shared 16px title size. */}
+                <Typography level="body-sm" sx={{ ...commonTextTitleStyles, fontSize: '14px' }}>
+                  Max output tokens
                 </Typography>
-                <Typography
-                  level="body-sm"
-                  sx={{ fontWeight: 'bold', color: brand[800], fontSize: '16px', whiteSpace: 'nowrap' }}
-                >
-                  {(modelInfo?.contextWindow ?? 0).toLocaleString().replace(/,/g, ' ')}
-                </Typography>
+                <FieldTooltip
+                  ariaLabel="Help: Output tokens"
+                  content={FIELD_TOOLTIPS.maxTokensOutput}
+                  data-testid="field-tooltip-output-tokens"
+                />
               </Box>
-
-              {/* Input */}
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '20px' }}>
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1,
-                    justifyContent: { xs: 'flex-start', sm: 'flex-end' },
-                  }}
-                >
-                  <Typography level="body-sm">Input</Typography>
-                  <FieldTooltip
-                    ariaLabel="Help: Input tokens"
-                    content={FIELD_TOOLTIPS.maxTokensInput}
-                    data-testid="field-tooltip-input-tokens"
-                  />
-                  <Input
-                    size="sm"
-                    variant="outlined"
-                    value={((modelInfo?.contextWindow ?? 0) - (max_tokens ?? 4096)).toLocaleString().replace(/,/g, ' ')}
-                    sx={{
-                      ...commonInputStyles(mode || 'light'),
-                      fontSize: { xs: '12px', sm: '14px' },
-                      width: { xs: '80px', sm: 'auto' },
-                    }}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                      const rawValue = e.target.value.replace(/\s/g, '');
-                      const inputTokens = parseInt(rawValue, 10);
-                      if (!isNaN(inputTokens) && inputTokens >= 0) {
-                        const contextWindow = modelInfo?.contextWindow ?? 0;
-                        const newMaxTokens = Math.max(
-                          4096,
-                          Math.min(contextWindow - inputTokens, modelInfo?.max_tokens ?? 16384)
-                        );
-                        setLLM({ max_tokens: newMaxTokens });
-                      }
-                    }}
-                  />
+              {/* A read-out, not a field - the slider owns this value. Shown against the model's
+                  own ceiling, because without it the slider's fill is unreadable: a full bar is 8K
+                  on gemini-2.5-pro and 128K on gpt-5.6-luna. Only the live value is emphasised; the
+                  ceiling is fixed per model, so it recedes. */}
+              <Typography
+                level="body-sm"
+                sx={{ fontSize: '14px', whiteSpace: 'nowrap' }}
+                data-testid="token-allocation-output"
+              >
+                <Box component="span" sx={{ color: brand[800], fontWeight: 'bold' }}>
+                  {formatTokenCount(outputTokens)}
                 </Box>
-
-                {/* Output */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Typography level="body-sm">Output</Typography>
-                  <FieldTooltip
-                    ariaLabel="Help: Output tokens"
-                    content={FIELD_TOOLTIPS.maxTokensOutput}
-                    data-testid="field-tooltip-output-tokens"
-                  />
-                  <Input
-                    size="sm"
-                    variant="outlined"
-                    value={(max_tokens ?? 4096).toLocaleString().replace(/,/g, ' ')}
-                    sx={{
-                      ...commonInputStyles(mode || 'light'),
-                      fontSize: { xs: '12px', sm: '14px' },
-                      width: { xs: '80px', sm: 'auto' },
-                    }}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                      const rawValue = e.target.value.replace(/\s/g, '');
-                      const outputTokens = parseInt(rawValue, 10);
-                      if (
-                        !isNaN(outputTokens) &&
-                        outputTokens >= 4096 &&
-                        outputTokens <= (modelInfo?.max_tokens ?? 16384)
-                      ) {
-                        setLLM({ max_tokens: outputTokens });
-                      }
-                    }}
-                  />
+                <Box component="span" sx={{ color: 'text.tertiary', fontWeight: 400 }}>
+                  {' / '}
+                  {formatTokenCount(outputCeiling)}
                 </Box>
-              </Box>
+              </Typography>
             </Box>
-            <Box sx={{ position: 'relative', width: '100%', marginBottom: '-20px' }}>
+            <Box sx={{ position: 'relative', width: '100%' }}>
+              {/* No valueLabelDisplay: the bubble is centred on the thumb, so at max value half of
+                  it sat past the container's right edge. With overflowY auto the browser resolves
+                  overflowX to auto as well, so hovering there produced a horizontal scrollbar
+                  across the whole dialog. The read-out above tracks the drag anyway. */}
               <Slider
-                aria-label="Token Allocation"
-                value={max_tokens ?? Math.min(4096, Math.floor((modelInfo?.contextWindow ?? 8192) / 2))}
-                min={Math.max(1024, Math.min(2048, Math.floor((modelInfo?.contextWindow ?? 8192) / 4)))}
-                max={modelInfo?.max_tokens ?? 16384}
+                aria-label="Max output tokens"
+                value={outputTokens}
+                min={MIN_OUTPUT_TOKENS}
+                max={outputCeiling}
                 step={256}
                 onChange={(_, newValue) => {
                   if (typeof newValue === 'number') {
@@ -907,13 +877,10 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   }
                 }}
                 disableSwap
-                valueLabelDisplay="auto"
-                valueLabelFormat={value => `${value.toLocaleString().replace(/,/g, ' ')}`}
                 sx={{
                   '--Slider-trackSize': '8px',
                   '--Slider-thumbSize': '16px',
                   '--Slider-thumbWidth': '16px',
-                  '--Slider-valueLabelArrowSize': '10px',
                   width: '100%',
                   '& .MuiSlider-mark': {
                     display: 'none',
@@ -930,6 +897,17 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 }}
               />
             </Box>
+            {/* The effect of the setting, not a second control: the reserved budget is what the
+                remainder is left over from, which is also where the context total now lives. */}
+            <Typography
+              level="body-sm"
+              data-testid="token-allocation-input-note"
+              // Negative top margin closes the gap left by the Slider's own bottom padding.
+              sx={{ color: 'text.primary50', fontSize: '12px', lineHeight: 1.4, mt: '-12px' }}
+            >
+              Reserved from the {formatTokenCount(contextWindow)} token context window, leaving{' '}
+              {formatTokenCount(inputTokens)} for input.
+            </Typography>
           </Box>
         )}
 
