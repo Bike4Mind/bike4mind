@@ -79,6 +79,12 @@ HOW TO CARRY THIS
  *
  * The three steps are ordered on purpose - step 0 is load-bearing: authoritative context makes a
  * model better at stating facts and worse at declining, so legitimacy is settled before capability.
+ *
+ * PRECONDITION: step 1 tells the model to SEARCH, but `search_knowledge_base` is only offered when
+ * the session has attached knowledge or the caller can reach a data lake (resolveEnabledTools, via
+ * hasAttachedKnowledge || hasAccessibleDataLake). Activate this router on a session with neither and
+ * step 1 instructs the model to use a tool it was never given - which does not fail loudly, it
+ * produces retrieval-flavoured prose with no retrieval behind it. Pair the router with a lake.
  */
 function buildTriageRouterPrompt(): DefaultSystemPrompt {
   return {

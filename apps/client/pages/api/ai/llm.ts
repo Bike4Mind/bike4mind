@@ -6,6 +6,7 @@ import { getOrCreateSession } from '@server/managers/sessionManager';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
+import { hasAuthoredSessionPrompt } from '@server/utils/sessionActivatablePrompts';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { loadBaseIdentitySystemPromptMessages } from '@server/utils/systemPrompts/loader';
 import { Request } from 'express';
@@ -38,8 +39,11 @@ const handler = baseApi()
     // carries its OWN authored prompt skips it - either raw `systemPromptText` (e.g. the /opti
     // surface) or a curated registry prompt via `systemPromptId` (e.g. the triage router, which the
     // completion path resolves + injects on every entry point) - so its persona isn't diluted.
+    // Asks the shared predicate rather than testing `systemPromptId` for presence: the id is
+    // client-settable, and a non-allowlisted one injects nothing, so presence alone would suppress
+    // the identity and leave the session with no authored prompt at all.
     // Prepended ahead of any client-sent context.
-    if (!session.systemPromptText && !session.systemPromptId) {
+    if (!hasAuthoredSessionPrompt(session)) {
       const identityPrompts = await loadBaseIdentitySystemPromptMessages(req.logger);
       if (identityPrompts.length > 0) {
         invokeParams.extraContextMessages = [...identityPrompts, ...(invokeParams.extraContextMessages ?? [])];
