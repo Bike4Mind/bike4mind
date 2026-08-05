@@ -236,8 +236,23 @@ jobs:
           fi
 
           # ── 6. Check for existing manual changesets (additive mode) ──
-          # If a manual changeset already covers a package, skip auto-generating for it.
+          # If a manual changeset already covers a package AT AN EQUAL OR HIGHER bump level, skip
+          # auto-generating for it. The level comparison is the point: this check used to match on
+          # package NAME alone, so a pending manual `patch` would swallow this PR's `minor` or
+          # `major` and the release would understate the change - a breaking change could ship as a
+          # patch with every check green. Additive mode is preserved; it just no longer discards a
+          # bump that the manual changeset does not actually cover.
           declare -A MANUAL_COVERED=()
+
+          # patch < minor < major. Unknown/empty ranks 0 so it never suppresses a real bump.
+          bump_rank() {
+            case "${1:-}" in
+              major) echo 3 ;;
+              minor) echo 2 ;;
+              patch) echo 1 ;;
+              *) echo 0 ;;
+            esac
+          }
 
           for cs_file in .changeset/*.md; do
             [ -f "$cs_file" ] || continue
@@ -259,20 +274,32 @@ jobs:
                 fi
               fi
               if [ "$in_frontmatter" = true ]; then
-                # Extract package name: "@bike4mind/common": minor  OR  @bike4mind/common: minor
+                # Extract package name AND level: "@bike4mind/common": minor  OR  @bike4mind/common: minor
                 pkg=$(echo "$line" | sed -n 's/^"\{0,1\}\(@[^"]*\)"\{0,1\}:.*/\1/p')
+                lvl=$(echo "$line" | sed -n 's/^"\{0,1\}@[^"]*"\{0,1\}:[[:space:]]*\([a-z]\{1,\}\).*/\1/p')
                 if [ -n "$pkg" ]; then
-                  MANUAL_COVERED["$pkg"]=1
+                  # Several manual changesets may name the same package; the highest level wins,
+                  # matching what `changeset version` itself does across multiple files.
+                  prev="${MANUAL_COVERED[$pkg]:-}"
+                  if [ -z "$prev" ] || [ "$(bump_rank "$lvl")" -gt "$(bump_rank "$prev")" ]; then
+                    MANUAL_COVERED["$pkg"]="$lvl"
+                  fi
                 fi
               fi
             done < "$cs_file"
           done
 
-          # Remove packages already covered by manual changesets
+          # Remove packages already covered by a manual changeset at an equal or higher level
+          AUTO_RANK=$(bump_rank "$BUMP")
           for pkg in "${!MANUAL_COVERED[@]}"; do
             if [ -n "${CHANGED_PKGS[$pkg]:-}" ]; then
-              echo "  Package $pkg already covered by manual changeset. Skipping."
-              unset "CHANGED_PKGS[$pkg]"
+              manual_lvl="${MANUAL_COVERED[$pkg]:-}"
+              if [ "$(bump_rank "$manual_lvl")" -ge "$AUTO_RANK" ]; then
+                echo "  Package $pkg already covered by manual changeset ($manual_lvl >= $BUMP). Skipping."
+                unset "CHANGED_PKGS[$pkg]"
+              else
+                echo "  Package $pkg has a manual changeset ($manual_lvl) below this PR's $BUMP. Keeping it."
+              fi
             fi
           done
 
