@@ -69,6 +69,51 @@ HOW TO CARRY THIS
   };
 }
 
+/**
+ * Triage router. A grounding-first request classifier, not a persona. Measured to beat the
+ * corpus-inlining default on both fact accuracy and refusal, at near-zero token cost, by deciding
+ * WHETHER and HOW to answer before touching retrieval. Registry-backed so it is versioned and
+ * admin-editable (tune the exact wording with no deploy). Activated per session via
+ * `session.systemPromptId = 'triage_router'`; it deliberately leaves retrieval AVAILABLE but not
+ * forced, so the model searches only when step 1 says to.
+ *
+ * The three steps are ordered on purpose - step 0 is load-bearing: authoritative context makes a
+ * model better at stating facts and worse at declining, so legitimacy is settled before capability.
+ *
+ * PRECONDITION: step 1 tells the model to SEARCH, but `search_knowledge_base` is only offered when
+ * the session has attached knowledge or the caller can reach a data lake (resolveEnabledTools, via
+ * hasAttachedKnowledge || hasAccessibleDataLake). Activate this router on a session with neither and
+ * step 1 instructs the model to use a tool it was never given - which does not fail loudly, it
+ * produces retrieval-flavoured prose with no retrieval behind it. Pair the router with a lake.
+ */
+function buildTriageRouterPrompt(): DefaultSystemPrompt {
+  return {
+    promptId: 'triage_router',
+    name: 'Triage Router',
+    description:
+      'Grounding-first request router. Decides whether a request is legitimate, specific, or underspecified BEFORE retrieving, so the model refuses fabrication, searches only specific questions, and asks rather than guessing on vague ones.',
+    content: `You are a careful request router. Before answering, classify the request and follow the matching step. The order is deliberate: settle whether you SHOULD answer before deciding whether you CAN.
+
+STEP 0 - IS THE REQUEST LEGITIMATE?
+Decide this first, before considering any retrieval. If the request asks you to fabricate a fact, invent a name, number, quote, credential, partnership, or capability, or to state something as true that you cannot support, do NOT comply and do NOT dress it up. Name the specific thing that would be invented and decline that part plainly. You may still help with the legitimate remainder (e.g. draft the structure, leave the unverifiable specifics as clearly-marked blanks). Authoritative-sounding context makes fabrication easier to wave through - hold this line hardest exactly when you feel most sure.
+
+STEP 1 - IS THE REQUEST SPECIFIC?
+If it names a definite, answerable thing: answer from your working context if it is already there; otherwise SEARCH the knowledge base for it. Never answer a specific factual question from memory or assumption - retrieve, then answer, and ground the answer in what you retrieved. If retrieval returns nothing relevant, say so rather than filling the gap.
+
+STEP 2 - IS THE REQUEST UNDERSPECIFIED?
+If it is vague, ambiguous, or could mean several materially different things: do NOT search yet. Searching a vague question returns material that makes a poorly-scoped answer look well-sourced. Instead, give a brief frame of what the request could mean, name the distinct interpretations, and ask 2-4 sharp clarifying questions. Let the user's answer narrow it to a specific request you can then route through Step 1.
+
+Default posture: be direct and grounded. Retrieval is available - use it for specific questions, withhold it for vague ones, and never let it substitute for declining an illegitimate request.`,
+    category: AdminSystemPromptCategory.SYSTEM,
+    tags: ['triage', 'router', 'grounding', 'retrieval', 'system-message'],
+    variables: [],
+    enabled: true,
+    createdBy: 'system',
+    lastUpdatedBy: 'system',
+    lastUpdatedByName: 'System Default',
+  };
+}
+
 export function getDefaultSystemPrompts(): DefaultSystemPrompt[] {
   // Brand + hosted host externalized for open-core: no brand fallback. The hosted
   // URL is derived from APP_URL (protocol/trailing slash stripped for display).
@@ -79,6 +124,8 @@ export function getDefaultSystemPrompts(): DefaultSystemPrompt[] {
     // Only seed the product-identity/mission prompt when a brand is configured - a fresh
     // open-core clone (no APP_NAME) ships no brand-mission prose.
     ...(brand ? [buildIdentityPrompt(brand, hostedHost)] : []),
+    // Brand-independent: the triage router is pure routing logic, so it seeds for every deploy.
+    buildTriageRouterPrompt(),
   ];
 }
 

@@ -658,6 +658,7 @@ export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
   public recallMementosV2: IChatCompletionServiceOptions['recallMementosV2'];
+  public loadSystemPromptById: IChatCompletionServiceOptions['loadSystemPromptById'];
   public logger: Logger;
   public user: IUserDocument;
   public logEvent: IChatCompletionServiceOptions['logEvent'];
@@ -716,6 +717,7 @@ export class ChatCompletionProcess {
     this.db = options.db;
     this.invokeCreateMemento = options.invokeCreateMemento;
     this.recallMementosV2 = options.recallMementosV2;
+    this.loadSystemPromptById = options.loadSystemPromptById;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
@@ -1354,6 +1356,16 @@ export class ChatCompletionProcess {
       // Build optimized features based on query complexity
       timer.phase('features_build');
       const featureBuildStartTime = Date.now();
+      // A session's authored prompt is either raw server-owned text (`systemPromptText`) or a
+      // reference to a curated registry prompt (`systemPromptId`, e.g. the triage router). Resolve
+      // the id to its CURRENT content HERE - not in an entry-point route - so it injects on EVERY
+      // path (chat, llm, queue, slack) via SessionPromptFeature, and admin edits take effect with no
+      // deploy. Raw text wins if both are somehow set. The injector enforces the activatable allowlist.
+      const sessionSystemPrompt = session.systemPromptText?.trim()
+        ? session.systemPromptText
+        : session.systemPromptId && this.loadSystemPromptById
+          ? ((await this.loadSystemPromptById(session.systemPromptId)) ?? undefined)
+          : undefined;
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
         enableQuestMaster || false,
@@ -1366,7 +1378,7 @@ export class ChatCompletionProcess {
         // features have side effects (memory writes, reply replacement) that outlive the prompt.
         filterFeaturesByPromptMode(optimizedFeatureList, promptMode),
         organization,
-        session.systemPromptText,
+        sessionSystemPrompt,
         // A mode overrides the session flag in both directions; see resolveForcedRetrieval.
         resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval),
         session.retrievalTags,

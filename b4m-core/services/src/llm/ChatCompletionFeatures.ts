@@ -206,6 +206,13 @@ export interface IChatCompletionServiceOptions {
     query: string,
     opts?: { enabled?: boolean }
   ) => Promise<{ fact: string; relevance: number }[] | null>;
+  /**
+   * Resolve a session-activatable registry prompt's CURRENT content by id (e.g. 'triage_router').
+   * Injected so the core takes no dependency on the app-layer prompt registry; the injector also
+   * enforces the session-activatable allowlist. Returns null for an unknown/disabled/not-allowed id.
+   * Used to turn `session.systemPromptId` into the session's authored prompt on every entry point.
+   */
+  loadSystemPromptById?: (promptId: string) => Promise<string | null>;
   summarizeSession: (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => Promise<void>;
   contextSummarizeSession: (sessionId: string, verbatimWindowStartQuestId: string) => Promise<void>;
   getMcpClient: (server: IMcpServerDocument) => Promise<{
