@@ -257,7 +257,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
       it('un-deletes a row stamped exactly at the mark', async () => {
         // The boundary a `$gt` bound would drop on the floor - every row a teardown flips carries
-        // the mark itself, so an exclusive comparison restores nothing at all.
+        // the mark itself, so an exclusive comparison skips the whole batch.
         await seedLakeRows();
         await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
 

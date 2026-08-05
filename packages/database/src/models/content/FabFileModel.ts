@@ -746,7 +746,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   // across every row a sweep flips, records that value on the lake, and later passes it back as
   // `stampedAt` to act on exactly that batch. Equality, not a range: a lower bound would also match
   // a file the creator deleted DURING the deleted window (the per-file routes stamp `deletedAt`
-  // too), which is the whole class of file that must stay deleted through a restore. Omitting
+  // too), and those deletions are the creator's to keep, not the teardown's to reverse. Omitting
   // `stampedAt` matches every stamped row, which is the pre-mark behavior and the fallback for a
   // lake torn down before the mark existed.
 

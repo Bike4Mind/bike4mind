@@ -650,7 +650,7 @@ describe('DataLakeRepository teardown stamps', () => {
 
   // The delete/archive services key a restore to the stamp they record here. If the schema were
   // missing either field mongoose would drop it on write without complaint, and every restore would
-  // silently fall back to reversing the whole lake - which no service-level mock can detect.
+  // silently fall back to reversing the whole lake - which a service-level mock cannot detect.
   it('round-trips both stamps as Dates', async () => {
     const stamp = new Date('2026-06-01T00:00:00.000Z');
     const created = await dataLakeRepository.create(baseLake({ slug: 'torn-down' }));

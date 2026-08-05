@@ -54,8 +54,9 @@ export const archiveDataLake = async (
   // Step 2: transitional state (crash-visible), carrying the stamp this sweep keys its batch to so
   // unarchive can reverse it and nothing else. Mirrors deleteDataLake - see the reasoning there for
   // why a live mark is reused and why the one undefined case stays unmarked. Reuse matters more on
-  // this axis: the sweep below skips rows that already carry archivedAt, so a freshly minted mark
-  // after archive -> delete -> restore -> re-archive would name no rows at all.
+  // this axis: the sweep below skips rows that already carry archivedAt, so after
+  // archive -> delete -> restore -> re-archive a freshly minted mark would name none of the rows
+  // still holding the earlier stamp.
   const stamp = existing.filesArchivedAt ?? (existing.status === 'archiving' ? undefined : new Date());
   await db.dataLakes.update({ id: dataLakeId, status: 'archiving', ...(stamp ? { filesArchivedAt: stamp } : {}) });
 
@@ -63,8 +64,8 @@ export const archiveDataLake = async (
   // members too, so a file that never got the meta-tag no longer stays browsable here.
   // Archive hides files, so a colliding sibling lake loses its prefix-tagged files from every
   // browse (they filter archivedAt: null). Unarchiving now returns only the rows this lake's own
-  // sweep stamped, so a sibling no longer steals them back - though rows stamped by whichever lake
-  // archived first stay hidden until THAT lake unarchives, and stay hidden for good if it is purged.
+  // sweep stamped, so a sibling no longer steals them back - the trade is that a shared row stays
+  // hidden until whichever lake stamped it unarchives.
   await warnOnPrefixCollision(db, existing, logger);
   const scope = lakeMembershipScope(existing);
   await db.fabFiles.archiveByDataLakeTag(scope, stamp);

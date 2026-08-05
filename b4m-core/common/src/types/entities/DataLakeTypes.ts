@@ -100,7 +100,7 @@ export interface IDataLake {
    * The exact `deletedAt` stamp phase-1 delete wrote on this lake's members, so restore can
    * un-delete that batch and nothing else. Not a time window: it is matched by EQUALITY, which is
    * what keeps a file the creator deleted independently - before OR during the deleted window -
-   * from riding back in. Non-null means the stamp is still live on the rows, so a re-run of a
+   * from riding back in. Non-null means the batch has not been reversed yet, so a re-run of a
    * crashed teardown reuses it rather than minting a second batch; restore clears it.
    *
    * Absent on a lake torn down before this field existed, which restores unbounded (the old

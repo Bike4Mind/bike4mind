@@ -53,8 +53,8 @@ export const deleteDataLake = async (
   // rows and only these rows. A mark that is already live is REUSED, so a re-run after a crash
   // stamps into the same batch instead of orphaning the first attempt's rows outside the window.
   //
-  // undefined for exactly one case: a lake already sitting in 'deleting' with no mark, which can
-  // only be a teardown that started before this field existed. Its rows carry a stamp nothing
+  // undefined for one case: a lake already sitting in 'deleting' with no mark, which means a
+  // teardown that started before this field existed. Its rows carry a stamp nothing
   // recorded, so leaving the mark unset keeps restore unbounded (the old behavior) instead of
   // bounding it to a stamp those rows do not have, which would strand them deleted.
   const stamp = existing.filesDeletedAt ?? (existing.status === 'deleting' ? undefined : new Date());
