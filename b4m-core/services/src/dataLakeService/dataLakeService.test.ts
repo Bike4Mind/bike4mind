@@ -20,7 +20,7 @@ import { setLakeVisibility } from './setLakeVisibility';
 import { updateDataLake } from './updateDataLake';
 import { reconcileStuckBatches, DEFAULT_STUCK_BATCH_TIMEOUT_MS } from './reconcileStuckBatches';
 import { listDataLakes, listAllDataLakes, listArchivedDataLakes, listDeletedDataLakes } from './listDataLakes';
-import { redactLakeForActor, READER_LAKE_FIELDS } from './redactLakeForActor';
+import { redactLakeForActor, READER_LAKE_FIELDS, LAKE_FIELD_VISIBILITY } from './redactLakeForActor';
 import { browsePublicDataLakes } from './browsePublicDataLakes';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
@@ -548,9 +548,22 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     expect('systemPrompt' in visible).toBe(false);
   });
 
-  it('pins the reader allow-list so a new IDataLake field forces a visibility decision', () => {
-    // If this fails, a field was added to IDataLake (or READER_LAKE_FIELDS changed) without deciding
-    // whether a non-editor may receive it. Add it to READER_LAKE_FIELDS on purpose, or leave it out.
+  it('keeps the field classification and the allow-list in step', () => {
+    // LAKE_FIELD_VISIBILITY is what actually forces a decision on a new IDataLake field (it is keyed
+    // by `keyof IDataLake`, so an unclassified field fails to compile - in the source module, which
+    // tsc checks; this file is excluded from typecheck). This pins the two against each other.
+    const readable = Object.entries(LAKE_FIELD_VISIBILITY)
+      .filter(([, visibility]) => visibility === 'reader')
+      .map(([field]) => field);
+    // READER_LAKE_FIELDS also carries the IMongoDocument keys (id/createdAt/updatedAt), which are
+    // not IDataLake fields, so compare on the intersection.
+    expect(readable.sort()).toEqual(
+      (READER_LAKE_FIELDS as readonly string[]).filter(f => f in LAKE_FIELD_VISIBILITY).sort()
+    );
+  });
+
+  it('pins the reader allow-list against an accidental widening', () => {
+    // The list itself, so adding a field to READER_LAKE_FIELDS is a deliberate edit here too.
     expect([...READER_LAKE_FIELDS].sort()).toEqual(
       [
         'createdAt',
@@ -966,7 +979,7 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
     // The dedup probe stays on the bare meta-tag: it decides which copy gets hard-deleted, and
     // fileTagPrefix is not unique, so a widened probe could nominate another lake's file.
     expect(fabFiles.findByContentHashesInDataLake).toHaveBeenCalledWith(['h1', 'h2'], 'datalake:lake');
-    expect(fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope);
+    expect(fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
     expect(fabFiles.deleteManyInIds).toHaveBeenCalledWith(['a1']);
     expect(result.skippedDuplicates).toBe(1);
     expect(result.restoredCount).toBe(1);
@@ -1011,7 +1024,7 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
     const result = await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       db: { dataLakes, fabFiles },
     });
-    expect(fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['d1']);
+    expect(fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['d1'], undefined);
     // Same narrow probe as the unarchive path, for the same reason.
     expect(fabFiles.findByContentHashesInDataLake).toHaveBeenCalledWith(['h1', 'h2'], 'datalake:lake');
     expect(result.skippedDuplicates).toBe(1);
@@ -1072,7 +1085,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
     const adapters = makeAdapters();
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
-    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope);
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
   });
 
   it('survives a member-id lookup that itself fails', async () => {
@@ -1140,7 +1153,7 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
     const adapters = makeAdapters();
     await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
-    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope);
+    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
   });
 
   it('survives a member-id lookup that itself fails', async () => {
@@ -1153,6 +1166,155 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
       expect.stringContaining('Best-effort index removal failed for datalake:lake'),
       expect.any(Error)
     );
+  });
+});
+
+describe('teardown stamp bookkeeping', () => {
+  const RECORDED = new Date('2026-06-01T00:00:00.000Z');
+
+  const teardownAdapters = (existing: IDataLakeDocument) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(existing),
+        update: vi
+          .fn()
+          .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
+        setStats: vi.fn().mockResolvedValue(undefined),
+        find: vi.fn().mockResolvedValue([]),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
+        archiveByDataLakeTag: vi.fn().mockResolvedValue(2),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+      },
+    },
+  });
+
+  const reversalAdapters = (existing: IDataLakeDocument) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockResolvedValue(lake()),
+        setStats: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findArchivedByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+        undeleteByDataLakeTag: vi.fn().mockResolvedValue(2),
+        unarchiveByDataLakeTag: vi.fn().mockResolvedValue(2),
+        deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 2, totalSizeBytes: 20 }),
+      },
+    },
+  });
+
+  const owner = { userId: 'owner', isAdmin: false };
+
+  describe('deleteDataLake', () => {
+    it('records the stamp in the write that flags the transitional state, before the sweep runs', async () => {
+      const adapters = teardownAdapters(lake());
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      const update = adapters.db.dataLakes.update;
+      expect(update.mock.calls[0][0]).toEqual({ id: 'lake1', status: 'deleting', filesDeletedAt: expect.any(Date) });
+      // Reference identity, not a matching value: two separately minted Dates would leave the mark
+      // pointing at an instant no row carries, and equality matching would then restore nothing.
+      const sweep = adapters.db.fabFiles.softDeleteByDataLakeTag;
+      expect(sweep.mock.calls[0][1]).toBe(update.mock.calls[0][0].filesDeletedAt);
+      expect(update.mock.invocationCallOrder[0]).toBeLessThan(sweep.mock.invocationCallOrder[0]);
+    });
+
+    it('settles to deleted without restamping', async () => {
+      const adapters = teardownAdapters(lake());
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.dataLakes.update.mock.calls[1][0]).toEqual({ id: 'lake1', status: 'deleted' });
+    });
+
+    it('reuses the stamp a crashed attempt already recorded', async () => {
+      const adapters = teardownAdapters(lake({ status: 'deleting', filesDeletedAt: RECORDED }));
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.dataLakes.update.mock.calls[0][0].filesDeletedAt).toBe(RECORDED);
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][1]).toBe(RECORDED);
+    });
+
+    it('leaves a teardown that predates the stamp unmarked, so its restore stays unbounded', async () => {
+      // Mid-flight when this shipped: rows already carry a stamp nothing recorded, and marking them
+      // now with a later one would strand them deleted forever.
+      const adapters = teardownAdapters(lake({ status: 'deleting' }));
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.dataLakes.update.mock.calls[0][0]).toEqual({ id: 'lake1', status: 'deleting' });
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+    });
+  });
+
+  describe('restoreDeletedDataLake', () => {
+    it('hands the recorded stamp to the dedup read and the flip', async () => {
+      const adapters = reversalAdapters(lake({ status: 'deleted', filesDeletedAt: RECORDED }));
+      await restoreDeletedDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.fabFiles.findDeletedByDataLakeTag).toHaveBeenCalledWith(lakeScope, RECORDED);
+      expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, [], RECORDED);
+    });
+
+    it('clears the spent stamp with null as it settles', async () => {
+      const adapters = reversalAdapters(lake({ status: 'deleted', filesDeletedAt: RECORDED }));
+      await restoreDeletedDataLake(owner, 'lake1', adapters);
+
+      const settle = adapters.db.dataLakes.update.mock.calls.at(-1)?.[0];
+      expect(settle).toEqual({ id: 'lake1', status: 'active', filesDeletedAt: null });
+      // undefined would be dropped on the way to mongo and leave the spent mark in place.
+      expect(settle.filesDeletedAt).toBeNull();
+    });
+
+    it('reverses unbounded when the lake carries no stamp', async () => {
+      const adapters = reversalAdapters(lake({ status: 'deleted' }));
+      await restoreDeletedDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.fabFiles.findDeletedByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+      expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, [], undefined);
+    });
+  });
+
+  describe('archiveDataLake / unarchiveDataLake', () => {
+    it('records the archive stamp in the transitional write and hands the sweep that Date', async () => {
+      const adapters = teardownAdapters(lake());
+      await archiveDataLake(owner, 'lake1', adapters);
+
+      const update = adapters.db.dataLakes.update;
+      expect(update.mock.calls[0][0]).toEqual({ id: 'lake1', status: 'archiving', filesArchivedAt: expect.any(Date) });
+      expect(adapters.db.fabFiles.archiveByDataLakeTag.mock.calls[0][1]).toBe(update.mock.calls[0][0].filesArchivedAt);
+    });
+
+    it('reuses a live archive stamp, so a re-archive after a delete round trip still names its rows', async () => {
+      // archiveByDataLakeTag skips rows already carrying archivedAt, so a fresh stamp here would
+      // name nothing and the unarchive would silently restore zero files.
+      const adapters = teardownAdapters(lake({ filesArchivedAt: RECORDED }));
+      await archiveDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.fabFiles.archiveByDataLakeTag.mock.calls[0][1]).toBe(RECORDED);
+    });
+
+    it('hands the stamp to the dedup read that hard-deletes, and clears it on settle', async () => {
+      const adapters = reversalAdapters(lake({ status: 'archived', filesArchivedAt: RECORDED }));
+      await unarchiveDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.fabFiles.findArchivedByDataLakeTag).toHaveBeenCalledWith(lakeScope, RECORDED);
+      expect(adapters.db.fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, RECORDED);
+      expect(adapters.db.dataLakes.update.mock.calls.at(-1)?.[0]).toEqual({
+        id: 'lake1',
+        status: 'active',
+        filesArchivedAt: null,
+      });
+    });
   });
 });
 

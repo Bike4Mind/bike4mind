@@ -644,3 +644,39 @@ describe('DataLakeRepository — systemPrompt round-trip (#843)', () => {
     expect(found?.systemPrompt).toBeUndefined();
   });
 });
+
+describe('DataLakeRepository teardown stamps', () => {
+  setupMongoTest();
+
+  // The delete/archive services key a restore to the stamp they record here. If the schema were
+  // missing either field mongoose would drop it on write without complaint, and every restore would
+  // silently fall back to reversing the whole lake - which no service-level mock can detect.
+  it('round-trips both stamps as Dates', async () => {
+    const stamp = new Date('2026-06-01T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'torn-down' }));
+
+    await dataLakeRepository.update({ id: created.id, filesDeletedAt: stamp, filesArchivedAt: stamp });
+
+    const found = await dataLakeRepository.findById(created.id);
+    expect(found?.filesDeletedAt).toBeInstanceOf(Date);
+    expect(found?.filesDeletedAt?.getTime()).toBe(stamp.getTime());
+    expect(found?.filesArchivedAt?.getTime()).toBe(stamp.getTime());
+  });
+
+  it('clears a spent stamp back to null', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'restored', filesDeletedAt: new Date('2026-06-01T00:00:00.000Z') })
+    );
+
+    await dataLakeRepository.update({ id: created.id, filesDeletedAt: null });
+
+    expect((await dataLakeRepository.findById(created.id))?.filesDeletedAt ?? null).toBeNull();
+  });
+
+  it('leaves both stamps unset on a lake that was never torn down', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'untouched' }));
+    const found = await dataLakeRepository.findById(created.id);
+    expect(found?.filesDeletedAt ?? null).toBeNull();
+    expect(found?.filesArchivedAt ?? null).toBeNull();
+  });
+});
