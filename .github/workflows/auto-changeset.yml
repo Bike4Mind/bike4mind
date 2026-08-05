@@ -310,6 +310,34 @@ jobs:
 
           echo "Packages to bump: ${!CHANGED_PKGS[*]}"
 
+          # A hand-edited pr-<N>.md is a trap in both directions: the write in step 7 overwrites it
+          # unconditionally, and step 6 skips pr-*.md when scanning for manual changesets, so the
+          # edit is neither kept nor honored - it just vanishes with CI green. The removal paths
+          # above already gate on AUTO_MARKER so this workflow never DELETES human content; this is
+          # the same check on the write side. Warn rather than yield: treating this file as
+          # authoritative would create a second override path step 6 cannot see, letting the
+          # published bump drift from the PR title. `pnpm changeset` is the supported route.
+          if [ -f "$CHANGESET_FILE" ] && ! grep -q "$AUTO_MARKER" "$CHANGESET_FILE" 2>/dev/null; then
+            echo "::warning::${CHANGESET_FILE} looks hand-edited and is being overwritten. Run 'pnpm changeset' to author an override."
+            EDIT_MARKER="<!-- auto-changeset-handedit -->"
+            EDIT_BODY="${EDIT_MARKER}
+          **Auto-Changeset:** \`${CHANGESET_FILE}\` looks hand-edited, and this workflow has just overwritten it.
+
+          That file is generated from the PR title and rewritten on every push, so edits to it are always lost. It is also skipped when scanning for manual changesets, so it never counts as an override either.
+
+          To override the generated bump, run \`pnpm changeset\` and commit the file it creates under any other name. Those are respected: a manual changeset at or above this PR's bump level replaces the auto-generated one, and a lower one is kept alongside it."
+
+            EDIT_COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+              --jq ".[] | select(.body | contains(\"${EDIT_MARKER}\")) | .id" | head -1)
+            if [ -n "$EDIT_COMMENT_ID" ]; then
+              gh api "repos/${{ github.repository }}/issues/comments/${EDIT_COMMENT_ID}" \
+                -X PATCH -f body="$EDIT_BODY" > /dev/null
+            else
+              gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+                -f body="$EDIT_BODY" > /dev/null
+            fi
+          fi
+
           # ── 7. Generate changeset file ──
           {
             echo "$AUTO_MARKER"
