@@ -16,6 +16,7 @@ import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
 import { ToolDefinition, type ToolContext } from './base/types';
 import { validateUserCredits, validateMusicCredits } from './base/utils';
+import type { CostInput } from '../imageCostCalculator/types';
 import { estimateMusicCredits } from '../../musicCost';
 import {
   extractAndSaveEntitiesFromUserMessage,
@@ -105,6 +106,9 @@ export interface ToolBuilderConfig {
   // more than once per turn with a different cost each time, so the settlement in
   // ChatCompletionProcess assigns each call its own charge instead of stamping the
   // last value onto every same-named functionCall.
+  // INVARIANT: append via reserveToolCredits only - a bare `.set(name, [x])` would
+  // overwrite a same-name call's earlier reservation and reintroduce the double-count
+  // bug this queue exists to prevent.
   toolCreditsMap: Map<string, number[]>;
   // Shared by reference with ChatCompletionProcess; mutations from callbacks
   // propagate to the parent for end-of-quest telemetry assembly.
@@ -382,6 +386,59 @@ export class ToolBuilder {
   }
 
   /**
+   * Reserve credits for a started image_generation/edit_image call (onToolStart). Image
+   * cost is known up front from the model + n/size/quality, so it reserves at start
+   * (unlike music, which reserves on delivery in settleMusicCredits). One reservation per
+   * call feeds the per-name queue that settleToolCallCredits distributes, so two calls in
+   * a turn settle as the sum of both. No-op when enforcement is off, the model is unknown,
+   * or the credit store is unavailable. Exposed for unit-testing the credit branch.
+   */
+  async reserveImageCredits(
+    toolName: 'image_generation' | 'edit_image',
+    data: { model?: string; n?: number; size?: string; quality?: string },
+    enforceCredits: boolean,
+    organization: IOrganizationDocument | null | undefined,
+    quest: IChatHistoryItemDocument,
+    saveQuest: (quest: IChatHistoryItemDocument) => Promise<IChatHistoryItemDocument | null>,
+    availableModels: ModelInfo[]
+  ): Promise<void> {
+    const { model: toolModel, n, size, quality } = data;
+    if (!toolModel) return;
+    if (!enforceCredits || !this.deps.db.creditTransactions) return;
+    const modelInfo = availableModels.find(m => m.id === toolModel);
+    if (!modelInfo) return;
+
+    const { requiredCredits: creditsUsed, usdCost } = await validateUserCredits(
+      this.deps.user,
+      modelInfo,
+      n || 1,
+      // Runtime tool args are untyped strings; the calculator narrows by model backend.
+      { model: toolModel, size, quality } as CostInput,
+      this.deps.logger,
+      organization
+    );
+    this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
+    this.reserveToolCredits(toolName, creditsUsed);
+    quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
+    await saveQuest(quest);
+    recordToolUsageEvent(
+      this.deps.db,
+      this.deps.logger,
+      toolName,
+      buildToolUsageEvent({
+        quest,
+        user: this.deps.user,
+        organization,
+        provider: modelInfo.backend,
+        model: toolModel,
+        costUsd: usdCost,
+        creditsCharged: creditsUsed,
+        units: n || 1,
+      })
+    );
+  }
+
+  /**
    * Build MCP tool definitions from DB-cached schemas.
    * No MCP server connections are made here - callTool closures connect lazily via Lambda
    * only when the LLM actually invokes a tool.
@@ -587,43 +644,16 @@ export class ToolBuilder {
 
           if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} started with data: ${JSON.stringify(data)}`);
-            const { model: toolModel, n, size, quality } = data;
-            if (!toolModel) return;
-
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
-            if (enforceCredits && toolModel && !!this.deps.db.creditTransactions) {
-              const availableModels = precomputed?.models ?? [];
-              const modelInfo = availableModels.find(m => m.id === toolModel);
-              if (!modelInfo) return;
-
-              const { requiredCredits: creditsUsed, usdCost } = await validateUserCredits(
-                this.deps.user,
-                modelInfo,
-                n || 1,
-                { model: toolModel, size, quality },
-                this.deps.logger,
-                organization
-              );
-              this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
-              this.reserveToolCredits(toolName, creditsUsed);
-              quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
-              await saveQuest(quest);
-              recordToolUsageEvent(
-                this.deps.db,
-                this.deps.logger,
-                toolName,
-                buildToolUsageEvent({
-                  quest,
-                  user: this.deps.user,
-                  organization,
-                  provider: modelInfo.backend,
-                  model: toolModel,
-                  costUsd: usdCost,
-                  creditsCharged: creditsUsed,
-                  units: n || 1,
-                })
-              );
-            }
+            await this.reserveImageCredits(
+              toolName,
+              data,
+              enforceCredits,
+              organization,
+              quest,
+              saveQuest,
+              precomputed?.models ?? []
+            );
           }
 
           if (toolName === 'music_generation') {

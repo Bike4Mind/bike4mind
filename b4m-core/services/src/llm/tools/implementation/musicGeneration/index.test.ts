@@ -107,11 +107,26 @@ describe('music_generation tool', () => {
     expect(mockGenerate).not.toHaveBeenCalled();
   });
 
-  it('returns a generic message and does not bill when no ElevenLabs key is configured', async () => {
+  it('rejects a non-finite lengthMs with the friendly message, before gating or generating', async () => {
+    const context = createFakeContext();
+    // A lax-schema caller passing a non-numeric lengthMs clamps to NaN; the guard must
+    // return the tool's own message instead of letting estimateMusicCredits throw a
+    // generic error from the onStart gate.
+    const result = await run(context, { prompt: 'ambient', lengthMs: 'soon' as unknown as number });
+    expect(result).toMatch(/length.*must be a number/i);
+    expect(context.onStart).not.toHaveBeenCalled();
+    expect(mockGetEffectiveApiKey).not.toHaveBeenCalled();
+    expect(mockGenerate).not.toHaveBeenCalled();
+  });
+
+  it('checks the key before the affordability gate, so a keyless caller never reaches onStart', async () => {
     mockGetEffectiveApiKey.mockResolvedValue(undefined);
     const context = createFakeContext();
     const result = await run(context, { prompt: 'jazz' });
     expect(result).toMatch(/currently unavailable/i);
+    // Key check runs first: the caller learns the key is missing rather than seeing a
+    // misleading "insufficient credits" from the gate.
+    expect(context.onStart).not.toHaveBeenCalled();
     expect(mockGenerate).not.toHaveBeenCalled();
     // onFinish reserves the charge; a missing key must never settle a charge.
     expect(context.onFinish).not.toHaveBeenCalled();

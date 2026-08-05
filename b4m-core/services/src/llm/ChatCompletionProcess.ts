@@ -2785,6 +2785,14 @@ export class ChatCompletionProcess {
             actualTokenUsage.cacheCreationInputTokens = undefined;
             actualTokenUsage.stopReason = undefined;
 
+            // Same reasoning for tool-credit reservations: quest.promptMeta.functionCalls
+            // is reassigned (not appended) per attempt, but toolCreditsMap is instance
+            // state that persists across the loop. A discarded attempt's reservation left
+            // in the queue would be shifted onto the next attempt's call by
+            // settleToolCallCredits and billed as its cost. Clear it so only the surviving
+            // attempt's delivered tools settle.
+            this.toolCreditsMap.clear();
+
             logger.info(
               `⏱️ [${Date.now() - processStartTime}ms] === ${
                 isInitialAttempt ? 'STARTING' : `FALLBACK ATTEMPT ${fallbackAttempt}`

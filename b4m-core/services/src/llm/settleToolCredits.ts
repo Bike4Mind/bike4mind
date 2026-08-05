@@ -15,6 +15,13 @@ export type SettleableFunctionCall = { name?: string; creditsUsed?: number };
  * charge is queued) the queue can be shorter than the matching calls; the leftover calls
  * simply keep their existing creditsUsed. Only the total is authoritative downstream, so
  * an in-order gap never changes what is billed.
+ *
+ * Per-call attribution is best-effort: charges are dequeued in reservation (completion)
+ * order while functionCalls is in issue order, so under parallel tool execution two
+ * same-name calls can swap which per-call creditsUsed they carry. Only the total is read
+ * for billing (ChatCompletionProcess sums functionCalls[].creditsUsed), so the swap is
+ * cosmetic; removing it entirely would mean keying reservations by the tool-call id,
+ * which is not threaded through the onToolStart/onToolFinish surface today.
  */
 export function settleToolCallCredits<T extends SettleableFunctionCall>(
   functionCalls: T[],
