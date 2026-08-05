@@ -186,7 +186,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // the current input box against the budget.
   const contextUsage = useSessionContextUsage(currentSessionId);
   const modelName = useMemo(() => modelInfo?.find(m => m.id === model)?.name ?? model, [modelInfo, model]);
-  const attachmentFit = useAttachmentFitWarning(model);
+  const attachmentFit = useAttachmentFitWarning(
+    model,
+    // Notebook-context files ride EVERY turn on this session, so they spend the budget too.
+    useMemo(() => workBenchFiles.map(f => String(f.id)).filter(Boolean), [workBenchFiles])
+  );
   // Dismissal is per attachment set: changing the files or the model asks a new question, so the
   // previous dismissal should not silence the new answer.
   const [attachmentWarningDismissed, setAttachmentWarningDismissed] = useState(false);

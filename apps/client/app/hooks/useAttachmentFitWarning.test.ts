@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import { deriveAttachmentFitWarning, type DryRunFile } from './useAttachmentFitWarning';
+import { collectMeasurableFileIds, deriveAttachmentFitWarning, type DryRunFile } from './useAttachmentFitWarning';
 
 const file = (over: Partial<DryRunFile> = {}): DryRunFile => ({
   id: 'f1',
@@ -112,5 +112,35 @@ describe('transport', () => {
     expect(source, 'bare axios sends no bearer token; the route 401s and the banner goes silent').not.toMatch(
       /from 'axios'/
     );
+  });
+});
+
+// With the default 'auto' scope every non-image attachment resolves to 'notebook', and the pending list
+// is cleared once the turn is sent. Measuring only pending files therefore warned on turn one and went
+// quiet from turn two, while the file kept spending the budget.
+describe('collectMeasurableFileIds', () => {
+  const p = (id: string, status = 'complete') => ({ fabFile: { id }, status });
+
+  it("measures notebook-context files, not just this turn's attachments", () => {
+    expect(collectMeasurableFileIds([], ['nb1', 'nb2'])).toEqual(['nb1', 'nb2']);
+  });
+
+  it('measures both scopes together without double-counting a shared file', () => {
+    expect(collectMeasurableFileIds([p('a'), p('shared')], ['shared', 'nb1'])).toEqual(['a', 'nb1', 'shared']);
+  });
+
+  it('skips a file with nothing on disk to measure yet', () => {
+    expect(collectMeasurableFileIds([p('up', 'uploading'), p('bad', 'error'), p('ok')], [])).toEqual(['ok']);
+  });
+
+  // Order is the react-query cache key; an unstable one refetches on every render.
+  it('returns a stable order regardless of input order', () => {
+    expect(collectMeasurableFileIds([p('c'), p('a')], ['b'])).toEqual(
+      collectMeasurableFileIds([p('a'), p('c')], ['b'])
+    );
+  });
+
+  it('says nothing to measure when the turn carries no files', () => {
+    expect(collectMeasurableFileIds([], [])).toEqual([]);
   });
 });

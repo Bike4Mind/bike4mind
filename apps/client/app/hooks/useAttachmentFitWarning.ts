@@ -33,6 +33,22 @@ export interface DryRunFile {
   deliveredFraction: number;
 }
 
+/**
+ * Every file this turn will actually carry, deduped and ordered so the query key is stable.
+ *
+ * Pending attachments AND notebook-context files, because both spend the same per-turn extraction
+ * budget. A file mid-upload or failed is excluded: there is nothing on disk to measure yet.
+ */
+export function collectMeasurableFileIds(
+  pending: { fabFile?: { id?: string }; status?: string }[],
+  notebookFileIds: string[]
+): string[] {
+  const ready = pending
+    .filter(f => f?.fabFile?.id && f.status !== 'uploading' && f.status !== 'error')
+    .map(f => String(f.fabFile!.id));
+  return [...new Set([...ready, ...notebookFileIds.filter(Boolean).map(String)])].sort();
+}
+
 function useDebounced<T>(value: T, ms: number): T {
   const [settled, setSettled] = useState(value);
   useEffect(() => {
@@ -42,15 +58,20 @@ function useDebounced<T>(value: T, ms: number): T {
   return settled;
 }
 
-export function useAttachmentFitWarning(modelId: string | null | undefined): AttachmentFitWarning | null {
+export function useAttachmentFitWarning(
+  modelId: string | null | undefined,
+  /**
+   * Notebook-context files. Not optional in spirit: with the default 'auto' scope every non-image
+   * attachment resolves to 'notebook' (see resolveAttachScope), and pendingMessageFiles is cleared once
+   * the turn is sent - so from the second turn onward the file still spends the budget and would draw
+   * no warning if only the pending list were measured.
+   */
+  notebookFileIds: string[] = []
+): AttachmentFitWarning | null {
   const { data: models } = useModelInfo();
   const pending = useSessionLayout(s => s.pendingMessageFiles ?? []);
 
-  // Only files that finished uploading have something on disk to measure.
-  const fileIds = pending
-    .filter(f => f?.fabFile?.id && f.status !== 'uploading' && f.status !== 'error')
-    .map(f => String(f.fabFile.id))
-    .sort();
+  const fileIds = collectMeasurableFileIds(pending, notebookFileIds);
 
   const model = models?.find(m => m.id === modelId);
   // Keyed on the ids and the model, and debounced, so this fires on attach/remove/model-change and
