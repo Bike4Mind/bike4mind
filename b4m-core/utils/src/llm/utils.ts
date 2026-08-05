@@ -1944,7 +1944,13 @@ export async function buildAndSortMessages(
   const systemTokenCap = Math.max(0, preSystemBudget - contentReserve);
 
   const systemCandidates = fabMessages.filter(message => message.role === 'system');
-  const systemMessageTokens = (message: IMessage): number => estimateTokenLength((message.content as string) || '');
+  // messageContentText rather than a cast: array content is legal on a system message
+  // (extraContextMessages accepts it from the request), and `content as string` leaves an array intact,
+  // so estimateTokenLength divided its ELEMENT COUNT by CHARS_PER_TOKEN. A single oversized block
+  // measured ~1 token, sailed past the cap for free, and its real weight only surfaced at the
+  // tokenizer-accurate safety pass, which shrinks content and history but never system messages - so
+  // the attachment paid for it.
+  const systemMessageTokens = (message: IMessage): number => estimateTokenLength(messageContentText(message));
   const priorityOf = (message: IMessage): number => {
     const priority = builderInjectedPriorities.get(message) ?? options.systemMessagePriority?.(message);
     return typeof priority === 'number' && Number.isFinite(priority) ? priority : Number.MAX_SAFE_INTEGER;

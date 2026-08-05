@@ -2852,6 +2852,43 @@ describe('system-message retention under a capped budget', () => {
     expect(tagsIn(result)).toEqual(['keep']);
   });
 
+  // Array content is legal on a system message and arrives that way from extraContextMessages, a public
+  // request field. Sized by a bare `content as string` cast, an array's ELEMENT COUNT was divided by
+  // CHARS_PER_TOKEN, so one huge block measured ~1 token: it cleared the cap for free and the file paid
+  // for it at the safety pass, which shrinks content but never system messages.
+  it('measures a system message with array content by its text, not its block count', async () => {
+    const huge: IMessage = { role: 'system', content: [{ type: 'text', text: 'S'.repeat(25_000) }] as any };
+    const marker = 'FINAL_ROW_MARKER: apricot';
+    const csv = 'id,fruit,color\n' + 'r,apple,red\n'.repeat(100) + marker;
+
+    const result = await buildAndSortMessages(
+      [],
+      [huge, { role: 'user', content: csv }],
+      ask,
+      6000,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    // ~7,150 real tokens against a cap near 3,250: too big to admit, so it is dropped deliberately.
+    expect(result.some(m => m.role === 'system')).toBe(false);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('No system instructions fit the budget'));
+    // And the attachment keeps its budget rather than paying for an unmeasured block.
+    const delivered = result.find(m => typeof m.content === 'string' && m.content.startsWith('id,fruit,color'));
+    expect(delivered?.content as string).toContain(marker);
+  });
+
+  it('still admits a small array-content system message', async () => {
+    const small: IMessage = { role: 'system', content: [{ type: 'text', text: 'be brief' }] as any };
+
+    const result = await buildAndSortMessages([], [small], ask, 6000, {}, 20, mockLogger as any, createMockTokenizer());
+
+    expect(result.some(m => m.role === 'system')).toBe(true);
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+  });
+
   // The unlimited-history path splits the budget 70/30 instead of using the floor, and 70% of what
   // survived a heavy system stack is LESS than 35% of the budget before it. Without the floor on this
   // branch too, the same file that arrives whole on a windowed turn was cut on an unwindowed one.
