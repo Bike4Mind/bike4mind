@@ -22,16 +22,17 @@ interface LoginError {
 
 // OTC login response: successful login, MFA required, MFA setup required, or, for an
 // email with no account, a signal to collect a username and finish registration inline.
+// The refresh token is absent from every shape: login endpoints set it as an HttpOnly cookie
+// (server/auth/refreshCookie.ts) rather than returning it.
 type OTCVerifyResponse =
-  | (IUserDocument & { accessToken: string; refreshToken: string })
-  | { mfaRequired: true; userId: string; accessToken: string; refreshToken: string }
-  | { mfaSetupRequired: true; userId: string; accessToken: string; refreshToken: string }
+  | (IUserDocument & { accessToken: string })
+  | { mfaRequired: true; userId: string; accessToken: string }
+  | { mfaSetupRequired: true; userId: string; accessToken: string }
   | { registrationRequired: true; email: string; pendingToken: string };
 
 interface OTCRegisterResponse {
   user: IUserDocument;
   accessToken: string;
-  refreshToken: string;
 }
 
 interface SendOTCData {
@@ -158,7 +159,7 @@ export const useAuthCallback = (
         if (strategy === AuthStrategy.Okta && state !== undefined) {
           params.append('state', state as string);
         }
-        const { data } = await api.get<IUserDocument & { accessToken: string; refreshToken: string }>(
+        const { data } = await api.get<IUserDocument & { accessToken: string }>(
           `/api/auth/${strategy}/callback?${params.toString()}`
         );
         return data;
@@ -174,7 +175,7 @@ export const useAuthCallback = (
   useEffect(() => {
     if (oauthCallback.data) {
       const user = oauthCallback.data;
-      useAccessToken.getState().setVerifiedTokens(user.accessToken, user.refreshToken);
+      useAccessToken.getState().setVerifiedSession(user.accessToken);
       setCurrentUser(user);
       // Route the user-controlled redirectTo through sanitizeRedirectTo so an
       // open-redirect can't ride the OAuth callback. Falls back to /new.

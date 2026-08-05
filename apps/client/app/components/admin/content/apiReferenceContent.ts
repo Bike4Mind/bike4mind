@@ -22,15 +22,20 @@ Authorization: Bearer <access_token>
 
 | Token Type | Lifetime | Description |
 |------------|----------|-------------|
-| Access Token | 7 days | Short-lived token for API requests |
+| Access Token | 30 minutes | Short-lived token for API requests |
 | Refresh Token | 30 days | Used to obtain new access tokens |
 
 **Obtaining tokens:**
 
 - \`POST /api/otc/send\` — request a one-time sign-in code by email (passwordless)
-- \`POST /api/otc/verify\` — verify the code to log in or register; returns both tokens
+- \`POST /api/otc/verify\` — verify the code to log in or register; returns the access token
 - \`POST /api/auth/refreshToken\` — exchange a refresh token for a new access token
-- OAuth callbacks (Google, GitHub, Okta, SAML) return tokens on successful authentication
+- OAuth callbacks (Google, GitHub, Okta, SAML) return an access token on successful authentication
+
+Browser clients never receive the refresh token in a response body: it is set as an
+\`HttpOnly; Secure; SameSite=Strict\` cookie scoped to \`/api\`, and \`POST /api/auth/refreshToken\`
+reads and rotates it from there. Non-browser clients (CLI, OAuth authorization-code and device
+flows) get the refresh token in the response body and send it back the same way.
 
 ### API Key Authentication
 
@@ -1340,7 +1345,8 @@ Admin endpoints require the \`admin:*\` scope or superuser role.
 }
 \`\`\`
 
-Use the refresh token flow to obtain a new access token:
+Use the refresh token flow to obtain a new access token. Non-browser clients pass the token in
+the body; a browser sends an empty body and the HttpOnly cookie supplies it:
 
 \`\`\`
 POST /api/auth/refreshToken
@@ -1388,7 +1394,7 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
 7. **Prefer pagination over fetching all.** All list endpoints support \`page\` and \`limit\` parameters. Default page size is 20. Never fetch unbounded lists in production.
 
-8. **Token lifecycle matters.** Access tokens expire after 7 days. Use the refresh token flow (\`POST /api/auth/refreshToken\`) to get new tokens without requiring re-authentication.
+8. **Token lifecycle matters.** Access tokens expire after 30 minutes. Use the refresh token flow (\`POST /api/auth/refreshToken\`) to get new tokens without requiring re-authentication.
 
 9. **Test with the server status endpoint.** Use \`GET /api/settings/serverStatus\` as a lightweight health check. It returns server version, uptime, and configuration without requiring authentication.
 
