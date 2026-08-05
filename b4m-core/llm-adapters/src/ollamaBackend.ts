@@ -163,7 +163,12 @@ export class OllamaBackend implements ICompletionBackend {
    *
    * Halving alone is not enough at the bottom of the range: OLLAMA_MAX_NUM_CTX accepts any positive
    * value, so an operator setting 2000 would leave exactly zero input budget for every local model
-   * at once. The second bound keeps at least one token of input whatever the window is.
+   * at once. The second bound keeps input room for any window ABOVE the safety buffer.
+   *
+   * At or below the buffer nothing here can: a 500-token window yields a cap of 1 and still leaves
+   * 500 - 1 - 1000 negative. Clamping the window up to hide that would advertise more context than
+   * the model has, which is the misreporting this whole change removes, so the honest answer is
+   * that such a model cannot serve a chat prompt at all.
    */
   private static advertisedOutputCap(contextWindow: number): number {
     const halved = Math.floor(contextWindow / 2);
