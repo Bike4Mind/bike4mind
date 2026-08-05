@@ -203,9 +203,10 @@ describe('semanticDataLakeSearch embedding-model mismatch', () => {
   });
 
   // findVectorsByFabFileIds filters vectorless chunks at the DB layer and is only asked for
-  // rankable ids, so these two states cannot arise on THIS path today. They are reachable on the
-  // forced-retrieval path (findByFabFileId, unfiltered), which shares the classifier, so the
-  // fixtures are deliberately stricter than the repo to keep the wiring covered from both ends.
+  // rankable ids, so these two states cannot arise from the repository today - every retrieval path
+  // now reads through that filter. The fixtures stay deliberately stricter than the repository so the
+  // classifier keeps its own coverage: it is shared, and a future reader that does not filter would
+  // otherwise reach it untested.
   it('counts a chunk with no vector as missingVector', async () => {
     const findVectors = pagedRows([chunk('c1', 'a', 'no vector', undefined)]);
     const result = await semanticDataLakeSearch(
