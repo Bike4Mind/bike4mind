@@ -110,6 +110,13 @@ describe('objectCreated - data lake stats (#1342)', () => {
     expect(h.claimFileStatus).toHaveBeenCalledWith('b1', 'ff1', ['uploaded', 'pending'], 'skipped');
     expect(h.incrementCounter).toHaveBeenCalledWith('b1', 'skippedFiles');
     expect(h.finalizeBatchIfComplete).toHaveBeenCalledWith({ id: 'b1', skippedFiles: 1, failedFiles: 0 }, logger);
+    // The uploadedFiles/vectorizedFiles branches both send their own counter in the progress
+    // event; skippedFiles must too, or a client reading it sees a stale value until reload.
+    expect(h.sendToClient).toHaveBeenCalledWith(
+      'u1',
+      'wss://test',
+      expect.objectContaining({ action: 'data_lake_batch_progress', batchId: 'b1', skippedFiles: 1 })
+    );
   });
 
   it('does not double-count a batch file that is actually chunked', async () => {

@@ -236,6 +236,7 @@ export const func = withContext(async (event, context, logger) => {
           await sendToClient(user.id, wsEndpoint, {
             action: 'data_lake_batch_progress',
             batchId: metadata.batchId,
+            skippedFiles: batch?.skippedFiles ?? 1,
             status: isBatchComplete(batch)
               ? batch!.failedFiles > 0
                 ? 'completed_with_errors'

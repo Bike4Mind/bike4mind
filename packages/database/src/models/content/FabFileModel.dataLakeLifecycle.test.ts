@@ -125,6 +125,18 @@ describe('FabFile data lake lifecycle membership', () => {
 
       expect((await fabFileRepository.computeDataLakeStats(scope)).fileCount).toBe(0);
     });
+
+    it('excludes a presigned member whose bytes have not landed yet (#1342)', async () => {
+      // Same exclusion countDataLakeFilesByMembership pins - counting an orphan 'pending' row
+      // would let an abandoned upload permanently activate the lake.
+      const rows = await seedLakeRows();
+      await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { status: 'pending' } });
+
+      const stats = await fabFileRepository.computeDataLakeStats(scope);
+
+      expect(stats.fileCount).toBe(1);
+      expect(stats.totalSizeBytes).toBe(100);
+    });
   });
 
   describe('archiveByDataLakeTag / unarchiveByDataLakeTag', () => {
