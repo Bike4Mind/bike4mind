@@ -620,6 +620,30 @@ describe('DataLakeBatchRepository.findActiveByUserId - list-surface query', () =
   });
 });
 
+describe('DataLakeBatchRepository.findActiveByDataLakeId - teardown-scan query', () => {
+  setupMongoTest();
+
+  it('excludes the per-file manifest - callers only ever read .id', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      status: 'processing',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt' }],
+    } as never);
+
+    const [active] = await dataLakeBatchRepository.findActiveByDataLakeId('lake1');
+    expect(active.files).toBeUndefined();
+  });
+
+  it('scopes to the requesting lake only', async () => {
+    await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', status: 'processing' } as never);
+    await dataLakeBatchRepository.create({ dataLakeId: 'lake2', userId: 'u1', status: 'processing' } as never);
+
+    const active = await dataLakeBatchRepository.findActiveByDataLakeId('lake1');
+    expect(active).toHaveLength(1);
+  });
+});
+
 describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId - list-surface query', () => {
   setupMongoTest();
 
@@ -659,6 +683,24 @@ describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId - list-surface q
     expect(attention.files).toBeUndefined();
   });
 
+  it('excludes taxonomySuggestions.fileAssignments but keeps tags', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'ready',
+      taxonomySuggestions: {
+        tags: [{ suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' }],
+        fileAssignments: [{ relativePath: 'a.txt', suggestedTags: [{ name: 'acme:type:invoice', strength: 0.9 }] }],
+      },
+    } as never);
+
+    const [attention] = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
+    expect(attention.taxonomySuggestions?.tags).toEqual([
+      { suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' },
+    ]);
+    expect(attention.taxonomySuggestions?.fileAssignments).toBeUndefined();
+  });
+
   it('orders most-recently-updated first and caps a large backlog', async () => {
     // A user with no exit path for old suggestions (no dismiss yet) can accumulate an
     // unbounded backlog - seed past the cap and confirm both the order and the bound.
@@ -683,11 +725,13 @@ describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId - list-surface q
     expect(attention.map(b => b.id)).not.toContain(batches[0].id);
   });
 
-  it('defaults the cap to 500 when no limit is given', async () => {
+  it('runs the no-arg (default-limit) path without requiring a caller to pass one', async () => {
+    // Only confirms the omitted-argument call works end to end - it can't practically pin the
+    // exact default value (500) without seeding past it, which the explicit-limit test above
+    // already covers for the cap-enforcement logic itself. The literal default lives at the
+    // call site (`limit = 500` in the method signature) and is reviewed there.
     await seed('ready');
     const attention = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
-    // A single seeded batch just confirms the default path runs without a limit arg;
-    // the cap-enforcement itself is covered by the explicit-limit test above.
     expect(attention).toHaveLength(1);
   });
 });
@@ -737,6 +781,24 @@ describe('DataLakeBatchRepository.findActiveTaxonomyByUserId - reconciler input'
 
     const [active] = await dataLakeBatchRepository.findActiveTaxonomyByUserId('u1');
     expect(active.files).toBeUndefined();
+  });
+
+  it('excludes taxonomySuggestions.fileAssignments but keeps tags', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'applying',
+      taxonomySuggestions: {
+        tags: [{ suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' }],
+        fileAssignments: [{ relativePath: 'a.txt', suggestedTags: [{ name: 'acme:type:invoice', strength: 0.9 }] }],
+      },
+    } as never);
+
+    const [active] = await dataLakeBatchRepository.findActiveTaxonomyByUserId('u1');
+    expect(active.taxonomySuggestions?.tags).toEqual([
+      { suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' },
+    ]);
+    expect(active.taxonomySuggestions?.fileAssignments).toBeUndefined();
   });
 });
 

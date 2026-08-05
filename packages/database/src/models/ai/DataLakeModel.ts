@@ -591,13 +591,16 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     // overridable for tests. The real fix for unbounded growth is the planned "dismiss" action -
     // once shipped, this cap stops being load-bearing since old suggestions get an exit path.
     // `files` is excluded for the same reason as findActiveByUserId: this is a list view, never
-    // a per-file read.
+    // a per-file read. `taxonomySuggestions.fileAssignments` (up to maxTotal=50 per-file entries
+    // from runTaxonomyInference's sampling) is excluded too - only `tags` is ever read by any
+    // list/chip consumer; the one caller that needs fileAssignments (applyTaxonomySuggestions)
+    // does its own findById, so dropping it here costs that path nothing.
     const results = await this.batchModel
       .find({
         userId,
         taxonomyStatus: { $in: TAXONOMY_ATTENTION_STATUSES },
       })
-      .select('-files')
+      .select('-files -taxonomySuggestions.fileAssignments')
       .sort({ updatedAt: -1 })
       .limit(limit);
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
@@ -609,12 +612,17 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     // batch stuck in 'analyzing' for hours has an old updatedAt and would otherwise be pushed out
     // before the reconciler ever sees it. 'ready'/'failed' are excluded here (unlike the
     // attention set) since they're already terminal and irrelevant to stuck-job detection.
+    // No explicit limit: the set is queued/analyzing/applying only, and the 10-minute reconciler
+    // this feeds is what drains it, so - unlike the attention set, which has no exit until
+    // applied/dismissed - it's self-limiting without a cap. `files` and
+    // `taxonomySuggestions.fileAssignments` are excluded for the same reason as
+    // findTaxonomyAttentionByUserId; the reconciler only reads taxonomyStatus/taxonomyStartedAt/id.
     const results = await this.batchModel
       .find({
         userId,
         taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES },
       })
-      .select('-files');
+      .select('-files -taxonomySuggestions.fileAssignments');
     return results.map(r => r.toJSON() as IDataLakeBatchSummary);
   }
 }
