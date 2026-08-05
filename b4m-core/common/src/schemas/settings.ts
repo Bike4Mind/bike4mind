@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
-import { DEFAULT_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
+import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -1992,9 +1992,14 @@ export const settingsMap = {
     // as an explicit chunkSize override) produces a different granularity than one driven through
     // /api/files/reprocess, which sends none and gets the chunker default. They disagreed by ~4x.
     defaultValue: DEFAULT_PASSAGE_TOKEN_TARGET,
+    // Floor matches the chunker's own clamp, so the UI cannot report a value the chunker will
+    // silently raise (chunk.ts clamps to MIN_PASSAGE_TOKEN_TARGET).
+    min: MIN_PASSAGE_TOKEN_TARGET,
     description:
-      'Default passage target in TOKENS for splitting large documents. Matches the chunker default; ' +
-      'raising it produces coarser chunks and measurably worse retrieval.',
+      'Passage target in TOKENS for splitting large documents. The DEFAULT matches the chunker; a ' +
+      'value stored here overrides it, and a stored value larger than the chunker default makes the ' +
+      'UI reprocess path produce coarser chunks than /api/files/reprocess. Coarser chunks measurably ' +
+      'worsen retrieval.',
     category: 'AI',
     order: 3,
   }),
