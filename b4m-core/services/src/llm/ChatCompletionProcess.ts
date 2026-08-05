@@ -638,9 +638,13 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
  * The condition is the per-doc even-split depth falling below the floor: attachedFileTokenBudget is
  * divided evenly across the inlined files (processFabFilesServer), so a large corpus gives each doc
  * a shallow slice. `retrievableCount` (not the full attached count) is the divisor on purpose - it
- * is the set eligible to defer, and the real per-file split includes the always-inlined sources
- * too, so this estimate is <= the real depth: if it already trips the floor, the real split is
- * definitely shallow. Small corpora keep a high per-doc share and stay inlined (strictly better).
+ * is the set eligible to defer. The real per-file split divides the same budget across MORE files
+ * (the always-inlined message/session/system sources share it too), so with
+ * retrievableCount <= totalAttached this estimate is an UPPER bound on the real depth
+ * (budget / retrievableCount >= budget / totalAttached). That biases conservatively in the safe
+ * direction: an estimate below the floor guarantees the real split is below it too, so we never
+ * over-defer - at worst we under-defer a corpus whose real split is shallow but whose estimate
+ * is not. Small corpora keep a high per-doc share and stay inlined (strictly better).
  */
 export function shouldDeferCorpusToRetrieval(input: {
   retrievableCount: number;
@@ -917,6 +921,14 @@ export class ChatCompletionProcess {
       const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
       const files = await this.db.fabfiles.getAccessibleFiles(sessionKnowledgeIds, scope);
 
+      // KNOWN GAP: tag membership is necessary but NOT sufficient for retrievability. A doc that
+      // carries an accessible lake tag but is not vectorized yet, or is embedded under a different
+      // model than the current query vector, passes this filter yet search_knowledge_base will not
+      // surface it - deferring it would strand its content silently. This is safe only because the
+      // feature is off by default; before the CorpusRetrievalMinInlineTokensPerDoc rollout the eval
+      // must exclude or account for non-vectorized docs, and the real fix is to gate on
+      // vectorization state + embedding-model agreement here (follow-up on top of #1411, which
+      // hardens the retrieval-side reads this defer relies on).
       const retrievableIds = files
         .filter(file => (file.tags ?? []).some(tag => accessibleTags.has(tag.name)))
         .map(file => file.id);
