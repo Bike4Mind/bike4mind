@@ -16,7 +16,7 @@ import { type MigrationFile } from './index';
  * indexes are additive and dropping this one would regress the walk.
  */
 const migration: MigrationFile = {
-  id: 20260804000000,
+  id: 20260805000000,
   name: 'ensure memento keyset index',
 
   up: async () => {

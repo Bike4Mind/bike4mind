@@ -39,16 +39,14 @@ const AdminEmergencyPage = () => {
       if (response.data.success) {
         const userData = response.data.user;
 
-        // Extract tokens from user data (they're embedded by the backend)
-        const { accessToken, refreshToken, ...userWithoutTokens } = userData;
+        // Extract the access token from user data (embedded by the backend). The refresh token
+        // is not here - the endpoint set it as an HttpOnly cookie.
+        const { accessToken, ...userWithoutTokens } = userData;
 
-        console.log('🔐 Emergency login tokens extracted:', {
-          hasAccessToken: !!accessToken,
-          hasRefreshToken: !!refreshToken,
-        });
+        console.log('Emergency login token extracted:', { hasAccessToken: !!accessToken });
 
-        // Store tokens in useAccessToken store (CRITICAL for API calls)
-        useAccessToken.getState().setVerifiedTokens(accessToken, refreshToken);
+        // Store the access token in useAccessToken store (CRITICAL for API calls)
+        useAccessToken.getState().setVerifiedSession(accessToken);
 
         // Set user context (without embedded tokens)
         setCurrentUser(userWithoutTokens);

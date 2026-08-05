@@ -19,10 +19,15 @@ import {
 import { creditService, userService, organizationService, authSessionService } from '@bike4mind/services';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
+import {
+  notifySeatCeilingRaised,
+  notifyPartnerSignupBlockedAtCapacity,
+} from '@server/organizations/notifySeatCeilingRaised';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { setRefreshCookie } from '@server/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { Config } from '@server/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -182,7 +187,8 @@ const handler = baseApi({ auth: false })
           logger: req.logger,
         }
       );
-      const tokens = { accessToken, refreshToken };
+      setRefreshCookie(res, refreshToken);
+      const tokens = { accessToken };
       const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
 
       // Analytics + device history are best-effort for the same post-rotation reason as
@@ -390,7 +396,33 @@ const handler = baseApi({ auth: false })
         if (result.added) {
           newUser.organizationId = partnerOrganizationId;
           req.logger.info(`Partner-rule org membership: added OTC user ${newUser.id} to org ${partnerOrganizationId}`);
-        } else if (result.reason === 'org-missing' || result.reason === 'at-capacity') {
+          if (result.reason === 'added-seat-raised') {
+            // Never awaited-into-failure: the join already committed; the alert/audit is best-effort.
+            await notifySeatCeilingRaised(
+              {
+                organizationId: partnerOrganizationId,
+                userId: newUser.id,
+                previousSeats: result.previousSeats,
+                newSeats: result.newSeats,
+                trigger: 'otc-signup',
+              },
+              req.logger
+            );
+          }
+        } else if (result.reason === 'at-capacity') {
+          // Org at capacity with no auto-raise: a Stripe-billed org (ceiling not raised out of band)
+          // or a non-Stripe org already at MAX_SEATS (the raise is clamped there, #1424). Alert an
+          // admin to add seats so this stranded partner user can be admitted. Best-effort, never throws.
+          await notifyPartnerSignupBlockedAtCapacity(
+            {
+              organizationId: partnerOrganizationId,
+              userId: newUser.id,
+              seats: result.seats,
+              trigger: 'otc-signup',
+            },
+            req.logger
+          );
+        } else if (result.reason === 'org-missing') {
           req.logger.warn(
             `Partner-rule org membership not applied for OTC user ${newUser.id} ` +
               `(org ${partnerOrganizationId}): ${result.reason}`
@@ -422,10 +454,10 @@ const handler = baseApi({ auth: false })
         logger: req.logger,
       }
     );
+    setRefreshCookie(res, registrationSession.refreshToken);
     return res.status(200).json({
       user: redactUserSecretsForSelf(newUser),
       accessToken: registrationSession.accessToken,
-      refreshToken: registrationSession.refreshToken,
     });
   });
 

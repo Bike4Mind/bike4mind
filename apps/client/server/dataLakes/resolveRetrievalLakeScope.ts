@@ -14,6 +14,7 @@
 import { DATA_LAKES, hasDeveloperUserTag, type DataLakeConfig } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository } from '@bike4mind/database';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { getRequestEntitlements, type EntitlementRequest } from '@server/entitlements';
 import type { Logger } from '@bike4mind/observability';
 
@@ -77,7 +78,9 @@ export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Pro
     user: {
       id: user.id,
       tags: user.tags ?? [],
-      organizationId: user.organizationId ?? undefined,
+      // Normalize once at the retrieval context seam, mirroring toAccessContext on the management
+      // side (#1281): a populated-doc org id would otherwise reach the gate as "[object Object]".
+      organizationId: normalizeId(user.organizationId),
     },
     entitlementKeys,
     logger: req.logger,

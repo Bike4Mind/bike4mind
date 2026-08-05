@@ -20,7 +20,6 @@ import {
   useTheme,
 } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
-import SwapVertIcon from '@mui/icons-material/SwapVert';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -42,12 +41,17 @@ import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
   ICON_BTN_SX,
+  SORT_MODE_ICON,
+  TREE_BACK_STICKY_SX,
   TREE_LIST_SX,
+  TREE_SCROLL_SX,
   hueForBranch,
   humanizeSegment,
+  treeBackRowSx,
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
-import { brandAlpha, gray } from '@client/app/utils/themes/colors';
+import type { TreeSortMode } from '@client/app/components/datalake/treeChrome';
+import { gray } from '@client/app/utils/themes/colors';
 import { useDataLakeFiles, useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
 import { useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import {
@@ -62,6 +66,7 @@ import {
 } from '@client/app/hooks/data/dataLakes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
+import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
@@ -69,7 +74,7 @@ import type { EditableLake } from './DataLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
-import type { IDataLakeBatchDocument, IFabFileDocument } from '@bike4mind/common';
+import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
 import { satisfiesTagPrefix } from '@bike4mind/common';
 
 type ManagerLake = NonNullable<ReturnType<typeof useDataLakes>['data']>[number];
@@ -105,7 +110,7 @@ export default function DataLakeManagerPanel() {
   // whose taxonomy phase actually needs attention are kept - a lake with none just misses the
   // map entry, which every consumer already treats the same as "nothing to show."
   const taxonomyBatchByLakeId = useMemo(() => {
-    const map = new Map<string, IDataLakeBatchDocument>();
+    const map = new Map<string, IDataLakeBatchSummary>();
     for (const batch of activeBatches ?? []) {
       if (!batch.taxonomyStatus || batch.taxonomyStatus === 'none') continue;
       if (!map.has(batch.dataLakeId)) map.set(batch.dataLakeId, batch);
@@ -172,6 +177,21 @@ export default function DataLakeManagerPanel() {
     if (managerTab !== 'mine') openManager('mine');
   };
 
+  // Discover swaps the right pane, but the activeLake branch below outranks it - so a click
+  // while a lake was open changed nothing on screen, then surfaced later as the catalog
+  // appearing when the user pressed Back. Exit the lake on the way in. Toggling back out is
+  // the only exit that does not require owning a lake to click.
+  const toggleDiscover = () => {
+    if (managerTab === 'discover') {
+      openManager('mine');
+      return;
+    }
+    setLakeId(null);
+    setPath([]);
+    setSelectedFile(null);
+    openManager('discover');
+  };
+
   // Shared choke point for every manager entry point: with the feature off the lakes
   // queries 403 and the empty panel is a dead end, so never render - even if some (future)
   // ungated caller opens the manager. Mirrors the render guard in SendToDataLakeModal.
@@ -205,7 +225,8 @@ export default function DataLakeManagerPanel() {
         }}
         onSelectFile={setSelectedFile}
         onCreateLake={openWizard}
-        onDiscover={() => openManager('discover')}
+        isDiscovering={managerTab === 'discover'}
+        onDiscover={toggleDiscover}
         onReviewTaxonomy={setReviewingBatchId}
       />
       {activeLake ? (
@@ -232,7 +253,7 @@ export default function DataLakeManagerPanel() {
         )
       ) : managerTab === 'discover' ? (
         // Public-lake catalog (store deep-link openManager('discover') or the footer button).
-        <Box sx={{ flex: 1, minWidth: 0, overflow: 'auto', px: 1 }}>
+        <Box sx={{ ...TREE_SCROLL_SX, minWidth: 0, px: 1 }}>
           <DataLakeDiscoverPanel />
         </Box>
       ) : (
@@ -261,7 +282,7 @@ interface ManagerNavProps {
   /** Per-lake live file count, resolved by lake membership (see lakeCount). */
   lakeCount: (lake: ManagerLake) => number | undefined;
   /** Lake id -> its attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
-  taxonomyBatchByLakeId: Map<string, IDataLakeBatchDocument>;
+  taxonomyBatchByLakeId: Map<string, IDataLakeBatchSummary>;
   activeLake: ManagerLake | null;
   /** In-lake tag path, seeded with the lake's prefix segments (see selectLake). */
   path: string[];
@@ -271,7 +292,9 @@ interface ManagerNavProps {
   onExitLake: () => void;
   onSelectFile: (file: IFabFileDocument) => void;
   onCreateLake: () => void;
-  /** Opens the public-lake Discover catalog in the right pane. */
+  /** True while the right pane shows the public catalog, so the footer button reads as pressed. */
+  isDiscovering: boolean;
+  /** Toggles the public-lake Discover catalog in the right pane. */
   onDiscover: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
@@ -290,6 +313,7 @@ function ManagerNav({
   onExitLake,
   onSelectFile,
   onCreateLake,
+  isDiscovering,
   onDiscover,
   onReviewTaxonomy,
 }: ManagerNavProps) {
@@ -298,7 +322,8 @@ function ManagerNav({
   const hoverBg = theme.palette.notebooklist.hoverBg;
   const borderColor = isDark ? gray[800] : gray[200];
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'count' | 'alpha'>('count');
+  const [sortBy, setSortBy] = useState<TreeSortMode>('count');
+  const SortModeIcon = SORT_MODE_ICON[sortBy];
 
   // Root accordions: active lakes open by default; the lifecycle lists stay collapsed (their
   // queries only fire once expanded, same as the old right-pane sections).
@@ -462,34 +487,21 @@ function ManagerNav({
             data-sort={sortBy}
             sx={{ ...ICON_BTN_SX, flexShrink: 0 }}
           >
-            <SwapVertIcon sx={{ fontSize: 18 }} />
+            <SortModeIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Tooltip>
       </Box>
 
-      <Box sx={{ flex: 1, overflow: 'auto', px: '8px' }}>
+      <Box sx={{ ...TREE_SCROLL_SX, px: '8px' }}>
         {activeLake && (
-          <ListItemButton
-            onClick={handleBack}
-            data-testid="datalake-manager-back"
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              px: '8px',
-              mb: '4px',
-              height: '32px',
-              minHeight: '32px',
-              borderRadius: '8px',
-              transition: 'background 0.15s',
-              '--variant-plainHoverBg': hoverBg,
-            }}
-          >
-            <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
-            <Typography noWrap sx={rowTypographySx}>
-              {backLabel}
-            </Typography>
-          </ListItemButton>
+          <Box sx={TREE_BACK_STICKY_SX}>
+            <ListItemButton onClick={handleBack} data-testid="datalake-manager-back" sx={treeBackRowSx(hoverBg)}>
+              <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
+              <Typography noWrap sx={rowTypographySx}>
+                {backLabel}
+              </Typography>
+            </ListItemButton>
+          </Box>
         )}
 
         {!activeLake ? (
@@ -804,15 +816,25 @@ function ManagerNav({
 
       {/* Sticky bottom bar, same chrome as the in-chat tree footer. */}
       <Box sx={{ display: 'flex', gap: '8px', p: '12px', borderTop: '1px solid', borderColor }}>
-        <Button
-          variant="outlined"
-          color="neutral"
-          onClick={onDiscover}
-          data-testid="datalake-manager-discover-btn"
-          sx={FOOTER_BTN_SX}
+        <Tooltip
+          title={
+            isDiscovering
+              ? 'Showing public data lakes. Click to return to your own lakes.'
+              : 'Browse data lakes other people have published, from across the app.'
+          }
+          size="sm"
         >
-          Discover
-        </Button>
+          <Button
+            variant={isDiscovering ? 'soft' : 'outlined'}
+            color="neutral"
+            onClick={onDiscover}
+            aria-pressed={isDiscovering}
+            data-testid="datalake-manager-discover-btn"
+            sx={FOOTER_BTN_SX}
+          >
+            Discover
+          </Button>
+        </Tooltip>
         <Button
           variant="solid"
           color="primary"
@@ -979,7 +1001,7 @@ function LakeInfoPanel({
   lake: ManagerLake;
   fileCount: number | undefined;
   /** This lake's attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
-  taxonomyBatch: IDataLakeBatchDocument | undefined;
+  taxonomyBatch: IDataLakeBatchSummary | undefined;
   onOpenSettings: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
@@ -1116,7 +1138,7 @@ function LakeInfoPanel({
           )}
         </Box>
       </Box>
-      <Box sx={{ flex: 1, overflow: 'auto', px: 3, py: 2 }}>
+      <Box sx={{ ...TREE_SCROLL_SX, px: 3, py: 2 }}>
         {lake.description ? (
           <Typography level="body-md" sx={{ whiteSpace: 'pre-wrap' }}>
             {lake.description}
@@ -1138,41 +1160,13 @@ function LakeInfoPanel({
 
 function ManagerOverview() {
   return (
-    <Box
+    <DataLakeEmptyState
+      icon={<StorageIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />}
+      title="Select a data lake"
       data-testid="datalake-manager-overview"
-      sx={{
-        flex: 1,
-        minWidth: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        px: 4,
-        color: 'text.tertiary',
-        textAlign: 'center',
-      }}
     >
-      {/* Empty-state icon badge - matches the advanced-search drawer's empty state. */}
-      <Box
-        sx={{
-          width: 40,
-          height: 40,
-          borderRadius: '10px',
-          bgcolor: theme => (theme.palette.mode === 'dark' ? brandAlpha[100][12] : brandAlpha[400][8]),
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <StorageIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
-      </Box>
-      <Typography level="title-lg" sx={{ color: 'text.primary', fontSize: '16px', mt: '16px', mb: '12px' }}>
-        Select a data lake
-      </Typography>
-      <Typography level="body-sm" sx={{ color: 'text.tertiary', fontSize: '13px', maxWidth: 380 }}>
-        Pick a lake on the left to see its details
-        <br /> and browse its files, or create a new one.
-      </Typography>
-    </Box>
+      Pick a lake on the left to see its details
+      <br /> and browse its files, or create a new one.
+    </DataLakeEmptyState>
   );
 }

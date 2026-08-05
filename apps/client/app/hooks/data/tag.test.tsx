@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { IFileTag, ITag } from '@bike4mind/common';
+import type { IFileTag, IFileTagWithFileCount, ITag } from '@bike4mind/common';
 import { AxiosError, type AxiosResponse } from 'axios';
 
 const mockPut = vi.fn();
@@ -24,7 +24,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }
 import { toast } from 'sonner';
 import { useCreateFileTag, useDeleteFileTag, useUpdateFileTag } from './tag';
 
-const CACHED_TAG = { id: 'tag-1', name: 'invoices', color: 'blue', fileCount: 7 } as IFileTag;
+const CACHED_TAG = { id: 'tag-1', name: 'invoices', color: 'blue', fileCount: 7 } as IFileTagWithFileCount;
 
 describe('file tag mutations', () => {
   let queryClient: QueryClient;
@@ -34,7 +34,7 @@ describe('file tag mutations', () => {
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
 
-  const cachedTags = () => queryClient.getQueryData<IFileTag[]>(['file-tags']) ?? [];
+  const cachedTags = () => queryClient.getQueryData<IFileTagWithFileCount[]>(['file-tags']) ?? [];
   const invalidatedKeys = () => invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
 
   beforeEach(() => {
@@ -127,10 +127,11 @@ describe('file tag mutations', () => {
   });
 
   describe('useCreateFileTag', () => {
-    // create seeds fileCount at 0, which is wrong whenever files already carry the name - tag
-    // documents get auto-created by name elsewhere, and deleting one never untags the files.
-    it('invalidates the tag list rather than trusting the seeded zero', async () => {
-      mockPost.mockResolvedValueOnce({ data: { id: 'tag-9', name: 'archive', fileCount: 0 } });
+    // The POST response carries no count - only the list query derives one - so the hook seeds its
+    // own zero. That is wrong whenever files already carry the name (tag documents get auto-created
+    // by name elsewhere, and deleting one never untags the files), hence the invalidation.
+    it('seeds the new row at zero and invalidates rather than trusting it', async () => {
+      mockPost.mockResolvedValueOnce({ data: { id: 'tag-9', name: 'archive' } });
 
       const { result } = renderHook(() => useCreateFileTag(), { wrapper });
       await act(async () => {
@@ -140,6 +141,7 @@ describe('file tag mutations', () => {
         >);
       });
 
+      expect(cachedTags().find(t => t.id === 'tag-9')?.fileCount).toBe(0);
       expect(invalidatedKeys()).toContainEqual(['file-tags']);
     });
   });
@@ -201,5 +203,54 @@ describe('file tag mutations', () => {
 
       expect(toast.error).toHaveBeenCalledWith('boom');
     });
+  });
+});
+
+// react-query hands the setQueryData updater `undefined` when the key holds nothing yet, which a
+// mount that mutates before the tag list has loaded will do. Both updaters used to assume an array,
+// so the write threw inside onSuccess: the server had already created or renamed the tag, but the
+// caller saw a rejected mutation and an error toast.
+describe('file tag mutations with an empty cache', () => {
+  let queryClient: QueryClient;
+
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  const cachedTags = () => queryClient.getQueryData<IFileTagWithFileCount[]>(['file-tags']) ?? [];
+
+  beforeEach(() => {
+    mockPut.mockReset();
+    mockPost.mockReset();
+    vi.mocked(toast.error).mockClear();
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Deliberately NOT seeded - that is the whole point.
+    expect(queryClient.getQueryData(['file-tags'])).toBeUndefined();
+  });
+
+  it('creates a tag without throwing when the list was never cached', async () => {
+    mockPost.mockResolvedValueOnce({ data: { id: 'tag-9', name: 'archive' } });
+
+    const { result } = renderHook(() => useCreateFileTag(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ name: 'archive' } as Omit<
+        ITag,
+        'id' | 'userId' | 'createdAt' | 'updatedAt' | 'type'
+      >);
+    });
+
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(cachedTags()).toEqual([expect.objectContaining({ id: 'tag-9', fileCount: 0 })]);
+  });
+
+  it('renames a tag without throwing when the list was never cached', async () => {
+    mockPut.mockResolvedValueOnce({ data: { id: 'tag-1', name: 'receipts' } });
+
+    const { result } = renderHook(() => useUpdateFileTag(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'tag-1', name: 'receipts' } as ITag);
+    });
+
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(cachedTags()).toEqual([]);
   });
 });

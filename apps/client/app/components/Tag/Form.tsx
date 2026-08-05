@@ -1,4 +1,4 @@
-import { ITag, TagType } from '@bike4mind/common';
+import { IFileTagWithFileCount, ISessionTag, TagType } from '@bike4mind/common';
 import { colorPalettes, emojis, shades } from '@client/app/constants/tools';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Casino } from '@mui/icons-material';
@@ -52,7 +52,10 @@ const tagSchema = z.object({
 type TagFormValues = z.infer<typeof tagSchema>;
 
 const TagForm: FC<{
-  data?: ITag;
+  // A file tag has to arrive as IFileTagWithFileCount, not IFileTag: the count the preview chip
+  // renders is derived per read by tagService/listFileTags and is not stored on the document, so
+  // only a tag that came through the tag-list query carries one.
+  data?: ISessionTag | IFileTagWithFileCount;
   submitting?: boolean;
   onSubmit: (data: TagFormValues) => void;
 }> = ({ data, submitting, onSubmit }) => {

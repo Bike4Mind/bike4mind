@@ -54,7 +54,6 @@ export const createFileTag = async (
 
     type: TagType.FILE,
 
-    fileCount: 0,
     lastActivityAt: new Date(),
 
     createdAt: new Date(),

@@ -233,7 +233,7 @@ const ProfileMenu = () => {
   const logEvent = useLogEvent();
   const { data: friendRequests } = useGetFriendRequests(currentUser?.id);
   const returnToAdmin = useReturnToAdmin();
-  const hasReturnToken = useAccessToken(s => s.returnToken);
+  const hasReturnToken = useAccessToken(s => s.impersonating);
   const { mutate: logout, isPending: isPendingLogout } = useUserLogout();
   const appVersion = useAppVersion();
 

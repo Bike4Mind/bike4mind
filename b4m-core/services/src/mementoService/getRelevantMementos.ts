@@ -48,9 +48,17 @@ export interface RelevantMemento {
  * Total order for the top-K. The id tiebreaker is load-bearing, not cosmetic: mementos now arrive
  * page by page, so leaving equal-similarity mementos to arrival order would make the result depend
  * on where a page boundary fell.
+ *
+ * Byte comparison, NOT localeCompare, matching `compareRankedChunks` in `@bike4mind/utils`: the cursor
+ * check and Mongo's `_id` ascending sort both order these ids bytewise, and a collation-aware
+ * comparator over the same key is how the determinism this tiebreaker provides would quietly erode.
  */
-const compareMementosBySimilarity = (a: RelevantMemento, b: RelevantMemento) =>
-  b.similarity - a.similarity || String(a.memento.id).localeCompare(String(b.memento.id));
+const compareMementosBySimilarity = (a: RelevantMemento, b: RelevantMemento) => {
+  const byScore = b.similarity - a.similarity;
+  if (byScore !== 0) return byScore;
+  const [x, y] = [String(a.memento.id), String(b.memento.id)];
+  return x < y ? -1 : x > y ? 1 : 0;
+};
 
 /**
  * Options for memento retrieval
