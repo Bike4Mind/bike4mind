@@ -41,7 +41,13 @@ export const useCreateFileTag = () => {
       // seeded at 0 here. Right for a genuinely new name and wrong the moment files already carry
       // it (tag documents are auto-created by name elsewhere, and deleting one never untags the
       // files), which is what the invalidation below settles. The list, not just the counts endpoint.
-      queryClient.setQueryData(['file-tags'], (prev: IFileTagWithFileCount[]) => [...prev, { ...data, fileCount: 0 }]);
+      // Defaulted, not just annotated: react-query hands the updater `undefined` when the key has no
+      // cached entry yet, and spreading that throws inside onSuccess - so the tag is created and the
+      // mutation still surfaces as a failure.
+      queryClient.setQueryData(['file-tags'], (prev: IFileTagWithFileCount[] = []) => [
+        ...prev,
+        { ...data, fileCount: 0 },
+      ]);
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       toast.success('Tag created successfully');
     },
@@ -66,7 +72,8 @@ export const useUpdateFileTag = () => {
       // echoes back only what tagUpdateSchema accepted, and a wholesale swap would blank the rest
       // of the row. The response carries no count, so the merge keeps the derived one - still only
       // optimistic, because a rename retags the files and can merge two tags into one.
-      queryClient.setQueryData(['file-tags'], (prev: IFileTagWithFileCount[]) =>
+      // Defaulted for the same reason as the create above: an uncached key yields `undefined`.
+      queryClient.setQueryData(['file-tags'], (prev: IFileTagWithFileCount[] = []) =>
         prev.map(t => (t.id === data.id ? { ...t, ...data } : t))
       );
       // The bare prefix: invalidating ['file-tags','counts'] alone leaves the longer key matched

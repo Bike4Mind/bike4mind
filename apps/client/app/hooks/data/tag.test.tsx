@@ -205,3 +205,52 @@ describe('file tag mutations', () => {
     });
   });
 });
+
+// react-query hands the setQueryData updater `undefined` when the key holds nothing yet, which a
+// mount that mutates before the tag list has loaded will do. Both updaters used to assume an array,
+// so the write threw inside onSuccess: the server had already created or renamed the tag, but the
+// caller saw a rejected mutation and an error toast.
+describe('file tag mutations with an empty cache', () => {
+  let queryClient: QueryClient;
+
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  const cachedTags = () => queryClient.getQueryData<IFileTagWithFileCount[]>(['file-tags']) ?? [];
+
+  beforeEach(() => {
+    mockPut.mockReset();
+    mockPost.mockReset();
+    vi.mocked(toast.error).mockClear();
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Deliberately NOT seeded - that is the whole point.
+    expect(queryClient.getQueryData(['file-tags'])).toBeUndefined();
+  });
+
+  it('creates a tag without throwing when the list was never cached', async () => {
+    mockPost.mockResolvedValueOnce({ data: { id: 'tag-9', name: 'archive' } });
+
+    const { result } = renderHook(() => useCreateFileTag(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ name: 'archive' } as Omit<
+        ITag,
+        'id' | 'userId' | 'createdAt' | 'updatedAt' | 'type'
+      >);
+    });
+
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(cachedTags()).toEqual([expect.objectContaining({ id: 'tag-9', fileCount: 0 })]);
+  });
+
+  it('renames a tag without throwing when the list was never cached', async () => {
+    mockPut.mockResolvedValueOnce({ data: { id: 'tag-1', name: 'receipts' } });
+
+    const { result } = renderHook(() => useUpdateFileTag(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'tag-1', name: 'receipts' } as ITag);
+    });
+
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(cachedTags()).toEqual([]);
+  });
+});

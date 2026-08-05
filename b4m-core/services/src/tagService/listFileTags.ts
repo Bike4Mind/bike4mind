@@ -25,6 +25,12 @@ interface TagListFileTagsAdapters {
  * tree - the two surfaces must stay in sync or the sidebar badge and the tag card disagree for the
  * same tag. Counting live files means soft-deleted files drop out, as does anything attached to a
  * session (the aggregate's own filter).
+ *
+ * Same aggregate, different grouping, though: this folds each bucket onto a tag document
+ * (matchTagDocument, case-insensitive) while the tree renders the raw `tags.name` buckets. So on
+ * files that store more than one casing of a name - which a rename leaves behind, since
+ * updateTagsByUserId only rewrites the name it was given - this reports one correct row and the tree
+ * shows one row per casing. The divergence is the tree's grouping, not this count.
  */
 export const listFileTags = async (
   userId: string,
