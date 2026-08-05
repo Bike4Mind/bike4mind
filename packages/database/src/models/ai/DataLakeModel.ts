@@ -69,6 +69,11 @@ const DataLakeSchema = new mongoose.Schema(
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     lastSyncAt: { type: Date },
+    // Teardown batch keys (see IDataLake.filesDeletedAt): the exact stamp each teardown wrote on
+    // the lake's member files, matched by equality on restore. No index - the lakes collection is
+    // tiny, and these are only ever read from a lake already in hand.
+    filesDeletedAt: { type: Date },
+    filesArchivedAt: { type: Date },
   },
   {
     timestamps: true,

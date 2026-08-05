@@ -96,6 +96,19 @@ export interface IDataLake {
   totalSizeBytes?: number;
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
+  /**
+   * The exact `deletedAt` stamp phase-1 delete wrote on this lake's members, so restore can
+   * un-delete that batch and nothing else. Not a time window: it is matched by EQUALITY, which is
+   * what keeps a file the creator deleted independently - before OR during the deleted window -
+   * from riding back in. Non-null means the stamp is still live on the rows, so a re-run of a
+   * crashed teardown reuses it rather than minting a second batch; restore clears it.
+   *
+   * Absent on a lake torn down before this field existed, which restores unbounded (the old
+   * behavior) rather than restoring nothing.
+   */
+  filesDeletedAt?: Date | null;
+  /** The archive-axis twin of `filesDeletedAt`, written by archive and cleared by unarchive. */
+  filesArchivedAt?: Date | null;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
