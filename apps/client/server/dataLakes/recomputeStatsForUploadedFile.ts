@@ -20,6 +20,11 @@ type UploadedFile = { batchId?: string | null; tags?: ({ name?: string | null } 
  *
  * Batch files are skipped: the batch finalizer recomputes the lake ONCE for the whole batch, so
  * doing it per file would run N identical aggregations for an N-file upload.
+ *
+ * Residual gap, accepted rather than fixed here: if the stuck-batch reconciler has already forced
+ * a batch terminal (its own recompute already ran), a since-arrived event for one of that batch's
+ * files still flips its FabFile status to 'complete' but has no further recompute to trigger - the
+ * lake's persisted stats undercount by that file until an unrelated door touches the lake.
  */
 export const recomputeStatsForUploadedFile = async (
   file: UploadedFile,

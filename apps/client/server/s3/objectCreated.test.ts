@@ -11,6 +11,8 @@ const h = vi.hoisted(() => ({
   sendToClient: vi.fn(),
   sendToQueue: vi.fn(),
   recomputeUploaded: vi.fn(),
+  finalizeBatchIfComplete: vi.fn(),
+  isBatchComplete: vi.fn(),
 }));
 
 // withContext just threads a logger; the handler body is the subject.
@@ -38,6 +40,10 @@ vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: h.recomputeUploaded,
+}));
+vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
+  finalizeBatchIfComplete: h.finalizeBatchIfComplete,
+  isBatchComplete: h.isBatchComplete,
 }));
 vi.mock('sst', () => ({
   Resource: { websocket: { managementEndpoint: 'wss://test' }, fabFileChunkQueue: { url: 'http://sqs/chunk' } },
@@ -89,6 +95,32 @@ describe('objectCreated - data lake stats (#1342)', () => {
     await run();
 
     expect(h.recomputeUploaded).toHaveBeenCalledWith(file, { logger });
+  });
+
+  it('accounts a skipped batch file as skippedFiles, not a hang until the reconciler', async () => {
+    // autochunk is off (the beforeEach default), so this file never reaches the chunk/vectorize
+    // handlers - without this, the batch's completion threshold would never close on its own.
+    const file = metadata({ batchId: 'b1' });
+    h.findOne.mockResolvedValue(file);
+    h.incrementCounter.mockResolvedValue({ id: 'b1', skippedFiles: 1, failedFiles: 0 });
+    h.isBatchComplete.mockReturnValue(true);
+
+    await run();
+
+    expect(h.claimFileStatus).toHaveBeenCalledWith('b1', 'ff1', ['uploaded', 'pending'], 'skipped');
+    expect(h.incrementCounter).toHaveBeenCalledWith('b1', 'skippedFiles');
+    expect(h.finalizeBatchIfComplete).toHaveBeenCalledWith({ id: 'b1', skippedFiles: 1, failedFiles: 0 }, logger);
+  });
+
+  it('does not double-count a batch file that is actually chunked', async () => {
+    const file = metadata({ batchId: 'b1' });
+    h.findOne.mockResolvedValue(file);
+    h.getSettingsValue.mockResolvedValue(true); // enableKnowledgeAutoChunk on
+
+    await run();
+
+    expect(h.sendToQueue).toHaveBeenCalled();
+    expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
   });
 
   it('does not recompute when no FabFile matches the uploaded key', async () => {
