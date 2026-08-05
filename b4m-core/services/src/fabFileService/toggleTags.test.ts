@@ -175,6 +175,16 @@ describe('toggleTags - data lake meta-tags', () => {
     expect(joining.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99 });
   });
 
+  it('activates a draft lake the toggle just added a file to (#1342)', async () => {
+    // The door the bug was reported through. It never wrote status itself - only batch creation
+    // did - so a lake filled this way stayed draft and never reached Discover or retrieval.
+    const adapters = makeAdapters([file('f1')], lake({ status: 'draft' }));
+
+    await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
+
+    expect(adapters.db.dataLakes.activateIfDraft).toHaveBeenCalledWith('lake1');
+  });
+
   it('recomputes a lake once for the whole batch, not once per file', async () => {
     const adapters = makeAdapters([
       file('f1', [{ name: 'datalake:lake', strength: 1 }]),

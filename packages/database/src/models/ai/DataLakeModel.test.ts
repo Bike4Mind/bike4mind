@@ -377,6 +377,20 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     expect(total).toBe(2);
   });
 
+  it('admits a public lake as soon as its first member file activates it (#1342)', async () => {
+    // The coupling the bug lived in: every lake is created in 'draft', and this catalog is the
+    // only place the persisted fileCount is rendered, so a lake that never activates is one no
+    // user can reach. Pins the value the transition writes against the value this query wants.
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'brand-new', name: 'Brand New', isPublic: true, status: 'draft' })
+    );
+    expect((await dataLakeRepository.findPublicLakes()).lakes).toEqual([]);
+
+    await dataLakeRepository.activateIfDraft(created.id);
+
+    expect((await dataLakeRepository.findPublicLakes()).lakes.map(l => l.slug)).toEqual(['brand-new']);
+  });
+
   it('search matches name OR description, case-insensitively', async () => {
     await seedMixed();
     expect((await dataLakeRepository.findPublicLakes({ search: 'alpha' })).lakes.map(l => l.slug)).toEqual(['alpha']);
