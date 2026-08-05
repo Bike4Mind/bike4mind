@@ -96,7 +96,10 @@ const handler = baseApi()
     });
 
     // No status write here. Activation is `recomputeLakeStats`'s, keyed on the lake actually
-    // having a member file, so an upload that fails outright leaves no empty card in Discover.
+    // having a member file - and `computeDataLakeStats` excludes status:'pending' rows, so a
+    // presigned-but-never-uploaded file (client fails outright, or the tab closes before any
+    // byte lands) cannot count toward that membership no matter which door recomputes the lake
+    // or how long the row survives.
     return res.json(batch);
   });
 
