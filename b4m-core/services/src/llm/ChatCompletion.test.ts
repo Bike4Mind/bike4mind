@@ -359,6 +359,7 @@ describe('ChatCompletionProcess', () => {
       threshold: string | undefined;
       attachedFileTokenBudget: number;
       skipAutoOffers?: boolean;
+      knowledgeSearchDisabled?: boolean;
       queryEmbeddingModel?: string;
       retrievalFilter?: RetrievalExclusionOptions;
     }) => {
@@ -375,6 +376,7 @@ describe('ChatCompletionProcess', () => {
         sessionKnowledgeIds: opts.files.map(f => f.id),
         attachedFileTokenBudget: opts.attachedFileTokenBudget,
         skipAutoOffers: opts.skipAutoOffers ?? false,
+        knowledgeSearchDisabled: opts.knowledgeSearchDisabled ?? false,
         retrievalFilter: opts.retrievalFilter ?? {},
         defaultAdminSettings: {
           ...(opts.threshold ? { CorpusRetrievalMinInlineTokensPerDoc: opts.threshold } : {}),
@@ -599,6 +601,45 @@ describe('ChatCompletionProcess', () => {
       expect(plan.deferredToRetrieval).toBe(false);
       expect(plan.deferredKnowledgeIds).toHaveLength(0);
       expect(getAccessibleFiles).not.toHaveBeenCalled();
+    });
+
+    it('defers nothing when the session denylist forbids the knowledge-search tool', async () => {
+      // `session.disabledTools` is applied to the built tool list AFTER this plan runs, so a
+      // corpus deferred here would be handed to a tool that is then stripped - losing it outright.
+      // Seed the lake memo and a real file set: without them the no-lake / empty-corpus early
+      // returns catch this case first and the test passes with the denylist guard DELETED.
+      const files = lakeFiles(40);
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: ['datalake:corpus'],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+      };
+      (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+      const getAccessibleFiles = vi.fn().mockResolvedValue(files);
+      (service as any).db = { fabfiles: { getAccessibleFiles } };
+      const plan = await (service as any).resolveCorpusInlinePlan({
+        sessionKnowledgeIds: files.map(f => f.id),
+        attachedFileTokenBudget: 4000, // 4000/40 = 100 < 500: would defer all 40 but for the guard
+        skipAutoOffers: false,
+        knowledgeSearchDisabled: true,
+        retrievalFilter: {},
+        defaultAdminSettings: { CorpusRetrievalMinInlineTokensPerDoc: '500', defaultEmbeddingModel: 'model-A' },
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.deferredKnowledgeIds).toHaveLength(0);
+      expect(getAccessibleFiles).not.toHaveBeenCalled();
+    });
+
+    it('DOES defer the same corpus when the tool is not denied (positive control)', async () => {
+      const plan = await runPlan({
+        files: lakeFiles(40),
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        knowledgeSearchDisabled: false,
+      });
+      expect(plan.deferredToRetrieval).toBe(true);
+      expect(plan.deferredKnowledgeIds).toHaveLength(40);
     });
 
     it('fails SAFE (inline all) and warns when the file read throws', async () => {

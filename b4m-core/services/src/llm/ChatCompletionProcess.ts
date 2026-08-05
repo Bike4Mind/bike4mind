@@ -287,6 +287,13 @@ const MIN_ATTACHED_CONTENT_SHARE = 0.15;
 const CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC = 0;
 
 /**
+ * The tool deferral hands the corpus to. A literal because the name is declared inline in the
+ * tool's schema (llm/tools/implementation/knowledgeBaseSearch) with no exported constant - must
+ * stay in sync with it. Deferring while this tool is denied strands the corpus with no reader.
+ */
+const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
+
+/**
  * Fraction of the space ACTUALLY AVAILABLE FOR HISTORY (safe input minus the
  * non-history overhead reserved below) kept as VERBATIM conversation history
  * before older turns are folded into contextSummary. The fraction tunes the
@@ -888,6 +895,8 @@ export class ChatCompletionProcess {
     sessionKnowledgeIds: string[];
     attachedFileTokenBudget: number;
     skipAutoOffers: boolean;
+    /** `session.disabledTools` includes the knowledge-search tool - see the guard below. */
+    knowledgeSearchDisabled: boolean;
     defaultAdminSettings: Record<string, string>;
     /** The SAME filter the knowledge tools are built with - see the retrievability comment below. */
     retrievalFilter: RetrievalExclusionOptions;
@@ -898,8 +907,14 @@ export class ChatCompletionProcess {
     deferredToRetrieval: boolean;
     minInlineTokensPerDoc: number;
   }> {
-    const { sessionKnowledgeIds, attachedFileTokenBudget, skipAutoOffers, defaultAdminSettings, retrievalFilter } =
-      input;
+    const {
+      sessionKnowledgeIds,
+      attachedFileTokenBudget,
+      skipAutoOffers,
+      knowledgeSearchDisabled,
+      defaultAdminSettings,
+      retrievalFilter,
+    } = input;
     const attachedCount = sessionKnowledgeIds.length;
 
     // getSettingsValue coerces via the setting's Zod schema, so this is a number (0 by default).
@@ -920,6 +935,11 @@ export class ChatCompletionProcess {
     // promptMode is an eval/passthrough surface where the tool is NOT offered - deferring there
     // would strand the corpus with no retrieval path. Symmetric with the tool-offer gate.
     if (skipAutoOffers) return noDefer;
+    // Same reasoning one step further: `session.disabledTools` wins over every other tool gate
+    // (including the post-build denylist pass, which runs AFTER this plan), so deferring to a
+    // denied tool loses the corpus outright. Read from the session rather than the resolved tool
+    // list because the list is filtered again downstream of this call.
+    if (knowledgeSearchDisabled) return noDefer;
     if (minInlineTokensPerDoc <= 0 || attachedCount === 0) return noDefer;
 
     try {
@@ -2036,8 +2056,12 @@ export class ChatCompletionProcess {
         sessionKnowledgeIds: session.knowledgeIds ?? [],
         attachedFileTokenBudget,
         skipAutoOffers,
+        knowledgeSearchDisabled:
+          Array.isArray(session.disabledTools) && session.disabledTools.includes(KNOWLEDGE_SEARCH_TOOL_NAME),
         defaultAdminSettings,
-        // Same mapping the tool build uses below, so the plan and the tool cannot disagree.
+        // The same mapping the tool build uses below, so the session -> filter translation cannot
+        // drift between them. Narrower than "the two agree": reachability also depends on the tool
+        // surviving the denylist, which is what knowledgeSearchDisabled above covers.
         retrievalFilter: toRetrievalFilter(session),
       });
 
