@@ -34,17 +34,17 @@ const migration: MigrationFile = {
   name: 'activate-draft-datalakes-with-files',
 
   up: async () => {
-    const lakes = await DataLakeModel.find({ status: DRAFT_STATUSES });
-    if (lakes.length === 0) {
-      console.log(`${LOG} no draft lakes, nothing to do`);
-      return;
-    }
-
+    let scanned = 0;
     let activated = 0;
     let stillEmpty = 0;
     const failed: string[] = [];
 
-    for (const lake of lakes) {
+    // A cursor rather than `.find()` materializing the whole result: the candidate set is
+    // every draft lake ever created, including ones that recompute to 0 files and get
+    // selected again on every future deploy, so it has no natural bound to size an array for.
+    const cursor = DataLakeModel.find({ status: DRAFT_STATUSES }).cursor();
+    for await (const lake of cursor) {
+      scanned++;
       try {
         // The lake DOCUMENT: recomputeLakeStats derives the two-signal membership scope from it,
         // and a partial one silently counts the meta-tag arm alone.
@@ -64,8 +64,13 @@ const migration: MigrationFile = {
       }
     }
 
+    if (scanned === 0) {
+      console.log(`${LOG} no draft lakes, nothing to do`);
+      return;
+    }
+
     console.log(
-      `${LOG} activated ${activated} lake(s); ${stillEmpty} still empty, ${failed.length} failed, ${lakes.length} scanned`
+      `${LOG} activated ${activated} lake(s); ${stillEmpty} still empty, ${failed.length} failed, ${scanned} scanned`
     );
     if (failed.length > 0) {
       console.log(`${LOG} ${failed.length} lake(s) failed and stay draft until a door touches them:`);

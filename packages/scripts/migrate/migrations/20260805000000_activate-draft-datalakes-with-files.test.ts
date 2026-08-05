@@ -3,9 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 type Filter = Record<string, unknown>;
 type Lake = { id: string; name: string; status?: string };
 
-const mockFind = vi.fn<(filter: Filter) => Promise<Lake[]>>();
+const mockFind = vi.fn<(filter: Filter) => { cursor: () => Lake[] }>();
 const mockRecompute =
   vi.fn<(lake: Lake, adapters: unknown) => Promise<{ fileCount: number; totalSizeBytes: number }>>();
+
+// Mirrors the real Query: `.find()` returns synchronously and `.cursor()` on it does too - the
+// async part is iteration, which a plain array satisfies fine under `for await`.
+const findReturning = (lakes: Lake[]) => ({ cursor: () => lakes });
 
 vi.mock('@bike4mind/database', () => ({
   DataLakeModel: { find: (filter: Filter) => mockFind(filter) },
@@ -33,7 +37,7 @@ beforeEach(() => {
 
 describe('activate-draft-datalakes-with-files', () => {
   it('selects draft lakes AND lakes stored before the status field existed', async () => {
-    mockFind.mockResolvedValue([]);
+    mockFind.mockReturnValue(findReturning([]));
 
     await migration.up();
 
@@ -41,10 +45,12 @@ describe('activate-draft-datalakes-with-files', () => {
   });
 
   it('recomputes every candidate and reports the ones that gained a status', async () => {
-    mockFind.mockResolvedValue([
-      { id: 'l1', name: 'Filled', status: 'draft' },
-      { id: 'l2', name: 'Empty', status: 'draft' },
-    ]);
+    mockFind.mockReturnValue(
+      findReturning([
+        { id: 'l1', name: 'Filled', status: 'draft' },
+        { id: 'l2', name: 'Empty', status: 'draft' },
+      ])
+    );
     mockRecompute
       .mockResolvedValueOnce({ fileCount: 3, totalSizeBytes: 30 })
       .mockResolvedValueOnce({ fileCount: 0, totalSizeBytes: 0 });
@@ -60,7 +66,7 @@ describe('activate-draft-datalakes-with-files', () => {
     // A partial shape silently counts the meta-tag membership arm alone, so the migration would
     // undercount and leave prefix-only lakes draft.
     const lake = { id: 'l1', name: 'Filled', status: 'draft', datalakeTag: 'datalake:l1', fileTagPrefix: 'l1:' };
-    mockFind.mockResolvedValue([lake]);
+    mockFind.mockReturnValue(findReturning([lake]));
     mockRecompute.mockResolvedValue({ fileCount: 1, totalSizeBytes: 10 });
 
     await migration.up();
@@ -70,10 +76,12 @@ describe('activate-draft-datalakes-with-files', () => {
 
   it('carries on past a lake that fails, and names it', async () => {
     // A migration that threw here would block the whole deploy over a stats-cache rebuild.
-    mockFind.mockResolvedValue([
-      { id: 'l1', name: 'Broken', status: 'draft' },
-      { id: 'l2', name: 'Fine', status: 'draft' },
-    ]);
+    mockFind.mockReturnValue(
+      findReturning([
+        { id: 'l1', name: 'Broken', status: 'draft' },
+        { id: 'l2', name: 'Fine', status: 'draft' },
+      ])
+    );
     mockRecompute
       .mockRejectedValueOnce(new Error('mongo down'))
       .mockResolvedValueOnce({ fileCount: 2, totalSizeBytes: 20 });
@@ -85,7 +93,7 @@ describe('activate-draft-datalakes-with-files', () => {
   });
 
   it('does nothing when no lake is draft', async () => {
-    mockFind.mockResolvedValue([]);
+    mockFind.mockReturnValue(findReturning([]));
 
     await migration.up();
 
