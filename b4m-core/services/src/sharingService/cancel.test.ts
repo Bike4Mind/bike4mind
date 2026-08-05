@@ -25,6 +25,16 @@ describe('sharingService - cancelInvite authority', () => {
     recipients: { pending: ['victim@example.com'], accepted: [], refused: [] },
   });
 
+  // Link-style invite: recipients.pending is `[]` (truthy), so it must never be decremented by an
+  // email-scoped cancel that never targeted it - see the cancelInvite loop.
+  const aLinkInvite = () => ({
+    id: 'invite-2',
+    documentId: DOC_ID,
+    name: 'Confidential Project',
+    remaining: 1000,
+    recipients: { pending: [], accepted: [], refused: [] },
+  });
+
   beforeEach(() => {
     db = {
       invites: {
@@ -40,7 +50,8 @@ describe('sharingService - cancelInvite authority', () => {
     };
   });
 
-  const cancel = (type: InviteType, user = asUser()) => cancelInvite(user, { id: DOC_ID, type } as any, { db });
+  const cancel = (type: InviteType, user = asUser(), email?: string) =>
+    cancelInvite(user, { id: DOC_ID, type, email } as any, { db });
 
   it('cancels project invites for a caller with share access', async () => {
     const project = { id: DOC_ID, name: 'Confidential Project' };
@@ -51,6 +62,21 @@ describe('sharingService - cancelInvite authority', () => {
     expect(db.projects.shareable.findShareAccessById).toHaveBeenCalledWith(asUser(), DOC_ID);
     expect(result[0].remaining).toBe(0);
     expect(db.invites.update).toHaveBeenCalled();
+  });
+
+  it('cancelling one email only decrements the invite it was actually pending on', async () => {
+    const project = { id: DOC_ID, name: 'Confidential Project' };
+    db.projects.shareable.findShareAccessById = vi.fn(async () => project);
+    db.invites.findAllByDocumentId = vi.fn(async () => [anInvite(), aLinkInvite()]);
+
+    const result = await cancel(InviteType.Project, asUser(), 'victim@example.com');
+
+    const targeted = result.find((invite: any) => invite.id === 'invite-1');
+    const link = result.find((invite: any) => invite.id === 'invite-2');
+    expect(targeted.remaining).toBe(4);
+    expect(targeted.recipients.pending).not.toContain('victim@example.com');
+    expect(link.remaining).toBe(1000);
+    expect(link.recipients.pending).toEqual([]);
   });
 
   it('rejects a project cancel from a caller with no share access, and performs no write', async () => {

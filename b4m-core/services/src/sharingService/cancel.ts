@@ -91,8 +91,11 @@ export const cancelInvite = async (
   for (const invite of invites) {
     // If email is provided, we need to remove it from the pending list
     if (email && invite.recipients?.pending) {
-      invite.recipients.pending = invite.recipients.pending?.filter(p => p !== email);
-      invite.remaining -= 1;
+      const before = invite.recipients.pending.length;
+      invite.recipients.pending = invite.recipients.pending.filter(p => p !== email);
+      if (invite.recipients.pending.length < before) {
+        invite.remaining -= 1;
+      }
     } else {
       invite.remaining = 0;
     }
