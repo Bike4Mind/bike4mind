@@ -64,6 +64,16 @@ export const AGENT_REGISTRY: Record<string, AgentPersona> = {
     capabilities: ['search', 'research', 'documentation'],
     preferredTools: ['confluence_search', 'web_search'],
   },
+  // `datalake` is a DETERMINISTIC command, NOT an LLM persona. It lives in the registry
+  // ONLY so AGENT_COMMAND_PATTERN (built from these keys in events.ts) matches "@datalake ..."
+  // in channels. The events.ts dispatch intercepts it before selectAgent, so this
+  // systemPrompt/capabilities are never sent to an LLM - see parseDataLakeCommand.
+  datalake: {
+    name: 'Data Lake',
+    description: 'Deterministic command to add content to a Data Lake from Slack (not an LLM agent)',
+    systemPrompt: 'Deterministic Data Lake command handler; not used for LLM routing.',
+    capabilities: [],
+  },
 };
 
 export interface AgentPersona extends IModelConfig {
@@ -117,6 +127,74 @@ export function parseCommand(text: string): ParsedAgentCommand {
     command: command.trim(),
     rawText: text,
   };
+}
+
+/** The agent key that routes to the deterministic `@datalake` command handler. */
+export const DATA_LAKE_AGENT_KEY = 'datalake';
+
+export type DataLakeSubcommand = 'add' | 'list' | 'help' | 'unknown';
+
+export interface ParsedDataLakeCommand {
+  subcommand: DataLakeSubcommand;
+  /** Lake slug from an explicit "to <lake>" clause, if present. */
+  lakeSlug?: string;
+  /** First http(s) URL found in the args, if present. */
+  link?: string;
+  /** Everything after the subcommand token, trimmed. */
+  rawArgs: string;
+}
+
+/** True when a parsed Slack command targets the deterministic `@datalake` handler. */
+export function isDataLakeCommand(parsed: ParsedAgentCommand): boolean {
+  return parsed.agentName === DATA_LAKE_AGENT_KEY;
+}
+
+/**
+ * Parse the `@datalake` subcommand grammar (v1):
+ *   @datalake add [to <lake>] <link>
+ *   @datalake add <link> [to <lake>]
+ *   @datalake list
+ *   @datalake help
+ * `<lake>` is a slug (a single token). A bare `@datalake` maps to `help`.
+ *
+ * Pure and DB-free by design: lake resolution and the write gate live app-side
+ * (events.ts) where the DataLake repository is available.
+ */
+export function parseDataLakeCommand(command: string): ParsedDataLakeCommand {
+  // Strip leading Slack user mentions (<@U123>) then the @datalake token itself.
+  const stripped = command
+    .trim()
+    .replace(/^(?:<@[^>]+>\s*)*/, '')
+    .replace(/^@datalake\b\s*/i, '')
+    .trim();
+
+  const [first = '', ...rest] = stripped.split(/\s+/).filter(Boolean);
+  const sub = first.toLowerCase();
+  const rawArgs = rest.join(' ');
+
+  let subcommand: DataLakeSubcommand;
+  if (sub === '') {
+    subcommand = 'help';
+  } else if (sub === 'add' || sub === 'list' || sub === 'help') {
+    subcommand = sub;
+  } else {
+    subcommand = 'unknown';
+  }
+
+  // Slack delivers URLs wrapped as <url> or <url|label>, never bare. The match starts
+  // at `https` (so the leading `<` is dropped); trim any `|label` and trailing `>`.
+  const link = rawArgs.match(/\bhttps?:\/\/\S+/i)?.[0].split(/[|>]/)[0];
+
+  // "to <lake>" clause: a standalone `to` followed by one slug token. Strip a leading
+  // `<` (Slack URL wrapping) before the URL guard, so "add to <link>" (no lake given)
+  // isn't mistaken for a slug.
+  const toMatch = rawArgs.match(/\bto\s+(\S+)/i);
+  let lakeSlug = toMatch?.[1]?.replace(/^</, '');
+  if (lakeSlug && /^https?:\/\//i.test(lakeSlug)) {
+    lakeSlug = undefined;
+  }
+
+  return { subcommand, lakeSlug, link, rawArgs };
 }
 
 /**
