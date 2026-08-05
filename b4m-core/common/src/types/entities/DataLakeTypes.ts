@@ -155,6 +155,13 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
   setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null>;
+  /**
+   * One-way draft -> active, the transition that makes a lake reachable from `findPublicLakes`
+   * and the `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale
+   * copy of the document cannot resurrect an archived or deleted lake. Returns whether this call
+   * was the one that flipped it.
+   */
+  activateIfDraft(id: string): Promise<boolean>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────

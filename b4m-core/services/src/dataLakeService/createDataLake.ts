@@ -105,7 +105,8 @@ export const createDataLake = async (
   const slug = await disambiguateSlug(db, params.slug, organizationId);
   const datalakeTag = buildDatalakeTag(slug, organizationId);
 
-  // Lakes start in 'draft'; the first batch flips them to 'active' (one-way).
+  // Lakes start in 'draft' and stay invisible to Discover and to retrieval until they have a
+  // member file, at which point `recomputeLakeStats` flips them to 'active' (one-way).
   const dataLake = await db.dataLakes.create({
     name: params.name,
     slug,

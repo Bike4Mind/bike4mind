@@ -3,7 +3,7 @@ import { lakeMembershipScope } from './lakeMembershipScope';
 
 export interface RecomputeLakeStatsAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'setStats' | 'activateIfDraft'>;
     fabFiles: Pick<IFabFileRepository, 'computeDataLakeStats'>;
   };
 }
@@ -18,6 +18,11 @@ export interface RecomputeLakeStatsAdapters {
  * every caller reaches it. That matters most at batch completion, the busiest writer of
  * fileCount: a caller left on a narrower scope would write a different count than the lifecycle
  * paths, and the stored value would flip depending on which one ran last.
+ *
+ * Also carries the draft -> active transition, because a lake with members is by definition no
+ * longer a draft and this is the one point every membership door already crosses. Putting it on
+ * the doors instead left four of the five without it, which is why a lake filled through anything
+ * but the upload wizard never reached Discover.
  */
 export const recomputeLakeStats = async (
   lake: Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>,
@@ -25,5 +30,8 @@ export const recomputeLakeStats = async (
 ): Promise<{ fileCount: number; totalSizeBytes: number }> => {
   const stats = await db.fabFiles.computeDataLakeStats(lakeMembershipScope(lake));
   await db.dataLakes.setStats(lake.id, stats);
+  // Emptying a lake never sends it back to draft - the transition is one-way, so a lake the owner
+  // has already published stays published while they swap its contents.
+  if (stats.fileCount > 0) await db.dataLakes.activateIfDraft(lake.id);
   return stats;
 };

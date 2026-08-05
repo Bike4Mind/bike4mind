@@ -10,7 +10,7 @@ import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 interface ReconcileLakeTagsAdapters {
   db: {
     fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'find'>;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };

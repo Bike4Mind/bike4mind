@@ -46,6 +46,7 @@ const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocume
       dataLakes: {
         findByDatalakeTag: vi.fn().mockResolvedValue(lakeDoc),
         setStats: vi.fn(),
+        activateIfDraft: vi.fn(),
         // No prefix collisions in these tests; the tagger's own collision/reserved-namespace
         // logic is covered by fallbackLakeTags.test.ts, not re-tested here.
         find: vi.fn().mockResolvedValue([]),

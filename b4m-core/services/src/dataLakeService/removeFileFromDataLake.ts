@@ -5,7 +5,7 @@ import { recomputeLakeStats } from './recomputeLakeStats';
 
 interface RemoveFileFromDataLakeAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
     fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
   };
 }

@@ -644,3 +644,45 @@ describe('DataLakeRepository — systemPrompt round-trip (#843)', () => {
     expect(found?.systemPrompt).toBeUndefined();
   });
 });
+
+describe('DataLakeRepository.activateIfDraft', () => {
+  setupMongoTest();
+
+  it('flips a draft lake to active, and only the first call does it', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'fresh', status: 'draft' }));
+
+    expect(await dataLakeRepository.activateIfDraft(created.id)).toBe(true);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('active');
+    expect(await dataLakeRepository.activateIfDraft(created.id)).toBe(false);
+  });
+
+  it('activates a lake stored before the status field existed', async () => {
+    // Inserted through the driver, not the model: mongoose would stamp the schema default and
+    // there would be no missing-field row left to test.
+    const { insertedId } = await DataLakeModel.collection.insertOne({
+      name: 'legacy',
+      slug: 'legacy',
+      fileTagPrefix: 'legacy:',
+      datalakeTag: 'datalake:legacy',
+      createdByUserId: 'admin',
+    });
+
+    expect(await dataLakeRepository.activateIfDraft(insertedId.toString())).toBe(true);
+    expect((await dataLakeRepository.findById(insertedId.toString()))?.status).toBe('active');
+  });
+
+  it('leaves every other status untouched', async () => {
+    // The teardown statuses matter most: a membership door hands over a lake document it read
+    // before the lifecycle write, so a guard on the caller's copy would resurrect these.
+    for (const status of ['active', 'archiving', 'archived', 'restoring', 'deleting', 'deleted'] as const) {
+      const created = await dataLakeRepository.create(baseLake({ slug: `lake-${status}`, status }));
+
+      expect(await dataLakeRepository.activateIfDraft(created.id)).toBe(false);
+      expect((await dataLakeRepository.findById(created.id))?.status).toBe(status);
+    }
+  });
+
+  it('reports false for an id that matches no lake', async () => {
+    expect(await dataLakeRepository.activateIfDraft(new mongoose.Types.ObjectId().toString())).toBe(false);
+  });
+});
