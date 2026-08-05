@@ -90,8 +90,13 @@ if ! hits=$(
       # List form: no shell, so a path cannot be interpreted as a command.
       open($fh, "-|", "git", "show", ":$f") or exit 3;
     } else {
+      # Skip symlinks. What git stores for a symlink is the TARGET PATH STRING, so reading
+      # through the link would scan bytes git is not tracking -- and would disagree with
+      # staged mode, which sees the blob. It also removes any reliance on -f following links.
+      next if -l $f;
       # A path git lists but the worktree lacks (an unstaged deletion under --all) has
-      # nothing to scan; skip it rather than let perl warn.
+      # nothing to scan; skip it rather than let perl warn. -f is also what keeps a device
+      # or fifo target out of the read loop.
       next unless -f $f;
       open($fh, "<", $f) or exit 3;
     }
