@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
+import { DEFAULT_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -1987,8 +1988,13 @@ export const settingsMap = {
   DefaultChunkSize: makeNumberSetting({
     key: 'DefaultChunkSize',
     name: 'Default Chunk Size',
-    defaultValue: 2100,
-    description: 'The default chunk size for splitting large documents.',
+    // Must equal the chunker's own default, or a reprocess driven through the UI (which sends this
+    // as an explicit chunkSize override) produces a different granularity than one driven through
+    // /api/files/reprocess, which sends none and gets the chunker default. They disagreed by ~4x.
+    defaultValue: DEFAULT_PASSAGE_TOKEN_TARGET,
+    description:
+      'Default passage target in TOKENS for splitting large documents. Matches the chunker default; ' +
+      'raising it produces coarser chunks and measurably worse retrieval.',
     category: 'AI',
     order: 3,
   }),

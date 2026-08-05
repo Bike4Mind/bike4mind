@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Box, Button, CircularProgress, Input, Stack, Tooltip, Typography } from '@mui/joy';
 import SegmentIcon from '@mui/icons-material/Segment';
 import CheckIcon from '@mui/icons-material/Check';
-import { IFabFileDocument } from '@bike4mind/common';
+import { DEFAULT_PASSAGE_TOKEN_TARGET, IFabFileDocument } from '@bike4mind/common';
 import { useChunkFile } from '@client/app/hooks/data/fabFiles';
 import { useServerSettings } from '@client/app/contexts/UserSettingsContext';
 import { toast } from 'sonner';
@@ -17,7 +17,7 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
   const { serverSettings } = useServerSettings();
   const defaultChunkSizeSetting = serverSettings.find(setting => setting.settingName === 'DefaultChunkSize');
   const [chunkSize, setChunkSize] = useState<number>(
-    defaultChunkSizeSetting ? parseInt(defaultChunkSizeSetting.settingValue, 10) : 2000
+    defaultChunkSizeSetting ? parseInt(defaultChunkSizeSetting.settingValue, 10) : DEFAULT_PASSAGE_TOKEN_TARGET
   );
   const [chunkSizeDisplay, setChunkSizeDisplay] = useState<string>(`${chunkSize} tokens`);
   const queryClient = useQueryClient();
