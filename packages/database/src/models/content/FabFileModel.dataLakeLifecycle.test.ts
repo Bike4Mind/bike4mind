@@ -256,6 +256,33 @@ describe('FabFile data lake lifecycle membership', () => {
     });
   });
 
+  describe('hardDeleteByIds', () => {
+    it('destroys exactly the ids given, soft-deleted included, and nothing a re-resolve would add', async () => {
+      const rows = await seedLakeRows();
+      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { deletedAt: new Date() } });
+      // Stands in for a file tagged into the lake after the sweep resolved its ids: a member by
+      // the predicate, absent from the snapshot, and so not this run's to destroy.
+      const joinedMidSweep = await makeFile({ fileName: 'late.txt', userId: CREATOR, tags: [{ name: 'acme:late' }] });
+
+      const purged = await fabFileRepository.hardDeleteByIds(rows.memberIds);
+
+      expect(purged.sort()).toEqual([...rows.memberIds].sort());
+      for (const id of rows.memberIds) expect(await readRaw(id)).toBeNull();
+      expect(await readRaw(joinedMidSweep._id.toString())).not.toBeNull();
+      // Whereas the predicate-resolving door would have taken it.
+      expect(await fabFileRepository.findIdsByDataLakeTag(scope)).toContain(joinedMidSweep._id.toString());
+    });
+
+    it('is a no-op on an empty set and on already-purged ids', async () => {
+      const rows = await seedLakeRows();
+      expect(await fabFileRepository.hardDeleteByIds([])).toEqual([]);
+      await fabFileRepository.hardDeleteByIds(rows.memberIds);
+
+      expect(await fabFileRepository.hardDeleteByIds(rows.memberIds)).toEqual(rows.memberIds);
+      for (const id of rows.strangerIds) expect(await readRaw(id)).not.toBeNull();
+    });
+  });
+
   describe('fail-closed scopes', () => {
     it('touches only the meta-tagged file when the lake has no usable prefix', async () => {
       const rows = await seedLakeRows();

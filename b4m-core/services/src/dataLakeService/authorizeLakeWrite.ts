@@ -1,4 +1,4 @@
-import type { AccessContext, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type { AccessContext, IDataLakeBatchDocument, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { DATALAKE_TAG_PREFIX } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { assertLakeAccess, assertLakeWritable } from './assertLakeAccess';
@@ -92,6 +92,51 @@ export const assertCanWriteDataLakeTags = async (
       // refusal covers adding a file to the lake and removing one from it. Saying "add" here
       // told a caller their removal was refused for the wrong reason.
       throw new BadRequestError("Only the creator can change this data lake's files");
+    }
+  }
+};
+
+/**
+ * Assert that a batch and the lake a request resolved are the same lake. Every batch is created
+ * for one lake (`dataLakeId` is required on it), which makes the batch the reliable authority on
+ * where its files belong: a lake reference resolving anywhere else is a stale client value, not a
+ * second target. A caller that names no lake is refused too - its files would otherwise land in
+ * the batch of a lake they never joined.
+ *
+ * Bad request, not not-found: callers reach this only after being shown that both the lake and
+ * the batch exist and are theirs.
+ */
+export const assertBatchBelongsToLake = (
+  batch: Pick<IDataLakeBatchDocument, 'dataLakeId'>,
+  lake: Pick<IDataLakeDocument, 'id'> | undefined
+): void => {
+  // A batch with no binding is the malformed side, so saying "name the lake" would blame a caller
+  // who did name one. The other two cases really are the caller's to fix.
+  if (!batch.dataLakeId) {
+    throw new BadRequestError('This batch is not attached to a data lake');
+  }
+  if (!lake || batch.dataLakeId !== lake.id) {
+    throw new BadRequestError('This upload must name the data lake its batch belongs to');
+  }
+};
+
+/**
+ * Assert that every `datalake:*` meta-tag in a payload names `lake` - the lake the request has
+ * already resolved and authorized. The gate above answers "may you write there", not "is that
+ * where these files are going", so a caller who can manage two lakes (any two, for an admin) can
+ * otherwise hand one lake's upload the other lake's meta-tag.
+ *
+ * The lake's side is folded too: `datalakeTag` is canonically lowercase but nothing enforces that
+ * on the way in, and a tag that IS the lake's own must be recognized rather than refused.
+ */
+export const assertMetaTagsMatchLake = (
+  lake: Pick<IDataLakeDocument, 'datalakeTag'>,
+  tagNames: readonly unknown[]
+): void => {
+  const expected = lake.datalakeTag?.toLowerCase();
+  for (const tag of extractDataLakeMetaTags(tagNames)) {
+    if (tag !== expected) {
+      throw new BadRequestError('A data lake tag on these files names a different data lake');
     }
   }
 };

@@ -131,7 +131,6 @@ async function main() {
       await sendToQueue(Resource.fabFileChunkQueue.url, {
         fabFileId: String(file._id),
         userId: file.userId,
-        chunkSize: '1000',
       });
     }
     if (candidates.length > 0) {

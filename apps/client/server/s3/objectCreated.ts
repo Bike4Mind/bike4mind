@@ -204,10 +204,10 @@ export const func = withContext(async (event, context, logger) => {
         const queueUrl = Resource.fabFileChunkQueue.url;
         if (!queueUrl) throw new Error('Chunk queue URL not found');
 
+        // No chunkSize: the chunker's passage-granularity default applies (#1420).
         const messageId = await sendToQueue(queueUrl, {
           fabFileId: metadata._id,
           userId: metadata.userId,
-          chunkSize: '1000',
         });
         logger.info(`Sent newly-uploaded FabFile to chunkQueue: ${messageId}`);
       } catch (error) {

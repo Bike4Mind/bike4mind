@@ -196,19 +196,22 @@ function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: 
   // rather than surfacing the raw validator string.
   if (status === 422) {
     const { config, targetLake } = useDataLakeWizardStore.getState();
-    const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
-    if (slug.length < MIN_DATA_LAKE_SLUG_LENGTH) {
-      return {
-        kind: 'validation',
-        message: 'The data lake name is too short. Use a name with at least 2 letters or numbers.',
-      };
-    }
-    const prefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : `${config.tagPrefix}:`;
-    if (prefix.length < 2) {
-      return {
-        kind: 'validation',
-        message: 'The tag prefix is too short. Use at least 2 characters ending in ":" (e.g. "legal:").',
-      };
+    // Only create mode submits a name and prefix; append mode locks both, so neither can be
+    // what the server rejected there - fall through to the neutral message instead.
+    if (!targetLake) {
+      if (slugifyDataLakeName(config.name).length < MIN_DATA_LAKE_SLUG_LENGTH) {
+        return {
+          kind: 'validation',
+          message: 'The data lake name is too short. Use a name with at least 2 letters or numbers.',
+        };
+      }
+      const prefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : `${config.tagPrefix}:`;
+      if (prefix.length < 2) {
+        return {
+          kind: 'validation',
+          message: 'The tag prefix is too short. Use at least 2 characters ending in ":" (e.g. "legal:").',
+        };
+      }
     }
     // Neutral fallback: a 422 can also come from the batch/presigned-URL endpoints or
     // requiredEntitlement, and in append mode the Config fields are locked - so don't
@@ -321,8 +324,6 @@ export function useBatchUpload() {
 
       // Ensure tag prefix ends with ':'
       const tagPrefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : config.tagPrefix + ':';
-      // Append mode reuses the target lake's slug; create mode derives it from the name.
-      const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
 
       // Step 1: Create the data lake; skipped in append mode (upload into the existing lake).
       let dataLakeId: string;
@@ -334,7 +335,9 @@ export function useBatchUpload() {
         const organizationId = activeOrgId();
         const dataLakeRes = await api.post<{ id: string }>('/api/data-lakes', {
           name: config.name,
-          slug,
+          // The slug we ask for. The server disambiguates it against lakes in scope, so the
+          // created lake's real slug can differ - everything downstream keys off the id.
+          slug: slugifyDataLakeName(config.name),
           description: config.description || undefined,
           fileTagPrefix: tagPrefix,
           requiredUserTag: config.requiredUserTag || undefined,
@@ -350,6 +353,9 @@ export function useBatchUpload() {
       // `reconciled` tells the catch the outcome branch already handled cleanup, so the
       // catch only rolls back a setup-phase failure (e.g. creating the batch threw).
       let batchId: string | undefined;
+      // The first presign refusal, kept so a batch where NOTHING uploaded can report the
+      // server's actual reason instead of the generic transport message below.
+      let firstPresignError: unknown;
       let failedCount = 0;
       const failedNames: string[] = [];
       const failedFileIds: string[] = [];
@@ -418,14 +424,19 @@ export function useBatchUpload() {
                 // later, post-upload, once the background job's suggestions are reviewed.
                 tags: folderTagForFile(f.relativePath, tagPrefix),
               })),
-              dataLakeSlug: slug,
+              // The lake id, never a slug derived from the name: on a name collision the server
+              // creates the lake under a disambiguated slug, and the name-derived one still
+              // resolves - to the lake that was already there, possibly another user's. The
+              // route accepts either form.
+              dataLakeSlug: dataLakeId,
               // Correlate every uploaded file to its batch so the pipeline
               // (objectCreated -> chunk -> vectorize) updates batch progress and the
               // batch can complete. Also populates the batch manifest server-side.
               batchId,
             });
             urlMap = urlsRes.data.files;
-          } catch {
+          } catch (err) {
+            if (firstPresignError === undefined) firstPresignError = err;
             for (const f of chunk) {
               failedCount++;
               failedNames.push(f.file.name);
@@ -530,9 +541,13 @@ export function useBatchUpload() {
               .catch(() => {});
             await api.delete(`/api/data-lakes/${dataLakeId}`).catch(() => {});
           }
-          // Surfaced via classifyUploadError as an 'upload' problem (transport, not the
-          // user's lake settings), so onError shows the right message + retry.
-          throw new Error(UPLOAD_ALL_FAILED_MESSAGE);
+          // A presign refusal already says WHY (e.g. the request did not name the batch's lake),
+          // and classifyUploadError surfaces a 4xx's server message - so rethrow it rather than
+          // blaming the network. Only when it carries a status: a timeout or abort has no response
+          // and would fall through to its raw axios text ("timeout of 30000ms exceeded"), where the
+          // generic transport message is both friendlier and true.
+          const refusalStatus = axios.isAxiosError(firstPresignError) ? firstPresignError.response?.status : undefined;
+          throw refusalStatus ? firstPresignError : new Error(UPLOAD_ALL_FAILED_MESSAGE);
         }
 
         // Partial or full success: the uploaded files proceed through the pipeline.
