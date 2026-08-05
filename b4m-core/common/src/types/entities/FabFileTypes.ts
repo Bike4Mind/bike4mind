@@ -590,14 +590,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * carry only the membership tag and over-counts multi-tagged ones.
    */
   countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>>;
-  // ── The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
+  // The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
   // to every row it flips; it records the stamp on the lake and restore passes it back as
   // `stampedAt` to reverse exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a
   // lower bound, which would also match a file the creator deleted during the deleted window (the
   // per-file delete routes stamp `deletedAt` too) and revive it on restore. Omitting `stampedAt`
   // matches every stamped row: the pre-mark behavior, and the fallback for a lake torn down before
   // the mark existed. The archive axis is deliberately NOT stamped - archiveByDataLakeTag is the
-  // only writer of a non-null archivedAt, so no independently-archived file exists to protect. ──
+  // only writer of a non-null archivedAt, so no independently-archived file exists to protect.
 
   /** Soft-archive (reversible) all live member files. Returns affected count. */
   archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
