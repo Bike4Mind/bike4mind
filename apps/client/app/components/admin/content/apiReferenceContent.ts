@@ -472,7 +472,7 @@ Multi-tenant organization management with roles and integrations.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | /api/organizations | List user organizations |
-| POST | /api/organizations | Create an organization |
+| POST | /api/organizations | Create an organization (admin) |
 | GET | /api/organizations/[id] | Get organization details |
 | PUT | /api/organizations/[id] | Update organization |
 | DELETE | /api/organizations/[id] | Delete organization |
@@ -557,6 +557,8 @@ Multi-tenant organization management with roles and integrations.
 | DELETE | /api/users/[id]/delete | Delete user account |
 | POST | /api/users/[id]/upload-photo | Upload profile photo |
 | GET | /api/users/[id]/organizations | List user organizations |
+| GET | /api/users/[id]/organization | Get active organization (self or admin) |
+| DELETE | /api/users/[id]/organization | Clear active-organization pointer (self or admin) |
 | GET | /api/users/[id]/projects | List user projects |
 | GET | /api/users/[id]/agents | List user agents |
 | GET | /api/users/[id]/activities | User activity log |
