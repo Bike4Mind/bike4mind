@@ -263,13 +263,41 @@ describe('check-no-control-bytes.sh', () => {
       expect(fs.existsSync(path.join(dir, 'PWNED'))).toBe(false);
     });
 
-    it('does not treat a file named "-" as stdin', () => {
+    // Two different mechanisms neutralise this, so both need pinning: staged mode goes through
+    // the list-form open("-|", "git", "show", ":$f"), while --all/--changed use the 3-arg
+    // open($fh, "<", $f). A test in only one mode leaves the other free to regress.
+    it.each([
+      ['staged mode', [] as string[]],
+      ['--all mode', ['--all']],
+    ])('does not treat a file named "-" as stdin (%s)', (_label, args) => {
       const { dir } = makeRepo();
       write(dir, '-.ts', 'export const x = 1;\x00\n');
       git(dir, 'add', '-A');
-      const r = runGuard(dir);
+      if (args.length) git(dir, 'commit', '-q', '-m', 'add -.ts');
+      const r = runGuard(dir, args);
       expect(r.status).toBe(1);
       expect(r.stdout).toContain('-.ts');
+    });
+
+    it('does not execute a command embedded in a filename under --all', () => {
+      const { dir } = makeRepo();
+      write(dir, hostile, 'export const x = 1;\n');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'add a hostile filename');
+      const r = runGuard(dir, ['--all']);
+      expect(r.status).toBe(0);
+      expect(fs.existsSync(path.join(dir, 'PWNED'))).toBe(false);
+    });
+
+    it('still scans a hostile filename under --all', () => {
+      const { dir } = makeRepo();
+      write(dir, hostile, 'export const x = 1;\x00\n');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'add a hostile filename with a NUL');
+      const r = runGuard(dir, ['--all']);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(hostile);
+      expect(fs.existsSync(path.join(dir, 'PWNED'))).toBe(false);
     });
   });
 
@@ -328,6 +356,19 @@ describe('check-no-control-bytes.sh', () => {
       git(dir, 'mv', 'a.ts', 'b.ts');
       git(dir, 'add', '-A');
       expect(runGuard(dir).status).toBe(0);
+    });
+
+    // Copy detection is off by default, so this is future-proofing rather than a live gap:
+    // with diff.renames=copies a copy-plus-edit can be scored C rather than A.
+    it('catches a control byte added during a copy, with copy detection enabled', () => {
+      const dir = repoWithCommittedFile();
+      git(dir, 'config', 'diff.renames', 'copies');
+      fs.copyFileSync(path.join(dir, 'a.ts'), path.join(dir, 'c.ts'));
+      fs.appendFileSync(path.join(dir, 'c.ts'), Buffer.from('export const bad = 9;\x00\n', 'binary'));
+      git(dir, 'add', '-A');
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('c.ts');
     });
   });
 
