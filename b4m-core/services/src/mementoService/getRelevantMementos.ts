@@ -26,6 +26,12 @@ import { BoundedTopK } from '../dataLakeService';
  * It is set far past any real account (400,000 mementos), so reaching it means the repository is
  * misbehaving - returning rows out of `_id` order, or ignoring the cursor in a way the strict
  * advance check below cannot see. Cursor advance alone proves PROGRESS, not termination.
+ *
+ * MUST STAY IN SYNC with PROFILE_MAX_PAGES in
+ * apps/client/server/memory/userMementoMemoryStore.ts: the two walk the same collection for the
+ * same user on the V1 and V2 paths, so ceilings that drift apart would make a user's memory depend
+ * on which path served the turn. Deliberately not one shared export - they sit in different
+ * packages and neither should take a dependency on the other to hold a number.
  */
 const MEMENTO_PAGE_SIZE = 200;
 const MEMENTO_MAX_PAGES = 2_000;

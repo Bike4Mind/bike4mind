@@ -28,6 +28,11 @@ const PROFILE_PAGE_SIZE = 200;
  * to say so. Hitting it therefore throws. Set far past any real account; reaching it means the
  * repository is misbehaving, which cursor-advance alone cannot detect (advance proves progress, not
  * termination).
+ *
+ * MUST STAY IN SYNC with MEMENTO_MAX_PAGES in
+ * b4m-core/services/src/mementoService/getRelevantMementos.ts: same collection, same user, V1
+ * versus V2 path; ceilings that drift apart would make a user's memory depend on which path
+ * served the turn.
  */
 const PROFILE_MAX_PAGES = 2_000;
 

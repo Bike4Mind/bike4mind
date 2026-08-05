@@ -226,14 +226,17 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             let cursor: string | undefined;
             let hitPageCap = false;
             for (let page = 0; page < KB_RETRIEVE_MAX_CHUNK_PAGES; page++) {
-              // Distinguished from a budget stop below: the two produce different labels, because
-              // "truncated at budget" is a lie when what stopped us was the page cap.
-              if (page === KB_RETRIEVE_MAX_CHUNK_PAGES - 1) hitPageCap = true;
               const rows = await chunkRepo.findTextsByFabFileId(file.id, {
                 limit: KB_RETRIEVE_CHUNK_PAGE_SIZE,
                 afterChunkId: cursor,
               });
               if (rows.length === 0) break;
+              // Set AFTER the fetch and the empty-break, so a last page that turns out to hold nothing
+              // does not leave the flag standing. It reads as "the cap is what stopped a walk that had
+              // more to read", which is the only thing the label below may claim. Setting it before the
+              // fetch left correctness resting on the `leftUnread` gate, and a later refactor of that
+              // gate would silently re-open the false positive.
+              if (page === KB_RETRIEVE_MAX_CHUNK_PAGES - 1) hitPageCap = true;
 
               const nextCursor = rows[rows.length - 1].id;
               if (cursor !== undefined && !(nextCursor > cursor)) {
