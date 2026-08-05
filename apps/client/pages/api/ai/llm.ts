@@ -7,8 +7,17 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
-import { loadBaseIdentitySystemPromptMessages } from '@server/utils/systemPrompts/loader';
+import {
+  loadBaseIdentitySystemPromptMessages,
+  loadSystemPromptContent,
+  buildSystemPromptMessage,
+} from '@server/utils/systemPrompts/loader';
 import { Request } from 'express';
+
+// Registry prompts a session may activate via `session.systemPromptId`. An allowlist, not an open
+// door: a session must not be able to inject an arbitrary admin/system prompt, so only ids meant to
+// be session-scoped modes live here. `triage_router` is the grounding-first request router.
+const SESSION_ACTIVATABLE_PROMPT_IDS = new Set<string>(['triage_router']);
 
 const handler = baseApi()
   .use(
@@ -34,13 +43,26 @@ const handler = baseApi()
     // Update the user's last notebook ID
     asyncPromises.push(userRepository.update({ id: req.user.id, lastNotebookId: sessionId }));
 
-    // General chat: give the assistant Bike4Mind's identity so it can pitch the product
-    // when asked instead of disowning it. Sessions that carry their own server-owned system
-    // prompt (e.g. the /opti surface) already have a specialized persona and their treatment
-    // - toolset, prompt, temperature, tool-call cap, integration isolation - rides on generic
-    // session fields applied by the completion path, so they skip the generic identity here.
-    // Prepended ahead of any client-sent context.
-    if (!session.systemPromptText) {
+    // A session gets ONE authored voice, prepended ahead of any client-sent context:
+    //  - `systemPromptId` -> a curated registry prompt (e.g. the triage router), resolved to its
+    //    CURRENT content here so admin edits take effect with no deploy;
+    //  - else `systemPromptText` -> a raw server-owned prompt (e.g. the /opti surface), injected by
+    //    the completion path itself;
+    //  - else the generic brand identity, so plain chat can pitch the product when asked.
+    // A session that carries either of its own prompts skips the identity (same as before).
+    const activatablePromptId =
+      session.systemPromptId && SESSION_ACTIVATABLE_PROMPT_IDS.has(session.systemPromptId)
+        ? session.systemPromptId
+        : undefined;
+    if (activatablePromptId) {
+      const resolved = await loadSystemPromptContent(activatablePromptId);
+      if (resolved) {
+        invokeParams.extraContextMessages = [
+          buildSystemPromptMessage(activatablePromptId, resolved.content),
+          ...(invokeParams.extraContextMessages ?? []),
+        ];
+      }
+    } else if (!session.systemPromptText) {
       const identityPrompts = await loadBaseIdentitySystemPromptMessages(req.logger);
       if (identityPrompts.length > 0) {
         invokeParams.extraContextMessages = [...identityPrompts, ...(invokeParams.extraContextMessages ?? [])];
