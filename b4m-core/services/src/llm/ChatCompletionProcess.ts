@@ -120,7 +120,9 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
+  SYSTEM_PROMPT_PRIORITY,
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
@@ -2268,6 +2270,13 @@ export class ChatCompletionProcess {
       });
       const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
+      // Carries each message's source across into the builder, which sees only an IMessage[] and so
+      // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
+      // the map above; if a source ever contributed the same object twice the last tag would win, and
+      // both entries would then hold the same priority anyway.
+      const systemPromptPriorities = new Map<IMessage, number>(
+        admittedContextMessages.map(t => [t.message, SYSTEM_PROMPT_PRIORITY[t.source]])
+      );
       const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
       // An explicit mode also excludes the admin templates this helper appends downstream
       // (FormatPromptTemplate, image prompt) - they are invisible from the assembly above, so the
@@ -2279,6 +2288,7 @@ export class ChatCompletionProcess {
         verbose: false,
         skipAdminPromptTemplates: Boolean(promptMode),
         imageGenerationAvailable,
+        systemMessagePriority: (message: IMessage) => systemPromptPriorities.get(message),
       };
       let messages = await buildAndSortMessages(
         previousMessages,
@@ -2493,14 +2503,40 @@ export class ChatCompletionProcess {
       // only when enhanced telemetry is on - so the API layer can report which prompts fed a
       // completion instead of leaving callers to infer it from behavior. Guarded: a counting
       // failure must degrade to a missing breakdown, never a failed completion.
+      // What actually reached the model, by reference, read off the final payload so it accounts for
+      // overflow recovery too. The budget can drop a system message deliberately now, so being in the
+      // admitted stack no longer means being in the prompt, and every inclusion claim below has to be
+      // read from here rather than from the assembly.
+      const deliveredMessages = new Set<IMessage>(messages);
+      const droppedSources = admittedContextMessages
+        .filter(t => t.message.role === 'system')
+        .reduce<Map<PromptSourceId, boolean>>(
+          (kept, t) => kept.set(t.source, (kept.get(t.source) ?? false) || deliveredMessages.has(t.message)),
+          new Map()
+        );
+      const shedSourceNames = [...droppedSources]
+        .filter(([, survived]) => !survived)
+        .map(([source]) => PROMPT_SOURCE_METADATA[source].name);
+      if (shedSourceNames.length > 0) {
+        // Deliberate, but not something to leave silent: the assistant's behaviour changes and only
+        // this line says which instructions it lost.
+        logger.warn(
+          `📊 System prompts dropped to fit the input budget (${shedSourceNames.length}): ${shedSourceNames.join(', ')}`
+        );
+      }
+
       let systemPromptDetails: SystemPromptDetail[] | undefined;
       try {
         const floorSources: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
         systemPromptDetails = await toPromptDetails(
           admittedContextMessages.filter(t => !floorSources.includes(t.source)),
-          messages => calculateTotalTokenLength(messages, tokenCalcOptions)
+          messages => calculateTotalTokenLength(messages, tokenCalcOptions),
+          deliveredMessages
         );
-        const admitted = (source: PromptSourceId) => admittedContextMessages.some(t => t.source === source);
+        // Reaching the model, not merely being assembled: the two floor rows below report inclusion the
+        // same way every other row now does, or a budget-dropped block would still read as billed.
+        const admitted = (source: PromptSourceId) =>
+          admittedContextMessages.some(t => t.source === source && deliveredMessages.has(t.message));
         systemPromptDetails.push(
           ...(await buildAlwaysOnFloorDetails(
             {
