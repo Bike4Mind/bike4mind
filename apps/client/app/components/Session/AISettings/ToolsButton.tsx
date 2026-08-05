@@ -61,10 +61,15 @@ const ToolsButton: FC<ToolsButtonProps> = ({
     if (open) updateBottomFade();
   }, [open, updateBottomFade]);
   const { data: modelInfoRepo } = useModelInfo();
-  const modelSupportsTools = useMemo(
-    () => modelInfoRepo?.find(m => m.id === model)?.supportsTools ?? true,
-    [model, modelInfoRepo]
-  );
+  const modelSupportsTools = useMemo(() => {
+    const info = modelInfoRepo?.find(m => m.id === model);
+    // Fail open only while the catalog has not resolved the model yet, so nothing flickers on
+    // first paint. Once it has, an absent flag means no tool support - the catalog omits
+    // supportsTools entirely on every image model rather than setting it false, and a blanket
+    // `?? true` read those as tool-capable. Falsy-checked here to match ToolsSection and
+    // ImageGenerationModelSelectionModal.
+    return info ? !!info.supportsTools : true;
+  }, [model, modelInfoRepo]);
 
   const toolsSectionProps = {
     tools,
@@ -77,6 +82,9 @@ const ToolsButton: FC<ToolsButtonProps> = ({
     // Only the padding differs from the default now; the surface colour and the absence of a
     // hover state both come from ToolContainer.
     toolContainerSx: { padding: '12px' },
+    // 500px of panel leaves the description a narrow column beside the toggle, where it wraps
+    // to four lines. The settings dialog has the width for the side-by-side layout.
+    stackedHeader: true,
   };
 
   if (isMobile) {
@@ -183,10 +191,11 @@ const ToolsButton: FC<ToolsButtonProps> = ({
               </Typography>
             )}
           </Box>
-          {/* Fast mode sends no tools, so nothing is actually active - hide all
-              indicators (tool icons, count, and thinking). Selections persist and
-              reappear when switching back to Smart. */}
-          {toolMode !== 'fast' && (
+          {/* Nothing is actually active in either of two cases, so hide all indicators (tool
+              icons, count, and thinking): Fast mode sends no tools, and a model that cannot run
+              them has its selection stripped at dispatch (resolveTools in useLLMSettingsAssembly).
+              Selections persist either way and reappear on a Smart, tool-capable model. */}
+          {toolMode !== 'fast' && modelSupportsTools && (
             <ToolIndicators
               activePrimaryTools={activePrimaryTools}
               isThinkingActive={isThinkingActive}

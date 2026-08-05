@@ -515,6 +515,18 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
 }) => {
   if (!modelInfo) return null;
 
+  // Provider and capability notices, rendered as one stacked block below the description.
+  const notices = [
+    // Same test the picker groups by, so the notice can never disagree with the provider
+    // section a model is filed under. A name-only check missed Sora.
+    ...(getModelBackend(modelInfo) === 'OpenAI'
+      ? ['This model shares session content with OpenAI for training purposes']
+      : []),
+    // The tools section is hidden outright for these models, so this line is the only
+    // thing that explains the absence.
+    ...(modelInfo.supportsTools ? [] : ['Selected AI model does not support tools']),
+  ];
+
   return (
     <>
       {/* Selected Model Details */}
@@ -527,20 +539,22 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
       >
         {/* Chips and notices; the title, description and reset live in the dialog header */}
         <Box sx={{ width: '100%' }}>
-          {/* Same test the picker groups by, so the notice can never disagree with the
-              provider section a model is filed under. A name-only check missed Sora. */}
-          {getModelBackend(modelInfo) === 'OpenAI' && (
-            <Typography
-              level="body-xs"
-              sx={{
-                color: brand[800],
-                fontSize: '14px',
-                fontWeight: '500',
-                mt: '16px',
-              }}
-            >
-              This model shares session content with OpenAI for training purposes
-            </Typography>
+          {notices.length > 0 && (
+            <Stack direction="column" gap="4px" sx={{ mt: '16px' }}>
+              {notices.map(notice => (
+                <Typography
+                  key={notice}
+                  level="body-xs"
+                  sx={{
+                    color: brand[800],
+                    fontSize: '14px',
+                    fontWeight: '500',
+                  }}
+                >
+                  {notice}
+                </Typography>
+              ))}
+            </Stack>
           )}
 
           {/* Specs then capabilities in one run. The editable Input/Output controls live in the
@@ -607,23 +621,30 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
         }}
       />
 
-      {/* Tool Components */}
-      <ToolsSection
-        tools={tools}
-        setTools={newTools => setLLM({ tools: newTools })}
-        model={model}
-        onRollDice={onRollDice}
-        columns={isMobile ? 1 : 2}
-      />
-      <Divider
-        sx={{
-          backgroundColor: grayAlpha[150][20],
-          width: '100%',
-          height: '1px',
-          mx: 'auto',
-          my: '28px',
-        }}
-      />
+      {/* Tool Components. Hidden for models that cannot run tools - the notice above the specs
+          carries that message here, so ToolsSection's own centered placeholder would duplicate
+          it. The placeholder stays in place for the composer's tools dropdown, which has no
+          other surface to say it on. */}
+      {modelInfo.supportsTools && (
+        <>
+          <ToolsSection
+            tools={tools}
+            setTools={newTools => setLLM({ tools: newTools })}
+            model={model}
+            onRollDice={onRollDice}
+            columns={isMobile ? 1 : 2}
+          />
+          <Divider
+            sx={{
+              backgroundColor: grayAlpha[150][20],
+              width: '100%',
+              height: '1px',
+              mx: 'auto',
+              my: '28px',
+            }}
+          />
+        </>
+      )}
 
       {/* An output-token budget only means something for chat models. Image, video and
           transcription entries carry placeholder context values in the catalog (every Flux and

@@ -243,6 +243,13 @@ interface ToolsSectionProps {
   onModalOpenChange?: (isOpen: boolean) => void;
   toolContainerSx?: BoxProps['sx'];
   onClose?: () => void;
+  /**
+   * Parks the mode toggle on the title row so the description gets the full width below,
+   * instead of wrapping in a narrow column beside it. For hosts too narrow to afford the
+   * side-by-side layout - the composer dropdown is 500px against the settings dialog's 820px.
+   * Mobile takes this path regardless of the flag.
+   */
+  stackedHeader?: boolean;
 }
 
 const ToolsSection = ({
@@ -252,6 +259,7 @@ const ToolsSection = ({
   onModalOpenChange,
   toolContainerSx,
   onClose,
+  stackedHeader = false,
 }: ToolsSectionProps = {}) => {
   // Use props if provided, otherwise use context
   const contextTools = useLLM(state => state.tools);
@@ -616,18 +624,33 @@ const ToolsSection = ({
   const agentModeNote =
     toolMode === 'smart' && agentWillRunFixedToolset
       ? agentModeActive
-        ? 'Agent mode is on. It runs a fixed toolset; greyed-out Smart Tools below are ignored while Agent mode is active.'
+        ? 'Agent mode is on and runs a fixed toolset - the tools below are ignored.'
         : 'This request may auto-route to Agent mode, which runs a fixed toolset. Greyed-out Smart Tools below would then be ignored.'
       : null;
 
-  // One instance, placed differently per breakpoint: on the title row on mobile, in the
-  // labelled group on the right on desktop. Rendering it twice would duplicate its test id.
+  // One instance, placed differently per host: on the title row where the header stacks,
+  // in the column on the right otherwise. Rendering it twice would duplicate its test id.
   const modeToggle = (
     <SquareSlideToggle
       onChange={() => setLLM({ toolMode: toolMode === 'smart' ? 'fast' : 'smart' })}
       checked={toolMode === 'smart'}
       data-testid="tool-mode-toggle"
     />
+  );
+
+  // Narrow hosts put the toggle beside the title; mobile is always one of them.
+  const stackHeader = isMobile || stackedHeader;
+
+  const toggleGroup = (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+      {/* Mobile drops the label - the title row has no width to spare for it. */}
+      {!isMobile && (
+        <Typography level="title-sm" sx={{ fontWeight: 'normal', fontSize: '14px', textAlign: 'right' }}>
+          Enable
+        </Typography>
+      )}
+      {modeToggle}
+    </Box>
   );
 
   return (
@@ -699,7 +722,7 @@ const ToolsSection = ({
           {/* Title, help button and description match the model title/description in the
               settings dialog header. The dropdown skips the help button - its own header
               already carries one. */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', mb: { xs: '16px', sm: '4px' } }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', mb: stackHeader ? '16px' : '4px' }}>
             <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>Smart tools</Typography>
             {!onClose && (
               <ContextHelpButton
@@ -710,9 +733,7 @@ const ToolsSection = ({
                 data-testid="help-button-smart-tools"
               />
             )}
-            {/* Mobile parks the toggle here so the description gets the full width below,
-                instead of being squeezed into a narrow column beside it. */}
-            {isMobile && <Box sx={{ display: 'flex', alignItems: 'center', ml: 'auto' }}>{modeToggle}</Box>}
+            {stackHeader && <Box sx={{ display: 'flex', ml: 'auto' }}>{toggleGroup}</Box>}
           </Box>
           {toolMode === 'fast' ? (
             <>
@@ -731,7 +752,7 @@ const ToolsSection = ({
               sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4' }}
               data-testid={agentModeNote ? 'tool-mode-caption-smart' : undefined}
             >
-              AI uses enabled tools as needed. Turn off for the fastest reply.
+              AI uses enabled tools as needed. Off is fastest.
               {agentModeNote && (
                 <>
                   <br />
@@ -741,16 +762,9 @@ const ToolsSection = ({
             </Typography>
           )}
         </Box>
-        {/* Desktop only: the labelled group, mirroring the Research Mode toggle. flexShrink
-            keeps it intact so a long description wraps instead of squeezing it. */}
-        {!isMobile && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
-            <Typography level="title-sm" sx={{ fontWeight: 'normal', fontSize: '14px', textAlign: 'right' }}>
-              Enable
-            </Typography>
-            {modeToggle}
-          </Box>
-        )}
+        {/* Wide hosts only: the group sits in its own column, mirroring the Research Mode
+            toggle. Narrow ones moved it onto the title row above. */}
+        {!stackHeader && toggleGroup}
       </Box>
 
       {/* Collapsible individual tools header (default expanded; collapse state persisted per-user) */}
