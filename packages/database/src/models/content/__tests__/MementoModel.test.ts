@@ -141,6 +141,15 @@ describe('MementoRepository.findByUserId keyset paging', () => {
     expect(rows.map(m => m.summary)).toEqual(['mine-1', 'mine-2']);
   });
 
+  it('refuses a non-positive limit instead of serving an unbounded read', async () => {
+    // Mongo reads .limit(0) as "no limit", so a caller asking for zero rows would get the sort applied
+    // and then the whole collection - the exact failure this reader exists to prevent.
+    await memento('u1', 'a');
+
+    await expect(mementoRepository.findByUserId('u1', { limit: 0 })).rejects.toThrow(/limit must be positive/);
+    await expect(mementoRepository.findByUserId('u1', { limit: -5 })).rejects.toThrow(/limit must be positive/);
+  });
+
   it('serves the paged walk from an index with no in-memory sort', async () => {
     // The shape asserted here is the one production actually issues: getRelevantMementos defaults
     // tier to HOT and pages with a cursor, so `tier` is present as a residual filter and `_id` carries

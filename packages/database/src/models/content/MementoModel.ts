@@ -83,6 +83,13 @@ class MementoRepository extends BaseRepository<IMementoDocument> implements IMem
     options: { tier?: MementoTier; select?: string; limit?: number; afterId?: string }
   ): Promise<IMementoDocument[]> {
     const { tier, select, limit, afterId } = options;
+    // Mongo treats `.limit(0)` as NO LIMIT, so a caller asking for zero rows would get the sort applied
+    // and then an unbounded read - precisely the failure this reader exists to prevent. Refuse rather
+    // than silently serve the whole collection. Unreachable from today's callers (both pass module
+    // constants), but this is now the shared paging primitive.
+    if (limit !== undefined && limit <= 0) {
+      throw new Error(`findByUserId: limit must be positive, got ${limit}; Mongo reads limit(0) as unbounded`);
+    }
     const filter: FilterQuery<IMementoDocument> = { userId };
     if (tier) {
       filter.tier = tier;

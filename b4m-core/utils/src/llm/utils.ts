@@ -961,9 +961,16 @@ export function computeCosineSimilarity(vector1: number[], vector2: number[]): n
   return dotProduct / (magnitude1 * magnitude2);
 }
 
-/** Total order for the top-K: `chunkId` breaks score ties so the result cannot depend on page arrival. */
+/**
+ * Total order for the top-K: `chunkId` breaks score ties so the result cannot depend on page arrival.
+ *
+ * Byte comparison, NOT localeCompare: the cursor check and Mongo's `_id` ascending sort both order these
+ * ids bytewise, and running a collation-aware comparator over the same key is how the determinism this
+ * tiebreaker exists to provide would quietly erode. They agree for lowercase hex today; one comparison
+ * means there is nothing to keep in agreement.
+ */
 const compareRankedChunks = (a: { score: number; chunkId: string }, b: { score: number; chunkId: string }) =>
-  b.score - a.score || a.chunkId.localeCompare(b.chunkId);
+  b.score - a.score || (a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0);
 
 /**
  * Similarity-select up to COSINE_SEARCH_TOP_K chunks of one attached file.
@@ -1000,12 +1007,17 @@ async function cosineSearch(
   const totalChunks = await db.fabfilechunks.countByFabFileId(file.id);
 
   const ranked: Array<{ chunkId: string; content: string; score: number; position: number }> = [];
-  // The head of the file, kept regardless of whether a chunk could be scored. When scoring rejects
-  // everything - a file whose chunks all sit in another embedding space - this is real content the
-  // caller can still hand over, and it costs the same order of memory as the top-K. The alternative
-  // is leaning on the raw-content read, which cannot decode every format that CAN be chunked (a
-  // vectorized .pptx has chunks but getFileContent throws on it), so the attachment would reach the
-  // model as nothing at all.
+  // The head of the file's VECTOR-BEARING chunks - not of the file. These come from
+  // findVectorsByFabFileIds, which filters `vector: { $exists: true, $ne: [] }`, so on a
+  // partially-vectorized file this starts at the first vectorized chunk rather than the first chunk.
+  // That is survivable precisely because `totalChunks` counts the vectorless ones too, so the caller
+  // still declares an excerpt rather than claiming the whole file.
+  //
+  // Kept regardless of whether a chunk could be SCORED. When scoring rejects everything - a file whose
+  // chunks all sit in another embedding space - this is real content the caller can still hand over, at
+  // the same order of memory as the top-K. The alternative is leaning on the raw-content read, which
+  // cannot decode every format that CAN be chunked (a vectorized .pptx has chunks but getFileContent
+  // throws on it), so the attachment would reach the model as nothing at all.
   const head: Array<{ chunkId: string; content: string; score: number }> = [];
   let scanned = 0;
   let scanTruncated = false;

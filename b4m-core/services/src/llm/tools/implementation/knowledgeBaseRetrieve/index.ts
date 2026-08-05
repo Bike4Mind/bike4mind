@@ -225,6 +225,10 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             let chunksRead = 0;
             let cursor: string | undefined;
             let hitPageCap = false;
+            // Set only on the short-page exit, which PROVES the walk reached the end of the file: unlike
+            // the vector reader, findTextsByFabFileId applies no filter, so a partial page means there is
+            // nothing left. That makes the count query below redundant on the common path.
+            let exhausted = false;
             for (let page = 0; page < KB_RETRIEVE_MAX_CHUNK_PAGES; page++) {
               const rows = await chunkRepo.findTextsByFabFileId(file.id, {
                 limit: KB_RETRIEVE_CHUNK_PAGE_SIZE,
@@ -264,6 +268,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               }
               if (rows.length < KB_RETRIEVE_CHUNK_PAGE_SIZE) {
                 hitPageCap = false;
+                exhausted = true;
                 break;
               }
             }
@@ -279,7 +284,9 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
             // The file's real chunk count, not the number this loop happened to read: after paging,
             // reporting chunks-read as "Chunks" would tell the model a partial file was the whole one.
-            const totalChunks = await chunkRepo.countByFabFileId(file.id);
+            // Skipped when the walk exhausted the file, where chunksRead already IS that count - which is
+            // the normal shape for a file inside the budget, and this runs once per delivered file.
+            const totalChunks = exhausted ? chunksRead : await chunkRepo.countByFabFileId(file.id);
             const fileTags = file.tags?.map(t => t.name).join(', ') || 'none';
             const leftUnread = chunksRead < totalChunks;
             const chunkLabel = leftUnread ? `${totalChunks} (${chunksRead} read)` : `${totalChunks}`;

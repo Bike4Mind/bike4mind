@@ -526,6 +526,32 @@ describe('retrieve_knowledge_content paged-read guards', () => {
     expect(out).toContain(`Chunks: ${CAP_CHUNKS} |`);
   });
 
+  it('skips the count query when the walk already reached the end of the file', async () => {
+    // A short page proves exhaustion for this reader (it applies no filter), so chunksRead already IS
+    // the file's chunk count and the extra round trip buys nothing. This is the normal shape for a file
+    // inside the budget, and it runs once per delivered file.
+    const repo = pagedTextChunkRepo([
+      { id: 'c-0000001', text: 'alpha' },
+      { id: 'c-0000002', text: 'beta' },
+    ]);
+    const ctx = ctxWith(repo);
+
+    const out = await runById(ctx);
+
+    expect(repo.countByFabFileId).not.toHaveBeenCalled();
+    expect(out).toContain('Chunks: 2 |');
+  });
+
+  it('still asks for the count when a budget or cap cut the walk short', async () => {
+    // Cut short, so chunksRead is NOT the file total and the count is the only honest source for it.
+    const ctx = ctxWith(pagedTextChunkRepo(emptyChunks(CAP_CHUNKS + PAGE_SIZE)));
+    const repo = ctx.db.fabfilechunks as unknown as { countByFabFileId: ReturnType<typeof vi.fn> };
+
+    await runBigBudget(ctx);
+
+    expect(repo.countByFabFileId).toHaveBeenCalled();
+  });
+
   it('stops on a cursor that does not advance instead of re-reading the same page', async () => {
     // A repository ignoring afterChunkId. The throw is caught by the tool's own handler and surfaced as
     // a refusal string rather than propagating - the point is that it STOPS, not that it rejects.

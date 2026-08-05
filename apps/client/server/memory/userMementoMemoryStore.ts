@@ -90,7 +90,8 @@ export function createUserMementoMemoryStore(deps: { mementos: UserMementoReader
         //
         // Rebuilt field by field rather than spread: these are HYDRATED Mongoose documents, and
         // spreading one copies its internals, not its fields. Rebuilding per page is also what lets
-        // the page's documents go once it has been folded.
+        // the page's documents go once it has been folded - which only holds because the embedding is
+        // COPIED below rather than referenced; a retained Mongoose array pins its parent document.
         for (const m of mementos) {
           safe.push({
             id: m.id,
@@ -102,7 +103,12 @@ export function createUserMementoMemoryStore(deps: { mementos: UserMementoReader
             questId: m.questId,
             lastAccessedAt: m.lastAccessedAt,
             isArchived: m.isArchived,
-            ...(mementoEmbeddingIsCurrent(m) && m.embedding?.length ? { embedding: m.embedding } : {}),
+            // Array.from, not the array itself: `embedding` is a `[Number]` path, so on a hydrated
+            // document it is a Mongoose array whose `$parent()` IS the document. Pushing that reference
+            // would keep the whole hydrated memento alive for every belief that keeps its embedding -
+            // i.e. the common case - and the page would not be released after all, which is the entire
+            // reason this read pages.
+            ...(mementoEmbeddingIsCurrent(m) && m.embedding?.length ? { embedding: Array.from(m.embedding) } : {}),
           });
         }
 

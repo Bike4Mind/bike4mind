@@ -132,6 +132,37 @@ describe('createUserMementoMemoryStore pages its profile read', () => {
     await expect(store.readProfile({ kind: 'user', id: 'u1' })).rejects.toThrow(/refusing to return a partial profile/);
   });
 
+  it('copies the embedding rather than retaining the source array', async () => {
+    // On a hydrated document `embedding` is a Mongoose array whose $parent() is the document, so keeping
+    // the reference pins the whole memento and the page is never released - which would defeat the only
+    // reason this read pages at all. Asserted by reference identity, the one observable that survives a
+    // plain-object stand-in.
+    const source = [0.1, 0.2, 0.3];
+    const reader = {
+      findByUserId: vi.fn(async () => [
+        {
+          _id: 'm-1',
+          id: 'm-1',
+          summary: 'has embedding',
+          tier: 'hot',
+          lastAccessedAt: new Date('2026-07-10T00:00:00Z'),
+          embedding: source,
+          embeddingModel: 'text-embedding-3-small',
+        },
+      ]),
+    } as unknown as UserMementoReader;
+    const store = createUserMementoMemoryStore({ mementos: reader, ownerUserId: 'u1' });
+
+    const p = await store.readProfile({ kind: 'user', id: 'u1' });
+
+    expect(p?.beliefs).toHaveLength(1);
+    const held = (p as unknown as { beliefs: Array<{ embedding?: number[] }> }).beliefs[0].embedding;
+    if (held) {
+      expect(held).toEqual(source);
+      expect(held).not.toBe(source);
+    }
+  });
+
   it('still refuses another user while paging', async () => {
     const { reader, findByUserId } = pagedReader(PAGE_SIZE + 5);
     const store = createUserMementoMemoryStore({ mementos: reader, ownerUserId: 'u1' });
