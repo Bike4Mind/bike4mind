@@ -19,6 +19,29 @@
  * strings: a model can degenerate into any repeating unit, and the pathology is
  * the repetition itself.
  *
+ * KNOWN FALSE POSITIVE - uniform generated data. Periodicity cannot distinguish a
+ * degenerate loop from output that is legitimately, exactly repetitive: "give me a
+ * 100x100 grid of zeros", "print 2000 'ha'", a zero-filled matrix, a blank
+ * template, a long padding run. Those trip. The guard cannot infer intent, so this
+ * is a real limitation rather than a tuning problem - the blast radius is one
+ * turn, the user sees an explicit notice, and a rephrase gets through, which is
+ * why the trade is still worth making. Do not read the prose/code/JSON/base64
+ * safety argument as "legitimate content cannot trip it".
+ *
+ * BLIND SPOT - reasoning tokens. Both hook sites are on visible text. Thinking
+ * tokens count against the same output ceiling, but on current models thinking
+ * blocks stream with empty text (`thinking.display` defaults to omitted), so
+ * there is nothing here to inspect. A model that degenerates INSIDE its reasoning
+ * still has the token ceiling as its only stop condition; bounding that is the
+ * wall-clock budget's job, not this guard's.
+ *
+ * DETECTION LATENCY - phase dependence. Each check evaluates exactly ONE candidate
+ * period (see below), so a unit containing an internal single-character run can
+ * yield a sub-period that fails verification, and that check returns null. It
+ * self-corrects because the phase moves on the next check - but anyone retuning
+ * `checkEveryChars` should avoid a stride that resonates with a likely unit
+ * length, which would stall detection far longer than one interval.
+ *
  * Cost: one `lastIndexOf` over a bounded window per check, and checks run only
  * every `checkEveryChars`. That is O(window) amortized per emitted chunk with no
  * per-period scan, so it is safe to leave on for every stream.

@@ -1566,18 +1566,26 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {/* Truncation that landed before any artifact tag was emitted. Without this the
           bubble renders blank (or stops mid-sentence) with no explanation at all. */}
-      {(truncationNotice === 'reply-empty' || truncationNotice === 'reply-partial') && (
+      {(truncationNotice === 'reply-empty' ||
+        truncationNotice === 'reply-partial' ||
+        truncationNotice === 'reply-degenerate') && (
         <Alert
           data-testid="reply-truncated-warning"
           color="warning"
           variant="soft"
           sx={{ my: 1, flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}
         >
-          <Typography level="title-sm">⚠️ Response was cut off</Typography>
+          <Typography level="title-sm">
+            {truncationNotice === 'reply-degenerate' ? '⚠️ Response stopped early' : '⚠️ Response was cut off'}
+          </Typography>
           <Typography level="body-sm">
-            {truncationNotice === 'reply-empty'
-              ? 'This response reached the output length limit before it produced any content. Try a smaller or more focused request, or ask for the work in parts.'
-              : 'This response reached the output length limit and stopped early. Ask me to continue, or try a smaller or more focused request.'}
+            {truncationNotice === 'reply-degenerate'
+              ? // Deliberately does NOT say "ask me to continue": continuing from a
+                // degenerated tail is what tends to reproduce the loop.
+                'This response began repeating itself, so it was stopped early rather than run to the output length limit. The reply above is what completed before that point - rephrasing the request usually works better than continuing.'
+              : truncationNotice === 'reply-empty'
+                ? 'This response reached the output length limit before it produced any content. Try a smaller or more focused request, or ask for the work in parts.'
+                : 'This response reached the output length limit and stopped early. Ask me to continue, or try a smaller or more focused request.'}
           </Typography>
         </Alert>
       )}
