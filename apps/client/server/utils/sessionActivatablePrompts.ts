@@ -5,8 +5,15 @@
  * Lives in its own module rather than in `chatCompletionDefaults` for two reasons: this is an
  * authorization policy rather than a completion default, and `chatCompletionDefaults` reads SST
  * `Resource` bindings, so anything declared there cannot be unit-tested without a deploy context.
- * The allowlist is the only thing standing between a client-settable string and an injected
- * system prompt, so it needs to be testable.
+ * The allowlist is what stands between a client-settable prompt ID and an injected REGISTRY prompt,
+ * so it needs to be testable.
+ *
+ * Scope, stated precisely because the narrower claim is the true one: this governs `systemPromptId`
+ * only. The sibling field `systemPromptText` is ALSO accepted from the client by
+ * `createSessionParametersSchema` and is injected verbatim with no allowlist and no resolver - so
+ * this is not the only route to an authored session prompt, and it is not a general defence against
+ * client-supplied prompt content. That gap is pre-existing and tracked separately; do not read this
+ * module as closing it.
  */
 
 /**

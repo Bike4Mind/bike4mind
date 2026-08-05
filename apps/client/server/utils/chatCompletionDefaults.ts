@@ -46,8 +46,7 @@ import { ILogger, Logger } from '@bike4mind/observability';
 import { accessibleBy } from '@casl/mongoose';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
-import { loadSystemPromptContent } from '@server/utils/systemPrompts/loader';
-import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
+import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
 import { Config } from '@server/utils/config';
@@ -204,14 +203,9 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       });
     },
     recallMementosV2,
-    // Resolve a session's `systemPromptId` to the registry prompt's current content, gated by the
-    // activatable allowlist. Injected into the engine so a lake/triage session gets its authored
-    // prompt on every entry point (chat, llm, queue) without the core touching the app registry.
-    loadSystemPromptById: async (promptId: string): Promise<string | null> => {
-      if (!isSessionActivatablePromptId(promptId)) return null;
-      const resolved = await loadSystemPromptContent(promptId);
-      return resolved?.content ?? null;
-    },
+    // Shared with the queue processors - see sessionSystemPromptResolver for why this must not be
+    // an inline lambda per factory.
+    loadSystemPromptById,
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: async (
