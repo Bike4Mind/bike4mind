@@ -71,6 +71,11 @@ const ADMIN_MIN_SEATS = 1;
  * the moment the recipient accepts. Letting an admin shrink below
  * `accepted + pending` causes the next acceptance to fail (org full) and may
  * skew billing on conversion.
+ *
+ * The floor is clamped at the ceiling (#1424): an org that grew past MAX_SEATS - reachable via a
+ * force-add or, before the clamp, the partner-rule auto-raise - would otherwise carry a floor above
+ * MAX that no value can satisfy against the ceiling, wedging every seat change. Clamping lets such an
+ * org be corrected DOWN to MAX in one call; it is then over-subscribed until members are removed.
  */
 export function validateSeatChange(
   organization: Pick<IOrganizationDocument, 'users'>,
@@ -81,9 +86,17 @@ export function validateSeatChange(
   // Owner + accepted members + outstanding invites.
   const currentTeamSize = organization.users.length + 1 + pendingInviteCount;
   const platformMin = actor.type === 'stripe' ? ORGANIZATION_SUBSCRIPTION_MIN_SEATS : ADMIN_MIN_SEATS;
-  const minimumRequiredSeats = Math.max(platformMin, currentTeamSize);
+  // Clamp the floor at the ceiling so an over-cap org (team size > MAX) can still be set down to MAX,
+  // instead of a floor above MAX that the ceiling check below would then always reject (#1424).
+  const minimumRequiredSeats = Math.min(Math.max(platformMin, currentTeamSize), ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
 
   if (newSeats < minimumRequiredSeats) {
+    if (currentTeamSize > ORGANIZATION_SUBSCRIPTION_MAX_SEATS) {
+      throw new BadRequestError(
+        `Organization has ${currentTeamSize} team members, over the ${ORGANIZATION_SUBSCRIPTION_MAX_SEATS}-seat maximum. ` +
+          `Set seats to ${ORGANIZATION_SUBSCRIPTION_MAX_SEATS}, then remove members to get back under the cap.`
+      );
+    }
     const pendingNote =
       pendingInviteCount > 0
         ? ` including ${pendingInviteCount} pending invite${pendingInviteCount === 1 ? '' : 's'}`
