@@ -50,12 +50,29 @@ export const musicGenerationTool: ToolDefinition = {
 
       // Clamp to the provider bounds and default when omitted, so the billed length
       // (reserved in onFinish) always equals the generated length - the deterministic
-      // reserve/settle contract the cost model depends on.
+      // reserve/settle contract the cost model depends on. A non-numeric lengthMs from
+      // a lax-schema caller clamps to NaN; reject it here with the tool's own friendly
+      // message rather than let estimateMusicCredits throw a generic error from onStart.
       const lengthMs = Math.min(
         MAX_MUSIC_LENGTH_MS,
         Math.max(MIN_MUSIC_LENGTH_MS, Math.round(requestedLengthMs ?? DEFAULT_MUSIC_LENGTH_MS))
       );
+      if (!Number.isFinite(lengthMs)) {
+        return 'Error: music track length (lengthMs) must be a number of milliseconds.';
+      }
       const modelId = DEFAULT_MUSIC_MODEL_ID;
+
+      // Resolve the provider key BEFORE the affordability gate so a caller who is both
+      // keyless and low on credits learns the key is missing (the actionable problem)
+      // instead of a misleading "insufficient credits". Return (not throw) the generic,
+      // non-leaking message so the ReAct loop relays a clear reason and the quest
+      // survives; nothing is billed since onFinish - which reserves the charge - is
+      // never reached.
+      const apiKey = await getEffectiveApiKey(context.userId, { type: ApiKeyType.elevenlabs }, { db: context.db });
+      if (!apiKey) {
+        context.logger.error('[music_generation] ElevenLabs API key is not configured; refusing to dispatch');
+        return 'Error: Music generation is currently unavailable. Please try again later.';
+      }
 
       // Affordability gate only: the host throws insufficient_credits here if the owner
       // can't cover the length-driven charge, BEFORE the paid provider call. The actual
@@ -64,14 +81,6 @@ export const musicGenerationTool: ToolDefinition = {
 
       await context.statusUpdate({}, 'Composing music...');
 
-      const apiKey = await getEffectiveApiKey(context.userId, { type: ApiKeyType.elevenlabs }, { db: context.db });
-      if (!apiKey) {
-        // Return (not throw) the generic, non-leaking message so the ReAct loop relays a
-        // clear reason and the quest survives; nothing is billed since onFinish - which
-        // reserves the charge - is never reached.
-        context.logger.error('[music_generation] ElevenLabs API key is not configured; refusing to dispatch');
-        return 'Error: Music generation is currently unavailable. Please try again later.';
-      }
       const service = aiMusicService(PROVIDER, apiKey, context.logger);
 
       let audio: Buffer;

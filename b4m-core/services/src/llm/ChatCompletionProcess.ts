@@ -77,6 +77,7 @@ import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
+import { settleToolCallCredits } from './settleToolCredits';
 import { LATTICE_TOOL_NAMES } from './tools';
 import {
   buildElisionStamp,
@@ -591,7 +592,10 @@ export class ChatCompletionProcess {
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
   private verbose: boolean = false;
-  private toolCreditsMap: Map<string, number> = new Map();
+  // Per-name queue of each tool call's reserved credits, in call order (see
+  // ToolBuilder.reserveToolCredits). Settled per-call below so a tool invoked more
+  // than once in a turn bills the sum of every call.
+  private toolCreditsMap: Map<string, number[]> = new Map();
   private subagentTelemetryData: SubagentTelemetryData[] = [];
   // Credit reservation tracking (pre-reserve/reconcile pattern)
   private reservedCredits: number = 0;
@@ -3684,13 +3688,13 @@ export class ChatCompletionProcess {
             });
           }
         }
-        // Update functionCalls with creditsUsed
-        quest.promptMeta!.functionCalls = (quest.promptMeta!.functionCalls || []).map(fc => {
-          if (this.toolCreditsMap.has(fc.name || '')) {
-            return { ...fc, creditsUsed: this.toolCreditsMap.get(fc.name || '') };
-          }
-          return fc;
-        });
+        // Assign each tool call its own reserved credits from the per-name queue so a
+        // tool called more than once in a turn settles as the sum of every call, not
+        // the count times the last call's cost (see settleToolCallCredits).
+        quest.promptMeta!.functionCalls = settleToolCallCredits(
+          quest.promptMeta!.functionCalls || [],
+          this.toolCreditsMap
+        );
 
         // Update execution tracking
         quest.promptMeta!.executionTracking = {

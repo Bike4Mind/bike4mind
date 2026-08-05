@@ -100,7 +100,12 @@ export interface ToolBuilderConfig {
   // State maps owned by ChatCompletionProcess. Passed by reference so mutations
   // inside tool callbacks (credit accounting, subagent telemetry) propagate back
   // without further synchronization.
-  toolCreditsMap: Map<string, number>;
+  // Per-name queue of each tool call's reserved credits, in call order. A tool
+  // (image_generation, edit_image, music_generation, delegate_to_agent) can fire
+  // more than once per turn with a different cost each time, so the settlement in
+  // ChatCompletionProcess assigns each call its own charge instead of stamping the
+  // last value onto every same-named functionCall.
+  toolCreditsMap: Map<string, number[]>;
   // Shared by reference with ChatCompletionProcess; mutations from callbacks
   // propagate to the parent for end-of-quest telemetry assembly.
   subagentTelemetryData: SubagentTelemetryData[];
@@ -302,6 +307,79 @@ export interface BuildToolPromptArgs {
 
 export class ToolBuilder {
   constructor(private readonly deps: ToolBuilderConfig) {}
+
+  /**
+   * Reserve one tool call's credits for end-of-quest settlement. Appends to the
+   * per-name queue in call order rather than overwriting, so a tool called more
+   * than once in a turn (e.g. a 10s then a 20s music track) settles as the sum of
+   * every call, not the count times the last call's cost. Fires exactly once per
+   * call: image/edit/music via onToolStart/onToolFinish, delegate via onSubagentCredits.
+   */
+  private reserveToolCredits(toolName: string, credits: number): void {
+    const queue = this.deps.toolCreditsMap.get(toolName) ?? [];
+    queue.push(credits);
+    this.deps.toolCreditsMap.set(toolName, queue);
+  }
+
+  /**
+   * Up-front affordability gate for music_generation (onToolStart): throws
+   * insufficient_credits before the paid provider call when the owner can't cover the
+   * length-driven charge. The reservation itself is deferred to settleMusicCredits so a
+   * failed generation is never billed. No-op when credit enforcement is off or the
+   * credit store is unavailable. Exposed for unit-testing the music credit branch.
+   */
+  gateMusicCredits(
+    data: { provider: MusicGenerationVendor; lengthMs: number },
+    enforceCredits: boolean,
+    organization?: IOrganizationDocument | null
+  ): void {
+    if (!enforceCredits || !this.deps.db.creditTransactions) return;
+    validateMusicCredits(this.deps.user, data.provider, data.lengthMs, this.deps.logger, organization);
+  }
+
+  /**
+   * Reserve + record a delivered music track's credits (onToolFinish) and ride its path
+   * on quest.images. Reached only after generation succeeds, so an undelivered track is
+   * never billed; uses estimateMusicCredits (pure, no throw) since affordability was
+   * already gated in gateMusicCredits. Does not persist the quest - the caller saves.
+   * Exposed for unit-testing the music credit branch.
+   */
+  settleMusicCredits(
+    quest: IChatHistoryItemDocument,
+    data: { paths: string[]; provider: MusicGenerationVendor; lengthMs: number; modelId: string },
+    enforceCredits: boolean,
+    organization?: IOrganizationDocument | null
+  ): void {
+    if (enforceCredits && !!this.deps.db.creditTransactions) {
+      const {
+        requiredCredits: creditsUsed,
+        usdCost,
+        billedSeconds,
+      } = estimateMusicCredits(data.provider, { lengthMs: data.lengthMs });
+      this.deps.logger.info(`Credits used for tool music_generation: ${creditsUsed}`);
+      this.reserveToolCredits('music_generation', creditsUsed);
+      quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
+      recordToolUsageEvent(
+        this.deps.db,
+        this.deps.logger,
+        'music_generation',
+        buildToolUsageEvent({
+          quest,
+          user: this.deps.user,
+          organization,
+          provider: data.provider,
+          model: data.modelId,
+          costUsd: usdCost,
+          creditsCharged: creditsUsed,
+          units: billedSeconds,
+        })
+      );
+    }
+    if (!quest.images) quest.images = [];
+    data.paths.forEach(path => {
+      if (!quest.images?.includes(path)) quest.images?.push(path);
+    });
+  }
 
   /**
    * Build MCP tool definitions from DB-cached schemas.
@@ -527,7 +605,7 @@ export class ToolBuilder {
                 organization
               );
               this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
-              this.deps.toolCreditsMap.set(toolName, creditsUsed);
+              this.reserveToolCredits(toolName, creditsUsed);
               quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
               await saveQuest(quest);
               recordToolUsageEvent(
@@ -549,15 +627,9 @@ export class ToolBuilder {
           }
 
           if (toolName === 'music_generation') {
-            // Up-front affordability gate ONLY: throw insufficient_credits before the
-            // paid provider call if the owner can't cover the length-driven charge. The
-            // reservation + usage event are deferred to onToolFinish so a failed
-            // generation is never billed (the tool returns early without calling onFinish).
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
-            if (enforceCredits && !!this.deps.db.creditTransactions) {
-              const { provider, lengthMs } = data as { provider: MusicGenerationVendor; lengthMs: number };
-              validateMusicCredits(this.deps.user, provider, lengthMs, this.deps.logger, organization);
-            }
+            const { provider, lengthMs } = data as { provider: MusicGenerationVendor; lengthMs: number };
+            this.gateMusicCredits({ provider, lengthMs }, enforceCredits, organization);
           }
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -569,50 +641,15 @@ export class ToolBuilder {
           }
           if (toolName === 'music_generation') {
             // Settle music billing HERE (not onToolStart) so only a delivered track is
-            // charged: reserve the deterministic, length-driven credits into toolCreditsMap
-            // for end-of-quest settlement and record the COGS usage event. The tool's
-            // failure paths return before calling onFinish, so nothing lands on failure.
-            // Uses estimateMusicCredits (pure, no throw) - affordability was already gated
-            // in onToolStart, so re-running the throwing validator on a delivered track
-            // would be wrong. Audio rides quest.images; the client splits by extension.
-            const { paths, provider, lengthMs, modelId } = data as {
-              paths: string[];
-              provider: MusicGenerationVendor;
-              lengthMs: number;
-              modelId: string;
-            };
+            // charged: the tool's failure paths return before calling onFinish, so nothing
+            // lands on failure. Audio rides quest.images; the client splits by extension.
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
-            if (enforceCredits && !!this.deps.db.creditTransactions) {
-              const {
-                requiredCredits: creditsUsed,
-                usdCost,
-                billedSeconds,
-              } = estimateMusicCredits(provider, {
-                lengthMs,
-              });
-              this.deps.logger.info(`Credits used for tool ${toolName}: ${creditsUsed}`);
-              this.deps.toolCreditsMap.set('music_generation', creditsUsed);
-              quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
-              recordToolUsageEvent(
-                this.deps.db,
-                this.deps.logger,
-                'music_generation',
-                buildToolUsageEvent({
-                  quest,
-                  user: this.deps.user,
-                  organization,
-                  provider,
-                  model: modelId,
-                  costUsd: usdCost,
-                  creditsCharged: creditsUsed,
-                  units: billedSeconds,
-                })
-              );
-            }
-            if (!quest.images) quest.images = [];
-            paths.forEach((path: string) => {
-              if (!quest.images?.includes(path)) quest.images?.push(path);
-            });
+            this.settleMusicCredits(
+              quest,
+              data as { paths: string[]; provider: MusicGenerationVendor; lengthMs: number; modelId: string },
+              enforceCredits,
+              organization
+            );
             await saveQuest(quest);
           }
           // image_generation / edit_image ride quest.images too (data is the path array).
@@ -656,7 +693,7 @@ export class ToolBuilder {
         },
         sessionId: quest.sessionId,
         onSubagentCredits: (credits, meta) => {
-          this.deps.toolCreditsMap.set('delegate_to_agent', credits);
+          this.reserveToolCredits('delegate_to_agent', credits);
           // No meta == model unresolvable; skip rather than fabricate a zero-cost event.
           if (meta) {
             recordToolUsageEvent(
