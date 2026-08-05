@@ -279,6 +279,17 @@ describe('check-no-control-bytes.sh', () => {
       expect(r.stdout).toContain('-.ts');
     });
 
+    // git's `:<path>` revspec does not reinterpret an option-looking path as a flag. Pinned so
+    // a future change in how git parses odd revspecs cannot silently regress staged mode.
+    it.each(['--foo.ts', '-.ts'])('does not let git reparse a staged path named %s as a flag', name => {
+      const { dir } = makeRepo();
+      write(dir, name, 'export const x = 1;\x00\n');
+      git(dir, 'add', '-A');
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain(name);
+    });
+
     it('does not execute a command embedded in a filename under --all', () => {
       const { dir } = makeRepo();
       write(dir, hostile, 'export const x = 1;\n');
@@ -370,6 +381,30 @@ describe('check-no-control-bytes.sh', () => {
       expect(r.status).toBe(1);
       expect(r.stdout).toContain('c.ts');
     });
+  });
+
+  describe('symlinks', () => {
+    it('does not scan through a symlink under --all', () => {
+      // git stores the target path string for a symlink, not the target's bytes, so reading
+      // through the link would flag content git is not tracking.
+      const { dir } = makeRepo();
+      write(dir, 'real.ts', 'export const bad = 1;\x00\n');
+      fs.symlinkSync(path.join(dir, 'real.ts'), path.join(dir, 'link.ts'));
+      git(dir, 'add', 'link.ts');
+      git(dir, 'commit', '-q', '-m', 'add only the symlink');
+      const r = runGuard(dir, ['--all']);
+      expect(r.status).toBe(0);
+    });
+
+    it('terminates on a symlink to an endless byte source', () => {
+      // Guards the bounded-read loop: a non-regular target must never enter it.
+      const { dir } = makeRepo();
+      fs.symlinkSync('/dev/urandom', path.join(dir, 'evil.ts'));
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'add a device symlink');
+      const r = runGuard(dir, ['--all']);
+      expect(r.status).toBe(0);
+    }, 15000);
   });
 
   it('finds a control byte beyond the first read chunk', () => {
