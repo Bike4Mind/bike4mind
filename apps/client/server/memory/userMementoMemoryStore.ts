@@ -22,8 +22,14 @@ export interface UserMementoReader {
  * keeps one page of documents live and retains only the rebuilt plain objects.
  */
 const PROFILE_PAGE_SIZE = 200;
-/** Backstop on the walk; see the ceiling note in getRelevantMementos. Reported, not assumed away. */
-const PROFILE_MAX_PAGES = 500;
+/**
+ * Sanity bound, not a coverage budget: a profile is defined as EVERY belief, so stopping short would
+ * hand the model a subset of the user's memory presented as complete - and this store has no logger
+ * to say so. Hitting it therefore throws. Set far past any real account; reaching it means the
+ * repository is misbehaving, which cursor-advance alone cannot detect (advance proves progress, not
+ * termination).
+ */
+const PROFILE_MAX_PAGES = 10_000;
 
 /**
  * Exactly the fields `userMementosToProfile` folds - nothing more. Without a projection the read
@@ -50,7 +56,13 @@ export function createUserMementoMemoryStore(deps: { mementos: UserMementoReader
       const safe: UserMementoLike[] = [];
       let cursor: string | undefined;
 
-      for (let page = 0; page < PROFILE_MAX_PAGES; page++) {
+      for (let page = 0; ; page++) {
+        if (page >= PROFILE_MAX_PAGES) {
+          throw new Error(
+            `[userMementoMemoryStore] profile walk exceeded ${PROFILE_MAX_PAGES} pages for ${deps.ownerUserId}; ` +
+              `refusing to return a partial profile silently`
+          );
+        }
         const mementos = await deps.mementos.findByUserId(deps.ownerUserId, {
           tier: MementoTier.HOT,
           select: PROFILE_FIELDS,

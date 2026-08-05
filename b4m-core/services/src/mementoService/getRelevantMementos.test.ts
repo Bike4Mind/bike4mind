@@ -137,10 +137,11 @@ describe('getRelevantMementos pages instead of loading every memento', () => {
     expect(findByUserId).toHaveBeenCalledTimes(1);
   });
 
-  it('says so when it stops on the page ceiling rather than on the data', async () => {
-    // The ceiling is a coverage budget, not just a loop guard, so hitting it has to be visible - a scan
-    // that quietly stops short is the failure this whole change removes. Simulated by a reader that
-    // always returns a full page, which is what an over-ceiling corpus looks like from in here.
+  it('refuses to score a prefix silently when the walk will not end', async () => {
+    // A reader that always returns a full page with an ADVANCING cursor: the cursor check cannot see
+    // this, because advance proves progress, not termination. The sanity bound is what stops it, and it
+    // throws rather than returning a top-K over an arbitrary prefix. Retrieval fails open, so the
+    // observable outcome is an empty result plus a log that names the real cause.
     const endless = vi.fn(async (_userId: string, opts: { limit?: number; afterId?: string }) => {
       const start = opts.afterId ? Number(opts.afterId.split('-')[1]) + 1 : 0;
       return Array.from({ length: opts.limit ?? PAGE_SIZE }, (_, i) => ({
@@ -152,16 +153,18 @@ describe('getRelevantMementos pages instead of loading every memento', () => {
 
     const out = await run(endless as never, 3);
 
-    expect(out).toHaveLength(3);
-    const warned = logger.warn.mock.calls.map(c => String(c[0])).join('\n');
-    expect(warned).toContain('page ceiling');
+    expect(out).toEqual([]);
+    const warned = logger.warn.mock.calls.map(c => `${c[0]} ${c[1]}`).join('\n');
+    expect(warned).toContain('exceeded');
+    expect(warned).toContain('refusing to score a prefix silently');
   });
 
-  it('stays silent about the ceiling on a corpus that fits', async () => {
-    await run(pagedMementos(mementoRows(PAGE_SIZE + 10)));
+  it('does not trip the sanity bound on a corpus that fits', async () => {
+    const out = await run(pagedMementos(mementoRows(PAGE_SIZE + 10)));
 
+    expect(out.length).toBeGreaterThan(0);
     const warned = logger.warn.mock.calls.map(c => String(c[0])).join('\n');
-    expect(warned).not.toContain('page ceiling');
+    expect(warned).not.toContain('exceeded');
   });
 });
 

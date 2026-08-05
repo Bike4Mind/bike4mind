@@ -224,7 +224,11 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             let collectedChars = 0;
             let chunksRead = 0;
             let cursor: string | undefined;
+            let hitPageCap = false;
             for (let page = 0; page < KB_RETRIEVE_MAX_CHUNK_PAGES; page++) {
+              // Distinguished from a budget stop below: the two produce different labels, because
+              // "truncated at budget" is a lie when what stopped us was the page cap.
+              if (page === KB_RETRIEVE_MAX_CHUNK_PAGES - 1) hitPageCap = true;
               const rows = await chunkRepo.findTextsByFabFileId(file.id, {
                 limit: KB_RETRIEVE_CHUNK_PAGE_SIZE,
                 afterChunkId: cursor,
@@ -251,8 +255,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   break;
                 }
               }
-              if (budgetMet) break;
-              if (rows.length < KB_RETRIEVE_CHUNK_PAGE_SIZE) break;
+              if (budgetMet) {
+                hitPageCap = false;
+                break;
+              }
+              if (rows.length < KB_RETRIEVE_CHUNK_PAGE_SIZE) {
+                hitPageCap = false;
+                break;
+              }
             }
 
             if (chunksRead === 0) {
@@ -270,7 +280,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             const fileTags = file.tags?.map(t => t.name).join(', ') || 'none';
             const leftUnread = chunksRead < totalChunks;
             const chunkLabel = leftUnread ? `${totalChunks} (${chunksRead} read)` : `${totalChunks}`;
-            const charLabel = truncated || leftUnread ? `${content.length} (truncated at budget)` : `${content.length}`;
+            // Name the actual reason. A file of many tiny chunks can exhaust the page cap without ever
+            // filling the budget, and reporting that as a budget truncation sends a reader looking at
+            // max_chars for a limit that had nothing to do with it.
+            const charLabel = hitPageCap
+              ? `${content.length} (truncated at the chunk-page cap)`
+              : truncated || leftUnread
+                ? `${content.length} (truncated at budget)`
+                : `${content.length}`;
 
             sections.push(
               `### ${file.fileName} (ID: ${file.id})\n` +

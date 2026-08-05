@@ -111,6 +111,27 @@ describe('createUserMementoMemoryStore pages its profile read', () => {
     await expect(store.readProfile({ kind: 'user', id: 'u1' })).rejects.toThrow(/cursor failed to advance/);
   });
 
+  it('refuses to return a partial profile when the walk will not end', async () => {
+    // Advancing cursor, always-full page: the cursor check cannot catch this, since advance proves
+    // progress and not termination. A profile is every belief, so returning a prefix would present a
+    // subset of the user's memory as complete - it throws instead.
+    const endless = {
+      findByUserId: vi.fn(async (_u: string, opts: { limit?: number; afterId?: string }) => {
+        const start = opts.afterId ? Number(opts.afterId.split('-')[1]) + 1 : 0;
+        return Array.from({ length: opts.limit ?? PAGE_SIZE }, (_, i) => ({
+          _id: `m-${String(start + i).padStart(9, '0')}`,
+          id: `m-${String(start + i).padStart(9, '0')}`,
+          summary: `fact ${start + i}`,
+          tier: 'hot',
+          lastAccessedAt: new Date('2026-07-10T00:00:00Z'),
+        }));
+      }),
+    } as unknown as UserMementoReader;
+    const store = createUserMementoMemoryStore({ mementos: endless, ownerUserId: 'u1' });
+
+    await expect(store.readProfile({ kind: 'user', id: 'u1' })).rejects.toThrow(/refusing to return a partial profile/);
+  });
+
   it('still refuses another user while paging', async () => {
     const { reader, findByUserId } = pagedReader(PAGE_SIZE + 5);
     const store = createUserMementoMemoryStore({ mementos: reader, ownerUserId: 'u1' });

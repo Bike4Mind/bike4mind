@@ -19,13 +19,16 @@ import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { BoundedTopK } from '../dataLakeService';
 
 /**
- * Page size for the memento walk, and a ceiling on how many pages it will take. The ceiling IS a
- * coverage budget, not merely a loop guard: a user holding more than PAGE_SIZE * MAX_PAGES mementos
- * gets scored on a prefix. That is far past any real account, but it is reported rather than assumed
- * away, because a scan that quietly stops short is the failure this whole change exists to remove.
+ * Page size for the memento walk, and a sanity bound on how many pages it may take.
+ *
+ * The bound is NOT a coverage budget: hitting it THROWS rather than quietly returning a prefix,
+ * because a scan that stops short without saying so is the failure this change exists to remove.
+ * It is set far past any real account (2,000,000 mementos), so reaching it means the repository is
+ * misbehaving - returning rows out of `_id` order, or ignoring the cursor in a way the strict
+ * advance check below cannot see. Cursor advance alone proves PROGRESS, not termination.
  */
 const MEMENTO_PAGE_SIZE = 200;
-const MEMENTO_MAX_PAGES = 500;
+const MEMENTO_MAX_PAGES = 10_000;
 
 /**
  * Result type for memento retrieval with similarity score
@@ -190,17 +193,22 @@ export async function getRelevantMementos(
     //
     // Every memento carries an embedding and its full original prompt, so reading them all at once
     // made peak memory a function of how long the user has been using the product. Paging bounds that
-    // to one page plus topK, and the walk runs to the end of the user's mementos for any account
-    // short of the page ceiling - so in practice which mementos get scored is what it always was.
+    // to one page plus topK. The walk runs to the end unconditionally, so which mementos get scored is
+    // exactly what it was before - only peak memory changed.
     //
     // No `.lean()`: RelevantMemento.memento is an IMementoDocument and consumers read `memento.id`,
     // a Mongoose virtual that a lean object does not carry.
     const ranked = new BoundedTopK<RelevantMemento>(topK, compareMementosBySimilarity);
     let scanned = 0;
     let cursor: string | undefined;
-    let coverageTruncated = false;
 
-    for (let page = 0; page < MEMENTO_MAX_PAGES; page++) {
+    for (let page = 0; ; page++) {
+      if (page >= MEMENTO_MAX_PAGES) {
+        throw new Error(
+          `[getRelevantMementos] memento walk exceeded ${MEMENTO_MAX_PAGES} pages for user ${userId}; ` +
+            `refusing to score a prefix silently`
+        );
+      }
       const mementos = await adapters.db.mementos.findByUserId(userId, {
         tier: tier === 'all' ? undefined : tier,
         select: 'summary embedding weight tags fullContent lastAccessedAt',
@@ -235,17 +243,6 @@ export async function getRelevantMementos(
       }
 
       if (mementos.length < MEMENTO_PAGE_SIZE) break;
-      // A full last page means more rows remain; if that was the final allowed page, the walk is
-      // stopping on the budget rather than on the data.
-      if (page === MEMENTO_MAX_PAGES - 1) coverageTruncated = true;
-    }
-
-    if (coverageTruncated) {
-      logger?.warn?.(
-        `Memento retrieval scanned ${scanned} memento(s) for user ${userId} and stopped on the ` +
-          `${MEMENTO_PAGE_SIZE * MEMENTO_MAX_PAGES}-memento page ceiling; the returned matches are over that ` +
-          `prefix, not the whole set.`
-      );
     }
 
     logger?.debug?.(`Scanned ${scanned} mementos (tier: ${tier})`);
