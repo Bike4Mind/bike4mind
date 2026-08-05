@@ -270,6 +270,19 @@ const ATTACHED_CONTENT_SHARE = 0.35;
 const MIN_ATTACHED_CONTENT_SHARE = 0.15;
 
 /**
+ * Below this per-doc even-split inline depth (tokens), inlining a RETRIEVABLE data-lake corpus
+ * goes breadth-shallow: buildDataSources splits attachedFileTokenBudget evenly across every file
+ * (processFabFilesServer in utils.ts), so many docs each get a thin, poorly-ranked slice - which
+ * an internal eval scored WORSE than deferring the corpus to the offered search_knowledge_base
+ * tool. When the estimated depth falls below this floor AND the corpus is retrievable, defer it.
+ *
+ * 0 = OFF (preserve today's force-inline) and is the default until tuned; override per-deploy via
+ * the `CorpusRetrievalMinInlineTokensPerDoc` admin setting. Expressed in tokens-per-doc, not a raw
+ * doc count, so the threshold auto-scales with the model's window through attachedFileTokenBudget.
+ */
+const CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC = 0;
+
+/**
  * Fraction of the space ACTUALLY AVAILABLE FOR HISTORY (safe input minus the
  * non-history overhead reserved below) kept as VERBATIM conversation history
  * before older turns are folded into contextSummary. The fraction tunes the
@@ -618,6 +631,33 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
 }
 
 /**
+ * Whether to stop force-inlining a retrievable data-lake corpus and let the offered
+ * search_knowledge_base tool fetch it on demand. Pure so it is unit-testable in isolation from the
+ * DB reads that produce `retrievableCount`.
+ *
+ * The condition is the per-doc even-split depth falling below the floor: attachedFileTokenBudget is
+ * divided evenly across the inlined files (processFabFilesServer), so a large corpus gives each doc
+ * a shallow slice. `retrievableCount` (not the full attached count) is the divisor on purpose - it
+ * is the set eligible to defer. The real per-file split divides the same budget across MORE files
+ * (the always-inlined message/session/system sources share it too), so with
+ * retrievableCount <= totalAttached this estimate is an UPPER bound on the real depth
+ * (budget / retrievableCount >= budget / totalAttached). That biases conservatively in the safe
+ * direction: an estimate below the floor guarantees the real split is below it too, so we never
+ * over-defer - at worst we under-defer a corpus whose real split is shallow but whose estimate
+ * is not. Small corpora keep a high per-doc share and stay inlined (strictly better).
+ */
+export function shouldDeferCorpusToRetrieval(input: {
+  retrievableCount: number;
+  attachedFileTokenBudget: number;
+  minInlineTokensPerDoc: number;
+}): boolean {
+  const { retrievableCount, attachedFileTokenBudget, minInlineTokensPerDoc } = input;
+  if (minInlineTokensPerDoc <= 0) return false; // feature off -> today's force-inline behavior
+  if (retrievableCount <= 0) return false; // nothing retrievable -> never defer (would lose content)
+  return Math.floor(attachedFileTokenBudget / retrievableCount) < minInlineTokensPerDoc;
+}
+
+/**
  * Tools this process auto-adds server-side regardless of user selection. Two auto-add sites feed
  * this: the request-parse method (blog_publish/blog_edit/blog_draft for admins, navigate_view,
  * skill) and `resolveEnabledTools` (the attached-knowledge offer). Small local (Ollama) models get
@@ -678,8 +718,13 @@ export class ChatCompletionProcess {
   public entitlementKeys: string[] = [];
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
-  /** Per-turn memo for the accessible-owned-lake offering check (see userHasAccessibleKnowledgeLake). */
-  private hasAccessibleKnowledgeLakeMemo: boolean | undefined;
+  /**
+   * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
+   * (userHasAccessibleKnowledgeLake) and the corpus inline-defer plan (resolveCorpusInlinePlan) so
+   * the two can never disagree - it is the SAME access the knowledge tool resolves with.
+   */
+  private accessibleDataLakeAccessMemo:
+    { dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] } | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
   private imageProcessorLambdaName?: string;
@@ -790,25 +835,139 @@ export class ChatCompletionProcess {
    * from lakes the caller was already authorized to read - this signal never widens that set.
    */
   public async userHasAccessibleKnowledgeLake(): Promise<boolean> {
-    if (this.hasAccessibleKnowledgeLakeMemo === undefined) {
+    return (await this.getAccessibleDataLakeAccess()).dataLakeTags.length > 0;
+  }
+
+  /**
+   * The caller's resolved data-lake access (owned + org + shared/entitlement-gated lakes they can
+   * reach), memoized per turn. This is the SAME resolver the knowledge tool executes with, so the
+   * tool-offer and the inline-defer decisions can never disagree. Fail-safe: any error degrades to
+   * empty access (treated as "no lake"), never breaks the turn.
+   */
+  private async getAccessibleDataLakeAccess(): Promise<{
+    dataLakeTags: string[];
+    dataLakeTagPrefixes: string[];
+    scopedTagPrefixes: string[];
+  }> {
+    if (this.accessibleDataLakeAccessMemo === undefined) {
       try {
         const entitlementKeys = await this.resolveEntitlementKeys();
-        const { dataLakeTags } = await getDynamicDataLakeAccess({
+        this.accessibleDataLakeAccessMemo = await getDynamicDataLakeAccess({
           db: this.db,
           user: this.user,
           entitlementKeys,
         });
-        this.hasAccessibleKnowledgeLakeMemo = dataLakeTags.length > 0;
       } catch (err) {
-        // Never break a chat turn over an offering hint - degrade to "no lake" (the tool simply
-        // isn't auto-offered), matching the entitlement-resolution fail-safe above.
         this.logger.warn(
-          `[dataLakes] accessible-lake offering check failed; not auto-offering: ${(err as Error)?.message}`
+          `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
         );
-        this.hasAccessibleKnowledgeLakeMemo = false;
+        this.accessibleDataLakeAccessMemo = { dataLakeTags: [], dataLakeTagPrefixes: [], scopedTagPrefixes: [] };
       }
     }
-    return this.hasAccessibleKnowledgeLakeMemo;
+    return this.accessibleDataLakeAccessMemo;
+  }
+
+  /**
+   * Decide which attached-knowledge documents to STOP inlining and leave to the offered
+   * search_knowledge_base tool. Returns the deferred id subset plus telemetry. See
+   * `shouldDeferCorpusToRetrieval` for the size rule and `CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC`
+   * for why this is off by default.
+   *
+   * Anti-regression is the whole design: a file is deferrable ONLY when the tool can actually reach
+   * it, which for the unscoped semantic arm means an EXACT match against the caller's accessible
+   * `dataLakeTags` (the ownership-independent membership branch). Prefix-only / non-lake attachments
+   * are never deferred - they stay inlined, because deferring content the tool cannot fetch would
+   * silently lose it. Only `sessionKnowledgeIds` are ever considered; message- and session-attached
+   * fab files and system files are always inlined by the caller.
+   */
+  private async resolveCorpusInlinePlan(input: {
+    sessionKnowledgeIds: string[];
+    attachedFileTokenBudget: number;
+    skipAutoOffers: boolean;
+    defaultAdminSettings: Record<string, string>;
+  }): Promise<{
+    deferredKnowledgeIds: string[];
+    attachedCount: number;
+    retrievableCount: number;
+    deferredToRetrieval: boolean;
+    minInlineTokensPerDoc: number;
+  }> {
+    const { sessionKnowledgeIds, attachedFileTokenBudget, skipAutoOffers, defaultAdminSettings } = input;
+    const attachedCount = sessionKnowledgeIds.length;
+
+    // getSettingsValue coerces via the setting's Zod schema, so this is a number (0 by default).
+    const rawThreshold = getSettingsValue('CorpusRetrievalMinInlineTokensPerDoc', defaultAdminSettings);
+    const minInlineTokensPerDoc =
+      typeof rawThreshold === 'number' && Number.isFinite(rawThreshold) && rawThreshold >= 0
+        ? rawThreshold
+        : CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC;
+
+    const noDefer = {
+      deferredKnowledgeIds: [] as string[],
+      attachedCount,
+      retrievableCount: 0,
+      deferredToRetrieval: false,
+      minInlineTokensPerDoc,
+    };
+
+    // promptMode is an eval/passthrough surface where the tool is NOT offered - deferring there
+    // would strand the corpus with no retrieval path. Symmetric with the tool-offer gate.
+    if (skipAutoOffers) return noDefer;
+    if (minInlineTokensPerDoc <= 0 || attachedCount === 0) return noDefer;
+
+    try {
+      const access = await this.getAccessibleDataLakeAccess();
+      if (access.dataLakeTags.length === 0) return noDefer; // no accessible lake -> nothing retrievable
+
+      const accessibleTags = new Set(access.dataLakeTags);
+      const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
+      const files = await this.db.fabfiles.getAccessibleFiles(sessionKnowledgeIds, scope);
+
+      // Retrievability = tag membership AND real vector-search reachability. A lake-tagged doc is
+      // deferrable only if search_knowledge_base's semantic arm can actually surface it: it must be
+      // FULLY VECTORIZED (vectorizedChunkCount >= chunkCount, chunkCount > 0) AND embedded under the
+      // SAME model as the query (embeddingModel agreement). A doc that is unvectorized, still
+      // vectorizing, or embedded in another model's space passes the tag check but the semantic arm
+      // skips it - deferring it would strand its content silently. When the query embedding model is
+      // unresolvable the semantic arm cannot run at all (the tool falls back to metadata-only keyword
+      // search), so nothing is deferrable. Closes the tag-only gap; #1411 hardened the retrieval-side
+      // reads this now relies on. `vectorizedChunkCount >= chunkCount` is the usable-data condition.
+      const queryEmbeddingModel = getSettingsValue('defaultEmbeddingModel', defaultAdminSettings);
+      const retrievableIds = files
+        .filter(file => {
+          const lakeTagged = (file.tags ?? []).some(tag => accessibleTags.has(tag.name));
+          const chunks = file.chunkCount ?? 0;
+          const fullyVectorized = chunks > 0 && (file.vectorizedChunkCount ?? 0) >= chunks;
+          // Exact-match on purpose, and deliberately STRICTER than embeddingMismatch's
+          // isForeignEmbeddingModel, which counts an absent/blank label as comparable. Here an
+          // unlabeled-but-vectorized doc stays inlined rather than risk a strand. Do NOT consolidate
+          // this onto isForeignEmbeddingModel - that loosens the gate to defer unlabeled docs the
+          // semantic arm may not actually reach, which is the content-losing direction.
+          const sameVectorSpace = Boolean(queryEmbeddingModel) && file.embeddingModel === queryEmbeddingModel;
+          return lakeTagged && fullyVectorized && sameVectorSpace;
+        })
+        .map(file => file.id);
+
+      const deferredToRetrieval = shouldDeferCorpusToRetrieval({
+        retrievableCount: retrievableIds.length,
+        attachedFileTokenBudget,
+        minInlineTokensPerDoc,
+      });
+
+      return {
+        deferredKnowledgeIds: deferredToRetrieval ? retrievableIds : [],
+        attachedCount,
+        retrievableCount: retrievableIds.length,
+        deferredToRetrieval,
+        minInlineTokensPerDoc,
+      };
+    } catch (err) {
+      // Never lose content over an optimization: any failure degrades to today's full inline.
+      this.logger.warn(
+        `[dataLakes] corpus inline-defer plan failed; inlining all attached knowledge: ${(err as Error)?.message}`
+      );
+      return noDefer;
+    }
   }
 
   private async initializeProcessContext(
@@ -1855,11 +2014,23 @@ export class ChatCompletionProcess {
         )
       );
 
+      // Once the knowledge tools are offered (above), stop ALSO force-inlining a large retrievable
+      // corpus - the even-split inline goes breadth-shallow and the tool can fetch the relevant
+      // docs on demand. Off by default; defers only the tool-retrievable subset. `skipAutoOffers`
+      // mirrors the tool-offer gate (the tool isn't offered under promptMode, so we don't defer).
+      const corpusInlinePlan = await this.resolveCorpusInlinePlan({
+        sessionKnowledgeIds: session.knowledgeIds ?? [],
+        attachedFileTokenBudget,
+        skipAutoOffers,
+        defaultAdminSettings,
+      });
+
       const dataSources = await this.buildDataSources({
         defaultAdminSettings,
         sessionFabFileIds,
         messageFileIds,
         sessionKnowledgeIds: session.knowledgeIds ?? [],
+        deferredKnowledgeIds: corpusInlinePlan.deferredKnowledgeIds,
         message,
         maxTokens: urlContentBudget,
         attachedFileTokenBudget,
@@ -2745,6 +2916,13 @@ export class ChatCompletionProcess {
       // Add system prompt tracking to promptMeta
       quest.promptMeta!.context!.sessionFileIds = sessionFabFileIds;
       quest.promptMeta!.context!.messageFileIds = messageFileIds;
+      quest.promptMeta!.context!.knowledgeInlining = {
+        attachedCount: corpusInlinePlan.attachedCount,
+        retrievableCount: corpusInlinePlan.retrievableCount,
+        deferredCount: corpusInlinePlan.deferredKnowledgeIds.length,
+        deferredToRetrieval: corpusInlinePlan.deferredToRetrieval,
+        minInlineTokensPerDoc: corpusInlinePlan.minInlineTokensPerDoc,
+      };
       quest.promptMeta!.context!.globalSystemFileIds = globalSystemFileIds;
       quest.promptMeta!.context!.userSystemFileIds = enabledSystemFileIds;
       quest.promptMeta!.context!.dedupedSystemPrompts = dedupedFileIds;
@@ -5092,6 +5270,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     sessionFabFileIds,
     messageFileIds,
     sessionKnowledgeIds,
+    deferredKnowledgeIds = [],
     message,
     maxTokens,
     attachedFileTokenBudget,
@@ -5105,6 +5284,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     sessionFabFileIds: string[];
     messageFileIds: string[];
     sessionKnowledgeIds: string[];
+    /** Subset of `sessionKnowledgeIds` to leave OUT of the inline merge and defer to retrieval
+     *  (resolveCorpusInlinePlan). Full `sessionKnowledgeIds` is still reported in logs/telemetry. */
+    deferredKnowledgeIds?: string[];
     message: string;
     maxTokens: number;
     attachedFileTokenBudget: number;
@@ -5173,13 +5355,21 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.systemFilesCache.set(systemFilesCacheKey, [globalSystemFileIds, enabledSystemFileIds]);
     }
 
+    // Defer the retrievable-corpus subset out of the inline set (resolveCorpusInlinePlan); the
+    // offered search_knowledge_base tool fetches those on demand. Only knowledge IDs are affected -
+    // message/session fab files and system files always inline.
+    const deferred = new Set(deferredKnowledgeIds);
+    const inlineKnowledgeIds = deferred.size
+      ? sessionKnowledgeIds.filter(id => !deferred.has(id))
+      : sessionKnowledgeIds;
+
     // Pre-compute file dedup (synchronous) before deciding whether to skip
     const allFileIdsBeforeDedup = [
       ...sessionFabFileIds,
       ...messageFileIds,
       ...enabledSystemFileIds,
       ...globalSystemFileIds,
-      ...sessionKnowledgeIds,
+      ...inlineKnowledgeIds,
     ];
     const dedupedFileIds = Array.from(new Set(allFileIdsBeforeDedup));
 
