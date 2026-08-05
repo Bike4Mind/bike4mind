@@ -742,53 +742,68 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return Object.fromEntries(scopes.map((scope, i) => [scope.datalakeTag, counts[i]]));
   }
 
-  async archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
+  // The teardown/restore pair below is stamp-keyed. A caller passes `at` to write one shared stamp
+  // across every row a sweep flips, records that value on the lake, and later passes it back as
+  // `stampedAt` to act on exactly that batch. Equality, not a range: a lower bound would also match
+  // a file the creator deleted DURING the deleted window (the per-file routes stamp `deletedAt`
+  // too), which is the whole class of file that must stay deleted through a restore. Omitting
+  // `stampedAt` matches every stamped row, which is the pre-mark behavior and the fallback for a
+  // lake torn down before the mark existed.
+
+  async archiveByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<number> {
     const result = await this.fabFileModel.updateMany(
       { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null },
-      { $set: { archivedAt: new Date() } }
+      { $set: { archivedAt: at } }
     );
     return result.modifiedCount;
   }
 
-  async unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
+  async unarchiveByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<number> {
     const result = await this.fabFileModel.updateMany(
-      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: { $ne: null } },
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: stampedAt ?? { $ne: null } },
       { $set: { archivedAt: null } }
     );
     return result.modifiedCount;
   }
 
-  async findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]> {
+  async findArchivedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: null,
-      archivedAt: { $ne: null },
+      archivedAt: stampedAt ?? { $ne: null },
     });
     return result.map(d => d.toJSON());
   }
 
-  async findDeletedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]> {
+  async findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]> {
+    // `includeDeleted` is load-bearing for BOTH forms, not just tidiness: the soft-delete plugin's
+    // find hook does `this.where({ deletedAt: null })`, which REPLACES the condition on that key, so
+    // without the option this query silently returns nothing.
     const result = await this.fabFileModel
-      .find({ ...buildDataLakeMembershipFilter(scope), deletedAt: { $ne: null } })
+      .find({ ...buildDataLakeMembershipFilter(scope), deletedAt: stampedAt ?? { $ne: null } })
       .setOptions({ includeDeleted: true });
     return result.map(d => d.toJSON());
   }
 
-  async undeleteByDataLakeTag(scope: DataLakeMembershipScope, excludeIds: string[] = []): Promise<number> {
+  async undeleteByDataLakeTag(
+    scope: DataLakeMembershipScope,
+    excludeIds: string[] = [],
+    stampedAt?: Date
+  ): Promise<number> {
     const filter: Record<string, unknown> = {
       ...buildDataLakeMembershipFilter(scope),
-      deletedAt: { $ne: null },
+      deletedAt: stampedAt ?? { $ne: null },
     };
     if (excludeIds.length > 0) filter._id = { $nin: excludeIds };
     const result = await this.fabFileModel.updateMany(filter, { $set: { deletedAt: null } });
     return result.modifiedCount;
   }
 
-  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
+  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<string[]> {
     const docs = await this.fabFileModel.find({ ...buildDataLakeMembershipFilter(scope), deletedAt: null }, { _id: 1 });
     const ids = docs.map(d => d._id.toString());
     if (ids.length === 0) return [];
-    await this.fabFileModel.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: new Date() } });
+    await this.fabFileModel.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: at } });
     return ids;
   }
 
