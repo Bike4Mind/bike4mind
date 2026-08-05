@@ -18,20 +18,26 @@
  * will fit does not have to build a completion to find out.
  */
 
-import type { ModelInfo } from '@bike4mind/common';
-
-/** Safety buffer held back from the context window before anything is reserved. */
-export const CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS = 1000;
+import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, type ModelInfo } from '@bike4mind/common';
 
 /**
  * Usable input window: the context window less the output this request will reserve, less a safety
  * buffer. Deliberately NOT clamped at zero - the caller's empty-prompt guard depends on seeing a
  * non-positive budget for a genuinely misconfigured text model.
  *
- * Image and video models return media rather than tokens, and most media rows set max_tokens equal to
- * contextWindow because both are the prompt-length limit, so reserving it as output left no room for
- * the prompt itself. Several callers need this figure - the assembly budget, the verbatim-history
- * window, and the extraction budget below - and they must not drift apart.
+ * Image and video models return media rather than tokens, so their max_tokens is a prompt-length limit
+ * and is never reserved as output - most media rows set it equal to contextWindow, Gemini's image rows
+ * set it lower, and either way subtracting it would leave no room for the prompt itself. Several
+ * callers need this figure - the assembly budget, the verbatim-history window, and the extraction
+ * budget below - and they must not drift apart.
+ *
+ * The static catalog tables are held to the positive-budget property by
+ * modelCatalogInputBudget.test.ts, and a discovered claim that would break it for a TEXT row is
+ * refused in modelDiscoveryService/catalogWrite. Neither covers a media row whose window arrives as 0
+ * from a feed, where the buffer still makes this negative.
+ *
+ * The buffer figure is imported rather than redeclared here: common owns it, and two copies of the
+ * same number is the drift that made it a shared export in the first place.
  */
 export function safeInputWindow(
   modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens' | 'type'>,

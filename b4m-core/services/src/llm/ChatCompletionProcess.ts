@@ -151,6 +151,7 @@ import {
   HELP_CENTER_PROMPT,
   ABSTENTION_PROMPT,
   ELISION_WARNING,
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 
@@ -1766,7 +1767,9 @@ export class ChatCompletionProcess {
       // attachedFileTokenBudget below), so the adaptive default must not balloon it.
       const urlContentBudget = maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS;
 
-      const safetyBuffer = 1000; // Emergency buffer
+      // The same figure the catalog tests hold rows to, so CI's rule cannot end up looser
+      // than what this call actually reserves. Reported as bufferTokens in the telemetry below.
+      const safetyBuffer = CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS;
       // safeMaxTokens, not the raw (possibly absent) requested maxTokens: this reserves against the
       // output budget actually in play, including the adaptive-reasoning floor above, or an adaptive
       // model could reserve less than it goes on to use and land back on the negative-window bug this

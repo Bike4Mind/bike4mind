@@ -60,7 +60,10 @@ describe('auditSeatCeilingRaised', () => {
     );
 
     expect(mockLogAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ adminUserId: 'admin-9', metadata: expect.objectContaining({ trigger: 'admin-backfill' }) }),
+      expect.objectContaining({
+        adminUserId: 'admin-9',
+        metadata: expect.objectContaining({ trigger: 'admin-backfill' }),
+      }),
       logger
     );
   });
