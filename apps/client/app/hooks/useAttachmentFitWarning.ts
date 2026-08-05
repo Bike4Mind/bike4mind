@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import axios from 'axios';
+import { api } from '@client/app/contexts/ApiContext';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import type { AttachmentFitWarning } from '@client/app/components/Session/ContextUsageWarning';
@@ -64,7 +64,10 @@ export function useAttachmentFitWarning(modelId: string | null | undefined): Att
     staleTime: 5 * 60 * 1000,
     retry: false,
     queryFn: async () => {
-      const res = await axios.post<{ files: DryRunFile[]; textFileCount: number }>('/api/ai/context-dry-run', {
+      // The shared authed client, NOT bare axios: this route requires a bearer token, and an
+      // unauthenticated call 401s, which with retry:false leaves data undefined and the banner silent -
+      // indistinguishable from "the file fits".
+      const res = await api.post<{ files: DryRunFile[]; textFileCount: number }>('/api/ai/context-dry-run', {
         contextWindow: model?.contextWindow,
         maxOutputTokens: model?.max_tokens,
         modelType: model?.type,

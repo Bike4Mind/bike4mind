@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { describe, expect, it } from 'vitest';
 import { deriveAttachmentFitWarning, type DryRunFile } from './useAttachmentFitWarning';
 
@@ -93,5 +95,22 @@ describe('deriveAttachmentFitWarning', () => {
     const warning = deriveAttachmentFitWarning([file({ deliveredFraction: 0.4, measured: 'fileSize' })], 1);
 
     expect(warning?.measured).toBe('fileSize');
+  });
+});
+
+// Source-level guard, in the spirit of the repo's fabFileModerationGate test. This shipped once with
+// bare `axios.post`, which sends no bearer token: the route 401s, react-query is configured retry:false
+// so `data` stays undefined, and the hook returns null - indistinguishable from "the file fits". Every
+// unit test here still passed, because they exercise the decision function and not the transport. Only
+// driving the real UI caught it, so this pins the transport instead.
+describe('transport', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'useAttachmentFitWarning.ts'), 'utf8');
+
+  it('calls the route through the authenticated api client, never bare axios', () => {
+    expect(source).toMatch(/from '@client\/app\/contexts\/ApiContext'/);
+    expect(source).toMatch(/api\.post</);
+    expect(source, 'bare axios sends no bearer token; the route 401s and the banner goes silent').not.toMatch(
+      /from 'axios'/
+    );
   });
 });
