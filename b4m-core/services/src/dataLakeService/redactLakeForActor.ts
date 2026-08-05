@@ -1,4 +1,4 @@
-import type { AccessContext, IDataLakeDocument } from '@bike4mind/common';
+import type { AccessContext, IDataLake, IDataLakeDocument } from '@bike4mind/common';
 import { canManageLake } from './authorizeLakeWrite';
 
 /**
@@ -9,8 +9,9 @@ import { canManageLake } from './authorizeLakeWrite';
  * this list, so `toReaderLake` never emits it.
  *
  * `satisfies readonly (keyof IDataLakeDocument)[]` makes a typo or a renamed field a COMPILE error,
- * and the redaction suite in `dataLakeService.test.ts` pins the served key set at runtime - so adding
- * a field to `IDataLake` forces a reader-visibility decision rather than leaking it silently.
+ * and the redaction suite in `dataLakeService.test.ts` pins the served key set at runtime. Neither
+ * catches a field added to `IDataLake` and named nowhere - a list of strings has no way to notice
+ * an absence - so `LAKE_FIELD_VISIBILITY` below is what forces the decision.
  *
  * Membership deliberately reproduces exactly what a reader receives today (see #1112): the
  * obviously-public fields plus `createdByUserId`, `organizationId`, `requiredUserTag` and
@@ -39,6 +40,35 @@ export const READER_LAKE_FIELDS = [
 
 /** A lake as served to a non-editor: the allow-listed subset, with `systemPrompt` unreachable. */
 export type ReaderDataLake = Pick<IDataLakeDocument, (typeof READER_LAKE_FIELDS)[number]>;
+
+/**
+ * Every `IDataLake` field, classified. Keyed by `keyof IDataLake`, so a field added to the entity
+ * and classified nowhere is a compile error here - which is the part `READER_LAKE_FIELDS` cannot
+ * do, being a list of strings a new field can simply never join. The document-only keys
+ * (`id`/`createdAt`/`updatedAt`) are not `IDataLake` fields and stay out; a test pins this against
+ * `READER_LAKE_FIELDS` so the two cannot drift.
+ */
+export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld'> = {
+  name: 'reader',
+  slug: 'reader',
+  description: 'reader',
+  // Steers every answer drawn from the lake, editable only by its editors.
+  systemPrompt: 'withheld',
+  fileTagPrefix: 'reader',
+  datalakeTag: 'reader',
+  requiredUserTag: 'reader',
+  requiredEntitlement: 'reader',
+  createdByUserId: 'reader',
+  organizationId: 'reader',
+  isPublic: 'reader',
+  status: 'reader',
+  fileCount: 'reader',
+  totalSizeBytes: 'reader',
+  lastSyncAt: 'reader',
+  // Teardown bookkeeping: of no use to a reader, and it reports when the owner tore the lake down.
+  filesDeletedAt: 'withheld',
+  filesArchivedAt: 'withheld',
+};
 
 /**
  * Project a lake down to the reader allow-list. Only ever emits fields named in
