@@ -23,12 +23,12 @@ import { BoundedTopK } from '../dataLakeService';
  *
  * The bound is NOT a coverage budget: hitting it THROWS rather than quietly returning a prefix,
  * because a scan that stops short without saying so is the failure this change exists to remove.
- * It is set far past any real account (2,000,000 mementos), so reaching it means the repository is
+ * It is set far past any real account (400,000 mementos), so reaching it means the repository is
  * misbehaving - returning rows out of `_id` order, or ignoring the cursor in a way the strict
  * advance check below cannot see. Cursor advance alone proves PROGRESS, not termination.
  */
 const MEMENTO_PAGE_SIZE = 200;
-const MEMENTO_MAX_PAGES = 10_000;
+const MEMENTO_MAX_PAGES = 2_000;
 
 /**
  * Result type for memento retrieval with similarity score
@@ -203,7 +203,7 @@ export async function getRelevantMementos(
     let cursor: string | undefined;
 
     for (let page = 0; ; page++) {
-      if (page >= MEMENTO_MAX_PAGES) {
+      if (page > MEMENTO_MAX_PAGES) {
         throw new Error(
           `[getRelevantMementos] memento walk exceeded ${MEMENTO_MAX_PAGES} pages for user ${userId}; ` +
             `refusing to score a prefix silently`

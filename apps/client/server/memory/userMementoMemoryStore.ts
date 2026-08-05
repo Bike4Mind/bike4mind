@@ -29,7 +29,7 @@ const PROFILE_PAGE_SIZE = 200;
  * repository is misbehaving, which cursor-advance alone cannot detect (advance proves progress, not
  * termination).
  */
-const PROFILE_MAX_PAGES = 10_000;
+const PROFILE_MAX_PAGES = 2_000;
 
 /**
  * Exactly the fields `userMementosToProfile` folds - nothing more. Without a projection the read
@@ -57,7 +57,7 @@ export function createUserMementoMemoryStore(deps: { mementos: UserMementoReader
       let cursor: string | undefined;
 
       for (let page = 0; ; page++) {
-        if (page >= PROFILE_MAX_PAGES) {
+        if (page > PROFILE_MAX_PAGES) {
           throw new Error(
             `[userMementoMemoryStore] profile walk exceeded ${PROFILE_MAX_PAGES} pages for ${deps.ownerUserId}; ` +
               `refusing to return a partial profile silently`

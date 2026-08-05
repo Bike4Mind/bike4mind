@@ -282,12 +282,15 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             const chunkLabel = leftUnread ? `${totalChunks} (${chunksRead} read)` : `${totalChunks}`;
             // Name the actual reason. A file of many tiny chunks can exhaust the page cap without ever
             // filling the budget, and reporting that as a budget truncation sends a reader looking at
-            // max_chars for a limit that had nothing to do with it.
-            const charLabel = hitPageCap
-              ? `${content.length} (truncated at the chunk-page cap)`
-              : truncated || leftUnread
-                ? `${content.length} (truncated at budget)`
-                : `${content.length}`;
+            // max_chars for a limit that had nothing to do with it. Gated on leftUnread as well: a file
+            // that ends exactly ON the last allowed page was delivered whole, and calling that a
+            // truncation is the same cry-wolf defect in the other direction.
+            const charLabel =
+              hitPageCap && leftUnread
+                ? `${content.length} (truncated at the chunk-page cap)`
+                : truncated || leftUnread
+                  ? `${content.length} (truncated at budget)`
+                  : `${content.length}`;
 
             sections.push(
               `### ${file.fileName} (ID: ${file.id})\n` +

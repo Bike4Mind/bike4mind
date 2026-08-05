@@ -474,3 +474,72 @@ describe('retrieve_knowledge_content bounds its chunk read', () => {
     expect(out).toContain('chunk reader unavailable');
   });
 });
+
+/**
+ * The two guards on the paged read that no other test reaches: the page cap, and the cursor that
+ * fails to advance. Both were added with the paging and neither would fail if it were deleted.
+ */
+describe('retrieve_knowledge_content paged-read guards', () => {
+  const PAGE_SIZE = 50;
+  const MAX_PAGES = 200;
+  const CAP_CHUNKS = PAGE_SIZE * MAX_PAGES; // 10000: the most the cap can read
+
+  const ctxWith = (repo: unknown) => {
+    const ctx = makeContext({ retrievalFilter: {} });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = repo;
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Handbook.pdf' })
+    );
+    return ctx;
+  };
+
+  /**
+   * `max_chars` at the absolute maximum is what makes the page cap reachable AT ALL. Even a chunk with
+   * empty text accrues one separator character, so at the 8000 default the character budget always
+   * ends the walk before 10000 chunks and the cap is dead code. That is worth knowing on its own.
+   */
+  const runBigBudget = (ctx: ToolContext) => {
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    return tool.toolFn({ file_id: FILE_ID, max_chars: 16000 }) as Promise<string>;
+  };
+
+  const emptyChunks = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `c-${String(i).padStart(7, '0')}`, text: '' }));
+
+  it('names the page cap, not the budget, when the cap is what stopped the walk', async () => {
+    // One page-worth beyond what the cap can read, so chunks are genuinely left unread.
+    const ctx = ctxWith(pagedTextChunkRepo(emptyChunks(CAP_CHUNKS + PAGE_SIZE)));
+
+    const out = await runBigBudget(ctx);
+
+    expect(out).toContain('truncated at the chunk-page cap');
+    expect(out).not.toContain('truncated at budget');
+  });
+
+  it('does not call a whole file truncated just because it ended on the last allowed page', async () => {
+    // Exactly what the cap can read, nothing left over: delivered whole, so no truncation label at all.
+    const ctx = ctxWith(pagedTextChunkRepo(emptyChunks(CAP_CHUNKS)));
+
+    const out = await runBigBudget(ctx);
+
+    expect(out).not.toContain('truncated at the chunk-page cap');
+    expect(out).toContain(`Chunks: ${CAP_CHUNKS} |`);
+  });
+
+  it('stops on a cursor that does not advance instead of re-reading the same page', async () => {
+    // A repository ignoring afterChunkId. The throw is caught by the tool's own handler and surfaced as
+    // a refusal string rather than propagating - the point is that it STOPS, not that it rejects.
+    const stuck = {
+      findTextsByFabFileId: vi.fn(async () =>
+        Array.from({ length: PAGE_SIZE }, (_, i) => ({ id: `c-${String(i).padStart(7, '0')}`, text: 'body' }))
+      ),
+      countByFabFileId: vi.fn(async () => 99999),
+    };
+
+    const out = await runById(ctxWith(stuck));
+
+    expect(out).toContain('error occurred while retrieving');
+    // Bounded: it did not drain the page cap re-reading page one.
+    expect(stuck.findTextsByFabFileId.mock.calls.length).toBeLessThan(4);
+  });
+});
