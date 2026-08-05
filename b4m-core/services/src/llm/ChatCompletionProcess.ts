@@ -64,7 +64,11 @@ import {
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
-import { toRetrievalFilter, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
+import {
+  isRetrievalExcluded,
+  toRetrievalFilter,
+  type RetrievalExclusionOptions,
+} from '@bike4mind/utils/retrievalExclusion';
 import {
   resolveOutputMaxTokens,
   getAvailableModels,
@@ -885,6 +889,8 @@ export class ChatCompletionProcess {
     attachedFileTokenBudget: number;
     skipAutoOffers: boolean;
     defaultAdminSettings: Record<string, string>;
+    /** The SAME filter the knowledge tools are built with - see the retrievability comment below. */
+    retrievalFilter: RetrievalExclusionOptions;
   }): Promise<{
     deferredKnowledgeIds: string[];
     attachedCount: number;
@@ -892,7 +898,8 @@ export class ChatCompletionProcess {
     deferredToRetrieval: boolean;
     minInlineTokensPerDoc: number;
   }> {
-    const { sessionKnowledgeIds, attachedFileTokenBudget, skipAutoOffers, defaultAdminSettings } = input;
+    const { sessionKnowledgeIds, attachedFileTokenBudget, skipAutoOffers, defaultAdminSettings, retrievalFilter } =
+      input;
     const attachedCount = sessionKnowledgeIds.length;
 
     // getSettingsValue coerces via the setting's Zod schema, so this is a number (0 by default).
@@ -944,7 +951,14 @@ export class ChatCompletionProcess {
           // this onto isForeignEmbeddingModel - that loosens the gate to defer unlabeled docs the
           // semantic arm may not actually reach, which is the content-losing direction.
           const sameVectorSpace = Boolean(queryEmbeddingModel) && file.embeddingModel === queryEmbeddingModel;
-          return lakeTagged && fullyVectorized && sameVectorSpace;
+          // The tool is built with `retrievalFilter: toRetrievalFilter(session)` and enforces it on
+          // BOTH arms, so a doc the filter excludes is unreachable however well vectorized it is.
+          // Checking the same predicate here is what stops the two lists diverging - the gap this
+          // closes was a lake-tagged, fully-vectorized doc matching a session exclusion marker being
+          // deferred and then dropped by the tool, losing it silently. Mirrors `isLiveVisibleFile` in
+          // knowledgeBaseRetrieve, which is the canonical "can the tool reach this file" predicate.
+          const liveAndReachable = !file.deletedAt && !file.archivedAt && !isRetrievalExcluded(file, retrievalFilter);
+          return lakeTagged && fullyVectorized && sameVectorSpace && liveAndReachable;
         })
         .map(file => file.id);
 
@@ -2023,6 +2037,8 @@ export class ChatCompletionProcess {
         attachedFileTokenBudget,
         skipAutoOffers,
         defaultAdminSettings,
+        // Same mapping the tool build uses below, so the plan and the tool cannot disagree.
+        retrievalFilter: toRetrievalFilter(session),
       });
 
       const dataSources = await this.buildDataSources({
