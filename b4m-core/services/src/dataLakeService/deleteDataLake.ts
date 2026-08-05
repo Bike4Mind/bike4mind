@@ -13,7 +13,7 @@ interface DeleteDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
-    fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag'>;
+    fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findIdsByDataLakeTag'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
@@ -51,8 +51,12 @@ export const deleteDataLake = async (
   await db.dataLakes.update({ id: dataLakeId, status: 'deleting' });
 
   await warnOnPrefixCollision(db, existing, logger);
-  await db.fabFiles.softDeleteByDataLakeTag(lakeMembershipScope(existing));
-  await bestEffortIndexRemove(retrievalIndex, existing.datalakeTag, logger);
+  const scope = lakeMembershipScope(existing);
+  await db.fabFiles.softDeleteByDataLakeTag(scope);
+  // Not softDeleteByDataLakeTag's return: it reports only the files this call flipped, so a re-run
+  // after a crashed attempt would hand the index an empty set. findIdsByDataLakeTag sees
+  // soft-deleted members too and stays stable across re-runs.
+  await bestEffortIndexRemove(retrievalIndex, scope, () => db.fabFiles.findIdsByDataLakeTag(scope), logger);
 
   const updated = await db.dataLakes.update({ id: dataLakeId, status: 'deleted' });
   if (!updated) {

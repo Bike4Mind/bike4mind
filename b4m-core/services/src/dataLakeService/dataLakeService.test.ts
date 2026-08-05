@@ -9,6 +9,9 @@ import {
 import { canAccessLake, assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
 import { canManageLake, assertLakeWriteAccess, assertCanWriteDataLakeTags } from './authorizeLakeWrite';
 import { createDataLake } from './createDataLake';
+import { archiveDataLake } from './archiveDataLake';
+import { deleteDataLake } from './deleteDataLake';
+import type { RetrievalIndexRemoval } from './ports';
 import { unarchiveDataLake } from './unarchiveDataLake';
 import { restoreDeletedDataLake } from './restoreDeletedDataLake';
 import { cleanupDeletedDataLake } from './cleanupDeletedDataLake';
@@ -38,6 +41,23 @@ const lakeScope = {
   fileTagPrefix: 'lk:',
   creatorUserId: 'owner',
 };
+
+/**
+ * What findIdsByDataLakeTag resolves for the `lake()` fixture. The second is the member a
+ * meta-tag-keyed removal could never reach; that the Mongo predicate genuinely selects a
+ * prefix-only file is proved real-DB in FabFileModel.dataLakeLifecycle.test.ts, not here.
+ */
+const memberIds = ['meta-tagged-file', 'prefix-only-file'];
+
+const indexPort = (behavior: 'ok' | 'fails' = 'ok') => ({
+  removeForDataLake:
+    behavior === 'ok'
+      ? vi.fn().mockResolvedValue(undefined)
+      : vi.fn().mockRejectedValue(new Error('index unreachable')),
+});
+
+const removalInput = (port: ReturnType<typeof indexPort>): RetrievalIndexRemoval =>
+  port.removeForDataLake.mock.calls[0][0];
 
 const ctx = (overrides: Partial<AccessContext> = {}): AccessContext => ({
   userId: 'someone',
@@ -157,6 +177,52 @@ describe('canAccessLake — entitlement-aware any-of (tag-retirement)', () => {
     // a user who holds only the bare `product` tag/key (the 1:1 passthrough) without `product:pro`.
     const l = lake({ requiredEntitlement: 'product:pro' });
     expect(canAccessLake(l, ctx({ userTags: ['product'], entitlementKeys: ['product'] }))).toBe(false);
+  });
+});
+
+describe('canAccessLake — org id shape parity with the casting collection query', () => {
+  // findAccessible matches an org lake via a Mongo query that CASTS types, so an org member
+  // whose ctx.organizationId is an ObjectId or a populated Organization doc still lands in the
+  // list. canAccessLake compares in memory, so it must reach the SAME grant for every shape -
+  // otherwise the single-lake gate 404s a lake the caller's own list returns. Each shape below
+  // stands in for the same org value the collection query matched on.
+  const orgHex = '507f1f77bcf86cd799439011';
+  const orgLake = lake({ id: 'orgLake', organizationId: orgHex, createdByUserId: 'admin' });
+
+  it('grants a same-org member when ctx.organizationId is a matching string', () => {
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: orgHex }))).toBe(true);
+  });
+
+  it('grants a same-org member when ctx.organizationId is an ObjectId', () => {
+    const objectId = { toHexString: () => orgHex } as unknown as string;
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: objectId }))).toBe(true);
+  });
+
+  it('grants a same-org member when ctx.organizationId is a populated Organization document', () => {
+    const populated = { _id: { toHexString: () => orgHex }, name: 'Acme' } as unknown as string;
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: populated }))).toBe(true);
+  });
+
+  it('still DENIES a member of a different org across every shape', () => {
+    const otherHex = '507f191e810c19729de860ea';
+    const otherObjectId = { toHexString: () => otherHex } as unknown as string;
+    const otherPopulated = { _id: { toHexString: () => otherHex } } as unknown as string;
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: otherHex }))).toBe(false);
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: otherObjectId }))).toBe(false);
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: otherPopulated }))).toBe(false);
+  });
+
+  it('fails CLOSED: a lake with a truthy-but-not-id-shaped org and no gate denies a non-owner', () => {
+    // Guards the fail-open asymmetry: private-by-default and the org-match check must both read
+    // the SAME normalized lake org id. A garbage org (normalizes to undefined) with no gate must
+    // deny a non-owner, not fall through to public.
+    const garbageOrgLake = lake({
+      id: 'garbageOrg',
+      organizationId: { not: 'an id' } as unknown as string,
+      createdByUserId: 'owner',
+    });
+    expect(canAccessLake(garbageOrgLake, ctx({ userId: 'member', organizationId: 'orgA' }))).toBe(false);
+    expect(canAccessLake(garbageOrgLake, ctx({ userId: 'owner' }))).toBe(true); // owner still in
   });
 });
 
@@ -953,6 +1019,143 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
   });
 });
 
+describe('archiveDataLake - retrieval-index removal', () => {
+  const makeAdapters = () => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake()),
+        update: vi
+          .fn()
+          .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
+        setStats: vi.fn().mockResolvedValue(undefined),
+        find: vi.fn().mockResolvedValue([]),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        archiveByDataLakeTag: vi.fn().mockResolvedValue(2),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue(memberIds),
+      },
+    },
+    logger: { warn: vi.fn() },
+  });
+
+  it('hands the index the whole membership scope and every member id', async () => {
+    const adapters = makeAdapters();
+    const retrievalIndex = indexPort();
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
+
+    // The scope, not the meta-tag: stripped of fileTagPrefix and creatorUserId an implementer
+    // cannot reach the prefix-only member the sweep just archived.
+    expect(removalInput(retrievalIndex)).toEqual({ scope: lakeScope, fabFileIds: memberIds });
+    expect(removalInput(retrievalIndex).fabFileIds).toContain('prefix-only-file');
+  });
+
+  it('still settles the lake to archived when the index removal throws', async () => {
+    const adapters = makeAdapters();
+    await expect(
+      archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+        ...adapters,
+        retrievalIndex: indexPort('fails'),
+      })
+    ).resolves.toMatchObject({ status: 'archived' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Best-effort index removal failed for datalake:lake'),
+      expect.any(Error)
+    );
+  });
+
+  it('resolves no member ids when no index is wired', async () => {
+    const adapters = makeAdapters();
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+    expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope);
+  });
+
+  it('survives a member-id lookup that itself fails', async () => {
+    const adapters = makeAdapters();
+    // The resolver is lazy and inside the try precisely so this cannot abort a best-effort op.
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockRejectedValue(new Error('mongo down'));
+    await expect(
+      archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex: indexPort() })
+    ).resolves.toMatchObject({ status: 'archived' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Best-effort index removal failed for datalake:lake'),
+      expect.any(Error)
+    );
+  });
+});
+
+describe('deleteDataLake - phase 1 retrieval-index removal', () => {
+  const makeAdapters = () => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake()),
+        update: vi
+          .fn()
+          .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
+        find: vi.fn().mockResolvedValue([]),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        // Empty is the re-run shape - a crashed prior attempt already flipped these files, so the
+        // flip reports nothing. Sourcing ids from it would send the index an empty set.
+        softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue(memberIds),
+      },
+    },
+    logger: { warn: vi.fn() },
+  });
+
+  it('hands the index every member id even when the soft-delete flipped nothing', async () => {
+    const adapters = makeAdapters();
+    const retrievalIndex = indexPort();
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
+
+    expect(removalInput(retrievalIndex)).toEqual({ scope: lakeScope, fabFileIds: memberIds });
+    expect(removalInput(retrievalIndex).fabFileIds).toContain('prefix-only-file');
+  });
+
+  it('still settles the lake to deleted when the index removal throws', async () => {
+    const adapters = makeAdapters();
+    await expect(
+      deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+        ...adapters,
+        retrievalIndex: indexPort('fails'),
+      })
+    ).resolves.toMatchObject({ status: 'deleted' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Best-effort index removal failed for datalake:lake'),
+      expect.any(Error)
+    );
+  });
+
+  it('resolves no member ids when no index is wired', async () => {
+    const adapters = makeAdapters();
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+    expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope);
+  });
+
+  it('survives a member-id lookup that itself fails', async () => {
+    const adapters = makeAdapters();
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockRejectedValue(new Error('mongo down'));
+    await expect(
+      deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex: indexPort() })
+    ).resolves.toMatchObject({ status: 'deleted' });
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Best-effort index removal failed for datalake:lake'),
+      expect.any(Error)
+    );
+  });
+});
+
 describe('cleanupDeletedDataLake — phase 2 sweep', () => {
   const makeAdapters = (status: IDataLakeDocument['status']) => ({
     db: {
@@ -963,7 +1166,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
       batches: { find: vi.fn().mockResolvedValue([{ id: 'b1' }]), delete: vi.fn().mockResolvedValue(undefined) },
       fabFiles: {
         findIdsByDataLakeTag: vi.fn().mockResolvedValue(['f1', 'f2']),
-        hardDeleteByDataLakeTag: vi.fn().mockResolvedValue(['f1', 'f2']),
+        hardDeleteByIds: vi.fn().mockResolvedValue(['f1', 'f2']),
       },
       fabFileChunks: { deleteManyByFabFileId: vi.fn().mockResolvedValue(undefined) },
     },
@@ -980,7 +1183,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     const adapters = makeAdapters('deleted');
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledTimes(2);
-    expect(adapters.db.fabFiles.hardDeleteByDataLakeTag).toHaveBeenCalled();
+    expect(adapters.db.fabFiles.hardDeleteByIds).toHaveBeenCalled();
     expect(adapters.db.batches.delete).toHaveBeenCalledWith('b1');
     expect(adapters.db.dataLakes.delete).toHaveBeenCalledWith('lake1');
   });
@@ -991,6 +1194,57 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     await expect(
       cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters)
     ).resolves.toBeUndefined();
+    expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+
+  it('hands the index the whole membership scope and every member id, before it destroys any of them', async () => {
+    const adapters = makeAdapters('deleted');
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValue(memberIds);
+    const retrievalIndex = indexPort();
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
+
+    expect(removalInput(retrievalIndex)).toEqual({ scope: lakeScope, fabFileIds: memberIds });
+    expect(removalInput(retrievalIndex).fabFileIds).toContain('prefix-only-file');
+
+    const indexRemove = retrievalIndex.removeForDataLake.mock.invocationCallOrder[0];
+    expect(indexRemove).toBeLessThan(
+      Math.min(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder)
+    );
+    expect(indexRemove).toBeLessThan(adapters.db.fabFiles.hardDeleteByIds.mock.invocationCallOrder[0]);
+  });
+
+  it('purges exactly the ids it announced, so a mid-sweep joiner is not destroyed unaccounted for', async () => {
+    const adapters = makeAdapters('deleted');
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValue(memberIds);
+    const retrievalIndex = indexPort();
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
+
+    // By id, never by re-running the predicate: a file tagged into the lake after the resolve
+    // would otherwise be hard-deleted with its chunks intact and the index never told.
+    expect(adapters.db.fabFiles.hardDeleteByIds).toHaveBeenCalledWith(memberIds);
+    expect(removalInput(retrievalIndex).fabFileIds).toEqual(memberIds);
+    // Resolved once and reused. Re-resolving before the purge would pass the assertions above
+    // while reopening the window they exist to close.
+    expect(adapters.db.fabFiles.findIdsByDataLakeTag).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the purge with nothing destroyed when the index removal fails', async () => {
+    const adapters = makeAdapters('deleted');
+    await expect(
+      cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+        ...adapters,
+        retrievalIndex: indexPort('fails'),
+      })
+    ).rejects.toThrow(/index unreachable/);
+
+    // Unlike the reversible doors this one propagates, because an entry pointing at a purged file
+    // can never be reconciled. The queue retry re-runs the whole sweep, so leaving it zero-progress
+    // is what makes propagating safe.
+    expect(adapters.db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.hardDeleteByIds).not.toHaveBeenCalled();
+    expect(adapters.db.batches.delete).not.toHaveBeenCalled();
     expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
   });
 
@@ -1007,7 +1261,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
 
     // Ordering contract: last chunk delete -> hard-delete files -> first batch delete -> lake last.
     const lastChunk = Math.max(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder);
-    const hardDelete = adapters.db.fabFiles.hardDeleteByDataLakeTag.mock.invocationCallOrder[0];
+    const hardDelete = adapters.db.fabFiles.hardDeleteByIds.mock.invocationCallOrder[0];
     const firstBatch = Math.min(...adapters.db.batches.delete.mock.invocationCallOrder);
     const lakeDelete = adapters.db.dataLakes.delete.mock.invocationCallOrder[0];
     expect(lastChunk).toBeLessThan(hardDelete);

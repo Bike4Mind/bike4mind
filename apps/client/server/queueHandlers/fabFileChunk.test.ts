@@ -108,3 +108,31 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
   });
 });
+
+describe('fabFileChunk handler - passage target passthrough (#1420)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1' });
+    h.chunkFabfile.mockResolvedValue([]);
+  });
+
+  it('forwards a payload chunkSize to chunkFabfile as passageTokenTarget', async () => {
+    // chunkSize was historically transported and silently dropped; it must reach the service.
+    await dispatch(makeEvent({ ...payload, chunkSize: '750' }), {} as never, mockLogger);
+    expect(h.chunkFabfile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ passageTokenTarget: 750 }),
+      expect.anything()
+    );
+  });
+
+  it('omits passageTokenTarget when the payload has no chunkSize (chunker default applies)', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.chunkFabfile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ passageTokenTarget: undefined }),
+      expect.anything()
+    );
+  });
+});
