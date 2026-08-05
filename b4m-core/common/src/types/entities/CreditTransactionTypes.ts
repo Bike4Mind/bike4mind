@@ -20,7 +20,13 @@ const BaseCreditTransaction = z.object({
    */
   credits: z.number(),
   description: z.string().optional(),
-  metadata: z.record(z.string(), z.any()).optional(), // For additional context
+  /**
+   * Free-form per-type context; the key set depends on the transaction `type`, so there is no
+   * writer-side contract. Values are `unknown` deliberately - readers must narrow rather than
+   * dereference straight through. Kept that way by CreditMetadataValuesStayNarrowed at the
+   * bottom of this file.
+   */
+  metadata: z.record(z.string(), z.unknown()).optional(),
   /**
    * Where this transaction originated - used to break down usage in reports.
    * Optional because legacy rows (and non-completion transactions like
@@ -218,9 +224,9 @@ export const TransferCreditTransaction = BaseCreditTransaction.extend({
  * Credit transaction
  *
  * IMPORTANT: When adding a new transaction type here, you MUST also update:
- * 1. packages/database/src/models/CreditTransactionModel.ts - Add to the `type` enum
- * 2. packages/database/src/models/CreditTransactionModel.ts - Add any new fields to schema
- * 3. packages/services/src/creditService/subtractCredits.ts - Add handler in switch statement
+ * 1. packages/database/src/models/billing/CreditTransactionModel.ts - Add to the `type` enum
+ * 2. packages/database/src/models/billing/CreditTransactionModel.ts - Add any new fields to schema
+ * 3. b4m-core/services/src/creditService/subtractCredits.ts - Add handler in switch statement
  * 4. apps/client/app/components/ProfileModal/CreditAnalyticsTabContent.tsx - Add filtering and display logic
  *
  * Failure to sync these files will cause validation errors in MongoDB.
@@ -473,3 +479,20 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
    */
   sourceUsageForOwner(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<ISourceUsage[]>;
 }
+
+// True only for `any`: `1 & any` collapses to `any`, so `0 extends any` holds.
+type IsAny<T> = 0 extends 1 & T ? true : false;
+type Expect<T extends true> = T;
+
+/**
+ * Compile-time guard: metadata values must stay `unknown`. `Record<string, any>` here silently
+ * disables checking for every consumer of the published declarations, so re-loosening it should
+ * break the build rather than rely on review. Same mechanism and reason as the guards in
+ * modelCatalog.ts - test files are outside tsconfig's include, so it lives in src.
+ *
+ * Interim: the general fix is a lint rule banning `z.any()` in entity schemas, which would retire
+ * this. Do not replicate it per field.
+ */
+export type CreditMetadataValuesStayNarrowed = Expect<
+  IsAny<NonNullable<ICreditTransaction['metadata']>[string]> extends true ? false : true
+>;
