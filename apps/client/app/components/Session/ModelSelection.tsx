@@ -18,7 +18,6 @@ import {
   Chat as ChatIcon,
   Image as ImageIcon,
   Videocam as VideoIcon,
-  Check as CheckIcon,
   StarRounded,
   StarBorderRounded,
 } from '@mui/icons-material';
@@ -41,7 +40,6 @@ import { sortModelsForPicker } from '@client/app/utils/modelRanking';
 import { useTheme } from '@mui/joy';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
-import { useLLM } from '@client/app/contexts/LLMContext';
 import {
   getModelPriceTier,
   isOpenAIModel,
@@ -55,11 +53,11 @@ import {
   CornerBadge,
   MetricIndicators,
   NEW_BADGE_BG,
+  SelectedCheckIcon,
   formatContextWindow,
   formatNumber,
 } from './AISettings/modelIndicators';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
-import { isImageModel } from '@client/app/utils/commands';
 import { green, greenAlpha } from '@client/app/utils/themes/colors';
 import { useFavoriteModels } from '@client/app/hooks/useFavoriteModels';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
@@ -317,19 +315,7 @@ const ModelOption = React.memo(
           </Typography>
         </Tooltip>
         {/* Selected Checkmark - sits right of the model name */}
-        {isSelected && (
-          <CheckIcon
-            sx={{
-              fontSize: '16px',
-              flex: 'none',
-              color: green[800],
-              '& path': {
-                strokeWidth: '2px',
-                stroke: green[800],
-              },
-            }}
-          />
-        )}
+        {isSelected && <SelectedCheckIcon />}
       </Box>
     );
 
@@ -453,7 +439,10 @@ const ModelOption = React.memo(
     // to the control that sets it.
     const contextSummary = model.type === 'text' && (
       <Tooltip title={`${formatNumber(model.contextWindow)} token context window`} placement="top">
-        <Typography sx={{ fontSize: { xs: '12px' }, color: 'text.primary50', fontWeight: '500' }}>
+        {/* fit-content keeps the tooltip anchored to the number. Typography renders a block <p>,
+            which as a flex item in the list row's stretch column spanned the full card width, so
+            the tooltip centred itself over the middle of the row instead of over the text. */}
+        <Typography sx={{ fontSize: { xs: '12px' }, color: 'text.primary50', fontWeight: '500', width: 'fit-content' }}>
           {formatContextWindow(model.contextWindow)}
         </Typography>
       </Tooltip>
@@ -672,7 +661,6 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   } = useAccessibleModels();
   const theme = useTheme();
   const mode = theme.palette.mode;
-  const setLLM = useLLM(s => s.setLLM);
   const isAdmin = useUser(s => s.isAdmin);
   const setAdminTab = useAdminModal(s => s.setActiveTab);
   const navigate = useNavigate();
@@ -867,34 +855,14 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     return userToggledBackends;
   }, [debouncedSearchQuery, modelsByBackend, userToggledBackends]);
 
-  const selectModel = useCallback(
-    (selectedModel: ModelInfo) => {
-      setModel(selectedModel.id);
-
-      // Remember the selected model for future use when switching model types
-      if (isImageModel(selectedModel.id)) {
-        setLLM({ lastUsedImageModel: selectedModel.id });
-      } else {
-        setLLM({ lastUsedTextModel: selectedModel.id });
-      }
-    },
-    [setModel, setLLM]
-  );
-
+  // lastUsedTextModel / lastUsedImageModel now ride along in buildModelSelectionPatch, which
+  // setModel applies - see aiSettingsUtils.
   const handleModelSelect = useCallback(
     (selectedModel: ModelInfo) => {
-      selectModel(selectedModel);
+      setModel(selectedModel.id);
       onSelectionComplete?.();
     },
-    [onSelectionComplete, selectModel]
-  );
-
-  const handleSettingsClick = useCallback(
-    (selectedModel: ModelInfo) => {
-      selectModel(selectedModel);
-      onSettingsClick?.(selectedModel);
-    },
-    [onSettingsClick, selectModel]
+    [onSelectionComplete, setModel]
   );
 
   // The admin page owns its active tab in a store rather than a route param, so the
@@ -1349,7 +1317,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                         maxContextWindow={maxContextWindow}
                         maxTokens={maxTokens}
                         onSelect={handleModelSelect}
-                        onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
+                        onSettingsClick={onSettingsClick}
                         isFavorite={true}
                         onToggleFavorite={toggleFavorite}
                         avgResponseTimeByModel={avgResponseTimeByModel}
@@ -1490,7 +1458,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 maxContextWindow={maxContextWindow}
                                 maxTokens={maxTokens}
                                 onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
+                                onSettingsClick={onSettingsClick}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
                                 avgResponseTimeByModel={avgResponseTimeByModel}
@@ -1539,7 +1507,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 maxContextWindow={maxContextWindow}
                                 maxTokens={maxTokens}
                                 onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
+                                onSettingsClick={onSettingsClick}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
                                 avgResponseTimeByModel={avgResponseTimeByModel}
@@ -1588,7 +1556,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 maxContextWindow={maxContextWindow}
                                 maxTokens={maxTokens}
                                 onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
+                                onSettingsClick={onSettingsClick}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
                                 avgResponseTimeByModel={avgResponseTimeByModel}
@@ -1618,7 +1586,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           maxContextWindow={maxContextWindow}
                           maxTokens={maxTokens}
                           onSelect={handleModelSelect}
-                          onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
+                          onSettingsClick={onSettingsClick}
                           isFavorite={isFavorite(modelInfo.id)}
                           onToggleFavorite={toggleFavorite}
                           avgResponseTimeByModel={avgResponseTimeByModel}

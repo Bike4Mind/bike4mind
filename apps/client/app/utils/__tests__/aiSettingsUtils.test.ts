@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { computeDefaultMaxTokens, refitMaxTokensForModel } from '../aiSettingsUtils';
+import { buildModelSelectionPatch, computeDefaultMaxTokens, refitMaxTokensForModel } from '../aiSettingsUtils';
+import type { ModelInfo } from '@bike4mind/common';
 
 describe('computeDefaultMaxTokens', () => {
   it('falls back to the catalog max_tokens when contextWindow is missing/0', () => {
@@ -89,6 +90,38 @@ describe('refitMaxTokensForModel', () => {
 
     it('still lowers a value the model cannot accept', () => {
       expect(refitMaxTokensForModel(128000, small, { allowRaise: false })).toBe(16384);
+    });
+  });
+});
+
+describe('buildModelSelectionPatch', () => {
+  // Only the fields the patch reads; the rest of ModelInfo is irrelevant here.
+  const model = (over: Partial<ModelInfo>): ModelInfo =>
+    ({ id: 'gpt-4o', type: 'text', contextWindow: 128000, max_tokens: 16384, ...over }) as ModelInfo;
+
+  it('records a text model in the text slot', () => {
+    const patch = buildModelSelectionPatch(model({ id: 'gpt-4o', type: 'text' }));
+    expect(patch).toMatchObject({ model: 'gpt-4o', lastUsedTextModel: 'gpt-4o' });
+    expect(patch).not.toHaveProperty('lastUsedImageModel');
+  });
+
+  it('records an image model in the image slot', () => {
+    const patch = buildModelSelectionPatch(model({ id: 'gpt-image-1', type: 'image' }));
+    expect(patch).toMatchObject({ model: 'gpt-image-1', lastUsedImageModel: 'gpt-image-1' });
+    expect(patch).not.toHaveProperty('lastUsedTextModel');
+  });
+
+  it.each(['video', 'speech-to-text'] as const)('files a %s model under the text slot, as before', type => {
+    // Matches the isImageModel() name-list behavior this replaced: only image models get the
+    // image slot, everything else shares the text one.
+    const patch = buildModelSelectionPatch(model({ id: 'sora', type }));
+    expect(patch).toMatchObject({ lastUsedTextModel: 'sora' });
+    expect(patch).not.toHaveProperty('lastUsedImageModel');
+  });
+
+  it('resets max_tokens to the new model default', () => {
+    expect(buildModelSelectionPatch(model({ contextWindow: 32768, max_tokens: 16384 }))).toMatchObject({
+      max_tokens: 16384,
     });
   });
 });

@@ -73,6 +73,7 @@ import {
   MetricIndicators,
   ModelSpeed,
   NEW_BADGE_BG,
+  SelectedCheckIcon,
   SpecPill,
   formatContextWindow,
   formatNumber,
@@ -484,6 +485,11 @@ const AGENT_FRAME_CHECKBOX_SX = {
   '--variant-outlinedBg': greenAlpha[800][10],
   '--variant-outlinedHoverBg': greenAlpha[800][10],
   '--variant-outlinedActiveBg': greenAlpha[800][10],
+  // Joy sizes the tick at --Checkbox-size, i.e. the full 20px box, leaving it edge to edge with
+  // no breathing room inside the frame. The svg rule is not redundant: Joy's own icon reads the
+  // var, but Stream passes a Material CheckIcon that ignores it.
+  '--Icon-fontSize': '14px',
+  '& svg': { fontSize: 'var(--Icon-fontSize)' },
 } as const;
 
 /**
@@ -743,23 +749,25 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
 
             {/* Quest Master Toggle */}
             {isQuestMasterFeatureEnabled && (
-              <Tooltip title="Enable Quest Master">
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                  <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                    Quest Master
-                  </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
+                <Typography level="body-sm" sx={{ flexGrow: 0 }}>
+                  Quest Master
+                </Typography>
+                {/* Wraps the control alone. Around the whole pair it fired from the label too and
+                    centred itself across both, which read as belonging to neither. The native
+                    `title` came off the checkbox with it - it duplicated this one. */}
+                <Tooltip title="Enable Quest Master">
                   <Checkbox
                     checked={isQuestMasterEnabled}
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                       setLLM({ isQuestMasterEnabled: e.target.checked })
                     }
-                    title="Enable Quest Master"
                     color="success"
                     variant="outlined"
                     sx={isQuestMasterEnabled ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
                   />
-                </Box>
-              </Tooltip>
+                </Tooltip>
+              </Box>
             )}
 
             {/* Sits with the controls it resets. Everything handleReset touches - the token
@@ -785,8 +793,13 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
             transcription entries carry placeholder context values in the catalog (every Flux and
             gpt-image row is a flat 10000/10000), so the slider edited a number nothing reads.
             Gated on the catalog's own type rather than isImageModel(), which name-matches a
-            hardcoded list and would read the selected model instead of the one on screen. */}
-        {modelInfo.type === 'text' && (
+            hardcoded list and would read the selected model instead of the one on screen.
+
+            Also hidden while previewing a model you have not selected: max_tokens is a single
+            global value belonging to the active model, so pairing it with a previewed model's
+            contextWindow renders a split that is not real - Input can even go negative, and the
+            slider's value can fall outside its own max. "Use this model" brings it back. */}
+        {modelInfo.type === 'text' && modelInfo.id === model && (
           <Box sx={{ p: 0, mb: '28px' }}>
             <Box
               sx={{
@@ -2137,6 +2150,43 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 >
                   Back to models
                 </Button>
+
+                {/* Commit control. Opening this screen no longer selects the model (see
+                    ModelSelection's onSettingsClick), so it is a preview until this is pressed -
+                    and pressing it deliberately leaves the dialog open so the settings below can
+                    be adjusted straight after. */}
+                {(() => {
+                  const shown = detailsModel ?? modelInfo;
+                  if (!shown) return null;
+                  if (shown.id === typedModel) {
+                    // Tick trails the label here, unlike the cards: this sits at the row's right
+                    // edge, so leading with the glyph would leave it floating mid-row.
+                    return (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <Typography
+                          data-testid="model-current-label"
+                          sx={{ color: 'text.primary', fontSize: '14px', fontWeight: 400 }}
+                        >
+                          Current model
+                        </Typography>
+                        <SelectedCheckIcon />
+                      </Box>
+                    );
+                  }
+                  return (
+                    <Button
+                      variant="solid"
+                      color="primary"
+                      size="sm"
+                      data-testid="model-use-btn"
+                      disabled={shown.disabled}
+                      onClick={() => handleModelSelection(shown.id)}
+                      sx={{ fontSize: '14px', fontWeight: 400, flexShrink: 0 }}
+                    >
+                      Use this model
+                    </Button>
+                  );
+                })()}
               </Box>
 
               <Box sx={{ mt: '24px' }}>

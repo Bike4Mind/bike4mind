@@ -114,10 +114,12 @@ describe('ModelSelection apply behavior', () => {
     setLLM.mockClear();
   });
 
+  // lastUsedTextModel / lastUsedImageModel now ride along in buildModelSelectionPatch, which the
+  // setModel callback applies - covered in utils/__tests__/aiSettingsUtils.test.ts.
   it.each([
-    ['text', textModel, 'lastUsedTextModel'],
-    ['image', imageModel, 'lastUsedImageModel'],
-  ] as const)('applies a %s model and completes the selection when its card is clicked', (_, model, memoryKey) => {
+    ['text', textModel],
+    ['image', imageModel],
+  ] as const)('applies a %s model and completes the selection when its card is clicked', (_, model) => {
     const setModel = vi.fn();
     const onSelectionComplete = vi.fn();
     renderSelection({ setModel, onSelectionComplete });
@@ -125,11 +127,13 @@ describe('ModelSelection apply behavior', () => {
     fireEvent.click(screen.getByTestId(`model-card-${model.id}`));
 
     expect(setModel).toHaveBeenCalledWith(model.id);
-    expect(setLLM).toHaveBeenCalledWith({ [memoryKey]: model.id });
     expect(onSelectionComplete).toHaveBeenCalledOnce();
   });
 
-  it('opens View more without completing the selection', () => {
+  // The gear is a preview: it opens the per-model settings screen WITHOUT switching the session's
+  // model, so the "Use this model" button on that screen is the only thing that commits. Selecting
+  // here would make that button permanently read "Current model".
+  it('opens View more without selecting the model or completing the selection', () => {
     const setModel = vi.fn();
     const onSelectionComplete = vi.fn();
     const onSettingsClick = vi.fn();
@@ -137,8 +141,8 @@ describe('ModelSelection apply behavior', () => {
 
     fireEvent.click(screen.getByTestId(`model-view-more-${imageModel.id}`));
 
-    expect(setModel).toHaveBeenCalledWith(imageModel.id);
     expect(onSettingsClick).toHaveBeenCalledWith(imageModel);
+    expect(setModel).not.toHaveBeenCalled();
     expect(onSelectionComplete).not.toHaveBeenCalled();
   });
 });

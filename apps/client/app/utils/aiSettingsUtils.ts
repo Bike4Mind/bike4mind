@@ -247,4 +247,8 @@ export const buildModelSelectionPatch = (modelInfo: ModelInfo) => ({
   model: modelInfo.id,
   max_tokens: computeDefaultMaxTokens(modelInfo),
   ...(FIXED_TEMPERATURE_MODELS.has(modelInfo.id) && { temperature: 1.0 }),
+  // Per-kind memory, so switching between a text and an image model returns you to the last one
+  // you used of that kind rather than a default. Keyed on the catalog's type instead of the
+  // IMAGE_MODELS name list; video and speech-to-text land on the text slot, as before.
+  ...(modelInfo.type === 'image' ? { lastUsedImageModel: modelInfo.id } : { lastUsedTextModel: modelInfo.id }),
 });

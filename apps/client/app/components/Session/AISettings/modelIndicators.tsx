@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Tooltip, Typography } from '@mui/joy';
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
+import CheckIcon from '@mui/icons-material/Check';
 import ConstructionIcon from '@mui/icons-material/Construction';
 import SpeedIcon from '@mui/icons-material/Speed';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
@@ -56,6 +57,25 @@ export const NEW_BADGE_BG = '#A52ECD';
 // a different axis. Amazon Bedrock's own teal, so it reads as the platform rather than as
 // another status colour.
 export const BEDROCK_BADGE_BG = '#01A88D';
+
+/**
+ * The green tick marking the model currently in use. Shared by the list/grid cards and the
+ * per-model settings header so the "this is your model" signal is one glyph everywhere.
+ */
+export const SelectedCheckIcon: React.FC<{ size?: number }> = ({ size = 16 }) => (
+  <CheckIcon
+    sx={{
+      fontSize: `${size}px`,
+      flex: 'none',
+      color: green[800],
+      // The outline weight is what makes it read at 16px; the fill alone looks thin.
+      '& path': {
+        strokeWidth: '2px',
+        stroke: green[800],
+      },
+    }}
+  />
+);
 
 // Small label. Positioning lives at the call site so multiple badges line up; this only
 // draws the pill.
