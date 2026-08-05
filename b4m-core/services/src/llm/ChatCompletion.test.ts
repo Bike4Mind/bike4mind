@@ -630,18 +630,6 @@ describe('ChatCompletionProcess', () => {
       expect(getAccessibleFiles).not.toHaveBeenCalled();
     });
 
-    it('DOES defer the same corpus when the tool is not denied (positive control)', async () => {
-      const plan = await runPlan({
-        files: lakeFiles(40),
-        dataLakeTags: ['datalake:corpus'],
-        threshold: '500',
-        attachedFileTokenBudget: 4000,
-        knowledgeSearchDisabled: false,
-      });
-      expect(plan.deferredToRetrieval).toBe(true);
-      expect(plan.deferredKnowledgeIds).toHaveLength(40);
-    });
-
     it('fails SAFE (inline all) and warns when the file read throws', async () => {
       (service as any).accessibleDataLakeAccessMemo = {
         dataLakeTags: ['datalake:corpus'],

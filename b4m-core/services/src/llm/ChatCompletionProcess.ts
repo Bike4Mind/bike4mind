@@ -288,10 +288,12 @@ const CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC = 0;
 
 /**
  * The tool deferral hands the corpus to. A literal because the name is declared inline in the
- * tool's schema (llm/tools/implementation/knowledgeBaseSearch) with no exported constant - must
- * stay in sync with it. Deferring while this tool is denied strands the corpus with no reader.
+ * tool's definition (llm/tools/implementation/knowledgeBaseSearch) with no exported constant.
+ * Deferring while this tool is denied strands the corpus with no reader, and a rename would
+ * un-guard that path silently - so exported, and pinned against the real name by a test rather
+ * than by this comment.
  */
-const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
+export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
 
 /**
  * Fraction of the space ACTUALLY AVAILABLE FOR HISTORY (safe input minus the
