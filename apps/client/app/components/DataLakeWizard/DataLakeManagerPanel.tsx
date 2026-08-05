@@ -50,6 +50,7 @@ import {
   treeBackRowSx,
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
+import type { TreeSortMode } from '@client/app/components/datalake/treeChrome';
 import { brandAlpha, gray } from '@client/app/utils/themes/colors';
 import { useDataLakeFiles, useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
 import { useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
@@ -301,7 +302,7 @@ function ManagerNav({
   const hoverBg = theme.palette.notebooklist.hoverBg;
   const borderColor = isDark ? gray[800] : gray[200];
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'count' | 'alpha'>('count');
+  const [sortBy, setSortBy] = useState<TreeSortMode>('count');
   const SortModeIcon = SORT_MODE_ICON[sortBy];
 
   // Root accordions: active lakes open by default; the lifecycle lists stay collapsed (their

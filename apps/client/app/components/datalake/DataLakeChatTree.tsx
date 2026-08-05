@@ -37,6 +37,7 @@ import {
   treeBackRowSx,
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
+import type { TreeSortMode } from '@client/app/components/datalake/treeChrome';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { gray } from '@client/app/utils/themes/colors';
 
@@ -82,7 +83,7 @@ export default function DataLakeChatTree({
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'count' | 'alpha'>('count');
+  const [sortBy, setSortBy] = useState<TreeSortMode>('count');
   const SortModeIcon = SORT_MODE_ICON[sortBy];
 
   const currentNodes = useMemo(() => getNodesAtPath(tree, breadcrumb), [tree, breadcrumb]);
