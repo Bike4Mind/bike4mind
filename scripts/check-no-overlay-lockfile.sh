@@ -46,8 +46,10 @@ if [ -n "$matches" ]; then
   echo ""
   echo "The tracked lockfile must be generated WITHOUT overlays hydrated."
   echo "Fix options:"
-  echo "  1. Restore the committed lockfile: git checkout origin/main -- $LOCKFILE"
+  echo "  1. Restore the tracked lockfile: pnpm lockfile:restore"
   echo "  2. Or empty packages/premium/ and re-run: pnpm install"
+  echo ""
+  echo "See CONTRIBUTING.md \"Premium overlays and the tracked lockfile\"."
   exit 1
 fi
 
