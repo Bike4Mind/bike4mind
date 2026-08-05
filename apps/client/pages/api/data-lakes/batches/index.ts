@@ -16,9 +16,9 @@ const handler = baseApi()
   // are fetched, reconciled, and re-fetched as two separate sets, then merged for the caller.
   .get(async (req: Request, res) => {
     const userId = req.user.id;
-    const [ingestActive, taxonomyAttention] = await Promise.all([
+    const [ingestActive, taxonomyActive] = await Promise.all([
       dataLakeBatchRepository.findActiveByUserId(userId),
-      dataLakeBatchRepository.findTaxonomyAttentionByUserId(userId),
+      dataLakeBatchRepository.findActiveTaxonomyByUserId(userId),
     ]);
 
     // Read-time reconciliation: force non-terminal batches idle past the timeout to a
@@ -41,10 +41,10 @@ const handler = baseApi()
           ]).then(() => {}),
       },
     });
-    // taxonomyAttention includes 'ready'/'failed' (finished, not stuck) alongside the
-    // in-flight phases - reconcileStuckTaxonomy only acts on the latter, so passing the
-    // wider set here is harmless.
-    await dataLakeService.reconcileStuckTaxonomy(taxonomyAttention, dataLakeService.DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS, {
+    // taxonomyActive is the non-terminal working set only (not the capped/sorted list-response
+    // set - see findActiveTaxonomyByUserId), so a batch stuck for hours is never excluded here
+    // just because it's not among the user's most-recently-updated attention batches.
+    await dataLakeService.reconcileStuckTaxonomy(taxonomyActive, dataLakeService.DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS, {
       db: { batches: dataLakeBatchRepository },
       logger: console,
     });
@@ -53,6 +53,9 @@ const handler = baseApi()
       dataLakeBatchRepository.findActiveByUserId(userId),
       dataLakeBatchRepository.findTaxonomyAttentionByUserId(userId),
     ]);
+    // Spread order matters: a batch present in both sets keeps whichever copy is spread last.
+    // Both finders currently project the same fields, so this is not load-bearing for shape
+    // today, but if that symmetry is ever broken again, freshTaxonomyAttention must stay last.
     const byId = new Map([...freshIngestActive, ...freshTaxonomyAttention].map(b => [b.id, b]));
     return res.json({ data: Array.from(byId.values()) });
   })

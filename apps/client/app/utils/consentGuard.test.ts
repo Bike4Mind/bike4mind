@@ -20,6 +20,9 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: { getState: () => tokenState },
 }));
+// The guard awaits the cold-load silent refresh before reading the stores; stub it to a resolved
+// no-op so these tests exercise only the gate decision, not the network exchange.
+vi.mock('./sessionBootstrap', () => ({ bootstrapSession: () => Promise.resolve() }));
 
 import { enforceConsentRedirect } from './consentGuard';
 
@@ -32,16 +35,16 @@ describe('enforceConsentRedirect', () => {
     tokenState = { accessToken: TOKEN };
   });
 
-  it('redirects a not-yet-consented account to /accept-policies with a return path', () => {
+  it('redirects a not-yet-consented account to /accept-policies with a return path', async () => {
     userState = { currentUser: { aupAcceptedVersion: undefined }, isHydrated: true };
-    expect(() => enforceConsentRedirect(loc('/admin'))).toThrow(
+    await expect(enforceConsentRedirect(loc('/admin'))).rejects.toThrow(
       expect.objectContaining({ isRedirect: true, to: '/accept-policies', search: { redirectTo: '/admin' } })
     );
   });
 
-  it('preserves the full search string in the return path (the OAuth authorize case)', () => {
+  it('preserves the full search string in the return path (the OAuth authorize case)', async () => {
     userState = { currentUser: {}, isHydrated: true };
-    expect(() => enforceConsentRedirect(loc('/oauth/authorize', '?client_id=abc&response_type=code'))).toThrow(
+    await expect(enforceConsentRedirect(loc('/oauth/authorize', '?client_id=abc&response_type=code'))).rejects.toThrow(
       expect.objectContaining({
         to: '/accept-policies',
         search: { redirectTo: '/oauth/authorize?client_id=abc&response_type=code' },
@@ -49,31 +52,31 @@ describe('enforceConsentRedirect', () => {
     );
   });
 
-  it('omits redirectTo when the location is not worth preserving (home page)', () => {
+  it('omits redirectTo when the location is not worth preserving (home page)', async () => {
     userState = { currentUser: {}, isHydrated: true };
-    expect(() => enforceConsentRedirect(loc('/'))).toThrow(
+    await expect(enforceConsentRedirect(loc('/'))).rejects.toThrow(
       expect.objectContaining({ to: '/accept-policies', search: undefined })
     );
   });
 
-  it('does NOT redirect an already-consented account', () => {
+  it('does NOT redirect an already-consented account', async () => {
     userState = { currentUser: { aupAcceptedVersion: 'v1' }, isHydrated: true };
-    expect(() => enforceConsentRedirect(loc('/admin'))).not.toThrow();
+    await expect(enforceConsentRedirect(loc('/admin'))).resolves.toBeUndefined();
   });
 
-  it('does NOT redirect a token-less / broken session (goes to /login instead, issue #386)', () => {
+  it('does NOT redirect a token-less / broken session (goes to /login instead, issue #386)', async () => {
     userState = { currentUser: {}, isHydrated: true };
     tokenState = { accessToken: null };
-    expect(() => enforceConsentRedirect(loc('/admin'))).not.toThrow();
+    await expect(enforceConsentRedirect(loc('/admin'))).resolves.toBeUndefined();
   });
 
-  it('does NOT redirect before the server-confirmed user has hydrated', () => {
+  it('does NOT redirect before the server-confirmed user has hydrated', async () => {
     userState = { currentUser: {}, isHydrated: false };
-    expect(() => enforceConsentRedirect(loc('/admin'))).not.toThrow();
+    await expect(enforceConsentRedirect(loc('/admin'))).resolves.toBeUndefined();
   });
 
-  it('does NOT redirect when there is no user (that path bounces to /login)', () => {
+  it('does NOT redirect when there is no user (that path bounces to /login)', async () => {
     userState = { currentUser: null, isHydrated: true };
-    expect(() => enforceConsentRedirect(loc('/admin'))).not.toThrow();
+    await expect(enforceConsentRedirect(loc('/admin'))).resolves.toBeUndefined();
   });
 });

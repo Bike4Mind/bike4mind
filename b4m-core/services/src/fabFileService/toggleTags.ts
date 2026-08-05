@@ -23,7 +23,7 @@ interface FabFileToggleTagsAdapters {
       IFabFileRepository,
       'shareable' | 'findById' | 'pullTagsByFabFileId' | 'pushTagsByFabFileId' | 'computeDataLakeStats'
     >;
-    fileTags: Pick<IFileTagRepository, 'incrementFileCountBy'>;
+    fileTags: Pick<IFileTagRepository, 'touchLastActivityBy'>;
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
     users: { findById: (id: string) => Promise<IUserDocument | null> };
   };
@@ -59,8 +59,8 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   const { ids, tags: requestedTags } = fabFileToggleTagsSchema.parse(params);
 
   // Toggling one tag twice in a request is meaningless, and acting on it twice is harmful: the
-  // second pass reads the same pre-write snapshot, so it repeats the write and double-counts the
-  // registry. Case-insensitively, because that is how a tag is matched below.
+  // second pass reads the same pre-write snapshot, so it repeats the write - toggling the tag back
+  // off. Case-insensitively, because that is how a tag is matched below.
   const seen = new Set<string>();
   const tags = requestedTags.filter(tag => {
     const key = tag.toLocaleLowerCase();
@@ -82,7 +82,7 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   }
 
   const actor = { userId, isAdmin: !!user.isAdmin };
-  const tagCounters: Record<string, number> = {};
+  const touchedTags = new Set<string>();
   const lakesByTag = new Map<string, Promise<MembershipLake>>();
   const touchedLakes = new Map<string, MembershipLake>();
   // One tagger for the whole request: it memoizes the lake lookup per meta-tag, so a bulk toggle
@@ -141,16 +141,16 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
     const present = storedTagNames(file).filter(name => name.toLocaleLowerCase() === key);
     if (present.length > 0) {
       await db.fabFiles.pullTagsByFabFileId(file.id, present);
-      // The pull's return cannot gate this: timestamps make it report a modification even when
-      // nothing matched, so a concurrent removal of the same tag still decrements here. The
-      // registry is a display counter, and recreating the tag re-counts it.
-      tagCounters[tag] = (tagCounters[tag] ?? 0) - 1;
+      // Not gated on the pull's return: timestamps make it report a modification even when nothing
+      // matched, so a concurrent removal of the same tag would still mark it touched here. Harmless
+      // for a timestamp - the user did act on this tag either way.
+      touchedTags.add(tag);
       return;
     }
     // The push's return IS truthful - a name already present fails its filter and counts 0 - so
     // gate on it rather than on the pre-write snapshot, which a concurrent add makes stale.
     const inserted = await db.fabFiles.pushTagsByFabFileId(file.id, [tag]);
-    if (inserted > 0) tagCounters[tag] = (tagCounters[tag] ?? 0) + 1;
+    if (inserted > 0) touchedTags.add(tag);
   };
 
   /**
@@ -212,13 +212,9 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
     await recomputeLakeStats(lake, { db });
   }
 
-  // Lake meta-tags are deliberately absent from these counters: they are lake membership, not
-  // entries in the user's own tag list, and no other lake door touches the tag registry.
-  await Promise.all(
-    Object.entries(tagCounters).map(async ([tag, delta]) => {
-      if (delta !== 0) await db.fileTags.incrementFileCountBy({ name: tag, userId }, delta);
-    })
-  );
+  // Lake meta-tags are deliberately absent from this set: they are lake membership, not entries in
+  // the user's own tag list, and no other lake door touches the tag registry.
+  await Promise.all([...touchedTags].map(tag => db.fileTags.touchLastActivityBy({ name: tag, userId })));
 
   const failure = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
   if (failure) throw failure.reason;

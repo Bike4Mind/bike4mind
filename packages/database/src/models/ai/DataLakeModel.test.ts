@@ -616,6 +616,83 @@ describe('DataLakeBatchRepository.findStuckTaxonomy - global cross-user stale sc
   });
 });
 
+describe('DataLakeBatchRepository.findActiveByUserId - list-surface query', () => {
+  setupMongoTest();
+
+  it('excludes the per-file manifest - this is a list view, never a per-file read', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      status: 'processing',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt' }],
+    } as never);
+
+    const [active] = await dataLakeBatchRepository.findActiveByUserId('u1');
+    // A `.select('-files')` exclusion omits the key entirely (not an empty array) - this
+    // asserts the projection is actually active, not just that the field happens to be empty.
+    expect(active.files).toBeUndefined();
+  });
+
+  it('excludes taxonomySuggestions.fileAssignments - ingest and taxonomy are independent clocks, so an applied-taxonomy batch can still be ingest-active', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      status: 'processing',
+      taxonomyStatus: 'applied',
+      taxonomySuggestions: {
+        tags: [{ suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' }],
+        fileAssignments: [{ relativePath: 'a.txt', suggestedTags: [{ name: 'acme:type:invoice', strength: 0.9 }] }],
+      },
+    } as never);
+
+    const [active] = await dataLakeBatchRepository.findActiveByUserId('u1');
+    expect(active.taxonomySuggestions?.tags).toEqual([
+      { suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' },
+    ]);
+    expect(active.taxonomySuggestions?.fileAssignments).toBeUndefined();
+  });
+});
+
+describe('DataLakeBatchRepository.findActiveByDataLakeId - teardown-scan query', () => {
+  setupMongoTest();
+
+  it('excludes the per-file manifest - callers only ever read .id', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      status: 'processing',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt' }],
+    } as never);
+
+    const [active] = await dataLakeBatchRepository.findActiveByDataLakeId('lake1');
+    expect(active.files).toBeUndefined();
+  });
+
+  it('excludes taxonomySuggestions.fileAssignments too', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      status: 'processing',
+      taxonomyStatus: 'applied',
+      taxonomySuggestions: {
+        tags: [{ suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' }],
+        fileAssignments: [{ relativePath: 'a.txt', suggestedTags: [{ name: 'acme:type:invoice', strength: 0.9 }] }],
+      },
+    } as never);
+
+    const [active] = await dataLakeBatchRepository.findActiveByDataLakeId('lake1');
+    expect(active.taxonomySuggestions?.fileAssignments).toBeUndefined();
+  });
+
+  it('scopes to the requesting lake only', async () => {
+    await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', status: 'processing' } as never);
+    await dataLakeBatchRepository.create({ dataLakeId: 'lake2', userId: 'u1', status: 'processing' } as never);
+
+    const active = await dataLakeBatchRepository.findActiveByDataLakeId('lake1');
+    expect(active).toHaveLength(1);
+  });
+});
+
 describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId - list-surface query', () => {
   setupMongoTest();
 
@@ -639,6 +716,138 @@ describe('DataLakeBatchRepository.findTaxonomyAttentionByUserId - list-surface q
     await seed('ready', 'u2');
     const attention = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
     expect(attention).toHaveLength(1);
+  });
+
+  it('excludes the per-file manifest - this is a list view, never a per-file read', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'ready',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt' }],
+    } as never);
+
+    const [attention] = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
+    // A `.select('-files')` exclusion omits the key entirely (not an empty array) - this
+    // asserts the projection is actually active, not just that the field happens to be empty.
+    expect(attention.files).toBeUndefined();
+  });
+
+  it('excludes taxonomySuggestions.fileAssignments but keeps tags', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'ready',
+      taxonomySuggestions: {
+        tags: [{ suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' }],
+        fileAssignments: [{ relativePath: 'a.txt', suggestedTags: [{ name: 'acme:type:invoice', strength: 0.9 }] }],
+      },
+    } as never);
+
+    const [attention] = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
+    expect(attention.taxonomySuggestions?.tags).toEqual([
+      { suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' },
+    ]);
+    expect(attention.taxonomySuggestions?.fileAssignments).toBeUndefined();
+  });
+
+  it('orders most-recently-updated first and caps a large backlog', async () => {
+    // A user with no exit path for old suggestions (no dismiss yet) can accumulate an
+    // unbounded backlog - seed past the cap and confirm both the order and the bound.
+    // Uses an explicit small `limit` override (production default is 500) so the test
+    // stays fast without seeding hundreds of documents.
+    const batches = [];
+    for (let i = 0; i < 6; i++) {
+      batches.push(await seed('ready'));
+      // Force each create's updatedAt strictly later than the last (timestamps:true otherwise
+      // collapses same-millisecond creates to an unstable order).
+      await mongoose.models.DataLakeBatch.updateOne(
+        { _id: batches[i].id },
+        { $set: { updatedAt: new Date(2024, 0, 1, 0, 0, i) } },
+        { timestamps: false }
+      );
+    }
+
+    const attention = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1', 5);
+    expect(attention).toHaveLength(5);
+    // Most recently updated (highest i, seeded last) comes first.
+    expect(attention[0].id).toBe(batches[5].id);
+    expect(attention.map(b => b.id)).not.toContain(batches[0].id);
+  });
+
+  it('runs the no-arg (default-limit) path without requiring a caller to pass one', async () => {
+    // Only confirms the omitted-argument call works end to end - it can't practically pin the
+    // exact default value (500) without seeding past it, which the explicit-limit test above
+    // already covers for the cap-enforcement logic itself. The literal default lives at the
+    // call site (`limit = 500` in the method signature) and is reviewed there.
+    await seed('ready');
+    const attention = await dataLakeBatchRepository.findTaxonomyAttentionByUserId('u1');
+    expect(attention).toHaveLength(1);
+  });
+});
+
+describe('DataLakeBatchRepository.findActiveTaxonomyByUserId - reconciler input', () => {
+  setupMongoTest();
+
+  const seed = (taxonomyStatus: string, userId = 'u1') =>
+    dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId, taxonomyStatus } as never);
+
+  it('includes only queued/analyzing/applying, not ready/failed/none/applied', async () => {
+    const queued = await seed('queued');
+    const analyzing = await seed('analyzing');
+    const applying = await seed('applying');
+    await seed('ready');
+    await seed('failed');
+    await seed('none');
+    await seed('applied');
+
+    const active = await dataLakeBatchRepository.findActiveTaxonomyByUserId('u1');
+    expect(active.map(b => b.id).sort()).toEqual([queued.id, analyzing.id, applying.id].sort());
+  });
+
+  it('is not capped, unlike findTaxonomyAttentionByUserId - a stale batch must not be excluded', async () => {
+    const batches = [];
+    for (let i = 0; i < 55; i++) {
+      batches.push(await seed('analyzing'));
+      await mongoose.models.DataLakeBatch.updateOne(
+        { _id: batches[i].id },
+        { $set: { updatedAt: new Date(2024, 0, 1, 0, 0, i) } },
+        { timestamps: false }
+      );
+    }
+
+    const active = await dataLakeBatchRepository.findActiveTaxonomyByUserId('u1');
+    expect(active).toHaveLength(55);
+    expect(active.map(b => b.id)).toContain(batches[0].id);
+  });
+
+  it('excludes the per-file manifest', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'analyzing',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt' }],
+    } as never);
+
+    const [active] = await dataLakeBatchRepository.findActiveTaxonomyByUserId('u1');
+    expect(active.files).toBeUndefined();
+  });
+
+  it('excludes taxonomySuggestions.fileAssignments but keeps tags', async () => {
+    await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'applying',
+      taxonomySuggestions: {
+        tags: [{ suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' }],
+        fileAssignments: [{ relativePath: 'a.txt', suggestedTags: [{ name: 'acme:type:invoice', strength: 0.9 }] }],
+      },
+    } as never);
+
+    const [active] = await dataLakeBatchRepository.findActiveTaxonomyByUserId('u1');
+    expect(active.taxonomySuggestions?.tags).toEqual([
+      { suffix: 'type:invoice', originalName: 'acme:type:invoice', strength: 0.9, source: 'ai' },
+    ]);
+    expect(active.taxonomySuggestions?.fileAssignments).toBeUndefined();
   });
 });
 

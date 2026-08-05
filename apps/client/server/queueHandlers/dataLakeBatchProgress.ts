@@ -1,6 +1,6 @@
 import { cacheRepository, dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import type { IDataLakeBatchDocument } from '@bike4mind/common';
+import type { IDataLakeBatchDocument, IDataLakeBatchSummary } from '@bike4mind/common';
 import { recordBatchCompletion, recordTaxonomyDailyCapExceeded } from '@server/utils/cloudwatch';
 import { sendToQueue } from '@server/utils/sqs';
 import { sendToClient } from '@server/websocket/utils';
@@ -78,7 +78,7 @@ export function isBatchComplete(batch: IDataLakeBatchDocument | null): boolean {
  * the cap first would only have saved a rate-limit slot on those already-harmless no-ops.
  */
 export async function enqueueTaxonomyAnalysisIfWanted(
-  batch: IDataLakeBatchDocument | null,
+  batch: IDataLakeBatchSummary | null,
   logger: { error: (msg: string) => void }
 ): Promise<void> {
   if (!batch || !batch.wantsTaxonomy) return;

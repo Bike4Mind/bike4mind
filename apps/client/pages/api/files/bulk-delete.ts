@@ -49,7 +49,8 @@ const handler = baseApi()
     // Process each file deletion sequentially
     for (const fileId of fileIds) {
       try {
-        // Remove tags of deleted files (only for owned files - check ownership first)
+        // Only for owned files - a shared file "delete" is an unshare, which changes nothing about
+        // the actor's own tags.
         const fabFile = await fabFileRepository.findById(fileId);
         const isOwned = fabFile?.userId === userId;
 
@@ -57,10 +58,10 @@ const handler = baseApi()
           for (const tag of fabFile.tags) {
             try {
               if (tag && tag.name) {
-                await fileTagRepository.incrementFileCountBy({ name: tag.name, userId }, -1);
+                await fileTagRepository.touchLastActivityBy({ name: tag.name, userId });
               }
             } catch (tagError) {
-              req.logger.error('Error updating tag count during bulk delete:', {
+              req.logger.error('Error touching tag activity during bulk delete:', {
                 tagError,
                 tag,
               });

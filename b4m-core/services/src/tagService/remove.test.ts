@@ -18,7 +18,6 @@ describe('tagService - remove', () => {
     id: existingTagId,
     userId,
     name,
-    fileCount: 0,
     createdAt: new Date(),
     updatedAt: new Date(),
     lastActivityAt: new Date(),

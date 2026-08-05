@@ -4,6 +4,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import DataLakeManagerPanel from './DataLakeManagerPanel';
 
 // Archive resolves synchronously so the onSuccess (exit-to-root) wiring is exercised.
@@ -152,6 +153,9 @@ beforeEach(() => {
   archiveMutate.mockClear();
   useActiveDataLakeBatches.mockReset();
   useActiveDataLakeBatches.mockReturnValue({ data: [] });
+  // managerTab is module state in the real store, so a test left in Discover would otherwise
+  // decide what the next one renders.
+  useDataLakeWizardStore.setState({ managerTab: 'mine' });
 });
 
 describe('DataLakeManagerPanel - EnableDataLakes gating', () => {
@@ -201,6 +205,36 @@ describe('DataLakeManagerPanel - root view', () => {
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
 
+  it('exits the open lake when Discover is clicked, rather than arming the tab invisibly', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    expect(screen.queryByTestId('datalake-manager-overview')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-manager-discover-btn'));
+    // The catalog shows on THIS click: the activeLake branch used to outrank the tab and swallow it.
+    expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
+    // The lake is really closed, so a later Back cannot drop the user into Discover by surprise.
+    expect(screen.queryByTestId('datalake-manager-back')).not.toBeInTheDocument();
+  });
+
+  it('toggles back out of Discover - the one exit that needs no lake of your own to click', async () => {
+    const user = userEvent.setup();
+    // No lakes: selectLake, the only other route back to the overview, has no row to click.
+    useDataLakes.mockReturnValue({ data: [], isLoading: false });
+    renderPanel();
+    const discover = screen.getByTestId('datalake-manager-discover-btn');
+    expect(discover).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(discover);
+    expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
+    expect(discover).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(discover);
+    expect(screen.queryByTestId('mock-discover')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
+  });
+
   it('collapses the Data Lakes accordion, hiding the lake rows', async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -208,6 +242,21 @@ describe('DataLakeManagerPanel - root view', () => {
     expect(screen.queryByTestId('datalake-manager-lake-mine')).not.toBeInTheDocument();
     // The lifecycle accordions are unaffected.
     expect(screen.getByTestId('datalake-archived-section')).toBeInTheDocument();
+  });
+
+  // A-Z names itself with the alphabet glyph, so the mode is readable from the button and not
+  // only from the tooltip; count keeps the neutral swap glyph.
+  it('swaps the sort icon to the alphabet glyph when toggled to A-Z', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const toggle = screen.getByTestId('datalake-manager-sort-toggle');
+    expect(toggle).toHaveAttribute('data-sort', 'count');
+    expect(screen.getByTestId('SwapVertIcon')).toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('data-sort', 'alpha');
+    expect(screen.getByTestId('SortByAlphaIcon')).toBeInTheDocument();
+    expect(screen.queryByTestId('SwapVertIcon')).not.toBeInTheDocument();
   });
 
   it('shows a persistent info icon next to the Data Lakes header that reveals the RAG explanation on hover', async () => {

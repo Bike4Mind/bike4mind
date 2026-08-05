@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { toast } from 'sonner';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeExplorer from './DataLakeExplorer';
 
@@ -33,6 +34,8 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
     data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
     isLoading: false,
   }),
+  // Page mode renders DataLakeArticle, which reads the selected file's body.
+  useGetFabFileContent: () => ({ data: undefined, isLoading: false }),
 }));
 
 vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () => ({ default: () => null }));
@@ -45,13 +48,14 @@ vi.mock('@client/app/components/layouts/Notebook', () => ({
 // The explorer calls useSetDataLakeMode at render (for the tree close button); its persist
 // logic is covered in useSetDataLakeMode.test. Spy so the close-wiring test below can assert
 // without needing a QueryClient.
-const { setModeSpy, toastInfo, toastError } = vi.hoisted(() => ({
+const { setModeSpy, toastInfo, toastError, toastSuccess } = vi.hoisted(() => ({
   setModeSpy: vi.fn(),
   toastInfo: vi.fn(),
   toastError: vi.fn(),
+  toastSuccess: vi.fn(),
 }));
 vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => setModeSpy }));
-vi.mock('sonner', () => ({ toast: { info: toastInfo, error: toastError } }));
+vi.mock('sonner', () => ({ toast: { info: toastInfo, error: toastError, success: toastSuccess } }));
 
 // Stub the tree so we can trigger onSelectFile/onClose deterministically and read the
 // highlight prop. Chat mode (chatSlot set) renders DataLakeChatTree, so that is what we stub.
@@ -186,5 +190,55 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
     expect(setSessionLayout).not.toHaveBeenCalled();
     errSpy.mockRestore();
+  });
+});
+
+describe('DataLakeExplorer - drag-and-drop discoverability (#839)', () => {
+  it('advertises drag-to-add at rest, before any drag has started', () => {
+    render(
+      <TestWrapper>
+        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
+      </TestWrapper>
+    );
+
+    // No drag is underway, so the drag-active overlay must stay hidden while the
+    // resting affordances carry the invitation.
+    expect(screen.queryByTestId('datalake-dropzone')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-drop-hint')).toHaveTextContent(/drag files here to add/i);
+    expect(screen.getByTestId('datalake-drop-prompt')).toBeInTheDocument();
+  });
+
+  it('swaps the resting hint for the drag overlay once a file drag enters', () => {
+    render(
+      <TestWrapper>
+        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
+      </TestWrapper>
+    );
+
+    fireEvent.dragEnter(screen.getByTestId('datalake-explorer'), {
+      dataTransfer: { types: ['Files'] },
+    });
+
+    expect(screen.getByTestId('datalake-dropzone')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-drop-hint')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-drop-prompt')).not.toBeInTheDocument();
+  });
+
+  it('confirms a successful drop with a toast naming the file count', async () => {
+    render(
+      <TestWrapper>
+        <DataLakeExplorer onBack={vi.fn()} onAskAbout={vi.fn()} />
+      </TestWrapper>
+    );
+
+    fireEvent.drop(screen.getByTestId('datalake-explorer'), {
+      dataTransfer: {
+        types: ['Files'],
+        items: [],
+        files: [new File(['a'], 'a.txt'), new File(['b'], 'b.txt')],
+      },
+    });
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/^2 files /)));
   });
 });

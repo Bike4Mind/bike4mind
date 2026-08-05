@@ -44,6 +44,10 @@ describe('organizationService - create', () => {
         organizations: {
           create: vi.fn().mockResolvedValue(createdOrganization),
         },
+        users: {
+          findById: vi.fn().mockResolvedValue(null),
+          update: vi.fn().mockResolvedValue(null),
+        },
       },
     };
   });
@@ -185,5 +189,48 @@ describe('organizationService - create', () => {
         extraParam: 'should be ignored',
       })
     );
+  });
+
+  describe('billing-owner active-org context (#1388)', () => {
+    it("sets the creating owner's organizationId to the new org when they have none", async () => {
+      await create(
+        mockUser as IUserDocument, // no organizationId
+        { name: 'Test Organization', personal: false, seats: 1, stripeCustomerId: null },
+        mockAdapters
+      );
+      expect(mockAdapters.db.users.update).toHaveBeenCalledWith({ id: 'user1', organizationId: 'org1' });
+      // Owner is the caller, so no lookup is needed.
+      expect(mockAdapters.db.users.findById).not.toHaveBeenCalled();
+    });
+
+    it('does NOT overwrite an owner who already has an active org', async () => {
+      await create(
+        { ...mockUser, organizationId: 'existing-org' } as IUserDocument,
+        { name: 'Test Organization', personal: false, seats: 1, stripeCustomerId: null },
+        mockAdapters
+      );
+      expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+    });
+
+    it('sets the org context on the billing owner (loaded) when billingOwnerId differs from the caller', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue({ id: 'owner2', organizationId: undefined });
+      await create(
+        mockUser as IUserDocument,
+        { name: 'Test Organization', personal: false, seats: 1, stripeCustomerId: null, billingOwnerId: 'owner2' },
+        mockAdapters
+      );
+      expect(mockAdapters.db.users.findById).toHaveBeenCalledWith('owner2');
+      expect(mockAdapters.db.users.update).toHaveBeenCalledWith({ id: 'owner2', organizationId: 'org1' });
+    });
+
+    it('leaves an on-behalf owner untouched when they already have an active org', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue({ id: 'owner2', organizationId: 'owner2-org' });
+      await create(
+        mockUser as IUserDocument,
+        { name: 'Test Organization', personal: false, seats: 1, stripeCustomerId: null, billingOwnerId: 'owner2' },
+        mockAdapters
+      );
+      expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+    });
   });
 });

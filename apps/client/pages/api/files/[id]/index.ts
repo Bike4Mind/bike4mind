@@ -147,17 +147,17 @@ const handler = baseApi()
       return res.status(404).json({ msg: 'File not found' });
     }
 
-    // Only decrement tag counts for owned files (shared file "delete" = unshare, not removal)
+    // Only touch tag activity for owned files (shared file "delete" = unshare, not removal)
     const fabFile = await fabFileRepository.findById(fabFileId);
     const isOwned = fabFile?.userId === userId;
     if (isOwned && fabFile?.tags?.length) {
       for (const tag of fabFile.tags) {
         try {
           if (tag?.name) {
-            await fileTagRepository.incrementFileCountBy({ name: tag.name, userId }, -1);
+            await fileTagRepository.touchLastActivityBy({ name: tag.name, userId });
           }
         } catch (tagError) {
-          req.logger.error('Error updating tag count during single file delete:', { tagError, tag });
+          req.logger.error('Error touching tag activity during single file delete:', { tagError, tag });
         }
       }
     }

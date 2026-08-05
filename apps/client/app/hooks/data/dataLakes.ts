@@ -2,6 +2,7 @@ import type {
   BrowsePublicDataLakesResult,
   DataLakeConfig,
   IDataLakeBatchDocument,
+  IDataLakeBatchSummary,
   ManageableDataLakeConfig,
   TaxonomyTag,
 } from '@bike4mind/common';
@@ -281,7 +282,7 @@ export function useActiveDataLakeBatches(enabled = true) {
     queryKey: ACTIVE_BATCHES_KEY,
     enabled,
     queryFn: async () => {
-      const response = await api.get<{ data: IDataLakeBatchDocument[] }>('/api/data-lakes/batches');
+      const response = await api.get<{ data: IDataLakeBatchSummary[] }>('/api/data-lakes/batches');
       return response.data.data;
     },
     refetchInterval: enabled ? ACTIVE_BATCHES_POLL_MS : false,

@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { buildUserActivityPipeline, parseMetadataFilters } from './userActivityQuery';
 
-const baseQuery = { startDate: '2026-07-21', endDate: '2026-07-28', page: 1, limit: 25 };
+const baseQuery = { startDate: '2026-07-21', endDate: '2026-07-28', skip: 0, limit: 25 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const stage = (pipeline: any[], name: string) => pipeline.find(s => Object.keys(s)[0] === name);
 
 describe('buildUserActivityPipeline - pagination', () => {
-  it('skips prior pages and limits the row facet to the page size', () => {
-    const { facetStages } = buildUserActivityPipeline({ ...baseQuery, page: 3, limit: 25 });
+  it('skips and limits the row facet to the window the caller asked for', () => {
+    const { facetStages } = buildUserActivityPipeline({ ...baseQuery, skip: 50, limit: 25 });
 
     expect(facetStages.rows).toEqual(expect.arrayContaining([{ $skip: 50 }, { $limit: 25 }]));
   });

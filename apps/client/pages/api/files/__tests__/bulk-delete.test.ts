@@ -9,7 +9,7 @@ const h = vi.hoisted(() => ({
   findAllWithKnowledgeId: vi.fn(),
   sessionUpdate: vi.fn(),
   userFindById: vi.fn(),
-  incrementFileCountBy: vi.fn(),
+  touchLastActivityBy: vi.fn(),
   findByDatalakeTag: vi.fn(),
   computeDataLakeStats: vi.fn(),
   setStats: vi.fn(),
@@ -49,7 +49,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     update: h.update,
     computeDataLakeStats: h.computeDataLakeStats,
   },
-  fileTagRepository: { incrementFileCountBy: h.incrementFileCountBy },
+  fileTagRepository: { touchLastActivityBy: h.touchLastActivityBy },
   sessionRepository: { findAllWithKnowledgeId: h.findAllWithKnowledgeId, update: h.sessionUpdate },
   userRepository: { findById: h.userFindById },
   withTransaction: (fn: (session?: unknown) => Promise<unknown>) => fn(undefined),
@@ -150,5 +150,70 @@ describe('bulk-delete - data-lake stats', () => {
     // The unshared file's lake must not be dragged into the recompute: its membership never moved.
     expect(h.findByDatalakeTag).toHaveBeenCalledTimes(1);
     expect(h.findByDatalakeTag).toHaveBeenCalledWith(LAKE.datalakeTag);
+  });
+});
+
+// Deleting files changes which files carry a tag, so each one is marked as recently used. The
+// ownership check is the route's own decision - deleting a file shared WITH you is an unshare, which
+// changes nothing about your tags - and the same decision is made independently in files/[id].
+describe('bulk-delete - tag activity', () => {
+  const taggedFile = (id: string, userId = OWNER) => ({
+    ...memberFile(id, userId),
+    tags: [
+      { name: 'invoices', strength: 0 },
+      { name: 'q3', strength: 0 },
+    ],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: OWNER });
+    h.update.mockResolvedValue(undefined);
+    h.deleteManyByFabFileId.mockResolvedValue(undefined);
+    h.findAllWithKnowledgeId.mockResolvedValue([]);
+  });
+
+  it('touches every tag on an owned file', async () => {
+    const owned = taggedFile('507f1f77bcf86cd799439011');
+    h.findById.mockResolvedValue(owned);
+    h.findByIdAndUserId.mockResolvedValue(owned);
+    const { res } = makeRes();
+
+    await run([owned.id], res);
+
+    expect(h.touchLastActivityBy).toHaveBeenCalledWith({ name: 'invoices', userId: OWNER });
+    expect(h.touchLastActivityBy).toHaveBeenCalledWith({ name: 'q3', userId: OWNER });
+    expect(h.touchLastActivityBy).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips a malformed tag entry rather than touching a nameless tag', async () => {
+    const owned = {
+      ...taggedFile('507f1f77bcf86cd799439011'),
+      tags: [
+        { name: 'invoices', strength: 0 },
+        { name: null as unknown as string, strength: 0 },
+      ],
+    };
+    h.findById.mockResolvedValue(owned);
+    h.findByIdAndUserId.mockResolvedValue(owned);
+    const { res } = makeRes();
+
+    await run([owned.id], res);
+
+    expect(h.touchLastActivityBy).toHaveBeenCalledTimes(1);
+    expect(h.touchLastActivityBy).toHaveBeenCalledWith({ name: 'invoices', userId: OWNER });
+  });
+
+  it('touches nothing when the file belongs to someone else', async () => {
+    const shared = { ...taggedFile('507f1f77bcf86cd799439011', 'someone-else'), users: [{ userId: OWNER }] };
+    h.findById.mockResolvedValue(shared);
+    h.findByIdAndUserId.mockResolvedValue(null);
+    const { res } = makeRes();
+
+    await run([shared.id], res);
+
+    // The names are the owner's tags, not the actor's: touching them would bump a same-named tag in
+    // the actor's own registry that they never changed.
+    expect(h.touchLastActivityBy).not.toHaveBeenCalled();
   });
 });
