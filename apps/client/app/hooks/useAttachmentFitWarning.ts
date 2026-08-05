@@ -29,7 +29,7 @@ export interface DryRunFile {
   isImage: boolean;
   extractedChars?: number;
   estimatedTokens: number;
-  measured: 'extracted' | 'fileSize';
+  measured: 'extracted' | 'fileSize' | 'pending';
   deliveredFraction: number;
 }
 
@@ -90,8 +90,11 @@ export function deriveAttachmentFitWarning(
 ): AttachmentFitWarning | null {
   if (!files?.length) return null;
 
-  // Images bypass the text budget entirely, so they can never be the reason to warn.
-  const candidates = files.filter(f => !f.isImage);
+  // Images bypass the text budget entirely, so they can never be the reason to warn. Nor can a file
+  // still awaiting moderation: the route refused to read it, so its size is unknown and warning about
+  // it would be inventing a number. Both are excluded explicitly rather than left to the threshold,
+  // which they happen to pass today.
+  const candidates = files.filter(f => !f.isImage && f.measured !== 'pending');
   // The worst-fitting file is the one worth naming; listing all of them in a one-line banner would
   // bury the actionable part.
   const worst = candidates.reduce<DryRunFile | null>(
@@ -105,7 +108,8 @@ export function deriveAttachmentFitWarning(
     fileName: worst.fileName,
     // Floored, so a file at 99.6% never reads as "100% will reach the model" next to a warning.
     deliveredPercent: Math.floor(worst.deliveredFraction * 100),
-    measured: worst.measured,
+    // Narrowed by the pending exclusion above, which the compiler cannot infer.
+    measured: worst.measured as 'extracted' | 'fileSize',
     siblingCount: Math.max(0, (textFileCount ?? 1) - 1),
   };
 }

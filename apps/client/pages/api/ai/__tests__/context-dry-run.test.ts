@@ -78,6 +78,8 @@ const file = (over: Record<string, unknown> = {}) => ({
   mimeType: 'text/csv',
   filePath: 'fab-files/f1.csv',
   fileSize: 4000,
+  // The serve gate fails closed, so a fixture that omits this is 'pending', not measurable.
+  moderationStatus: 'clean',
   ...over,
 });
 
@@ -186,6 +188,43 @@ describe('POST /api/ai/context-dry-run', () => {
     expect(body.files[0].isImage).toBe(true);
     expect(body.files[0].deliveredFraction).toBe(1);
     expect(mockGetFileContent).not.toHaveBeenCalled();
+  });
+
+  // The serve gate holds every mime type until moderation completes, because the mimeType this route
+  // would otherwise trust is client-declared and only corrected by the S3 scan a second or two later.
+  // A file declared text/csv but actually an image must not be downloaded inside that window.
+  it.each([['pending'], ['scanning'], ['blocked'], [null], [undefined]])(
+    'refuses to read a file whose moderationStatus is %s',
+    async status => {
+      mockListFabFiles.mockResolvedValue([file({ moderationStatus: status })]);
+
+      const { body } = await run({ ...LLAMA_8K, fileIds: ['f1'] });
+
+      expect(mockGetFileContent).not.toHaveBeenCalled();
+      expect(body.files[0].measured).toBe('pending');
+      // Claims nothing about a size it refused to measure, so the banner stays quiet.
+      expect(body.files[0].deliveredFraction).toBe(1);
+    }
+  );
+
+  it('reads a file once moderation has cleared it', async () => {
+    mockListFabFiles.mockResolvedValue([file({ moderationStatus: 'clean' })]);
+    mockGetFileContent.mockResolvedValue(csv(4000));
+
+    const { body } = await run({ ...LLAMA_8K, fileIds: ['f1'] });
+
+    expect(mockGetFileContent).toHaveBeenCalledTimes(1);
+    expect(body.files[0].measured).toBe('extracted');
+  });
+
+  // An already-persisted count came from a previous read, so it stays usable without re-downloading.
+  it('still reports a previously measured count for a file now mid-rescan', async () => {
+    mockListFabFiles.mockResolvedValue([file({ moderationStatus: 'scanning', extractedCharCount: 4000 })]);
+
+    const { body } = await run({ ...LLAMA_8K, fileIds: ['f1'] });
+
+    expect(mockGetFileContent).not.toHaveBeenCalled();
+    expect(body.files[0].measured).toBe('extracted');
   });
 
   // A dry run must not shape later real completions. The pipeline features that would - mementos

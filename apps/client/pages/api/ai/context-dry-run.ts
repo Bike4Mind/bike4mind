@@ -1,3 +1,4 @@
+import { isImageServeable } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database/infra';
 import { fabFileRepository } from '@bike4mind/database/content';
 import { userRepository } from '@bike4mind/database/auth';
@@ -115,13 +116,24 @@ const handler = baseApi().post(async (req: Request<{}, {}, DryRunBody>, res) => 
     filePath?: string;
     fileSize?: number;
     extractedCharCount?: number;
+    moderationStatus?: string | null;
   }[]) {
     const id = String(file.id ?? file._id ?? '');
     const isImage = String(file.mimeType ?? '').startsWith('image');
     let chars = typeof file.extractedCharCount === 'number' ? file.extractedCharCount : undefined;
-    let measured: 'extracted' | 'fileSize' = chars === undefined ? 'fileSize' : 'extracted';
+    let measured: 'extracted' | 'fileSize' | 'pending' = chars === undefined ? 'fileSize' : 'extracted';
 
-    if (chars === undefined && !isImage && file.filePath) {
+    // Fail closed until moderation has run. Nothing here would show the user the bytes, but the
+    // mimeType this route would otherwise trust is CLIENT-DECLARED and only corrected by the S3 scan a
+    // second or two later - so a file uploaded as text/csv but actually an image would be downloaded
+    // and read inside that window, which is exactly the gap this gate exists to close. An unscanned
+    // file is reported as not-yet-measurable rather than guessed at, and the banner stays quiet.
+    const serveable = isImageServeable(file);
+    if (chars === undefined && !serveable) {
+      measured = 'pending';
+    }
+
+    if (chars === undefined && serveable && !isImage && file.filePath) {
       try {
         const content = await getFileContent(
           { mimeType: file.mimeType ?? '', fileName: file.fileName ?? '', filePath: file.filePath },
@@ -148,8 +160,12 @@ const handler = baseApi().post(async (req: Request<{}, {}, DryRunBody>, res) => 
       extractedChars: chars,
       estimatedTokens,
       measured,
-      // 1 means the whole file survives extraction. Images bypass the text budget entirely.
-      deliveredFraction: isImage || effectiveChars === 0 ? 1 : Math.min(1, perFileBudgetChars / effectiveChars),
+      // 1 means the whole file survives extraction. Images bypass the text budget entirely, and a file
+      // still awaiting moderation reports 1 so nothing is claimed about a size we refused to read.
+      deliveredFraction:
+        isImage || measured === 'pending' || effectiveChars === 0
+          ? 1
+          : Math.min(1, perFileBudgetChars / effectiveChars),
     });
   }
 

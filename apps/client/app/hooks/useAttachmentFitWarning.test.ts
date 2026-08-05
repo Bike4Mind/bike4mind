@@ -67,6 +67,27 @@ describe('deriveAttachmentFitWarning', () => {
     ).toBeNull();
   });
 
+  // The route refuses to read a file until moderation clears it, so its size is genuinely unknown.
+  // Warning about it would mean inventing a number, and the route reports full delivery for exactly
+  // that reason - so this must hold even if that reporting later changes.
+  it('says nothing about a file still awaiting moderation', () => {
+    expect(deriveAttachmentFitWarning([file({ measured: 'pending', deliveredFraction: 1 })], 1)).toBeNull();
+    // Belt and braces: excluded by measurement state, not merely by the fraction it happens to carry.
+    expect(deriveAttachmentFitWarning([file({ measured: 'pending', deliveredFraction: 0.1 })], 1)).toBeNull();
+  });
+
+  it('still warns about a measured sibling when another file is awaiting moderation', () => {
+    const warning = deriveAttachmentFitWarning(
+      [
+        file({ id: 'a', measured: 'pending', deliveredFraction: 0.1 }),
+        file({ id: 'b', fileName: 'big.csv', deliveredFraction: 0.3 }),
+      ],
+      2
+    );
+
+    expect(warning?.fileName).toBe('big.csv');
+  });
+
   // A byte-size estimate is only a fair proxy for plain text, so the caller has to be able to hedge.
   it('passes through which figure the measurement came from', () => {
     const warning = deriveAttachmentFitWarning([file({ deliveredFraction: 0.4, measured: 'fileSize' })], 1);
