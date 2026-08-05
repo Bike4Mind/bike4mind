@@ -60,7 +60,7 @@ handler.delete(async (req, res) => {
   const kind = String(req.query.kind);
   const id = String(req.query.id);
   if (!READABLE_PRINCIPAL_KINDS.includes(kind as PrincipalKind)) {
-    return res.status(400).json({ error: `Unknown principal kind '${kind}'.` });
+    return res.status(400).json({ error: `Unsupported principal kind '${kind}'.` });
   }
   if (kind !== 'user' || id !== ownerUserId) {
     return res.status(403).json({ error: 'You can only delete your own user memory for now.' });
@@ -124,7 +124,7 @@ handler.get(async (req, res) => {
   if (!READABLE_PRINCIPAL_KINDS.includes(kind as PrincipalKind)) {
     return res
       .status(400)
-      .json({ error: `Unknown principal kind '${kind}'. Expected one of: ${READABLE_PRINCIPAL_KINDS.join(', ')}.` });
+      .json({ error: `Unsupported principal kind '${kind}'. Expected one of: ${READABLE_PRINCIPAL_KINDS.join(', ')}.` });
   }
 
   // Defense-in-depth: a user may only read their OWN user-memory. Each store already owner-scopes its
