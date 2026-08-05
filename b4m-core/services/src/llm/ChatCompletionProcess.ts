@@ -936,6 +936,11 @@ export class ChatCompletionProcess {
           const lakeTagged = (file.tags ?? []).some(tag => accessibleTags.has(tag.name));
           const chunks = file.chunkCount ?? 0;
           const fullyVectorized = chunks > 0 && (file.vectorizedChunkCount ?? 0) >= chunks;
+          // Exact-match on purpose, and deliberately STRICTER than embeddingMismatch's
+          // isForeignEmbeddingModel, which counts an absent/blank label as comparable. Here an
+          // unlabeled-but-vectorized doc stays inlined rather than risk a strand. Do NOT consolidate
+          // this onto isForeignEmbeddingModel - that loosens the gate to defer unlabeled docs the
+          // semantic arm may not actually reach, which is the content-losing direction.
           const sameVectorSpace = Boolean(queryEmbeddingModel) && file.embeddingModel === queryEmbeddingModel;
           return lakeTagged && fullyVectorized && sameVectorSpace;
         })
