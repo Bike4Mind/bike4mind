@@ -74,7 +74,12 @@ const handler = baseApi()
       ...((data.status === 'completed' || data.status === 'completed_with_errors') && { completedAt: new Date() }),
     });
 
-    await recomputeLakeAfterTerminal(data.status, batch.dataLakeId, req.logger);
+    // Only on the transition INTO terminal. Re-PUTting a status the batch already holds would
+    // otherwise run a fresh whole-lake aggregation per call, and the normal completed path is
+    // already recomputed by the queue finalizer.
+    if (!BATCH_TERMINAL_STATUSES.includes(batch.status)) {
+      await recomputeLakeAfterTerminal(data.status, batch.dataLakeId, req.logger);
+    }
 
     return res.json({ success: true });
   })

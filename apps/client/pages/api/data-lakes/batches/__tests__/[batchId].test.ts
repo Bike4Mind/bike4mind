@@ -41,7 +41,7 @@ const req = (method: string, body: unknown = {}) =>
 const run = (method: string, res: unknown, body?: unknown) =>
   (handler as (req: unknown, res: unknown) => Promise<void>)(req(method, body), res);
 
-describe('/api/data-lakes/batches/[batchId] — lake stats on a terminal batch', () => {
+describe('/api/data-lakes/batches/[batchId] lake stats on a terminal batch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: 'lake1', status: 'uploading' });
@@ -67,6 +67,16 @@ describe('/api/data-lakes/batches/[batchId] — lake stats on a terminal batch',
     await run('DELETE', res);
 
     expect(h.recomputeLakeStats).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake1' }), expect.anything());
+  });
+
+  it('does not recompute a terminal status the batch already holds', async () => {
+    // A client re-PUTting 'failed' would otherwise run a whole-lake aggregation per call.
+    h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: 'lake1', status: 'failed' });
+    const { res } = makeRes();
+
+    await run('PUT', res, { status: 'failed' });
+
+    expect(h.recomputeLakeStats).not.toHaveBeenCalled();
   });
 
   it('does not recompute while the batch is still running', async () => {

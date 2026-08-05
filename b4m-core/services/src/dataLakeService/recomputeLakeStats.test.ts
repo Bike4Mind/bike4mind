@@ -21,7 +21,7 @@ const makeAdapters = (fileCount: number) => ({
   },
 });
 
-describe('recomputeLakeStats — draft activation', () => {
+describe('recomputeLakeStats draft activation', () => {
   it('activates the lake once it holds a member file', async () => {
     const adapters = makeAdapters(1);
 

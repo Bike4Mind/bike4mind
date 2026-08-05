@@ -98,10 +98,17 @@ const handler = baseApi()
       // service sees, so this door owns the lake's counts - and, through them, the draft->active
       // transition that puts the lake in Discover. After the transaction, so the aggregate reads
       // the committed row.
-      await recomputeStatsForLakeTags(
-        tags.map(tag => tag.name),
-        { logger: req.logger }
-      );
+      //
+      // Content path only. A `presignedUrl` means the caller sent no content and the bytes are
+      // not in storage yet (fabFileService/create.ts), so counting the row would activate a lake
+      // on an upload that may never arrive - and activation is one-way. Those rows stay
+      // uncounted until a door that knows the file landed recomputes.
+      if (!result.presignedUrl) {
+        await recomputeStatsForLakeTags(
+          tags.map(tag => tag.name),
+          { logger: req.logger }
+        );
+      }
 
       // Route the browser's upload via the shared resolver: hosted keeps the direct S3 presign;
       // self-host returns a same-origin proxy (S3/MinIO isn't browser-reachable). Shared with the

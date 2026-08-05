@@ -17,7 +17,9 @@ import { type MigrationFile } from './index';
  * decide. Recomputing repairs the counts on the way past, and the activation then falls out of
  * the same code path the live doors use rather than a second copy of the rule.
  *
- * Idempotent: a second run finds no lake left in a draft/absent status and matches nothing.
+ * Re-runnable, not a no-op: a lake that recomputes to 0 files stays draft and is scanned again.
+ * The writes are idempotent - an already-active lake is not selected, and a repeat recompute
+ * writes the same counts.
  */
 
 const LOG = '[activate-draft-datalakes-with-files]';

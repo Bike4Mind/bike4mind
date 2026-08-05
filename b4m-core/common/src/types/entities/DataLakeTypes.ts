@@ -5,8 +5,9 @@ import { IBaseRepository, type IMongoDocument } from '.';
 /**
  * Lake lifecycle. Stable states (draft/active/archived/deleted) plus transitional
  * states (archiving/restoring/deleting) that exist to drive UI and make a crashed
- * mid-operation observable. draft -> active is one-way and happens implicitly on
- * first batch creation.
+ * mid-operation observable. draft -> active is one-way. It happens implicitly once the lake
+ * holds its first member file (see `activateIfDraft` below), and unconditionally when an
+ * archived or deleted lake is restored, which is how an empty lake can end up active.
  */
 export type DataLakeStatus = 'draft' | 'active' | 'archiving' | 'archived' | 'restoring' | 'deleting' | 'deleted';
 

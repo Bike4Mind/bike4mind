@@ -121,11 +121,11 @@ describe('POST /api/files/createFabFile - data-lake tags', () => {
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
   });
 
-  it('recomputes the lake, so a file created straight into a draft one activates it (#1342)', async () => {
+  it('recomputes the lake when content lands straight into it (#1342)', async () => {
     // This door reaches no batch and no membership service. Without the recompute the lake's
     // counts stay stale and it never leaves 'draft', so it never appears in Discover.
     const { res } = makeRes();
-    await run(body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
+    await run(body({ content: 'hello', tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
 
     expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith(
       expect.arrayContaining(['datalake:orga:acme-2026']),
@@ -133,11 +133,13 @@ describe('POST /api/files/createFabFile - data-lake tags', () => {
     );
   });
 
-  it('hands the recompute no lake tag when the file joins none', async () => {
+  it('does not recompute a presign-style create, whose bytes are not in storage yet', async () => {
+    // No content means the service mints a presignedUrl and the upload has not happened.
+    // Activation is one-way, so counting that row could park an empty lake in Discover forever.
     const { res } = makeRes();
-    await run(body(), res);
+    await run(body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
 
-    expect(h.recomputeStatsForLakeTags).toHaveBeenCalledWith([], expect.anything());
+    expect(h.recomputeStatsForLakeTags).not.toHaveBeenCalled();
   });
 });
 
