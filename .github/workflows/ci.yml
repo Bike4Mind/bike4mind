@@ -90,6 +90,14 @@ jobs:
       - name: Check user $lookup field projections
         run: node scripts/check-user-lookup-projection.mjs
 
+      # Mirrors the husky pre-commit guard so a `--no-verify` bypass is still caught.
+      # Each trigger exposes the base under a different key; the script over-scans the
+      # whole tree if none resolve, so a new-branch push (all-zero `before`) still checks.
+      - name: Check for raw control bytes in source files
+        run: bash scripts/check-no-control-bytes.sh --changed "$CONTROL_BYTES_BASE"
+        env:
+          CONTROL_BYTES_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
 
