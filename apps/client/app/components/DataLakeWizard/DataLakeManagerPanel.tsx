@@ -51,7 +51,7 @@ import {
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
 import type { TreeSortMode } from '@client/app/components/datalake/treeChrome';
-import { brandAlpha, gray } from '@client/app/utils/themes/colors';
+import { gray } from '@client/app/utils/themes/colors';
 import { useDataLakeFiles, useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
 import { useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import {
@@ -66,6 +66,7 @@ import {
 } from '@client/app/hooks/data/dataLakes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
+import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
@@ -176,6 +177,21 @@ export default function DataLakeManagerPanel() {
     if (managerTab !== 'mine') openManager('mine');
   };
 
+  // Discover swaps the right pane, but the activeLake branch below outranks it - so a click
+  // while a lake was open changed nothing on screen, then surfaced later as the catalog
+  // appearing when the user pressed Back. Exit the lake on the way in. Toggling back out is
+  // the only exit that does not require owning a lake to click.
+  const toggleDiscover = () => {
+    if (managerTab === 'discover') {
+      openManager('mine');
+      return;
+    }
+    setLakeId(null);
+    setPath([]);
+    setSelectedFile(null);
+    openManager('discover');
+  };
+
   // Shared choke point for every manager entry point: with the feature off the lakes
   // queries 403 and the empty panel is a dead end, so never render - even if some (future)
   // ungated caller opens the manager. Mirrors the render guard in SendToDataLakeModal.
@@ -209,7 +225,8 @@ export default function DataLakeManagerPanel() {
         }}
         onSelectFile={setSelectedFile}
         onCreateLake={openWizard}
-        onDiscover={() => openManager('discover')}
+        isDiscovering={managerTab === 'discover'}
+        onDiscover={toggleDiscover}
         onReviewTaxonomy={setReviewingBatchId}
       />
       {activeLake ? (
@@ -275,7 +292,9 @@ interface ManagerNavProps {
   onExitLake: () => void;
   onSelectFile: (file: IFabFileDocument) => void;
   onCreateLake: () => void;
-  /** Opens the public-lake Discover catalog in the right pane. */
+  /** True while the right pane shows the public catalog, so the footer button reads as pressed. */
+  isDiscovering: boolean;
+  /** Toggles the public-lake Discover catalog in the right pane. */
   onDiscover: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
@@ -294,6 +313,7 @@ function ManagerNav({
   onExitLake,
   onSelectFile,
   onCreateLake,
+  isDiscovering,
   onDiscover,
   onReviewTaxonomy,
 }: ManagerNavProps) {
@@ -796,15 +816,25 @@ function ManagerNav({
 
       {/* Sticky bottom bar, same chrome as the in-chat tree footer. */}
       <Box sx={{ display: 'flex', gap: '8px', p: '12px', borderTop: '1px solid', borderColor }}>
-        <Button
-          variant="outlined"
-          color="neutral"
-          onClick={onDiscover}
-          data-testid="datalake-manager-discover-btn"
-          sx={FOOTER_BTN_SX}
+        <Tooltip
+          title={
+            isDiscovering
+              ? 'Showing public data lakes. Click to return to your own lakes.'
+              : 'Browse data lakes other people have published, from across the app.'
+          }
+          size="sm"
         >
-          Discover
-        </Button>
+          <Button
+            variant={isDiscovering ? 'soft' : 'outlined'}
+            color="neutral"
+            onClick={onDiscover}
+            aria-pressed={isDiscovering}
+            data-testid="datalake-manager-discover-btn"
+            sx={FOOTER_BTN_SX}
+          >
+            Discover
+          </Button>
+        </Tooltip>
         <Button
           variant="solid"
           color="primary"
@@ -1130,41 +1160,13 @@ function LakeInfoPanel({
 
 function ManagerOverview() {
   return (
-    <Box
+    <DataLakeEmptyState
+      icon={<StorageIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />}
+      title="Select a data lake"
       data-testid="datalake-manager-overview"
-      sx={{
-        flex: 1,
-        minWidth: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        px: 4,
-        color: 'text.tertiary',
-        textAlign: 'center',
-      }}
     >
-      {/* Empty-state icon badge - matches the advanced-search drawer's empty state. */}
-      <Box
-        sx={{
-          width: 40,
-          height: 40,
-          borderRadius: '10px',
-          bgcolor: theme => (theme.palette.mode === 'dark' ? brandAlpha[100][12] : brandAlpha[400][8]),
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <StorageIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
-      </Box>
-      <Typography level="title-lg" sx={{ color: 'text.primary', fontSize: '16px', mt: '16px', mb: '12px' }}>
-        Select a data lake
-      </Typography>
-      <Typography level="body-sm" sx={{ color: 'text.tertiary', fontSize: '13px', maxWidth: 380 }}>
-        Pick a lake on the left to see its details
-        <br /> and browse its files, or create a new one.
-      </Typography>
-    </Box>
+      Pick a lake on the left to see its details
+      <br /> and browse its files, or create a new one.
+    </DataLakeEmptyState>
   );
 }
