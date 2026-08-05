@@ -77,6 +77,11 @@ describe('sharingService - cancelInvite authority', () => {
     expect(targeted.recipients.pending).not.toContain('victim@example.com');
     expect(link.remaining).toBe(1000);
     expect(link.recipients.pending).toEqual([]);
+
+    // The link invite wasn't touched, so it must not be written - avoids churning its
+    // updatedAt (and a redundant write) on every unrelated cancel for the document.
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
+    expect(db.invites.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'invite-1' }));
   });
 
   it('rejects a project cancel from a caller with no share access, and performs no write', async () => {

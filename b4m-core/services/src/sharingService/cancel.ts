@@ -89,17 +89,26 @@ export const cancelInvite = async (
   if (invites.length === 0) throw new NotFoundError('Invite not found');
 
   for (const invite of invites) {
+    // Skip the write entirely for invites this cancel doesn't touch, so we don't churn
+    // updatedAt (and needless writes) on every sibling invite for the document.
+    let changed = false;
+
     // If email is provided, we need to remove it from the pending list
     if (email && invite.recipients?.pending) {
       const before = invite.recipients.pending.length;
       invite.recipients.pending = invite.recipients.pending.filter(p => p !== email);
       if (invite.recipients.pending.length < before) {
         invite.remaining -= 1;
+        changed = true;
       }
-    } else {
+    } else if (invite.remaining !== 0) {
       invite.remaining = 0;
+      changed = true;
     }
-    await db.invites.update(invite);
+
+    if (changed) {
+      await db.invites.update(invite);
+    }
   }
 
   return invites;
