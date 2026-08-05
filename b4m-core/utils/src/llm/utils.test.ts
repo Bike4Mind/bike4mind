@@ -2852,6 +2852,36 @@ describe('system-message retention under a capped budget', () => {
     expect(tagsIn(result)).toEqual(['keep']);
   });
 
+  // The unlimited-history path splits the budget 70/30 instead of using the floor, and 70% of what
+  // survived a heavy system stack is LESS than 35% of the budget before it. Without the floor on this
+  // branch too, the same file that arrives whole on a windowed turn was cut on an unwindowed one.
+  it('honours the content floor on an unwindowed request as well', async () => {
+    const heavy = sysOf(2600, 'heavy');
+    const csv = 'id,fruit,color\n' + 'r,apple,red\n'.repeat(330) + 'FINAL_ROW_MARKER: apricot';
+
+    const result = await buildAndSortMessages(
+      Array.from({ length: 40 }, (_, i) => ({
+        role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+        content: `history-${i}-` + 'h'.repeat(240),
+      })),
+      [heavy, { role: 'user', content: csv }],
+      ask,
+      5144,
+      {},
+      // UNLIMITED_HISTORY_COUNT, so allocation takes the 70/30 branch rather than the windowed floor.
+      // It is -1, not a large count: the in-range sentinel it replaced could collide with a real one.
+      -1,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const delivered = result.find(
+      m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color')
+    );
+    expect(delivered).toBeDefined();
+    expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
+  });
+
   // The reserve only exists to protect an attachment, so a turn without one must not pay for it. This
   // is the pair of assertions that pins the condition in both directions.
   it('caps system instructions only when the turn carries an attachment', async () => {

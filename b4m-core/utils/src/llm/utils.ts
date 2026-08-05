@@ -2093,11 +2093,17 @@ export async function buildAndSortMessages(
 
       processedPreviousMessages = recordHistoryResult(processMessages(historyMessages, tokenBudget));
     } else {
-      // No content floor on this path: the 70% split below already gives content the majority, so the
-      // 0.35 reserve would only ever weaken it. The system cap still applies, having been taken above
-      // the branch, which is what stops system instructions spending the 70% before it is divided.
       // Both exceed the budget: trim proportionally. See KNOWLEDGE_FILE_TOKEN_ALLOCATION for the split.
-      const nonImageTokenBudget = Math.min(tokenBudget * KNOWLEDGE_FILE_TOKEN_ALLOCATION, totalContentTokens);
+      //
+      // The floor applies here too, and the two are not comparable by their fractions alone: 70% is a
+      // share of what survived the system stack, the floor is a share of the budget before it. Once
+      // system instructions approach their cap the floor is the larger of the two, and without it a
+      // heavy stack still cut the file on this path. Capped at what content actually wants, so a small
+      // attachment does not hold budget away from history.
+      const nonImageTokenBudget = Math.min(
+        totalContentTokens,
+        Math.max(contentReserve, tokenBudget * KNOWLEDGE_FILE_TOKEN_ALLOCATION)
+      );
       const previousMessageTokenBudget = tokenBudget - nonImageTokenBudget;
 
       processedContentMessages = recordContentResult(
