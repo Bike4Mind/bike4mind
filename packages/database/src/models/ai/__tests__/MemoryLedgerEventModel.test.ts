@@ -74,6 +74,15 @@ describe('MemoryLedgerRepository', () => {
     expect((await memoryLedgerRepository.listChain('lake', 'lake:corpus', 'owner1')).map(e => e.hash)).toEqual(['L0']);
   });
 
+  it('rejects an unknown principalKind (enum enforcement intact)', async () => {
+    // tryInsert only swallows the seq-collision 11000; a validation error must still propagate, so a
+    // bogus kind cannot slip into the chain. Guards the enum against a silent widening.
+    await expect(
+      // @ts-expect-error - deliberately invalid value to prove the enum still enforces
+      memoryLedgerRepository.tryInsert(sealedEvent({ principalKind: 'bogus', seq: 0, hash: 'x' }))
+    ).rejects.toThrow(/enum|validation/i);
+  });
+
   it('markShredded clears the embedding ciphertext along with the fact', async () => {
     // The embedding is a semantic image of the fact (inversion can partially reconstruct the source
     // text), so a shred that cleared the fact but left the embedding behind would leave a

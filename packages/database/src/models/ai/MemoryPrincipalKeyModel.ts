@@ -1,6 +1,7 @@
 import mongoose, { Model, Schema } from 'mongoose';
 import { IMongoDocument } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
+import { MEMORY_PRINCIPAL_KINDS, type MemoryPrincipalKind } from './MemoryLedgerEventModel';
 
 const ModelName = 'MemoryPrincipalKey';
 
@@ -14,7 +15,7 @@ const ModelName = 'MemoryPrincipalKey';
  * master secret before it lands here. This model just holds and, on request, forgets it.
  */
 export interface IMemoryPrincipalKey extends IMongoDocument {
-  principalKind: 'user' | 'agent' | 'org' | 'system' | 'lake';
+  principalKind: MemoryPrincipalKind;
   principalId: string;
   ownerUserId: string;
   /** The (possibly envelope-wrapped) data-encryption key, base64. Opaque here. */
@@ -25,7 +26,7 @@ interface IMemoryPrincipalKeyModel extends Model<IMemoryPrincipalKey> {}
 
 const MemoryPrincipalKeySchema = new Schema<IMemoryPrincipalKey>(
   {
-    principalKind: { type: String, enum: ['user', 'agent', 'org', 'system', 'lake'], required: true },
+    principalKind: { type: String, enum: MEMORY_PRINCIPAL_KINDS, required: true },
     principalId: { type: String, required: true },
     ownerUserId: { type: String, required: true },
     dek: { type: String, required: true },
@@ -60,7 +61,9 @@ class MemoryPrincipalKeyRepository extends BaseRepository<IMemoryPrincipalKey> {
       const doc = await this.model.findOneAndUpdate(
         { principalKind, principalId },
         { $setOnInsert: { principalKind, principalId, ownerUserId, dek: candidateDek } },
-        { new: true, upsert: true, setDefaultsOnInsert: true }
+        // runValidators so the principalKind enum actually gates this upsert - the only production
+        // write path for a key. Without it an unknown kind would mint a key the ledger enum rejects.
+        { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
       );
       return doc.dek;
     } catch (err) {

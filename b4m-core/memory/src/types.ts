@@ -5,8 +5,8 @@
  * independent of the ACTOR that authored any given event. A principal is a user, an agent, an
  * org, the system, or a data lake - all fold from one substrate. These shapes generalize what the
  * DeepAgent Charter/Episode model already ships for agents; user mementos plug in behind the same
- * types. A `lake` principal is a data lake whose ledger is the fold of its corpus (one durable
- * belief per source claim) - the same substrate, a different scope.
+ * types. A `lake` principal is a data lake as a memory scope - the same substrate, a different
+ * principal; nothing produces or consumes a lake profile yet (its fold arrives with #1440).
  */
 
 export type PrincipalKind = 'user' | 'agent' | 'org' | 'system' | 'lake';

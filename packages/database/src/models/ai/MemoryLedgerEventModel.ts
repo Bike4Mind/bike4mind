@@ -21,7 +21,9 @@ export type MemoryEvidenceTier = 'engineering-proxy' | 'engineering-scaled' | 'e
 export type MemorySalience = 'hot' | 'warm' | 'cold';
 
 const MEMORY_EVENT_KINDS: MemoryEventKind[] = ['assert', 'affirm', 'retract'];
-const MEMORY_PRINCIPAL_KINDS: MemoryPrincipalKind[] = ['user', 'agent', 'org', 'system', 'lake'];
+// Exported so the sibling keyring model (MemoryPrincipalKeyModel) reuses this one list instead of
+// hand-copying it - the two enums must admit the same kinds or a principal's key and its chain drift.
+export const MEMORY_PRINCIPAL_KINDS: MemoryPrincipalKind[] = ['user', 'agent', 'org', 'system', 'lake'];
 const MEMORY_EVIDENCE_TIERS: MemoryEvidenceTier[] = [
   'engineering-proxy',
   'engineering-scaled',
@@ -34,6 +36,10 @@ export interface IMemoryLedgerEvent extends IMongoDocument {
   // --- scope ---
   /** Whose memory this belongs to (the principal), independent of who authored the event. */
   principalKind: MemoryPrincipalKind;
+  // A (principalKind, principalId) is assumed to determine exactly one owner: the keyring's uniqueness
+  // ($setOnInsert), shredPrincipalMemory, and the seq index are all owner-blind while reads are
+  // owner-scoped. That holds for user/agent/org/system; `lake` is org-shared, so once #1440 gives it a
+  // writer this assumption must be revisited (a second caller would share the first's DEK).
   principalId: string;
   /** Access-control scope: the user permitted to read this chain. */
   ownerUserId: string;
