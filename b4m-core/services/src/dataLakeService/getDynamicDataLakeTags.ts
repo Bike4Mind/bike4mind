@@ -6,7 +6,16 @@ import {
   type IDataLakeRepository,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { buildDatalakeTag } from './createDataLake';
+
+/**
+ * An id value `normalizeId` resolves: a plain string, a Mongo ObjectId (via `toHexString`), or a
+ * populated Mongoose document (`{ _id }` / string `{ id }`). Deliberately excludes a bare
+ * `{ toString(): string }` - `normalizeId` ignores that shape and returns undefined - which is why
+ * `organizationId` uses this while `id`, still `String()`-coerced, keeps the wider `toString` form.
+ */
+type NormalizableId = string | { toHexString(): string } | { _id: unknown } | { id: string };
 
 /**
  * The minimal context the data-lake access resolver needs. The knowledge tools
@@ -26,13 +35,14 @@ export interface DataLakeAccessContext {
    * The caller. `organizationId` scopes org lakes (org-less lakes stay open to all);
    * `id` is the owner bypass - the caller always retrieves their own lakes (re-checked in
    * memory against each lake's persisted `createdByUserId`, not assumed from the query), and a
-   * gateless org-less lake is owner-only (Private-by-default). Both accept an ObjectId-like
-   * value too (a hydrated user doc carries ObjectIds); they're string-coerced before querying.
+   * gateless org-less lake is owner-only (Private-by-default). A hydrated user doc carries
+   * ObjectIds, so `organizationId` is resolved via `normalizeId` (string, ObjectId, or populated
+   * `{ _id }` doc) while `id` is `String()`-coerced before querying.
    */
   user: {
     id?: string | { toString(): string } | null;
     tags?: string[] | null;
-    organizationId?: string | { toString(): string } | null;
+    organizationId?: NormalizableId | null;
   };
   /** Caller's resolved entitlement keys; absent means tag-only matching. */
   entitlementKeys?: string[];
@@ -75,9 +85,11 @@ export async function getDynamicDataLakeAccess(
 ): Promise<{ dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] }> {
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
-  // Coerce to string: the lake's organizationId/createdByUserId are String fields, but a
-  // hydrated user doc may carry ObjectIds here - an ObjectId query against a String never matches.
-  const organizationId = context.user.organizationId ? String(context.user.organizationId) : undefined;
+  // Coerce to string: the lake's organizationId/createdByUserId are String fields, but a hydrated
+  // user doc may carry an ObjectId - or a populated Organization document - here, and an
+  // ObjectId/document query against a String never matches. normalizeId handles all three shapes;
+  // plain String() would turn a populated doc into "[object Object]" (#1281 / @bike4mind/utils/normalizeId).
+  const organizationId = normalizeId(context.user.organizationId);
   const userId = context.user.id ? String(context.user.id) : undefined;
   let dynamicDataLakes: DataLakeConfig[] | undefined;
   // Ids of fetched lakes whose PERSISTED createdByUserId is this caller. Read off the raw

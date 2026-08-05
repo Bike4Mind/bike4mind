@@ -1,5 +1,6 @@
 import { DATALAKE_TAG_PREFIX, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import type { IDataLakeDocument } from '@bike4mind/common';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
 
 /**
@@ -39,17 +40,20 @@ export interface DataLakePrompt {
  * governance path). The surviving lakes are rendered by renderDataLakePromptSection at each
  * retrieval-scoped injection site (forced retrieval + the model-driven knowledge tools).
  *
- * Both sides of each comparison are String-coerced (behind a truthiness guard, so an absent
- * value never becomes the string "undefined"). The schema stores these as Strings today, but an
- * ObjectId-vs-String comparison would fail SILENTLY - denying injection with no error - which is
- * the hard failure mode to notice. Same reasoning as the actor-side coercion in the resolver.
+ * Both sides of the org comparison are normalized through normalizeId (which yields undefined for
+ * an absent value, so it never becomes the string "undefined"). The schema stores these as Strings
+ * today, but an ObjectId- or populated-document-vs-String comparison would fail SILENTLY - denying
+ * injection with no error - which is the hard failure mode to notice. Same reasoning and normalizer
+ * as the actor-side coercion in the resolver (#1281 / @bike4mind/utils/normalizeId).
  */
 function isTrustedForInjection(
   lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,
   actor: { userId?: string; organizationId?: string }
 ): boolean {
   if (actor.userId && lake.createdByUserId && String(lake.createdByUserId) === actor.userId) return true;
-  return !!lake.organizationId && !!actor.organizationId && String(lake.organizationId) === actor.organizationId;
+  const lakeOrg = normalizeId(lake.organizationId);
+  const actorOrg = normalizeId(actor.organizationId);
+  return !!lakeOrg && !!actorOrg && lakeOrg === actorOrg;
 }
 
 /**
@@ -92,9 +96,9 @@ export async function getAccessibleDataLakePrompts(
 
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
-  // String-coerce for the same reason getDynamicDataLakeAccess does: a hydrated user doc
-  // carries ObjectIds, and the lake's owner/org fields are Strings.
-  const organizationId = context.user.organizationId ? String(context.user.organizationId) : undefined;
+  // Normalize for the same reason getDynamicDataLakeAccess does: a hydrated user doc carries an
+  // ObjectId (or a populated Organization document), and the lake's owner/org fields are Strings.
+  const organizationId = normalizeId(context.user.organizationId);
   const userId = context.user.id ? String(context.user.id) : undefined;
 
   let lakes: IDataLakeDocument[];
