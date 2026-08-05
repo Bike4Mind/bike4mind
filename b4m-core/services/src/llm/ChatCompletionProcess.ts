@@ -147,6 +147,7 @@ import {
   HELP_CENTER_PROMPT,
   ABSTENTION_PROMPT,
   ELISION_WARNING,
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 
@@ -217,12 +218,22 @@ const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
  * buffer. Deliberately NOT clamped at zero - the empty-prompt guard depends on seeing a non-positive
  * budget for a genuinely misconfigured text model.
  *
- * Image and video models return media rather than tokens, and every image backend here sets
- * max_tokens equal to contextWindow because both are the prompt-length limit, so reserving it as
- * output left no room for the prompt itself. Two callers need this figure - the assembly budget and
- * the verbatim-history window - and they must not drift apart.
+ * Image and video models return media rather than tokens, so their max_tokens is a prompt-length
+ * limit and is never reserved as output - most media rows set it equal to contextWindow, Gemini's
+ * image rows set it lower, and either way subtracting it would leave no room for the prompt itself.
+ * Two callers need this figure - the assembly budget and the verbatim-history window - and they must
+ * not drift apart.
+ *
+ * The static catalog tables are held to the positive-budget property by
+ * modelCatalogInputBudget.test.ts, and a discovered claim that would break it for a TEXT row is
+ * refused in modelDiscoveryService/catalogWrite. Neither covers a media row whose window arrives as
+ * 0 from a feed, where the buffer below still makes this negative.
  */
-const safeInputWindow = (modelInfo: ModelInfo, requestedMaxTokens: number, safetyBuffer = 1000): number => {
+const safeInputWindow = (
+  modelInfo: ModelInfo,
+  requestedMaxTokens: number,
+  safetyBuffer = CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS
+): number => {
   const contextLimit = modelInfo.contextWindow ?? 200000;
   const modelMaxOutput = modelInfo.max_tokens ?? 16384;
   const returnsMedia = modelInfo.type === 'image' || modelInfo.type === 'video';
@@ -1791,7 +1802,9 @@ export class ChatCompletionProcess {
       // attachedFileTokenBudget below), so the adaptive default must not balloon it.
       const urlContentBudget = maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS;
 
-      const safetyBuffer = 1000; // Emergency buffer
+      // The same figure the catalog tests hold rows to, so CI's rule cannot end up looser
+      // than what this call actually reserves. Reported as bufferTokens in the telemetry below.
+      const safetyBuffer = CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS;
       // safeMaxTokens, not the raw (possibly absent) requested maxTokens: this reserves against the
       // output budget actually in play, including the adaptive-reasoning floor above, or an adaptive
       // model could reserve less than it goes on to use and land back on the negative-window bug this
