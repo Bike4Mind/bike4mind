@@ -51,6 +51,7 @@ const makeAdapters = (opts?: {
   batchDoc?: IDataLakeBatchDocument | null;
   lakeDoc?: IDataLakeDocument | null;
   files?: ReturnType<typeof file>[];
+  bulkUpdateTagsResult?: number;
 }) => ({
   db: {
     dataLakes: { findById: vi.fn().mockResolvedValue(opts && 'lakeDoc' in opts ? opts.lakeDoc : lake()) },
@@ -60,9 +61,12 @@ const makeAdapters = (opts?: {
     },
     fabFiles: {
       findByBatchId: vi.fn().mockResolvedValue(opts?.files ?? [file()]),
-      bulkUpdateTags: vi.fn().mockImplementation((updates: unknown[]) => Promise.resolve(updates.length)),
+      bulkUpdateTags: vi
+        .fn()
+        .mockImplementation((updates: unknown[]) => Promise.resolve(opts?.bulkUpdateTagsResult ?? updates.length)),
     },
   },
+  logger: { warn: vi.fn() },
 });
 
 describe('applyTaxonomySuggestions', () => {
@@ -220,6 +224,37 @@ describe('applyTaxonomySuggestions', () => {
 
     const updates = adapters.db.fabFiles.bulkUpdateTags.mock.calls[0][0];
     expect(updates[0].expectedTags).toEqual(existingTags);
+  });
+
+  it('warns with the skip count when bulkUpdateTags reports fewer modified than matched (a race lost)', async () => {
+    const adapters = makeAdapters({
+      files: [file(), file({ id: 'f2', relativePath: 'legal/2.pdf' })],
+      bulkUpdateTagsResult: 1, // 2 files matched, only 1 actually written - 1 lost a concurrency race
+    });
+
+    await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('1/2'));
+  });
+
+  it('does not warn when every matched file was actually updated', async () => {
+    const adapters = makeAdapters({
+      files: [file({ tags: [{ name: 'acme:legal', strength: 1 }] })],
+    });
+
+    await applyTaxonomySuggestions(
+      { userId: 'owner', isAdmin: false },
+      'b1',
+      [tag({ suffix: 'type:contract', matchingFolders: ['legal'] })],
+      adapters as any
+    );
+
+    expect(adapters.logger.warn).not.toHaveBeenCalled();
   });
 
   it('keeps a genuinely suggested tag even after its suffix was edited by the reviewer', async () => {

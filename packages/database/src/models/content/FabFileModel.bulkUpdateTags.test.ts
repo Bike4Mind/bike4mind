@@ -183,4 +183,34 @@ describe('FabFileRepository.bulkUpdateTags', () => {
     const fresh = await fabFileRepository.findById(a.id);
     expect(fresh?.tags?.map(t => t.name)).toEqual(['acme:legal']);
   });
+
+  it('does not write tags to a file soft-deleted since expectedTags was read', async () => {
+    const a = await FabFile.create({
+      userId,
+      fileName: 'a.txt',
+      mimeType: 'text/plain',
+      type: KnowledgeType.FILE,
+      filePath: 'a.txt',
+      tags: [{ name: 'acme:legal', strength: 1 }],
+    });
+    // Simulates a delete landing after this caller's read, before its write.
+    await FabFile.updateOne({ _id: a._id }, { $set: { deletedAt: new Date() } });
+
+    const modifiedCount = await fabFileRepository.bulkUpdateTags([
+      {
+        id: a.id,
+        tags: [
+          { name: 'acme:legal', strength: 1 },
+          { name: 'acme:type:contract', strength: 0.9 },
+        ],
+        expectedTags: [{ name: 'acme:legal', strength: 1 }],
+      },
+    ]);
+
+    expect(modifiedCount).toBe(0);
+    // findById excludes soft-deleted docs by default (schema-level `pre('findOne')` guard) -
+    // opt in explicitly to inspect the deleted document's persisted state.
+    const raw = await FabFile.findOne({ _id: a._id }, null, { includeDeleted: true });
+    expect(raw?.tags?.map((t: { name: string }) => t.name)).toEqual(['acme:legal']);
+  });
 });

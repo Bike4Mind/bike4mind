@@ -25,7 +25,10 @@ const handler = baseApi()
       { userId: req.user.id, isAdmin: req.user.isAdmin },
       batchId,
       data.tags.filter(t => !t.deleted),
-      { db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository } }
+      {
+        db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+        logger: console,
+      }
     );
 
     return res.json(result);

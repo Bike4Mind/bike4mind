@@ -8,6 +8,7 @@ interface ApplyTaxonomySuggestionsAdapters {
     batches: Pick<IDataLakeBatchRepository, 'findById' | 'setTaxonomyStatusIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'findByBatchId' | 'bulkUpdateTags'>;
   };
+  logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
 
 /**
@@ -38,7 +39,7 @@ export const applyTaxonomySuggestions = async (
   actor: { userId: string; isAdmin: boolean },
   batchId: string,
   acceptedTags: TaxonomyTag[],
-  { db }: ApplyTaxonomySuggestionsAdapters
+  { db, logger }: ApplyTaxonomySuggestionsAdapters
 ): Promise<{ success: true; filesUpdated: number }> => {
   const batch = await db.batches.findById(batchId);
   if (!batch) throw new NotFoundError('Batch not found');
@@ -109,6 +110,17 @@ export const applyTaxonomySuggestions = async (
     });
 
     const filesUpdated = await db.fabFiles.bulkUpdateTags(updates);
+    const skipped = updates.length - filesUpdated;
+    if (skipped > 0) {
+      // Every op in `updates` matched a file that needed new tags - a lower filesUpdated means
+      // bulkUpdateTags' optimistic-concurrency check lost the race for `skipped` of them (see
+      // its doc comment). Not an error - the concurrent writer's change legitimately wins - but
+      // otherwise invisible: filesUpdated just reaches the caller as a smaller-than-expected
+      // number with no signal why.
+      logger?.warn(
+        `applyTaxonomySuggestions: ${skipped}/${updates.length} file(s) skipped on batch ${batchId} - tags changed since read`
+      );
+    }
 
     const finalized = await db.batches.setTaxonomyStatusIfActive(batchId, ['applying'], 'applied');
     if (!finalized) {
