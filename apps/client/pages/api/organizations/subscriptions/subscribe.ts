@@ -10,7 +10,7 @@ import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
-import { appendSuccessParams } from '@server/integrations/stripe/callbackUrl';
+import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
@@ -26,6 +26,16 @@ const handler = baseApi()
 
     if (priceId !== ORGANIZATION_SUBSCRIPTION_PRICE_ID) {
       throw new BadRequestError('Invalid Organization Subscription Price ID');
+    }
+
+    // Restrict the Stripe success/cancel redirect to the deployed app origin. An
+    // external callbackUrl is an open-redirect/phishing vector off Stripe's hosted
+    // checkout page, and this route's schema types callbackUrl as a bare string, so
+    // this is the only guard. The individual path and pages/api/stripe/portal.ts
+    // already do this; the omission here matters more now that the success redirect
+    // carries the completed checkout session id.
+    if (!isAllowedCallbackOrigin(callbackUrl)) {
+      throw new BadRequestError('callbackUrl must point to the deployed application origin');
     }
 
     // Check for existing active subscription

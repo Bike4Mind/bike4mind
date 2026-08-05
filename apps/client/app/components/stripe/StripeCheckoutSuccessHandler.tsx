@@ -66,8 +66,15 @@ const StripeCheckoutSuccessHandler = () => {
           .catch(() => {});
       }
 
-      // Clean up URL without triggering a refresh
-      const newUrl = window.location.pathname;
+      // Clean up URL without triggering a refresh. Strip only OUR two params and
+      // keep everything else: rewriting to the bare pathname would discard the
+      // caller's own query and hash, which now matters because the individual
+      // checkout path reaches this code for the first time (its callbackUrl can
+      // carry a redirectTo and the router preserves hashes).
+      searchParams.delete('subscription_success');
+      searchParams.delete('checkout_session_id');
+      const remaining = searchParams.toString();
+      const newUrl = `${window.location.pathname}${remaining ? `?${remaining}` : ''}${window.location.hash}`;
       window.history.replaceState({}, '', newUrl);
     }
   }, [queryClient]);

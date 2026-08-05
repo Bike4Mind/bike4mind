@@ -74,6 +74,18 @@ describe('GET /api/subscriptions/checkout-session', () => {
     });
   });
 
+  it('retrieves the caller-supplied session with the expansions authorization needs', async () => {
+    mockSessionsRetrieve.mockResolvedValue(paidSession());
+
+    await call('cs_test_1').promise;
+
+    // `subscription` must be expanded or the ownership check has no metadata to
+    // read; `line_items` carries the price/plan/quantity in the response.
+    expect(mockSessionsRetrieve).toHaveBeenCalledWith('cs_test_1', {
+      expand: ['subscription', 'line_items'],
+    });
+  });
+
   it('rejects a missing or malformed session id without calling Stripe', async () => {
     await expect(call(undefined).promise).rejects.toThrow();
     await expect(call('not-a-session').promise).rejects.toThrow();
@@ -104,6 +116,25 @@ describe('GET /api/subscriptions/checkout-session', () => {
 
     mockSessionsRetrieve.mockResolvedValue(paidSession({ payment_status: 'unpaid' }));
     await expect(call('cs_test_1').promise).rejects.toThrow(/completed payment/i);
+  });
+
+  it('refuses a $0 completion - payment_status must be positively paid', async () => {
+    // `no_payment_required` is the third member of Stripe's union (a 100%-off
+    // coupon or a trial). A denylist that only rejected 'unpaid' would report it
+    // as revenue and train ad bidding on non-revenue conversions.
+    mockSessionsRetrieve.mockResolvedValue(paidSession({ payment_status: 'no_payment_required', amount_total: 0 }));
+
+    await expect(call('cs_test_1').promise).rejects.toThrow(/completed payment/i);
+  });
+
+  it('does not divide by 100 for a zero-decimal currency', async () => {
+    // JPY has no minor unit: 3000 JPY is 3000, not 30.
+    mockSessionsRetrieve.mockResolvedValue(paidSession({ currency: 'jpy', amount_total: 3000 }));
+
+    const { promise, res } = call('cs_test_1');
+    await promise;
+
+    expect(res._getJSONData()).toMatchObject({ value: 3000, currency: 'JPY' });
   });
 
   it('falls back cleanly when the line item carries no plan detail', async () => {

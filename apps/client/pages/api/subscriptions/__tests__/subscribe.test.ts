@@ -50,10 +50,14 @@ vi.mock('@client/lib/userSubscriptions/constants', () => ({
   ],
 }));
 
-vi.mock('@server/integrations/stripe/callbackUrl', () => ({
-  isAllowedCallbackOrigin: () => true,
-  appendSuccessParams: (url: string) => `${url}?success`,
-}));
+// Use the REAL appendSuccessParams so the success_url this route builds is
+// actually asserted below - mocking it away is what let the individual path ship
+// with an unmarked success redirect in the first place. Only the origin check is
+// stubbed, since it reads APP_URL from the environment.
+vi.mock('@server/integrations/stripe/callbackUrl', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/integrations/stripe/callbackUrl')>();
+  return { ...actual, isAllowedCallbackOrigin: () => true };
+});
 vi.mock('@server/utils/config', () => ({ Config: { STAGE: 'test' } }));
 
 const mockSessionsCreate = vi.fn();
@@ -114,6 +118,26 @@ describe('POST /api/subscriptions/subscribe — launch/availability gate', () =>
     expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200);
     expect(res._getData()).toEqual({ sessionUrl: 'https://checkout.stripe/session' });
+  });
+
+  it('marks the individual success_url so a completed purchase is distinguishable from a cancel', async () => {
+    // The bug this route had: success_url was the bare callbackUrl, so a paying
+    // subscriber returned indistinguishably from someone who cancelled - no toast,
+    // no cache invalidation, and nothing to report a conversion from. The
+    // {CHECKOUT_SESSION_ID} template must stay literal for Stripe to substitute it.
+    mockGetSettingsValue.mockResolvedValue(true);
+    const { req, res } = makeReq('price_open');
+
+    await (handler as HandlerFn)(req, res);
+
+    const args = mockSessionsCreate.mock.calls[0][0] as { success_url: string; cancel_url: string };
+    expect(args.success_url).toBe(
+      'https://app.example.com/cb?subscription_success=true&checkout_session_id={CHECKOUT_SESSION_ID}'
+    );
+    expect(args.success_url).not.toContain('%7B');
+    // cancel_url stays bare - a cancel must not look like a success.
+    expect(args.cancel_url).toBe('https://app.example.com/cb');
+    expect(res.statusCode).toBe(200);
   });
 
   it('fails closed when the flag setting resolves to a non-boolean-true value (=== true read)', async () => {

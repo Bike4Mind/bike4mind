@@ -33,6 +33,14 @@ export function isAllowedCallbackOrigin(url: string): boolean {
  * app/components/stripe/StripeCheckoutSuccessHandler.tsx.
  */
 export function appendSuccessParams(callbackUrl: string): string {
-  const separator = callbackUrl.includes('?') ? '&' : '?';
-  return `${callbackUrl}${separator}subscription_success=true&checkout_session_id={CHECKOUT_SESSION_ID}`;
+  // Params must land in the QUERY, before any `#fragment`. Both production callers
+  // pass `window.location.origin`-derived URLs and the router preserves hashes on
+  // login redirects, so a naive append would bury the params inside the fragment -
+  // where the browser never exposes them as query params, silently costing the
+  // toast, the cache invalidation, and the conversion this whole path exists for.
+  const hashAt = callbackUrl.indexOf('#');
+  const base = hashAt === -1 ? callbackUrl : callbackUrl.slice(0, hashAt);
+  const fragment = hashAt === -1 ? '' : callbackUrl.slice(hashAt);
+  const separator = base.includes('?') ? '&' : '?';
+  return `${base}${separator}subscription_success=true&checkout_session_id={CHECKOUT_SESSION_ID}${fragment}`;
 }
