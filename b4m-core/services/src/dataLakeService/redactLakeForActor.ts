@@ -50,6 +50,8 @@ export type ReaderDataLake = Pick<IDataLakeDocument, (typeof READER_LAKE_FIELDS)
  *
  * `withheld` is reader-scope only - the field is absent from `READER_LAKE_FIELDS`, not hidden from
  * everyone. An editor is served the whole document, so this map says nothing about what they see.
+ * Nor does the map withhold anything itself: `toReaderLake` projects through `READER_LAKE_FIELDS`,
+ * and the teeth here are the compile error plus the test pinning the two together.
  */
 export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld'> = {
   name: 'reader',

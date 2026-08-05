@@ -58,10 +58,18 @@ export const deleteDataLake = async (
   // that started before this field existed. Its rows carry a stamp nothing recorded, so leaving the
   // mark unset keeps restore unbounded (the old behavior) instead of bounding it to a stamp those
   // rows do not have, which would strand them deleted.
+  let stamp: Date | undefined;
   const preMarkSweepInFlight = existing.status === 'deleting' && !existing.filesDeletedAt;
-  const stamp = preMarkSweepInFlight
-    ? undefined
-    : ((await db.dataLakes.claimFilesDeletedAt(dataLakeId, new Date())) ?? undefined);
+  if (!preMarkSweepInFlight) {
+    stamp = (await db.dataLakes.claimFilesDeletedAt(dataLakeId, new Date())) ?? undefined;
+    // No stamp came back: the claim lost AND the fallback read found none either, so a restore
+    // cleared it between the two round trips. The sweep still runs, just unmarked, and this one
+    // lake's restore goes back to reversing unbounded. It fails open, but not silently - without
+    // this line the only symptom is a restore that over-restores months later.
+    if (!stamp) {
+      logger?.warn('[dataLakes] teardown recorded no stamp; this lake will restore unbounded', { dataLakeId });
+    }
+  }
 
   await db.dataLakes.update({ id: dataLakeId, status: 'deleting' });
 

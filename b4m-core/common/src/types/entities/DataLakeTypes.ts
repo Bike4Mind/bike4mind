@@ -170,7 +170,9 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * Claim `filesDeletedAt` for a phase-1 teardown: writes `at` only if the lake carries no stamp,
    * and returns the stamp now in force - the existing one when a concurrent teardown or a crashed
    * prior attempt already claimed it. Callers must sweep with the RETURNED value, not their own,
-   * or they stamp rows under a mark the lake does not name. Null only if the lake vanished.
+   * or they stamp rows under a mark the lake does not name. Null means no stamp is in force: the
+   * lake vanished, or a restore cleared it between the claim and the fallback read - so a null
+   * caller sweeps unmarked and must say so, since that lake then restores unbounded.
    */
   claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
 }

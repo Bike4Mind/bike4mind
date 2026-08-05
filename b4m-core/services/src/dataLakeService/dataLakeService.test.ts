@@ -1255,6 +1255,32 @@ describe('teardown stamp bookkeeping', () => {
       expect(adapters.db.dataLakes.claimFilesDeletedAt).not.toHaveBeenCalled();
       expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
     });
+
+    it('warns when no stamp comes back, since that lake restores unbounded', async () => {
+      // The claim lost AND its fallback read found nothing, so a restore cleared the mark between
+      // the two round trips. The sweep still runs unmarked and the only other symptom is a restore
+      // that over-restores much later, which is why this one has to be audible.
+      const adapters = teardownAdapters(lake());
+      adapters.db.dataLakes.claimFilesDeletedAt = vi.fn().mockResolvedValue(null);
+      const logger = { warn: vi.fn() };
+
+      await deleteDataLake(owner, 'lake1', { ...adapters, logger });
+
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('restore unbounded'), {
+        dataLakeId: 'lake1',
+      });
+    });
+
+    it('says nothing when the claim succeeds', async () => {
+      // A warning that fires on the healthy path is one nobody reads on the unhealthy one.
+      const adapters = teardownAdapters(lake());
+      const logger = { warn: vi.fn() };
+
+      await deleteDataLake(owner, 'lake1', { ...adapters, logger });
+
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
   });
 
   describe('restoreDeletedDataLake', () => {
