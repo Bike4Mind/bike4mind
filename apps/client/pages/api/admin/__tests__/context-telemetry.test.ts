@@ -124,6 +124,27 @@ describe('GET /api/admin/context-telemetry', () => {
     }
   );
 
+  it('excludes benign turns when filtering by severity', async () => {
+    const { promise } = run({ minAnomalyScore: '0', severity: 'low' });
+    await promise;
+    const query = findQuery();
+    expect(query['promptMeta.contextTelemetry.anomalies.severity']).toBe('low');
+    // benign turns are stored as severity 'low', so "Severity: Low" must not match them
+    expect(query['promptMeta.contextTelemetry.anomalies.primaryAnomaly']).toEqual({ $ne: 'none' });
+  });
+
+  it('lets an explicit anomaly type win over the severity exclusion', async () => {
+    const { promise } = run({ severity: 'high', anomalyType: 'tool_failure' });
+    await promise;
+    expect(findQuery()['promptMeta.contextTelemetry.anomalies.primaryAnomaly']).toBe('tool_failure');
+  });
+
+  it('leaves primaryAnomaly unconstrained when neither severity nor type is filtered', async () => {
+    const { promise } = run({ minAnomalyScore: '0' });
+    await promise;
+    expect(findQuery()['promptMeta.contextTelemetry.anomalies.primaryAnomaly']).toBeUndefined();
+  });
+
   it('returns benign entries with their telemetry when minAnomalyScore=0', async () => {
     const timestamp = new Date('2026-08-04T06:27:22.185Z');
     const telemetry = { captureLevel: 'enhanced', anomalies: { anomalyScore: 0, primaryAnomaly: 'none' } };

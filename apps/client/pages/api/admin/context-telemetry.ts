@@ -66,8 +66,15 @@ const handler = baseApi().get(
       query['promptMeta.contextTelemetry.anomalies.severity'] = params.severity;
     }
 
+    // primaryAnomaly: an explicit type filter wins; otherwise a severity filter still
+    // has to exclude benign turns, which are stored as severity 'low' because there is
+    // no benign tier (TelemetryBuilder floors at 'low'). Keeps "Severity: Low" meaning
+    // real low-severity anomalies, matching the Severity Distribution stat. No-op on
+    // the default view, where score > 0 already implies a real anomaly.
     if (params.anomalyType && params.anomalyType !== 'none') {
       query['promptMeta.contextTelemetry.anomalies.primaryAnomaly'] = params.anomalyType;
+    } else if (params.severity) {
+      query['promptMeta.contextTelemetry.anomalies.primaryAnomaly'] = { $ne: 'none' };
     }
 
     const [entries, total] = await Promise.all([

@@ -119,8 +119,12 @@ const SEVERITY_COLORS: Record<AnomalySeverity, string> = {
   critical: '#f44336',
 };
 
-// Severity icons
-const SeverityIcon = ({ severity }: { severity: AnomalySeverity }) => {
+// Severity icons. Benign turns are stored as severity 'low' (there is no benign tier),
+// so they are flagged separately rather than sharing the real low-severity indicator.
+const SeverityIcon = ({ severity, benign }: { severity: AnomalySeverity; benign?: boolean }) => {
+  if (benign) {
+    return <InfoIcon sx={{ color: 'neutral.400' }} />;
+  }
   switch (severity) {
     case 'critical':
       return <ErrorIcon sx={{ color: SEVERITY_COLORS.critical }} />;
@@ -1402,7 +1406,7 @@ const TelemetryEntryCard = ({
       <CardContent>
         <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 1 }}>
           <Stack direction="row" spacing={1} alignItems="center">
-            <SeverityIcon severity={anomalies.severity} />
+            <SeverityIcon severity={anomalies.severity} benign={anomalies.primaryAnomaly === 'none'} />
             <Typography level="title-sm">{model.modelId}</Typography>
             <Chip size="sm" variant="outlined">
               {model.provider}
