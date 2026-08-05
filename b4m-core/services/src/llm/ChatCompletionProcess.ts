@@ -921,16 +921,24 @@ export class ChatCompletionProcess {
       const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
       const files = await this.db.fabfiles.getAccessibleFiles(sessionKnowledgeIds, scope);
 
-      // KNOWN GAP: tag membership is necessary but NOT sufficient for retrievability. A doc that
-      // carries an accessible lake tag but is not vectorized yet, or is embedded under a different
-      // model than the current query vector, passes this filter yet search_knowledge_base will not
-      // surface it - deferring it would strand its content silently. This is safe only because the
-      // feature is off by default; before the CorpusRetrievalMinInlineTokensPerDoc rollout the eval
-      // must exclude or account for non-vectorized docs, and the real fix is to gate on
-      // vectorization state + embedding-model agreement here (follow-up on top of #1411, which
-      // hardens the retrieval-side reads this defer relies on).
+      // Retrievability = tag membership AND real vector-search reachability. A lake-tagged doc is
+      // deferrable only if search_knowledge_base's semantic arm can actually surface it: it must be
+      // FULLY VECTORIZED (vectorizedChunkCount >= chunkCount, chunkCount > 0) AND embedded under the
+      // SAME model as the query (embeddingModel agreement). A doc that is unvectorized, still
+      // vectorizing, or embedded in another model's space passes the tag check but the semantic arm
+      // skips it - deferring it would strand its content silently. When the query embedding model is
+      // unresolvable the semantic arm cannot run at all (the tool falls back to metadata-only keyword
+      // search), so nothing is deferrable. Closes the tag-only gap; #1411 hardened the retrieval-side
+      // reads this now relies on. `vectorizedChunkCount >= chunkCount` is the usable-data condition.
+      const queryEmbeddingModel = getSettingsValue('defaultEmbeddingModel', defaultAdminSettings);
       const retrievableIds = files
-        .filter(file => (file.tags ?? []).some(tag => accessibleTags.has(tag.name)))
+        .filter(file => {
+          const lakeTagged = (file.tags ?? []).some(tag => accessibleTags.has(tag.name));
+          const chunks = file.chunkCount ?? 0;
+          const fullyVectorized = chunks > 0 && (file.vectorizedChunkCount ?? 0) >= chunks;
+          const sameVectorSpace = Boolean(queryEmbeddingModel) && file.embeddingModel === queryEmbeddingModel;
+          return lakeTagged && fullyVectorized && sameVectorSpace;
+        })
         .map(file => file.id);
 
       const deferredToRetrieval = shouldDeferCorpusToRetrieval({

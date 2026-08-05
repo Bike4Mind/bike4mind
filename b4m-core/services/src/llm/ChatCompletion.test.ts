@@ -330,8 +330,12 @@ describe('ChatCompletionProcess', () => {
     // The suite mocks @bike4mind/utils wholesale (getSettingsValue -> vi.fn() -> undefined). Restore
     // the production-equivalent numeric coercion so the threshold read behaves realistically here.
     beforeEach(() => {
-      mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
-        settings?.[key] !== undefined ? Number(settings[key]) : undefined) as typeof getSettingsValue);
+      mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) => {
+        const v = settings?.[key];
+        if (v === undefined) return undefined;
+        // Only the threshold is numeric; other keys (e.g. defaultEmbeddingModel) stay strings.
+        return key === 'CorpusRetrievalMinInlineTokensPerDoc' ? Number(v) : v;
+      }) as typeof getSettingsValue);
     });
     afterEach(() => {
       mockedGetSettingsValue.mockReset();
@@ -339,11 +343,18 @@ describe('ChatCompletionProcess', () => {
 
     // Helper: partition knowledge ids into deferred vs inlined for a given lake/threshold setup.
     const runPlan = async (opts: {
-      files: Array<{ id: string; tags: Array<{ name: string }> }>;
+      files: Array<{
+        id: string;
+        tags: Array<{ name: string }>;
+        chunkCount?: number;
+        vectorizedChunkCount?: number;
+        embeddingModel?: string;
+      }>;
       dataLakeTags: string[];
       threshold: string | undefined;
       attachedFileTokenBudget: number;
       skipAutoOffers?: boolean;
+      queryEmbeddingModel?: string;
     }) => {
       // Seed the per-turn access memo directly (getAccessibleDataLakeAccess returns it when set),
       // so the plan uses these tags without exercising the DB-backed resolver.
@@ -358,12 +369,28 @@ describe('ChatCompletionProcess', () => {
         sessionKnowledgeIds: opts.files.map(f => f.id),
         attachedFileTokenBudget: opts.attachedFileTokenBudget,
         skipAutoOffers: opts.skipAutoOffers ?? false,
-        defaultAdminSettings: opts.threshold ? { CorpusRetrievalMinInlineTokensPerDoc: opts.threshold } : {},
+        defaultAdminSettings: {
+          ...(opts.threshold ? { CorpusRetrievalMinInlineTokensPerDoc: opts.threshold } : {}),
+          // The query embedding model; a doc is retrievable only if embedded under the same one.
+          // Defaults to the model the fixtures embed under ('model-A') unless a test overrides it.
+          ...(opts.queryEmbeddingModel === undefined
+            ? { defaultEmbeddingModel: 'model-A' }
+            : { defaultEmbeddingModel: opts.queryEmbeddingModel }),
+        },
       });
     };
 
-    const lakeFiles = (n: number, tag = 'datalake:corpus') =>
-      Array.from({ length: n }, (_, i) => ({ id: `k${i}`, tags: [{ name: tag }] }));
+    // Retrievable-by-default fixtures: fully vectorized and embedded under the query model ('model-A').
+    // Pass `over` to make an unvectorized / wrong-model / partially-vectorized variant.
+    const lakeFiles = (n: number, tag = 'datalake:corpus', over: Record<string, unknown> = {}) =>
+      Array.from({ length: n }, (_, i) => ({
+        id: `k${i}`,
+        tags: [{ name: tag }],
+        chunkCount: 2,
+        vectorizedChunkCount: 2,
+        embeddingModel: 'model-A',
+        ...over,
+      }));
 
     it('defers the whole corpus when every doc is lake-tagged and the split goes shallow', async () => {
       const plan = await runPlan({
@@ -401,6 +428,59 @@ describe('ChatCompletionProcess', () => {
       });
       expect(plan.deferredToRetrieval).toBe(false);
       expect(plan.deferredKnowledgeIds).toHaveLength(0);
+    });
+
+    it('excludes lake-tagged but UNVECTORIZED docs - the search tool cannot surface them (#1411 gap)', async () => {
+      const vectorized = lakeFiles(30); // k0..k29, fully vectorized under the query model
+      const unvectorized = lakeFiles(10, 'datalake:corpus', { chunkCount: 0, vectorizedChunkCount: 0 }).map(f => ({
+        ...f,
+        id: `u${f.id}`,
+      }));
+      const plan = await runPlan({
+        files: [...vectorized, ...unvectorized],
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000, // 4000/30 = 133 < 500
+      });
+      expect(plan.deferredToRetrieval).toBe(true);
+      expect(plan.retrievableCount).toBe(30); // only the vectorized docs count
+      expect(plan.deferredKnowledgeIds).toHaveLength(30);
+      expect(plan.deferredKnowledgeIds.some((id: string) => id.startsWith('u'))).toBe(false);
+    });
+
+    it('excludes a partially-vectorized doc (vectorizedChunkCount < chunkCount)', async () => {
+      const plan = await runPlan({
+        files: lakeFiles(40, 'datalake:corpus', { chunkCount: 4, vectorizedChunkCount: 2 }),
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.retrievableCount).toBe(0);
+    });
+
+    it('excludes lake-tagged docs embedded under a DIFFERENT model than the query', async () => {
+      const plan = await runPlan({
+        files: lakeFiles(40, 'datalake:corpus', { embeddingModel: 'model-B' }),
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        queryEmbeddingModel: 'model-A',
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.retrievableCount).toBe(0);
+    });
+
+    it('defers nothing when the query embedding model is unresolvable (semantic arm cannot run)', async () => {
+      const plan = await runPlan({
+        files: lakeFiles(40), // vectorized under 'model-A', but the query has no model
+        dataLakeTags: ['datalake:corpus'],
+        threshold: '500',
+        attachedFileTokenBudget: 4000,
+        queryEmbeddingModel: '',
+      });
+      expect(plan.deferredToRetrieval).toBe(false);
+      expect(plan.retrievableCount).toBe(0);
     });
 
     it('keeps a small corpus inlined (per-doc share stays above the floor)', async () => {
