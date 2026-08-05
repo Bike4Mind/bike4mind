@@ -11,9 +11,10 @@ import { dataLakeService } from '@bike4mind/services';
  *   it with the tags of files whose outcome was 'deleted' only: an 'unshared' edits the file's
  *   `users` array and touches neither `tags` nor `userId`, so neither membership arm moves.
  * - Joining, on `POST /api/files/createFabFile` and `POST /api/files/generate-presigned-url`,
- *   which stamp a lake's meta-tag onto a brand-new file. Neither reaches a batch or a membership
- *   service, so without this the lake's counts stay stale and a lake still in 'draft' never
- *   activates - see `recomputeLakeStats`, which owns that transition.
+ *   which stamp a lake's meta-tag onto a brand-new file. Neither runs a membership service, and
+ *   a create carrying no `batchId` reaches no finalizer either - so without this the lake's
+ *   counts stay stale and a lake still in 'draft' never activates. See `recomputeLakeStats`,
+ *   which owns that transition.
  *
  * Takes the tags of ALL affected files at once and recomputes each distinct lake a single time,
  * which is what keeps a bulk delete of N files in one lake from running N identical aggregations.

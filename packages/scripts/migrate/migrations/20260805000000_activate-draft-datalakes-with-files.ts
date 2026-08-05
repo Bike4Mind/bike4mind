@@ -11,11 +11,11 @@ import { type MigrationFile } from './index';
  * forever, invisible to everyone but its owner. The live doors now activate through
  * `recomputeLakeStats`, but only when they next run, so a lake nobody touches again stays stuck.
  *
- * Runs the real `recomputeLakeStats` per candidate rather than a hand-rolled updateMany. The
- * stuck lakes are exactly the ones whose stats no door refreshed, so their persisted `fileCount`
- * cannot be trusted as the predicate - the aggregate has to decide. Recomputing also repairs the
- * counts, and the activation then falls out of the same shipped code path the doors use, so this
- * cannot disagree with them.
+ * Runs the real `recomputeLakeStats` per candidate rather than a hand-rolled updateMany. Some
+ * of these lakes were filled through a door that wrote no stats either, so a persisted
+ * `fileCount` of 0 does not mean empty and is no predicate to select on - the aggregate has to
+ * decide. Recomputing repairs the counts on the way past, and the activation then falls out of
+ * the same code path the live doors use rather than a second copy of the rule.
  *
  * Idempotent: a second run finds no lake left in a draft/absent status and matches nothing.
  */

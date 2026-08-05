@@ -15,9 +15,9 @@ const UpdateBatchInput = z.object({
 /**
  * Rebuild the lake's stats once a batch stops here rather than at the finalizer. A batch the
  * client fails or cancels after some files already landed never reaches
- * `finalizeBatchIfComplete`, and the stuck-batch reconciler skips terminal batches, so this is
- * the only pass left that can count what did arrive - and, through `recomputeLakeStats`, the
- * only one that can activate the lake.
+ * `finalizeBatchIfComplete`, and the stuck-batch reconciler skips terminal batches. Nothing on
+ * the batch's own path is left to count what did arrive, so until some unrelated door touches
+ * the lake its counts are wrong and, if it is still a draft, it stays invisible.
  *
  * Best-effort: the batch transition has already committed, so a failure here is stale stats, not
  * a failed request.

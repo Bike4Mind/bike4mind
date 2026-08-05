@@ -20,9 +20,9 @@ export interface RecomputeLakeStatsAdapters {
  * paths, and the stored value would flip depending on which one ran last.
  *
  * Also carries the draft -> active transition, because a lake with members is by definition no
- * longer a draft and this is the one point every membership door already crosses. Putting it on
- * the doors instead left four of the five without it, which is why a lake filled through anything
- * but the upload wizard never reached Discover.
+ * longer a draft and this is where the membership doors converge (see
+ * `recomputeStatsForLakeTags` for the file-write ones). Sitting on the doors instead, it reached
+ * only the upload wizard, which is why a lake filled any other way never got to Discover.
  */
 export const recomputeLakeStats = async (
   lake: Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>,
