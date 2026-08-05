@@ -46,6 +46,12 @@ import { ILogger, Logger } from '@bike4mind/observability';
 import { accessibleBy } from '@casl/mongoose';
 import { logEvent } from '@server/utils/analyticsLog';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
+import { loadSystemPromptContent } from '@server/utils/systemPrompts/loader';
+
+// Registry prompts a session may activate via `session.systemPromptId`. An allowlist, not an open
+// door: a session must not be able to inject an arbitrary admin/system prompt, so only ids meant to
+// run as session-scoped modes live here. `triage_router` is the grounding-first request router.
+const SESSION_ACTIVATABLE_PROMPT_IDS = new Set<string>(['triage_router']);
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
 import { Config } from '@server/utils/config';
@@ -202,6 +208,14 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       });
     },
     recallMementosV2,
+    // Resolve a session's `systemPromptId` to the registry prompt's current content, gated by the
+    // activatable allowlist. Injected into the engine so a lake/triage session gets its authored
+    // prompt on every entry point (chat, llm, queue) without the core touching the app registry.
+    loadSystemPromptById: async (promptId: string): Promise<string | null> => {
+      if (!SESSION_ACTIVATABLE_PROMPT_IDS.has(promptId)) return null;
+      const resolved = await loadSystemPromptContent(promptId);
+      return resolved?.content ?? null;
+    },
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: async (
