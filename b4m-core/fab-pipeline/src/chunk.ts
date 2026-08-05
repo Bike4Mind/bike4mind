@@ -1,6 +1,8 @@
 import {
   BedrockEmbeddingModel,
+  DEFAULT_PASSAGE_TOKEN_TARGET,
   IFabFile,
+  MIN_PASSAGE_TOKEN_TARGET,
   OllamaEmbeddingModel,
   isAudioMimeType,
   OpenAIEmbeddingModel,
@@ -28,16 +30,11 @@ export const ChunkSchema = z.object({
 });
 export type Chunk = z.infer<typeof ChunkSchema>;
 
-/**
- * Default soft cap on chunk size, in tokens. Retrieval quality is the reason this exists:
- * without it, chunks grow to the embedding model's context window (~6.5K tokens / ~26KB of
- * prose), so one vector averages a whole document and cosine ranking cannot discriminate a
- * specific fact from the rest of the file. ~512 tokens is passage granularity: large enough
- * to carry a coherent idea, small enough that the vector is about one thing.
- */
-export const DEFAULT_PASSAGE_TOKEN_TARGET = 512;
-/** Floor for caller-supplied passage targets; below this, chunks lose usable context. */
-export const MIN_PASSAGE_TOKEN_TARGET = 64;
+// Canonical in @bike4mind/common (see constants/chunking) so the admin-settings schema and the
+// React controls can share them without importing this module, which pulls in mammoth, JSZip,
+// tiktoken, unpdf and the S3 client. Re-exported so existing `from './chunk'` importers are
+// unaffected.
+export { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET };
 
 export interface SmartChunkerOptions {
   /** Buffer as a percent (0-1) or absolute value (if >= 1) to subtract from maxTokens. */
