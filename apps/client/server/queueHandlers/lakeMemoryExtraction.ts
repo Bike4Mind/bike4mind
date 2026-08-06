@@ -1,5 +1,6 @@
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { extractLakeMemoryForBatch } from '@server/dataLakes/extractLakeMemory';
+import { adminSettingsRepository } from '@bike4mind/database';
 import { z, ZodError } from 'zod';
 
 const LakeMemoryPayload = z.object({
@@ -19,7 +20,24 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const payload = LakeMemoryPayload.parse(JSON.parse(event.Records[0].body));
     logger.updateMetadata({ handler: 'lakeMemoryExtraction', dataLakeId: payload.dataLakeId, userId: payload.userId });
 
-    await extractLakeMemoryForBatch({ dataLakeId: payload.dataLakeId }, logger);
+    // Re-check the flag HERE, not just at enqueue time. The enqueue gate
+    // (`enqueueLakeMemoryExtractionIfWanted`) runs when the batch finalizes, but this message can sit in
+    // the queue for the full visibility window and across retries - so without this, turning the
+    // kill-switch off would still let already-queued extractions write beliefs. The consumer side is
+    // gated independently, so those beliefs would be inert; this makes the switch stop the WRITE too.
+    const enabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory').catch(() => false);
+    if (!enabled) {
+      logger.info('[lakeMemory] EnableLakeMemory is off; dropping queued extraction', {
+        dataLakeId: payload.dataLakeId,
+      });
+      return;
+    }
+
+    await extractLakeMemoryForBatch(
+      // Real Lambda clock, so the deadline guard accounts for cold start and time already spent.
+      { dataLakeId: payload.dataLakeId, getRemainingTimeInMillis: () => context.getRemainingTimeInMillis() },
+      logger
+    );
   } catch (err) {
     // Permanently-invalid message (malformed payload) - retrying can't fix it.
     if (err instanceof ZodError || err instanceof SyntaxError) {

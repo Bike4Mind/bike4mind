@@ -46,6 +46,27 @@ const MAX_DOC_CHARS = 24_000;
  * real work, not on tombstones.
  */
 const MAX_DOCS_PER_RUN = 100;
+/**
+ * Stop starting new documents once the Lambda has less than this left, so a run ends by LOGGING its
+ * remainder instead of being killed mid-document.
+ *
+ * The doc cap above is an *estimate* of what fits; this is the *enforcement*. Both are needed, because
+ * the per-doc cost is not a constant: one doc is one LLM extraction plus up to `LAKE_FACTS_PER_DOC_MAX`
+ * embed round trips and that many ledger appends, and each append re-reads the lake's whole profile - so
+ * later documents in a run are slower than earlier ones. Getting killed instead of yielding is
+ * expensive rather than merely late: the handler rethrows, SQS redelivers (`retry: 2`, then DLQ), and
+ * every redelivery re-bills the entire lake, because the LLM call for a doc precedes the ledger de-dup
+ * that would have made it free.
+ *
+ * Sized for the slowest realistic single document, not the average one.
+ */
+const LAKE_EXTRACTION_DEADLINE_BUFFER_MS = 90_000;
+/**
+ * Wall-clock budget when the caller cannot supply the Lambda's real remaining time (tests, scripts, any
+ * non-Lambda host). Keeps the guard active by default rather than silently absent - an unbounded default
+ * would mean the guard exists only where someone remembered to wire it.
+ */
+const DEFAULT_RUN_BUDGET_MS = 9 * 60_000;
 /** Chunk page size when reconstructing a document's text. */
 const CHUNK_PAGE_LIMIT = 1_000;
 
@@ -62,9 +83,19 @@ const CHUNK_PAGE_LIMIT = 1_000;
  * are best-effort too - a vectorless write stays lexically recallable and can be re-embedded later.
  */
 export async function extractLakeMemoryForBatch(
-  params: { dataLakeId: string },
+  params: {
+    dataLakeId: string;
+    /**
+     * The Lambda's `context.getRemainingTimeInMillis`. Supplied by the queue handler so the deadline
+     * tracks the real invocation (including cold start and time already spent) rather than a guess;
+     * omitted callers fall back to `DEFAULT_RUN_BUDGET_MS` from entry.
+     */
+    getRemainingTimeInMillis?: () => number;
+  },
   logger: Logger
 ): Promise<{ docsProcessed: number; factsWritten: number }> {
+  const startedAt = Date.now();
+  const remainingMs = () => params.getRemainingTimeInMillis?.() ?? DEFAULT_RUN_BUDGET_MS - (Date.now() - startedAt);
   const lake = await dataLakeRepository.findById(params.dataLakeId);
   if (!lake?.createdByUserId || !lake.datalakeTag) {
     logger.warn('[lakeMemory] lake missing owner or tag; skipping extraction', { dataLakeId: params.dataLakeId });
@@ -111,7 +142,19 @@ export async function extractLakeMemoryForBatch(
 
   let docsProcessed = 0;
   let factsWritten = 0;
+  let docsAttempted = 0;
   for (const file of docs) {
+    // Yield rather than get killed. Checked BEFORE starting a doc, since the expensive, unresumable
+    // part (the LLM call) is at the start of one.
+    if (remainingMs() < LAKE_EXTRACTION_DEADLINE_BUFFER_MS) {
+      logger.warn(
+        `[lakeMemory] lake ${datalakeTag} ran out of time after ${docsAttempted}/${docs.length} docs; ` +
+          `${docs.length - docsAttempted} not yet covered this run (bounded-continuation follow-up). ` +
+          `Stopping cleanly so the beliefs already written are kept and the lake is not re-billed by a redelivery.`
+      );
+      break;
+    }
+    docsAttempted++;
     try {
       const chunks = await fabFileChunkRepository.findTextsByFabFileId(file.id, { limit: CHUNK_PAGE_LIMIT });
       const text = chunks
@@ -153,6 +196,14 @@ export async function extractLakeMemoryForBatch(
     }
   }
 
-  logger.info('[lakeMemory] extraction complete', { dataLakeId: params.dataLakeId, docsProcessed, factsWritten });
+  logger.info('[lakeMemory] extraction complete', {
+    dataLakeId: params.dataLakeId,
+    docsProcessed,
+    factsWritten,
+    // `docsAttempted < docs.length` is the deadline-stop signal, distinct from the cap's own log above.
+    docsAttempted,
+    docsAvailableThisRun: docs.length,
+    elapsedMs: Date.now() - startedAt,
+  });
   return { docsProcessed, factsWritten };
 }
