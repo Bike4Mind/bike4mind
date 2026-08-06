@@ -85,7 +85,7 @@ describe('runDataLakeSlackCommand (gate + dispatch)', () => {
     vi.clearAllMocks();
   });
 
-  it('is a silent no-op when the flag is off (dormant): no reply, no DB read', async () => {
+  it('is a silent no-op when the flag is off (dormant): no reply, no lake lookup', async () => {
     getSettingsValue.mockResolvedValue(false);
     await runDataLakeSlackCommand(baseDeps());
     expect(getSettingsValue).toHaveBeenCalledWith('EnableDataLakeSlackAdd');
