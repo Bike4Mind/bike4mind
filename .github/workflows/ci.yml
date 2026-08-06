@@ -98,6 +98,13 @@ jobs:
         env:
           CONTROL_BYTES_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
 
+      # The other half of the ASCII-only rule. Scans ADDED lines only, so the pre-existing
+      # em-dashes in ~645 tracked files do not gate anything; same base resolution as above.
+      - name: Check for smart punctuation in added lines
+        run: bash scripts/check-no-smart-punctuation.sh --changed "$SMART_PUNCTUATION_BASE"
+        env:
+          SMART_PUNCTUATION_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
 
