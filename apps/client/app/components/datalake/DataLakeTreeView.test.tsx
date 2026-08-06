@@ -55,17 +55,24 @@ const testChrome: DataLakeTreeChrome = {
 const file = (id: string, fileName: string, tags: string[]): IFabFileDocument =>
   ({ id, fileName, tags: tags.map(name => ({ name })) }) as unknown as IFabFileDocument;
 
-// books:war (2 files), books:peace (1), news:today (1)
+// books:war (2 files), books:peace (1), news:today (1), zebra:x (5) - zebra's count rank (highest)
+// disagrees with its alpha rank (last), so count-desc and alpha sorts produce different orders.
 const ARTICLES = [
   file('f1', 'b-war-one.md', ['books:war']),
   file('f2', 'a-war-two.md', ['books:war']),
   file('f3', 'peace.md', ['books:peace']),
   file('f4', 'today.md', ['news:today']),
+  file('f5', 'x1.md', ['zebra:x']),
+  file('f6', 'x2.md', ['zebra:x']),
+  file('f7', 'x3.md', ['zebra:x']),
+  file('f8', 'x4.md', ['zebra:x']),
+  file('f9', 'x5.md', ['zebra:x']),
 ];
 const TREE = buildTagTree([
   { tag: 'books:war', count: 2 },
   { tag: 'books:peace', count: 1 },
   { tag: 'news:today', count: 1 },
+  { tag: 'zebra:x', count: 5 },
 ]);
 
 const renderTree = (over: Partial<React.ComponentProps<typeof DataLakeTreeView>> = {}) => {
@@ -92,10 +99,12 @@ describe('DataLakeTreeView nodes', () => {
   it('renders root nodes sorted by count desc, toggling to alpha', () => {
     renderTree();
     const nodes = () => screen.getAllByTestId(/^datalake-node-/).map(el => el.dataset.testid);
-    expect(nodes()).toEqual(['datalake-node-books', 'datalake-node-news']);
+    // count desc: zebra(5) > books(3) > news(1)
+    expect(nodes()).toEqual(['datalake-node-zebra', 'datalake-node-books', 'datalake-node-news']);
     fireEvent.click(screen.getByTestId('datalake-sort-toggle'));
-    // alpha: books < news (same order here); assert the mode flag flipped
     expect(screen.getByTestId('datalake-sort-toggle').dataset.sort).toBe('alpha');
+    // alpha: books < news < zebra - a genuinely different order than count desc
+    expect(nodes()).toEqual(['datalake-node-books', 'datalake-node-news', 'datalake-node-zebra']);
   });
 
   it('search filters segments and shows No matches when nothing survives', async () => {
@@ -154,6 +163,17 @@ describe('DataLakeTreeView back row', () => {
     expect(humanizeSpy).not.toHaveBeenCalled();
   });
 
+  it('never calls humanize at depth 1 either (allCategoriesLabel path, not humanize(parent))', () => {
+    const humanizeSpy = vi.fn(() => 'x');
+    const spyChrome: DataLakeTreeChrome = {
+      ...testChrome,
+      humanize: humanizeSpy,
+    };
+    renderTree({ breadcrumb: ['books'], chrome: spyChrome });
+    expect(screen.getByTestId('datalake-back').textContent).toBe('All Categories');
+    expect(humanizeSpy).not.toHaveBeenCalled();
+  });
+
   it('labels depth-1 with allCategoriesLabel and deeper with the humanized parent', () => {
     const first = renderTree({ breadcrumb: ['books'] });
     expect(screen.getByTestId('datalake-back').textContent).toBe('All Categories');
@@ -164,7 +184,7 @@ describe('DataLakeTreeView back row', () => {
     expect(onNavigate).toHaveBeenCalledWith(['books']);
   });
 
-  it('renders sticky-back wrapped inside scroll pane when chrome.stickyBackSx is set', () => {
+  it('renders sticky-back inside the scroll pane when chrome.stickyBackSx is set', () => {
     const stickyChrome: DataLakeTreeChrome = {
       ...testChrome,
       stickyBackSx: { position: 'sticky', top: 0 },
@@ -174,13 +194,19 @@ describe('DataLakeTreeView back row', () => {
     expect(backBtn.textContent).toBe('All Categories');
     fireEvent.click(backBtn);
     expect(onNavigate).toHaveBeenCalledWith([]);
-    // With sticky chrome, back row is nested inside scroll pane (one level deeper wrapper).
-    // The search input's container and sticky-back wrapper are siblings under the tree container.
-    // Assertion: sticky-back wrapper is a different element than search input's ancestor.
-    const searchInput = screen.getByTestId('datalake-search');
-    const backWrapper = backBtn.closest('div')?.parentElement; // back row is inside a wrapper Box
-    expect(backWrapper).toBeTruthy();
-    expect(searchInput.parentElement).not.toBe(backWrapper?.parentElement); // different parent hierarchies
+
+    // Sticky chrome: the back row shares the scroll pane (the Box wrapping the node <ul>)
+    // with the node rows - it is a descendant of that same container.
+    const scrollPane = screen.getByTestId('datalake-node-war').closest('ul')!.parentElement!;
+    expect(scrollPane.contains(screen.getByTestId('datalake-back'))).toBe(true);
+  });
+
+  it('keeps the back row outside the scroll pane under default chrome (no stickyBackSx)', () => {
+    renderTree({ breadcrumb: ['books'] });
+    // Default chrome renders the back row as a preceding sibling of the scroll pane, so it
+    // is NOT contained within it - the inverse of the sticky-chrome case above.
+    const scrollPane = screen.getByTestId('datalake-node-war').closest('ul')!.parentElement!;
+    expect(scrollPane.contains(screen.getByTestId('datalake-back'))).toBe(false);
   });
 });
 
@@ -215,6 +241,9 @@ describe('DataLakeTreeView uncategorized bucket', () => {
     const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
     await userEvent.type(searchInput, 'x');
     expect(screen.queryByTestId('datalake-node-uncategorized')).toBeNull();
+    // The bucket is the only root content once searching hides it: no other node matches
+    // "x" either, so the empty state must re-show rather than leave a blank pane.
+    expect(screen.getByText('No matches')).toBeTruthy();
   });
 
   it('opens the bucket via the synthetic breadcrumb key and lists its files', () => {
