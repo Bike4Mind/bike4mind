@@ -100,15 +100,13 @@ describe('DataLakeTreeView nodes', () => {
 
   it('search filters segments and shows No matches when nothing survives', async () => {
     renderTree();
-    const searchInput = screen.getByTestId('datalake-search').querySelector('input');
-    if (searchInput) {
-      await userEvent.type(searchInput, 'new');
-      expect(screen.queryByTestId('datalake-node-books')).toBeNull();
-      expect(screen.getByTestId('datalake-node-news')).toBeTruthy();
-      await userEvent.clear(searchInput);
-      await userEvent.type(searchInput, 'zzz');
-      expect(screen.getByText('No matches')).toBeTruthy();
-    }
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'new');
+    expect(screen.queryByTestId('datalake-node-books')).toBeNull();
+    expect(screen.getByTestId('datalake-node-news')).toBeTruthy();
+    await userEvent.clear(searchInput);
+    await userEvent.type(searchInput, 'zzz');
+    expect(screen.getByText('No matches')).toBeTruthy();
   });
 
   it('navigates into a node via the chrome row', () => {
@@ -154,6 +152,25 @@ describe('DataLakeTreeView back row', () => {
     fireEvent.click(screen.getByTestId('datalake-back'));
     expect(onNavigate).toHaveBeenCalledWith(['books']);
   });
+
+  it('renders sticky-back wrapped inside scroll pane when chrome.stickyBackSx is set', () => {
+    const stickyChrome: DataLakeTreeChrome = {
+      ...testChrome,
+      stickyBackSx: { position: 'sticky', top: 0 },
+    };
+    const { onNavigate } = renderTree({ breadcrumb: ['books'], chrome: stickyChrome });
+    const backBtn = screen.getByTestId('datalake-back');
+    expect(backBtn.textContent).toBe('All Categories');
+    fireEvent.click(backBtn);
+    expect(onNavigate).toHaveBeenCalledWith([]);
+    // With sticky chrome, back row is nested inside scroll pane (one level deeper wrapper).
+    // The search input's container and sticky-back wrapper are siblings under the tree container.
+    // Assertion: sticky-back wrapper is a different element than search input's ancestor.
+    const searchInput = screen.getByTestId('datalake-search');
+    const backWrapper = backBtn.closest('div')?.parentElement; // back row is inside a wrapper Box
+    expect(backWrapper).toBeTruthy();
+    expect(searchInput.parentElement).not.toBe(backWrapper?.parentElement); // different parent hierarchies
+  });
 });
 
 describe('DataLakeTreeView states', () => {
@@ -184,11 +201,9 @@ describe('DataLakeTreeView uncategorized bucket', () => {
   it('renders the bucket row at root and hides it while searching', async () => {
     renderTree({ uncategorized });
     expect(screen.getByTestId('datalake-node-uncategorized').textContent).toBe('Uncategorized (1)');
-    const searchInput = screen.getByTestId('datalake-search').querySelector('input');
-    if (searchInput) {
-      await userEvent.type(searchInput, 'x');
-      expect(screen.queryByTestId('datalake-node-uncategorized')).toBeNull();
-    }
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'x');
+    expect(screen.queryByTestId('datalake-node-uncategorized')).toBeNull();
   });
 
   it('opens the bucket via the synthetic breadcrumb key and lists its files', () => {
