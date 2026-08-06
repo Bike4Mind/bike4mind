@@ -20,6 +20,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload, updateFabFileOnServer } from '@client/app/utils/filesAPICalls';
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 
@@ -77,8 +78,8 @@ export default function SendToDataLakeModal() {
         tags: [{ name: lake.datalakeTag, strength: 1 }],
         primaryTag: lake.datalakeTag,
       });
-      queryClient.invalidateQueries({ queryKey: ['dataLakeFiles', lake.id] });
-      queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(lake.id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       // The tag write above lands on the file, so every per-tag file count is now stale.
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       toast.success(`Saved ${sourceLabel} to “${lake.name}”. It'll be searchable once processing finishes.`);
