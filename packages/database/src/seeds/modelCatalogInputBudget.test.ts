@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, MODEL_INFO_TYPES } from '@bike4mind/common';
+import { attachedContentBudgetsAgree, safeInputWindow } from '@bike4mind/utils';
 import type { ModelInfo } from '@bike4mind/common';
 import { collectStaticCatalogModels } from './generateModelCatalogSeed';
 
@@ -56,6 +57,28 @@ describe('static model catalog input budget', () => {
         (model.contextWindow ?? 0) - (model.max_tokens ?? 0) - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS <= 0
     );
     expect(starved.map(describeEntry)).toEqual([]);
+  });
+
+  // The cross-stage property, asserted over the real catalog rather than a handful of hand-written
+  // shapes. Extraction reads a file off disk and assembly trims what was read; if extraction is the
+  // binding cap the assembly floor is unreachable, which is the defect this PR fixed on the 8k class.
+  // Four hardcoded model shapes cannot catch a NEW row that reintroduces it - the catalog can.
+  it('extracts something deliverable for every text entry in the catalog', async () => {
+    // Matches SYSTEM_PROMPT_RESERVE in ChatCompletionProcess, the flat allowance extraction sets aside
+    // before dividing. Spelled out because services is not a dependency of this package; a drift
+    // between the two surfaces here as a failure rather than silently.
+    const SYSTEM_PROMPT_RESERVE = 4000;
+    const models = await collectStaticCatalogModels();
+
+    const violating = models
+      .filter(model => RULE_BY_TYPE[model.type] === 'reserves-output')
+      .filter(model => {
+        // The request's own output reserve is what a real turn subtracts; the row's cap is the ceiling.
+        const window = safeInputWindow(model, model.max_tokens ?? 0);
+        return !attachedContentBudgetsAgree(window, SYSTEM_PROMPT_RESERVE);
+      });
+
+    expect(violating.map(describeEntry)).toEqual([]);
   });
 
   it('leaves a media entry a prompt it can fill', async () => {

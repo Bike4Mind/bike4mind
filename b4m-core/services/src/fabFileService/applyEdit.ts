@@ -1,5 +1,11 @@
 import { Logger } from '@bike4mind/observability';
-import { IFabFileDocument, IFabFileRepository, IUserDocument, isImageServeable } from '@bike4mind/common';
+import {
+  IFabFileDocument,
+  IFabFileRepository,
+  IUserDocument,
+  isImageServeable,
+  FAB_FILE_CONTENT_REWRITE_PATCH,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
@@ -134,6 +140,7 @@ export const applyEdit = async (
     fileUrl: await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS),
     fileUrlExpireAt: new Date(Date.now() + EXPIRE_IN_SECONDS * 1000),
     updatedAt: new Date(),
+    ...FAB_FILE_CONTENT_REWRITE_PATCH,
   };
 
   await db.fabFiles.update(updatedFabFile);
