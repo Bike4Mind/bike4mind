@@ -1431,12 +1431,25 @@ describe('removeFileFromDataLake — single-file removal', () => {
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 
-  it('lets an admin remove a prefix-only file they do not own', async () => {
+  it('refuses even an admin removing a prefix-only file the lake creator does not own', async () => {
+    // The prefix arm is anchored to the LAKE'S CREATOR, matching the read path's own membership
+    // predicate - an admin bypass here would let an admin strip a tag off a file the read path
+    // never actually admitted to this lake.
     const someoneElses = { id: 'f1', userId: 'victim', tags: [{ name: 'lk:invoices', strength: 1 }] };
     const adapters = makeAdapters(someoneElses);
     await expect(
       removeFileFromDataLake({ userId: 'root', isAdmin: true }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin remove a prefix-only file the lake creator DOES own', async () => {
+    const creatorsFile = { id: 'f1', userId: 'owner', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(creatorsFile);
+    await expect(
+      removeFileFromDataLake({ userId: 'root', isAdmin: true }, 'lake1', 'f1', adapters as any)
     ).resolves.toMatchObject({ success: true });
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
   });
 
   it('ignores a fileTagPrefix no read arm would match, rather than clearing every tag', async () => {

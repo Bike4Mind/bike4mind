@@ -50,9 +50,11 @@ export const removeFileFromLake = async (
   // Normalized through the same predicate the read arms use, so a lake whose prefix no query
   // matches (empty, or missing its trailing colon) also gets nothing cleared by prefix.
   const prefix = normalizeTagPrefix(lake.fileTagPrefix);
-  // Positive ownership: both ids must be present AND equal, so a file with no owner does not
-  // fall through as a match.
-  const ownsFile = actor.isAdmin || (!!file?.userId && file.userId === actor.userId);
+  // Positive ownership, anchored to the LAKE'S CREATOR (not the acting admin) so this matches
+  // the read path's own membership predicate exactly: both ids must be present AND equal, so a
+  // file with no owner does not fall through as a match, and an admin cannot strip a prefixed
+  // tag off a file the read path never actually admitted to this lake.
+  const ownsFile = !!file?.userId && file.userId === lake.createdByUserId;
   const prefixedTags = prefix ? tagNames.filter(name => name.startsWith(prefix)) : [];
   const inLake = !!file && (tagNames.includes(lake.datalakeTag) || (ownsFile && prefixedTags.length > 0));
   if (!file || !inLake) {
