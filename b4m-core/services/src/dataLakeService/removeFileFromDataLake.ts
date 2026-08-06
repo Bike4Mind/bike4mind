@@ -38,8 +38,9 @@ interface RemoveFileFromDataLakeAdapters {
  * tag off a file the read path never actually admitted to this lake.
  *
  * A second lake sharing this prefix - not necessarily the caller's, since fileTagPrefix has no
- * org-scope uniqueness (same-creator collisions are blocked by a DB index; see tagPrefixCollision
- * for why org-scope is not) - loses the shared prefixed tag too. A lake holding its own meta-tag on
+ * org-scope uniqueness (same-creator collisions are blocked by a DB index; see the comment on
+ * that index in DataLakeModel.ts for why org-scope is not) - loses the shared prefixed tag too.
+ * A lake holding its own meta-tag on
  * the file keeps it and only loses the folder grouping, but a lake whose membership was
  * prefix-only loses the file outright. One tag string cannot be cleared for one lake and kept
  * for another.
