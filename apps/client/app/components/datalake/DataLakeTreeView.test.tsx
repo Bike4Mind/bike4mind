@@ -34,14 +34,14 @@ const testChrome: DataLakeTreeChrome = {
   nodeListSx: {},
   fileListSx: {},
   renderNodeRow: (node, _depth, onOpen) => (
-    <ListItem key={node.segment}>
+    <ListItem>
       <ListItemButton data-testid={`datalake-node-${node.segment}`} onClick={onOpen}>
         {node.segment} ({node.fileCount})
       </ListItemButton>
     </ListItem>
   ),
   renderFileRow: (file, selected, onSelect) => (
-    <ListItem key={file.id}>
+    <ListItem>
       <ListItemButton data-testid={`datalake-file-${file.id}`} data-selected={selected} onClick={onSelect}>
         {file.fileName}
       </ListItemButton>
@@ -210,6 +210,16 @@ describe('DataLakeTreeView back row', () => {
     const scrollPane = screen.getByTestId('datalake-node-war').closest('ul')!.parentElement!;
     expect(scrollPane.contains(screen.getByTestId('datalake-back'))).toBe(false);
   });
+
+  it('alwaysShowBackRow renders the back row even at an empty breadcrumb, as an exit control', () => {
+    const { onNavigate } = renderTree({ breadcrumb: [], alwaysShowBackRow: true });
+    const backBtn = screen.getByTestId('datalake-back');
+    expect(backBtn.textContent).toBe('All Categories');
+    fireEvent.click(backBtn);
+    // Popping an empty breadcrumb (slice(0, -1) of []) is still [] - the host's onNavigate([])
+    // is what drives the actual exit.
+    expect(onNavigate).toHaveBeenCalledWith([]);
+  });
 });
 
 describe('DataLakeTreeView states', () => {
@@ -229,7 +239,7 @@ describe('DataLakeTreeView uncategorized bucket', () => {
   const uncategorized = {
     files: loose,
     renderRow: (count: number, onOpen: () => void) => (
-      <ListItem key={UNCATEGORIZED_KEY}>
+      <ListItem>
         <ListItemButton data-testid="datalake-node-uncategorized" onClick={onOpen}>
           Uncategorized ({count})
         </ListItemButton>
@@ -278,6 +288,18 @@ describe('DataLakeTreeView v2 contract', () => {
     expect(onSortChange).toHaveBeenCalledWith('count');
     // still controlled: the visible filter did not change on its own
     expect(screen.queryByTestId('datalake-node-books')).toBeNull();
+  });
+
+  it('uncontrolled search with only onSearchChange: reports the change AND still filters locally', async () => {
+    // A host that passes onSearchChange without `search` must not lose typing (finding 2):
+    // internal state has to keep driving the filter even though the callback also fires.
+    const onSearchChange = vi.fn();
+    renderTree({ onSearchChange });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'new');
+    expect(onSearchChange).toHaveBeenCalledWith('new');
+    expect(screen.queryByTestId('datalake-node-books')).toBeNull();
+    expect(screen.getByTestId('datalake-node-news')).toBeTruthy();
   });
 
   it('hideToolbar renders no search input', () => {
