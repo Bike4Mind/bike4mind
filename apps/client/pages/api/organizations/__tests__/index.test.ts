@@ -54,7 +54,7 @@ const create = vi.hoisted(() =>
   }))
 );
 vi.mock('@bike4mind/services', () => ({ organizationService: { search, create } }));
-vi.mock('@bike4mind/database', () => ({ organizationRepository: {} }));
+vi.mock('@bike4mind/database', () => ({ organizationRepository: {}, userRepository: {} }));
 
 import '@pages/api/organizations/index';
 
@@ -108,15 +108,24 @@ describe('GET /api/organizations - scoping + safe serialization', () => {
   });
 });
 
-describe('POST /api/organizations - safe serialization', () => {
+describe('POST /api/organizations - admin gate + safe serialization', () => {
   beforeEach(() => create.mockClear());
 
-  it('strips stripeCustomerId from the created org before returning it', async () => {
+  it('rejects a non-admin caller and does not create (#1428)', async () => {
+    // The route creates an org and re-points the caller's own billing/scope (#1405) onto a
+    // 0-credit org, so it must be admin-only - a stray authenticated caller can't self-brick.
     const { req, res } = mocks({ id: 'creator1', isAdmin: false });
+    (req as any).body = { name: 'Acme' };
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/admin/i);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('strips stripeCustomerId from the created org before returning it (admin)', async () => {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true });
     (req as any).body = { name: 'Acme' };
     await mockRefs.postHandler!(req, res);
     const body = res._getJSONData();
-    // creator is the owner, so billingContact is kept, but stripeCustomerId never leaks
+    // owner view keeps billingContact, but stripeCustomerId never leaks
     expect(body.name).toBe('Acme');
     expect('stripeCustomerId' in body).toBe(false);
     expect(body.billingContact).toBe('billing@acme.com');

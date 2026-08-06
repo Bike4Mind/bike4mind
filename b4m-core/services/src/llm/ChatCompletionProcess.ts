@@ -60,11 +60,17 @@ import {
   ITokenizer,
   getLastBuildDebugInfo,
   getSettingsByNames,
+  attachedContentExtractionBudget,
+  safeInputWindow,
 } from '@bike4mind/utils';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
-import { toRetrievalFilter, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
+import {
+  isRetrievalExcluded,
+  toRetrievalFilter,
+  type RetrievalExclusionOptions,
+} from '@bike4mind/utils/retrievalExclusion';
 import {
   resolveOutputMaxTokens,
   getAvailableModels,
@@ -77,7 +83,9 @@ import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
+import { settleToolCallCredits } from './settleToolCredits';
 import { LATTICE_TOOL_NAMES } from './tools';
+import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -119,7 +127,9 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
+  SYSTEM_PROMPT_PRIORITY,
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
@@ -144,7 +154,9 @@ import {
   mapMimeTypeToArtifactType,
   ARTIFACT_EMISSION_PROMPT,
   HELP_CENTER_PROMPT,
+  ABSTENTION_PROMPT,
   ELISION_WARNING,
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 
@@ -211,49 +223,42 @@ function assertNeverElisionSignal(signal: never): never {
 const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
 
 /**
- * Usable input window: the context window less the output this request will reserve, less a safety
- * buffer. Deliberately NOT clamped at zero - the empty-prompt guard depends on seeing a non-positive
- * budget for a genuinely misconfigured text model.
- *
- * Image and video models return media rather than tokens, and every image backend here sets
- * max_tokens equal to contextWindow because both are the prompt-length limit, so reserving it as
- * output left no room for the prompt itself. Two callers need this figure - the assembly budget and
- * the verbatim-history window - and they must not drift apart.
- */
-const safeInputWindow = (modelInfo: ModelInfo, requestedMaxTokens: number, safetyBuffer = 1000): number => {
-  const contextLimit = modelInfo.contextWindow ?? 200000;
-  const modelMaxOutput = modelInfo.max_tokens ?? 16384;
-  const returnsMedia = modelInfo.type === 'image' || modelInfo.type === 'video';
-  const reservedOutput = returnsMedia ? 0 : Math.min(requestedMaxTokens, modelMaxOutput);
-  return contextLimit - reservedOutput - safetyBuffer;
-};
-
-/**
  * Share of the context budget this file assumes history will take when sizing a history count. It
  * does NOT mirror how buildAndSortMessages splits the budget: that depends on historyCount, giving
- * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise.
+ * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise - a floor measured
+ * against the budget BEFORE system instructions are charged to it, so it does not shrink as the system
+ * stack grows.
  */
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
+// Three stages decide how much attached content survives, and they are easily confused.
+// HISTORY_BUDGET_PERCENTAGE above sizes the history MESSAGE COUNT before anything is fetched. The other
+// two now live together in @bike4mind/utils contextBudget, because the relationship between them is
+// what matters: EXTRACTION reads content off disk, ASSEMBLY trims what was read, and when extraction
+// is the smaller of the two the assembly floor is what a file actually gets. On a small window that
+// held only after the reserve was bounded; above ~80k it does not hold at all, and contextBudget spells
+// out why that is tolerable there.
+
 /**
- * Share of the usable input window that attached-file content may be EXTRACTED into.
- * Kept a minority share so conversational history, which is what users notice losing
- * first, keeps the majority. See attachedFileTokenBudget at its only use site.
+ * Below this per-doc even-split inline depth (tokens), inlining a RETRIEVABLE data-lake corpus
+ * goes breadth-shallow: buildDataSources splits attachedFileTokenBudget evenly across every file
+ * (processFabFilesServer in utils.ts), so many docs each get a thin, poorly-ranked slice - which
+ * an internal eval scored WORSE than deferring the corpus to the offered search_knowledge_base
+ * tool. When the estimated depth falls below this floor AND the corpus is retrievable, defer it.
  *
- * Three different stages, easily confused. HISTORY_BUDGET_PERCENTAGE above sizes the
- * history MESSAGE COUNT before anything is fetched. Two constants in utils.ts govern
- * ASSEMBLY, trimming an already-extracted set to fit: KNOWLEDGE_FILE_TOKEN_ALLOCATION for
- * an unwindowed request, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION as the floor for a windowed
- * one. This constant governs EXTRACTION - how much is read off disk at all - and is held
- * below the assembly share on purpose.
+ * 0 = OFF (preserve today's force-inline) and is the default until tuned; override per-deploy via
+ * the `CorpusRetrievalMinInlineTokensPerDoc` admin setting. Expressed in tokens-per-doc, not a raw
+ * doc count, so the threshold auto-scales with the model's window through attachedFileTokenBudget.
  */
-const ATTACHED_CONTENT_SHARE = 0.35;
+const CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC = 0;
+
 /**
- * Floor for the attached-content budget, as a share of the raw input window. Applies
- * when subtracting SYSTEM_PROMPT_RESERVE would drive the budget to zero, which a small
- * local model does routinely. See attachedFileTokenBudget for why zero is the dangerous
- * value rather than the safe one.
+ * The tool deferral hands the corpus to. A literal because the name is declared inline in the
+ * tool's definition (llm/tools/implementation/knowledgeBaseSearch) with no exported constant.
+ * Deferring while this tool is denied strands the corpus with no reader, and a rename would
+ * un-guard that path silently - so exported, and pinned against the real name by a test rather
+ * than by this comment.
  */
-const MIN_ATTACHED_CONTENT_SHARE = 0.15;
+export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
 
 /**
  * Fraction of the space ACTUALLY AVAILABLE FOR HISTORY (safe input minus the
@@ -528,12 +533,120 @@ export function addPairedTool<T extends string>(tools: readonly T[], trigger: T,
   return [...tools];
 }
 
+export interface ResolveEnabledToolsInput {
+  /** Tools already assembled for this request: client selection + server auto-adds. */
+  requestTools: string[];
+  /** `session.enabledTools` - tools a surface forces on regardless of the client toggle. */
+  sessionEnabledTools?: string[];
+  /** `session.disabledTools` - tools a curated surface forbids. Wins over everything else. */
+  sessionDisabledTools?: string[];
+  /** True when the session has documents attached (`session.knowledgeIds`). */
+  hasAttachedKnowledge: boolean;
+  /**
+   * True when the caller can retrieve from at least one data lake - their own, their org's, or a
+   * shared/entitlement-gated lake they hold the gate for - independent of what's attached to this
+   * session. See `userHasAccessibleKnowledgeLake`. Low-stakes offering signal only; the knowledge
+   * tool re-resolves the authoritative retrieval scope fresh at execution.
+   */
+  hasAccessibleDataLake?: boolean;
+  /**
+   * Skip OUR server-side auto-offers (step 2, the knowledge offer). Set for any `promptMode`,
+   * matching the auto-add gate at the request-parse site (`if (!parsedBody.promptMode)`): auto-adds
+   * are our additions, not the caller's, and attaching a tool also pulls the provider's tool-use
+   * preamble into the request - so a mode-driven eval, above all `raw` (the bare-model control
+   * arm), must not get surprise tools. Caller-selected and session-forced tools are unaffected;
+   * only step 2 is gated.
+   */
+  skipAutoOffers?: boolean;
+}
+
 /**
- * Tools this process auto-adds server-side regardless of user selection (see the
- * auto-add pushes in the request-parse method: blog_publish/blog_edit/blog_draft
- * for admins, navigate_view, skill). Small local (Ollama) models get confused by
- * tools they didn't ask for, so these are trimmed for that backend unless the user
- * explicitly enabled them. Keep this list in sync with those auto-add sites.
+ * Single owner for the final tool-offer list handed to `buildTools`. The step order is
+ * deliberate:
+ *   1. session-forced union     - a surface can guarantee a tool is offered.
+ *   2. knowledge offer         - offer the knowledge-base tool when the caller has retrievable
+ *      knowledge: documents attached to THIS session (hasAttachedKnowledge) OR a data lake they
+ *      can reach (hasAccessibleDataLake). Attaching files / having a lake is a far stronger
+ *      retrieval signal than any phrase match, and offering a tool is cheap (the model may
+ *      decline) whereas withholding it is unrecoverable. Skipped when `skipAutoOffers` is set
+ *      (prompt-mode requests), since the offer is our addition, not the caller's.
+ *   3. companion pairing        - a tool useless without its partner rides along
+ *      (search_knowledge_base -> retrieve_knowledge_content, image_generation ->
+ *      edit_image). Runs AFTER the union/offer so session-forced and auto-offered tools
+ *      get paired too; pairing used to run at request-parse time, before the union, so
+ *      anything added later was silently left unpaired.
+ *   4. session denylist wraps pairing - a curated surface ("approved sources only") wins.
+ *      We strip denied tools BEFORE pairing so a denied trigger can't drag its companion
+ *      in (deny search_knowledge_base => retrieve_knowledge_content must not ride along),
+ *      and AFTER pairing so a denied companion can't ride in on a surviving trigger (keep
+ *      image_generation but deny edit_image). The final filter is the authoritative last word.
+ *
+ * Containment note for curated surfaces: this is a UNION plus a denylist, never an allowlist.
+ * `sessionDisabledTools` is the only thing that subtracts, so a surface that wants the knowledge
+ * tool kept out must deny it explicitly - carrying no attached documents is no longer sufficient,
+ * since `hasAccessibleDataLake` offers it to any caller who can reach a lake.
+ */
+export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
+  const denied = new Set(input.sessionDisabledTools ?? []);
+  const tools = [...input.requestTools];
+
+  for (const tool of input.sessionEnabledTools ?? []) {
+    if (!tools.includes(tool)) tools.push(tool);
+  }
+
+  if (
+    !input.skipAutoOffers &&
+    (input.hasAttachedKnowledge || input.hasAccessibleDataLake) &&
+    !tools.includes('search_knowledge_base')
+  ) {
+    tools.push('search_knowledge_base');
+  }
+
+  const survivors = tools.filter(tool => !denied.has(tool));
+  let paired = addPairedTool(survivors, 'image_generation', 'edit_image');
+  paired = addPairedTool(paired, 'search_knowledge_base', 'retrieve_knowledge_content');
+  return paired.filter(tool => !denied.has(tool));
+}
+
+/**
+ * Whether to stop force-inlining a retrievable data-lake corpus and let the offered
+ * search_knowledge_base tool fetch it on demand. Pure so it is unit-testable in isolation from the
+ * DB reads that produce `retrievableCount`.
+ *
+ * The condition is the per-doc even-split depth falling below the floor: attachedFileTokenBudget is
+ * divided evenly across the inlined files (processFabFilesServer), so a large corpus gives each doc
+ * a shallow slice. `retrievableCount` (not the full attached count) is the divisor on purpose - it
+ * is the set eligible to defer. The real per-file split divides the same budget across MORE files
+ * (the always-inlined message/session/system sources share it too), so with
+ * retrievableCount <= totalAttached this estimate is an UPPER bound on the real depth
+ * (budget / retrievableCount >= budget / totalAttached). That biases conservatively in the safe
+ * direction: an estimate below the floor guarantees the real split is below it too, so we never
+ * over-defer - at worst we under-defer a corpus whose real split is shallow but whose estimate
+ * is not. Small corpora keep a high per-doc share and stay inlined (strictly better).
+ */
+export function shouldDeferCorpusToRetrieval(input: {
+  retrievableCount: number;
+  attachedFileTokenBudget: number;
+  minInlineTokensPerDoc: number;
+}): boolean {
+  const { retrievableCount, attachedFileTokenBudget, minInlineTokensPerDoc } = input;
+  if (minInlineTokensPerDoc <= 0) return false; // feature off -> today's force-inline behavior
+  if (retrievableCount <= 0) return false; // nothing retrievable -> never defer (would lose content)
+  return Math.floor(attachedFileTokenBudget / retrievableCount) < minInlineTokensPerDoc;
+}
+
+/**
+ * Tools this process auto-adds server-side regardless of user selection. Two auto-add sites feed
+ * this: the request-parse method (blog_publish/blog_edit/blog_draft for admins, navigate_view,
+ * skill) and `resolveEnabledTools` (the attached-knowledge offer). Small local (Ollama) models get
+ * confused by tools they didn't ask for, so the names in this list are trimmed for that backend
+ * unless the user explicitly enabled them. Keep this list in sync with those auto-add sites.
+ *
+ * Deliberately NOT listed: search_knowledge_base / retrieve_knowledge_content. Attaching a
+ * document is itself an explicit user signal that the docs should be used, unlike the genuinely
+ * unrequested capabilities above - so the attached-knowledge offer must survive the Ollama trim,
+ * which is the whole point of the feature for local models. Listing them here would silently
+ * defeat it.
  */
 export const AUTO_ADDED_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit', 'navigate_view', 'skill'];
 
@@ -563,6 +676,7 @@ export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
   public recallMementosV2: IChatCompletionServiceOptions['recallMementosV2'];
+  public loadSystemPromptById: IChatCompletionServiceOptions['loadSystemPromptById'];
   public logger: Logger;
   public user: IUserDocument;
   public logEvent: IChatCompletionServiceOptions['logEvent'];
@@ -582,6 +696,13 @@ export class ChatCompletionProcess {
   public entitlementKeys: string[] = [];
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
+  /**
+   * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
+   * (userHasAccessibleKnowledgeLake) and the corpus inline-defer plan (resolveCorpusInlinePlan) so
+   * the two can never disagree - it is the SAME access the knowledge tool resolves with.
+   */
+  private accessibleDataLakeAccessMemo:
+    { dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] } | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
   private imageProcessorLambdaName?: string;
@@ -600,7 +721,10 @@ export class ChatCompletionProcess {
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
   private verbose: boolean = false;
-  private toolCreditsMap: Map<string, number> = new Map();
+  // Per-name queue of each tool call's reserved credits, in call order (see
+  // ToolBuilder.reserveToolCredits). Settled per-call below so a tool invoked more
+  // than once in a turn bills the sum of every call.
+  private toolCreditsMap: Map<string, number[]> = new Map();
   private subagentTelemetryData: SubagentTelemetryData[] = [];
   // Credit reservation tracking (pre-reserve/reconcile pattern)
   private reservedCredits: number = 0;
@@ -616,6 +740,7 @@ export class ChatCompletionProcess {
     this.db = options.db;
     this.invokeCreateMemento = options.invokeCreateMemento;
     this.recallMementosV2 = options.recallMementosV2;
+    this.loadSystemPromptById = options.loadSystemPromptById;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
@@ -675,6 +800,177 @@ export class ChatCompletionProcess {
     return this.entitlementKeys;
   }
 
+  /**
+   * Coarse offering signal: can the caller retrieve from at least one data lake - their own,
+   * their org's, OR a shared/entitlement-gated lake they hold the gate for? Uses `dataLakeTags`
+   * from the shared access resolver, which is ALREADY access-filtered (tag / entitlement /
+   * ownership), so a shared lake only counts for a user who can actually reach it - offering the
+   * search tool to entitled users is the intent. Memoized per turn (the DB lookup runs at most once).
+   *
+   * Offering-only and low-stakes: the knowledge tool re-resolves the authoritative retrieval
+   * scope fresh at execution (never cached), so a FALSE POSITIVE here can only offer a tool that
+   * returns nothing. A true positive does change what the model can pull into context, but only
+   * from lakes the caller was already authorized to read - this signal never widens that set.
+   */
+  public async userHasAccessibleKnowledgeLake(): Promise<boolean> {
+    return (await this.getAccessibleDataLakeAccess()).dataLakeTags.length > 0;
+  }
+
+  /**
+   * The caller's resolved data-lake access (owned + org + shared/entitlement-gated lakes they can
+   * reach), memoized per turn. This is the SAME resolver the knowledge tool executes with, so the
+   * tool-offer and the inline-defer decisions can never disagree. Fail-safe: any error degrades to
+   * empty access (treated as "no lake"), never breaks the turn.
+   */
+  private async getAccessibleDataLakeAccess(): Promise<{
+    dataLakeTags: string[];
+    dataLakeTagPrefixes: string[];
+    scopedTagPrefixes: string[];
+  }> {
+    if (this.accessibleDataLakeAccessMemo === undefined) {
+      try {
+        const entitlementKeys = await this.resolveEntitlementKeys();
+        this.accessibleDataLakeAccessMemo = await getDynamicDataLakeAccess({
+          db: this.db,
+          user: this.user,
+          entitlementKeys,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
+        );
+        this.accessibleDataLakeAccessMemo = { dataLakeTags: [], dataLakeTagPrefixes: [], scopedTagPrefixes: [] };
+      }
+    }
+    return this.accessibleDataLakeAccessMemo;
+  }
+
+  /**
+   * Decide which attached-knowledge documents to STOP inlining and leave to the offered
+   * search_knowledge_base tool. Returns the deferred id subset plus telemetry. See
+   * `shouldDeferCorpusToRetrieval` for the size rule and `CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC`
+   * for why this is off by default.
+   *
+   * Anti-regression is the whole design: a file is deferrable ONLY when the tool can actually reach
+   * it, which for the unscoped semantic arm means an EXACT match against the caller's accessible
+   * `dataLakeTags` (the ownership-independent membership branch). Prefix-only / non-lake attachments
+   * are never deferred - they stay inlined, because deferring content the tool cannot fetch would
+   * silently lose it. Only `sessionKnowledgeIds` are ever considered; message- and session-attached
+   * fab files and system files are always inlined by the caller.
+   */
+  private async resolveCorpusInlinePlan(input: {
+    sessionKnowledgeIds: string[];
+    attachedFileTokenBudget: number;
+    skipAutoOffers: boolean;
+    /** `session.disabledTools` includes the knowledge-search tool - see the guard below. */
+    knowledgeSearchDisabled: boolean;
+    defaultAdminSettings: Record<string, string>;
+    /** The SAME filter the knowledge tools are built with - see the retrievability comment below. */
+    retrievalFilter: RetrievalExclusionOptions;
+  }): Promise<{
+    deferredKnowledgeIds: string[];
+    attachedCount: number;
+    retrievableCount: number;
+    deferredToRetrieval: boolean;
+    minInlineTokensPerDoc: number;
+  }> {
+    const {
+      sessionKnowledgeIds,
+      attachedFileTokenBudget,
+      skipAutoOffers,
+      knowledgeSearchDisabled,
+      defaultAdminSettings,
+      retrievalFilter,
+    } = input;
+    const attachedCount = sessionKnowledgeIds.length;
+
+    // getSettingsValue coerces via the setting's Zod schema, so this is a number (0 by default).
+    const rawThreshold = getSettingsValue('CorpusRetrievalMinInlineTokensPerDoc', defaultAdminSettings);
+    const minInlineTokensPerDoc =
+      typeof rawThreshold === 'number' && Number.isFinite(rawThreshold) && rawThreshold >= 0
+        ? rawThreshold
+        : CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC;
+
+    const noDefer = {
+      deferredKnowledgeIds: [] as string[],
+      attachedCount,
+      retrievableCount: 0,
+      deferredToRetrieval: false,
+      minInlineTokensPerDoc,
+    };
+
+    // promptMode is an eval/passthrough surface where the tool is NOT offered - deferring there
+    // would strand the corpus with no retrieval path. Symmetric with the tool-offer gate.
+    if (skipAutoOffers) return noDefer;
+    // Same reasoning one step further: `session.disabledTools` wins over every other tool gate
+    // (including the post-build denylist pass, which runs AFTER this plan), so deferring to a
+    // denied tool loses the corpus outright. Read from the session rather than the resolved tool
+    // list because the list is filtered again downstream of this call.
+    if (knowledgeSearchDisabled) return noDefer;
+    if (minInlineTokensPerDoc <= 0 || attachedCount === 0) return noDefer;
+
+    try {
+      const access = await this.getAccessibleDataLakeAccess();
+      if (access.dataLakeTags.length === 0) return noDefer; // no accessible lake -> nothing retrievable
+
+      const accessibleTags = new Set(access.dataLakeTags);
+      const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
+      const files = await this.db.fabfiles.getAccessibleFiles(sessionKnowledgeIds, scope);
+
+      // Retrievability = tag membership AND real vector-search reachability. A lake-tagged doc is
+      // deferrable only if search_knowledge_base's semantic arm can actually surface it: it must be
+      // FULLY VECTORIZED (vectorizedChunkCount >= chunkCount, chunkCount > 0) AND embedded under the
+      // SAME model as the query (embeddingModel agreement). A doc that is unvectorized, still
+      // vectorizing, or embedded in another model's space passes the tag check but the semantic arm
+      // skips it - deferring it would strand its content silently. When the query embedding model is
+      // unresolvable the semantic arm cannot run at all (the tool falls back to metadata-only keyword
+      // search), so nothing is deferrable. Closes the tag-only gap; #1411 hardened the retrieval-side
+      // reads this now relies on. `vectorizedChunkCount >= chunkCount` is the usable-data condition.
+      const queryEmbeddingModel = getSettingsValue('defaultEmbeddingModel', defaultAdminSettings);
+      const retrievableIds = files
+        .filter(file => {
+          const lakeTagged = (file.tags ?? []).some(tag => accessibleTags.has(tag.name));
+          const chunks = file.chunkCount ?? 0;
+          const fullyVectorized = chunks > 0 && (file.vectorizedChunkCount ?? 0) >= chunks;
+          // Exact-match on purpose, and deliberately STRICTER than embeddingMismatch's
+          // isForeignEmbeddingModel, which counts an absent/blank label as comparable. Here an
+          // unlabeled-but-vectorized doc stays inlined rather than risk a strand. Do NOT consolidate
+          // this onto isForeignEmbeddingModel - that loosens the gate to defer unlabeled docs the
+          // semantic arm may not actually reach, which is the content-losing direction.
+          const sameVectorSpace = Boolean(queryEmbeddingModel) && file.embeddingModel === queryEmbeddingModel;
+          // The tool is built with `retrievalFilter: toRetrievalFilter(session)` and enforces it on
+          // BOTH arms, so a doc the filter excludes is unreachable however well vectorized it is.
+          // Checking the same predicate here is what stops the two lists diverging - the gap this
+          // closes was a lake-tagged, fully-vectorized doc matching a session exclusion marker being
+          // deferred and then dropped by the tool, losing it silently. Mirrors `isLiveVisibleFile` in
+          // knowledgeBaseRetrieve, which is the canonical "can the tool reach this file" predicate.
+          const liveAndReachable = !file.deletedAt && !file.archivedAt && !isRetrievalExcluded(file, retrievalFilter);
+          return lakeTagged && fullyVectorized && sameVectorSpace && liveAndReachable;
+        })
+        .map(file => file.id);
+
+      const deferredToRetrieval = shouldDeferCorpusToRetrieval({
+        retrievableCount: retrievableIds.length,
+        attachedFileTokenBudget,
+        minInlineTokensPerDoc,
+      });
+
+      return {
+        deferredKnowledgeIds: deferredToRetrieval ? retrievableIds : [],
+        attachedCount,
+        retrievableCount: retrievableIds.length,
+        deferredToRetrieval,
+        minInlineTokensPerDoc,
+      };
+    } catch (err) {
+      // Never lose content over an optimization: any failure degrades to today's full inline.
+      this.logger.warn(
+        `[dataLakes] corpus inline-defer plan failed; inlining all attached knowledge: ${(err as Error)?.message}`
+      );
+      return noDefer;
+    }
+  }
+
   private async initializeProcessContext(
     body: z.infer<typeof QuestStartBodySchema>,
     logger: Logger,
@@ -730,10 +1026,11 @@ export class ChatCompletionProcess {
       timezone: userTimezone,
     } = parsedBody;
 
-    // Pair tools that are useless without their companion. The UI exposes single toggles
-    // ("Image Generation", "Knowledge Base Search") that imply the paired capability.
-    let finalEnabledTools: string[] = addPairedTool(enabledTools, 'image_generation', 'edit_image');
-    finalEnabledTools = addPairedTool(finalEnabledTools, 'search_knowledge_base', 'retrieve_knowledge_content');
+    // Companion pairing now runs once in `resolveEnabledTools` (see process()), after the
+    // per-session union and attached-knowledge offer, so session-forced and auto-offered
+    // tools get paired too. Here we only copy the request selection so the auto-adds below
+    // don't mutate `parsedBody.tools`.
+    const finalEnabledTools: string[] = [...enabledTools];
     let hasContentTransform = false;
 
     // Auto-added capabilities are OUR additions, not the caller's, so a prompt mode skips this
@@ -1090,28 +1387,31 @@ export class ChatCompletionProcess {
       }
       quest.status = 'running';
 
-      // Generic per-session tool defaults: a session may carry tools that must
-      // always be offered to the model, unioned with the per-request selection.
-      // Lets a product surface guarantee grounded retrieval (or other tools)
-      // regardless of the client's Smart/Fast toggle. No product-specific branch
-      // in core - mirrors the generic `session.systemPromptText` capability.
-      if (Array.isArray(session.enabledTools)) {
-        for (const tool of session.enabledTools) {
-          if (!enabledTools.includes(tool)) enabledTools.push(tool);
-        }
-      }
+      // Finalize the tool-offer list in one place: union the session's forced tools, offer the
+      // knowledge-base tool when the caller has retrievable knowledge (documents attached to this
+      // session OR one of their own data lakes), pair companion tools, and apply the session
+      // denylist last (so a curated "approved sources only" surface still wins). `enabledTools`
+      // is the array reference handed to buildTools, so splice the result back in place rather
+      // than reassigning the binding.
+      const hasAttachedKnowledge = (session.knowledgeIds?.length ?? 0) > 0;
+      // Any promptMode is an eval/passthrough that must not receive our server-side offers.
+      const skipAutoOffers = Boolean(promptMode);
+      // Only pay the accessible-lake lookup when it could change the offer: not skipped
+      // (prompt-mode), and attached knowledge hasn't already triggered the offer anyway.
+      const hasAccessibleDataLake =
+        skipAutoOffers || hasAttachedKnowledge ? false : await this.userHasAccessibleKnowledgeLake();
+      const resolvedTools = resolveEnabledTools({
+        requestTools: enabledTools,
+        sessionEnabledTools: Array.isArray(session.enabledTools) ? session.enabledTools : undefined,
+        sessionDisabledTools: Array.isArray(session.disabledTools) ? session.disabledTools : undefined,
+        hasAttachedKnowledge,
+        hasAccessibleDataLake,
+        skipAutoOffers,
+      });
+      enabledTools.splice(0, enabledTools.length, ...resolvedTools);
 
-      // Generic per-session tool denylist: strip tools the session forbids, even if
-      // the request or a global auto-add (e.g. navigate_view) included them. Lets a
-      // product surface enforce an approved toolset ("curated sources only" -> no web
-      // search). Applied last so it wins over every other tool source. Mutates in
-      // place since `enabledTools` is the array reference passed to buildTools.
-      if (Array.isArray(session.disabledTools) && session.disabledTools.length > 0) {
-        const denied = new Set(session.disabledTools);
-        for (let i = enabledTools.length - 1; i >= 0; i--) {
-          if (denied.has(enabledTools[i])) enabledTools.splice(i, 1);
-        }
-      }
+      // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
+      // moved to after buildTools, where the authoritative post-build tool list is known.
 
       // Generic per-session integration isolation: a curated-surface session (e.g. /opti)
       // can suppress the user's personal integrations so it runs only its server-owned
@@ -1216,6 +1516,16 @@ export class ChatCompletionProcess {
       // Build optimized features based on query complexity
       timer.phase('features_build');
       const featureBuildStartTime = Date.now();
+      // A session's authored prompt is either raw server-owned text (`systemPromptText`) or a
+      // reference to a curated registry prompt (`systemPromptId`, e.g. the triage router). Resolve
+      // the id to its CURRENT content HERE - not in an entry-point route - so it injects on EVERY
+      // path (chat, llm, queue, slack) via SessionPromptFeature, and admin edits take effect with no
+      // deploy. Raw text wins if both are somehow set. The injector enforces the activatable allowlist.
+      const sessionSystemPrompt = session.systemPromptText?.trim()
+        ? session.systemPromptText
+        : session.systemPromptId && this.loadSystemPromptById
+          ? ((await this.loadSystemPromptById(session.systemPromptId)) ?? undefined)
+          : undefined;
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
         enableQuestMaster || false,
@@ -1228,7 +1538,7 @@ export class ChatCompletionProcess {
         // features have side effects (memory writes, reply replacement) that outlive the prompt.
         filterFeaturesByPromptMode(optimizedFeatureList, promptMode),
         organization,
-        session.systemPromptText,
+        sessionSystemPrompt,
         // A mode overrides the session flag in both directions; see resolveForcedRetrieval.
         resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval),
         session.retrievalTags,
@@ -1668,7 +1978,9 @@ export class ChatCompletionProcess {
       // attachedFileTokenBudget below), so the adaptive default must not balloon it.
       const urlContentBudget = maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS;
 
-      const safetyBuffer = 1000; // Emergency buffer
+      // The same figure the catalog tests hold rows to, so CI's rule cannot end up looser
+      // than what this call actually reserves. Reported as bufferTokens in the telemetry below.
+      const safetyBuffer = CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS;
       // safeMaxTokens, not the raw (possibly absent) requested maxTokens: this reserves against the
       // output budget actually in play, including the adaptive-reasoning floor above, or an adaptive
       // model could reserve less than it goes on to use and land back on the negative-window bug this
@@ -1682,32 +1994,42 @@ export class ChatCompletionProcess {
       // answers silently shrank your own retrieval. Deriving it from the input window
       // instead means a large-context model can actually use one.
       //
-      // Held below the assembly budget on purpose. Extraction estimates at
-      // CHARS_PER_TOKEN while assembly re-counts with the real tokenizer, so leaving
-      // headroom keeps anything extracted from being dropped again downstream.
+      // Meant to sit below the assembly budget, because extraction estimates at CHARS_PER_TOKEN while
+      // assembly re-counts with the real tokenizer, so headroom keeps anything extracted from being
+      // dropped again downstream. It does on the small windows that matter, but not universally: see
+      // contextBudget, where the flat-reserve-versus-percentage-buffer crossover is spelled out.
       //
-      // The floor is load-bearing, not defensive. On a small local model the reserve
-      // subtraction goes negative, and a budget of 0 does NOT mean "send nothing" to
-      // processFabFilesServer - it means "no budget given", which restores a flat
-      // per-file cap applied once per file. Three files would then be handed more
-      // content than the whole input window. Flooring at a share of the raw window
-      // keeps the per-file division in effect, and assembly trims from there.
-      // Outer clamp is not redundant: on a tiny context window maxSafeInputTokens is
-      // itself negative (contextLimit - output cap - buffer), so both inner terms are
-      // negative and a negative budget would reach processFabFilesServer.
-      const attachedFileTokenBudget = Math.max(
-        0,
-        Math.max(
-          Math.floor(maxSafeInputTokens * MIN_ATTACHED_CONTENT_SHARE),
-          Math.floor((maxSafeInputTokens - SYSTEM_PROMPT_RESERVE) * ATTACHED_CONTENT_SHARE)
-        )
-      );
+      // SYSTEM_PROMPT_RESERVE is bounded to a share of the window inside this helper. Flat, it was
+      // most of an 8k-class budget, which collapsed the formula onto its emergency floor and
+      // head-sliced a 4k character file to ~2.6k before assembly could apply its own floor - so the
+      // floor was unreachable and raising it changed nothing. Bounded at the use site rather than at
+      // the constant because the history sizing above also reads it, where a smaller reserve would
+      // fetch MORE history to compete with the file.
+      const attachedFileTokenBudget = attachedContentExtractionBudget(maxSafeInputTokens, SYSTEM_PROMPT_RESERVE);
+
+      // Once the knowledge tools are offered (above), stop ALSO force-inlining a large retrievable
+      // corpus - the even-split inline goes breadth-shallow and the tool can fetch the relevant
+      // docs on demand. Off by default; defers only the tool-retrievable subset. `skipAutoOffers`
+      // mirrors the tool-offer gate (the tool isn't offered under promptMode, so we don't defer).
+      const corpusInlinePlan = await this.resolveCorpusInlinePlan({
+        sessionKnowledgeIds: session.knowledgeIds ?? [],
+        attachedFileTokenBudget,
+        skipAutoOffers,
+        knowledgeSearchDisabled:
+          Array.isArray(session.disabledTools) && session.disabledTools.includes(KNOWLEDGE_SEARCH_TOOL_NAME),
+        defaultAdminSettings,
+        // The same mapping the tool build uses below, so the session -> filter translation cannot
+        // drift between them. Narrower than "the two agree": reachability also depends on the tool
+        // surviving the denylist, which is what knowledgeSearchDisabled above covers.
+        retrievalFilter: toRetrievalFilter(session),
+      });
 
       const dataSources = await this.buildDataSources({
         defaultAdminSettings,
         sessionFabFileIds,
         messageFileIds,
         sessionKnowledgeIds: session.knowledgeIds ?? [],
+        deferredKnowledgeIds: corpusInlinePlan.deferredKnowledgeIds,
         message,
         maxTokens: urlContentBudget,
         attachedFileTokenBudget,
@@ -1890,10 +2212,52 @@ export class ChatCompletionProcess {
         }
       }
 
+      const offeredToolNames = allTools?.map(t => t.toolSchema.name) ?? [];
       logger.info('🔧 [Tools] allTools:', {
-        count: allTools?.length ?? 0,
-        names: allTools?.map(t => t.toolSchema.name) ?? [],
+        count: offeredToolNames.length,
+        names: offeredToolNames,
       });
+      // Record the final offered tool list for telemetry/eval. The API response's
+      // effectiveTools is the API-layer (phrase-recommender) selection only; this is what
+      // the model was actually given, so it reflects server-side offers like the attached-
+      // knowledge auto-offer above.
+      if (quest.promptMeta) quest.promptMeta.offeredTools = offeredToolNames;
+
+      // Loud warning for the invisible failure mode: the caller has retrievable knowledge
+      // (attached documents OR an accessible lake) but no knowledge tool survived into the final
+      // offered set. Checked here against offeredToolNames (not at resolveEnabledTools) because
+      // this is the authoritative post-build list - it sees the post-build denylist pass, the
+      // Ollama auto-added trim, and tools injected inside buildTools, none of which the pre-build
+      // enabledTools filter can. Skipped under promptMode, where withholding the offer is
+      // deliberate (see skipAutoOffers), not a failure. Silent otherwise means the model answers
+      // from its weights while the user believes their knowledge was consulted.
+      // The lake signal is held to a stricter bar than attached documents. The warning speaks to a
+      // user belief that their knowledge was consulted, and attaching documents creates that belief
+      // where merely owning a lake does not. So for the lake-only case we warn on an UNEXPECTED
+      // disappearance and stay quiet when the tool is absent BY CONFIGURATION: a session that
+      // denies it, or a model offered no tools at all. Without this, every turn of every
+      // lake-holding caller on a non-tool model logs a warning and drowns the real case.
+      const knowledgeToolWithheldByConfig =
+        (Array.isArray(session.disabledTools) && session.disabledTools.includes('search_knowledge_base')) ||
+        offeredToolNames.length === 0;
+      if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !promptMode) {
+        const source = hasAttachedKnowledge
+          ? `${session.knowledgeIds!.length} attached document(s)`
+          : 'an accessible data lake';
+        if (!offeredToolNames.includes('search_knowledge_base')) {
+          this.logger.warn(
+            `[knowledge] session ${session.id} has ${source} but search_knowledge_base is not offered - ` +
+              `the answer will come from model weights, not the knowledge.`
+          );
+        } else if (!offeredToolNames.includes('retrieve_knowledge_content')) {
+          // Search survived but its companion did not (e.g. a denylist stripped retrieve): the
+          // model can locate passages but cannot read their text. See addPairedTool.
+          this.logger.warn(
+            `[knowledge] session ${session.id} offers search_knowledge_base without ` +
+              `retrieve_knowledge_content - the model can locate passages but cannot read them.`
+          );
+        }
+      }
 
       // For tool prompt guidance, only include MCP tools given directly to the main LLM
       // (agent-only tools like Atlassian are excluded - they're accessed via delegate_to_agent)
@@ -1906,6 +2270,16 @@ export class ChatCompletionProcess {
       // trimmed from their schemas above, and telling a model to call a tool it does not
       // have makes it emit the call as leaked JSON text in the reply.
       const blogDraftAvailable = allTools?.some(t => t.toolSchema.name === 'blog_draft') ?? false;
+
+      // Same gate, same reason, for the image prompt - except buildAndSortMessages appends that one
+      // out of sight of this assembly site, so availability has to be threaded into the builder.
+      const imageGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'image_generation') ?? false;
+
+      // navigate_view is auto-added (AUTO_ADDED_TOOL_NAMES), so the local-model trim above drops it
+      // from the built list while it stays in the requested one - the view registry below would then
+      // describe a tool the model never received.
+      const navigateViewAvailable = allTools?.some(t => t.toolSchema.name === 'navigate_view') ?? false;
+      const editImageAvailable = allTools?.some(t => t.toolSchema.name === 'edit_image') ?? false;
 
       const toolPromptMessage = await toolBuilder.buildToolPrompt({
         toolPromptId,
@@ -2002,11 +2376,26 @@ export class ChatCompletionProcess {
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
         // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).
         helpCenter: isLocalModel ? [] : [{ role: 'system' as const, content: helpCenterContent }],
-        // Inject view registry summary when navigate_view tool is enabled
-        viewRegistry: enabledTools.includes('navigate_view')
+        // Abstention licence. Counterweight to the completeness pressure the rest of the prompt
+        // applies - without it the model treats "answer fully" as unconditional and invents
+        // specifics about the user or their data rather than naming the gap. Ships on every
+        // in-app completion (not just the grounded surfaces) because that is where the pressure
+        // is; a promptMode strips it like any other prompt we author. Admin-editable via
+        // `AbstentionPrompt`; a blank value falls back to the built-in default so the licence can
+        // never be silently stripped.
+        abstention: [
+          {
+            role: 'system' as const,
+            content: getSettingsValue('AbstentionPrompt', defaultAdminSettings, ABSTENTION_PROMPT),
+          },
+        ],
+        // Inject view registry summary when the navigate_view tool reached the model
+        viewRegistry: navigateViewAvailable
           ? [
               {
                 role: 'system' as const,
+                // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
+                requiresTool: 'navigate_view',
                 content: (() => {
                   // Extract current path from extraContextMessages for context-aware prompting
                   const viewCtx = extraContextMessages.find(
@@ -2030,6 +2419,10 @@ export class ChatCompletionProcess {
         questMaster: featureContextMessages['questMaster'],
         organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
         sessionPrompt: featureContextMessages['sessionPrompt'], // Per-session system prompt (product surfaces)
+        // Skills catalog (model-invocable `skill` tool discovery) + expanded `/skill-name`
+        // invocations. Grouped with the instruction-shaping blocks above and ahead of the
+        // data-context blocks below so an explicit invocation is not diluted by retrieval noise.
+        skills: featureContextMessages['skills'],
         knowledgeRetrieval: featureContextMessages['knowledgeRetrieval'], // Forced data-lake retrieval (grounding + citations)
         // Add LLM-optimized context summary if available (covers messages before verbatim window)
         contextSummary: session.contextSummary
@@ -2046,10 +2439,12 @@ export class ChatCompletionProcess {
         // generated image ("make it cartoonish"). Generated images persist as
         // bare storage keys in quest.images with no fabFile record, so without
         // this note the model can't reference them and either declines or (worse)
-        // claims success without calling a tool. Gated on edit_image being
-        // available (paired with image_generation).
+        // claims success without calling a tool. Gated on edit_image reaching the
+        // built tool list, like the two prompts above: the requested list agrees today
+        // only because edit_image is never auto-added, which is exactly the assumption
+        // that broke the view registry once navigate_view became auto-added.
         recentImages:
-          enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
+          editImageAvailable && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
             ? [
                 {
                   role: 'system' as const,
@@ -2072,11 +2467,26 @@ export class ChatCompletionProcess {
       });
       const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
+      // Carries each message's source across into the builder, which sees only an IMessage[] and so
+      // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
+      // the map above; if a source ever contributed the same object twice the last tag would win, and
+      // both entries would then hold the same priority anyway.
+      const systemPromptPriorities = new Map<IMessage, number>(
+        admittedContextMessages.map(t => [t.message, SYSTEM_PROMPT_PRIORITY[t.source]])
+      );
       const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
       // An explicit mode also excludes the admin templates this helper appends downstream
       // (FormatPromptTemplate, image prompt) - they are invisible from the assembly above, so the
       // source filter alone would leave them in front of a "raw" completion.
-      const buildOptions = { verbose: false, skipAdminPromptTemplates: Boolean(promptMode) };
+      //
+      // Shared with the overflow-recovery rebuild further down, so a prompt rebuilt after shedding
+      // history cannot carry different builder options than the first build.
+      const buildOptions = {
+        verbose: false,
+        skipAdminPromptTemplates: Boolean(promptMode),
+        imageGenerationAvailable,
+        systemMessagePriority: (message: IMessage) => systemPromptPriorities.get(message),
+      };
       let messages = await buildAndSortMessages(
         previousMessages,
         contextAndSystemMessages,
@@ -2275,45 +2685,80 @@ export class ChatCompletionProcess {
         logger.warn(`📊 Failed to calculate token breakdown:`, tokenBreakdownError);
       }
 
+      // Per-source breakdown, derived from the same tagged list the prompt was assembled
+      // from (see systemPromptSources) rather than re-listed by hand here. The hand-written
+      // version this replaces covered a third of the sources and reported a `session_summary`
+      // row built from `session.summary`, a field the assembled prompt never carried - it
+      // carries `session.contextSummary`. Sources appended downstream by buildAndSortMessages
+      // (FormatPromptTemplate, image prompt) are still not represented here. The two always-on
+      // floor sources come from systemPromptFloorTelemetry, which owns those rows outright -
+      // including the wasIncluded:false inventory rows a derivation from the admitted stack
+      // cannot produce; inclusion is read off the admitted stack rather than the raw settings
+      // gates, so a promptMode that strips a block reports it excluded instead of billed (#810).
+      //
+      // Persisted on the quest for every completion - unlike contextTelemetry, which exists
+      // only when enhanced telemetry is on - so the API layer can report which prompts fed a
+      // completion instead of leaving callers to infer it from behavior. Guarded: a counting
+      // failure must degrade to a missing breakdown, never a failed completion.
+      // What actually reached the model, by reference, read off the final payload so it accounts for
+      // overflow recovery too. The budget can drop a system message deliberately now, so being in the
+      // admitted stack no longer means being in the prompt, and every inclusion claim below has to be
+      // read from here rather than from the assembly.
+      const deliveredMessages = new Set<IMessage>(messages);
+      const droppedSources = admittedContextMessages
+        .filter(t => t.message.role === 'system')
+        .reduce<Map<PromptSourceId, boolean>>(
+          (kept, t) => kept.set(t.source, (kept.get(t.source) ?? false) || deliveredMessages.has(t.message)),
+          new Map()
+        );
+      const shedSourceNames = [...droppedSources]
+        .filter(([, survived]) => !survived)
+        .map(([source]) => PROMPT_SOURCE_METADATA[source].name);
+      if (shedSourceNames.length > 0) {
+        // Deliberate, but not something to leave silent: the assistant's behaviour changes and only
+        // this line says which instructions it lost.
+        logger.warn(
+          `📊 System prompts dropped to fit the input budget (${shedSourceNames.length}): ${shedSourceNames.join(', ')}`
+        );
+      }
+
+      let systemPromptDetails: SystemPromptDetail[] | undefined;
+      try {
+        const floorSources: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
+        systemPromptDetails = await toPromptDetails(
+          admittedContextMessages.filter(t => !floorSources.includes(t.source)),
+          messages => calculateTotalTokenLength(messages, tokenCalcOptions),
+          deliveredMessages
+        );
+        // Two different questions, and the floor rows need both: whether the gates admitted a block at
+        // all, and whether it survived the budget. Collapsing them would report a block the window could
+        // not fit as though an admin had switched it off.
+        const admitted = (source: PromptSourceId) => admittedContextMessages.some(t => t.source === source);
+        const delivered = (source: PromptSourceId) =>
+          admittedContextMessages.some(t => t.source === source && deliveredMessages.has(t.message));
+        systemPromptDetails.push(
+          ...(await buildAlwaysOnFloorDetails(
+            {
+              artifactEmissionEnabled: admitted('artifactEmission'),
+              artifactEmissionContent,
+              // The helper models exactly one exclusion ("local model"); a mode that strips
+              // the help-center block must surface the same way: excluded, zero tokens.
+              isLocalModel: !admitted('helpCenter'),
+              helpCenterContent,
+              artifactEmissionDelivered: delivered('artifactEmission'),
+              helpCenterDelivered: delivered('helpCenter'),
+            },
+            content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
+          ))
+        );
+        quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
+      } catch (detailsError) {
+        logger.warn(`📊 Failed to derive system prompt details:`, detailsError);
+      }
+
       // Feed breakdown into telemetry builder for detailed system prompt tracking
-      if (telemetryBuilder) {
+      if (telemetryBuilder && systemPromptDetails) {
         try {
-          // Per-source breakdown, derived from the same tagged list the prompt was assembled
-          // from (see systemPromptSources) rather than re-listed by hand here. The hand-written
-          // version this replaces covered a third of the sources and reported a `session_summary`
-          // row built from `session.summary`, a field the assembled prompt never carried - it
-          // carries `session.contextSummary`. Sources appended downstream by buildAndSortMessages
-          // (FormatPromptTemplate, image prompt) are still not represented here. The two always-on
-          // floor sources are excluded: systemPromptFloorTelemetry owns those rows outright
-          // (pushed below), including the wasIncluded:false inventory rows a derivation from the
-          // admitted stack cannot produce.
-          const floorSources: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
-          const systemPromptDetails: SystemPromptDetail[] = await toPromptDetails(
-            admittedContextMessages.filter(t => !floorSources.includes(t.source)),
-            messages => calculateTotalTokenLength(messages, tokenCalcOptions)
-          );
-
-          // Always-on floor blocks (artifact-emission, help-center) billed on every basic
-          // turn. Previously invisible inside the systemPrompts residual; itemized here so
-          // the fixed prompt cost is auditable in the Context Inspector (#810). Inclusion is
-          // read off the admitted stack rather than the raw settings gates, so a promptMode
-          // that strips a block reports it excluded instead of billed.
-          const admitted = (source: PromptSourceId) => admittedContextMessages.some(t => t.source === source);
-          systemPromptDetails.push(
-            ...(await buildAlwaysOnFloorDetails(
-              {
-                artifactEmissionEnabled: admitted('artifactEmission'),
-                artifactEmissionContent,
-                // The helper models exactly one exclusion ("local model"); a mode that strips
-                // the help-center block must surface the same way: excluded, zero tokens.
-                isLocalModel: !admitted('helpCenter'),
-                helpCenterContent,
-              },
-              content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
-            ))
-          );
-
-          // Calculate total system prompt tokens
           const systemPromptTokensTotal = systemPromptDetails.reduce((sum, p) => sum + p.tokenCount, 0);
 
           telemetryBuilder.setSystemPrompts({
@@ -2508,6 +2953,13 @@ export class ChatCompletionProcess {
       // Add system prompt tracking to promptMeta
       quest.promptMeta!.context!.sessionFileIds = sessionFabFileIds;
       quest.promptMeta!.context!.messageFileIds = messageFileIds;
+      quest.promptMeta!.context!.knowledgeInlining = {
+        attachedCount: corpusInlinePlan.attachedCount,
+        retrievableCount: corpusInlinePlan.retrievableCount,
+        deferredCount: corpusInlinePlan.deferredKnowledgeIds.length,
+        deferredToRetrieval: corpusInlinePlan.deferredToRetrieval,
+        minInlineTokensPerDoc: corpusInlinePlan.minInlineTokensPerDoc,
+      };
       quest.promptMeta!.context!.globalSystemFileIds = globalSystemFileIds;
       quest.promptMeta!.context!.userSystemFileIds = enabledSystemFileIds;
       quest.promptMeta!.context!.dedupedSystemPrompts = dedupedFileIds;
@@ -2751,6 +3203,14 @@ export class ChatCompletionProcess {
             actualTokenUsage.cacheReadInputTokens = undefined;
             actualTokenUsage.cacheCreationInputTokens = undefined;
             actualTokenUsage.stopReason = undefined;
+
+            // Same reasoning for tool-credit reservations: quest.promptMeta.functionCalls
+            // is reassigned (not appended) per attempt, but toolCreditsMap is instance
+            // state that persists across the loop. A discarded attempt's reservation left
+            // in the queue would be shifted onto the next attempt's call by
+            // settleToolCallCredits and billed as its cost. Clear it so only the surviving
+            // attempt's delivered tools settle.
+            this.toolCreditsMap.clear();
 
             logger.info(
               `⏱️ [${Date.now() - processStartTime}ms] === ${
@@ -3655,13 +4115,13 @@ export class ChatCompletionProcess {
             });
           }
         }
-        // Update functionCalls with creditsUsed
-        quest.promptMeta!.functionCalls = (quest.promptMeta!.functionCalls || []).map(fc => {
-          if (this.toolCreditsMap.has(fc.name || '')) {
-            return { ...fc, creditsUsed: this.toolCreditsMap.get(fc.name || '') };
-          }
-          return fc;
-        });
+        // Assign each tool call its own reserved credits from the per-name queue so a
+        // tool called more than once in a turn settles as the sum of every call, not
+        // the count times the last call's cost (see settleToolCallCredits).
+        quest.promptMeta!.functionCalls = settleToolCallCredits(
+          quest.promptMeta!.functionCalls || [],
+          this.toolCreditsMap
+        );
 
         // Update execution tracking
         quest.promptMeta!.executionTracking = {
@@ -4847,6 +5307,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     sessionFabFileIds,
     messageFileIds,
     sessionKnowledgeIds,
+    deferredKnowledgeIds = [],
     message,
     maxTokens,
     attachedFileTokenBudget,
@@ -4860,6 +5321,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     sessionFabFileIds: string[];
     messageFileIds: string[];
     sessionKnowledgeIds: string[];
+    /** Subset of `sessionKnowledgeIds` to leave OUT of the inline merge and defer to retrieval
+     *  (resolveCorpusInlinePlan). Full `sessionKnowledgeIds` is still reported in logs/telemetry. */
+    deferredKnowledgeIds?: string[];
     message: string;
     maxTokens: number;
     attachedFileTokenBudget: number;
@@ -4928,13 +5392,21 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.systemFilesCache.set(systemFilesCacheKey, [globalSystemFileIds, enabledSystemFileIds]);
     }
 
+    // Defer the retrievable-corpus subset out of the inline set (resolveCorpusInlinePlan); the
+    // offered search_knowledge_base tool fetches those on demand. Only knowledge IDs are affected -
+    // message/session fab files and system files always inline.
+    const deferred = new Set(deferredKnowledgeIds);
+    const inlineKnowledgeIds = deferred.size
+      ? sessionKnowledgeIds.filter(id => !deferred.has(id))
+      : sessionKnowledgeIds;
+
     // Pre-compute file dedup (synchronous) before deciding whether to skip
     const allFileIdsBeforeDedup = [
       ...sessionFabFileIds,
       ...messageFileIds,
       ...enabledSystemFileIds,
       ...globalSystemFileIds,
-      ...sessionKnowledgeIds,
+      ...inlineKnowledgeIds,
     ];
     const dedupedFileIds = Array.from(new Set(allFileIdsBeforeDedup));
 

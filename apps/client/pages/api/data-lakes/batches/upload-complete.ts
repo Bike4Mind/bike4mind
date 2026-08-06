@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeBatchRepository, fabFileRepository } from '@bike4mind/database';
+import { dataLakeService } from '@bike4mind/services';
 import { finalizeBatchIfComplete, enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -37,10 +38,10 @@ const handler = baseApi()
     const userId = req.user.id;
     const { batchId, failedFiles, failedFileNames, failedFileIds } = UploadCompleteInput.parse(req.body);
 
-    const batch = await dataLakeBatchRepository.findById(batchId);
-    if (!batch || batch.userId !== userId) {
-      return res.status(404).json({ error: 'Batch not found' });
-    }
+    // Shared with the presign/create routes (see assertBatchOwnership) - this route doesn't
+    // attach a new file, but it still mutates an existing batch by a client-suppliable id, so
+    // the same ownership guard applies.
+    await dataLakeService.assertBatchOwnership(userId, batchId, { db: { batches: dataLakeBatchRepository } });
 
     // Remove the orphan FabFiles the failed uploads created. A plain soft-delete is
     // complete for these: 0 chunks (nothing to tear down), no S3 object (the PUT never
@@ -72,9 +73,11 @@ const handler = baseApi()
     const fresh = await dataLakeBatchRepository.findById(batchId);
     await finalizeBatchIfComplete(fresh, req.logger);
 
-    // Background AI-tag suggestion: the browser upload phase is done here regardless
-    // of how much longer chunk/vectorize takes, so this fires independently of the finalize
-    // call above rather than waiting behind it.
+    // Background AI-tag suggestion: not gated on chunk/vectorize completion, only on the
+    // browser upload phase being done - so this call still matters even though it usually
+    // loses the claim now. finalizeBatchIfComplete above already tries the same guarded
+    // enqueue when ingest happens to be complete already; this is the call that actually wins
+    // it on the (more common) case where chunk/vectorize are still running.
     await enqueueTaxonomyAnalysisIfWanted(fresh, req.logger);
 
     return res.json({ success: true });

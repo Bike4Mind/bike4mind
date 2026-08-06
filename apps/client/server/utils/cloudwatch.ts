@@ -450,6 +450,8 @@ export const DataLakeBatchMetrics = {
   BATCH_COMPLETED: 'BatchCompleted',
   STUCK_BATCHES: 'StuckBatches',
   RECONCILE_RUNS: 'ReconcileRuns',
+  TAXONOMY_DAILY_CAP_EXCEEDED: 'TaxonomyDailyCapExceeded',
+  TAXONOMY_TAGS_APPLY_SKIPPED: 'TaxonomyTagsApplySkipped',
 } as const;
 
 export async function emitDataLakeBatchMetric(
@@ -481,7 +483,22 @@ export async function recordStuckBatchGauge(count: number): Promise<void> {
   return emitDataLakeBatchMetric(DataLakeBatchMetrics.STUCK_BATCHES, count, {}, StandardUnit.Count);
 }
 
+/** A batch's automatic AI-tag-suggestion enqueue was blocked by the shared per-user daily cap. */
+export async function recordTaxonomyDailyCapExceeded(): Promise<void> {
+  return emitDataLakeBatchMetric(DataLakeBatchMetrics.TAXONOMY_DAILY_CAP_EXCEEDED, 1, {}, StandardUnit.Count);
+}
+
 /** Heartbeat: the reconciler cron ran. Emit even on zero work so absence-of-data can alarm. */
 export async function recordReconcileRun(): Promise<void> {
   return emitDataLakeBatchMetric(DataLakeBatchMetrics.RECONCILE_RUNS, 1, {}, StandardUnit.Count);
+}
+
+/**
+ * Count of files an apply-taxonomy call skipped because bulkUpdateTags' optimistic-concurrency
+ * check lost the race (the file's tags changed between the read and the write) - a benign,
+ * expected-under-load outcome, not a failure. Value is the per-call skip count so this is a
+ * real rate over time, not just a per-batch log line.
+ */
+export async function recordTaxonomyTagsApplySkipped(count: number): Promise<void> {
+  return emitDataLakeBatchMetric(DataLakeBatchMetrics.TAXONOMY_TAGS_APPLY_SKIPPED, count, {}, StandardUnit.Count);
 }

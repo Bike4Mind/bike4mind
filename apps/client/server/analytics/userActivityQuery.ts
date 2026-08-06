@@ -6,6 +6,10 @@
  * every match unpaginated, which reached ~17MB on production data and tripped Lambda's 6MB
  * response cap (413 -> 502).
  *
+ * Everything up to the facet is the expensive part (~8-9s on a 7-day production window), and it
+ * costs the same whether the facet returns 25 rows or 25,000. The route therefore asks for a
+ * whole window of rows and slices pages out of it - see userActivityCache.ts.
+ *
  * ROW UNIT: `metadata` is part of the group key, so two events that differ only in metadata
  * stay separate rows. The pre-pagination client merged them (per day/counter/user), so the
  * grid shows more, finer rows than it used to and `total` counts those finer rows. That is a
@@ -53,7 +57,9 @@ export function parseMetadataFilters(raw: string | undefined): MetadataFilter[] 
 export interface UserActivityQueryParams {
   startDate: string;
   endDate: string;
-  page: number;
+  /** Rows to skip before the returned window. The caller pages by moving this, not by re-sorting. */
+  skip: number;
+  /** Rows to return. Sized by the caller: one page for a deep page, a whole cache window otherwise. */
   limit: number;
   events?: string[];
   orgs?: string[];
@@ -123,7 +129,7 @@ export interface UserActivityPipeline {
 export function buildUserActivityPipeline({
   startDate,
   endDate,
-  page,
+  skip,
   limit,
   events,
   orgs,
@@ -201,7 +207,7 @@ export function buildUserActivityPipeline({
     // The email lives on the joined user, so this can only be matched after the join.
     ...(userEmail ? [{ $match: { userEmail: { $regex: escapeRegex(userEmail), $options: 'i' } } }] : []),
     // Sort before the facet: a $sort inside a $facet sub-pipeline is held to the 100MB
-    // in-memory limit. The tiebreak has to be TOTAL or a row can straddle or skip a page
+    // in-memory limit. The tiebreak has to be TOTAL or a row can straddle or skip a window
     // across the two facet executions - userEmail cannot do it, since every row whose join
     // missed shares the same '' fallback. Covering the whole group key (userId + metadata,
     // ordered by BSON comparison) makes the order unique, because the key is unique per row.
@@ -219,7 +225,7 @@ export function buildUserActivityPipeline({
 
   const facetStages: Record<string, any[]> = {
     rows: [
-      { $skip: (page - 1) * limit },
+      { $skip: skip },
       { $limit: limit },
       {
         $project: {

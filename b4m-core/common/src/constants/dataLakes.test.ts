@@ -130,10 +130,9 @@ describe('toDataLakeConfig', () => {
     expect(config.requiredUserTag).toBe('tag');
   });
 
-  // The projection dropped `slug`, so the lake list returned lakes without a slug.
-  // The Add-files (append) wizard reads `lake.slug` to send `dataLakeSlug`; without it the
-  // server never resolved the lake tag and uploaded files were never registered to the lake.
-  it('carries slug through the projection (append-mode upload depends on it)', () => {
+  // The projection dropped `slug`, so the lake list returned lakes without a slug - and the
+  // wizard carries whatever the list gave it into the lake it is adding files to.
+  it('carries slug through the projection (clients read it off a lake they hold)', () => {
     const config = toDataLakeConfig({
       id: 'lake1',
       slug: 'acme-robotics-kb',

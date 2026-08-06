@@ -69,9 +69,10 @@ describe('getAccessibleDataLakePrompts', () => {
   });
 
   /**
-   * The trust check compares ids across a String schema and a String()-coerced actor. If a future
-   * migration ever stored `createdByUserId` (or `organizationId`) as an ObjectId, a raw `===` would
-   * fail SILENTLY - the lake is simply never trusted, no error anywhere. Lock the coercion.
+   * The trust check compares ids across a String schema and a coerced actor. If a future migration
+   * ever stored `createdByUserId` (or `organizationId`) as an ObjectId - or a populated doc reached
+   * the actor org - a raw `===` would fail SILENTLY: the lake is never trusted, no error anywhere.
+   * Lock the coercion (createdByUserId via String(), organizationId via normalizeId; see #1281/#1343).
    */
   it('trusts an owner whose lake id is ObjectId-like rather than a plain string', async () => {
     const objectIdLike = { toString: () => OWNER } as unknown as string;
@@ -81,13 +82,30 @@ describe('getAccessibleDataLakePrompts', () => {
     expect(prompts.map(p => p.name)).toEqual(['Lake One']);
   });
 
-  it('trusts an org lake whose organizationId is ObjectId-like rather than a plain string', async () => {
-    const objectIdLike = { toString: () => ORG } as unknown as string;
+  it('trusts an org lake whose organizationId is an ObjectId rather than a plain string', async () => {
+    // A real ObjectId exposes toHexString - the shape normalizeId reads (raw String() on a populated
+    // doc would yield "[object Object]"). The lake side is normalized inside isTrustedForInjection.
+    const objectId = { toHexString: () => ORG } as unknown as string;
     const prompts = await getAccessibleDataLakePrompts(
-      makeContext([makeLake({ createdByUserId: 'colleague', organizationId: objectIdLike })], {
+      makeContext([makeLake({ createdByUserId: 'colleague', organizationId: objectId })], {
         id: 'me',
         tags: [],
         organizationId: ORG,
+      })
+    );
+    expect(prompts.map(p => p.name)).toEqual(['Lake One']);
+  });
+
+  it('trusts an org lake for a POPULATED-document actor org vs a String lake org (#1343)', async () => {
+    // The #1343 shape: a .populate('organizationId') upstream hands the actor a full Organization
+    // doc. Normalized at the resolver seam to its hex, it agrees with the lake's stored String org;
+    // a raw String(actor) would be "[object Object]" and silently deny injection.
+    const populatedActorOrg = { _id: { toHexString: () => ORG }, name: 'Acme' } as unknown as string;
+    const prompts = await getAccessibleDataLakePrompts(
+      makeContext([makeLake({ createdByUserId: 'colleague', organizationId: ORG })], {
+        id: 'me',
+        tags: [],
+        organizationId: populatedActorOrg,
       })
     );
     expect(prompts.map(p => p.name)).toEqual(['Lake One']);

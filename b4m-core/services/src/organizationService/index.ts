@@ -13,6 +13,7 @@ import { listOwn } from './listOwn';
 import { listPendingUsers } from './listPendingUsers';
 import { revokeAccess } from './revokeAccess';
 import { leave } from './leave';
+import { clearActiveOrganization } from './clearActiveOrganization';
 import { setOrganizationGroupTypes } from './setOrganizationGroupTypes';
 import {
   assignUserToGroup,
@@ -24,6 +25,7 @@ import {
 import { resolveGroupTypesForUser } from './resolveGroupTypesForUser';
 import type { GroupTypeResolutionOverride } from './resolveGroupTypesForUser';
 import { resolveCapabilitiesForUser, userHasCapability } from './resolveCapabilitiesForUser';
+import type { GroupTypeCapabilityMap } from './resolveCapabilitiesForUser';
 
 export {
   search,
@@ -42,6 +44,7 @@ export {
   listPendingUsers,
   revokeAccess,
   leave,
+  clearActiveOrganization,
   setOrganizationGroupTypes,
   assignUserToGroup,
   assertCanManageOrgGroups,
@@ -55,3 +58,4 @@ export {
 
 export type { SearchParameters };
 export type { GroupTypeResolutionOverride };
+export type { GroupTypeCapabilityMap };

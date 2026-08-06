@@ -8,6 +8,7 @@ import {
   resolveSubscriptionSource,
 } from './organizationService';
 import { SubscriptionSource } from '@client/lib/subscriptions/types';
+import { ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@client/lib/subscriptions/constants';
 
 // Vitest hoists vi.mock() calls above imports, so the mocked modules win
 // even though imports appear higher in source order.
@@ -87,6 +88,32 @@ describe('organizationService', () => {
         /Minimum required seats: 5.*including 4 pending invites/
       );
       expect(() => validateSeatChange(org, 5, { type: 'admin', userId: 'a1' }, 4)).not.toThrow();
+    });
+
+    describe('over-capacity recovery (#1424)', () => {
+      // owner + MAX members = team size MAX + 1, one past the ceiling.
+      const overCapOrg = () =>
+        ({
+          users: Array.from({ length: ORGANIZATION_SUBSCRIPTION_MAX_SEATS }, (_, i) => ({ userId: `m${i}` })),
+        }) as any;
+
+      it('lets an over-cap org be corrected DOWN to the maximum in one call', () => {
+        expect(() =>
+          validateSeatChange(overCapOrg(), ORGANIZATION_SUBSCRIPTION_MAX_SEATS, { type: 'admin', userId: 'a1' })
+        ).not.toThrow();
+      });
+
+      it('rejects a reduction below the maximum with the over-cap guidance', () => {
+        expect(() =>
+          validateSeatChange(overCapOrg(), ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1, { type: 'admin', userId: 'a1' })
+        ).toThrow(/over the 100-seat maximum.*remove members/is);
+      });
+
+      it('still rejects any raise past the maximum', () => {
+        expect(() =>
+          validateSeatChange(overCapOrg(), ORGANIZATION_SUBSCRIPTION_MAX_SEATS + 1, { type: 'admin', userId: 'a1' })
+        ).toThrow(/cannot exceed/i);
+      });
     });
   });
 

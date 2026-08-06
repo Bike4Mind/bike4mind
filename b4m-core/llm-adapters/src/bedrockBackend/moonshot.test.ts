@@ -19,7 +19,8 @@ describe('MoonshotBedrockBackend payload', () => {
   });
 
   it('clamps max_tokens to the 16K Bedrock ceiling rather than passing the direct-API limit', () => {
-    // Direct Moonshot allows 262144; asking Bedrock for it is a validation error.
+    // 262144 is the direct-served K2.5 context window, not an output budget anywhere:
+    // asking Bedrock for that many output tokens is a validation error.
     expect(bodyOf(ChatModels.KIMI_K2_5_BEDROCK, { maxTokens: 262_144 }).max_tokens).toBe(16_384);
   });
 

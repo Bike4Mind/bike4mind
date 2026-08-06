@@ -149,5 +149,6 @@ export const TOOLS_REQUIRING_APPROVAL: ReadonlySet<string> = new Set([
   'delegate_to_agent',
   'image_generation',
   'edit_image',
+  'music_generation',
   'video_generation',
 ]);

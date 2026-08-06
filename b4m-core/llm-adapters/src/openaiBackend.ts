@@ -14,6 +14,7 @@ import {
   type ReasoningEffort,
   type CacheUsageStats,
 } from '@bike4mind/common';
+import { stripToolDependentMessages } from './toolPairingUtils';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources/chat/completions';
 import type {
@@ -795,6 +796,11 @@ export class OpenAIBackend implements ICompletionBackend {
           "OpenAI's original GPT-4 model. Legacy model good for basic tasks and content generation, but newer models offer better capabilities.",
       },
       // OpenAI Image Models
+      //
+      // max_tokens equals contextWindow on purpose here: both are the prompt-length limit,
+      // and max_tokens is never sent to the image API. Do not "correct" it to a smaller
+      // output reserve - safeInputWindow (ChatCompletionProcess) skips the reserve for media
+      // types precisely because there is no token output to reserve.
       {
         id: ImageModels.GPT_IMAGE_1,
         type: 'image',
@@ -970,7 +976,8 @@ export class OpenAIBackend implements ICompletionBackend {
       // Remove tools when limit is hit and continue, preserving _internal settings
       await this.complete(
         model,
-        messages,
+        // Tools are going away, so the prompts that order the model to use one have to go with them.
+        stripToolDependentMessages(messages),
         {
           ...options,
           tools: undefined,
@@ -1356,7 +1363,9 @@ export class OpenAIBackend implements ICompletionBackend {
             // correct credit attribution).
             await this.complete(
               model,
-              messages,
+              // Tracks the tools decision on the next line: this branch keeps tools only for MCP
+              // chaining, so on the built-in-tool path the tool-dependent prompts have to go too.
+              anyMcpTool ? messages : stripToolDependentMessages(messages),
               {
                 ...options,
                 tools: anyMcpTool ? options.tools : undefined,

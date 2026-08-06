@@ -100,6 +100,40 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
   }
 
   /**
+   * One deterministic page of chunk TEXT for a single file, ascending by `_id`.
+   *
+   * Deliberately separate from `findVectorsByFabFileIds`: that reader filters
+   * `vector: { $exists: true, $ne: [] }`, which is right for cosine but would DROP a
+   * vectorless chunk that still carries text. A text consumer needs every chunk,
+   * vectorized or not, so reusing it here would silently lose content.
+   *
+   * Same keyset contract as the vector reader: `_id` is unique, so the order is total and
+   * `afterChunkId` is an exact cursor - paging never skips or repeats a chunk.
+   */
+  async findTextsByFabFileId(fabFileId: string, options: { limit?: number; afterChunkId?: string } = {}) {
+    const { limit = 1_000, afterChunkId } = options;
+    const docs = await this.fabFileChunkModel
+      .find({
+        fabFileId,
+        ...(afterChunkId ? { _id: { $gt: afterChunkId } } : {}),
+      })
+      .select({ _id: 1, text: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => ({ id: String(d._id), text: d.text ?? '' }));
+  }
+
+  /**
+   * Every chunk of a file, vectorless ones included. Callers that page a bounded window
+   * need this to tell "you are holding the whole file" from "you are holding a slice" -
+   * counting only what a projected reader returned cannot make that distinction.
+   */
+  async countByFabFileId(fabFileId: string): Promise<number> {
+    return this.fabFileChunkModel.countDocuments({ fabFileId });
+  }
+
+  /**
    * Count a file's "terminal" chunks: those that have an embedding vector OR are
    * oversized (token count exceeds the model context window, so they can never be
    * embedded). Used to recompute vectorizedChunkCount from source so SQS redelivery
@@ -145,7 +179,8 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
 // Equality on the prefix + sort on `_id` lets the planner SORT_MERGE the per-file index scans
 // instead of collecting and sorting them, which is what keeps findVectorsByFabFileIds' keyset
 // paging non-blocking. Deliberately the only declaration: this compound's leftmost prefix already
-// serves the bare `fabFileId` reads (findByFabFileId, deleteManyByFabFileId, countTerminalChunks),
+// serves the bare `fabFileId` reads (findByFabFileId, findTextsByFabFileId, countByFabFileId,
+// deleteManyByFabFileId, countTerminalChunks),
 // and a `{ _id: 1, fabFileId: 1 }` buys nothing over `_id_` since `vector` is in neither index, so
 // both plans fetch anyway. Environments deployed before this still hold those two as orphans until
 // a drop migration removes them; nothing recreates them, because autoIndex only builds what is
@@ -640,13 +675,40 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
-  async bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number> {
+  async bulkUpdateTags(
+    updates: {
+      id: string;
+      tags: { name: string; strength: number }[];
+      expectedTags: { name: string; strength: number }[];
+    }[]
+  ): Promise<number> {
     if (updates.length === 0) return 0;
 
+    // `tags: expectedTags` is an exact, order-sensitive array match (Mongo array-equality
+    // semantics) - ANY concurrent change (add/remove/reorder) makes this op a no-op rather
+    // than overwriting with a merge computed from data that's no longer current. Order-
+    // sensitivity is safe only because every other tags writer in this file (push/pull/dedupe)
+    // preserves order - it appends or removes, never reshuffles. That's an invariant of those
+    // methods, not of this one; a future writer that resorts/rebuilds `tags` would silently
+    // defeat this CAS. Keep it that way, or switch to a version counter instead of a full-array
+    // compare.
+    //
+    // `tags` is a schema-less [Object] array with no default enforced on legacy rows (see the
+    // $ifNull guards in dedupeTagByUserId above), so "no tags" can be stored as `null`, an
+    // absent field, or `[]`. A caller's `file.tags ?? []` read collapses all three to `[]`
+    // before it ever reaches expectedTags, so an exact-array filter of `{ tags: [] }` would
+    // never match the null/missing cases and permanently strand those files. `{ tags: null }`
+    // alone covers both the explicit-null and the missing-field case (Mongo treats them as the
+    // same match), so two clauses - not three - cover all storage forms as equivalent to an
+    // empty snapshot, mirroring the read side.
     const result = await this.fabFileModel.bulkWrite(
-      updates.map(({ id, tags }) => ({
+      updates.map(({ id, tags, expectedTags }) => ({
         updateOne: {
-          filter: { _id: convertId(id) },
+          filter: {
+            _id: convertId(id),
+            deletedAt: null,
+            ...(expectedTags.length === 0 ? { $or: [{ tags: [] }, { tags: null }] } : { tags: expectedTags }),
+          },
           update: { $set: { tags } },
         },
       })),
@@ -704,8 +766,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   /**
    * Authoritative lake stats from source records via an aggregate - counts only live files
-   * (not archived, not deleted). Runs at batch completion AND on the reconcile read path, so
-   * it must NOT load-all-and-count.
+   * (not archived, not deleted, not an orphan upload still `pending`). Runs at batch completion
+   * AND on the reconcile read path, so it must NOT load-all-and-count.
+   *
+   * `status: { $ne: 'pending' }` matters here specifically because this count also drives
+   * `activateIfDraft` (recomputeLakeStats.ts): a presigned FabFile row is tagged into the lake
+   * before a byte is sent, and without this exclusion an upload that never completed could
+   * still count toward "the lake has a member" and activate it - permanently, since the
+   * transition is one-way. Same exclusion as findByContentHashes, for the same reason.
    *
    * The `{ 'tags.name': 1, archivedAt: 1, deletedAt: 1 }` index bounds the meta-tag arm fully.
    * The prefix arm only gets a range on the leading key (an anchored regex) and its `userId`
@@ -714,7 +782,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    */
   async computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }> {
     const [agg] = await this.fabFileModel.aggregate<{ fileCount: number; totalSizeBytes: number }>([
-      { $match: { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null } },
+      {
+        $match: {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+        },
+      },
       { $group: { _id: null, fileCount: { $sum: 1 }, totalSizeBytes: { $sum: { $ifNull: ['$fileSize', 0] } } } },
       { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1 } },
     ]);
@@ -736,11 +811,24 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           ...buildDataLakeMembershipFilter(scope),
           deletedAt: null,
           archivedAt: null,
+          status: { $ne: 'pending' },
         })
       )
     );
     return Object.fromEntries(scopes.map((scope, i) => [scope.datalakeTag, counts[i]]));
   }
+
+  // The delete/restore pair below is stamp-keyed. Phase-1 delete passes `at` to write one shared
+  // stamp across every row it flips, records that value on the lake, and restore passes it back as
+  // `stampedAt` to reverse exactly that batch. Equality, not a range: a lower bound would also match
+  // a file the creator deleted DURING the deleted window (the per-file delete routes stamp
+  // `deletedAt` too), and those deletions are the creator's to keep, not the teardown's to reverse.
+  // Omitting `stampedAt` matches every stamped row, which is the pre-mark behavior and the fallback
+  // for a lake torn down before the mark existed.
+  //
+  // The archive axis deliberately stays unstamped: `archiveByDataLakeTag` is the only writer of a
+  // non-null `archivedAt`, so there is no independently-archived file to protect, and bounding it
+  // would strand any row still holding a stamp its lake no longer names.
 
   async archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
     const result = await this.fabFileModel.updateMany(
@@ -767,29 +855,43 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
-  async findDeletedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]> {
+  async findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]> {
+    // `includeDeleted` is load-bearing for BOTH forms, not just tidiness: the soft-delete plugin's
+    // find hook does `this.where({ deletedAt: null })`, which REPLACES the condition on that key, so
+    // without the option this query silently returns nothing.
     const result = await this.fabFileModel
-      .find({ ...buildDataLakeMembershipFilter(scope), deletedAt: { $ne: null } })
+      .find({ ...buildDataLakeMembershipFilter(scope), deletedAt: stampedAt ?? { $ne: null } })
       .setOptions({ includeDeleted: true });
     return result.map(d => d.toJSON());
   }
 
-  async undeleteByDataLakeTag(scope: DataLakeMembershipScope, excludeIds: string[] = []): Promise<number> {
+  async undeleteByDataLakeTag(
+    scope: DataLakeMembershipScope,
+    excludeIds: string[] = [],
+    stampedAt?: Date
+  ): Promise<number> {
     const filter: Record<string, unknown> = {
       ...buildDataLakeMembershipFilter(scope),
-      deletedAt: { $ne: null },
+      deletedAt: stampedAt ?? { $ne: null },
     };
     if (excludeIds.length > 0) filter._id = { $nin: excludeIds };
     const result = await this.fabFileModel.updateMany(filter, { $set: { deletedAt: null } });
     return result.modifiedCount;
   }
 
-  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
+  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<string[]> {
     const docs = await this.fabFileModel.find({ ...buildDataLakeMembershipFilter(scope), deletedAt: null }, { _id: 1 });
     const ids = docs.map(d => d._id.toString());
     if (ids.length === 0) return [];
-    await this.fabFileModel.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: new Date() } });
+    await this.fabFileModel.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: at } });
     return ids;
+  }
+
+  async hardDeleteByIds(fabFileIds: string[]): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
+    await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds } }, { hardDelete: true } as Record<string, unknown>);
+    return fabFileIds;
   }
 
   async hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
@@ -797,11 +899,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const docs = await this.fabFileModel
       .find(buildDataLakeMembershipFilter(scope), { _id: 1 })
       .setOptions({ includeDeleted: true });
-    const ids = docs.map(d => d._id.toString());
-    if (ids.length === 0) return [];
-    // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
-    await this.fabFileModel.deleteMany({ _id: { $in: ids } }, { hardDelete: true } as Record<string, unknown>);
-    return ids;
+    return this.hardDeleteByIds(docs.map(d => d._id.toString()));
   }
 
   async findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
@@ -978,6 +1076,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     userId: { type: String, required: true },
     fileName: { type: String, required: true },
     fileSize: { type: Number },
+    // Extracted TEXT length, not bytes; see IFabFile. Absent until something extracts the file.
+    extractedCharCount: { type: Number, required: false },
     filePath: { type: String },
     mimeType: { type: String },
     type: { type: String, enum: Object.values(KnowledgeType), required: true },
@@ -1073,6 +1173,11 @@ FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
 FabFileSchema.index({ contentHash: 1, userId: 1 });
+
+// Un-chunked rescue sweep (buildFabFileChunkScanFilter: self-host worker scan + the hosted
+// dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily
+// sweep is a collection scan, since almost every file has chunkCount > 0.
+FabFileSchema.index({ status: 1, chunkCount: 1, deletedAt: 1, createdAt: 1 });
 
 // Batch file queries
 FabFileSchema.index({ batchId: 1 });

@@ -15,6 +15,9 @@ export default defineConfig({
     'src/imageResize.ts',
     'src/llm/backend.ts',
     'src/escapeRegex.ts',
+    // Own entry so client-side `server/` modules (covered by client vitest) can import the
+    // id normalizer via the lightweight subpath instead of dragging the whole barrel in.
+    'src/normalizeId.ts',
     'src/retrievalExclusion.ts',
     'src/registrableDomain.ts',
   ],

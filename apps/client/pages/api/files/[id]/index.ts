@@ -16,6 +16,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { findLakeAccessibleFabFile } from '@server/dataLakes';
+import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
 import { Request } from 'express';
 import { Types } from 'mongoose';
@@ -66,6 +67,12 @@ const handler = baseApi()
     const fabFileId = req.query.id;
 
     req.logger.updateMetadata({ userId, fileId: fabFileId });
+
+    // Same guard the DELETE branch below carries. The round trip matters on top of isValid():
+    // isValid() also accepts any 12-character string, which then coerces to an unrelated id.
+    if (!Types.ObjectId.isValid(fabFileId) || new Types.ObjectId(fabFileId).toString() !== fabFileId) {
+      return res.status(404).json({ msg: 'File not found' });
+    }
 
     // Data-lake membership is conferred by the lake's `datalake:*` meta-tag. Applying one is a
     // WRITE into that lake, so gate it with the same creator/admin check the remove path uses -
@@ -140,17 +147,17 @@ const handler = baseApi()
       return res.status(404).json({ msg: 'File not found' });
     }
 
-    // Only decrement tag counts for owned files (shared file "delete" = unshare, not removal)
+    // Only touch tag activity for owned files (shared file "delete" = unshare, not removal)
     const fabFile = await fabFileRepository.findById(fabFileId);
     const isOwned = fabFile?.userId === userId;
     if (isOwned && fabFile?.tags?.length) {
       for (const tag of fabFile.tags) {
         try {
           if (tag?.name) {
-            await fileTagRepository.incrementFileCountBy({ name: tag.name, userId }, -1);
+            await fileTagRepository.touchLastActivityBy({ name: tag.name, userId });
           }
         } catch (tagError) {
-          req.logger.error('Error updating tag count during single file delete:', { tagError, tag });
+          req.logger.error('Error touching tag activity during single file delete:', { tagError, tag });
         }
       }
     }
@@ -212,6 +219,15 @@ const handler = baseApi()
           sizeToDeduct,
         });
       }
+    }
+
+    // After the transaction, so the aggregation sees the committed `deletedAt`. The shared helper
+    // also backs bulk-delete; see it for why only the 'deleted' outcome moves lake membership.
+    if (deleteAction === 'deleted') {
+      await recomputeStatsForLakeTags(
+        (fabFile?.tags ?? []).map(tag => tag?.name),
+        { logger: req.logger }
+      );
     }
 
     return res.json({ msg: 'Fab file deleted', action: deleteAction });

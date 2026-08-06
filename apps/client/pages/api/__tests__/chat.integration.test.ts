@@ -26,17 +26,23 @@ const {
   mockFindById,
   mockRateLimit,
   mockInvoke,
+  mockProcess,
   mockGetSettingsMap,
   mockResolveDefaultChatModel,
   mockIsChatModelUsable,
+  mockTryIncrement,
+  mockResolveUserRateLimitPerMin,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
   mockRateLimit: vi.fn(),
   mockInvoke: vi.fn(),
+  mockProcess: vi.fn(),
   mockGetSettingsMap: vi.fn(),
   mockResolveDefaultChatModel: vi.fn(),
   mockIsChatModelUsable: vi.fn(),
+  mockTryIncrement: vi.fn(),
+  mockResolveUserRateLimitPerMin: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -50,20 +56,26 @@ const RATE_LIMIT_HEADERS = {
 
 // The Mongo-backed per-API-key rate-limit counter (buffers forever against a
 // stubbed connectDB otherwise). Overridable per-test.
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+  // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it now; only
+  // checkApiKeyRateLimit is stubbed.
+  ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
 
 // Keep fire-and-forget analytics writes from touching the DB.
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
-// The per-user tier rate-limit middleware runs before the handler and
-// resolves the caller's limit from their active subscriptions (a Mongo read via
-// subscriptionRepository). This test stubs connectDB, so that read would buffer
-// forever - return Infinity ("no limit") so the middleware skips enforcement and
-// the test stays focused on apiKeyAuth scope enforcement.
+// The per-user tier rate-limit middleware resolves the caller's limit from their
+// active subscriptions (a Mongo read via subscriptionRepository). This test stubs
+// connectDB, so that read would buffer forever - stub it instead.
+//
+// It resolves to a FINITE limit by default. An earlier `Infinity` here meant the
+// limiter short-circuited before its counter, so no chat test - happy path included -
+// ever exercised the increment, and the whole rate-limit-vs-validation ordering was
+// untested. Individual tests override it.
 vi.mock('@server/utils/userRateTier', () => ({
-  resolveUserRateLimitPerMin: vi.fn().mockResolvedValue(Infinity),
+  resolveUserRateLimitPerMin: (...a: unknown[]) => mockResolveUserRateLimitPerMin(...a),
 }));
 
 // Chat's own in-memory rateLimit + the settings load both reach the DB - stub
@@ -87,8 +99,14 @@ vi.mock('@bike4mind/services', async orig => {
     prefetchedOrganization = undefined;
     invoke = (...a: unknown[]) => mockInvoke(...a);
   }
+  // The wait=true path constructs this directly; the async-path tests never reach it.
+  class MockChatCompletionProcess {
+    pipelinePhases = undefined;
+    process = (...a: unknown[]) => mockProcess(...a);
+  }
   return {
     ...actual,
+    ChatCompletionProcess: MockChatCompletionProcess,
     userApiKeyService: {
       ...(actual.userApiKeyService as object),
       validateUserApiKey: (...a: unknown[]) => mockValidate(...a),
@@ -117,9 +135,9 @@ vi.mock('@bike4mind/database', async orig => {
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindById(...a) }),
     cacheRepository: {
       ...(actual.cacheRepository as object),
-      tryIncrementWithinLimitFixedWindow: vi
-        .fn()
-        .mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) }),
+      // Hoisted so tests can assert the per-user limiter actually ran, and drive
+      // the over-limit path.
+      tryIncrementWithinLimitFixedWindow: (...a: unknown[]) => mockTryIncrement(...a),
     },
   };
 });
@@ -196,6 +214,8 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       })
     );
     mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
+    mockResolveUserRateLimitPerMin.mockResolvedValue(60);
+    mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
     // Hosted-path shape: no apiKeys/models, so chat.ts skips the self-host usability guard.
     mockResolveDefaultChatModel.mockImplementation(
       async ({ configuredModel }: { configuredModel?: string | null }) => ({
@@ -260,6 +280,101 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
+  // F1: apiKeyAuth must accept the canonical `Authorization: Bearer b4m_<key>` form
+  // (what the OpenAPI spec + code samples advertise), while a Bearer JWT still
+  // falls through to JWT auth.
+  it('authenticates Authorization: Bearer b4m_<key> as an API key', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    const { req, res } = fire({ apiKey: null, bearer: 'b4m_live_testkey' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    // Went the API-key route (not JWT): the key validator ran with the Bearer token.
+    expect(mockValidate).toHaveBeenCalledWith('b4m_live_testkey', expect.anything());
+  });
+
+  it('leaves a Bearer JWT (no b4m_ prefix) to JWT auth, not api-key auth', async () => {
+    const { req, res } = fire({ apiKey: null, bearer: 'eyJhbGciOi.jwt.token' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    // The api-key validator never ran - this was a JWT.
+    expect(mockValidate).not.toHaveBeenCalled();
+  });
+
+  // The 200 above is NOT load-bearing on its own: this file's JWT stub authenticates
+  // any caller, so a completely broken Bearer key path would still answer 200. These
+  // assert the api-key ERROR paths, which only a real Bearer extraction can produce.
+  it('403s an under-scoped key presented as Bearer', async () => {
+    validateWithScopes([ApiKeyScope.READ_FILES]);
+    const { req, res } = fire({ apiKey: null, bearer: 'b4m_live_testkey' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error).toMatch(/insufficient/i);
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('401s an invalid key presented as Bearer', async () => {
+    mockValidate.mockResolvedValue({ isValid: false, reason: 'revoked' });
+    const { req, res } = fire({ apiKey: null, bearer: 'b4m_live_revoked' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(401);
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  // Only a `b4m_`-prefixed Bearer token is an API key. Anything else must fall
+  // through to JWT auth rather than being sent to the key validator.
+  it.each(['not_b4m_live_x', 'Bearerb4m_live_x', 'eyJhbGciOi.b4m_live.token'])(
+    'does not treat Bearer %s as an api key',
+    async token => {
+      const { req, res } = fire({ apiKey: null, bearer: token });
+      await handler(req, res);
+      expect(mockValidate).not.toHaveBeenCalled();
+    }
+  );
+
+  // Rate limiting must run BEFORE contract validation, or a flood of malformed
+  // bodies costs a caller nothing. The discriminator is the limiter's own counter:
+  // a 422 alone is returned by either ordering.
+  describe('rate limit runs before validation', () => {
+    const badBody = { message: 'hi', sessionId: 'sess-1', historyCount: -5 };
+
+    it('counts a malformed body from an api-key caller against the limiter', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: badBody });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockTryIncrement).toHaveBeenCalledTimes(1);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('counts a malformed body from a JWT caller against the limiter', async () => {
+      const { req, res } = fire({ apiKey: null, body: badBody });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockTryIncrement).toHaveBeenCalledTimes(1);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('429s an over-limit caller instead of 422ing their malformed body', async () => {
+      // The sharpest pre-fix/post-fix discriminator: if validation ran first, this
+      // request would never reach the limiter and would answer 422.
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      mockTryIncrement.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 30_000) });
+      const { req, res } = fire({ body: badBody });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('skips enforcement entirely for an unlimited (admin/dev) caller', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      mockResolveUserRateLimitPerMin.mockResolvedValue(Infinity);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockTryIncrement).not.toHaveBeenCalled();
+    });
+  });
+
   it('returns 400 when the resolved default chat model is unusable (self-host, no key, no local model)', async () => {
     // Self-host resolver shape: apiKeys/models ARE present (unlike the hosted default),
     // so chat.ts runs its no-usable-model guard. An empty model list plus an unusable
@@ -272,6 +387,27 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(res._getStatusCode()).toBe(400);
     expect(res._getJSONData().error).toMatch(/no usable default chat model/i);
     expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  // Behaviour change: extracting the schema to the contract dropped
+  // `historyCount`'s `.catch(10)` in favour of `.default(10)` (fail loud). An
+  // invalid value now 422s instead of silently coercing to 10 (pre-PR behaviour).
+  describe('historyCount fail-loud (behaviour change vs pre-contract .catch(10))', () => {
+    it('rejects a non-positive historyCount with 422 (previously silently coerced to 10)', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', historyCount: 0 } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('defaults an omitted historyCount to 10 and proceeds (2xx)', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect((mockInvoke.mock.calls[0][0] as { body: { historyCount?: number } }).body.historyCount).toBe(10);
+    });
   });
 
   // Output-budget override: the handler must forward a caller-supplied token
@@ -318,11 +454,22 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
   });
 });
 
-describe('POST /api/chat (integration - promptMode request contract)', () => {
+describe('POST /api/chat (integration - wait path promptDetails exposure)', () => {
+  // What process() leaves on the in-memory quest; the route must surface it only on request.
+  const DETAILS = [{ source: 'hardcoded', name: 'date_time_context', tokenCount: 12, wasIncluded: true }];
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetSettingsMap.mockResolvedValue({});
-    mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'queued' });
+    mockInvoke.mockResolvedValue({
+      id: 'quest-2',
+      status: 'done',
+      reply: 'hi',
+      replies: ['hi'],
+      createdAt: new Date('2026-08-03T00:00:00Z'),
+      promptMeta: { context: { systemPromptDetails: DETAILS } },
+    });
+    mockProcess.mockResolvedValue(undefined);
     mockFindById.mockReturnValue(
       Promise.resolve({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false })
     );
@@ -336,6 +483,22 @@ describe('POST /api/chat (integration - promptMode request contract)', () => {
       scopes: [ApiKeyScope.AI_CHAT],
       rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
     });
+  });
+
+  it('returns the per-source breakdown when includePromptDetails is set', async () => {
+    const { req, res } = fire({
+      body: { message: 'hello', sessionId: 'sess-1', wait: true, includePromptDetails: true },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().promptDetails).toEqual(DETAILS);
+  });
+
+  it('omits the breakdown without the flag, keeping the response shape unchanged', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).not.toHaveProperty('promptDetails');
   });
 
   it('accepts promptMode: raw at the HTTP boundary', async () => {

@@ -25,12 +25,14 @@ export type PromptSourceId =
   | 'extraContext'
   | 'artifactEmission'
   | 'helpCenter'
+  | 'abstention'
   | 'viewRegistry'
   | 'toolPrompt'
   | 'agentDetection'
   | 'questMaster'
   | 'organizationPrompt'
   | 'sessionPrompt'
+  | 'skills'
   | 'knowledgeRetrieval'
   | 'contextSummary'
   | 'mementos'
@@ -49,12 +51,14 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'extraContext',
   'artifactEmission',
   'helpCenter',
+  'abstention',
   'viewRegistry',
   'toolPrompt',
   'agentDetection',
   'questMaster',
   'organizationPrompt',
   'sessionPrompt',
+  'skills',
   'knowledgeRetrieval',
   'contextSummary',
   'mementos',
@@ -101,6 +105,57 @@ export const PROMPT_MODE_SOURCES: Record<PromptMode, PromptSourceId[]> = {
   raw: CALLER_SUPPLIED_SOURCES,
   grounded: [...CALLER_SUPPLIED_SOURCES, 'knowledgeRetrieval'],
   surface: [...CALLER_SUPPLIED_SOURCES, 'knowledgeRetrieval', 'organizationPrompt', 'sessionPrompt'],
+};
+
+/**
+ * Which system messages survive when they do not all fit the input budget. Lower is kept first.
+ *
+ * Separate from PROMPT_SOURCE_ORDER on purpose: that table is the order the model SEES, which is
+ * prompt-visible and drives cache-prefix reuse, whereas this one is only about what to give up. The
+ * builder selects by this and re-emits survivors in assembly order.
+ *
+ * It exists because retention used to fall out of assembly position - the builder walked the array and
+ * stopped at the first message over budget, so what it dropped was the tail. That put the org and
+ * per-session prompts, the two most likely to be load-bearing for a tenant, at the back of the queue
+ * behind guidance we wrote ourselves.
+ *
+ * Bands of 10 so a new source can be slotted in without renumbering. Anything at 50 or above is
+ * reserved for the two injectors inside buildAndSortMessages (IMAGE_PROMPT_PRIORITY,
+ * FORMAT_PROMPT_PRIORITY in @bike4mind/utils); they cannot be listed here because utils must not
+ * import services, so a test pins the two ranges apart instead.
+ */
+export const SYSTEM_PROMPT_PRIORITY: Record<PromptSourceId, number> = {
+  // Carry the caller's own content rather than guidance, and arrive as user-role messages that never
+  // reach the system budget at all. Ranked anyway, and ranked first, so that if one ever becomes a
+  // system message it inherits the rule at CALLER_SUPPLIED_SOURCES rather than a default.
+  extraContext: 0,
+  urls: 0,
+  attachedFiles: 0,
+
+  // Authored by the tenant or the session, or invoked by name. Losing one of these changes who the
+  // assistant is, which no other source can compensate for.
+  organizationPrompt: 10,
+  sessionPrompt: 11,
+  skills: 12,
+  agentDetection: 13,
+  questMaster: 14,
+
+  // Grounding data. Absent, the model does not degrade politely - it fabricates, or denies it can see
+  // something the user knows it was given.
+  knowledgeRetrieval: 20,
+  project: 21,
+  contextSummary: 22,
+  mementos: 23,
+  recentImages: 24,
+
+  // Guidance we wrote. Each one degrades gracefully: the model still answers, with worse formatting,
+  // weaker abstention, or no awareness of a product surface.
+  toolPrompt: 30,
+  viewRegistry: 31,
+  abstention: 32,
+  artifactEmission: 33,
+  helpCenter: 34,
+  dateContext: 35,
 };
 
 /**
@@ -166,12 +221,14 @@ export const PROMPT_SOURCE_METADATA: Record<
   extraContext: { origin: 'user', name: 'extra_context' },
   artifactEmission: { origin: 'admin', name: 'artifact_emission' },
   helpCenter: { origin: 'admin', name: 'help_center' },
+  abstention: { origin: 'admin', name: 'abstention' },
   viewRegistry: { origin: 'hardcoded', name: 'view_registry' },
   toolPrompt: { origin: 'admin', name: 'tool_guidance' },
   agentDetection: { origin: 'hardcoded', name: 'agent_detection' },
   questMaster: { origin: 'session', name: 'quest_master' },
   organizationPrompt: { origin: 'org', name: 'organization_prompt' },
   sessionPrompt: { origin: 'session', name: 'session_prompt' },
+  skills: { origin: 'session', name: 'skills' },
   knowledgeRetrieval: { origin: 'session', name: 'knowledge_retrieval' },
   contextSummary: { origin: 'session', name: 'context_summary' },
   mementos: { origin: 'user', name: 'mementos' },
@@ -191,17 +248,43 @@ export type SystemPromptDetail = z.infer<typeof SystemPromptDetailSchema>;
  * version came to omit most of the stack.
  *
  * `countTokens` is injected so this stays free of tokenizer wiring.
+ *
+ * `includedMessages` is the set that reached the model, by reference. Pass it whenever the payload is
+ * known: the budget can now drop a system message deliberately, and without this every row would still
+ * report wasIncluded true and bill its tokens, which is a false claim on the one field that exists to
+ * record the opposite. Omitted, every contributing source is reported as included, which is what a
+ * caller that has not built the payload yet can honestly say.
  */
 export async function toPromptDetails(
   tagged: TaggedSystemMessage[],
-  countTokens: (messages: IMessage[]) => Promise<number>
+  countTokens: (messages: IMessage[]) => Promise<number>,
+  includedMessages?: ReadonlySet<IMessage>
 ): Promise<SystemPromptDetail[]> {
   const details: SystemPromptDetail[] = [];
   for (const source of PROMPT_SOURCE_ORDER) {
     const messages = tagged.filter(t => t.source === source).map(t => t.message);
     if (messages.length === 0) continue;
+    // Tokens are counted over survivors only, so a dropped source reports zero rather than billing the
+    // model for text it never saw. Partial survival still counts as included: some of the source's
+    // guidance did reach the model.
+    //
+    // Applied to SYSTEM messages only, because identity is what the check relies on and only system
+    // messages keep it: they are selected and emitted as-is, never routed through processMessages. A
+    // user-role source (an attached file, URL content) IS routed through it, and truncation returns a
+    // fresh object - so an identity test would report a file that arrived shortened as not delivered at
+    // all, and bill it zero tokens. Content truncation has its own reporting channel; this field is
+    // about the budget dropping a block whole.
+    const identityIsReliable = (message: IMessage) => message.role === 'system';
+    const delivered = includedMessages
+      ? messages.filter(message => !identityIsReliable(message) || includedMessages.has(message))
+      : messages;
     const { origin, name } = PROMPT_SOURCE_METADATA[source];
-    details.push({ source: origin, name, tokenCount: await countTokens(messages), wasIncluded: true });
+    details.push({
+      source: origin,
+      name,
+      tokenCount: await countTokens(delivered),
+      wasIncluded: delivered.length > 0,
+    });
   }
   return details;
 }

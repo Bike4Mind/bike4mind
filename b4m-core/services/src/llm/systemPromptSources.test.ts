@@ -1,3 +1,4 @@
+import { FORMAT_PROMPT_PRIORITY, IMAGE_PROMPT_PRIORITY } from '@bike4mind/utils';
 import { describe, expect, it } from 'vitest';
 import {
   buildTaggedContextMessages,
@@ -6,7 +7,9 @@ import {
   PROMPT_SOURCE_METADATA,
   PROMPT_SOURCE_ORDER,
   resolveForcedRetrieval,
+  SYSTEM_PROMPT_PRIORITY,
   toPromptDetails,
+  type PromptSourceId,
 } from './systemPromptSources';
 
 const sys = (content: string) => ({ role: 'system' as const, content });
@@ -56,6 +59,38 @@ describe('buildTaggedContextMessages', () => {
   });
 });
 
+describe('SYSTEM_PROMPT_PRIORITY', () => {
+  // Same hazard as the ORDER/METADATA pair above: the compiler forces the record to cover the union
+  // but not the reverse, so a stale key would sit here unnoticed after a source was renamed.
+  it('prioritizes exactly the ordered sources, no more and no less', () => {
+    expect(Object.keys(SYSTEM_PROMPT_PRIORITY).sort()).toEqual([...PROMPT_SOURCE_ORDER].sort());
+  });
+
+  // The defect this table exists to fix. Retention used to follow assembly position, and these two sit
+  // at the tail of PROMPT_SOURCE_ORDER, so they were the first things dropped.
+  it('keeps tenant and session prompts ahead of the guidance we author ourselves', () => {
+    const authored = ['toolPrompt', 'viewRegistry', 'abstention', 'artifactEmission', 'helpCenter', 'dateContext'];
+    const mostImportantAuthored = Math.min(...authored.map(source => SYSTEM_PROMPT_PRIORITY[source as PromptSourceId]));
+
+    expect(SYSTEM_PROMPT_PRIORITY.organizationPrompt).toBeLessThan(mostImportantAuthored);
+    expect(SYSTEM_PROMPT_PRIORITY.sessionPrompt).toBeLessThan(mostImportantAuthored);
+  });
+
+  it('keeps grounding data ahead of authored guidance, since the model cannot infer it', () => {
+    expect(SYSTEM_PROMPT_PRIORITY.knowledgeRetrieval).toBeLessThan(SYSTEM_PROMPT_PRIORITY.artifactEmission);
+    expect(SYSTEM_PROMPT_PRIORITY.contextSummary).toBeLessThan(SYSTEM_PROMPT_PRIORITY.helpCenter);
+  });
+
+  // The builder assigns these two itself because @bike4mind/utils cannot import this package. Nothing
+  // holds the two tables in the same order except this assertion, and the whole point of the change is
+  // that the builder's own prepended blocks stop outranking a tenant's prompt.
+  it('ranks every caller source ahead of the blocks buildAndSortMessages injects', () => {
+    const lowestBuilderInjected = Math.min(IMAGE_PROMPT_PRIORITY, FORMAT_PROMPT_PRIORITY);
+
+    expect(Math.max(...Object.values(SYSTEM_PROMPT_PRIORITY))).toBeLessThan(lowestBuilderInjected);
+  });
+});
+
 describe('filterByPromptMode', () => {
   // Every source the assembly can produce, so a mode that forgets to exclude one is caught here
   // rather than in an eval run.
@@ -73,6 +108,7 @@ describe('filterByPromptMode', () => {
     expect(kept).not.toContain('dateContext');
     expect(kept).not.toContain('artifactEmission');
     expect(kept).not.toContain('helpCenter');
+    expect(kept).not.toContain('abstention');
     expect(kept).not.toContain('toolPrompt');
     expect(kept).not.toContain('mementos');
     expect(kept).not.toContain('knowledgeRetrieval');
@@ -186,5 +222,40 @@ describe('toPromptDetails', () => {
   // `session.summary`, a field the assembled prompt never carried.
   it('reports nothing for a source that contributed no messages', async () => {
     await expect(toPromptDetails(buildTaggedContextMessages({}), countChars)).resolves.toEqual([]);
+  });
+
+  it('reports a source the budget dropped as excluded, billing it nothing', async () => {
+    const kept = sys('abc');
+    const dropped = sys('de');
+    const tagged = buildTaggedContextMessages({ dateContext: [kept], mementos: [dropped] });
+
+    const details = await toPromptDetails(tagged, countChars, new Set([kept]));
+
+    expect(details).toEqual([
+      { source: 'hardcoded', name: 'date_time_context', tokenCount: 3, wasIncluded: true },
+      // Zero rather than 2: the model never saw it, so billing its tokens would overstate the prompt.
+      { source: 'user', name: 'mementos', tokenCount: 0, wasIncluded: false },
+    ]);
+  });
+
+  it('still counts a source as included when only some of its messages survived', async () => {
+    const kept = sys('abc');
+    const dropped = sys('de');
+    const tagged = buildTaggedContextMessages({ knowledgeRetrieval: [kept, dropped] });
+
+    const details = await toPromptDetails(tagged, countChars, new Set([kept]));
+
+    expect(details[0].wasIncluded).toBe(true);
+    expect(details[0].tokenCount).toBe(3);
+  });
+
+  // A caller that has not built the payload cannot say what was delivered, and must not be forced to
+  // claim everything was dropped.
+  it('treats every contributing source as included when no payload is supplied', async () => {
+    const tagged = buildTaggedContextMessages({ dateContext: [sys('abc')] });
+
+    await expect(toPromptDetails(tagged, countChars)).resolves.toEqual([
+      { source: 'hardcoded', name: 'date_time_context', tokenCount: 3, wasIncluded: true },
+    ]);
   });
 });

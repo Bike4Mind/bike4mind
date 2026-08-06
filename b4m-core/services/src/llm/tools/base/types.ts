@@ -78,7 +78,10 @@ export interface ToolContext {
     };
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
-    fabfilechunks?: Pick<IFabFileChunkRepository, 'findByFabFileId' | 'findVectorsByFabFileIds'>;
+    fabfilechunks?: Pick<
+      IFabFileChunkRepository,
+      'findByFabFileId' | 'findVectorsByFabFileIds' | 'findTextsByFabFileId' | 'countByFabFileId'
+    >;
     users?: Pick<IUserRepository, 'findById'>;
     projects?: IProjectRepository;
     dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'>;

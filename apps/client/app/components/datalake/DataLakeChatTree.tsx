@@ -15,7 +15,6 @@ import {
   useTheme,
 } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
-import SwapVertIcon from '@mui/icons-material/SwapVert';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -29,11 +28,16 @@ import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
   ICON_BTN_SX,
+  SORT_MODE_ICON,
+  TREE_BACK_STICKY_SX,
   TREE_LIST_SX,
+  TREE_SCROLL_SX,
   hueForBranch,
   humanizeSegment,
+  treeBackRowSx,
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
+import type { TreeSortMode } from '@client/app/components/datalake/treeChrome';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { gray } from '@client/app/utils/themes/colors';
 
@@ -79,7 +83,8 @@ export default function DataLakeChatTree({
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'count' | 'alpha'>('count');
+  const [sortBy, setSortBy] = useState<TreeSortMode>('count');
+  const SortModeIcon = SORT_MODE_ICON[sortBy];
 
   const currentNodes = useMemo(() => getNodesAtPath(tree, breadcrumb), [tree, breadcrumb]);
 
@@ -208,38 +213,29 @@ export default function DataLakeChatTree({
             data-sort={sortBy}
             sx={{ ...ICON_BTN_SX, flexShrink: 0 }}
           >
-            <SwapVertIcon sx={{ fontSize: 18 }} />
+            <SortModeIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Tooltip>
       </Box>
 
       {/* Tree / file list */}
-      <Box className="datalake-tree-list" sx={{ flex: 1, overflow: 'auto', px: '8px' }}>
-        {/* Breadcrumb back - styled like the tree items (14px / gray[200]). */}
+      <Box className="datalake-tree-list" sx={{ ...TREE_SCROLL_SX, px: '8px' }}>
+        {/* Breadcrumb back - styled like the tree items (14px / gray[200]), pinned while scrolling. */}
         {breadcrumb.length > 0 && (
-          <ListItemButton
-            onClick={() => onNavigate(breadcrumb.slice(0, -1))}
-            data-testid="datalake-back"
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              px: '8px',
-              mb: '4px',
-              height: '32px',
-              minHeight: '32px',
-              borderRadius: '8px',
-              transition: 'background 0.15s',
-              '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
-            }}
-          >
-            <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
-            <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
-              {breadcrumb.length === 1
-                ? 'All Categories'
-                : humanizeSegment(breadcrumb[breadcrumb.length - 2], breadcrumb.length - 2)}
-            </Typography>
-          </ListItemButton>
+          <Box sx={TREE_BACK_STICKY_SX}>
+            <ListItemButton
+              onClick={() => onNavigate(breadcrumb.slice(0, -1))}
+              data-testid="datalake-back"
+              sx={treeBackRowSx(theme.palette.notebooklist.hoverBg)}
+            >
+              <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
+              <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
+                {breadcrumb.length === 1
+                  ? 'All Categories'
+                  : humanizeSegment(breadcrumb[breadcrumb.length - 2], breadcrumb.length - 2)}
+              </Typography>
+            </ListItemButton>
+          </Box>
         )}
         {isError ? (
           <Box sx={{ p: 2, textAlign: 'center' }} data-testid="datalake-error">

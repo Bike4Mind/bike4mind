@@ -166,7 +166,7 @@ describe('updateFabFile (upload moderation gate)', () => {
           pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
           computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
         },
-        dataLakes: { findByDatalakeTag: vi.fn().mockResolvedValue(lake), setStats: vi.fn() },
+        dataLakes: { findByDatalakeTag: vi.fn().mockResolvedValue(lake), setStats: vi.fn(), activateIfDraft: vi.fn() },
       },
       storage: mockAdapters.storage,
     };
@@ -245,7 +245,12 @@ describe('updateFabFile (lake-tag reconciliation wiring)', () => {
           pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
           computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
         },
-        dataLakes: { findByDatalakeTag, find: vi.fn().mockResolvedValue([]), setStats: vi.fn() },
+        dataLakes: {
+          findByDatalakeTag,
+          find: vi.fn().mockResolvedValue([]),
+          setStats: vi.fn(),
+          activateIfDraft: vi.fn(),
+        },
       },
       storage: {
         upload: vi.fn().mockResolvedValue(undefined),
