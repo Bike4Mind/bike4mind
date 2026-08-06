@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   getEmbedding: vi.fn(),
   updateFileStatus: vi.fn(),
   incrementCounter: vi.fn(async () => ({ failedFiles: 1, processingFailedFiles: 1 })),
+  incrementCounters: vi.fn(async () => ({ failedFiles: 1, processingFailedFiles: 1 })),
   claimFileStatus: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdate: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: {
     updateFileStatus: h.updateFileStatus,
     incrementCounter: h.incrementCounter,
+    incrementCounters: h.incrementCounters,
     claimFileStatus: h.claimFileStatus,
   },
   embeddingCacheRepository: {},
@@ -215,7 +217,7 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     });
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
     expect(h.updateFileStatus).not.toHaveBeenCalled();
-    expect(h.incrementCounter).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
   });
 
   it('the operator-facing auth-failure warning still fires when deferred, even though nothing persists', async () => {
@@ -229,7 +231,7 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
   });
 
-  it('when not deferred (final attempt), accounts the failure into both counters', async () => {
+  it('when not deferred (final attempt), accounts the failure into both counters atomically', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.getVector.mockRejectedValue(new Error(RATE_LIMIT_ERR));
     h.deferFailureIfRetryable.mockResolvedValue(false);
@@ -237,9 +239,9 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(RATE_LIMIT_ERR);
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', RATE_LIMIT_ERR);
     expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', RATE_LIMIT_ERR);
-    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'failedFiles');
-    // Separate counter so the client can tell a processing failure from an upload one (#1412).
-    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'processingFailedFiles');
+    // One atomic call for both counters, so a crash between two sequential $inc writes can
+    // never misclassify a processing failure as an upload one (#1412).
+    expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
   });
 
   it('a deferred failure followed by a successful retry never touches failedFiles', async () => {
@@ -247,7 +249,7 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     h.getVector.mockRejectedValue(new Error(RATE_LIMIT_ERR));
     h.deferFailureIfRetryable.mockResolvedValue(true);
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(RATE_LIMIT_ERR);
-    expect(h.incrementCounter).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
     (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -265,6 +267,7 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     await dispatch(makeEvent(payload), {} as never, mockLogger);
     expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
+    expect(h.incrementCounters).not.toHaveBeenCalled();
     expect(h.updateFileStatus).not.toHaveBeenCalledWith('batch-1', 'ff1', 'failed', expect.anything());
   });
 });

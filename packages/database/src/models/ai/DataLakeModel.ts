@@ -571,6 +571,20 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   }
 
   /**
+   * Increment multiple counters in ONE atomic $inc, so a crash between two sequential
+   * incrementCounter calls can never leave a caller's counters partially applied (e.g.
+   * failedFiles bumped but processingFailedFiles not, misclassifying a processing failure
+   * as an upload failure with no automatic recovery).
+   */
+  async incrementCounters(
+    batchId: string,
+    fields: Partial<Record<BatchCounterField, number>>
+  ): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate({ _id: batchId }, { $inc: fields }, { new: true });
+    return doc?.toJSON() as IDataLakeBatchDocument | null;
+  }
+
+  /**
    * Shared guard behind markTerminalIfActive/setStatusIfActive/touchIfActive: apply `set` only
    * while the batch is still non-terminal, so a redelivered message, a reconciler race, or a
    * client-driven status flip can never resurrect or double-finalize a batch another caller

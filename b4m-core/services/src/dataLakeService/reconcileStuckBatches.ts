@@ -15,9 +15,11 @@ import { recomputeLakeStats } from './recomputeLakeStats';
  * fabFileVectorize.ts's deferFailureIfRetryable gate) - otherwise this reconciler forces the
  * batch terminal mid-retry, before a later attempt gets the chance to succeed. The chunk queue
  * is the long pole: infra/queues.ts pins fabFileChunkQueue to a 60-minute visibility timeout and
- * dlq.retry: 3, so a worst-case run is 2 full visibility waits plus 3 Lambda executions (13-min
- * timeout each) - roughly 2*60 + 3*13 = 159 minutes - before the final attempt's own
- * accounting can possibly land. 180 minutes leaves real margin over that.
+ * dlq.retry: 3. Each visibility wait already covers that attempt's own Lambda execution time (the
+ * timeout starts at receipt, not at completion), so only the FINAL attempt's own run needs adding
+ * on top of the two full waits between attempts: 2*60 + 13 (Lambda timeout) = 133 minutes worst
+ * case before the final attempt's own accounting can possibly land. 180 minutes leaves real
+ * margin over that.
  */
 export const DEFAULT_STUCK_BATCH_TIMEOUT_MS = 180 * 60 * 1000; // 180 minutes (3 hours)
 

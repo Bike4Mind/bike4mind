@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   markFailedIfNotAlready: vi.fn(),
   updateFileStatus: vi.fn(),
   incrementCounter: vi.fn(),
+  incrementCounters: vi.fn(),
   claimFileStatus: vi.fn(),
   getSettingsValue: vi.fn(),
   sendToClient: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: {
     updateFileStatus: h.updateFileStatus,
     incrementCounter: h.incrementCounter,
+    incrementCounters: h.incrementCounters,
     claimFileStatus: h.claimFileStatus,
   },
   fabFileChunkRepository: {},
@@ -72,7 +74,7 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
     h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
     h.markFailedIfNotAlready.mockResolvedValue(true);
-    h.incrementCounter.mockResolvedValue({
+    h.incrementCounters.mockResolvedValue({
       failedFiles: 1,
       processingFailedFiles: 1,
       vectorizedFiles: 0,
@@ -86,9 +88,9 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', CHUNK_ERR);
     expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', CHUNK_ERR);
-    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'failedFiles');
-    // Separate counter so the client can tell a processing failure from an upload one (#1412).
-    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'processingFailedFiles');
+    // One atomic call for both counters, so a crash between two sequential $inc writes can
+    // never misclassify a processing failure as an upload one (#1412).
+    expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
     expect(h.sendToClient).toHaveBeenCalledWith(
       'u1',
       expect.anything(),
@@ -102,7 +104,7 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     h.markFailedIfNotAlready.mockResolvedValue(false);
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', CHUNK_ERR);
-    expect(h.incrementCounter).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
     expect(h.updateFileStatus).not.toHaveBeenCalled();
   });
 
@@ -110,7 +112,7 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     h.findAccessibleById.mockResolvedValue({ id: 'ff1' });
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', CHUNK_ERR);
-    expect(h.incrementCounter).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
     // No batch -> no batchId in log metadata.
     expect(mockLogger.updateMetadata).not.toHaveBeenCalledWith({ batchId: 'batch-1' });
   });
@@ -134,7 +136,12 @@ describe('fabFileChunk handler - retry gating (#1412)', () => {
     h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
     h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
     h.markFailedIfNotAlready.mockResolvedValue(true);
-    h.incrementCounter.mockResolvedValue({ failedFiles: 1, vectorizedFiles: 0, totalFiles: 3 });
+    h.incrementCounters.mockResolvedValue({
+      failedFiles: 1,
+      processingFailedFiles: 1,
+      vectorizedFiles: 0,
+      totalFiles: 3,
+    });
     h.isBatchComplete.mockReturnValue(false);
     h.chunkFabfile.mockRejectedValue(new Error(CHUNK_ERR));
   });
@@ -151,7 +158,7 @@ describe('fabFileChunk handler - retry gating (#1412)', () => {
     });
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
     expect(h.updateFileStatus).not.toHaveBeenCalled();
-    expect(h.incrementCounter).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
     expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
     expect(h.sendToClient).not.toHaveBeenCalled();
   });
@@ -162,19 +169,18 @@ describe('fabFileChunk handler - retry gating (#1412)', () => {
     expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
   });
 
-  it('when not deferred (final attempt), accounts the failure into both counters', async () => {
+  it('when not deferred (final attempt), accounts the failure into both counters atomically', async () => {
     h.deferFailureIfRetryable.mockResolvedValue(false);
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', CHUNK_ERR);
     expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', CHUNK_ERR);
-    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'failedFiles');
-    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'processingFailedFiles');
+    expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
   });
 
   it('a deferred failure followed by a successful retry never touches failedFiles', async () => {
     h.deferFailureIfRetryable.mockResolvedValue(true);
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
-    expect(h.incrementCounter).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
     h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
@@ -186,7 +192,7 @@ describe('fabFileChunk handler - retry gating (#1412)', () => {
     await dispatch(makeEvent(payload), {} as never, mockLogger);
     expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['uploaded', 'pending'], 'chunking');
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'chunkedFiles');
-    expect(h.incrementCounter).not.toHaveBeenCalledWith('batch-1', 'failedFiles');
+    expect(h.incrementCounters).not.toHaveBeenCalled();
   });
 });
 

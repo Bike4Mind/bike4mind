@@ -332,6 +332,13 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
+  /** Atomic multi-field variant of incrementCounter - use when two+ counters must land together
+   * (e.g. failedFiles + processingFailedFiles), so a crash between them can't leave one applied
+   * and the other not. */
+  incrementCounters(
+    batchId: string,
+    fields: Partial<Record<BatchCounterField, number>>
+  ): Promise<IDataLakeBatchDocument | null>;
   /**
    * Guarded terminal transition: set the batch terminal only if it is still
    * non-terminal. Returns the post-update doc to the single winner, null to losers,

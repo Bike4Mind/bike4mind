@@ -323,12 +323,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     if (existingFabFile.batchId && isFirstFailure) {
       try {
         await dataLakeBatchRepository.updateFileStatus(existingFabFile.batchId, fabFileId, 'failed', storedError);
-        await dataLakeBatchRepository.incrementCounter(existingFabFile.batchId, 'failedFiles');
-        // Separate counter so the client can say "failed to process" rather than a bare
-        // "failed" that reads as an upload failure (#1412) - incrementCounter returns the
-        // whole post-update doc, so this second call's result also carries the fresh
-        // failedFiles from the increment just above.
-        const batch = await dataLakeBatchRepository.incrementCounter(existingFabFile.batchId, 'processingFailedFiles');
+        // One atomic $inc for both counters - two sequential incrementCounter calls could
+        // leave failedFiles bumped without processingFailedFiles on a crash between them,
+        // misclassifying this as an upload failure with no automatic recovery (#1412).
+        const batch = await dataLakeBatchRepository.incrementCounters(existingFabFile.batchId, {
+          failedFiles: 1,
+          processingFailedFiles: 1,
+        });
         await finalizeBatchIfComplete(batch, logger);
 
         const isComplete = isBatchComplete(batch);

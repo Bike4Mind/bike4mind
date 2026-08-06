@@ -1483,11 +1483,13 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
     db = makeDb();
   });
 
-  it('is at least the worst-case chunk-queue SQS retry window (2 visibility waits + 3 Lambda runs), so a legitimately-retrying batch is never forced terminal mid-retry (#1412)', () => {
+  it('is at least the worst-case chunk-queue SQS retry window (2 full visibility waits + the final Lambda run), so a legitimately-retrying batch is never forced terminal mid-retry (#1412)', () => {
     // fabFileChunkQueue: 60-minute visibility timeout, 13-minute Lambda timeout, 3 delivery
-    // attempts (infra/queues.ts). Mirrors the worst-case computation in this constant's own
-    // doc comment - if that infra config ever changes, this drifts and should be revisited.
-    const chunkQueueWorstCaseMs = (2 * 60 + 3 * 13) * 60 * 1000;
+    // attempts (infra/queues.ts). Each visibility wait already covers that attempt's own Lambda
+    // execution time (the timeout starts at receipt, not completion), so only the FINAL attempt's
+    // run adds on top of the two full waits between attempts - mirrors this constant's own doc
+    // comment; if that infra config ever changes, this drifts and should be revisited.
+    const chunkQueueWorstCaseMs = (2 * 60 + 13) * 60 * 1000;
     expect(DEFAULT_STUCK_BATCH_TIMEOUT_MS).toBeGreaterThan(chunkQueueWorstCaseMs);
   });
 

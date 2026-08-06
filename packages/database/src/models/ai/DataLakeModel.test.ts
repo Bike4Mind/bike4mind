@@ -687,6 +687,32 @@ describe('DataLakeBatchRepository.incrementCounter - additive, not clobbering', 
   });
 });
 
+describe('DataLakeBatchRepository.incrementCounters - atomic multi-field increment', () => {
+  setupMongoTest();
+
+  it('bumps two counters in one write, so neither can land without the other', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    const after = await dataLakeBatchRepository.incrementCounters(batch.id, {
+      failedFiles: 1,
+      processingFailedFiles: 1,
+    });
+    expect(after?.failedFiles).toBe(1);
+    expect(after?.processingFailedFiles).toBe(1);
+  });
+
+  it('composes with prior single-field increments rather than clobbering them', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    await dataLakeBatchRepository.incrementCounter(batch.id, 'vectorizedFiles', 2);
+    const after = await dataLakeBatchRepository.incrementCounters(batch.id, {
+      failedFiles: 1,
+      processingFailedFiles: 1,
+    });
+    expect(after?.vectorizedFiles).toBe(2);
+    expect(after?.failedFiles).toBe(1);
+    expect(after?.processingFailedFiles).toBe(1);
+  });
+});
+
 describe('DataLakeBatchRepository.findStuck — global cross-user stale scan', () => {
   setupMongoTest();
 

@@ -125,6 +125,23 @@ describe('UploadStep — completion summary', () => {
     expect(screen.getByText('3 files uploaded, chunked, and vectorized. 1 file failed to upload.')).toBeInTheDocument();
   });
 
+  // Defensive only: today's write paths keep processingFailedFiles <= failedFiles, so this
+  // combination can't occur in practice, but the displayed processing count must never exceed
+  // the batch's real total failed count.
+  it('clamps processingFailedFiles to the real total if it ever exceeds failedFiles', () => {
+    renderComplete({
+      totalFiles: 4,
+      uploadedFiles: 3,
+      chunkedFiles: 3,
+      vectorizedFiles: 3,
+      failedFiles: 1,
+      processingFailedFiles: 5,
+    });
+    expect(
+      screen.getByText('3 files uploaded, chunked, and vectorized. 1 file failed to process.')
+    ).toBeInTheDocument();
+  });
+
   // The wizard flips to 'error' when everything fails, so this fallback rarely
   // renders in practice - assert it anyway to lock the copy against 0 uploads.
   it('renders the not-started fallback when nothing was uploaded', () => {

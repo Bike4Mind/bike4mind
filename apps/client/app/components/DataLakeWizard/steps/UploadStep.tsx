@@ -48,14 +48,18 @@ function TaxonomyStatusRow({ status }: { status: string | undefined }) {
  * server-reported and always a subset of it, so upload-only failures are the remainder.
  */
 function describeFailures(failedFiles: number, processingFailedFiles: number): string {
-  const uploadFailed = failedFiles - processingFailedFiles;
+  // Clamp: today's write paths keep 0 <= processingFailedFiles <= failedFiles (both counters
+  // move together in one atomic increment - see incrementCounters), but clamping here means a
+  // future regression could never display more processing failures than the batch's real total.
+  const safeProcessingFailed = Math.min(Math.max(processingFailedFiles, 0), failedFiles);
+  const uploadFailed = failedFiles - safeProcessingFailed;
   const parts: string[] = [];
   if (uploadFailed > 0) {
     parts.push(`${uploadFailed.toLocaleString()} ${uploadFailed === 1 ? 'file' : 'files'} failed to upload`);
   }
-  if (processingFailedFiles > 0) {
+  if (safeProcessingFailed > 0) {
     parts.push(
-      `${processingFailedFiles.toLocaleString()} ${processingFailedFiles === 1 ? 'file' : 'files'} failed to process`
+      `${safeProcessingFailed.toLocaleString()} ${safeProcessingFailed === 1 ? 'file' : 'files'} failed to process`
     );
   }
   return parts.join('; ');
