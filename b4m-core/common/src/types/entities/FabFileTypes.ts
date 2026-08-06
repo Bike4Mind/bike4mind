@@ -252,6 +252,17 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     fabFileIds: string[],
     options?: { limit?: number; afterChunkId?: string }
   ): Promise<FabFileChunkVector[]>;
+  /**
+   * One page of chunk TEXT for a single file, ascending by `_id`, same exact-cursor contract as
+   * `findVectorsByFabFileIds`. Returns vectorless chunks too - a text consumer that inherited the
+   * vector filter would silently drop content.
+   */
+  findTextsByFabFileId(
+    fabFileId: string,
+    options?: { limit?: number; afterChunkId?: string }
+  ): Promise<{ id: string; text: string }[]>;
+  /** Every chunk of a file, vectorless included - lets a paging caller tell a whole file from a slice. */
+  countByFabFileId(fabFileId: string): Promise<number>;
 }
 
 /**
@@ -552,10 +563,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Bulk-writes each file's full tags array in a single round trip via bulkWrite, instead of
    * one findOneAndUpdate per file. Used by applyTaxonomySuggestions, where a batch can hold
    * thousands of files and one write per file risks exceeding the caller's request timeout.
-   * @param updates - Each file's id and its complete resolved tags array.
-   * @returns Number of documents modified.
+   *
+   * Optimistic concurrency: each op is additionally filtered on `expectedTags`, the exact
+   * array the caller read before computing `tags`. If another writer (a direct tag edit, a
+   * lake-membership tag pull, a concurrent apply) changed the file's tags since that read, the
+   * filter no longer matches and this op is a silent no-op instead of clobbering the
+   * concurrent change - the caller's merge logic ran against stale data, so writing it would
+   * be wrong regardless of what it computed.
+   * @param updates - Each file's id, its complete resolved tags array, and the tags snapshot
+   * the resolution was computed from.
+   * @returns Number of documents modified (may be less than `updates.length` - see above).
    */
-  bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number>;
+  bulkUpdateTags(
+    updates: {
+      id: string;
+      tags: { name: string; strength: number }[];
+      expectedTags: { name: string; strength: number }[];
+    }[]
+  ): Promise<number>;
 
   /**
    * Find files by content hashes for a given user (deduplication).

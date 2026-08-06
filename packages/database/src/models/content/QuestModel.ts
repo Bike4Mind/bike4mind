@@ -212,6 +212,15 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       globalSystemFileIds: { type: [String], required: false, default: undefined },
       userSystemFileIds: { type: [String], required: false, default: undefined },
       projectSystemFileIds: { type: [String], required: false, default: undefined },
+      // Corpus inline-vs-retrieve decision for the turn (ChatCompletionProcess.resolveCorpusInlinePlan).
+      // Must stay in sync with the Zod PromptMeta `context.knowledgeInlining` (parity test enforces it).
+      knowledgeInlining: {
+        attachedCount: { type: Number, required: false },
+        retrievableCount: { type: Number, required: false },
+        deferredCount: { type: Number, required: false },
+        deferredToRetrieval: { type: Boolean, required: false },
+        minInlineTokensPerDoc: { type: Number, required: false },
+      },
       messageTruncation: { type: MessageTruncationSchema, required: false, default: undefined },
       tokensBySource: {
         systemPrompts: { type: Number, required: false },

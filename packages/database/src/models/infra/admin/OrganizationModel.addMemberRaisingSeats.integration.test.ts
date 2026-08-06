@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
-import { Permission } from '@bike4mind/common';
+import { Permission, ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@bike4mind/common';
 import { createMongoServer } from '../../../__test__/createMongoServer';
 import { Organization, organizationRepository } from './OrganizationModel';
 
@@ -36,7 +36,8 @@ afterEach(async () => {
 const member = (userId: string) => ({ userId, permissions: [Permission.read] });
 
 // Read past the soft-delete filter to assert the true post-state of an org.
-const readRaw = (id: string) => Organization.findOne({ _id: id }, null, { includeDeleted: true } as mongoose.QueryOptions);
+const readRaw = (id: string) =>
+  Organization.findOne({ _id: id }, null, { includeDeleted: true } as mongoose.QueryOptions);
 
 describe('OrganizationModel.addMemberRaisingSeats (#1239)', () => {
   it('adds the member and returns the pre-image; ceiling holds when the member fits', async () => {
@@ -117,6 +118,41 @@ describe('OrganizationModel.addMemberRaisingSeats (#1239)', () => {
     const fresh = await readRaw(created.id);
     expect(fresh!.users.map(u => u.userId)).toEqual(['dup']);
     expect(fresh!.seats).toBe(1);
+  });
+
+  it('rejects the add and does not grow seats past the maximum when the org is at the ceiling (#1424)', async () => {
+    const atMax = Array.from({ length: ORGANIZATION_SUBSCRIPTION_MAX_SEATS }, (_, i) => member(`u${i}`));
+    const created = await Organization.create({
+      name: 'Partner',
+      userId: 'owner',
+      seats: ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+      users: atMax,
+    });
+
+    const pre = await organizationRepository.addMemberRaisingSeats(created.id, member('over'));
+
+    // Clamp matched no doc: no member added, seats never grow above the maximum -> no setSeats wedge.
+    expect(pre).toBeNull();
+    const fresh = await readRaw(created.id);
+    expect(fresh!.users).toHaveLength(ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
+    expect(fresh!.seats).toBe(ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
+  });
+
+  it('still admits a member one below the ceiling, raising seats up to the maximum (#1424 boundary)', async () => {
+    const belowMax = Array.from({ length: ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1 }, (_, i) => member(`u${i}`));
+    const created = await Organization.create({
+      name: 'Partner',
+      userId: 'owner',
+      seats: ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1,
+      users: belowMax,
+    });
+
+    const pre = await organizationRepository.addMemberRaisingSeats(created.id, member('last'));
+
+    expect(pre).not.toBeNull();
+    const fresh = await readRaw(created.id);
+    expect(fresh!.users).toHaveLength(ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
+    expect(fresh!.seats).toBe(ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
   });
 });
 

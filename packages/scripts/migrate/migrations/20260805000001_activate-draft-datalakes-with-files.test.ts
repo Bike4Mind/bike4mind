@@ -22,7 +22,7 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: { recomputeLakeStats: (lake: Lake, adapters: unknown) => mockRecompute(lake, adapters) },
 }));
 
-import migration from './20260805000000_activate-draft-datalakes-with-files';
+import migration from './20260805000001_activate-draft-datalakes-with-files';
 
 let logged: string[] = [];
 

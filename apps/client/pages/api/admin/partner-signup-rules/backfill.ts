@@ -6,6 +6,7 @@ import { partnerSignupRuleRepository, userRepository, organizationRepository } f
 import { organizationService } from '@bike4mind/services';
 import { assertOrganizationExists } from '@server/entitlements/assertOrganizationExists';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@client/lib/subscriptions/constants';
 import { auditSeatCeilingRaised } from '@server/organizations/notifySeatCeilingRaised';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { z } from 'zod';
@@ -62,11 +63,17 @@ const handler = baseApi().post(
 
     // Since a commit can now grow the seat ceiling (#1239), the preview surfaces the seat/billing
     // blast radius, not just the head count. A Stripe-billed org keeps its ceiling (candidates past
-    // it are rejected, not billed silently); a non-Stripe org raises to fit the whole backfill.
+    // it are rejected, not billed silently); a non-Stripe org raises to fit the whole backfill, but
+    // that raise is clamped at ORGANIZATION_SUBSCRIPTION_MAX_SEATS (#1424): new members cap at the
+    // ceiling, so cap the fit target there. Floor the projection at currentSeats because the backfill
+    // never lowers seats (`$max($seats, $size+1)`), so a legacy org already over the ceiling keeps its
+    // seats rather than the preview reading as a spurious decrease.
     const currentSeats = organization?.seats ?? 0;
     const currentMembers = organization?.users?.length ?? 0;
     const stripeBilled = !!organization?.stripeCustomerId;
-    const projectedSeats = stripeBilled ? currentSeats : Math.max(currentSeats, currentMembers + candidates.length);
+    const projectedSeats = stripeBilled
+      ? currentSeats
+      : Math.max(currentSeats, Math.min(ORGANIZATION_SUBSCRIPTION_MAX_SEATS, currentMembers + candidates.length));
 
     if (!body.commit) {
       return res.status(200).json({

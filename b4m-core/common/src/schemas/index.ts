@@ -1,4 +1,5 @@
 export * from './actions';
+export * from './chat';
 export * from './cliCompletions';
 export * from './decisionMaker';
 export * from './file';

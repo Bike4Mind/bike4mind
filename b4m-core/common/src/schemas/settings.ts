@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
+import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -354,6 +355,7 @@ export const SettingKeySchema = z.enum([
   'EnableContextTelemetry',
   'contextTelemetryAlerts',
   'ContextVerbatimWindowFraction',
+  'CorpusRetrievalMinInlineTokensPerDoc',
 
   // SRE AGENT SETTINGS
   'sreAgentConfig',
@@ -428,6 +430,7 @@ export const OrchestrationDefaultsSchema = z.object({
     // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
     'image_generation',
     'edit_image',
+    'music_generation',
     'excel_generation',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
@@ -1986,8 +1989,18 @@ export const settingsMap = {
   DefaultChunkSize: makeNumberSetting({
     key: 'DefaultChunkSize',
     name: 'Default Chunk Size',
-    defaultValue: 2100,
-    description: 'The default chunk size for splitting large documents.',
+    // Must equal the chunker's own default, or a reprocess driven through the UI (which sends this
+    // as an explicit chunkSize override) produces a different granularity than one driven through
+    // /api/files/reprocess, which sends none and gets the chunker default. They disagreed by ~4x.
+    defaultValue: DEFAULT_PASSAGE_TOKEN_TARGET,
+    // Floor matches the chunker's own clamp, so the UI cannot report a value the chunker will
+    // silently raise (chunk.ts clamps to MIN_PASSAGE_TOKEN_TARGET).
+    min: MIN_PASSAGE_TOKEN_TARGET,
+    description:
+      'Passage target in TOKENS for splitting large documents. The DEFAULT matches the chunker; a ' +
+      'value stored here overrides it, and a stored value larger than the chunker default makes the ' +
+      'UI reprocess path produce coarser chunks than /api/files/reprocess. Coarser chunks measurably ' +
+      'worsen retrieval.',
     category: 'AI',
     order: 3,
   }),
@@ -3544,6 +3557,17 @@ export const settingsMap = {
       'Fraction of a model usable input budget (context window minus reserved output) kept as verbatim conversation history before older turns are summarized into working memory. Lower = compact sooner (cheaper, less verbatim detail); higher = keep more raw history.',
     category: 'AI',
     order: 121,
+  }),
+  CorpusRetrievalMinInlineTokensPerDoc: makeNumberSetting({
+    key: 'CorpusRetrievalMinInlineTokensPerDoc',
+    name: 'Corpus Retrieval Min Inline Tokens Per Doc',
+    defaultValue: 0,
+    min: 0,
+    max: 100000,
+    description:
+      'When a session has a large RETRIEVABLE knowledge corpus attached, stop force-inlining it and let the offered search_knowledge_base tool fetch the relevant docs on demand, IF the even-split inline depth (attached-content budget / retrievable doc count) would fall below this many tokens per doc. 0 disables (always inline). Only documents the retrieval tool can actually reach are ever deferred; other attachments always inline.',
+    category: 'AI',
+    order: 122,
   }),
   sreAgentConfig: makeObjectSetting({
     key: 'sreAgentConfig',

@@ -93,7 +93,10 @@ interface DatabaseAdapters {
   };
   adminSettings: IAdminSettingsRepository;
   fabfiles: IFabFileRepository;
-  fabfilechunks: Pick<IFabFileChunkRepository, 'findByFabFileId' | 'findVectorsByFabFileIds'>;
+  fabfilechunks: Pick<
+    IFabFileChunkRepository,
+    'findByFabFileId' | 'findVectorsByFabFileIds' | 'findTextsByFabFileId' | 'countByFabFileId'
+  >;
   mementos: IMementoRepository;
   projects: IProjectRepository;
   organizations: IOrganizationRepository;
@@ -203,6 +206,13 @@ export interface IChatCompletionServiceOptions {
     query: string,
     opts?: { enabled?: boolean }
   ) => Promise<{ fact: string; relevance: number }[] | null>;
+  /**
+   * Resolve a session-activatable registry prompt's CURRENT content by id (e.g. 'triage_router').
+   * Injected so the core takes no dependency on the app-layer prompt registry; the injector also
+   * enforces the session-activatable allowlist. Returns null for an unknown/disabled/not-allowed id.
+   * Used to turn `session.systemPromptId` into the session's authored prompt on every entry point.
+   */
+  loadSystemPromptById?: (promptId: string) => Promise<string | null>;
   summarizeSession: (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => Promise<void>;
   contextSummarizeSession: (sessionId: string, verbatimWindowStartQuestId: string) => Promise<void>;
   getMcpClient: (server: IMcpServerDocument) => Promise<{
@@ -443,7 +453,21 @@ export class MementoFeature implements ChatCompletionFeature {
     // time on every chat turn. Must use the Map-aware reader: the bag is a Mongoose Map.
     const isV2 = isExperimentalFeatureEnabled(this.user, 'enableMementosV2');
     if (isV2 && this.chatCompletion.recallMementosV2) {
-      const v2 = await this.chatCompletion.recallMementosV2(this.user.id, message, { enabled: true });
+      // Fail OPEN, and here rather than inside the recall: memory enriches an answer, it does not gate
+      // one, so a recall fault must degrade to the V1 path instead of failing the turn. The V1 scorer
+      // already fails open for the same reason; the V2 store cannot, because it has no logger and its
+      // guards throw (a partial profile would be a subset of the user's memory presented as complete).
+      // This is the boundary that owns the V1/V2 decision AND has a logger, so it is where the two
+      // postures get reconciled.
+      let v2: Awaited<ReturnType<NonNullable<typeof this.chatCompletion.recallMementosV2>>> = null;
+      try {
+        v2 = await this.chatCompletion.recallMementosV2(this.user.id, message, { enabled: true });
+      } catch (error) {
+        this.logger.warn(
+          '[Mementos V2] recall failed; falling back to the V1 memento path for this turn: ' +
+            (error instanceof Error ? `${error.name}: ${error.message}` : String(error))
+        );
+      }
       if (v2 !== null) {
         this.usedMementoIds = [];
         this.logger.log(`[Mementos V2] injecting ${v2.length} belief(s) into context`);

@@ -26,6 +26,7 @@ const TOOL_RUNNING_COPY: Record<string, string> = {
   web_fetch: 'Reading the page…',
   image_generation: 'Painting your image…',
   edit_image: 'Editing the image…',
+  music_generation: 'Composing your music…',
   delegate_to_agent: 'Conferring with a specialist agent…',
   send_slack_message: 'Drafting a Slack message…',
   knowledge_base: 'Searching knowledge base…',

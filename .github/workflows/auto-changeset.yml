@@ -236,8 +236,23 @@ jobs:
           fi
 
           # ── 6. Check for existing manual changesets (additive mode) ──
-          # If a manual changeset already covers a package, skip auto-generating for it.
+          # If a manual changeset already covers a package AT AN EQUAL OR HIGHER bump level, skip
+          # auto-generating for it. The level comparison is the point: this check used to match on
+          # package NAME alone, so a pending manual `patch` would swallow this PR's `minor` or
+          # `major` and the release would understate the change - a breaking change could ship as a
+          # patch with every check green. Additive mode is preserved; it just no longer discards a
+          # bump that the manual changeset does not actually cover.
           declare -A MANUAL_COVERED=()
+
+          # patch < minor < major. Unknown/empty ranks 0 so it never suppresses a real bump.
+          bump_rank() {
+            case "${1:-}" in
+              major) echo 3 ;;
+              minor) echo 2 ;;
+              patch) echo 1 ;;
+              *) echo 0 ;;
+            esac
+          }
 
           for cs_file in .changeset/*.md; do
             [ -f "$cs_file" ] || continue
@@ -259,20 +274,32 @@ jobs:
                 fi
               fi
               if [ "$in_frontmatter" = true ]; then
-                # Extract package name: "@bike4mind/common": minor  OR  @bike4mind/common: minor
+                # Extract package name AND level: "@bike4mind/common": minor  OR  @bike4mind/common: minor
                 pkg=$(echo "$line" | sed -n 's/^"\{0,1\}\(@[^"]*\)"\{0,1\}:.*/\1/p')
+                lvl=$(echo "$line" | sed -n 's/^"\{0,1\}@[^"]*"\{0,1\}:[[:space:]]*\([a-z]\{1,\}\).*/\1/p')
                 if [ -n "$pkg" ]; then
-                  MANUAL_COVERED["$pkg"]=1
+                  # Several manual changesets may name the same package; the highest level wins,
+                  # matching what `changeset version` itself does across multiple files.
+                  prev="${MANUAL_COVERED[$pkg]:-}"
+                  if [ -z "$prev" ] || [ "$(bump_rank "$lvl")" -gt "$(bump_rank "$prev")" ]; then
+                    MANUAL_COVERED["$pkg"]="$lvl"
+                  fi
                 fi
               fi
             done < "$cs_file"
           done
 
-          # Remove packages already covered by manual changesets
+          # Remove packages already covered by a manual changeset at an equal or higher level
+          AUTO_RANK=$(bump_rank "$BUMP")
           for pkg in "${!MANUAL_COVERED[@]}"; do
             if [ -n "${CHANGED_PKGS[$pkg]:-}" ]; then
-              echo "  Package $pkg already covered by manual changeset. Skipping."
-              unset "CHANGED_PKGS[$pkg]"
+              manual_lvl="${MANUAL_COVERED[$pkg]:-}"
+              if [ "$(bump_rank "$manual_lvl")" -ge "$AUTO_RANK" ]; then
+                echo "  Package $pkg already covered by manual changeset ($manual_lvl >= $BUMP). Skipping."
+                unset "CHANGED_PKGS[$pkg]"
+              else
+                echo "  Package $pkg has a manual changeset ($manual_lvl) below this PR's $BUMP. Keeping it."
+              fi
             fi
           done
 
@@ -282,6 +309,19 @@ jobs:
           fi
 
           echo "Packages to bump: ${!CHANGED_PKGS[*]}"
+
+          # A hand-edited pr-<N>.md is a trap in both directions: the write in step 7 overwrites
+          # it unconditionally, and step 6 skips pr-*.md when scanning for manual changesets, so the
+          # edit is neither kept nor honored - it just vanishes with CI green. The removal paths
+          # above already gate on AUTO_MARKER so this workflow never DELETES human content; this is
+          # the same check on the write side. Detect only here and report in step 10, AFTER the
+          # changeset is safely committed: this job is not a required check, so an API error before
+          # the write would abort with no changeset generated and merge would not be blocked.
+          HAND_EDITED=false
+          if [ -f "$CHANGESET_FILE" ] && ! grep -q "$AUTO_MARKER" "$CHANGESET_FILE" 2>/dev/null; then
+            HAND_EDITED=true
+            echo "::warning::${CHANGESET_FILE} looks hand-edited and is being overwritten. Run 'pnpm changeset' to author an override."
+          fi
 
           # ── 7. Generate changeset file ──
           {
@@ -298,23 +338,49 @@ jobs:
           echo "Generated changeset:"
           cat "$CHANGESET_FILE"
 
-          # ── 8. Check if content actually changed ──
+          # ── 8/9. Commit and push if the content actually changed ──
+          # Deliberately not an early `exit 0`: step 10 must still reconcile the PR comments, or a
+          # stale hand-edit warning would survive the very push that fixed the file (that push
+          # regenerates identical content, so this branch is exactly when cleanup is needed).
           git add "$CHANGESET_FILE"
           if git diff --cached --quiet; then
             echo "::notice::Changeset already up-to-date. No commit needed."
-            exit 0
+          else
+            git commit -m "chore: auto-generate changeset for PR #${PR_NUMBER}"
+            git push
           fi
 
-          # ── 9. Commit and push ──
-          git commit -m "chore: auto-generate changeset for PR #${PR_NUMBER}"
-          git push
-
-          # ── 10. Clean up guidance comment if it exists ──
+          # ── 10. Reconcile PR comments (best effort - must never fail the run) ──
+          # Runs only after the changeset is committed, and every call is `|| true`, so a GitHub API
+          # hiccup can cost at most a comment, never the changeset.
           COMMENT_MARKER="<!-- auto-changeset-comment -->"
           EXISTING_COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
-            --jq ".[] | select(.body | contains(\"${COMMENT_MARKER}\")) | .id" | head -1)
+            --jq ".[] | select(.body | contains(\"${COMMENT_MARKER}\")) | .id" 2>/dev/null | head -1 || true)
           if [ -n "$EXISTING_COMMENT_ID" ]; then
             gh api "repos/${{ github.repository }}/issues/comments/${EXISTING_COMMENT_ID}" -X DELETE > /dev/null 2>&1 || true
+          fi
+
+          # Hand-edit warning: post while the condition holds, clear it once the file is ours again.
+          EDIT_MARKER="<!-- auto-changeset-handedit -->"
+          EDIT_COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+            --jq ".[] | select(.body | contains(\"${EDIT_MARKER}\")) | .id" 2>/dev/null | head -1 || true)
+          if [ "$HAND_EDITED" = true ]; then
+            EDIT_BODY="${EDIT_MARKER}
+          **Auto-Changeset:** \`${CHANGESET_FILE}\` looked hand-edited, and this workflow has overwritten it.
+
+          That file is generated from the PR title and rewritten on every push, so edits to it are always lost. It is also skipped when scanning for manual changesets, so it never counts as an override either.
+
+          To override the generated bump, run \`pnpm changeset\` and commit the file it creates under any other name. Those are respected: a manual changeset at or above this PR's bump level replaces the auto-generated one, and a lower one is kept alongside it."
+
+            if [ -n "$EDIT_COMMENT_ID" ]; then
+              gh api "repos/${{ github.repository }}/issues/comments/${EDIT_COMMENT_ID}" \
+                -X PATCH -f body="$EDIT_BODY" > /dev/null 2>&1 || true
+            else
+              gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+                -f body="$EDIT_BODY" > /dev/null 2>&1 || true
+            fi
+          elif [ -n "$EDIT_COMMENT_ID" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/${EDIT_COMMENT_ID}" -X DELETE > /dev/null 2>&1 || true
           fi
 
           echo "::notice::Changeset committed for PR #${PR_NUMBER}"

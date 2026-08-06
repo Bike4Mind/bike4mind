@@ -30,7 +30,7 @@ const LOG = '[activate-draft-datalakes-with-files]';
 const DRAFT_STATUSES = { $in: ['draft', null] };
 
 const migration: MigrationFile = {
-  id: 20260805000000,
+  id: 20260805000001,
   name: 'activate-draft-datalakes-with-files',
 
   up: async () => {

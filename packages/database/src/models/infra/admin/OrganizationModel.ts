@@ -1,4 +1,10 @@
-import { IOrganizationDocument, Permission, IOrganizationRepository, IUserShare } from '@bike4mind/common';
+import {
+  IOrganizationDocument,
+  Permission,
+  IOrganizationRepository,
+  IUserShare,
+  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+} from '@bike4mind/common';
 import mongoose, { HydratedDocument, Model, Schema } from 'mongoose';
 import { softDeletePlugin } from '../../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
@@ -207,7 +213,8 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    *
    * Returns the PRE-image ({ new: false }) - the caller derives before/after seats from this one
    * atomically-matched document rather than from an earlier read, so two racers can't report
-   * overlapping ranges. Null means the user is already a member (the guard) or the org is gone.
+   * overlapping ranges. Null means the user is already a member (the guard), the org is gone, or the
+   * org is at `ORGANIZATION_SUBSCRIPTION_MAX_SEATS` (see CLAMP below).
    * `$$NOW` stamps `updatedAt` since a pipeline update bypasses Mongoose's timestamp hook.
    *
    * NOTE (Stripe): this deliberately does NOT touch `subscriptions.quantity` or Stripe's billed
@@ -215,20 +222,23 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * force-reverted by the next `customer.subscription.updated` webhook. `applyPartnerRuleMembership`
    * routes Stripe-billed orgs to `addMemberIfUnderCeiling` instead.
    *
-   * NOTE (unbounded by decision, #1239): the raise has no upper cap - blocking a legitimate partner
-   * signup was judged the worse outcome, and every raise is alerted + audited instead. Known edge,
-   * deliberately not handled here: nothing clamps against `ORGANIZATION_SUBSCRIPTION_MAX_SEATS`, so
-   * an org grown past it has a `validateSeatChange` floor above that maximum and `setSeats` then
-   * rejects every value until members are removed. Reachable today without this path (`addMember`
-   * fills to `seats`, and `force` bypasses the ceiling), so it is a pre-existing wedge this method
-   * can reach unattended rather than one it introduces. Clamp here if that ever bites.
+   * CLAMP (#1424): the `$size(users) < MAX_SEATS` guard caps the raise at the ceiling. Without it a
+   * full org grew a `seats` floor above `ORGANIZATION_SUBSCRIPTION_MAX_SEATS`, wedging every later
+   * `setSeats` (floor `users.length + 1` > ceiling MAX, so no value satisfies both). At MAX the add
+   * matches no doc and returns null - the caller routes that to the same 'at-capacity' outcome the
+   * Stripe path already uses (an admin is alerted to add seats), rather than raising past the ceiling.
    */
   async addMemberRaisingSeats(
     organizationId: string,
     member: IOrganizationDocument['users'][number]
   ): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
-      { _id: organizationId, deletedAt: null, 'users.userId': { $ne: member.userId } },
+      {
+        _id: organizationId,
+        deletedAt: null,
+        'users.userId': { $ne: member.userId },
+        $expr: { $lt: [{ $size: '$users' }, ORGANIZATION_SUBSCRIPTION_MAX_SEATS] },
+      },
       [
         {
           $set: {

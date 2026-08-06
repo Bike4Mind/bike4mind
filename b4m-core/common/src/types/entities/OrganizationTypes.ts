@@ -96,9 +96,12 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   /**
    * Atomically add a member and raise the seat ceiling to fit, in a single update (#1239).
    * Race-safe: idempotent on a duplicate add, and raises `seats` only to the post-add member count
-   * (never a double-raise). Returns the PRE-image (before/after seats are derived from it), or null
-   * if the user is already a member or the org is gone. Domain-signup auto-add path for orgs NOT
-   * billed through Stripe - it does not sync Stripe's billed quantity (see `addMemberIfUnderCeiling`).
+   * (never a double-raise). The raise is clamped at `ORGANIZATION_SUBSCRIPTION_MAX_SEATS` (#1424), so
+   * a full org matches no doc and returns null - the caller routes that to 'at-capacity' rather than
+   * growing a seat floor no `setSeats` value can satisfy. Returns the PRE-image (before/after seats are
+   * derived from it), or null if the user is already a member, the org is gone, OR the org is at the
+   * ceiling. Domain-signup auto-add path for orgs NOT billed through Stripe - it does not sync Stripe's
+   * billed quantity (see `addMemberIfUnderCeiling`).
    */
   addMemberRaisingSeats(
     organizationId: string,

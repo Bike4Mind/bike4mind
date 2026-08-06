@@ -100,6 +100,40 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
   }
 
   /**
+   * One deterministic page of chunk TEXT for a single file, ascending by `_id`.
+   *
+   * Deliberately separate from `findVectorsByFabFileIds`: that reader filters
+   * `vector: { $exists: true, $ne: [] }`, which is right for cosine but would DROP a
+   * vectorless chunk that still carries text. A text consumer needs every chunk,
+   * vectorized or not, so reusing it here would silently lose content.
+   *
+   * Same keyset contract as the vector reader: `_id` is unique, so the order is total and
+   * `afterChunkId` is an exact cursor - paging never skips or repeats a chunk.
+   */
+  async findTextsByFabFileId(fabFileId: string, options: { limit?: number; afterChunkId?: string } = {}) {
+    const { limit = 1_000, afterChunkId } = options;
+    const docs = await this.fabFileChunkModel
+      .find({
+        fabFileId,
+        ...(afterChunkId ? { _id: { $gt: afterChunkId } } : {}),
+      })
+      .select({ _id: 1, text: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => ({ id: String(d._id), text: d.text ?? '' }));
+  }
+
+  /**
+   * Every chunk of a file, vectorless ones included. Callers that page a bounded window
+   * need this to tell "you are holding the whole file" from "you are holding a slice" -
+   * counting only what a projected reader returned cannot make that distinction.
+   */
+  async countByFabFileId(fabFileId: string): Promise<number> {
+    return this.fabFileChunkModel.countDocuments({ fabFileId });
+  }
+
+  /**
    * Count a file's "terminal" chunks: those that have an embedding vector OR are
    * oversized (token count exceeds the model context window, so they can never be
    * embedded). Used to recompute vectorizedChunkCount from source so SQS redelivery
@@ -145,7 +179,8 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
 // Equality on the prefix + sort on `_id` lets the planner SORT_MERGE the per-file index scans
 // instead of collecting and sorting them, which is what keeps findVectorsByFabFileIds' keyset
 // paging non-blocking. Deliberately the only declaration: this compound's leftmost prefix already
-// serves the bare `fabFileId` reads (findByFabFileId, deleteManyByFabFileId, countTerminalChunks),
+// serves the bare `fabFileId` reads (findByFabFileId, findTextsByFabFileId, countByFabFileId,
+// deleteManyByFabFileId, countTerminalChunks),
 // and a `{ _id: 1, fabFileId: 1 }` buys nothing over `_id_` since `vector` is in neither index, so
 // both plans fetch anyway. Environments deployed before this still hold those two as orphans until
 // a drop migration removes them; nothing recreates them, because autoIndex only builds what is
@@ -640,13 +675,40 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
-  async bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number> {
+  async bulkUpdateTags(
+    updates: {
+      id: string;
+      tags: { name: string; strength: number }[];
+      expectedTags: { name: string; strength: number }[];
+    }[]
+  ): Promise<number> {
     if (updates.length === 0) return 0;
 
+    // `tags: expectedTags` is an exact, order-sensitive array match (Mongo array-equality
+    // semantics) - ANY concurrent change (add/remove/reorder) makes this op a no-op rather
+    // than overwriting with a merge computed from data that's no longer current. Order-
+    // sensitivity is safe only because every other tags writer in this file (push/pull/dedupe)
+    // preserves order - it appends or removes, never reshuffles. That's an invariant of those
+    // methods, not of this one; a future writer that resorts/rebuilds `tags` would silently
+    // defeat this CAS. Keep it that way, or switch to a version counter instead of a full-array
+    // compare.
+    //
+    // `tags` is a schema-less [Object] array with no default enforced on legacy rows (see the
+    // $ifNull guards in dedupeTagByUserId above), so "no tags" can be stored as `null`, an
+    // absent field, or `[]`. A caller's `file.tags ?? []` read collapses all three to `[]`
+    // before it ever reaches expectedTags, so an exact-array filter of `{ tags: [] }` would
+    // never match the null/missing cases and permanently strand those files. `{ tags: null }`
+    // alone covers both the explicit-null and the missing-field case (Mongo treats them as the
+    // same match), so two clauses - not three - cover all storage forms as equivalent to an
+    // empty snapshot, mirroring the read side.
     const result = await this.fabFileModel.bulkWrite(
-      updates.map(({ id, tags }) => ({
+      updates.map(({ id, tags, expectedTags }) => ({
         updateOne: {
-          filter: { _id: convertId(id) },
+          filter: {
+            _id: convertId(id),
+            deletedAt: null,
+            ...(expectedTags.length === 0 ? { $or: [{ tags: [] }, { tags: null }] } : { tags: expectedTags }),
+          },
           update: { $set: { tags } },
         },
       })),

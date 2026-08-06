@@ -1,4 +1,5 @@
 import {
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   IMessage,
   isUserInitiatedAbort,
   ModelBackend,
@@ -106,7 +107,7 @@ export class OllamaBackend implements ICompletionBackend {
             name: model.name,
             backend: ModelBackend.Ollama,
             contextWindow,
-            max_tokens: contextWindow,
+            max_tokens: OllamaBackend.advertisedOutputCap(contextWindow),
             supportsImageVariation: false,
             // Local models are free. pricing is a tier map keyed by a token
             // threshold (consumed by getTextModelCost), not a flat {input,output}
@@ -156,6 +157,24 @@ export class OllamaBackend implements ICompletionBackend {
    * than the advertised maximum. Override with OLLAMA_MAX_NUM_CTX.
    */
   private static readonly DEFAULT_MAX_NUM_CTX = 32768;
+
+  /**
+   * Output ceiling we advertise for a local model. Half of what we allocate, because advertising
+   * the whole window made the server's context - output - buffer negative and emptied the prompt.
+   *
+   * Halving alone is not enough at the bottom of the range: OLLAMA_MAX_NUM_CTX accepts any positive
+   * value, so an operator setting 2000 would leave exactly zero input budget for every local model
+   * at once. The second bound keeps input room for any window ABOVE the safety buffer.
+   *
+   * At or below the buffer nothing here can: a 500-token window yields a cap of 1 and still leaves
+   * 500 - 1 - 1000 negative. Clamping the window up to hide that would advertise more context than
+   * the model has, which is the misreporting this whole change removes, so the honest answer is
+   * that such a model cannot serve a chat prompt at all.
+   */
+  private static advertisedOutputCap(contextWindow: number): number {
+    const halved = Math.floor(contextWindow / 2);
+    return Math.max(1, Math.min(halved, contextWindow - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS - 1));
+  }
 
   /** A model's reported window clamped to what we are willing to allocate. */
   private static effectiveContextWindow(reported: number): number {
@@ -224,8 +243,9 @@ export class OllamaBackend implements ICompletionBackend {
     return {
       num_ctx: numCtx,
       ...(typeof options.temperature === 'number' && { temperature: options.temperature }),
-      // The catalogue reports max_tokens as the whole context window, so cap
-      // the output budget at what we actually allocated.
+      // A caller can still ask for more than the catalogue advertises - a stale
+      // persisted setting, or a direct API request - so cap the output budget at
+      // what we actually allocated.
       ...(typeof options.maxTokens === 'number' && { num_predict: Math.min(options.maxTokens, numCtx) }),
     };
   }

@@ -38,6 +38,7 @@ import {
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import { type BaseArtifact } from '@bike4mind/common';
+import { type ArtifactWithContent, type ArtifactMutationResponse } from './types';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import Editor from 'react-simple-code-editor';
@@ -85,13 +86,6 @@ interface UpdateArtifactRequest {
   versionMessage?: string;
 }
 
-interface ArtifactWithContent extends BaseArtifact {
-  content?: string;
-  contentSize: number;
-  contentHash: string;
-  metadata?: Record<string, unknown>;
-}
-
 interface ArtifactEditorProps {
   artifact: ArtifactWithContent;
   onClose?: () => void;
@@ -137,7 +131,7 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
   const [saving, setSaving] = useState(false);
   const [currentTab, setCurrentTab] = useState(0); // 0 = Edit, 1 = Preview
 
-  // Form state - initialize with artifact data
+  // Form state - seeded from props once on mount, with no resync on prop change.
   const [formData, setFormData] = useState<UpdateArtifactRequest>({
     title: artifact.title,
     description: artifact.description || '',
@@ -154,6 +148,13 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
     },
     metadata: artifact.metadata || {},
   });
+
+  // Pinned at mount alongside originalData so the PUT target matches the state the body was
+  // diffed from. Redundant while every host keys this component by artifact id, but it keeps a
+  // host that forgets from saving one artifact's edits onto another.
+  //
+  // Also see: formData/originalData below are seeded once and never resync on prop change.
+  const [artifactId] = useState(artifact.id);
 
   // Track original values for change detection
   const [originalData] = useState<UpdateArtifactRequest>({
@@ -281,14 +282,11 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
       if (JSON.stringify(formData.metadata) !== JSON.stringify(originalData.metadata))
         changedFields.metadata = formData.metadata;
 
-      const response = await api.put<{ artifact: BaseArtifact; content?: any; version?: any }>(
-        `/api/artifacts/${artifact.id}`,
-        changedFields
-      );
+      const response = await api.put<ArtifactMutationResponse>(`/api/artifacts/${artifactId}`, changedFields);
+      const updated = response.data.artifact;
 
-      toast.success('Artifact updated successfully!');
-      // Extract the artifact from the response (API returns {artifact, content, version})
-      onSave?.(response.data.artifact || response.data);
+      toast.success(`Artifact "${updated.title}" updated successfully!`);
+      onSave?.(updated);
       onClose?.();
     } catch (error: any) {
       console.error('[ARTIFACT EDITOR] Save failed:', error);
@@ -296,7 +294,7 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
     } finally {
       setSaving(false);
     }
-  }, [formData, originalData, validateForm, artifact.id, onSave, onClose, hasChanges]);
+  }, [formData, originalData, validateForm, artifactId, onSave, onClose, hasChanges]);
 
   // Handle revert changes
   const handleRevert = useCallback(() => {
@@ -367,7 +365,13 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
         <Stack direction="row" spacing={1}>
           {hasChanges && (
             <Tooltip title="Revert all changes">
-              <Button variant="outlined" color="neutral" startDecorator={<UndoIcon />} onClick={handleRevert}>
+              <Button
+                variant="outlined"
+                color="neutral"
+                startDecorator={<UndoIcon />}
+                onClick={handleRevert}
+                data-testid="artifact-editor-revert-btn"
+              >
                 Revert
               </Button>
             </Tooltip>
@@ -382,6 +386,7 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
           </Button>
 
           <Button
+            data-testid="artifact-editor-save-btn"
             startDecorator={<SaveIcon />}
             onClick={handleSave}
             loading={saving}
@@ -427,6 +432,7 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
                 <FormControl error={!!errors.title}>
                   <FormLabel>Title</FormLabel>
                   <Input
+                    slotProps={{ input: { 'data-testid': 'artifact-editor-title-input' } }}
                     placeholder="Enter artifact title..."
                     value={formData.title}
                     onChange={e => handleFieldChange('title', e.target.value)}
