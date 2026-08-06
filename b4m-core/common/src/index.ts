@@ -78,6 +78,7 @@ export * from './utils/isImageServeable';
 export * from './utils/attachmentScope';
 export * from './utils/dataLakeTaxonomy';
 export * from './utils/tagName';
+export * from './utils/generatedMedia';
 export * from './navigation';
 export * from './sample';
 export * from './rateLimitHeaders';

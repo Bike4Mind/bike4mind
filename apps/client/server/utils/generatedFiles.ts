@@ -1,3 +1,5 @@
+import { GENERATED_AUDIO_EXTENSION_RE, GENERATED_IMAGE_EXTENSION_RE } from '@bike4mind/common';
+
 /**
  * A file produced by a quest tool (image_generation, edit_image, excel_generation,
  * music_generation, ...), exposed to programmatic API consumers with a ready-to-use URL
@@ -13,12 +15,6 @@ export type GeneratedFile = {
   isAudio: boolean;
 };
 
-// Mirror the extension sets the web client splits quest.images by (GENERATED_IMAGE_EXT /
-// GENERATED_AUDIO_EXT in PromptReplies.tsx's classifyGeneratedFiles) so API consumers and
-// the UI agree on how a generated file renders. Must stay in sync with that helper.
-const IMAGE_EXTENSION_RE = /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i;
-const AUDIO_EXTENSION_RE = /\.(mp3|wav|m4a|aac|flac|opus)$/i;
-
 /**
  * Map bare generated-file basenames (as stored on `quest.images`) to descriptors with
  * fully-qualified CDN URLs. Generated files are served under `<cdnUrl>/generated/<name>`.
@@ -32,7 +28,7 @@ export function toGeneratedFiles(names: string[]): GeneratedFile[] {
   return names.map(name => ({
     name,
     url: `${cdnUrl}/generated/${name}`,
-    isImage: IMAGE_EXTENSION_RE.test(name),
-    isAudio: AUDIO_EXTENSION_RE.test(name),
+    isImage: GENERATED_IMAGE_EXTENSION_RE.test(name),
+    isAudio: GENERATED_AUDIO_EXTENSION_RE.test(name),
   }));
 }

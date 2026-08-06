@@ -148,11 +148,15 @@ describe('audio_generation tool', () => {
     expect(context.onFinish).not.toHaveBeenCalled();
   });
 
-  it('returns the provider error as the tool result without storing or billing', async () => {
-    mockSynthesize.mockRejectedValue(new Error('provider exploded'));
+  it('sanitizes the provider error in the tool result (logs detail) without storing or billing', async () => {
+    mockSynthesize.mockRejectedValue(new Error('provider exploded: key sk-abc123 rejected at https://api.example'));
     const context = createFakeContext();
-    const result = await run(context, { kind: 'speech', text: 'boom' });
-    expect(result).toMatch(/Error: provider exploded/);
+    const result = await run(context, { kind: 'speech', text: 'boom' }, { ttsProvider: 'openai' });
+    // The model sees a generic message; the raw vendor string (key hint / URL) must not leak.
+    expect(result).toBe('Error: TTS request rejected by the openai provider.');
+    expect(result).not.toMatch(/sk-abc123|api\.example/);
+    // The detail is still logged for operators.
+    expect(context.logger.error).toHaveBeenCalledWith(expect.stringContaining('provider exploded'));
     expect(context.imageGenerateStorage.upload).not.toHaveBeenCalled();
     // A failed generation must not settle a charge - onFinish is never reached.
     expect(context.onFinish).not.toHaveBeenCalled();

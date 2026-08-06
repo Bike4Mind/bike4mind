@@ -75,7 +75,7 @@ import {
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
 } from '@bike4mind/services';
-import { creditService, apiKeyService } from '@bike4mind/services';
+import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
@@ -1237,11 +1237,57 @@ async function processExecution(
           await sendWs('progress', { executionId, status });
         }
       },
-      onToolStart: async () => {
-        // Agent Executor handles credit billing per-iteration, not per-tool-call
+      onToolStart: async (toolName, data) => {
+        // Agent mode bills LLM tokens per-iteration; a generative tool's provider media
+        // cost (image/music/audio USD) is NOT LLM spend, so classic chat's per-tool
+        // toolCreditsMap drain never runs here. Fold the media USD into the same
+        // per-iteration bucket (`pendingToolUsage.costUsd`) that `onToolLlmUsage` feeds, so
+        // `billIteration` charges it on the existing agent rail - otherwise agent-mode
+        // generation is free. Image cost is known up front (n/size/quality), so it is read
+        // at start (mirrors classic reserve-on-start); music/audio settle at finish.
+        // Subagent-dispatch tool cost stays unbilled until its Phase-1 credit deduction
+        // lands (see processSubagentDispatch) - tracked as a follow-up.
+        if (toolName === 'image_generation' || toolName === 'edit_image') {
+          try {
+            const usd = estimateGeneratedMediaUsd(toolName, data, models);
+            if (usd > 0) {
+              addToolUsage(pendingToolUsage, {
+                costUsd: usd,
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+              });
+            }
+          } catch (err) {
+            logger.warn(`[agentExecutor] failed to estimate ${toolName} media cost; not billed this iteration`, {
+              err,
+            });
+          }
+        }
       },
-      onToolFinish: async () => {
-        // Tool finish side effects tracked via ReActAgent steps
+      onToolFinish: async (toolName, data) => {
+        // Settle music/audio media cost on delivery (see onToolStart for the rail rationale):
+        // the tools' failure paths return before onFinish, so an undelivered clip is never
+        // billed. Charged into the current iteration's pendingToolUsage.
+        if (toolName === 'music_generation' || toolName === 'audio_generation') {
+          try {
+            const usd = estimateGeneratedMediaUsd(toolName, data, models);
+            if (usd > 0) {
+              addToolUsage(pendingToolUsage, {
+                costUsd: usd,
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheReadTokens: 0,
+                cacheWriteTokens: 0,
+              });
+            }
+          } catch (err) {
+            logger.warn(`[agentExecutor] failed to estimate ${toolName} media cost; not billed this iteration`, {
+              err,
+            });
+          }
+        }
       },
       onUiSideEffect: async sideEffect => {
         // Fires inside the wrapped toolFn (sharedToolBuilder extraction), i.e. between the

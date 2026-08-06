@@ -38,6 +38,7 @@ export * as creditService from './creditService';
 export * from './billing';
 export * from './soundCost';
 export * from './musicCost';
+export * from './llm/agentToolMediaCost';
 export * as emailIngestionService from './emailIngestionService';
 export * as emailAnalysisService from './emailAnalysisService';
 export * as mementoService from './mementoService';

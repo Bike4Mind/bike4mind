@@ -10,6 +10,7 @@ import {
 } from '@bike4mind/common';
 import { aiSoundService, aiVoiceService } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
+import { z } from 'zod';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
 import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
 import { ToolContext, ToolDefinition } from '../../base/types';
@@ -25,6 +26,15 @@ const UNAVAILABLE_MESSAGE = 'Error: Audio generation is currently unavailable. P
 const ttsApiKeyType = (provider: VoiceGenerationVendor): ApiKeyType =>
   provider === 'elevenlabs' ? ApiKeyType.elevenlabs : ApiKeyType.openai;
 
+// Defensive shape check for the model-supplied tool arguments. `kind` stays a loose string
+// (the toolFn treats anything that is not 'sound_effect' as speech); this only guards the
+// types so a malformed call fails cleanly instead of casting `unknown` and reading garbage.
+const audioArgsSchema = z.object({
+  kind: z.string().optional(),
+  text: z.string().optional(),
+  durationSeconds: z.number().optional(),
+});
+
 /**
  * In-chat / agent TTS + sound-effects generation, modeled on image_generation and
  * music_generation. A second entry point (not a second config) to the direct-action
@@ -35,8 +45,10 @@ const ttsApiKeyType = (provider: VoiceGenerationVendor): ApiKeyType =>
  * The model picks the `kind` (speech vs sound effect) and supplies the text; provider,
  * voice, format and duration default from `audioConfig` so the user never has to pick an
  * "audio model." Billing settles on delivery (onFinish) - the failure paths return before
- * then, so an undelivered clip is never billed - reserving into the host's toolCreditsMap
- * for end-of-quest settlement (see ToolBuilder + ChatCompletionProcess). The clip is
+ * then, so an undelivered clip is never billed. The tool is host-agnostic: it just emits
+ * onStart/onFinish, and the host decides how to charge - classic chat reserves into
+ * toolCreditsMap for end-of-quest settlement (ToolBuilder + ChatCompletionProcess), agent
+ * mode folds the media USD into its per-iteration bill (see estimateGeneratedMediaUsd). The clip is
  * uploaded to the generated-content bucket and pushed onto `quest.images` (the client
  * splits by extension so audio renders as an inline player), with a browsable AUDIO copy
  * kept in the Knowledge Base (best-effort).
@@ -46,11 +58,11 @@ export const audioGenerationTool: ToolDefinition = {
   implementation: (context, config: AudioGenerationToolCall) => ({
     toolFn: async val => {
       const audioConfig = config ?? {};
-      const {
-        kind,
-        text,
-        durationSeconds: toolDurationSeconds,
-      } = val as { kind?: string; text?: string; durationSeconds?: number };
+      const parsedArgs = audioArgsSchema.safeParse(val);
+      if (!parsedArgs.success) {
+        return 'Error: audio_generation received invalid arguments.';
+      }
+      const { kind, text, durationSeconds: toolDurationSeconds } = parsedArgs.data;
 
       if (!text || !text.trim()) {
         return 'Error: audio_generation requires non-empty text.';
@@ -99,7 +111,10 @@ export const audioGenerationTool: ToolDefinition = {
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           context.logger.error(`[audio_generation] sound-effect generation failed: ${message}`);
-          return `Error: ${message}`;
+          // Return a generic message, not the raw vendor error: provider strings can echo
+          // API-key hints or upstream URLs into the assistant context. Matches the direct
+          // /api/ai/sound-effects sanitization; the detail stays in the log above.
+          return `Error: sound-effect request rejected by the ${SFX_PROVIDER} provider.`;
         }
 
         const storedPath = await persistAndUpload(context, audio, contentType, 'sound-effect');
@@ -176,7 +191,8 @@ export const audioGenerationTool: ToolDefinition = {
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         context.logger.error(`[audio_generation] speech generation failed: ${message}`);
-        return `Error: ${message}`;
+        // Generic message, not the raw vendor error - see the sound-effect branch above.
+        return `Error: TTS request rejected by the ${provider} provider.`;
       }
 
       const storedPath = await persistAndUpload(context, audio, contentType, 'speech');
