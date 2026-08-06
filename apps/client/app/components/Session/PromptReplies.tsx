@@ -458,10 +458,12 @@ function omitBetweenTags(input: string, openTag: string, closeTag: string): stri
 
 // Generated audio (music_generation) rides quest.images alongside images/xlsx; this
 // splits it out for the inline player and excludes it from the download-chip list.
-// Kept to the formats music_generation actually emits: .webm and .ogg are omitted
-// because both are predominantly video containers, so a future generated-video path
-// routed through quest.images must not be claimed here for the <audio> player.
-const GENERATED_AUDIO_EXT = /\.(mp3|wav|m4a|aac|flac)$/i;
+// Kept to the audio formats music_generation / audio_generation emit and browsers can
+// play inline (.opus is a browser-playable audio container; raw .pcm is intentionally
+// omitted as it has no container the <audio> element can decode). .webm and .ogg are
+// omitted because both are predominantly video containers, so a future generated-video
+// path routed through quest.images must not be claimed here for the <audio> player.
+const GENERATED_AUDIO_EXT = /\.(mp3|wav|m4a|aac|flac|opus)$/i;
 // Actual raster/vector images belong in the inline grid; anything else (e.g. an .xlsx
 // from excel_generation) would render as a broken <img>.
 const GENERATED_IMAGE_EXT = /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i;

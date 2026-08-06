@@ -10,6 +10,7 @@ import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 import useCreateDataLakeSession from '@client/app/hooks/useCreateDataLakeSession';
 
 import {
+  AudioGenerationToolCall,
   B4MLLMTools,
   GenerateImageToolCall,
   IChatHistoryItemDocument,
@@ -17,6 +18,7 @@ import {
   ModelName,
   requiresImageInput,
 } from '@bike4mind/common';
+import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
 import type { IAgent } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -629,6 +631,21 @@ export function useSendMessage({
       output_format,
     };
 
+    // Snapshot the current audio-generation selections so the audio_generation tool has
+    // provider/voice/format/duration defaults without the model having to pick them. Read
+    // synchronously from the store (single source of truth, #1055/PR #1183) at send time,
+    // exactly as the direct Generate Audio action does. An empty `voice` stays empty so the
+    // server falls back to the user's preferredVoice / provider default.
+    const audioState = useAudioGenSettings.getState();
+    const audioSettings: AudioGenerationToolCall = {
+      ttsProvider: audioState.ttsProvider,
+      voice: audioState.voice || undefined,
+      format: audioState.format,
+      languageCode: audioState.languageCode || undefined,
+      durationSeconds: audioState.durationSeconds,
+      promptInfluence: audioState.promptInfluence,
+    };
+
     const currentModelInfo = modelInfo?.find(m => m.id === model);
     // Tool-resolution ladder (model-capability gate -> Smart recommendations -> Fast ->
     // briefcase per-message override) extracted to useLLMSettingsAssembly.
@@ -711,6 +728,7 @@ export function useSendMessage({
           researchMode,
           deepResearchConfig,
           imageConfig: imageSettings,
+          audioConfig: audioSettings,
           modelConfigurations: accessibleModels,
           userTags,
           setChatCompletion,
@@ -753,6 +771,7 @@ export function useSendMessage({
           researchMode,
           deepResearchConfig,
           imageConfig: imageSettings,
+          audioConfig: audioSettings,
           setChatCompletion,
           ...llmSettings,
           mcpServers: enabledMcpServers ?? undefined,

@@ -442,6 +442,7 @@ interface ProcessInitContext {
   embeddingModel?: string;
   queryComplexity: string;
   imageConfig?: z.infer<typeof QuestStartBodySchema>['imageConfig'];
+  audioConfig?: z.infer<typeof QuestStartBodySchema>['audioConfig'];
   deepResearchConfig?: z.infer<typeof QuestStartBodySchema>['deepResearchConfig'];
   userTimezone?: string;
 }
@@ -860,6 +861,7 @@ export class ChatCompletionProcess {
       embeddingModel,
       queryComplexity,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       timezone: userTimezone,
     } = parsedBody;
@@ -951,6 +953,7 @@ export class ChatCompletionProcess {
       embeddingModel,
       queryComplexity,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       userTimezone,
     };
@@ -1006,6 +1009,7 @@ export class ChatCompletionProcess {
       embeddingModel,
       queryComplexity,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       userTimezone,
     } = initContext;
@@ -1988,6 +1992,7 @@ export class ChatCompletionProcess {
           },
           image_generation: imageConfig,
           edit_image: imageConfig,
+          audio_generation: audioConfig,
         },
         model,
         organization,

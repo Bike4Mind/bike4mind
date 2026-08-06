@@ -17,7 +17,7 @@ export type GeneratedFile = {
 // GENERATED_AUDIO_EXT in PromptReplies.tsx's classifyGeneratedFiles) so API consumers and
 // the UI agree on how a generated file renders. Must stay in sync with that helper.
 const IMAGE_EXTENSION_RE = /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i;
-const AUDIO_EXTENSION_RE = /\.(mp3|wav|m4a|aac|flac)$/i;
+const AUDIO_EXTENSION_RE = /\.(mp3|wav|m4a|aac|flac|opus)$/i;
 
 /**
  * Map bare generated-file basenames (as stored on `quest.images`) to descriptors with
