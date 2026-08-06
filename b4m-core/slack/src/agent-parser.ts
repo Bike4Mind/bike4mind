@@ -134,15 +134,23 @@ export const DATA_LAKE_AGENT_KEY = 'datalake';
 
 export type DataLakeSubcommand = 'add' | 'list' | 'help' | 'unknown';
 
-export interface ParsedDataLakeCommand {
-  subcommand: DataLakeSubcommand;
-  /** Lake slug from an explicit "to <lake>" clause, if present. */
-  lakeSlug?: string;
-  /** First http(s) URL found in the args, if present. */
-  link?: string;
-  /** Everything after the subcommand token, trimmed. */
-  rawArgs: string;
-}
+// Discriminated on `subcommand` so `lakeSlug`/`link` exist ONLY on the `add` variant -
+// a `list`/`help`/`unknown` result has no such fields to read by mistake.
+export type ParsedDataLakeCommand =
+  | {
+      subcommand: 'add';
+      /** Lake slug from an explicit "to <lake>" clause, if present. */
+      lakeSlug?: string;
+      /** First http(s) URL found in the args, if present. */
+      link?: string;
+      /** Everything after the subcommand token, trimmed. */
+      rawArgs: string;
+    }
+  | {
+      subcommand: Exclude<DataLakeSubcommand, 'add'>;
+      /** Everything after the subcommand token, trimmed. */
+      rawArgs: string;
+    };
 
 /** Matches a leading `@datalake` mention (after optional Slack user mentions), even with no args. */
 const DATA_LAKE_MENTION_PATTERN = /^(?:<@[^>]+>\s*)*@datalake\b/i;
@@ -188,26 +196,26 @@ export function parseDataLakeCommand(command: string): ParsedDataLakeCommand {
     subcommand = 'unknown';
   }
 
-  // Only `add` consumes a link/lake, so parse them there - keeps a `list to ...` or
-  // `help to ...` phrasing from yielding a spurious lakeSlug for a future subcommand.
-  let link: string | undefined;
-  let lakeSlug: string | undefined;
-  if (subcommand === 'add') {
-    // Slack delivers URLs wrapped as <url> or <url|label>, never bare. The match starts
-    // at `https` (so the leading `<` is dropped); trim any `|label` and trailing `>`.
-    link = rawArgs.match(/\bhttps?:\/\/\S+/i)?.[0].split(/[|>]/)[0];
-
-    // "to <lake>" clause: a standalone `to` followed by one slug token. Strip Slack's
-    // `<...>` wrapping symmetrically before the URL guard, so "add to <link>" (no lake
-    // given) isn't mistaken for a slug.
-    const toMatch = rawArgs.match(/\bto\s+(\S+)/i);
-    lakeSlug = toMatch?.[1]?.replace(/^</, '').replace(/>$/, '');
-    if (lakeSlug && /^https?:\/\//i.test(lakeSlug)) {
-      lakeSlug = undefined;
-    }
+  // Only `add` carries a link/lake; every other subcommand returns the bare shape, so a
+  // `list to ...` or `help to ...` phrasing can't yield a spurious lakeSlug.
+  if (subcommand !== 'add') {
+    return { subcommand, rawArgs };
   }
 
-  return { subcommand, lakeSlug, link, rawArgs };
+  // Slack delivers URLs wrapped as <url> or <url|label>, never bare. The match starts
+  // at `https` (so the leading `<` is dropped); trim any `|label` and trailing `>`.
+  const link = rawArgs.match(/\bhttps?:\/\/\S+/i)?.[0].split(/[|>]/)[0];
+
+  // "to <lake>" clause: a standalone `to` followed by one slug token. Strip Slack's
+  // `<...>` wrapping symmetrically before the URL guard, so "add to <link>" (no lake
+  // given) isn't mistaken for a slug.
+  const toMatch = rawArgs.match(/\bto\s+(\S+)/i);
+  let lakeSlug = toMatch?.[1]?.replace(/^</, '').replace(/>$/, '');
+  if (lakeSlug && /^https?:\/\//i.test(lakeSlug)) {
+    lakeSlug = undefined;
+  }
+
+  return { subcommand: 'add', lakeSlug, link, rawArgs };
 }
 
 /**
