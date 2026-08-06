@@ -343,7 +343,7 @@ export default function TaxonomyReviewPanel({
             loading={dismissMutation.isPending}
             onClick={() =>
               confirm({
-                type: 'warning',
+                type: 'danger',
                 title: 'Dismiss Suggestion',
                 description: 'This clears the suggestion from your list. Files keep whatever tags they already have.',
                 okLabel: 'Dismiss',
