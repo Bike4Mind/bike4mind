@@ -6,6 +6,9 @@ import { z } from 'zod';
 const chunkFileSchema = z.object({
   fabFileId: z.string(),
   embeddingModel: z.string(),
+  // Soft chunk-size cap in tokens (see DEFAULT_PASSAGE_TOKEN_TARGET). Optional: the
+  // chunker's passage-granularity default applies when omitted.
+  passageTokenTarget: z.number().int().positive().optional(),
 });
 
 type ChunkFileParameters = z.infer<typeof chunkFileSchema>;
@@ -33,14 +36,14 @@ export const chunkFabfile = async (
   parameters: ChunkFileParameters,
   { db, storage, logger }: ChunkFileAdapters
 ) => {
-  const { fabFileId, embeddingModel } = secureParameters(parameters, chunkFileSchema);
+  const { fabFileId, embeddingModel, passageTokenTarget } = secureParameters(parameters, chunkFileSchema);
 
   const fabFile = await db.fabFiles.shareable.findAccessibleById(user, fabFileId);
   if (!fabFile) throw new NotFoundError('FabFile not found');
 
   logger.updateMetadata({ mimeType: fabFile.mimeType });
 
-  const chunker = new SmartChunker(embeddingModel, storage, logger);
+  const chunker = new SmartChunker(embeddingModel, storage, logger, { passageTokenTarget });
   const chunks = await chunker.chunkFile(fabFile);
   chunker.freeEncoder();
   Logger.globalInstance.log(`Completed chunking file into ${chunks.length} chunks`);

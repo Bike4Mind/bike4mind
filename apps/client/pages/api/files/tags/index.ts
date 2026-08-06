@@ -16,8 +16,11 @@ const handler = baseApi()
       const result = await tagService.create(
         req.user.id,
         {
-          type: TagType.FILE,
+          // any: the request body is unknown at this layer; tagService/create re-parses it.
           ...(req.body as any),
+          // After the spread, not before: this route only ever creates FILE tags, and a body
+          // claiming another type would otherwise reach the service and be refused as a 500.
+          type: TagType.FILE,
         },
         {
           db: {

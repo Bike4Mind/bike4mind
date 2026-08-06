@@ -21,7 +21,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { memo, useEffect, useState } from 'react';
-import type { IDataLakeBatchDocument, TaxonomyTag } from '@bike4mind/common';
+import type { IDataLakeBatchSummary, TaxonomyTag } from '@bike4mind/common';
 import { useApplyTaxonomySuggestions, useReanalyzeTaxonomy } from '@client/app/hooks/data/dataLakes';
 
 // Confidence tier helpers
@@ -202,7 +202,7 @@ const TagCard = memo(function TagCard({ tag, prefix, onUpdate, onDelete }: TagCa
 /**
  * Review/apply panel for a batch's background AI tag suggestions. Replaces the old
  * pre-upload TaxonomyReviewStep: analysis now runs AFTER upload, so this is a standalone
- * modal opened from the Data Lakes list (`DataLakeListPanel`) rather than a wizard step -
+ * modal opened from the Data Lakes manager (`DataLakeManagerPanel`) rather than a wizard step -
  * edits live in local state here, not the wizard store, and "Apply" writes tags directly to
  * the batch's already-uploaded files via the apply-taxonomy endpoint.
  */
@@ -211,7 +211,7 @@ export default function TaxonomyReviewPanel({
   prefix,
   onClose,
 }: {
-  batch: IDataLakeBatchDocument;
+  batch: IDataLakeBatchSummary;
   /** The lake's fixed tag prefix (fetched separately - the batch doc doesn't carry it). */
   prefix: string;
   onClose: () => void;

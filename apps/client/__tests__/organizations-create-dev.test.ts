@@ -4,6 +4,10 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: {
     create: vi.fn(),
   },
+  userRepository: {
+    findById: vi.fn(),
+    update: vi.fn(),
+  },
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -22,7 +26,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   })),
 }));
 
-import { organizationRepository } from '@bike4mind/database';
+import { organizationRepository, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
 import { isDevelopment } from '@server/utils/config';
 
@@ -76,7 +80,9 @@ describe('POST /api/organizations/create-dev', () => {
       {
         db: {
           organizations: organizationRepository,
+          users: userRepository,
         },
+        logger: mockReq.logger,
       }
     );
     expect(mockRes.status).toHaveBeenCalledWith(200);

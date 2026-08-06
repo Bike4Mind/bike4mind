@@ -37,6 +37,7 @@ import { gray, brand } from '@client/app/utils/themes/colors';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
 import { resetRefreshPromise } from '@client/app/contexts/ApiContext';
+import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 
@@ -62,7 +63,6 @@ const Register: React.FC = () => {
   const { setCurrentUser, currentUser } = useUser();
   const navigate = useNavigate();
   const router = useRouter();
-  const { setAccessToken } = useAccessToken();
   const theme = useTheme();
   const { t } = useTranslation();
 
@@ -249,7 +249,10 @@ const Register: React.FC = () => {
         result = await verifyMFA.mutateAsync({ token });
       }
       resetRefreshPromise();
-      useAccessToken.getState().setVerifiedTokens(result.accessToken, result.refreshToken);
+      // Drop the cached cold-load result: this browser just acquired a session, so the next
+      // protected navigation must not reuse the "no session" answer from before login.
+      resetSessionBootstrap();
+      useAccessToken.getState().setVerifiedSession(result.accessToken);
       setShowMFAModal(false);
       // Setting currentUser triggers the redirect effect above.
       setCurrentUser(result.user);
@@ -264,11 +267,6 @@ const Register: React.FC = () => {
         setMfaSetupData(null);
         toast.error((errorData.error as string) || 'Too many failed attempts. Please try again.');
         return;
-      }
-      if (errorData?.accessToken && errorData?.refreshToken) {
-        useAccessToken
-          .getState()
-          .setMfaPendingTokens(errorData.accessToken as string, errorData.refreshToken as string);
       }
       const baseError = (errorData?.error as string) || (error as Error).message || 'MFA verification failed';
       const attemptsInfo = errorData?.attemptsRemaining ? ` (${errorData.attemptsRemaining} attempts remaining)` : '';
@@ -351,13 +349,15 @@ const Register: React.FC = () => {
         return;
       }
 
-      // Registration successful - response may be OTCRegisterResponse ({ user, accessToken, refreshToken })
-      // or OTCVerifyResponse (user doc spread with tokens). Handle both shapes.
+      // Registration successful - response may be OTCRegisterResponse ({ user, accessToken })
+      // or OTCVerifyResponse (user doc spread with the access token). Handle both shapes.
       const result = response as Record<string, unknown>;
       const accessToken = (result.accessToken as string) || '';
-      const refreshToken = (result.refreshToken as string) || '';
       const user = result.user ?? result; // OTCRegisterResponse has .user, OTCVerifyResponse spreads it
       resetRefreshPromise();
+      // Drop the cached cold-load result: this browser just acquired a session, so the next
+      // protected navigation must not reuse the "no session" answer from before login.
+      resetSessionBootstrap();
 
       if (result.user) {
         // Ad-conversion signal (GA4 sign_up + Reddit SignUp). Fires exactly once per
@@ -368,8 +368,7 @@ const Register: React.FC = () => {
         trackSignupConversion('password');
       }
 
-      setAccessToken(accessToken);
-      useAccessToken.getState().setVerifiedTokens(accessToken, refreshToken);
+      useAccessToken.getState().setVerifiedSession(accessToken);
       setCurrentUser(user as Parameters<typeof setCurrentUser>[0]);
 
       const searchParams = new URLSearchParams(window.location.search);

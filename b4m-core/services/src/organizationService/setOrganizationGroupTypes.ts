@@ -10,7 +10,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 interface SetGroupTypesAdapters {
   db: {
     organizations: Pick<IOrganizationRepository, 'findById' | 'update'>;
-    groups: Pick<IGroupRepository, 'findByOrganization' | 'createIfMissing' | 'softDeleteByIds'>;
+    groups: Pick<IGroupRepository, 'findByOrganization' | 'createIfMissing' | 'delete'>;
     users: Pick<IUserRepository, 'removeGroupsFromAllUsers'>;
   };
   logger?: { info: (message: string) => void };
@@ -83,7 +83,11 @@ export async function setOrganizationGroupTypes(
   const revokedGroupIds = liveGroups.filter(group => removed.includes(group.type)).map(group => group.id);
   if (revokedGroupIds.length > 0) {
     await db.users.removeGroupsFromAllUsers(revokedGroupIds);
-    await db.groups.softDeleteByIds(revokedGroupIds);
+    // Soft-delete each revoked group via the inherited `delete` (softDeletePlugin), which now joins
+    // the caller's transaction through transactionAsyncLocalStorage (#1228) - no bulk workaround.
+    for (const groupId of revokedGroupIds) {
+      await db.groups.delete(groupId);
+    }
   }
 
   await db.organizations.update({ id: organizationId, allowedGroupTypes: requested });

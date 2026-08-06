@@ -10,6 +10,13 @@ import type { ModelRecord } from './types/entities/ModelCatalogTypes';
 export const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 
 /**
+ * Input headroom the chat path holds back on top of a request's reserved output.
+ * safeInputWindow (ChatCompletionProcess) subtracts it, so a text entry whose output
+ * reserve leaves less than this has no room for a prompt at all.
+ */
+export const CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS = 1000;
+
+/**
  * The model types this build's ModelInfo consumers narrow on. ModelRecord.type is
  * wider (embedding / tts / realtime-voice), so the read path drops and counts any
  * record outside this set: an old build must degrade to "I do not see the new video

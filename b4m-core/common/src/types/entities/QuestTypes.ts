@@ -12,6 +12,12 @@ export type QuestItem = {
 
 export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistoryItemDocument> {
   findAllBySessionId: (sessionId: string) => Promise<IChatHistoryItemDocument[]>;
+  // One page of a session's turns, projected to the conversation fields. Ordered
+  // by (timestamp, _id) so paging is stable when turns share a millisecond.
+  findPageBySessionId: (
+    sessionId: string,
+    options: { limit: number; page: number; sort?: 'asc' | 'desc' }
+  ) => Promise<{ data: IChatHistoryItemDocument[]; hasMore: boolean }>;
   findAllBySessionIdAndLessThanOrEqualToTimestamp(
     sessionId: string,
     timestamp: Date

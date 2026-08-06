@@ -13,17 +13,53 @@
  * Schedule: daily. Enabled: production + dev.
  */
 
-import { connectDB, dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  connectDB,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  FabFile,
+  fabFileRepository,
+} from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
+import { buildFabFileChunkScanFilter, CHUNK_SCAN_MIN_AGE_MS } from '@server/worker/chunkScan';
+import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 
 const logger = new Logger({ metadata: { service: 'dataLakeBatchReconcile' } });
 
 const MAX_PER_RUN = 500;
+/** Cap per daily run for the un-chunked rescue sweep; a large backlog drains gradually. */
+const CHUNK_RESCUE_MAX_PER_RUN = 500;
+
+/**
+ * Hosted counterpart of the self-host worker's fabFileChunkScan (worker/main.ts): re-enqueue
+ * files that completed upload but were never chunked, so they stop being silently unsearchable
+ * (#1420 - e.g. uploads that landed while enableAutoChunk was off, or whose S3 event was lost).
+ * The shared filter excludes terminal outcomes (no-text note, chunk error), so a file is swept
+ * at most once per cause; a repeat appearance means the queue message itself was lost.
+ */
+async function rescueUnchunkedFiles(): Promise<number> {
+  if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return 0;
+
+  const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
+  const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
+    .select('_id userId')
+    .limit(CHUNK_RESCUE_MAX_PER_RUN)
+    .lean();
+
+  for (const file of candidates) {
+    await sendToQueue(Resource.fabFileChunkQueue.url, {
+      fabFileId: String(file._id),
+      userId: file.userId,
+    });
+  }
+  return candidates.length;
+}
 
 export async function handler() {
   const stage = Resource.App.stage;
@@ -37,10 +73,10 @@ export async function handler() {
     db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
     logger,
     metrics: {
-      // Also backstops the taxonomy enqueue for a batch that never reached
-      // upload-complete - that path bypasses finalizeBatchIfComplete, so the daily sweep is
-      // the last chance to catch it (the read-time reconciler in batches/index.ts is the
-      // faster backstop for the same gap).
+      // Also backstops the taxonomy enqueue for a batch that never reached upload-complete
+      // NOR a terminal chunk/vectorize event (finalizeBatchIfComplete already backstops the
+      // latter case) - this daily sweep is the last chance to catch a genuinely stuck batch
+      // (the read-time reconciler in batches/index.ts is the faster backstop for the same gap).
       emitForcedTerminal: batch =>
         Promise.all([
           recordReconcilerForcedTerminal().catch(() => {}),
@@ -61,6 +97,12 @@ export async function handler() {
     logger,
   });
 
+  // Isolated so a rescue failure never blocks the batch reconciliation above.
+  const rescuedChunkFiles = await rescueUnchunkedFiles().catch(err => {
+    logger.error(`[DataLakeBatchReconcile] un-chunked rescue sweep failed: ${err}`);
+    return 0;
+  });
+
   // Heartbeat every run (even zero-work) so a stopped/broken cron alarms on absence of data.
   await recordReconcileRun().catch(() => {});
 
@@ -69,6 +111,7 @@ export async function handler() {
     forced: forced.length,
     taxonomyCandidates: stuckTaxonomy.length,
     taxonomyForced: forcedTaxonomy.length,
+    rescuedChunkFiles,
   });
   return {
     statusCode: 200,
@@ -77,6 +120,7 @@ export async function handler() {
       forced: forced.length,
       taxonomyCandidates: stuckTaxonomy.length,
       taxonomyForced: forcedTaxonomy.length,
+      rescuedChunkFiles,
     }),
   };
 }

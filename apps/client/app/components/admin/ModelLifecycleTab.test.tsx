@@ -17,6 +17,9 @@ vi.mock('./DiscoveryStatusCard', () => ({
 }));
 
 import { ModelLifecycleTab } from './ModelLifecycleTab';
+import { AdminTab } from './adminSidebarConfig';
+import { useAdminModal } from './useAdminModal';
+import { useCreditAnalysisStore } from './CreditAnalysis/store';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -59,6 +62,8 @@ describe('ModelLifecycleTab', () => {
     vi.clearAllMocks();
     mockGet.mockResolvedValue({ data: STATUS });
     mockPost.mockResolvedValue({ data: {} });
+    useAdminModal.setState({ activeTab: AdminTab.ModelLifecycle });
+    useCreditAnalysisStore.setState({ activeTab: 'users', pricingModelId: null });
   });
 
   it('renders the queue, the horizon and the stale references from one fetch', async () => {
@@ -253,6 +258,22 @@ describe('ModelLifecycleTab', () => {
     expect(screen.getByRole('button', { name: 'Refresh model lifecycle status' })).toBe(
       screen.getByTestId('model-lifecycle-refresh-btn')
     );
+  });
+
+  it('links to Model Pricing, landing on the pricing sub-tab of another sidebar section', async () => {
+    renderTab();
+    await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
+
+    const link = screen.getByTestId('model-lifecycle-model-pricing-link');
+    // A Joy Link with an onClick and no href renders an <a> with no href: not
+    // focusable, not announced, unreachable by keyboard.
+    expect(link.tagName).toBe('BUTTON');
+    fireEvent.click(link);
+
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.CreditAnalytics);
+    expect(useCreditAnalysisStore.getState().activeTab).toBe('pricing');
+    // The header link is not about one model, so nothing is put in focus.
+    expect(useCreditAnalysisStore.getState().pricingModelId).toBeNull();
   });
 
   it('says so when nothing is awaiting a decision', async () => {

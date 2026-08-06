@@ -321,6 +321,14 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
   const { data: paginatedFabFiles } = useGetFabFiles();
   const fabFiles = useMemo(() => paginatedFabFiles?.pages?.map(page => page.data).flat(), [paginatedFabFiles?.pages]);
+  // Ref mirror so fetchFiles can read the latest fabFiles without re-creating
+  // itself on every paginated refetch. Without this, every fabFiles change
+  // re-triggers the hydration effect, which re-reads currentSession.knowledgeIds
+  // and can overwrite an in-flight optimistic removal.
+  const fabFilesRef = useRef(fabFiles);
+  useEffect(() => {
+    fabFilesRef.current = fabFiles;
+  }, [fabFiles]);
   const queryClient = useQueryClient();
 
   // Memoize the query object to prevent re-subscription churn: this is an
@@ -425,10 +433,12 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
     [settings.experimentalFeatures, isFeatureEnabled, availableAgents, currentSession, queryClient]
   );
 
-  // Utility function to fetch files, first trying local storage, then the server
+  // Utility function to fetch files, first trying local storage, then the server.
+  // Reads fabFilesRef (not fabFiles) so this callback is stable across paginated
+  // refetches and does not re-trigger the hydration effect.
   const fetchFiles = useCallback(
     async (knowledgeIds: string[]): Promise<IFabFileDocument[]> => {
-      const safeFabFiles = fabFiles ?? [];
+      const safeFabFiles = fabFilesRef.current ?? [];
 
       const localFiles = knowledgeIds
         .map(knowledgeId => safeFabFiles.find(file => file.id === knowledgeId))
@@ -451,7 +461,8 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
         .filter((file): file is IFabFileDocument => file !== undefined)
         .map(file => ({ ...file, enabled: true }));
     },
-    [fabFiles]
+
+    []
   );
 
   // Persist session knowledgeIds to the backend
@@ -598,7 +609,7 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
     } else if (currentSessionId) {
       setWorkBenchFiles(currentSessionId, []);
     }
-  }, [currentSession?.knowledgeIds, fabFiles, fetchFiles, currentSessionId, setWorkBenchFiles]);
+  }, [currentSession?.knowledgeIds, fetchFiles, currentSessionId, setWorkBenchFiles]);
 
   // AUTO-DISABLE EXPENSIVE TOOLS: Disable Deep Research and QuestMaster when SWITCHING notebooks (A->B)
   // This prevents accidental expensive operations when users change context

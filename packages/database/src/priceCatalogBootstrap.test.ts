@@ -11,6 +11,7 @@ const seedModelPrices = vi.fn();
 const seedModelCatalog = vi.fn();
 const catalogInit = vi.fn();
 const discoveryStateInit = vi.fn();
+const dataLakeInit = vi.fn();
 
 vi.mock('@bike4mind/db-core', () => ({ connectDB: baseConnectDB }));
 vi.mock('@bike4mind/llm-adapters', () => ({ setModelPriceRowsProvider, setModelCatalogProvider }));
@@ -20,6 +21,7 @@ vi.mock('./models/ai/ModelCatalogModel', () => ({
   ModelCatalog: { init: catalogInit },
 }));
 vi.mock('./models/ai/ModelDiscoveryStateModel', () => ({ ModelDiscoveryState: { init: discoveryStateInit } }));
+vi.mock('./models/ai/DataLakeModel', () => ({ DataLakeModel: { init: dataLakeInit } }));
 vi.mock('./seeds/seedModelPrices', () => ({ seedModelPrices }));
 vi.mock('./seeds/seedModelCatalog', () => ({ seedModelCatalog }));
 
@@ -41,6 +43,7 @@ describe('priceCatalogBootstrap.connectDB', () => {
     seedModelCatalog.mockResolvedValue({ inserted: 0, skipped: 0 });
     catalogInit.mockResolvedValue(undefined);
     discoveryStateInit.mockResolvedValue(undefined);
+    dataLakeInit.mockResolvedValue(undefined);
   });
 
   it('wires both providers and seeds exactly once across repeated connects', async () => {
@@ -79,14 +82,17 @@ describe('priceCatalogBootstrap.connectDB', () => {
     expect(order).toEqual(['catalog', 'prices']);
   });
 
-  it('awaits both unique-index builds before the first write', async () => {
+  it('awaits all three unique-index builds before the first write', async () => {
     // autoIndex is fire-and-forget: seeding a fresh collection first lets the
     // duplicates land, and createIndexes then fails on them permanently. The
     // discovery drivers gate on whenCatalogSeeded, so the discovery-state index
     // has to be built here too, ahead of the first recordSighting upsert.
+    // DataLakeModel's index build is awaited for a different reason (see
+    // ensureUniqueIndex's docstring): its collection is pre-existing, not fresh.
     const order: string[] = [];
     catalogInit.mockImplementation(async () => order.push('catalog-index'));
     discoveryStateInit.mockImplementation(async () => order.push('discovery-index'));
+    dataLakeInit.mockImplementation(async () => order.push('dataLake-index'));
     seedModelCatalog.mockImplementation(async () => {
       order.push('catalog-seed');
       return { inserted: 0, skipped: 0 };
@@ -96,7 +102,7 @@ describe('priceCatalogBootstrap.connectDB', () => {
     await connectDB('mongodb://x');
     await flushSeeding();
 
-    expect(order).toEqual(['catalog-index', 'discovery-index', 'catalog-seed']);
+    expect(order).toEqual(['catalog-index', 'discovery-index', 'dataLake-index', 'catalog-seed']);
   });
 
   it('still seeds when an index build fails, so an already-duplicated collection is not left empty', async () => {
@@ -110,6 +116,19 @@ describe('priceCatalogBootstrap.connectDB', () => {
     expect(seedModelCatalog).toHaveBeenCalledTimes(1);
     expect(seedModelPrices).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('unique index build failed'), expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('warns (does not throw or block seeding) when the DataLake index build fails on legacy duplicates', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    dataLakeInit.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+
+    const connectDB = await freshConnectDB();
+    await expect(connectDB('mongodb://x')).resolves.toBe('connection');
+    await flushSeeding();
+
+    expect(seedModelCatalog).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[dataLake]'), expect.any(Error));
     warn.mockRestore();
   });
 

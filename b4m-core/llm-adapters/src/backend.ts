@@ -120,6 +120,12 @@ export interface ICompletionOptions {
   /** If false, backend returns tool calls without executing (for CLI). Default: true */
   executeTools?: boolean;
   /**
+   * Skip the model-identity reminder the backend appends to the system parameter.
+   * For callers whose contract is a bare completion (API promptMode raw): with this
+   * set and no system messages, the request carries no system parameter at all.
+   */
+  omitIdentityReminder?: boolean;
+  /**
    * Controls which tool the model should use.
    * - 'auto': Model decides whether to call a tool (default)
    * - 'required': Model must call at least one tool
@@ -231,6 +237,15 @@ export interface ICompletionResponse {
 export interface ICompletionResponseChunk {
   model: string;
   choices: Array<IChoice>;
+  /**
+   * The provider's end-of-generation reason, already normalized onto the
+   * `CompletionInfo.stopReason` vocabulary. Carried on the chunk rather than the
+   * choice because ChoiceEndReason has no truncation member: 'stop' and 'length'
+   * both map to ChoiceEndReason.STOP, so a translate() that only sets
+   * statusEndReason cannot tell a caller the output was cut off. Backends whose
+   * complete() derives stopReason from the raw provider response leave this unset.
+   */
+  stopReason?: string;
 }
 
 export type CompletionCallback = (done: boolean, chunk?: ICompletionResponseChunk) => Promise<void>;

@@ -259,6 +259,24 @@ Preview environments (`pr<N>.preview.bike4mind.com`) are created **on demand by 
 
 What gets PRs declined most often, in order: (1) no prior issue/discussion for a large change, (2) crossing the open/closed boundary, (3) missing tests, (4) scope sprawl, (5) new heavyweight dependencies without justification.
 
+### Automated review comments and one-click autofixes
+
+Bot reviewers (Copilot review comments, Copilot Autofix, CodeQL suggestions) are useful and worth reading. They are good at **noticing** — an unhandled boundary, a condition that looks wrong, a signature that changed. They are much weaker at **prescribing**, because they reason locally and often cannot see that the concern is already handled elsewhere in the file.
+
+So treat a bot's finding as a question to investigate, and its patch as a hypothesis. Both still need a human to decide.
+
+The commit-shaped suggestions deserve the most care and tend to get the least. A review comment costs you a reply; an applied autofix commit lands in your branch and can turn a green PR red, or worse, change behavior no test covers. Give an autofix commit the same scrutiny you would give a PR from someone who has not read the file.
+
+Before accepting any suggested fix:
+
+- **Run the tests it touches.** An autofix that breaks existing tests is telling you it changed behavior somebody deliberately pinned. Read those tests before you "fix" them.
+- **Ask what the code already does about this.** If a guard, fallback, or validation already covers the concern somewhere else, the suggestion is duplicating it — and duplicating a guard in the wrong place usually fires earlier than the real one, replacing a specific, actionable error with a generic one.
+- **Check for a failing case.** A fix with no test that fails without it is a guess. If the suggestion is right, it should be straightforward to write that test; if you cannot, be suspicious.
+- **Watch for semantic changes to a predicate.** Formatting, typing, and null-safety suggestions are usually safe. A change to what a condition *means* — an inverted check, a widened comparison, a `>=` that becomes a `>` — is where these go wrong. Slow down there.
+- **Read the comments around the line.** More than once, a suggestion has undone a deliberate decision explained in a comment directly above it.
+
+Declining a bot suggestion is a normal outcome, not a lapse. Reply on the thread with the reasoning and move on — and when the finding is real but the proposed remedy is wrong, say both. If the reasoning is subtle, leave it in a comment at the call site so the same suggestion is not proposed and accepted next quarter.
+
 ## Reporting security vulnerabilities
 
 **Do not open a public issue for a security vulnerability.**

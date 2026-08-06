@@ -119,6 +119,11 @@ export const BatchPresignedUrlFileItem = z.object({
 
 export const BatchPresignedUrlRequestInput = z.object({
   files: z.array(BatchPresignedUrlFileItem).min(1).max(100),
+  /**
+   * The lake to upload into, as an id or a slug (`assertLakeWriteAccess` resolves either).
+   * Send the id: a slug the client derived from the lake's name resolves to whichever lake
+   * holds it, which after the server disambiguates a collision is not the new lake.
+   */
   dataLakeSlug: z.string().optional(),
   /**
    * When uploading into a data lake batch, the batch id so each created FabFile is

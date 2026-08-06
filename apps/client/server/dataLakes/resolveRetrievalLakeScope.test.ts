@@ -183,4 +183,31 @@ describe('resolveRetrievalLakeScope', () => {
       entitlementKeys: [],
     });
   });
+
+  it('normalizes a populated-document organizationId at the seam (#1343)', async () => {
+    // A .populate('organizationId') upstream would hand req.user a full Organization doc. It must
+    // reach the shared resolver as its hex string, not "[object Object]", mirroring toAccessContext.
+    const populatedOrg = { _id: { toHexString: () => 'org-hex' }, name: 'Acme' } as unknown as string;
+    await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: ['Opti'], organizationId: populatedOrg }));
+
+    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
+      db: { dataLakes: dataLakeRepository },
+      user: { id: 'u1', tags: ['Opti'], organizationId: 'org-hex' },
+      entitlementKeys: [],
+    });
+  });
+
+  it('normalizes an empty-string organizationId to undefined (org-less), not literal "" (#1343)', async () => {
+    // An empty string is not a valid org id: normalizeId('') returns undefined, so the caller is
+    // treated as org-less (only org-less lakes resolve) rather than filtering on a literal "".
+    // This is the intended, safer behavior - locking it in so the delta from the old `?? undefined`
+    // pass-through stays deliberate.
+    await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: ['Opti'], organizationId: '' }));
+
+    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
+      db: { dataLakes: dataLakeRepository },
+      user: { id: 'u1', tags: ['Opti'], organizationId: undefined },
+      entitlementKeys: [],
+    });
+  });
 });

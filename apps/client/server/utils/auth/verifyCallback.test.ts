@@ -6,6 +6,7 @@ import { ForbiddenError } from '@server/utils/errors';
 const mockFindOne = vi.fn();
 const mockUpdateOne = vi.fn();
 const mockCreate = vi.fn();
+const mockRevokeAllByUserId = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   User: {
@@ -13,6 +14,7 @@ vi.mock('@bike4mind/database', () => ({
     updateOne: (...args: unknown[]) => mockUpdateOne(...args),
     create: (...args: unknown[]) => mockCreate(...args),
   },
+  authSessionRepository: { revokeAllByUserId: (...args: unknown[]) => mockRevokeAllByUserId(...args) },
 }));
 
 vi.mock('@server/auth/requireNonSystemUser', () => ({
@@ -34,6 +36,8 @@ beforeEach(() => {
   mockFindOne.mockReset();
   mockUpdateOne.mockReset();
   mockCreate.mockReset();
+  mockRevokeAllByUserId.mockReset();
+  mockRevokeAllByUserId.mockResolvedValue(0);
 });
 
 // Failure-safe restore of any vi.spyOn() (e.g. console.error) so a throwing
@@ -182,6 +186,9 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     expect(updateArg.$set.authProviders[0].id).toBe('google-sub-real');
     expect(updateArg.$inc).toEqual({ tokenVersion: 1 });
     expect(mockFindOne).toHaveBeenCalledTimes(2);
+    // The tokenVersion bump must be paired with a session revoke, else an opaque refresh token
+    // (never checked against tokenVersion) would rotate past the bump and survive.
+    expect(mockRevokeAllByUserId).toHaveBeenCalledWith('u1');
   });
 
   it('refuses when existing provider entry has DIFFERENT sub (impersonation via takeover of same strategy)', async () => {
@@ -231,6 +238,8 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     expect(updateArg.emailVerifiedAt).toBeInstanceOf(Date);
     // Replacing an existing strategy entry is not a NEW link -> no tokenVersion bump.
     expect(updateArg.$inc).toBeUndefined();
+    // ...and with no bump there is nothing to pair a session revoke with.
+    expect(mockRevokeAllByUserId).not.toHaveBeenCalled();
   });
 
   it('refreshes tokens without gate when SAME sub re-authenticates (stage-1 hit)', async () => {

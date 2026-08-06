@@ -9,6 +9,7 @@ import {
   userRepository,
   withTransaction,
 } from '@bike4mind/database';
+import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
 import { FileEvents } from '@bike4mind/common';
@@ -41,11 +42,15 @@ const handler = baseApi()
     };
 
     let totalSizeToDeduct = 0;
+    // Collected across the whole batch and recomputed once at the end, so deleting N files out of
+    // one lake costs one aggregation rather than N identical ones.
+    const deletedFileTagNames: (string | undefined)[] = [];
 
     // Process each file deletion sequentially
     for (const fileId of fileIds) {
       try {
-        // Remove tags of deleted files (only for owned files - check ownership first)
+        // Only for owned files - a shared file "delete" is an unshare, which changes nothing about
+        // the actor's own tags.
         const fabFile = await fabFileRepository.findById(fileId);
         const isOwned = fabFile?.userId === userId;
 
@@ -53,10 +58,10 @@ const handler = baseApi()
           for (const tag of fabFile.tags) {
             try {
               if (tag && tag.name) {
-                await fileTagRepository.incrementFileCountBy({ name: tag.name, userId }, -1);
+                await fileTagRepository.touchLastActivityBy({ name: tag.name, userId });
               }
             } catch (tagError) {
-              req.logger.error('Error updating tag count during bulk delete:', {
+              req.logger.error('Error touching tag activity during bulk delete:', {
                 tagError,
                 tag,
               });
@@ -88,6 +93,9 @@ const handler = baseApi()
               { ability: req.ability, session }
             );
             results.deleted.push(fileId);
+            // Read off the pre-delete row: this is a soft delete, so `tags` survives, but the
+            // file has already dropped out of every lake's membership scope.
+            deletedFileTagNames.push(...(fabFile?.tags ?? []).map(tag => tag?.name));
           } else if (result.action === 'unshared') {
             await logEvent(
               {
@@ -127,6 +135,11 @@ const handler = baseApi()
           totalSizeToDeduct,
         });
       }
+    }
+
+    // After every delete transaction has committed, so the aggregation sees each `deletedAt`.
+    if (deletedFileTagNames.length > 0) {
+      await recomputeStatsForLakeTags(deletedFileTagNames, { logger: req.logger });
     }
 
     const parts: string[] = [];

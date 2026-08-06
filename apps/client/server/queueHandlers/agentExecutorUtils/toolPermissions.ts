@@ -40,6 +40,7 @@ const REQUIRES_APPROVAL_TOOLS = new Set([
   'delegate_to_agent',
   'image_generation',
   'edit_image',
+  'music_generation',
   'video_generation',
 ]);
 

@@ -202,6 +202,12 @@ export const SoundEffectsUsageTransaction = BaseCreditTransaction.extend({
   sessionId: z.string(),
 });
 
+export const MusicGenerationUsageTransaction = BaseCreditTransaction.extend({
+  type: z.literal('music_generation_usage'),
+  model: z.string(),
+  sessionId: z.string(),
+});
+
 export const TransferCreditTransaction = BaseCreditTransaction.extend({
   type: z.literal('transfer_credit'),
   recipientId: z.string(),
@@ -234,6 +240,7 @@ export const CreditTransaction = z.discriminatedUnion('type', [
   SpeechToTextUsageTransaction,
   TextToSpeechUsageTransaction,
   SoundEffectsUsageTransaction,
+  MusicGenerationUsageTransaction,
   TransferCreditTransaction,
   ReceivedCreditTransaction,
 ]);
@@ -260,6 +267,7 @@ export type ICompletionApiUsageTransaction = z.infer<typeof CompletionApiUsageTr
 export type ISpeechToTextUsageTransaction = z.infer<typeof SpeechToTextUsageTransaction>;
 export type ITextToSpeechUsageTransaction = z.infer<typeof TextToSpeechUsageTransaction>;
 export type ISoundEffectsUsageTransaction = z.infer<typeof SoundEffectsUsageTransaction>;
+export type IMusicGenerationUsageTransaction = z.infer<typeof MusicGenerationUsageTransaction>;
 export type ITransferCreditTransaction = z.infer<typeof TransferCreditTransaction>;
 export type IReceivedCreditTransaction = z.infer<typeof ReceivedCreditTransaction>;
 
@@ -292,6 +300,7 @@ export const CREDIT_DEDUCT_TRANSACTION_TYPES: CreditTransactionType[] = [
   'speech_to_text_usage',
   'text_to_speech_usage',
   'sound_effects_usage',
+  'music_generation_usage',
   'transfer_credit',
   'generic_deduct',
 ] as const;

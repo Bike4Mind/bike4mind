@@ -67,6 +67,7 @@ import {
 import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
+import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@server/security/tokenEncryption';
 
 // Cache static ChatCompletion options that don't change between invocations
@@ -174,6 +175,9 @@ const getStaticOptions = () => {
       });
     },
     recallMementosV2,
+    // Without this the worker resolves session.systemPromptId to undefined, so a triage session
+    // gets no authored prompt while the route has already suppressed the brand identity.
+    loadSystemPromptById,
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: getMcpClientAdapter,

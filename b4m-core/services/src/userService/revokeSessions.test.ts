@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { revokeUserSessions, adminRevokeUserSessions } from './revokeSessions';
 import { UnauthorizedError, NotFoundError } from '@bike4mind/utils';
-import { createMockUserRepository } from '../__tests__/utils/testUtils';
+import { createMockUserRepository, createMockAuthSessionRepository } from '../__tests__/utils/testUtils';
 
 const makeDb = () => {
   const users = createMockUserRepository();
   users.incrementTokenVersion.mockResolvedValue(1);
-  return { users };
+  const authSessions = createMockAuthSessionRepository();
+  authSessions.revokeAllByUserId.mockResolvedValue(0);
+  return { users, authSessions };
 };
 
 describe('revokeUserSessions', () => {
@@ -16,6 +18,12 @@ describe('revokeUserSessions', () => {
     const result = await revokeUserSessions('user-1', { db });
     expect(db.users.incrementTokenVersion).toHaveBeenCalledWith('user-1');
     expect(result).toBe(4);
+  });
+
+  it('also revokes all AuthSessions (so a live refresh token cannot defeat the revoke)', async () => {
+    const db = makeDb();
+    await revokeUserSessions('user-1', { db });
+    expect(db.authSessions.revokeAllByUserId).toHaveBeenCalledWith('user-1');
   });
 });
 

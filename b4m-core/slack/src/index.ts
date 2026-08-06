@@ -55,8 +55,15 @@ export { SlackMessageEnricher } from './SlackMessageEnricher';
 export { CommandHandler } from './CommandHandler';
 
 // ─── Agent Parser ────────────────────────────────────────────────────────────
-export { AGENT_REGISTRY, buildSystemPrompt, parseImageModelOverride } from './agent-parser';
-export type { BuildSystemPromptOptions } from './agent-parser';
+export {
+  AGENT_REGISTRY,
+  buildSystemPrompt,
+  parseImageModelOverride,
+  parseDataLakeCommand,
+  isDataLakeCommand,
+  DATA_LAKE_AGENT_KEY,
+} from './agent-parser';
+export type { BuildSystemPromptOptions, ParsedDataLakeCommand, DataLakeSubcommand } from './agent-parser';
 
 // ─── Tools ───────────────────────────────────────────────────────────────────
 export { generateHelpMessage } from './tools/slackbotHelp';
