@@ -1,4 +1,5 @@
 import type { ArtifactType } from '@bike4mind/common';
+import { escapeHtml } from '@client/app/utils/htmlEscape';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
 
 /**
@@ -18,18 +19,15 @@ import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
  * byte-parity tests in `renderArtifactHtml.test.ts` guard that invariant.
  */
 
-/** Escapes &, <, >, ", ' for interpolation into HTML text/attributes. */
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 /** Render an artifact to a single static index.html based on its type. */
 export function renderArtifactIndexHtml(type: ArtifactType, content: string, title: string): string {
+  // React is transpiled via buildReactArtifactBundle, never rendered here. Enforce the
+  // contract at runtime (not just in the docstring) so a future caller passing artifact.type
+  // straight through gets a loud failure instead of raw JSX quietly published as escaped source.
+  if (type === 'react') {
+    throw new Error('react artifacts must be transpiled via buildReactArtifactBundle, not rendered here');
+  }
+
   const t = escapeHtml(title || 'Shared artifact');
   // Full HTML doc -> serve as-is, but still inject the lead-gen footer before
   // </body> (fall back to appending) so every published page is branded.
@@ -47,6 +45,6 @@ export function renderArtifactIndexHtml(type: ArtifactType, content: string, tit
 
   if (type === 'html') return PAGE(content); // HTML fragment
   if (type === 'svg') return PAGE(content); // inline SVG markup
-  // Source-bearing types (code/python/react/recharts/mermaid/json/...) -> code view.
+  // Source-bearing types (code/python/recharts/mermaid/json/...) -> code view.
   return PAGE(`<pre><code>${escapeHtml(content)}</code></pre>`);
 }

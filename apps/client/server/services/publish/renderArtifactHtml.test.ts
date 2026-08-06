@@ -65,4 +65,8 @@ describe('renderArtifactIndexHtml byte-parity with the client pre-render', () =>
     const out = renderArtifactIndexHtml('svg', '<svg/>', '');
     expect(out).toContain('<title>Shared artifact</title>');
   });
+
+  it('throws on react rather than code-viewing raw JSX', () => {
+    expect(() => renderArtifactIndexHtml('react', '<App/>', title)).toThrow(/transpiled/);
+  });
 });
