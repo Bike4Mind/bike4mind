@@ -74,7 +74,11 @@ function specAuthForProject(projectName: string): SpecAuth | null {
 export const test = base.extend<TestFixtures>({
   // eslint-disable-next-line no-empty-pattern -- no fixture deps; identity derives from the project.
   authState: async ({}, use, testInfo) => {
-    await use({ current: specAuthForProject(testInfo.project.name) });
+    // @realauth tests drive the app's real refresh-cookie bootstrap (e.g. the hard-reload guard),
+    // so they must NOT be wrapped through /auth/success - null passes their gotos through untouched
+    // and they authenticate from the pristine cookie the setup planted (see seedAuthStorageState).
+    const current = testInfo.tags.includes('@realauth') ? null : specAuthForProject(testInfo.project.name);
+    await use({ current });
   },
 
   // Suppress the What's New modal globally - return empty modals so it never renders.
