@@ -157,4 +157,64 @@ describe('audio_generation tool', () => {
     // A failed generation must not settle a charge - onFinish is never reached.
     expect(context.onFinish).not.toHaveBeenCalled();
   });
+
+  it('rejects an over-length sound-effect description before gating or calling the provider', async () => {
+    const context = createFakeContext();
+    const result = await run(context, { kind: 'sound_effect', text: 'x'.repeat(1001) });
+    expect(result).toMatch(/too long/i);
+    expect(context.onStart).not.toHaveBeenCalled();
+    expect(mockGenerate).not.toHaveBeenCalled();
+  });
+
+  it('rejects speech longer than the resolved provider cap before the paid call', async () => {
+    const context = createFakeContext();
+    // OpenAI cap is 4096 chars.
+    const result = await run(context, { kind: 'speech', text: 'a'.repeat(4097) }, { ttsProvider: 'openai' });
+    expect(result).toMatch(/too long/i);
+    expect(mockSynthesize).not.toHaveBeenCalled();
+    expect(context.onFinish).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the other TTS provider (dropping the voice) when the preferred one has no key', async () => {
+    // Preferred provider (openai) has no key; the other (elevenlabs) does.
+    mockGetEffectiveApiKey.mockReset();
+    mockGetEffectiveApiKey.mockResolvedValueOnce(undefined).mockResolvedValue('el-key');
+    const context = createFakeContext();
+    const result = await run(context, { kind: 'speech', text: 'read me' }, { ttsProvider: 'openai', voice: 'alloy' });
+
+    // Resolved provider surfaces on the gate as elevenlabs, not the requested openai.
+    expect(context.onStart).toHaveBeenCalledWith('audio_generation', {
+      kind: 'speech',
+      provider: 'elevenlabs',
+      characters: 'read me'.length,
+    });
+    // Voice is provider-specific, so the openai voice is dropped for the fallback.
+    expect(mockSynthesize).toHaveBeenCalledWith('read me', expect.objectContaining({ voice: undefined }));
+    expect(result).toBe('Successfully generated speech');
+  });
+
+  it('still fails when neither TTS provider has a key', async () => {
+    mockGetEffectiveApiKey.mockReset();
+    mockGetEffectiveApiKey.mockResolvedValue(undefined);
+    const context = createFakeContext();
+    const result = await run(context, { kind: 'speech', text: 'hi' }, { ttsProvider: 'openai' });
+    expect(result).toMatch(/currently unavailable/i);
+    expect(context.onStart).not.toHaveBeenCalled();
+    expect(mockSynthesize).not.toHaveBeenCalled();
+  });
+
+  it('honors saveGeneratedAudio=false: uploads for inline playback but skips the KB FabFile copy', async () => {
+    const context = createFakeContext();
+    (context as { user: unknown }).user = { preferences: { saveGeneratedAudio: false } };
+    const result = await run(context, { kind: 'speech', text: 'hello world' });
+    expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
+    expect(mockPersistFab).not.toHaveBeenCalled();
+    expect(result).toBe('Successfully generated speech');
+  });
+
+  it('persists the KB FabFile copy when saveGeneratedAudio is unset (defaults on)', async () => {
+    const context = createFakeContext();
+    await run(context, { kind: 'speech', text: 'hello world' });
+    expect(mockPersistFab).toHaveBeenCalledTimes(1);
+  });
 });

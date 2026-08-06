@@ -456,7 +456,7 @@ function omitBetweenTags(input: string, openTag: string, closeTag: string): stri
   return result;
 }
 
-// Generated audio (music_generation) rides quest.images alongside images/xlsx; this
+// Generated audio (music_generation / audio_generation) rides quest.images alongside images/xlsx; this
 // splits it out for the inline player and excludes it from the download-chip list.
 // Kept to the audio formats music_generation / audio_generation emit and browsers can
 // play inline (.opus is a browser-playable audio container; raw .pcm is intentionally

@@ -970,6 +970,13 @@ export function useSendMessage({
           // (consumed only by buildSubagentToolConfig), so it can't reintroduce
           // the prior `structuredClone` failure.
           imageConfig: imageSettings.model ? imageSettings : undefined,
+          // Audio config parity with imageConfig: forward the user's saved audio
+          // settings so the executor's audio_generation tool resolves the same
+          // provider/voice/format the classic-chat path uses (`audioSettings` is
+          // the useAudioGenSettings snapshot taken above). Without it the tool
+          // falls back to OpenAI + provider-default voice, ignoring the Audio tab
+          // and hard-failing for an ElevenLabs-only user.
+          audioConfig: audioSettings,
           // Memento parity with chat_completion. Mirrors the
           // `enableMementos: isMementosEnabled` payload field used by the
           // chat-completion dispatchers above so agent-mode runs evaluate

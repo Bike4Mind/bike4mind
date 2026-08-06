@@ -3,7 +3,9 @@ import {
   AudioGenerationToolCall,
   extensionFromMimeType,
   KnowledgeType,
+  SOUND_EFFECTS_MAX_INPUT_CHARS,
   SoundGenerationVendor,
+  TTS_MAX_INPUT_CHARS,
   VoiceGenerationVendor,
 } from '@bike4mind/common';
 import { aiSoundService, aiVoiceService } from '@bike4mind/utils';
@@ -19,6 +21,9 @@ const SFX_PROVIDER: SoundGenerationVendor = 'elevenlabs';
 
 /** Generic, non-leaking message when a required provider key is not configured. */
 const UNAVAILABLE_MESSAGE = 'Error: Audio generation is currently unavailable. Please try again later.';
+
+const ttsApiKeyType = (provider: VoiceGenerationVendor): ApiKeyType =>
+  provider === 'elevenlabs' ? ApiKeyType.elevenlabs : ApiKeyType.openai;
 
 /**
  * In-chat / agent TTS + sound-effects generation, modeled on image_generation and
@@ -56,6 +61,13 @@ export const audioGenerationTool: ToolDefinition = {
       const isSoundEffect = kind === 'sound_effect';
 
       if (isSoundEffect) {
+        // Reject over-length input before any paid provider call, matching the bound the
+        // direct /api/ai/sound-effects endpoint enforces (soundGeneration.ts). A crafted
+        // caller could otherwise round-trip an oversized prompt to the vendor.
+        if (text.length > SOUND_EFFECTS_MAX_INPUT_CHARS) {
+          return `Error: sound-effect description too long (max ${SOUND_EFFECTS_MAX_INPUT_CHARS} characters).`;
+        }
+
         // Resolve the provider key BEFORE the affordability gate so a keyless, low-credit
         // caller learns the actionable problem (missing key) instead of "insufficient credits".
         const apiKey = await getEffectiveApiKey(context.userId, { type: ApiKeyType.elevenlabs }, { db: context.db });
@@ -102,13 +114,36 @@ export const audioGenerationTool: ToolDefinition = {
         return 'Successfully generated sound effect';
       }
 
-      // Speech (text-to-speech)
-      const provider = audioConfig.ttsProvider ?? DEFAULT_TTS_PROVIDER;
-      const apiKeyType = provider === 'elevenlabs' ? ApiKeyType.elevenlabs : ApiKeyType.openai;
-      const apiKey = await getEffectiveApiKey(context.userId, { type: apiKeyType }, { db: context.db });
+      // Speech (text-to-speech). serverConfig gates audio_generation on OpenAI OR ElevenLabs,
+      // so a user can have only one key while their saved ttsProvider names the other (e.g. an
+      // ElevenLabs-only user whose default is still openai). Fall back to whichever provider the
+      // user actually has a key for instead of hard-failing. Voices are provider-specific, so a
+      // fallback drops the configured voice and lets the fallback provider use its default.
+      let provider = audioConfig.ttsProvider ?? DEFAULT_TTS_PROVIDER;
+      let voice = audioConfig.voice || undefined;
+      let apiKey = await getEffectiveApiKey(context.userId, { type: ttsApiKeyType(provider) }, { db: context.db });
       if (!apiKey) {
-        context.logger.error(`[audio_generation] ${provider} API key is not configured; refusing to dispatch`);
-        return UNAVAILABLE_MESSAGE;
+        const fallbackProvider: VoiceGenerationVendor = provider === 'elevenlabs' ? 'openai' : 'elevenlabs';
+        const fallbackKey = await getEffectiveApiKey(
+          context.userId,
+          { type: ttsApiKeyType(fallbackProvider) },
+          { db: context.db }
+        );
+        if (!fallbackKey) {
+          context.logger.error('[audio_generation] no TTS provider key is configured; refusing to dispatch');
+          return UNAVAILABLE_MESSAGE;
+        }
+        context.logger.warn(
+          `[audio_generation] ${provider} key not configured; falling back to ${fallbackProvider} for speech (provider default voice)`
+        );
+        provider = fallbackProvider;
+        voice = undefined;
+        apiKey = fallbackKey;
+      }
+
+      // Reject over-length input before the paid call, per the resolved provider's cap.
+      if (text.length > TTS_MAX_INPUT_CHARS[provider]) {
+        return `Error: text too long for ${provider} speech (max ${TTS_MAX_INPUT_CHARS[provider]} characters).`;
       }
 
       // Gate on the input character count with a conservative (highest-rate) estimate:
@@ -134,7 +169,7 @@ export const audioGenerationTool: ToolDefinition = {
           model: resolvedModel,
           characters,
         } = await aiVoiceService(provider, apiKey, context.logger).synthesize(text, {
-          voice: audioConfig.voice || undefined,
+          voice,
           format: audioConfig.format,
           language: provider === 'elevenlabs' && audioConfig.languageCode ? audioConfig.languageCode : undefined,
         }));
@@ -177,7 +212,8 @@ export const audioGenerationTool: ToolDefinition = {
           },
           durationSeconds: {
             type: 'number',
-            description: 'Sound-effect length in seconds (0.5-30). Ignored for speech; omit to let the provider choose.',
+            description:
+              'Sound-effect length in seconds (0.5-30). Ignored for speech; omit to let the provider choose.',
             minimum: 0.5,
             maximum: 30,
           },
@@ -204,19 +240,25 @@ async function persistAndUpload(
   const filename = `${uuidv4()}.${ext}`;
 
   // Pass ContentType so S3 serves audio/* and the browser <audio> element can play it.
+  // Always kept - this is what the inline player streams.
   const storedPath = await context.imageGenerateStorage.upload(audio, filename, { ContentType: contentType });
 
-  // AUDIO type so the file is never chunked/vectorized/attached to a completion.
-  await persistGeneratedFileAsFabFile(context, {
-    fileName: `generated-${source}-${filename.slice(0, 8)}.${ext}`,
-    mimeType: contentType,
-    content: audio,
-    type: KnowledgeType.AUDIO,
-    tags: [
-      { name: 'generated', strength: 1 },
-      { name: source, strength: 1 },
-    ],
-  });
+  // Keep a browsable AUDIO copy in the Knowledge Base, honoring the user's
+  // saveGeneratedAudio preference - the same gate the direct /api/ai/tts and
+  // sound-effects endpoints apply (defaults on). AUDIO type so the file is never
+  // chunked/vectorized/attached to a completion.
+  if (context.user?.preferences?.saveGeneratedAudio ?? true) {
+    await persistGeneratedFileAsFabFile(context, {
+      fileName: `generated-${source}-${filename.slice(0, 8)}.${ext}`,
+      mimeType: contentType,
+      content: audio,
+      type: KnowledgeType.AUDIO,
+      tags: [
+        { name: 'generated', strength: 1 },
+        { name: source, strength: 1 },
+      ],
+    });
+  }
 
   return storedPath;
 }

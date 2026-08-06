@@ -395,11 +395,7 @@ export class ToolBuilder {
    * sound effects on the duration. The reservation is deferred to settleAudioCredits so a
    * failed generation is never billed. Exposed for unit-testing the audio credit branch.
    */
-  gateAudioCredits(
-    data: AudioCostInput,
-    enforceCredits: boolean,
-    organization?: IOrganizationDocument | null
-  ): void {
+  gateAudioCredits(data: AudioCostInput, enforceCredits: boolean, organization?: IOrganizationDocument | null): void {
     if (!enforceCredits || !this.deps.db.creditTransactions) return;
     validateAudioCredits(this.deps.user, data, this.deps.logger, organization);
   }
@@ -451,7 +447,10 @@ export class ToolBuilder {
           user: this.deps.user,
           organization,
           provider: data.provider,
-          model: data.model ?? data.kind,
+          // Speech always resolves a real model id; a sound effect has none, so
+          // qualify it by provider (e.g. "elevenlabs-sound_effect") instead of the
+          // bare kind so per-model COGS analytics stays clean.
+          model: data.model ?? `${data.provider}-${data.kind}`,
           costUsd: usdCost,
           creditsCharged: creditsUsed,
           units,

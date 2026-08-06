@@ -172,7 +172,9 @@ export const AudioGenerationSettings: React.FC<{ mode?: AudioGenMode }> = ({ mod
         Powered by ElevenLabs.
       </Typography>
       <FormControl size="sm">
-        <FormLabel>Duration: {durationSeconds == null ? 'Auto' : `${durationSeconds.toFixed(1)}s`}</FormLabel>
+        <FormLabel>
+          Duration: {durationSeconds == null ? `Auto (max ${SFX_MAX_DURATION}s)` : `${durationSeconds.toFixed(1)}s`}
+        </FormLabel>
         <Slider
           value={durationSeconds ?? 0}
           min={0}

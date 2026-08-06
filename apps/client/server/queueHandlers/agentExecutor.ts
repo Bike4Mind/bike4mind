@@ -938,6 +938,11 @@ async function processExecution(
           // required" (no picker UI in a headless run). Omitted when the parent
           // had none, so the tool falls back to its built-in default.
           ...(execution.imageConfig && { imageConfig: execution.imageConfig }),
+          // Inherit the parent's audio config for the same reason as imageConfig:
+          // a subagent that calls audio_generation should reach for the provider/
+          // voice the parent resolved, not the tool's built-in OpenAI default.
+          // Omitted when the parent had none.
+          ...(execution.audioConfig && { audioConfig: execution.audioConfig }),
           // NOTE: `enableLattice` (and other parent-only launch-gate flags) is
           // intentionally omitted here - subagents / DAG children do NOT inherit
           // it. The parent's Lattice toolbelt is scoped to the parent run; a
@@ -1288,6 +1293,7 @@ async function processExecution(
       model: execution.model,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: execution.imageConfig,
+      audioConfig: execution.audioConfig,
     });
 
     // Lattice opt-in pool for delegated subagents. Built UNCONDITIONALLY (unlike
@@ -2572,6 +2578,7 @@ async function processSubagentDispatch(
       model: child.model,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
+      audioConfig: child.audioConfig,
     });
 
     // Lattice opt-in pool for this subagent (and any grandchildren it delegates

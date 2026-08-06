@@ -12,7 +12,7 @@
  * Pure helper to keep the wiring unit-testable.
  */
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
-import type { GenerateImageToolCall } from '@bike4mind/common';
+import type { GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
 import type { BuildSharedToolsOptions } from '@bike4mind/services';
 
 export interface BuildSubagentToolConfigInput {
@@ -28,12 +28,23 @@ export interface BuildSubagentToolConfigInput {
    * (`GPT_IMAGE_2`).
    */
   imageConfig?: Partial<GenerateImageToolCall>;
+  /**
+   * The user's selected audio generation config (provider, voice, format,
+   * language, SFX duration/prompt-influence), forwarded from the dispatch and
+   * persisted on the AgentExecution doc. Without it the `audio_generation` tool
+   * receives `undefined` and falls back to its built-in defaults (OpenAI + the
+   * provider-default voice), silently ignoring the user's Audio-tab selections
+   * and hard-failing for an ElevenLabs-only user. Omit when the user never
+   * touched the Audio tab; the tool then uses its defaults.
+   */
+  audioConfig?: Partial<AudioGenerationToolCall>;
 }
 
 export function buildSubagentToolConfig({
   model,
   apiKeyTable,
   imageConfig,
+  audioConfig,
 }: BuildSubagentToolConfigInput): NonNullable<BuildSharedToolsOptions['config']> {
   return {
     deep_research: {
@@ -45,5 +56,9 @@ export function buildSubagentToolConfig({
     // run with. Only set when imageConfig is present so a text-only run
     // doesn't carry an empty object.
     ...(imageConfig && { image_generation: imageConfig, edit_image: imageConfig }),
+    // Same for audio_generation - the classic path threads `audioConfig`
+    // (ChatCompletionProcess), so agent-mode must too or the tool ignores the
+    // user's saved audio settings. Only set when present.
+    ...(audioConfig && { audio_generation: audioConfig }),
   };
 }

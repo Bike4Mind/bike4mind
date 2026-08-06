@@ -108,10 +108,15 @@ export const AudioGenerationToolCallSchema = z.object({
   format: voiceOutputFormatSchema.optional(),
   /** ISO 639-1 language pin for ElevenLabs speech; unset lets the provider auto-detect. */
   languageCode: z.string().optional(),
-  /** Sound-effect clip length in seconds; null/unset lets the provider auto-select. */
-  durationSeconds: z.number().nullable().optional(),
-  /** Sound-effect prompt adherence (0-1). */
-  promptInfluence: z.number().optional(),
+  /**
+   * Sound-effect clip length in seconds; null/unset lets the provider auto-select.
+   * Bounded to the same 0.5-30 range the direct sound-effects endpoint enforces
+   * (`soundGeneration.ts`) so a crafted client can't ship a huge duration that
+   * scales the per-second credit charge linearly.
+   */
+  durationSeconds: z.number().min(0.5).max(30).nullable().optional(),
+  /** Sound-effect prompt adherence (0-1), matching the direct endpoint's bound. */
+  promptInfluence: z.number().min(0).max(1).optional(),
 });
 export type AudioGenerationToolCall = z.infer<typeof AudioGenerationToolCallSchema>;
 
