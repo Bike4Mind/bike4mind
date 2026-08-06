@@ -28,8 +28,9 @@ import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import RestoreIcon from '@mui/icons-material/Restore';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
+import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
 import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
@@ -59,7 +60,7 @@ import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
 import { satisfiesTagPrefix } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
-import { UNCATEGORIZED_KEY, normalizePrefix, prefixSegments } from './shared';
+import { normalizePrefix, prefixSegments } from './shared';
 import { EmptyHint, NavLifecycleSection, NavSectionHeader, NavSkeletons } from './navChrome';
 
 // Left sidebar
@@ -144,19 +145,6 @@ export default function ManagerNav({
     return buildTagTree(Array.from(tagCountMap.entries()).map(([tag, count]) => ({ tag, count })));
   }, [articles, activeLake]);
 
-  const currentNodes = useMemo(() => getNodesAtPath(tree, path), [tree, path]);
-
-  const filteredNodes = useMemo(() => {
-    let nodes = currentNodes;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      nodes = nodes.filter(node => node.segment.toLowerCase().includes(q));
-    }
-    return [...nodes].sort((a, b) =>
-      sortBy === 'count' ? b.fileCount - a.fileCount : a.segment.localeCompare(b.segment)
-    );
-  }, [currentNodes, searchQuery, sortBy]);
-
   // Files in the lake with no prefix-matching (non-meta) tag - surfaced under "Uncategorized".
   // Shares the server's predicate so this bucket holds exactly the files the write doors and the
   // backfill consider uncategorized; a local copy already drifted on the bare-prefix case.
@@ -175,20 +163,6 @@ export default function ManagerNav({
   }, [articles, activeLake]);
 
   const seedDepth = activeLake ? prefixSegments(activeLake.fileTagPrefix).length : 0;
-  const atLakeRoot = !!activeLake && path.length <= seedDepth;
-  const isUncategorized = path[path.length - 1] === UNCATEGORIZED_KEY;
-  // Leaf detection starts BELOW the seeded lake root, so an empty/untagged lake still shows
-  // the folder view (with the Uncategorized bucket) instead of flipping to a dead file list.
-  const leafTag =
-    activeLake && !isUncategorized && path.length > seedDepth && currentNodes.length === 0 ? path.join(':') : null;
-  const showFiles = isUncategorized || !!leafTag;
-  const files = useMemo(() => {
-    if (isUncategorized) return uncategorizedFiles;
-    if (!leafTag) return [];
-    return [...articles]
-      .filter(f => (f.tags ?? []).some(t => t.name === leafTag))
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
-  }, [isUncategorized, uncategorizedFiles, leafTag, articles]);
 
   const filteredLakes = useMemo(() => {
     let list = lakes ?? [];
@@ -222,19 +196,129 @@ export default function ManagerNav({
   };
   const handleBack = () => {
     setSearchQuery('');
-    if (!activeLake || atLakeRoot) onExitLake();
+    if (!activeLake || path.length <= seedDepth) onExitLake();
     else onNavigate(path.slice(0, -1));
   };
 
   const backLabel = !activeLake
     ? ''
-    : atLakeRoot
+    : path.length <= seedDepth
       ? 'All Lakes'
       : path.length - 1 <= seedDepth
         ? activeLake.name
         : humanizeSegment(path[path.length - 2], path.length - 2);
 
   const rowTypographySx = { fontSize: '14px', fontWeight: 400, color: 'text.primary' } as const;
+
+  // Bucket row for files with no prefix-matching tag - TreeView owns visibility (root only,
+  // hidden while searching) and the synthetic-breadcrumb interception; this only renders the row.
+  const renderUncategorizedRow = (count: number, onOpen: () => void) => (
+    <ListItem>
+      <ListItemButton onClick={onOpen} data-testid="datalake-manager-uncategorized" sx={treeRowSx(hoverBg)}>
+        <FolderOutlinedIcon sx={{ fontSize: 16, color: 'neutral.400', flexShrink: 0 }} />
+        <ListItemContent>
+          <Typography noWrap sx={{ ...rowTypographySx, fontStyle: 'italic', color: 'text.secondary' }}>
+            Uncategorized
+          </Typography>
+        </ListItemContent>
+        <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
+          {count}
+        </Chip>
+      </ListItemButton>
+    </ListItem>
+  );
+
+  // Chrome for the in-lake DataLakeTreeView instance: the manager's own toolbar/back row/rows,
+  // carried verbatim from the pre-fold-in JSX below (now render props instead of inline JSX).
+  const managerTreeChrome: DataLakeTreeChrome = {
+    containerSx: { display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1, overflow: 'hidden' },
+    // Dormant under hideToolbar (ManagerNav renders its own toolbar above) - kept accurate in
+    // case a future host drops hideToolbar.
+    toolbarSx: { mt: '12px', mb: '12px', px: '12px', display: 'flex', gap: '10px', alignItems: 'center' },
+    searchPlaceholder: 'Search',
+    searchSx: { flex: 1, '--Input-minHeight': '32px', color: 'text.primary', boxShadow: 'none' },
+    renderSortButton: (sortMode, toggle) => {
+      const SortIcon = SORT_MODE_ICON[sortMode];
+      return (
+        <Tooltip
+          title={sortMode === 'count' ? 'Sort: by count (click for A-Z)' : 'Sort: A-Z (click for count)'}
+          size="sm"
+        >
+          <IconButton
+            variant="outlined"
+            color="neutral"
+            onClick={toggle}
+            data-testid="datalake-manager-sort-toggle"
+            data-sort={sortMode}
+            sx={{ ...ICON_BTN_SX, flexShrink: 0 }}
+          >
+            <SortIcon sx={{ fontSize: 18 }} />
+          </IconButton>
+        </Tooltip>
+      );
+    },
+    // Ignores TreeView's computed label/onBack: the seeded lake root needs the 'All Lakes'/
+    // lake-name ladder (backLabel) and to exit the lake at that root (handleBack), not TreeView's
+    // generic one-level-up back.
+    renderBackRow: () => (
+      <ListItemButton onClick={handleBack} data-testid="datalake-manager-back" sx={treeBackRowSx(hoverBg)}>
+        <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
+        <Typography noWrap sx={rowTypographySx}>
+          {backLabel}
+        </Typography>
+      </ListItemButton>
+    ),
+    backRowPlacement: 'sticky',
+    stickyBackSx: TREE_BACK_STICKY_SX,
+    scrollSx: { ...TREE_SCROLL_SX, px: '8px' },
+    nodeListSx: TREE_LIST_SX,
+    fileListSx: TREE_LIST_SX,
+    renderNodeRow: (node, depth, onOpen) => (
+      <ListItem>
+        <ListItemButton onClick={onOpen} sx={treeRowSx(hoverBg)} data-testid={`datalake-manager-node-${node.segment}`}>
+          <FolderOutlinedIcon
+            sx={{ fontSize: 16, color: inkFor(hueForBranch(node.segment, path), isDark), flexShrink: 0 }}
+          />
+          <ListItemContent>
+            <Typography noWrap sx={rowTypographySx}>
+              {humanizeSegment(node.segment, depth)}
+            </Typography>
+          </ListItemContent>
+          <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
+            {node.fileCount}
+          </Chip>
+        </ListItemButton>
+      </ListItem>
+    ),
+    renderFileRow: (file, selected, onSelect) => (
+      <ListItem>
+        <ListItemButton
+          selected={selected}
+          onClick={onSelect}
+          data-testid={`datalake-manager-file-${file.id}`}
+          sx={treeRowSx(hoverBg)}
+        >
+          <ArticleOutlinedIcon
+            sx={{
+              fontSize: 16,
+              color: selected ? inkFor(HUES.cyan, isDark) : 'text.tertiary',
+              flexShrink: 0,
+            }}
+          />
+          <ListItemContent>
+            <Typography noWrap sx={{ ...rowTypographySx, fontWeight: selected ? 'lg' : 400 }}>
+              {file.fileName.replace(/\.[^/.]+$/, '')}
+            </Typography>
+          </ListItemContent>
+        </ListItemButton>
+      </ListItem>
+    ),
+    humanize: humanizeSegment,
+    // Unused given the renderBackRow override above, but kept truthful.
+    allCategoriesLabel: 'All Lakes',
+    emptyFilesLabel: 'No files found',
+    errorLabel: 'Failed to load files',
+  };
 
   return (
     <Box
@@ -280,20 +364,9 @@ export default function ManagerNav({
         </Tooltip>
       </Box>
 
-      <Box sx={{ ...TREE_SCROLL_SX, px: '8px' }}>
-        {activeLake && (
-          <Box sx={TREE_BACK_STICKY_SX}>
-            <ListItemButton onClick={handleBack} data-testid="datalake-manager-back" sx={treeBackRowSx(hoverBg)}>
-              <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
-              <Typography noWrap sx={rowTypographySx}>
-                {backLabel}
-              </Typography>
-            </ListItemButton>
-          </Box>
-        )}
-
-        {!activeLake ? (
-          /* Root: accordions - active lakes (tree-folder rows) + the lifecycle lists. */
+      {!activeLake ? (
+        <Box sx={{ ...TREE_SCROLL_SX, px: '8px' }}>
+          {/* Root: accordions - active lakes (tree-folder rows) + the lifecycle lists. */}
           <>
             <Box data-testid="datalake-manager-lakes-section">
               <NavSectionHeader
@@ -507,100 +580,28 @@ export default function ManagerNav({
               </ModalDialog>
             </Modal>
           </>
-        ) : filesError ? (
-          <Box sx={{ p: 2, textAlign: 'center' }} data-testid="datalake-manager-error">
-            <Typography level="body-xs" sx={{ color: 'danger.400' }}>
-              Failed to load files
-            </Typography>
-          </Box>
-        ) : filesLoading ? (
-          <NavSkeletons />
-        ) : showFiles ? (
-          /* File list at leaf */
-          <List size="sm" sx={TREE_LIST_SX}>
-            {files.length === 0 ? (
-              <EmptyHint text="No files found" />
-            ) : (
-              files.map(file => (
-                <ListItem key={file.id}>
-                  <ListItemButton
-                    selected={selectedFileId === file.id}
-                    onClick={() => onSelectFile(file)}
-                    data-testid={`datalake-manager-file-${file.id}`}
-                    sx={treeRowSx(hoverBg)}
-                  >
-                    <ArticleOutlinedIcon
-                      sx={{
-                        fontSize: 16,
-                        color: selectedFileId === file.id ? inkFor(HUES.cyan, isDark) : 'text.tertiary',
-                        flexShrink: 0,
-                      }}
-                    />
-                    <ListItemContent>
-                      <Typography
-                        noWrap
-                        sx={{ ...rowTypographySx, fontWeight: selectedFileId === file.id ? 'lg' : 400 }}
-                      >
-                        {file.fileName.replace(/\.[^/.]+$/, '')}
-                      </Typography>
-                    </ListItemContent>
-                  </ListItemButton>
-                </ListItem>
-              ))
-            )}
-          </List>
-        ) : (
-          /* In-lake folder tree */
-          <List size="sm" sx={TREE_LIST_SX}>
-            {filteredNodes.map(node => (
-              <ListItem key={node.segment}>
-                <ListItemButton
-                  onClick={() => navigate([...path, node.segment])}
-                  sx={treeRowSx(hoverBg)}
-                  data-testid={`datalake-manager-node-${node.segment}`}
-                >
-                  <FolderOutlinedIcon
-                    sx={{ fontSize: 16, color: inkFor(hueForBranch(node.segment, path), isDark), flexShrink: 0 }}
-                  />
-                  <ListItemContent>
-                    <Typography noWrap sx={rowTypographySx}>
-                      {humanizeSegment(node.segment, path.length)}
-                    </Typography>
-                  </ListItemContent>
-                  <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
-                    {node.fileCount}
-                  </Chip>
-                </ListItemButton>
-              </ListItem>
-            ))}
-
-            {/* Fallback bucket: files with no prefix-matching tag, so nothing is hidden. */}
-            {atLakeRoot && !searchQuery && uncategorizedFiles.length > 0 && (
-              <ListItem key={UNCATEGORIZED_KEY}>
-                <ListItemButton
-                  onClick={() => navigate([...path, UNCATEGORIZED_KEY])}
-                  data-testid="datalake-manager-uncategorized"
-                  sx={treeRowSx(hoverBg)}
-                >
-                  <FolderOutlinedIcon sx={{ fontSize: 16, color: 'neutral.400', flexShrink: 0 }} />
-                  <ListItemContent>
-                    <Typography noWrap sx={{ ...rowTypographySx, fontStyle: 'italic', color: 'text.secondary' }}>
-                      Uncategorized
-                    </Typography>
-                  </ListItemContent>
-                  <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
-                    {uncategorizedFiles.length}
-                  </Chip>
-                </ListItemButton>
-              </ListItem>
-            )}
-
-            {filteredNodes.length === 0 && !(atLakeRoot && !searchQuery && uncategorizedFiles.length > 0) && (
-              <EmptyHint text={searchQuery ? 'No matches' : 'No categories'} />
-            )}
-          </List>
-        )}
-      </Box>
+        </Box>
+      ) : (
+        <DataLakeTreeView
+          tree={tree}
+          articles={articles}
+          breadcrumb={path}
+          onNavigate={navigate}
+          selectedFileId={selectedFileId}
+          onSelectFile={onSelectFile}
+          isLoading={filesLoading}
+          isError={filesError}
+          chrome={managerTreeChrome}
+          uncategorized={{ files: uncategorizedFiles, renderRow: renderUncategorizedRow }}
+          search={searchQuery}
+          onSearchChange={setSearchQuery}
+          sort={sortBy}
+          onSortChange={setSortBy}
+          hideToolbar
+          leafMinDepth={seedDepth}
+          testIds={{ container: 'datalake-manager-tree', error: 'datalake-manager-error' }}
+        />
+      )}
 
       {/* Sticky bottom bar, same chrome as the in-chat tree footer. */}
       <Box sx={{ display: 'flex', gap: '8px', p: '12px', borderTop: '1px solid', borderColor }}>

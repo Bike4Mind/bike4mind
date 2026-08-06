@@ -2,9 +2,9 @@ import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 
 export type ManagerLake = NonNullable<ReturnType<typeof useGetDataLakes>['data']>[number];
 
-/** Synthetic category for lake files that carry no prefix-matching tag (e.g. appended or
- *  meta-tag-only files), so every file is always reachable in the manager. */
-export const UNCATEGORIZED_KEY = '__uncategorized__';
+// Re-exported so the manager and any future orchestrator share TreeView's constant rather than
+// keeping a second copy of the same synthetic bucket key.
+export { UNCATEGORIZED_KEY } from '@client/app/components/datalake/DataLakeTreeView';
 
 export const normalizePrefix = (fileTagPrefix: string) =>
   fileTagPrefix.endsWith(':') ? fileTagPrefix : `${fileTagPrefix}:`;
