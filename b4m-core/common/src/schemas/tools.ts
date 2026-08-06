@@ -9,7 +9,7 @@ import { z } from 'zod';
  */
 export const ToolExecutionRequestSchema = z.object({
   toolName: z.enum(['weather_info', 'web_search', 'web_fetch']),
-  input: z.record(z.string(), z.any()),
+  input: z.record(z.string(), z.unknown()),
 });
 
 export type ToolExecutionRequest = z.infer<typeof ToolExecutionRequestSchema>;
@@ -21,7 +21,7 @@ export type ToolExecutionRequest = z.infer<typeof ToolExecutionRequestSchema>;
  */
 export const ToolExecutionResponseSchema = z.object({
   success: z.boolean(),
-  result: z.any().optional(),
+  result: z.unknown().optional(),
   error: z.string().optional(),
   errorType: z.string().optional(),
   executionTimeMs: z.number().optional(),

@@ -51,9 +51,9 @@ vi.mock('./toolsHandler.shared', async importOriginal => {
 });
 
 import { handleToolRequest } from './tools';
-import { executeToolWithLogging } from './toolsHandler.shared';
+import { executeToolWithLogging, SUPPORTED_TOOLS } from './toolsHandler.shared';
 import { verifyJwtToken, checkRateLimit } from './auth';
-import { REQUEST_ID_HEADER } from '@bike4mind/common';
+import { REQUEST_ID_HEADER, ToolExecutionRequestSchema } from '@bike4mind/common';
 
 const VALID_BODY = JSON.stringify({ toolName: 'weather_info', input: { city: 'Tokyo' } });
 
@@ -168,5 +168,15 @@ describe('tools Lambda handler — request ID correlation', () => {
 
     expect(header).toBe('from-wrapper');
     expect(body.request_id).toBe('from-wrapper');
+  });
+});
+
+describe('tool-name enum stays in sync with SUPPORTED_TOOLS', () => {
+  // The contract schema's toolName enum and the handler's SUPPORTED_TOOLS are two
+  // hand-maintained lists (schema can't import the handler's runtime module). If
+  // they drift, the OpenAPI spec advertises a tool the handler rejects, or vice
+  // versa. Assert parity so adding a tool to one without the other fails loudly.
+  it('the contract enum matches the handler allowlist exactly', () => {
+    expect([...ToolExecutionRequestSchema.shape.toolName.options].sort()).toEqual([...SUPPORTED_TOOLS].sort());
   });
 });
