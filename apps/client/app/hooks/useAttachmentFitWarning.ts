@@ -76,7 +76,8 @@ export function useAttachmentFitWarning(
   const model = models?.find(m => m.id === modelId);
   // Keyed on the ids and the model, and debounced, so this fires on attach/remove/model-change and
   // never on a keystroke.
-  const key = useDebounced(`${modelId ?? ''}|${fileIds.join(',')}`, DEBOUNCE_MS);
+  const currentKey = `${modelId ?? ''}|${fileIds.join(',')}`;
+  const key = useDebounced(currentKey, DEBOUNCE_MS);
 
   const { data } = useQuery({
     queryKey: ['contextDryRun', key],
@@ -98,7 +99,14 @@ export function useAttachmentFitWarning(
     },
   });
 
-  return deriveAttachmentFitWarning(data?.files, data?.textFileCount);
+  // Filtered against the CURRENT attachments, not just whatever the query last returned. Removing the
+  // offending file leaves the debounced key - and react-query's cache for it - pointing at the previous
+  // answer, so without this the banner outlives the file it names and the user who reacted correctly by
+  // removing it is still told their file will be cut. QA measured 30+ seconds of that.
+  //
+  // A separate "only trust an answer computed for exactly this key" guard was tried here and removed:
+  // with the filter below it can never change the outcome, and a guard no test can kill is dead code.
+  return deriveAttachmentFitWarning(data?.files, data?.textFileCount, fileIds);
 }
 
 /**
@@ -110,15 +118,24 @@ export function useAttachmentFitWarning(
  */
 export function deriveAttachmentFitWarning(
   files: DryRunFile[] | undefined,
-  textFileCount: number | undefined
+  textFileCount: number | undefined,
+  /**
+   * Ids currently attached. A response can name a file that has since been removed, and warning about
+   * one is the defect QA found: the banner kept naming a detached file. Omitted means "trust the
+   * response", which is what a caller with no attachment state of its own can honestly say.
+   */
+  attachedIds?: string[]
 ): AttachmentFitWarning | null {
   if (!files?.length) return null;
+  const stillAttached = attachedIds ? new Set(attachedIds) : null;
 
   // Images bypass the text budget entirely, so they can never be the reason to warn. Nor can a file
   // still awaiting moderation: the route refused to read it, so its size is unknown and warning about
   // it would be inventing a number. Both are excluded explicitly rather than left to the threshold,
   // which they happen to pass today.
-  const candidates = files.filter(f => !f.isImage && f.measured !== 'pending');
+  const candidates = files.filter(
+    f => !f.isImage && f.measured !== 'pending' && (!stillAttached || stillAttached.has(f.id))
+  );
   // The worst-fitting file is the one worth naming; listing all of them in a one-line banner would
   // bury the actionable part.
   const worst = candidates.reduce<DryRunFile | null>(

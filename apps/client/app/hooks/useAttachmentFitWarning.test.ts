@@ -98,6 +98,42 @@ describe('deriveAttachmentFitWarning', () => {
   });
 });
 
+// QA defect: the banner kept naming "oversize.txt" for 30+ seconds after the file was removed, with
+// zero attachments on the composer. A warning that outlives the condition it describes tells a user who
+// reacted correctly that their file will still be cut.
+describe('a warning never outlives the attachment it names', () => {
+  it('ignores a file that is no longer attached', () => {
+    const removed = file({ id: 'gone', fileName: 'oversize.txt', deliveredFraction: 0.1 });
+
+    expect(deriveAttachmentFitWarning([removed], 1, [])).toBeNull();
+    expect(deriveAttachmentFitWarning([removed], 1, ['something-else'])).toBeNull();
+  });
+
+  it('still warns about a file that IS still attached', () => {
+    const present = file({ id: 'here', fileName: 'oversize.txt', deliveredFraction: 0.1 });
+
+    expect(deriveAttachmentFitWarning([present], 1, ['here'])?.fileName).toBe('oversize.txt');
+  });
+
+  it('names the worst file that survives the attachment filter, not the worst overall', () => {
+    const warning = deriveAttachmentFitWarning(
+      [
+        file({ id: 'gone', fileName: 'removed.txt', deliveredFraction: 0.05 }),
+        file({ id: 'here', fileName: 'kept.csv', deliveredFraction: 0.4 }),
+      ],
+      2,
+      ['here']
+    );
+
+    expect(warning?.fileName).toBe('kept.csv');
+  });
+
+  // Callers with no attachment state of their own keep the previous behaviour.
+  it('trusts the response when no attachment set is supplied', () => {
+    expect(deriveAttachmentFitWarning([file({ deliveredFraction: 0.2 })], 1)?.deliveredPercent).toBe(20);
+  });
+});
+
 // Source-level guard, in the spirit of the repo's fabFileModerationGate test. This shipped once with
 // bare `axios.post`, which sends no bearer token: the route 401s, react-query is configured retry:false
 // so `data` stays undefined, and the hook returns null - indistinguishable from "the file fits". Every
