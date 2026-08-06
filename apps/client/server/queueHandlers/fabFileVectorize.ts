@@ -13,8 +13,14 @@ import {
 import { NotFoundError } from '@server/utils/errors';
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
-import { ChunkSchema, EmbeddingFactory, resolveEmbeddingConfig, isEmbeddingAuthError } from '@bike4mind/fab-pipeline';
-import { apiKeyService, embeddingCacheService } from '@bike4mind/services';
+import {
+  ChunkSchema,
+  EmbeddingFactory,
+  resolveEmbeddingConfig,
+  isEmbeddingAuthError,
+  getAtlasIndexForModel,
+} from '@bike4mind/fab-pipeline';
+import { apiKeyService, embeddingCacheService, fabFilesService } from '@bike4mind/services';
 import { finalizeBatchIfComplete, isBatchComplete } from '@server/queueHandlers/dataLakeBatchProgress';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -205,11 +211,22 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     logger.log(`Successfully generated embeddings: ${cacheHitCount} from cache, ${cacheMisses.length} newly generated`);
 
+    // Guards against a future Atlas index/chunk-vector width mismatch (e.g. a Voyage model
+    // called with a non-default outputDimension): a chunk written at the wrong width would
+    // silently corrupt that model's shared Atlas index once embeddingModel is stamped on it.
+    const expectedDimensions = getAtlasIndexForModel(embeddingModel)?.numDimensions;
+
     // Write this message's chunk vectors in a transaction.
     await withTransaction(async () => {
       await Promise.all(
         embeddableChunks.map((chunk, index) => {
-          chunk.vector = vectors[index];
+          const vector = vectors[index];
+          if (expectedDimensions !== undefined && vector.length !== expectedDimensions) {
+            throw new Error(
+              `Chunk ${chunk.id} vector has ${vector.length} dimensions, expected ${expectedDimensions} for model ${embeddingModel}`
+            );
+          }
+          chunk.vector = vector;
           return fabFileChunkRepository.update(chunk);
         })
       );
@@ -235,6 +252,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     fabFile.isVectorizing = !isFileVectorized;
 
     if (isFileVectorized) {
+      // Stamp every chunk with its embeddingModel only once the WHOLE file is vectorized -
+      // a partial stamp mid-batch would let the Atlas cutover read path treat a still-vectorizing
+      // file as ready.
+      await fabFilesService.stampChunkEmbeddingModel(fabFileId, embeddingModel, {
+        db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository },
+      });
+
       await sendToClient(userId, Resource.websocket.managementEndpoint, {
         action: 'update_file_chunk_vector_status',
         fabFileId,

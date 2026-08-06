@@ -57,6 +57,12 @@ export interface IFabFileChunk {
   text: string;
   tokenCount: number;
   vector?: number[];
+  /**
+   * Embedding model this chunk's vector was generated with. Chunks can outlive their file's
+   * current `embeddingModel` (re-embedding, backfill), so this is the per-chunk source of truth
+   * an Atlas `$vectorSearch` index lookup keys on - not FabFile.embeddingModel.
+   */
+  embeddingModel?: string;
 }
 
 /**
@@ -120,6 +126,12 @@ export interface IFabFile {
   vectorized?: boolean;
   /** The embedding model used to generate the vectors. */
   embeddingModel?: string;
+  /**
+   * When this file's chunks were last fully re-stamped with their per-chunk `embeddingModel`
+   * (see IFabFileChunk.embeddingModel). Atlas $vectorSearch cutover treats a stamp younger than
+   * ~60s as not-yet-queryable (mongot indexing lag), so this is read-time readiness, not a cache.
+   */
+  chunkEmbeddingModelStampedAt?: Date;
 
   system?: boolean;
 
@@ -238,6 +250,22 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /** Count chunks that are terminal (have a vector OR are oversized) - for idempotent vectorizedChunkCount recompute. */
   countTerminalChunks(fabFileId: string, contextWindow: number): Promise<number>;
+  /** Bulk-stamp every chunk of a file with the model its vectors were generated under. */
+  updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void>;
+  /** One page of vector-bearing chunks missing `embeddingModel`, ascending by `_id` - backfill's keyset cursor. */
+  findChunksMissingEmbeddingModel(options?: {
+    limit?: number;
+    afterChunkId?: string;
+  }): Promise<Array<{ id: string; fabFileId: string; vectorLength: number }>>;
+  /** Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model. */
+  vectorSearch(
+    fileIds: string[],
+    queryVector: number[],
+    model: string,
+    options?: { limit?: number }
+  ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>>;
+  /** Whether `model`'s Atlas vector index exists and is queryable (cached; see atlasSearchIndex.ts). */
+  getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null>;
   /**
    * One page of vector-bearing chunks (id, fabFileId, text, vector) for the given files,
    * ascending by `_id`. Skips chunks without a vector at the DB layer. Powers semantic search

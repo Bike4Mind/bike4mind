@@ -13,6 +13,10 @@ const h = vi.hoisted(() => ({
   markFailedIfNotAlready: vi.fn(),
   getVector: vi.fn(),
   getEmbedding: vi.fn(),
+  countTerminalChunks: vi.fn(),
+  chunkUpdate: vi.fn(),
+  getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
+  stampChunkEmbeddingModel: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -24,7 +28,7 @@ vi.mock('@bike4mind/database', () => ({
     claimFileStatus: vi.fn(),
   },
   embeddingCacheRepository: {},
-  fabFileChunkRepository: { findById: vi.fn() },
+  fabFileChunkRepository: { findById: vi.fn(), countTerminalChunks: h.countTerminalChunks, update: h.chunkUpdate },
   fabFileRepository: {
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
@@ -36,7 +40,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/managers/fabFileManager', () => ({ getVector: h.getVector }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
-  embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn() },
+  embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn().mockResolvedValue(undefined) },
+  fabFilesService: { stampChunkEmbeddingModel: h.stampChunkEmbeddingModel },
 }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
@@ -58,6 +63,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   resolveEmbeddingConfig: vi.fn(() => ({ config: {}, missing: null })),
   // Mirror the real name-based guard so any test that reaches the failure branch classifies correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
+  getAtlasIndexForModel: h.getAtlasIndexForModel,
 }));
 vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get: () => 'mock' }) }) }));
 
@@ -147,5 +153,51 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
 
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'rate limit exceeded');
+  });
+});
+
+describe('fabFileVectorize handler - embeddingModel discriminator stamp', () => {
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getAtlasIndexForModel.mockReturnValue({ name: 'idx', numDimensions: 3 });
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.countTerminalChunks.mockResolvedValue(1);
+  });
+
+  it('stamps the chunk embeddingModel once the whole file is fully vectorized', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.stampChunkEmbeddingModel).toHaveBeenCalledWith(
+      'ff1',
+      'text-embedding-3-small',
+      expect.objectContaining({ db: expect.anything() })
+    );
+  });
+
+  it('throws before writing a chunk vector whose width does not match the model Atlas index', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.getAtlasIndexForModel.mockReturnValue({ name: 'idx', numDimensions: 5 });
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(/dimensions/);
+
+    expect(h.chunkUpdate).not.toHaveBeenCalled();
+    expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
   });
 });
