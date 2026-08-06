@@ -36,8 +36,14 @@ export function evidenceTierForDoc(tagNames: string[]): EvidenceTier {
 
 /** Cap the text sent to the extractor per document, so one huge file cannot dominate the LLM budget. */
 const MAX_DOC_CHARS = 24_000;
-/** Safety cap on documents scanned in a single extraction run. */
-const MAX_DOCS_PER_RUN = 500;
+/**
+ * Timeout-safe bound on documents per run. Extraction is sequential and each doc costs one LLM call
+ * plus embeds/appends (~5s), while the job runs in a 5-minute Lambda - so this is the most that
+ * reliably completes in one pass. A lake larger than this extracts its first slice and LOGS the
+ * remainder (never a silent drop); full coverage for large lakes is the bounded-continuation
+ * follow-up. Small measurement lakes (the rollout target) fit entirely.
+ */
+const MAX_DOCS_PER_RUN = 40;
 /** Chunk page size when reconstructing a document's text. */
 const CHUNK_PAGE_LIMIT = 1_000;
 
@@ -85,10 +91,16 @@ export async function extractLakeMemoryForBatch(
   }
 
   const extractor = new LakeMemoryExtractionService(logger);
-  const docIds = (await fabFileRepository.findIdsByDataLakeTag(dataLakeService.lakeMembershipScope(lake))).slice(
-    0,
-    MAX_DOCS_PER_RUN
-  );
+  const allDocIds = await fabFileRepository.findIdsByDataLakeTag(dataLakeService.lakeMembershipScope(lake));
+  const docIds = allDocIds.slice(0, MAX_DOCS_PER_RUN);
+  if (allDocIds.length > docIds.length) {
+    // Never silently truncate: a large lake covers only its first slice this run. Surfacing the
+    // remainder is what keeps "the card looks complete" from masking a partial extraction.
+    logger.warn(
+      `[lakeMemory] lake ${datalakeTag} has ${allDocIds.length} docs; extracting ${docIds.length} this run, ` +
+        `${allDocIds.length - docIds.length} not yet covered (bounded-continuation follow-up)`
+    );
+  }
 
   let docsProcessed = 0;
   let factsWritten = 0;
