@@ -31,10 +31,7 @@ import { useDataLakeFiles, useReprocessFabFile, useRemoveFileFromDataLake } from
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { satisfiesTagPrefix } from '@bike4mind/common';
-import DataLakeTreeView, {
-  UNCATEGORIZED_KEY,
-  type DataLakeTreeChrome,
-} from '@client/app/components/datalake/DataLakeTreeView';
+import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
 
 // Utilities
 
@@ -234,11 +231,12 @@ function TreeSidebar({
         </Typography>
       </ListItemButton>
     ),
+    backRowPlacement: 'above',
     scrollSx: { flex: 1, overflow: 'auto' },
     nodeListSx: { '--ListItem-paddingX': '12px', '--ListItem-paddingY': '4px' },
     fileListSx: { '--ListItem-paddingX': '12px', '--ListItem-paddingY': '6px' },
     renderNodeRow: (node, _depth, onOpen) => (
-      <ListItem key={node.segment}>
+      <ListItem>
         <ListItemButton
           onClick={onOpen}
           sx={{ borderRadius: 'sm', gap: 1 }}
@@ -261,7 +259,7 @@ function TreeSidebar({
       </ListItem>
     ),
     renderFileRow: (file, selected, onSelect) => (
-      <ListItem key={file.id}>
+      <ListItem>
         <ListItemButton
           selected={selected}
           onClick={onSelect}
@@ -297,7 +295,7 @@ function TreeSidebar({
       uncategorized={{
         files: uncategorizedFiles,
         renderRow: (count, onOpen) => (
-          <ListItem key={UNCATEGORIZED_KEY}>
+          <ListItem>
             <ListItemButton
               onClick={onOpen}
               sx={{ borderRadius: 'sm', gap: 1 }}

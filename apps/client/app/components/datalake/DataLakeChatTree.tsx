@@ -225,6 +225,7 @@ export default function DataLakeChatTree({
         </Typography>
       </ListItemButton>
     ),
+    backRowPlacement: 'sticky',
     stickyBackSx: TREE_BACK_STICKY_SX,
     scrollSx: { ...TREE_SCROLL_SX, px: '8px' },
     nodeListSx: TREE_LIST_SX,
@@ -232,7 +233,7 @@ export default function DataLakeChatTree({
     renderNodeRow: (node, depth, onOpen) => {
       const branchInk = inkFor(hueForBranch(node.segment, breadcrumb), isDark);
       return (
-        <ListItem key={node.segment}>
+        <ListItem>
           <ListItemButton
             onClick={onOpen}
             sx={treeRowSx(theme.palette.notebooklist.hoverBg)}
@@ -252,7 +253,7 @@ export default function DataLakeChatTree({
       );
     },
     renderFileRow: (file, selected, onSelect) => (
-      <ListItem key={file.id}>
+      <ListItem>
         <ListItemButton
           selected={selected}
           onClick={onSelect}

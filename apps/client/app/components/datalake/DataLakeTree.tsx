@@ -73,13 +73,14 @@ export default function DataLakeTree(props: DataLakeTreeProps) {
         </Typography>
       </ListItemButton>
     ),
+    backRowPlacement: 'above',
     scrollSx: { flex: 1, overflow: 'auto' },
     nodeListSx: { '--ListItem-paddingX': '12px', '--ListItem-paddingY': '4px' },
     fileListSx: { '--ListItem-paddingX': '12px', '--ListItem-paddingY': '6px' },
     renderNodeRow: (node, depth, onOpen) => {
       const branchInk = inkFor(hueForBranch(node.segment, props.breadcrumb, theme), isDark);
       return (
-        <ListItem key={node.segment}>
+        <ListItem>
           <ListItemButton
             onClick={onOpen}
             sx={{
@@ -117,7 +118,7 @@ export default function DataLakeTree(props: DataLakeTreeProps) {
       );
     },
     renderFileRow: (file, selected, onSelect) => (
-      <ListItem key={file.id}>
+      <ListItem>
         <ListItemButton
           selected={selected}
           onClick={onSelect}
