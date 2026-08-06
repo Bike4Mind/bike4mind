@@ -49,7 +49,10 @@ export async function handleDataLakeCommand(params: HandleDataLakeCommandParams)
   }
 }
 
-async function handleAdd(parsed: ParsedDataLakeCommand, params: HandleDataLakeCommandParams): Promise<string> {
+async function handleAdd(
+  parsed: Extract<ParsedDataLakeCommand, { subcommand: 'add' }>,
+  params: HandleDataLakeCommandParams
+): Promise<string> {
   if (!parsed.lakeSlug) {
     return 'Please name a target lake, e.g. `@datalake add to <lake> <link>` (with a link or an attached file).';
   }
