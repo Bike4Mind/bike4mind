@@ -76,7 +76,7 @@ export default function DataLakeViewer({
   const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
 
   const { data: filesResult, isLoading, isError } = useDataLakeFiles(dataLakeId);
-  const articles = filesResult?.data ?? [];
+  const articles = useMemo(() => filesResult?.data ?? [], [filesResult?.data]);
 
   // Build tag tree from articles, filtering to only data lake-specific tags
   const tree = useMemo(() => {
