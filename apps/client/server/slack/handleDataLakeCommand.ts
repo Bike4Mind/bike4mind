@@ -74,7 +74,7 @@ export interface RunDataLakeSlackCommandDeps {
   adminSettings: { getSettingsValue(key: 'EnableDataLakeSlackAdd'): Promise<boolean | undefined> };
   dataLakes: DataLakeCommandRepo;
   sendMessage: (args: { channel: string; text: string; threadTs?: string }) => Promise<unknown>;
-  logger: { info: (message: string) => void };
+  logger: { info: (message: string) => void; error: (message: string, meta?: unknown) => void };
 }
 
 /**
@@ -83,16 +83,34 @@ export interface RunDataLakeSlackCommandDeps {
  * The caller intercepts this BEFORE the LLM path and always acks Slack with 200.
  */
 export async function runDataLakeSlackCommand(deps: RunDataLakeSlackCommandDeps): Promise<void> {
-  const enabled = await deps.adminSettings.getSettingsValue('EnableDataLakeSlackAdd');
-  if (!enabled) {
-    deps.logger.info('Ignoring @datalake command: EnableDataLakeSlackAdd is off');
-    return;
-  }
+  // Never throw: the caller acks Slack with 200 on the next line, and an escaped
+  // exception would unwind past it and trigger Slack's event retry (and, once ingest
+  // lands, duplicate replies). Log, best-effort notify, and swallow.
+  try {
+    const enabled = await deps.adminSettings.getSettingsValue('EnableDataLakeSlackAdd');
+    if (!enabled) {
+      deps.logger.info('Ignoring @datalake command: EnableDataLakeSlackAdd is off');
+      return;
+    }
 
-  const response = await handleDataLakeCommand({
-    command: deps.command,
-    organizationId: deps.organizationId,
-    dataLakes: deps.dataLakes,
-  });
-  await deps.sendMessage({ channel: deps.channel, text: response, threadTs: deps.threadTs });
+    const response = await handleDataLakeCommand({
+      command: deps.command,
+      organizationId: deps.organizationId,
+      dataLakes: deps.dataLakes,
+    });
+    await deps.sendMessage({ channel: deps.channel, text: response, threadTs: deps.threadTs });
+  } catch (err) {
+    deps.logger.error('@datalake command failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    try {
+      await deps.sendMessage({
+        channel: deps.channel,
+        text: 'Something went wrong handling that `@datalake` command. Please try again.',
+        threadTs: deps.threadTs,
+      });
+    } catch {
+      // Best-effort error reply; ignore a secondary sendMessage failure so we still ack 200.
+    }
+  }
 }
