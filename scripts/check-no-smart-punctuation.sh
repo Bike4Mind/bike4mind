@@ -27,6 +27,12 @@
 # Every mode is the same code path: parse a unified diff, look only at added lines. --all gets
 # there by diffing against the empty tree, which presents every tracked file as all-added.
 #
+# MUST STAY IN SYNC with check-no-control-bytes.sh: a .ts that git classifies as BINARY (which is
+# what a NUL does) yields "Binary files ... differ" with no +++ or @@ records, so this guard skips
+# it entirely. That is safe only because the control-byte guard runs alongside it in both the hook
+# and CI, scans whole files, and rejects the NUL that caused the classification. If that guard is
+# ever removed, a binary .ts becomes an unscanned hole here.
+#
 # Fails closed: a missing or erroring perl, and a failing git diff, both exit non-zero rather
 # than reporting "clean".
 set -euo pipefail
@@ -63,9 +69,10 @@ usage() {
 
 all_diff() {
   # The empty tree, so every tracked file's whole content shows up as added lines. hash-object
-  # without -w only computes the id, it writes nothing.
+  # without -w only computes the id, it writes nothing. Fed from empty stdin rather than
+  # /dev/null: identical result (4b825dc6...) without assuming /dev/null is readable.
   local empty_tree
-  if ! empty_tree=$("${GIT[@]}" hash-object -t tree /dev/null 2>/dev/null); then
+  if ! empty_tree=$(printf '' | "${GIT[@]}" hash-object --stdin -t tree 2>/dev/null); then
     echo "check-no-smart-punctuation: cannot resolve the empty tree object." >&2
     return 1
   fi
