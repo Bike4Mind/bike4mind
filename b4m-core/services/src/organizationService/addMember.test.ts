@@ -266,4 +266,35 @@ describe('addMember', () => {
       users: [{ userId: 'user-id', permissions: [Permission.read] }],
     });
   });
+
+  describe('userDetails seeding (#1460)', () => {
+    it('seeds a zero-usage userDetails row for a newly added member', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue(mockUser);
+      mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(cloneDeep(mockOrganization));
+
+      const result = await addMember(mockOwnerUser, { userId: 'user-id', organizationId: 'org-id' }, mockAdapters);
+
+      expect(result.organization.userDetails).toEqual([
+        { id: 'user-id', email: 'test@example.com', name: 'Test User', usedCredits: 0, lastCreditUsedAt: null },
+      ]);
+    });
+
+    it('does not duplicate the row when the member already has one (re-add)', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue(mockUser);
+      mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue({
+        ...cloneDeep(mockOrganization),
+        users: [{ userId: 'user-id', permissions: [] }],
+        userDetails: [
+          { id: 'user-id', email: 'test@example.com', name: 'Test User', usedCredits: 42, lastCreditUsedAt: null },
+        ],
+      });
+
+      const result = await addMember(mockOwnerUser, { userId: 'user-id', organizationId: 'org-id' }, mockAdapters);
+
+      // Existing usage is preserved (not reset to 0) and the row is not duplicated.
+      expect(result.organization.userDetails).toEqual([
+        { id: 'user-id', email: 'test@example.com', name: 'Test User', usedCredits: 42, lastCreditUsedAt: null },
+      ]);
+    });
+  });
 });

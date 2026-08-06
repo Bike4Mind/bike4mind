@@ -55,6 +55,21 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
     organization.users.push({ userId: userToAdd.id, permissions: [Permission.read] });
   }
 
+  // Seed the per-member credit side-table in the same write so `users[]` and `userDetails[]` stay in
+  // sync at the grant point. Without a row, `updateUserDetails`'s positional $inc no-ops and the member
+  // escapes `maxCreditsPerMember` entirely (reads as 0 spend forever). Guarded so a re-add never
+  // duplicates a row - and so it also backfills an existing member who predates this seeding.
+  organization.userDetails ||= [];
+  if (!organization.userDetails.some(detail => detail.id === userToAdd.id)) {
+    organization.userDetails.push({
+      id: userToAdd.id,
+      email: userToAdd.email ?? userToAdd.username,
+      name: userToAdd.name,
+      usedCredits: 0,
+      lastCreditUsedAt: null,
+    });
+  }
+
   await db.organizations.update(organization);
 
   // Establish org membership on the user document. Org-scoped features (e.g.
