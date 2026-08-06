@@ -27,6 +27,8 @@ export function activeOrgId(): string | undefined {
   return selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
 }
 
+// ── Lake catalog & lifecycle ────────────────────────────────────────────────
+
 /**
  * Fetches all data lakes accessible to the current user. Manage-gated shape: the server attaches
  * the editor-only fields (systemPrompt) per lake, and only where `canManage` holds - so a lake the
@@ -344,6 +346,8 @@ export function useReanalyzeTaxonomy(batchId: string) {
 
 /**
  * Hook: Fetch files belonging to a specific data lake by ID.
+ * One lake's own file list (GET /api/data-lakes/{id}/articles) - not the cross-lake browse
+ * query; see useGetDataLakeArticles.
  */
 export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: number }) {
   return useQuery({
@@ -431,10 +435,7 @@ export interface DataLakeArticlesParams {
   sortDir?: 'asc' | 'desc';
 }
 
-/**
- * Fetches tag counts for the Data Lake Explorer tag tree via server-side aggregation.
- * Much lighter than fetching all articles - returns ~50 tag/count pairs instead of 2000 documents.
- */
+/** Response shape for the tag-counts endpoint. */
 export interface DataLakeTagCountsResponse {
   /** Tag-occurrence sums that drive the Data Lake Explorer's tag tree. */
   tagCounts: { tag: string; count: number }[];
@@ -459,6 +460,10 @@ export interface DataLakeTagCountsResponse {
 export type DataLakeBrowseSource = 'opti' | 'datalakes';
 const browseBase = (_source: DataLakeBrowseSource) => '/api/data-lakes';
 
+/**
+ * Fetches tag counts for the Data Lake Explorer tag tree via server-side aggregation.
+ * Much lighter than fetching all articles - returns ~50 tag/count pairs instead of 2000 documents.
+ */
 export function useGetDataLakeTagCounts(source: DataLakeBrowseSource = 'opti') {
   return useQuery({
     queryKey: dataLakeKeys.tagCounts(source),
@@ -498,6 +503,10 @@ export function useDataLakeArticleCounts(): { total: number; sales: number; opti
   };
 }
 
+/**
+ * Cross-lake browse query (GET /api/data-lakes/articles) - not one lake's file list; see
+ * useDataLakeFiles.
+ */
 export function useGetDataLakeArticles(params?: DataLakeArticlesParams | null, source: DataLakeBrowseSource = 'opti') {
   return useQuery({
     queryKey: dataLakeKeys.articles(source, params),

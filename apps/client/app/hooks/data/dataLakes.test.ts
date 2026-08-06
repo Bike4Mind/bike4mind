@@ -17,8 +17,8 @@ const apiDelete = vi.fn();
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: (...args: unknown[]) => apiGet(...args), delete: (...args: unknown[]) => apiDelete(...args) },
 }));
-// dataLakes.ts value-imports these at module load for its OTHER hooks; the browse hook touches
-// none of them, and AccountSelector alone would pull in MUI Joy plus two React contexts.
+// dataLakes.ts value-imports these at module load for its OTHER hooks; useBrowsePublicDataLakes
+// touches none of them, and AccountSelector alone would pull in MUI Joy plus two React contexts.
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: { getState: () => ({ selectedAccount: undefined }) },
