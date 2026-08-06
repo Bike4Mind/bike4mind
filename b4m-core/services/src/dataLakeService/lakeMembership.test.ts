@@ -111,4 +111,24 @@ describe('removeFileFromLake', () => {
     );
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
+
+  it('refuses even an admin clearing a prefixed tag on a file the lake creator does not own', async () => {
+    // Prefix-only (no meta-tag), owned by someone other than lake()'s creator ('owner'), so the
+    // outcome is decided entirely by the ownership conjunct, not the meta-tag arm.
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi
+            .fn()
+            .mockResolvedValue({ id: 'f1', userId: 'victim', tags: [{ name: 'lk:invoices', strength: 1 }] }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    await expect(removeFileFromLake({ userId: 'root', isAdmin: true }, lake(), 'f1', adapters)).rejects.toThrow(
+      /not found in this data lake/i
+    );
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
 });

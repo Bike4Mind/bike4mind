@@ -466,7 +466,7 @@ describe('DataLakeRepository — slug is unique per org', () => {
   });
 });
 
-describe('DataLakeRepository — fileTagPrefix is unique per creator (DB backstop)', () => {
+describe('DataLakeRepository - fileTagPrefix is unique per creator (DB backstop)', () => {
   setupMongoTest();
 
   // cleanupTestDB drops the whole DB before each test, so (re)build the model's indexes
