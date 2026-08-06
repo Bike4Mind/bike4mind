@@ -54,7 +54,10 @@ export async function atlasVectorSearch(args: {
 
   for (const hit of hits) {
     const file = fileById.get(hit.fabFileId);
-    if (classifyAnnHit({ parentFile: file })) {
+    // Narrow on `file` directly rather than on classifyAnnHit's return - it decides the skip
+    // REASON, but the type-narrowing must not depend on a helper that could later classify a
+    // non-null file as skippable too.
+    if (!file || classifyAnnHit({ parentFile: file })) {
       hitsSkippedUnknownFile++;
       continue;
     }
@@ -63,8 +66,8 @@ export async function atlasVectorSearch(args: {
     results.push({
       chunkId: hit.id,
       fileId: hit.fabFileId,
-      fileName: file!.fileName,
-      fileTags: file!.fileTags,
+      fileName: file.fileName,
+      fileTags: file.fileTags,
       chunkText: hit.text,
       score,
     });

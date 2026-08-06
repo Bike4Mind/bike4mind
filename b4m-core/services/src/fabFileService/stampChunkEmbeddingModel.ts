@@ -1,4 +1,5 @@
 import { IFabFileRepository } from '@bike4mind/common';
+import { withTransaction } from '@bike4mind/db-core';
 
 interface StampChunkEmbeddingModelAdapters {
   db: {
@@ -18,12 +19,18 @@ interface StampChunkEmbeddingModelAdapters {
  * `chunkEmbeddingModelStampedAt` is the readiness signal the Atlas `$vectorSearch` cutover reads
  * (see atlasSearchIndex.ts / vectorSearchEligibility.ts) - it must be set AFTER the chunk stamp
  * commits, never before, or a reader could see "ready" while chunks are still unstamped.
+ *
+ * Both writes run in one transaction: without it, a crash between them would leave the chunks
+ * correctly stamped but the readiness stamp permanently unset - the vectorize handler's own
+ * idempotency check already treats this file as done, so no later SQS redelivery would retry it.
  */
 export const stampChunkEmbeddingModel = async (
   fabFileId: string,
   embeddingModel: string,
   { db }: StampChunkEmbeddingModelAdapters
 ): Promise<void> => {
-  await db.fabFileChunks.updateEmbeddingModel(fabFileId, embeddingModel);
-  await db.fabFiles.update({ id: fabFileId, chunkEmbeddingModelStampedAt: new Date() });
+  await withTransaction(async () => {
+    await db.fabFileChunks.updateEmbeddingModel(fabFileId, embeddingModel);
+    await db.fabFiles.update({ id: fabFileId, chunkEmbeddingModelStampedAt: new Date() });
+  });
 };

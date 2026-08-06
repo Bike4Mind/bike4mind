@@ -596,18 +596,35 @@ async function rankChunksForFiles(args: {
     }
   }
 
-  const annResult =
-    annEligible.length > 0
-      ? await atlasVectorSearch({
-          fileIds: annEligible.map(f => f.id),
-          fileById,
-          queryVector: queryEmbedding,
-          model: embeddingModel,
-          limit: topK,
-          minScore,
-          adapters: args.fabfilechunks as AtlasVectorSearchAdapters,
-        })
-      : { results: [], hitsReturned: 0, hitsSkippedUnknownFile: 0 };
+  let annResult: Awaited<ReturnType<typeof atlasVectorSearch>> = {
+    results: [],
+    hitsReturned: 0,
+    hitsSkippedUnknownFile: 0,
+  };
+  if (annEligible.length > 0) {
+    try {
+      annResult = await atlasVectorSearch({
+        fileIds: annEligible.map(f => f.id),
+        fileById,
+        queryVector: queryEmbedding,
+        model: embeddingModel,
+        limit: topK,
+        minScore,
+        adapters: args.fabfilechunks as AtlasVectorSearchAdapters,
+      });
+    } catch (error) {
+      // A broken Atlas index (transient mongot outage, IAM regression, quota exhaustion) must
+      // degrade to the scan path, not surface as a 500 - the whole point of the per-file split
+      // is that scanAndRank can always cover any file the ann path can't serve right now.
+      logger?.warn?.('[semanticSearch] $vectorSearch failed, falling back to scan for its files', {
+        embeddingModel,
+        fileCount: annEligible.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      scanEligible = [...scanEligible, ...annEligible];
+      annEligible = [];
+    }
+  }
   for (let i = 0; i < annResult.hitsSkippedUnknownFile; i++) mismatch.skip('unknownFile');
 
   const scanned = await scanAndRank({

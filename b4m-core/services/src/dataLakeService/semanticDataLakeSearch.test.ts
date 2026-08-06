@@ -774,4 +774,28 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
 
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('nothing could be compared'));
   });
+
+  it('falls back to scan for its files when $vectorSearch itself throws, instead of failing the whole search', async () => {
+    const logger = makeLogger();
+    const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+      files: [annFile('ready')],
+      scanChunks: chunkRows('ready', 2),
+    });
+    vectorSearch.mockRejectedValueOnce(new Error('mongot unavailable'));
+
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), vectorSearchEnabled: true, logger: logger as never },
+      {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never
+    );
+
+    expect(result.scan.annFilesQueried).toBe(0);
+    expect(result.scan.chunksScanned).toBe(2);
+    expect(result.results.map(r => r.fileId)).toEqual(['ready', 'ready']);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('$vectorSearch failed'),
+      expect.objectContaining({ fileCount: 1 })
+    );
+  });
 });

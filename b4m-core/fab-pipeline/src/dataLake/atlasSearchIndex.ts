@@ -174,6 +174,10 @@ export const getAtlasIndexStatus = async (conn: Connection, model: string): Prom
     value = null;
   }
 
+  // A null (not-yet-provisioned/not-queryable) result is cached for the full TTL too, same as a
+  // real status - deliberate, to avoid thrashing listSearchIndexes while an index is still
+  // building. Do not special-case null to re-check sooner: the per-file VECTOR_SEARCH_READY_LAG_MS
+  // gate already re-checks readiness on that cadence.
   statusCache.set(target.name, { value, expiresAt: now + STATUS_CACHE_TTL_MS });
   return value;
 };

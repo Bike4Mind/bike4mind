@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { stampChunkEmbeddingModel } from './stampChunkEmbeddingModel';
 
+// Passthrough: these tests assert ordering and error-propagation between the two writes, not
+// transaction atomicity itself (that's Mongoose's connection.transaction(), not this file's job).
+vi.mock('@bike4mind/db-core', () => ({
+  withTransaction: vi.fn((fn: () => unknown) => fn()),
+}));
+
 describe('stampChunkEmbeddingModel', () => {
   it('stamps the chunks first, then records the file-level readiness timestamp', async () => {
     const calls: string[] = [];
