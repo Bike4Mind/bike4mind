@@ -280,6 +280,20 @@ describe('check-no-smart-punctuation.sh', () => {
     });
   });
 
+  // Documents the boundary between the two guards rather than asserting a desirable outcome: a
+  // NUL makes git classify the file as binary, which emits "Binary files ... differ" with no
+  // +++/@@ records, so this guard cannot see the em-dash next to it. Safe only because
+  // check-no-control-bytes.sh runs alongside in the hook and CI and rejects the NUL itself. This
+  // test exists so that removing that guard visibly breaks the assumption recorded here.
+  it('skips a binary-classified .ts, which the control-byte guard covers instead', () => {
+    const { dir } = makeRepo();
+    fs.writeFileSync(path.join(dir, 'bin.ts'), Buffer.from(`// bad ${EM} dash\0 with a NUL\n`, 'utf8'));
+    git(dir, 'add', 'bin.ts');
+    // Guard against the fixture silently not being binary any more.
+    expect(git(dir, 'diff', '--cached')).toContain('Binary files');
+    expect(runGuard(dir).status).toBe(0);
+  });
+
   describe('--all mode', () => {
     it('rejects a tracked file containing smart punctuation anywhere', () => {
       const { dir } = makeRepo();
