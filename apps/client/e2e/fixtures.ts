@@ -3,7 +3,7 @@ import { test as base, expect } from '@playwright/test';
 import { TIMEOUTS } from './constants';
 import { ConsoleTracker } from './helpers/console-tracker';
 import { LoginPage } from './pages/LoginPage';
-import { seedAuthOnPage } from './helpers/auth-seed';
+import { buildAuthSuccessUrl, type SpecAuth } from './helpers/auth-seed';
 import { NavigationPage } from './pages/NavigationPage';
 import { BasePage } from './pages/BasePage';
 import { SignupPage } from './pages/SignupPage';
@@ -45,18 +45,56 @@ type TestFixtures = {
   dataLakePage: DataLakePage;
   skillsPage: SkillsPage;
   loginAsAdmin: () => Promise<void>;
-  loginAsUser: (user: { accessToken: string; refreshToken: string }) => Promise<void>;
+  loginAsUser: (user: SpecAuth) => Promise<void>;
+  /** Mutable per-test identity the page.goto override authenticates as; loginAs* rewrites `current`
+   *  so a mid-test user switch takes effect on the next navigation. Null on unauthenticated projects. */
+  authState: { current: SpecAuth | null };
 
   verifyAnswers: (answers: string | string[], options?: VerifyAnswersOptions) => Promise<void>;
 };
 
+// playwright.config project names are kebab-case (data-lake); spec-user keys are camelCase (dataLake).
+function projectNameToSpecKey(projectName: string): string {
+  return projectName.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+}
+
+/** Access token + userId for the spec user backing an authenticated project, or null for projects
+ *  that seed no user (unauthenticated, admin, setup) or before core data exists. */
+function specAuthForProject(projectName: string): SpecAuth | null {
+  try {
+    const u = getTestUsers().specUsers[projectNameToSpecKey(projectName)];
+    return u ? { accessToken: u.accessToken, userId: u.userId } : null;
+  } catch {
+    return null;
+  }
+}
+
 export const test = base.extend<TestFixtures>({
+  // eslint-disable-next-line no-empty-pattern -- no fixture deps; identity derives from the project.
+  authState: async ({}, use, testInfo) => {
+    await use({ current: specAuthForProject(testInfo.project.name) });
+  },
+
   // Suppress the What's New modal globally - return empty modals so it never renders.
   // This eliminates flaky backdrop-interception failures without relying on timing hacks.
-  page: async ({ page }, use) => {
+  page: async ({ page, authState }, use) => {
     await page.route('**/api/modals**', route =>
       route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
     );
+
+    // Authenticated projects: the access token is memory-only and dies on every full load, so a raw
+    // goto to a protected route cold-loads unauthenticated and the router guard bounces to /login.
+    // Route in-app navigations through /auth/success, which re-seeds the token via the client router
+    // without replaying the single-use refresh cookie (whose one shared token got the session
+    // revoked) or hitting the rate-limited OTC path. `authState.current` is read per call so a
+    // mid-test loginAs* switch is honored; unauthenticated projects (current === null) pass through.
+    const rawGoto = page.goto.bind(page);
+    page.goto = (url: string, options?: Parameters<typeof rawGoto>[1]) => {
+      const auth = authState.current;
+      const wrap = !!auth && url.startsWith('/') && !url.startsWith('/auth/success') && !url.startsWith('/login');
+      return rawGoto(wrap ? buildAuthSuccessUrl(url, auth) : url, options);
+    };
+
     await use(page);
   },
 
@@ -125,17 +163,19 @@ export const test = base.extend<TestFixtures>({
     await use(new SkillsPage(page));
   },
 
-  loginAsAdmin: async ({ page }, use) => {
+  loginAsAdmin: async ({ page, authState }, use) => {
     const login = async () => {
       const { admin } = getTestUsers();
-      await seedAuthOnPage(page, { accessToken: admin.accessToken, refreshToken: admin.refreshToken });
+      authState.current = { accessToken: admin.accessToken, userId: admin.userId };
+      await page.goto('/'); // wrapped goto re-seeds the token via /auth/success as the new identity
     };
     await use(login);
   },
 
-  loginAsUser: async ({ page }, use) => {
-    const login = async (user: { accessToken: string; refreshToken: string }) => {
-      await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
+  loginAsUser: async ({ page, authState }, use) => {
+    const login = async (user: SpecAuth) => {
+      authState.current = { accessToken: user.accessToken, userId: user.userId };
+      await page.goto('/'); // wrapped goto re-seeds the token via /auth/success as the new identity
     };
     await use(login);
   },
