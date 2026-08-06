@@ -660,10 +660,13 @@ async function rankChunksForFiles(args: {
     );
   }
 
-  // Warn only when NOTHING could be compared. A few withheld chunks mid-revectorize are expected
-  // and must stay quiet - the same policy the truncation warning above applies, and the reason
-  // unlabeled files and budgets do not raise the flag either.
-  if (mismatchReport.partial && scanned.chunksScored === 0) {
+  // Warn only when NOTHING could be compared by EITHER path. A few withheld chunks mid-revectorize
+  // are expected and must stay quiet - the same policy the truncation warning above applies, and
+  // the reason unlabeled files and budgets do not raise the flag either. Excludes annResult.hitsReturned
+  // (not annEligible.length): a lake fully served by Atlas legitimately scores zero chunks on the
+  // scan path, and without this the warning would false-fire on every healthy all-ANN search that
+  // also happens to have an unrelated off-model file elsewhere in scope.
+  if (mismatchReport.partial && scanned.chunksScored === 0 && annResult.hitsReturned === 0) {
     logger?.warn?.('[semanticSearch] nothing could be compared in the query embedding space', {
       queryEmbeddingModel: embeddingModel,
       excludedFiles: mismatchReport.excludedFiles.count,

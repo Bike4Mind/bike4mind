@@ -66,8 +66,10 @@ function formatSemanticResults(
   });
   // A truncated scan ranked only part of the corpus. Say so, or the model will read "no further
   // matches" into what is really "we stopped looking" and assert the library holds nothing else.
+  // filesScanned + annFilesQueried, not filesScanned alone: an Atlas-served file was searched too,
+  // just never handed to the brute-force scan (see SemanticSearchScanAccounting.annFilesQueried).
   const partial = scan?.truncated
-    ? `NOTE: this search covered only ${scan.filesScanned} of ${scan.filesMatching} documents (a scan budget was reached), so these passages may be incomplete. Do not state or imply the knowledge base has nothing further on this topic.\n\n`
+    ? `NOTE: this search covered only ${scan.filesScanned + scan.annFilesQueried} of ${scan.filesMatching} documents (a scan budget was reached), so these passages may be incomplete. Do not state or imply the knowledge base has nothing further on this topic.\n\n`
     : '';
   return (
     formatSkipNotice(skipNotice) +

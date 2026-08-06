@@ -131,7 +131,7 @@ export interface IFabFile {
    * (see IFabFileChunk.embeddingModel). Atlas $vectorSearch cutover treats a stamp younger than
    * ~60s as not-yet-queryable (mongot indexing lag), so this is read-time readiness, not a cache.
    */
-  chunkEmbeddingModelStampedAt?: Date;
+  chunkEmbeddingModelStampedAt?: Date | null;
 
   system?: boolean;
 

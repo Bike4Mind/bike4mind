@@ -214,19 +214,26 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Guards against a future Atlas index/chunk-vector width mismatch (e.g. a Voyage model
     // called with a non-default outputDimension): a chunk written at the wrong width would
     // silently corrupt that model's shared Atlas index once embeddingModel is stamped on it.
+    // Validated up front, before any write is dispatched: throwing from inside the `.map()`
+    // below would abort the transaction while sibling `update()` calls it already kicked off
+    // are still in flight, leaving unhandled rejections racing the rollback.
     const expectedDimensions = getAtlasIndexForModel(embeddingModel)?.numDimensions;
+    if (expectedDimensions !== undefined) {
+      embeddableChunks.forEach((chunk, index) => {
+        const vector = vectors[index];
+        if (vector.length !== expectedDimensions) {
+          throw new Error(
+            `Chunk ${chunk.id} vector has ${vector.length} dimensions, expected ${expectedDimensions} for model ${embeddingModel}`
+          );
+        }
+      });
+    }
 
     // Write this message's chunk vectors in a transaction.
     await withTransaction(async () => {
       await Promise.all(
         embeddableChunks.map((chunk, index) => {
-          const vector = vectors[index];
-          if (expectedDimensions !== undefined && vector.length !== expectedDimensions) {
-            throw new Error(
-              `Chunk ${chunk.id} vector has ${vector.length} dimensions, expected ${expectedDimensions} for model ${embeddingModel}`
-            );
-          }
-          chunk.vector = vector;
+          chunk.vector = vectors[index];
           return fabFileChunkRepository.update(chunk);
         })
       );

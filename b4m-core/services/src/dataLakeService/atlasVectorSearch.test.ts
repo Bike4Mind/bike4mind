@@ -34,10 +34,28 @@ describe('atlasVectorSearch', () => {
       adapters: { vectorSearch },
     });
     expect(result.results).toEqual([
-      { chunkId: 'c1', fileId: 'f1', fileName: 'a.pdf', fileTags: ['x'], chunkText: 'hello', score: 0.9 },
+      { chunkId: 'c1', fileId: 'f1', fileName: 'a.pdf', fileTags: ['x'], chunkText: 'hello', score: 0.8 },
     ]);
     expect(result.hitsReturned).toBe(1);
     expect(result.hitsSkippedUnknownFile).toBe(0);
+  });
+
+  it('denormalizes Atlas cosine score (1+cos)/2 back to raw cosine before scoring', async () => {
+    const vectorSearch = vi.fn().mockResolvedValue([
+      { id: 'c1', fabFileId: 'f1', text: 'perfect match', score: 1 },
+      { id: 'c2', fabFileId: 'f1', text: 'orthogonal', score: 0.5 },
+      { id: 'c3', fabFileId: 'f1', text: 'opposite', score: 0 },
+    ]);
+    const result = await atlasVectorSearch({
+      fileIds: ['f1'],
+      fileById,
+      queryVector: [1, 2, 3],
+      model: 'text-embedding-3-small',
+      limit: 10,
+      minScore: -1,
+      adapters: { vectorSearch },
+    });
+    expect(result.results.map(r => r.score)).toEqual([1, 0, -1]);
   });
 
   it('drops a hit for a file no longer in scope', async () => {

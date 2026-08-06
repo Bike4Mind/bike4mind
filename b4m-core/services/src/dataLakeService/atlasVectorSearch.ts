@@ -29,6 +29,11 @@ export interface AtlasVectorSearchResult {
  * `minScore` is re-applied here even though the query only returns its best `limit` matches:
  * Atlas's `limit` bounds candidates by SIMILARITY RANK, not by score threshold, so a low-signal
  * corpus could otherwise return hits the scan path would have rejected under the same minScore.
+ *
+ * Atlas normalizes a `similarity: 'cosine'` score to `(1 + cosine) / 2` (range [0,1]) - a
+ * different scale than the scan path's `computeCosineSimilarity`, which returns raw cosine
+ * (range [-1,1]). Denormalized back to raw cosine below so both paths' scores are directly
+ * comparable in the merged BoundedTopK and against the same minScore.
  */
 export async function atlasVectorSearch(args: {
   fileIds: string[];
@@ -53,14 +58,15 @@ export async function atlasVectorSearch(args: {
       hitsSkippedUnknownFile++;
       continue;
     }
-    if (hit.score < minScore) continue;
+    const score = 2 * hit.score - 1;
+    if (score < minScore) continue;
     results.push({
       chunkId: hit.id,
       fileId: hit.fabFileId,
       fileName: file!.fileName,
       fileTags: file!.fileTags,
       chunkText: hit.text,
-      score: hit.score,
+      score,
     });
   }
 
