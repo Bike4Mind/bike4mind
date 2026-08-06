@@ -61,8 +61,13 @@ export const removeFileFromLake = async (
   // the prefix within the VIEWER's own access - that is ownership of the file, not membership in
   // this lake, and unaffected by this write.
   const ownsFile = !!file?.userId && file.userId === lake.createdByUserId;
-  const prefixedTags = prefix ? tagNames.filter(name => name.startsWith(prefix)) : [];
-  const inLake = !!file && (tagNames.includes(lake.datalakeTag) || (ownsFile && prefixedTags.length > 0));
+  // Gated on ownsFile, not just prefix: a file admitted to inLake via the META-TAG arm (e.g. an
+  // admin added a stranger's file with addFileToLake, which checks only the ACTOR's access, not
+  // the file's ownership) must not also have its unrelated tags stripped just because one
+  // happens to start with this lake's prefix - the read path's prefix arm never admitted this
+  // file, so the write must not touch prefix-matching tags on it either.
+  const prefixedTags = prefix && ownsFile ? tagNames.filter(name => name.startsWith(prefix)) : [];
+  const inLake = !!file && (tagNames.includes(lake.datalakeTag) || prefixedTags.length > 0);
   if (!file || !inLake) {
     throw new NotFoundError('File not found in this data lake');
   }
