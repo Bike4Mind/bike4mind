@@ -28,6 +28,16 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
       isLoading: false,
       isError: false,
     }),
+    // Per-lake counts come from lakeFileCounts (membership), NOT from the per-prefix tag counts.
+    // The two disagree here on purpose: `theirs` has taxonomy tags but only 2 member files, and
+    // `mine` has member files with NO taxonomy tag at all - the shape that used to display 0.
+    useGetDataLakeTagCounts: () => ({
+      data: {
+        tagCounts: [],
+        uniqueArticleCounts: { total: 4, byPrefix: { 'lk:': 0, 'th:': 9 } },
+        lakeFileCounts: { 'datalake:mine': 3, 'datalake:theirs': 2 },
+      },
+    }),
   };
 });
 
@@ -68,19 +78,6 @@ const lakeFiles = [
 ];
 
 const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
-
-// Per-lake counts come from lakeFileCounts (membership), NOT from the per-prefix tag counts.
-// The two disagree here on purpose: `theirs` has taxonomy tags but only 2 member files, and
-// `mine` has member files with NO taxonomy tag at all - the shape that used to display 0.
-vi.mock('@client/app/hooks/data/fabFiles', () => ({
-  useGetDataLakeTagCounts: () => ({
-    data: {
-      tagCounts: [],
-      uniqueArticleCounts: { total: 4, byPrefix: { 'lk:': 0, 'th:': 9 } },
-      lakeFileCounts: { 'datalake:mine': 3, 'datalake:theirs': 2 },
-    },
-  }),
-}));
 
 // Default (flag on) is established per-describe; tests override per-case.
 const isFeatureEnabled = vi.fn();

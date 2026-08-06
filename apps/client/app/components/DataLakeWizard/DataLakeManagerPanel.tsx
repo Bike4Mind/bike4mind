@@ -52,7 +52,6 @@ import {
 } from '@client/app/components/datalake/treeChrome';
 import type { TreeSortMode } from '@client/app/components/datalake/treeChrome';
 import { gray } from '@client/app/utils/themes/colors';
-import { useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import {
   useActiveDataLakeBatches,
   useArchiveDataLake,
@@ -60,6 +59,7 @@ import {
   useDataLakeFiles,
   useGetArchivedDataLakes,
   useGetDataLakes,
+  useGetDataLakeTagCounts,
   useGetDeletedDataLakes,
   usePermanentDeleteDataLake,
   useRestoreDeletedDataLake,
