@@ -14,6 +14,8 @@
  * the ordering and the thresholds matter, and both are configurable.
  */
 
+import type { PrincipalKind } from './types';
+
 const DAY_MS = 86_400_000;
 
 export interface ActivationConfig {
@@ -62,4 +64,37 @@ export function activationToSalience(
   if (activation > config.hotAbove) return 'hot';
   if (activation > config.warmAbove) return 'warm';
   return 'cold';
+}
+
+/**
+ * A data lake's clock is not a chat's clock. Lake beliefs are extracted from reference documents
+ * whose as-of dates are routinely months old, so under the day-scale DEFAULT_ACTIVATION every lake
+ * belief floors to `cold` - a single belief one month old scores `ln(30^-0.5) = -1.70`, below
+ * warmAbove. A near-flat decay makes lake salience CORROBORATION-driven instead of recency-driven:
+ * a single fact stays warm for years, while a fact asserted by many articles rises to hot - the
+ * right ordering for durable reference content. Recency still adjudicates contradictions (a newer
+ * assert on a contested subject outscores an older one) without flooring the fact.
+ *
+ * A calibration STARTING POINT to tune against real lake data, not a measured constant. Only the
+ * decay differs from the default; the thresholds stay put until data says otherwise.
+ */
+export const LAKE_ACTIVATION: ActivationConfig = {
+  decay: 0.1,
+  floorDays: 0.5,
+  hotAbove: 0,
+  warmAbove: -1.2,
+};
+
+/** Per-principalKind activation overrides; any kind absent here uses DEFAULT_ACTIVATION. */
+const ACTIVATION_BY_KIND: Partial<Record<PrincipalKind, ActivationConfig>> = {
+  lake: LAKE_ACTIVATION,
+};
+
+/**
+ * The activation config for a principal kind. A lake decays far slower than a chat (see
+ * LAKE_ACTIVATION); everything else uses the day-scale default. This is the one seam that makes
+ * salience per-principalKind - callers pass `activationConfigForKind(principal.kind)` into foldEvents.
+ */
+export function activationConfigForKind(kind: PrincipalKind): ActivationConfig {
+  return ACTIVATION_BY_KIND[kind] ?? DEFAULT_ACTIVATION;
 }

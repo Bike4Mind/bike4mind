@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ContextTelemetrySchema } from './contextTelemetry';
+import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
 
 /**
  * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
@@ -113,6 +113,11 @@ const PromptMetaContextSchema = z.object({
   mementoCount: z.number().optional(),
   mementoIds: z.array(z.string()).optional(),
   tokensBySource: PromptMetaTokensBySourceSchema.optional(),
+  // Per-source system prompt breakdown, derived from the tagged assembly (see
+  // services systemPromptSources). Stored on every completion - unlike contextTelemetry,
+  // which only exists when enhanced telemetry is enabled - so the API layer can report
+  // which prompts fed a completion.
+  systemPromptDetails: z.array(SystemPromptDetailSchema).optional(),
   systemPrompt: z.string().optional(),
   userPrompt: z.string().optional(),
   conversationContext: z
@@ -143,6 +148,20 @@ const PromptMetaContextSchema = z.object({
   globalSystemFileIds: z.array(z.string()).optional(),
   userSystemFileIds: z.array(z.string()).optional(),
   projectSystemFileIds: z.array(z.string()).optional(),
+  // What the assembler decided about inlining the attached knowledge corpus vs deferring it to
+  // the offered search_knowledge_base tool. Pairs with `offeredTools` + `tokensBySource.fabFiles`
+  // so one row shows: tools offered, docs deferred, resulting inline token cost. `deferredCount`
+  // counts only the RETRIEVABLE subset (docs the tool can actually reach); non-retrievable
+  // attachments are always inlined and never counted here.
+  knowledgeInlining: z
+    .object({
+      attachedCount: z.number(),
+      retrievableCount: z.number(),
+      deferredCount: z.number(),
+      deferredToRetrieval: z.boolean(),
+      minInlineTokensPerDoc: z.number(),
+    })
+    .optional(),
   // Phase 2: Context window debug fields
   contextWindowUsage: z
     .object({
@@ -281,6 +300,17 @@ export const PromptMetaZodSchema = z.object({
   tokenUsage: PromptMetaTokenUsageSchema.optional(),
   context: PromptMetaContextSchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
+  /**
+   * Names of the tools actually offered to the model this turn - the output of `buildTools`
+   * (`allTools`), after the post-build denylist pass and the Ollama auto-added trim. This is a
+   * superset of the resolved `enabledTools`: it also includes MCP server tools and the
+   * auto-injected `delegate_to_agent`, neither of which ever appears in `enabledTools`. Distinct
+   * from the chat response's `effectiveTools`, which reflects only the API-layer (phrase-
+   * recommender) selection and so cannot see server-side offers like the attached-knowledge
+   * auto-offer. This is the authoritative "what did the model actually get" signal for
+   * eval/measurement and for diagnosing the silent no-tool-offered state.
+   */
+  offeredTools: z.array(z.string()).optional(),
   performance: PromptMetaPerformanceSchema.optional(),
   session: PromptMetaSessionSchema.optional(),
   questId: z.string().optional(),

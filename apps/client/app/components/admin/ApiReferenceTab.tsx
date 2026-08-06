@@ -1,4 +1,4 @@
-import { Box, Button, Divider, Sheet, Typography } from '@mui/joy';
+import { Alert, Box, Button, Divider, Link, Sheet, Typography } from '@mui/joy';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useState } from 'react';
@@ -123,6 +123,22 @@ const ApiReferenceTab = () => {
           </Sheet>
         </Box>
       </Box>
+      {view === 'full' && (
+        // This reference is hand-maintained (apiReferenceContent.ts) and is not
+        // generated from the code, so it can lag reality. Point readers at the
+        // generated, drift-gated spec for endpoints that have one. Removed as the
+        // hand-written surface is migrated onto the contract pattern.
+        <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-reference-drift-banner">
+          <Typography level="body-sm">
+            This reference is hand-maintained and may lag the code. For endpoints with a verified, always-current
+            contract, use the{' '}
+            <Link href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
+              generated interactive API docs
+            </Link>
+            .
+          </Typography>
+        </Alert>
+      )}
       <Sheet variant="outlined" sx={{ p: 3, borderRadius: 'lg', ...markdownStyles }}>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
           {view === 'full' ? API_REFERENCE_CONTENT : QUICKSTART_CONTENT}

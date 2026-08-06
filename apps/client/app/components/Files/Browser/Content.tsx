@@ -39,6 +39,7 @@ import { TagViewPanel } from './TagView';
 import { HomeViewPanel } from './HomeView';
 import { MobileSearchFilter } from './MobileSearchFilter';
 import { UploadActionsSelect } from './UploadActionsSelect';
+import GenerateAudioButton from '../GenerateAudio/GenerateAudioButton';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
@@ -684,6 +685,7 @@ const FileBrowserContent = () => {
               }}
             >
               <UploadDropdown isLoading={isLoading} />
+              <GenerateAudioButton />
             </Stack>
           </Stack>
 

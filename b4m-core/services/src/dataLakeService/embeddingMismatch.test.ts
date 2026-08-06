@@ -226,8 +226,6 @@ describe('createEmbeddingMismatchAccumulator', () => {
     expect(report.partial).toBe(false);
   });
 
-
-
   it('does not count a foreign file that chunked but never finished vectorizing', () => {
     // The state the pipeline actually writes: chunk.ts stamps vectorized = chunks.length > 0,
     // vectorizedChunkCount = 0 AND embeddingModel together at chunk time, before any vector

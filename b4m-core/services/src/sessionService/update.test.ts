@@ -85,6 +85,76 @@ describe('updateSession — signed-URL cache pre-warm gate', () => {
   });
 });
 
+describe('updateSession - forceKnowledgeRetrieval passthrough', () => {
+  const user = { id: 'user-1' } as IUserDocument;
+
+  const makeAdapters = (existing: Record<string, unknown>) => {
+    const update = vi.fn();
+    return {
+      update,
+      adapters: {
+        db: {
+          sessions: {
+            shareable: {
+              findUpdateAccessById: vi.fn().mockResolvedValue({
+                id: 'session-1',
+                knowledgeIds: [],
+                artifactIds: [],
+                tags: [],
+                name: 'Session',
+                ...existing,
+              }),
+            },
+            update,
+          },
+          projects: { findAllBySessionId: vi.fn().mockResolvedValue([]) },
+          fabFiles: { findAllByIds: vi.fn().mockResolvedValue([]) },
+          caches: {},
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
+        } as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- storage isn't exercised here
+        storage: {} as any,
+      },
+    };
+  };
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('persists forceKnowledgeRetrieval: true onto the session', async () => {
+    const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: false });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exercising the new schema field before types settle
+    await updateSession(user, { id: 'session-1', forceKnowledgeRetrieval: true } as any, adapters);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][0]).toMatchObject({ forceKnowledgeRetrieval: true });
+  });
+
+  it('persists forceKnowledgeRetrieval: false (toggling off), not the old truthy value', async () => {
+    const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: true });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exercising the new schema field before types settle
+    await updateSession(user, { id: 'session-1', forceKnowledgeRetrieval: false } as any, adapters);
+    expect(update.mock.calls[0][0]).toMatchObject({ forceKnowledgeRetrieval: false });
+  });
+
+  it('leaves forceKnowledgeRetrieval untouched when the field is omitted', async () => {
+    const { update, adapters } = makeAdapters({ forceKnowledgeRetrieval: true });
+    await updateSession(user, { id: 'session-1', name: 'Renamed' }, adapters);
+    expect(update.mock.calls[0][0]).toMatchObject({ forceKnowledgeRetrieval: true, name: 'Renamed' });
+  });
+
+  it('ignores surface even if a caller passes it (allow-list strips it; sidebar visibility preserved)', async () => {
+    const { update, adapters } = makeAdapters({ surface: 'opti', forceKnowledgeRetrieval: false });
+    await updateSession(
+      user,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberately passing a field the allow-list must strip
+      { id: 'session-1', surface: 'datalake', forceKnowledgeRetrieval: true } as any,
+      adapters
+    );
+    const saved = update.mock.calls[0][0];
+    expect(saved.forceKnowledgeRetrieval).toBe(true);
+    expect(saved.surface).toBe('opti'); // unchanged - never overwritten by the update
+  });
+});
+
 describe('updateSession - project propagation opt-out', () => {
   const user = { id: 'user-1' } as IUserDocument;
 

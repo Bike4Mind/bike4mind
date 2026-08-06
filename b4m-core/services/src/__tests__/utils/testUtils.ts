@@ -13,6 +13,8 @@ import {
   IOrganizationDocument,
   ICreditTransactionRepository,
   ICreditTransactionDocument,
+  IAuthSessionRepository,
+  IAuthSessionDocument,
 } from '@bike4mind/common';
 import {
   IResearchTask,
@@ -58,6 +60,8 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   getAccessibleFiles: vi.fn(),
   findByIdAndUserId: vi.fn(),
   findAllInIds: vi.fn(),
+  findMetadataByIds: vi.fn(),
+  findMetadataBySessionId: vi.fn(),
   deleteManyInIds: vi.fn(),
   findAllByIds: vi.fn(),
   findByBatchId: vi.fn(),
@@ -70,12 +74,15 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   countUniqueFilesByNamespaceForUser: vi.fn(),
   removeTagByUserId: vi.fn(),
   updateTagsByUserId: vi.fn(),
+  dedupeTagByUserId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
+  pushTagsByFabFileId: vi.fn(),
   bulkUpdateTags: vi.fn(),
   findByContentHashes: vi.fn(),
   findByContentHashesInDataLake: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
   computeDataLakeStats: vi.fn(),
+  countDataLakeFilesByMembership: vi.fn(),
   archiveByDataLakeTag: vi.fn(),
   unarchiveByDataLakeTag: vi.fn(),
   findArchivedByDataLakeTag: vi.fn(),
@@ -83,6 +90,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   undeleteByDataLakeTag: vi.fn(),
   softDeleteByDataLakeTag: vi.fn(),
   hardDeleteByDataLakeTag: vi.fn(),
+  hardDeleteByIds: vi.fn(),
   findIdsByDataLakeTag: vi.fn(),
   findByUserId: vi.fn(),
 });
@@ -126,6 +134,16 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     countActiveVoiceSessionsByUserId: vi.fn(),
   });
 
+export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepository> =>
+  vi.mocked({
+    ...createMockRepository<IAuthSessionDocument>(),
+    findBySid: vi.fn(),
+    findActiveByUserId: vi.fn(),
+    rotateHash: vi.fn(),
+    revokeBySid: vi.fn(),
+    revokeAllByUserId: vi.fn(),
+  });
+
 export const createMockUserRepository = (): MockedObject<IUserRepository> =>
   vi.mocked({
     ...createMockRepository<IUserDocument>(),
@@ -162,8 +180,9 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     shareable: createMockShareableRepository<IOrganizationDocument>(),
     search: vi.fn(),
     findByStripeCustomerId: vi.fn(),
+    addMemberRaisingSeats: vi.fn(),
+    addMemberIfUnderCeiling: vi.fn(),
     findIdsAdministeredBy: vi.fn(),
-    softDeleteById: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),
     findByIdAndUserId: vi.fn(),

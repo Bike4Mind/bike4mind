@@ -1,15 +1,22 @@
 import { AuthEvents, IUserDocument } from '@bike4mind/common';
-import { userRepository } from '@bike4mind/database';
+import { userRepository, authSessionRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
+import { clearSessionCookies } from '@server/auth/refreshCookie';
 
 const handler = baseApi().get(async (req, res) => {
   const user = req.user as IUserDocument & { impersonatedBy?: string };
   const userId = user?.id;
+
+  // Expire the refresh cookies unconditionally and first: the client can no longer clear them
+  // itself (HttpOnly), and a logout that 500s partway must still leave the browser without a
+  // usable refresh credential. Includes the impersonation return cookie - an admin who logs out
+  // mid-impersonation should not keep a live path back into their own session.
+  clearSessionCookies(res);
 
   await userService.updateLogoutTime(userId, { db: { users: userRepository }, logger: req.logger });
   // Revoke the session server-side, not just client-side: bump tokenVersion so the logged-out
@@ -24,7 +31,10 @@ const handler = baseApi().get(async (req, res) => {
   //    real customer out on every device. Impersonation ends via "Return to safety", not logout.
   if (userId && !isApiKeyAuth(req) && !user?.impersonatedBy) {
     try {
-      await userService.revokeUserSessions(userId, { db: { users: userRepository }, logger: req.logger });
+      await userService.revokeUserSessions(userId, {
+        db: { users: userRepository, authSessions: authSessionRepository },
+        logger: req.logger,
+      });
     } catch (error) {
       // Rare race: the account was deleted between JWT auth and this bump. Nothing is left to
       // revoke, so let logout still succeed instead of surfacing a confusing 404 to the client.

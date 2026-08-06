@@ -58,11 +58,81 @@ describe('models.dev normalization', () => {
   it('leaves a cache rate the entry does not carry unset', () => {
     // grok-4.5 publishes cache_read and no cache_write. An invented rate would
     // overwrite the one the price row in force already carries.
-    expect(byId(result.records).get('grok-4.5')?.pricing).toEqual({
+    expect(byId(result.records).get('grok-4.5')?.pricing).toMatchObject({
       inputPerMTok: 2,
       outputPerMTok: 6,
       cacheReadPerMTok: 0.3,
     });
+    expect(byId(result.records).get('grok-4.5')?.pricing).not.toHaveProperty('cacheWritePerMTok');
+  });
+
+  it('reads cost.tiers[] as long-context brackets, cache rates included', () => {
+    expect(byId(result.records).get('grok-4.5')?.pricing?.brackets).toEqual([
+      { aboveTokens: 200_000, inputPerMTok: 4, outputPerMTok: 12, cacheReadPerMTok: 1 },
+    ]);
+  });
+
+  it('leaves a model with no tiers flat', () => {
+    expect(byId(result.records).get('claude-opus-5')?.pricing).not.toHaveProperty('brackets');
+  });
+
+  it('takes the breakpoint from tier.size, never from the context_over_200k key', () => {
+    // The legacy key's NAME is fixed while the real breakpoint is not: upstream
+    // ships context_over_200k next to a tier of size 272000. Reading the name
+    // would start the long-context rate 72k tokens early.
+    const document = {
+      openai: {
+        models: {
+          'gpt-luna': {
+            cost: {
+              input: 0.2,
+              output: 1.2,
+              tiers: [{ input: 0.4, output: 1.8, tier: { type: 'context', size: 272_000 } }],
+              context_over_200k: { input: 0.4, output: 1.8 },
+            },
+          },
+        },
+      },
+    };
+    const records = normalizeModelsDev(document, [{ modelId: 'gpt-luna', backend: 'openai' }]).records;
+    expect(records[0]?.pricing?.brackets).toEqual([{ aboveTokens: 272_000, inputPerMTok: 0.4, outputPerMTok: 1.8 }]);
+  });
+
+  it('sorts a two-rung ladder ascending and ignores a tier that is not a context bracket', () => {
+    const document = {
+      openai: {
+        models: {
+          'gpt-rungs': {
+            cost: {
+              input: 1,
+              output: 5,
+              tiers: [
+                { input: 4, output: 20, tier: { type: 'context', size: 512_000 } },
+                { input: 9, output: 9, tier: { type: 'service', size: 200_000 } },
+                { input: 2, output: 10, tier: { type: 'context', size: 200_000 } },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const records = normalizeModelsDev(document, [{ modelId: 'gpt-rungs', backend: 'openai' }]).records;
+    expect(records[0]?.pricing?.brackets).toEqual([
+      { aboveTokens: 200_000, inputPerMTok: 2, outputPerMTok: 10 },
+      { aboveTokens: 512_000, inputPerMTok: 4, outputPerMTok: 20 },
+    ]);
+  });
+
+  it.each([
+    ['prices only one direction', { input: 4, tier: { type: 'context', size: 200_000 } }],
+    ['has no breakpoint', { input: 4, output: 20, tier: { type: 'context' } }],
+    ['has a zero breakpoint', { input: 4, output: 20, tier: { type: 'context', size: 0 } }],
+  ])('drops the whole ladder when a context tier %s', (_label, tier) => {
+    // Half a ladder would leave the rung we dropped billing at the rate below it,
+    // so the observation goes out flat and the tiered row stays a manual edit.
+    const document = { openai: { models: { 'gpt-broken': { cost: { input: 1, output: 5, tiers: [tier] } } } } };
+    const records = normalizeModelsDev(document, [{ modelId: 'gpt-broken', backend: 'openai' }]).records;
+    expect(records[0]?.pricing).toEqual({ inputPerMTok: 1, outputPerMTok: 5 });
   });
 
   it('fills the AWS pricing hole for Bedrock', () => {

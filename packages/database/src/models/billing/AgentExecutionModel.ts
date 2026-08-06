@@ -1601,6 +1601,69 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * ready set and the partial-completion report without loading checkpoints
    * or iteration billing on every completion handler tick.
    */
+  /**
+   * Batch-read just enough of a set of executions to render them as run
+   * summaries. Deliberately projected and deliberately batched: the caller
+   * (the QuestMaster v5 graph view) polls while a node runs, and a per-node
+   * `findById` would be both an N+1 and a full read of `result`, whose `steps`
+   * array carries the entire iteration trace. Mirrors the intent of
+   * EXECUTION_LIST_PROJECTION - never pull the heavy fields for a list view.
+   */
+  async findRunSummariesByIds(ids: string[]): Promise<
+    Array<{
+      id: string;
+      questId: string | null;
+      status: AgentExecutionStatus;
+      answer: string | null;
+      totalIterations: number | null;
+      totalCreditsUsed: number | null;
+      errorMessage: string | null;
+      completedAt: Date | null;
+    }>
+  > {
+    const valid = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (!valid.length) return [];
+
+    const docs = await this.model
+      .find(
+        { _id: { $in: valid.map(id => new mongoose.Types.ObjectId(id)) } },
+        {
+          _id: 1,
+          questId: 1,
+          status: 1,
+          'result.answer': 1,
+          'result.totalIterations': 1,
+          totalCreditsUsed: 1,
+          'error.message': 1,
+          completedAt: 1,
+        }
+      )
+      .lean<
+        Array<{
+          _id: mongoose.Types.ObjectId;
+          questId?: string;
+          status: AgentExecutionStatus;
+          result?: { answer?: string; totalIterations?: number };
+          totalCreditsUsed?: number;
+          error?: { message?: string };
+          completedAt?: Date;
+        }>
+      >();
+
+    return docs.map(doc => ({
+      id: String(doc._id),
+      // The Quest this run wrote. QuestMaster v5 joins a node's artifacts on it -
+      // persistAgentArtifacts stamps `sourceQuestId` with the same value.
+      questId: doc.questId ?? null,
+      status: doc.status,
+      answer: typeof doc.result?.answer === 'string' ? doc.result.answer : null,
+      totalIterations: typeof doc.result?.totalIterations === 'number' ? doc.result.totalIterations : null,
+      totalCreditsUsed: typeof doc.totalCreditsUsed === 'number' ? doc.totalCreditsUsed : null,
+      errorMessage: doc.error?.message ?? null,
+      completedAt: doc.completedAt ?? null,
+    }));
+  }
+
   async findDagChildrenLean(parentExecutionId: string): Promise<
     Array<{
       _id: unknown;

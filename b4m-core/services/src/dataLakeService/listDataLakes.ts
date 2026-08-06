@@ -6,7 +6,7 @@ import type {
   ManageableDataLakeConfig,
 } from '@bike4mind/common';
 import { DATA_LAKES, toDataLakeConfig, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
-import { redactLakesForActor } from './redactLakeForActor';
+import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
 
 interface ListDataLakesAdapters {
   db: {
@@ -115,7 +115,7 @@ export const listAllDataLakes = async ({ db }: ListDataLakesAdapters): Promise<M
 export const listArchivedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
-): Promise<IDataLakeDocument[]> => {
+): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['archived'], includePublic: false });
   return redactLakesForActor(lakes, ctx);
 };
@@ -128,7 +128,7 @@ export const listArchivedDataLakes = async (
 export const listDeletedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
-): Promise<IDataLakeDocument[]> => {
+): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false });
   return redactLakesForActor(lakes, ctx);
 };

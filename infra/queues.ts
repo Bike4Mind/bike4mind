@@ -14,6 +14,19 @@ import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
 import { router, whatsNewDistributionId } from './router';
 
+// Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
+// because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
+// call, enqueues taxonomy analysis as a backstop - see the fuller comment further down where
+// the queue's own subscription is wired).
+const dataLakeTaxonomyQueueDLQ = new sst.aws.Queue('dataLakeTaxonomyQueueDLQ', {});
+const dataLakeTaxonomyQueue = new sst.aws.Queue('dataLakeTaxonomyQueue', {
+  visibilityTimeout: '6 minutes',
+  dlq: {
+    queue: dataLakeTaxonomyQueueDLQ.arn,
+    retry: 2, // LLM calls cost money; the stuck-job reconciler is the backstop for the rest.
+  },
+});
+
 // FabFile Vectorize Queue
 const fabFileVectorizeQueueDLQ = new sst.aws.Queue('fabFileVectorizeQueueDLQ', {});
 const fabFileVectorizeQueue = new sst.aws.Queue('fabFileVectorizeQueue', {
@@ -29,7 +42,9 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    // dataLakeTaxonomyQueue: finalizeBatchIfComplete (called from this handler) enqueues
+    // taxonomy analysis as a backstop, which needs Resource.dataLakeTaxonomyQueue.url.
+    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, dataLakeTaxonomyQueue],
     logging: {
       retention: '3 days',
     },
@@ -87,7 +102,17 @@ const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '13 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, fabFileVectorizeQueue, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    // dataLakeTaxonomyQueue: finalizeBatchIfComplete (called from this handler) enqueues
+    // taxonomy analysis as a backstop, which needs Resource.dataLakeTaxonomyQueue.url.
+    link: [
+      ...allSecrets,
+      websocketApi,
+      fabFileVectorizeQueue,
+      fabFileBucket,
+      generatedImagesBucket,
+      appFilesBucket,
+      dataLakeTaxonomyQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -420,6 +445,12 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
         actions: ['rekognition:DetectModerationLabels'],
         resources: ['*'],
       },
+      {
+        // generateAndSend resolves the agent's pinned model, which emits
+        // Lumina5/ModelSunset. PutMetricData takes no resource scope.
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
     ],
     copyFiles: [
       {
@@ -639,19 +670,12 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// Data Lake Taxonomy Analysis Queue
+// Data Lake Taxonomy Analysis Queue (Queue + DLQ declared near the top of this file, since
+// the chunk/vectorize subscriptions above need to link it too)
 // Triggered once per batch (from finalizeBatchIfComplete) when the wizard opted into
 // background AI tag suggestion. A single bounded OpenAI call over already-uploaded
 // FabFiles - no buckets needed (metadata-only sampling in v1), but links websocketApi
 // so the handler can push `data_lake_batch_progress` taxonomyStatus updates live.
-const dataLakeTaxonomyQueueDLQ = new sst.aws.Queue('dataLakeTaxonomyQueueDLQ', {});
-const dataLakeTaxonomyQueue = new sst.aws.Queue('dataLakeTaxonomyQueue', {
-  visibilityTimeout: '6 minutes',
-  dlq: {
-    queue: dataLakeTaxonomyQueueDLQ.arn,
-    retry: 2, // LLM calls cost money; the stuck-job reconciler is the backstop for the rest.
-  },
-});
 const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
   {
     handler: 'apps/client/server/queueHandlers/dataLakeTaxonomyAnalysis.dispatch',

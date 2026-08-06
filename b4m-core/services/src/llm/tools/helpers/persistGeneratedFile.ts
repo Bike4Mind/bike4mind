@@ -22,7 +22,15 @@ import type { ToolContext } from '../base/types';
  */
 export async function persistGeneratedFileAsFabFile(
   context: ToolContext,
-  file: { fileName: string; mimeType: string; content: Buffer }
+  file: {
+    fileName: string;
+    mimeType: string;
+    content: Buffer;
+    /** KnowledgeType to store under; defaults to FILE. Audio-generating tools pass AUDIO. */
+    type?: KnowledgeType;
+    /** FabFile tags; defaults to a single `generated` tag. */
+    tags?: { name: string; strength: number }[];
+  }
 ): Promise<void> {
   const { sessionId, userId, db, storage, logger } = context;
 
@@ -40,12 +48,12 @@ export async function persistGeneratedFileAsFabFile(
         fileName: file.fileName,
         mimeType: file.mimeType,
         fileSize: file.content.length,
-        type: KnowledgeType.FILE,
+        type: file.type ?? KnowledgeType.FILE,
         content: file.content,
         contentType: file.mimeType,
         sessionId,
         prefix: 'generated',
-        tags: [{ name: 'generated', strength: 1 }],
+        tags: file.tags ?? [{ name: 'generated', strength: 1 }],
       },
       {
         db: {

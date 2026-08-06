@@ -51,7 +51,7 @@ export function getSettingsValue<K extends SettingKey>(
     // prompts from completions and contradicting each setting's "clearing reverts to the built-in
     // default" contract. Only when the caller PASSED a default (defaultValue !== undefined) do we
     // treat '' as "use the default"; callers that omit it keep '' as a legitimate value (e.g.
-    // FormatPromptTemplate, whose empty default is meaningful).
+    // FormatPromptTemplate, whose sole reader substitutes its own fallback for a blank).
     if (parsed.data === '' && defaultValue !== undefined) {
       return defaultValue;
     }

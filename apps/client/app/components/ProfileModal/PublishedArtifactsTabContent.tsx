@@ -19,6 +19,10 @@ import RestoreIcon from '@mui/icons-material/Restore';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import CodeIcon from '@mui/icons-material/Code';
+import NotesIcon from '@mui/icons-material/Notes';
+import DownloadIcon from '@mui/icons-material/Download';
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
+import PublishedWithChangesIcon from '@mui/icons-material/PublishedWithChanges';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { PublishVisibility } from '@bike4mind/common';
@@ -29,8 +33,14 @@ import {
   updatePublishedCommentPolicy,
   restorePreviousVersion,
   toArtifactSharePath,
+  fetchPublishedExport,
+  canRefreshFromSource,
+  refreshPublishedFromSource,
   type ManagedArtifact,
 } from '@client/app/utils/publishApi';
+import { EXPORT_CONTENT_TYPE, exportFilename, supportsExport } from '@client/app/utils/publishExport';
+import { downloadData } from '@client/app/utils/download';
+import { printHtmlForPdf } from '@client/app/utils/printToPdf';
 import { ManageSharingPanel } from '@client/app/components/common/ManageSharingPanel';
 
 const QUERY_KEY = ['published-artifacts', 'mine'] as const;
@@ -49,9 +59,10 @@ function sharePath(a: ManagedArtifact): string {
 
 /**
  * Profile Published tab: manage the artifacts the caller has published. Toggle
- * who can view, turn comments on/off, restore the previous version, copy/open
- * the share link, or delete - all reachable for ANY published artifact, not
- * just one freshly shared in-session.
+ * who can view, turn comments on/off, refresh a link from its source artifact,
+ * restore the previous version, copy/open the share link, export the content, or
+ * delete - all reachable for ANY published artifact, not just one freshly shared
+ * in-session.
  */
 export default function PublishedArtifactsTabContent() {
   const qc = useQueryClient();
@@ -89,6 +100,14 @@ export default function PublishedArtifactsTabContent() {
     },
     onError: (e: unknown) => toast.error(apiError(e, 'Restore failed')),
   });
+  const refreshMut = useMutation({
+    mutationFn: (a: ManagedArtifact) => refreshPublishedFromSource(a),
+    onSuccess: () => {
+      toast.success('Refreshed from source - a new version is live');
+      invalidate();
+    },
+    onError: (e: unknown) => toast.error(apiError(e, 'Refresh failed')),
+  });
   const deleteMut = useMutation({
     mutationFn: (publicId: string) => deletePublishedArtifact(publicId),
     onSuccess: () => {
@@ -98,9 +117,59 @@ export default function PublishedArtifactsTabContent() {
     onError: (e: unknown) => toast.error(apiError(e, 'Failed to delete')),
   });
 
-  const busy = visibilityMut.isPending || commentsMut.isPending || restoreMut.isPending || deleteMut.isPending;
+  const busy =
+    visibilityMut.isPending ||
+    commentsMut.isPending ||
+    restoreMut.isPending ||
+    refreshMut.isPending ||
+    deleteMut.isPending;
   // One row's sharing panel open at a time.
   const [manageOpen, setManageOpen] = useState<string | null>(null);
+  // publicId+format of an export in flight, so only the clicked button disables.
+  const [exporting, setExporting] = useState<string | null>(null);
+
+  /**
+   * Run an export through the authenticated api client (a plain download link would
+   * navigate uncredentialed and get the loader shell for anything gated), then either
+   * copy it or save it. Owner-side only: these buttons are the export path for private
+   * and org-gated artifacts, whose public pages deliberately show no export links.
+   */
+  const runExport = async (a: ManagedArtifact, format: 'md' | 'html', action: 'copy' | 'download') => {
+    const key = `${a.publicId}:${format}`;
+    setExporting(key);
+    try {
+      const content = await fetchPublishedExport(sharePath(a), format);
+      if (action === 'copy') {
+        await navigator.clipboard.writeText(content);
+        toast.success('Markdown copied');
+      } else {
+        downloadData(content, exportFilename(a.title, format), EXPORT_CONTENT_TYPE[format]);
+      }
+    } catch (e) {
+      toast.error(apiError(e, format === 'md' ? 'Could not copy as Markdown' : 'Could not save as HTML'));
+    } finally {
+      setExporting(cur => (cur === key ? null : cur));
+    }
+  };
+
+  /**
+   * Save as PDF via the browser's print dialog (issue #1142 item 2). Reuses the HTML
+   * export as the source of truth and hands it to an isolated print frame rather than
+   * opening author HTML in the app origin - see printToPdf.ts. Owner-only (the public
+   * footers are CSP-locked); offered for every kind since the browser renders it.
+   */
+  const runPrint = async (a: ManagedArtifact) => {
+    const key = `${a.publicId}:pdf`;
+    setExporting(key);
+    try {
+      const content = await fetchPublishedExport(sharePath(a), 'html');
+      printHtmlForPdf(content);
+    } catch (e) {
+      toast.error(apiError(e, 'Could not open the print view'));
+    } finally {
+      setExporting(cur => (cur === key ? null : cur));
+    }
+  };
 
   if (isLoading) return <LinearProgress data-testid="published-artifacts-loading" />;
   if (isError) {
@@ -117,8 +186,8 @@ export default function PublishedArtifactsTabContent() {
         Live Artifacts
       </Typography>
       <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }}>
-        Everything you&apos;ve published as a live link. Change who can view, turn comments on or off, restore a
-        previous version, or delete.
+        Everything you&apos;ve published as a live link. Change who can view, turn comments on or off, export the
+        content, refresh a link from its source artifact, restore a previous version, or delete.
       </Typography>
 
       {artifacts.length === 0 ? (
@@ -132,6 +201,7 @@ export default function PublishedArtifactsTabContent() {
             const path = sharePath(a);
             const url = `${window.location.origin}${path}`;
             const isBundle = a.source.kind === 'bundle';
+            const canRefresh = canRefreshFromSource(a);
             const hasPrevious = Boolean(a.previousVersionMeta?.sha256Index);
             const commentsOn = a.commentPolicy === 'open' || a.commentPolicy === 'restricted';
 
@@ -242,6 +312,82 @@ export default function PublishedArtifactsTabContent() {
                     </IconButton>
                   </Tooltip>
 
+                  {/* Markdown is offered only for kinds it converts to faithfully (replies,
+                      whose stored body IS markdown) - see exportFormatsFor. Hidden, not
+                      disabled: a greyed button implies the export exists and is unavailable,
+                      when in fact there is no honest Markdown form of an HTML bundle. */}
+                  {supportsExport(a.source.kind, 'md') && (
+                    <Tooltip title="Copy as Markdown">
+                      <IconButton
+                        size="sm"
+                        variant="plain"
+                        color="neutral"
+                        loading={exporting === `${a.publicId}:md`}
+                        onClick={() => void runExport(a, 'md', 'copy')}
+                        data-testid={`published-artifact-copy-md-${a.publicId}`}
+                      >
+                        <NotesIcon />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+
+                  <Tooltip title="Save as HTML">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      loading={exporting === `${a.publicId}:html`}
+                      onClick={() => void runExport(a, 'html', 'download')}
+                      data-testid={`published-artifact-save-html-${a.publicId}`}
+                    >
+                      <DownloadIcon />
+                    </IconButton>
+                  </Tooltip>
+
+                  {/* PDF is produced client-side by printing the HTML export from an
+                      isolated frame (printToPdf), not a server export format. Offered
+                      for every kind - the browser renders it visually. */}
+                  <Tooltip title="Save as PDF (opens print dialog)">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      loading={exporting === `${a.publicId}:pdf`}
+                      onClick={() => void runPrint(a)}
+                      data-testid={`published-artifact-save-pdf-${a.publicId}`}
+                    >
+                      <PictureAsPdfIcon />
+                    </IconButton>
+                  </Tooltip>
+
+                  {/* Refresh re-publishes from the source artifact's CURRENT content onto
+                      the same link. Hidden where there is no source to read back (a reply
+                      snapshot, or a bundle published from outside the app). */}
+                  {canRefresh && (
+                    <Tooltip title="Refresh from source (publishes a new version)">
+                      <IconButton
+                        size="sm"
+                        variant="plain"
+                        color="neutral"
+                        disabled={busy}
+                        loading={refreshMut.isPending && refreshMut.variables?.publicId === a.publicId}
+                        onClick={() => {
+                          // Outward-facing: it replaces what viewers of a live link see.
+                          if (
+                            window.confirm(
+                              `Refresh "${a.title}" from its source artifact? This publishes a new version to the same link.`
+                            )
+                          ) {
+                            refreshMut.mutate(a);
+                          }
+                        }}
+                        data-testid={`published-artifact-refresh-${a.publicId}`}
+                      >
+                        <PublishedWithChangesIcon />
+                      </IconButton>
+                    </Tooltip>
+                  )}
+
                   {isBundle && (
                     <Tooltip title={hasPrevious ? 'Restore the previous version' : 'No previous version to restore'}>
                       <span>
@@ -298,8 +444,9 @@ export default function PublishedArtifactsTabContent() {
                     sx={{ opacity: 0.7 }}
                     data-testid={`published-artifact-single-version-${a.publicId}`}
                   >
-                    Only one version published - re-publish this artifact (or use AI Revise) to create version history.
-                    A version switcher appears on the page once there are 2 or more versions.
+                    Only one version published -{' '}
+                    {canRefresh ? 'refresh it from source (or use AI Revise)' : 're-publish this artifact'} to create
+                    version history. A version switcher appears on the page once there are 2 or more versions.
                   </Typography>
                 )}
               </Sheet>

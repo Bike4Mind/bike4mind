@@ -30,13 +30,10 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
-import {
-  useDataLakeFiles,
-  useReprocessFabFile,
-  useRemoveFileFromDataLake,
-} from '@client/app/hooks/data/dataLakeWizard';
+import { useDataLakeFiles, useReprocessFabFile, useRemoveFileFromDataLake } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import type { IFabFileDocument } from '@bike4mind/common';
+import { satisfiesTagPrefix } from '@bike4mind/common';
 
 // Utilities
 
@@ -203,11 +200,19 @@ function TreeSidebar({
   }, [currentNodes, searchQuery, sortBy]);
 
   // Files in the lake with no prefix-matching (non-meta) tag - surfaced under "Uncategorized".
+  // Shares the server's predicate so this bucket holds exactly the files the write doors and the
+  // backfill consider uncategorized; a local copy already drifted on the bare-prefix case.
   const prefixNorm = tagPrefix.endsWith(':') ? tagPrefix : `${tagPrefix}:`;
   const uncategorizedFiles = useMemo(
     () =>
       [...articles]
-        .filter(f => !(f.tags ?? []).some(t => t.name.startsWith(prefixNorm) && !t.name.startsWith('datalake:')))
+        .filter(
+          f =>
+            !satisfiesTagPrefix(
+              (f.tags ?? []).map(t => t.name),
+              prefixNorm
+            )
+        )
         .sort((a, b) => a.fileName.localeCompare(b.fileName)),
     [articles, prefixNorm]
   );

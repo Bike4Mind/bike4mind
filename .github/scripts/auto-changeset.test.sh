@@ -206,6 +206,53 @@ else
   ok "a manual changeset suppresses auto-generation"
 fi
 
+# --- A manual changeset BELOW this PR's bump level must not suppress it ---
+D="$WORK/case-manual-lower"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+(
+  cd "$D/work"
+  printf '%s\n' '---' '"@bike4mind/auth": patch' '---' '' 'Hand written.' >.changeset/hand-written.md
+  git add -A
+  git commit --quiet -m "chore: manual changeset"
+  git push --quiet 2>/dev/null
+)
+run_step "$D/work" "feat(auth): new grant type" 906
+if grep -q '"@bike4mind/auth": minor' "$D/work/.changeset/pr-906.md" 2>/dev/null; then
+  ok "a manual patch does not swallow this PR's minor"
+else
+  fail "a manual patch does not swallow this PR's minor" "output:" "$(cat "$D/work/.step-output")"
+fi
+
+# --- A hand-edited pr-<N>.md is overwritten, with a comment saying so ---
+D="$WORK/case-hand-edit"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+(
+  cd "$D/work"
+  printf '%s\n' '---' '"@bike4mind/auth": major' '---' '' 'Hand edited.' >.changeset/pr-907.md
+  git add -A
+  git commit --quiet -m "chore: edit the generated changeset"
+  git push --quiet 2>/dev/null
+)
+run_step "$D/work" "fix(auth): correct token refresh" 907
+if grep -q 'looked hand-edited' "$D/work/.gh-calls" 2>/dev/null &&
+  grep -q '"@bike4mind/auth": patch' "$D/work/.changeset/pr-907.md" 2>/dev/null; then
+  ok "a hand-edited changeset is overwritten and reported"
+else
+  fail "a hand-edited changeset is overwritten and reported" \
+    "changeset:" "$(cat "$D/work/.changeset/pr-907.md" 2>/dev/null)" \
+    "gh calls: $(cat "$D/work/.gh-calls" 2>/dev/null)"
+fi
+rm -f "$D/work/.gh-calls"
+run_step "$D/work" "fix(auth): correct token refresh" 907
+if grep -q 'looked hand-edited' "$D/work/.gh-calls" 2>/dev/null; then
+  fail "the hand-edit warning stops once the file is regenerated" \
+    "gh calls: $(cat "$D/work/.gh-calls")"
+else
+  ok "the hand-edit warning stops once the file is regenerated"
+fi
+
 # --- A non-publishable type generates nothing ---
 D="$WORK/case-chore"
 mkdir -p "$D"

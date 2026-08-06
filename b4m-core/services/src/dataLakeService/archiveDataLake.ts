@@ -12,9 +12,9 @@ import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 
 interface ArchiveDataLakeAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'find'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'find'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
-    fabFiles: Pick<IFabFileRepository, 'archiveByDataLakeTag' | 'computeDataLakeStats'>;
+    fabFiles: Pick<IFabFileRepository, 'archiveByDataLakeTag' | 'computeDataLakeStats' | 'findIdsByDataLakeTag'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
@@ -60,8 +60,12 @@ export const archiveDataLake = async (
   // browse (they filter archivedAt: null) - and unarchiving either lake brings back BOTH lakes'
   // archived files, since the flip matches on archivedAt alone.
   await warnOnPrefixCollision(db, existing, logger);
-  await db.fabFiles.archiveByDataLakeTag(lakeMembershipScope(existing));
-  await bestEffortIndexRemove(retrievalIndex, existing.datalakeTag, logger);
+  const scope = lakeMembershipScope(existing);
+  await db.fabFiles.archiveByDataLakeTag(scope);
+  // Same scope the sweep ran on. findIdsByDataLakeTag is the id source rather than the flip's
+  // count because it reports every member whatever its archived/deleted state, so a re-run after
+  // a crashed attempt still hands the index the full set.
+  await bestEffortIndexRemove(retrievalIndex, scope, () => db.fabFiles.findIdsByDataLakeTag(scope), logger);
 
   // Step 4: settle to archived and reconcile stats from source (now 0 live files).
   const updated = await db.dataLakes.update({ id: dataLakeId, status: 'archived' });

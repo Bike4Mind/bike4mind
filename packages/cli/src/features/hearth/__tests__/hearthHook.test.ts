@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { homedir } from 'node:os';
+import { basename } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -18,10 +20,19 @@ interface CapturedRequest {
   body: Record<string, unknown>;
 }
 
+/**
+ * process.env minus every B4M_HEARTH_* key. A developer who actually uses the
+ * hook has these set, and inheriting them makes the suite assert against their
+ * configuration rather than the tier defaults this file exists to pin.
+ */
+function ambientHookEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('B4M_HEARTH_')));
+}
+
 function runHook(env: Record<string, string>, stdinPayload: unknown) {
   return new Promise<number>((resolve, reject) => {
     const child = spawn(process.execPath, [HOOK_PATH], {
-      env: { ...process.env, ...env },
+      env: { ...ambientHookEnv(), ...env },
       stdio: ['pipe', 'ignore', 'ignore'],
     });
     child.on('error', reject);
@@ -242,6 +253,121 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
     }
   }, 15000);
 
+  it('never sends the home directory as a workspace, because its basename is the username', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      // Starting a session in $HOME is ordinary, and `/Users/<user>` or
+      // `/home/<user>` basenames to the OS USERNAME - so this fired on real
+      // sessions at the DEFAULT tier while the header promised "the repo name".
+      await runHook(HOOK_ENV(port), {
+        hook_event_name: 'Stop',
+        session_id: 'sess-123',
+        cwd: homedir(),
+      });
+
+      const body = captured.current!.body;
+      const payload = (body.machine as { payload: Record<string, unknown> }).payload;
+      expect(payload.workspace).toBeUndefined();
+      // And the username must not have reached the human line either.
+      expect(JSON.stringify(body)).not.toContain(basename(homedir()));
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('still sends a real workspace basename', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      await runHook(HOOK_ENV(port), {
+        hook_event_name: 'Stop',
+        session_id: 'sess-123',
+        cwd: '/Users/someone/parent/my-repo',
+      });
+
+      const payload = (captured.current!.body.machine as { payload: Record<string, unknown> }).payload;
+      expect(payload.workspace).toBe('my-repo');
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('reduces an MCP tool to a bare kind, so server names stay local', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      // mcp__<server>__<tool> disclosed every configured MCP SERVER at the
+      // default tier through a field documented as a closed set.
+      await runHook(HOOK_ENV(port), {
+        hook_event_name: 'PreToolUse',
+        session_id: 'sess-123',
+        tool_name: 'mcp__acme_internal_crm__create_ticket',
+      });
+
+      const body = captured.current!.body;
+      const activity = (body.machine as { payload: { activity: Record<string, unknown> } }).payload.activity;
+      expect(activity.tool).toBe('mcp');
+      expect(JSON.stringify(body)).not.toContain('acme_internal_crm');
+      expect(JSON.stringify(body)).not.toContain('create_ticket');
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('drops a tool name that is not a plain identifier', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      await runHook(HOOK_ENV(port), {
+        hook_event_name: 'PreToolUse',
+        session_id: 'sess-123',
+        tool_name: 'Bash /Users/someone/secret-project/deploy.sh',
+      });
+
+      const body = captured.current!.body;
+      const activity = (body.machine as { payload: { activity: Record<string, unknown> } }).payload.activity;
+      expect(activity.tool).toBeUndefined();
+      expect(JSON.stringify(body)).not.toContain('secret-project');
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('ignores an unrecognized notification_type instead of forwarding it', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      // The field was documented as a closed set but was forwarded unchecked, so
+      // an upstream addition (or anything else) passed straight through.
+      await runHook(HOOK_ENV(port), {
+        hook_event_name: 'Stop',
+        session_id: 'sess-123',
+        notification_type: 'BAIT-unknown-classifier',
+      });
+
+      const body = captured.current!.body;
+      const activity = (body.machine as { payload: { activity: Record<string, unknown> } }).payload.activity;
+      // Falls back to the event-derived code for Stop.
+      expect(activity.reason).toBe('turn_finished');
+      expect(JSON.stringify(body)).not.toContain('BAIT-unknown-classifier');
+    } finally {
+      close();
+    }
+  }, 15000);
+
+  it('does not treat a prototype key as a known notification_type', async () => {
+    const { port, captured, close } = await startCaptureServer();
+    try {
+      await runHook(HOOK_ENV(port), {
+        hook_event_name: 'Stop',
+        session_id: 'sess-123',
+        notification_type: 'constructor',
+      });
+
+      const activity = (captured.current!.body.machine as { payload: { activity: Record<string, unknown> } }).payload
+        .activity;
+      expect(activity.reason).toBe('turn_finished');
+    } finally {
+      close();
+    }
+  }, 15000);
+
   it('gives each session a stable, distinct actor identity', async () => {
     const identityFor = async (sessionId: string) => {
       const { port, captured, close } = await startCaptureServer();
@@ -328,7 +454,7 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
     try {
       const child = spawn(process.execPath, [HOOK_PATH], {
         env: {
-          ...process.env,
+          ...ambientHookEnv(),
           B4M_API_URL: `http://127.0.0.1:${port}`,
           B4M_API_KEY: 'k',
           B4M_HEARTH_CHANNEL: 'ch',
