@@ -15,7 +15,7 @@ const deleteFabFileSchema = z.object({
 
 type DeleteFabFileParameters = z.infer<typeof deleteFabFileSchema>;
 
-export type DeleteFabFileAction = 'deleted' | 'unshared' | 'not_found';
+export type DeleteFabFileAction = 'deleted' | 'unshared' | 'not_found' | 'denied';
 
 export interface DeleteFabFileResult {
   action: DeleteFabFileAction;
@@ -101,11 +101,12 @@ export const deleteFabFile = async (
 
   const userShareIndex = sharedFile.users?.findIndex(u => u.userId.toString() === userId);
   if (userShareIndex === undefined || userShareIndex === -1) {
-    // File exists but user has no direct share - may be group-shared or data-lake
+    // File exists but user has no direct share - may be group-shared or data-lake. Distinct from
+    // genuine absence: callers must not report this identically to a no-op (see bulk-delete.ts).
     Logger.globalInstance.warn(
       `[deleteFabFile] File exists but user is not in share list — fileId: ${id}, userId: ${userId}. Cannot unshare.`
     );
-    return { action: 'not_found', fabFile: null };
+    return { action: 'denied', fabFile: null };
   }
 
   // 3. Remove the user from the share list (self-unshare)

@@ -152,6 +152,42 @@ describe('bulk-delete - data-lake stats', () => {
   });
 });
 
+describe('bulk-delete - not-found and denied reporting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: OWNER });
+    h.findAllWithKnowledgeId.mockResolvedValue([]);
+  });
+
+  it('reports a genuinely missing file under notFound, not silently', async () => {
+    h.findById.mockResolvedValue(null);
+    h.findByIdAndUserId.mockResolvedValue(null);
+    const { res, json } = makeRes();
+
+    await run(['507f1f77bcf86cd799439011'], res);
+
+    const body = json.mock.calls[0][0];
+    expect(body.results.notFound).toEqual(['507f1f77bcf86cd799439011']);
+    expect(body.results.denied).toEqual([]);
+    expect(body.message).toBe('1 file(s) not found');
+  });
+
+  it('reports a file the actor has no access to under denied, distinct from notFound', async () => {
+    // Exists, but the actor is neither owner nor in the share list.
+    const inaccessible = { ...memberFile('507f1f77bcf86cd799439011', 'someone-else'), users: [] };
+    h.findById.mockResolvedValue(inaccessible);
+    h.findByIdAndUserId.mockResolvedValue(null);
+    const { res, json } = makeRes();
+
+    await run(['507f1f77bcf86cd799439011'], res);
+
+    const body = json.mock.calls[0][0];
+    expect(body.results.denied).toEqual(['507f1f77bcf86cd799439011']);
+    expect(body.results.notFound).toEqual([]);
+    expect(body.message).toBe('Access denied for 1 file(s)');
+  });
+});
+
 // Deleting files changes which files carry a tag, so each one is marked as recently used. The
 // ownership check is the route's own decision - deleting a file shared WITH you is an unshare, which
 // changes nothing about your tags - and the same decision is made independently in files/[id].
