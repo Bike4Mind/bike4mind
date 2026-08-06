@@ -737,4 +737,7 @@ export function useApplyAutoRenameFabFile() {
 
 // The premium overlay imports this hook from the fabFiles path (pinned ref). Keep the alias
 // until the overlay repoints its imports, then delete it. New code imports from dataLakes.
+// The type aliases cost nothing at runtime (erased) and cover downstream declarations typed
+// against the pre-move fabFiles surface.
 export { useDataLakeArticleCounts } from './dataLakes';
+export type { DataLakeArticlesParams, DataLakeTagCountsResponse, DataLakeBrowseSource } from './dataLakes';

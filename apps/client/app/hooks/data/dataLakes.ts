@@ -38,18 +38,26 @@ export function activeOrgId(): string | undefined {
  * disabled. Callers that mount app-wide (e.g. a closed modal) pass `enabled: false` until the
  * list is actually needed, and the gate rejection is never retried, so a disabled feature can't
  * spam a 403 on every page.
+ *
+ * The defaults (no retry, 2 min staleTime, no focus refetch) are tuned for those display
+ * surfaces. A consumer whose correctness depends on the CURRENT list - a gate, not a hint -
+ * overrides them via `opts` (see useDuplicatePrefixLake); staleTime is per-observer and retry
+ * follows the observer that triggers the fetch, so one eager consumer doesn't change the others.
  */
-export function useGetDataLakes(enabled = true) {
+export function useGetDataLakes(
+  enabled = true,
+  opts?: { staleTime?: number; retry?: number | boolean; refetchOnWindowFocus?: boolean }
+) {
   return useQuery({
     queryKey: dataLakeKeys.list,
     enabled,
-    retry: false,
+    retry: opts?.retry ?? false,
     queryFn: async () => {
       const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
       return response.data.data;
     },
-    refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
+    refetchOnWindowFocus: opts?.refetchOnWindowFocus ?? false,
+    staleTime: opts?.staleTime ?? 1000 * 60 * 2,
   });
 }
 
@@ -65,7 +73,10 @@ export function useGetDataLakes(enabled = true) {
  * conflict either way round.
  */
 export function useDuplicatePrefixLake(prefix: string, skip = false): DataLakeConfig | undefined {
-  const { data: allLakes } = useGetDataLakes();
+  // This mirrors a server refusal and gates the wizard's Next/Upload buttons, so it must see
+  // the current list and ride out transient errors - the list-surface defaults (2 min stale,
+  // no retry, no focus refetch) would let a stale or errored read open the gate.
+  const { data: allLakes } = useGetDataLakes(true, { staleTime: 0, retry: 3, refetchOnWindowFocus: true });
   const selectedAccount = useSelectedAccount(s => s.selectedAccount);
   const scopeOrgId = selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
 
@@ -377,7 +388,7 @@ export function useReprocessFabFile(dataLakeId: string | null) {
       return res.data;
     },
     onSuccess: () => {
-      toast.success('Re-processing started — chunking and vectorization will re-run.');
+      toast.success('Re-processing started - chunking and vectorization will re-run.');
       if (dataLakeId) queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
     },
     onError: (error: Error) => {
