@@ -27,6 +27,7 @@ import {
   useDismissTaxonomy,
   useReanalyzeTaxonomy,
 } from '@client/app/hooks/data/dataLakes';
+import { useConfirmation } from '@client/app/hooks/useConfirmation';
 
 // Confidence tier helpers
 
@@ -225,6 +226,7 @@ export default function TaxonomyReviewPanel({
   const applyMutation = useApplyTaxonomySuggestions(batch.id);
   const reanalyzeMutation = useReanalyzeTaxonomy(batch.id);
   const dismissMutation = useDismissTaxonomy(batch.id);
+  const confirm = useConfirmation();
 
   // Re-seed local edits whenever the batch's stored suggestions change identity (e.g. after
   // a re-analyze completes and the list refetches with a fresh taxonomySuggestions object).
@@ -339,7 +341,17 @@ export default function TaxonomyReviewPanel({
             color="neutral"
             data-testid="taxonomy-dismiss-btn"
             loading={dismissMutation.isPending}
-            onClick={() => dismissMutation.mutate(undefined, { onSuccess: onClose })}
+            onClick={() =>
+              confirm({
+                type: 'warning',
+                title: 'Dismiss Suggestion',
+                description: 'This clears the suggestion from your list. Files keep whatever tags they already have.',
+                okLabel: 'Dismiss',
+                onOk: async () => {
+                  dismissMutation.mutate(undefined, { onSuccess: onClose });
+                },
+              })
+            }
           >
             Dismiss
           </Button>
