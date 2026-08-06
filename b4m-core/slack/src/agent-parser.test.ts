@@ -215,6 +215,21 @@ describe('@datalake command', () => {
     expect(isDataLakeCommand(parseCommand('summarize this thread'))).toBe(false);
   });
 
+  it('intercepts a bare `@datalake` mention with no args (would otherwise leak to the LLM)', () => {
+    expect(isDataLakeCommand(parseCommand('@datalake'))).toBe(true);
+    expect(isDataLakeCommand(parseCommand('@datalake   '))).toBe(true);
+    expect(isDataLakeCommand(parseCommand('<@U12345> @datalake'))).toBe(true);
+    // not a leading mention, and word-boundary guard
+    expect(isDataLakeCommand(parseCommand('hey @datalake'))).toBe(false);
+    expect(isDataLakeCommand(parseCommand('@datalaked add'))).toBe(false);
+  });
+
+  it('selectAgent never routes @datalake to an LLM persona (falls back to the general agent)', () => {
+    expect(selectAgent(parseCommand('@datalake add to sales https://x.com'))).toBe(AGENT_REGISTRY.agent);
+    // sanity: a real persona still resolves
+    expect(selectAgent(parseCommand('@dev create an issue'))).toBe(AGENT_REGISTRY.dev);
+  });
+
   describe('parseDataLakeCommand grammar', () => {
     it('parses `add to <lake> <link>`', () => {
       const r = parseDataLakeCommand('@datalake add to sales https://example.com/doc');
@@ -255,6 +270,15 @@ describe('@datalake command', () => {
       expect(r.subcommand).toBe('add');
       expect(r.lakeSlug).toBeUndefined();
       expect(r.link).toBe('https://example.com/doc');
+    });
+
+    it('anchors the `to <lake>` capture to the add subcommand only', () => {
+      expect(parseDataLakeCommand('@datalake list to sales').lakeSlug).toBeUndefined();
+      expect(parseDataLakeCommand('@datalake help to sales').lakeSlug).toBeUndefined();
+    });
+
+    it('strips a Slack-wrapped slug symmetrically (leading < and trailing >)', () => {
+      expect(parseDataLakeCommand('@datalake add to <sales>').lakeSlug).toBe('sales');
     });
 
     it('parses `list` and `help`', () => {
