@@ -54,7 +54,7 @@ vi.mock('ink', async importOriginal => {
 });
 
 // eslint-disable-next-line no-control-regex
-const stripAnsi = (value: string) => value.replace(/\[[0-9;]*[A-Za-z]/g, '');
+const stripAnsi = (value: string) => value.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
 
 /**
  * Renders through real Ink at an exact terminal width and returns the height of
