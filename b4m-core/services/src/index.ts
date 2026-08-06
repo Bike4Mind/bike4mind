@@ -36,6 +36,7 @@ export * as mfaService from './mfaService';
 export * as adminSettingsService from './adminSettingsService';
 export * as creditService from './creditService';
 export * from './billing';
+export * as spendReconciliationService from './spendReconciliation';
 export * from './soundCost';
 export * from './musicCost';
 export * from './llm/agentToolMediaCost';
