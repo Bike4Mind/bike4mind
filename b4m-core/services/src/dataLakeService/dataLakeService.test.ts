@@ -1004,6 +1004,7 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       findById: vi.fn().mockResolvedValue(lake({ status: 'archived' })),
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
     };
     const result = await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       db: { dataLakes, fabFiles },
@@ -1024,6 +1025,7 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
       findById: vi.fn().mockResolvedValue(lake({ status: 'active' })),
       update: vi.fn(),
       setStats: vi.fn(),
+      activateIfDraft: vi.fn(),
     };
     const fabFiles = {
       findDeletedByDataLakeTag: vi.fn(),
@@ -1052,6 +1054,7 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
       findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
       update: vi.fn().mockResolvedValue(lake()),
       setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
     };
     const result = await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       db: { dataLakes, fabFiles },
@@ -1073,6 +1076,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
           .fn()
           .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
         setStats: vi.fn().mockResolvedValue(undefined),
+        activateIfDraft: vi.fn(),
         find: vi.fn().mockResolvedValue([]),
       },
       batches: {
@@ -1233,6 +1237,7 @@ describe('teardown stamp bookkeeping', () => {
         findById: vi.fn().mockResolvedValue(existing),
         update: vi.fn().mockResolvedValue(lake()),
         setStats: vi.fn().mockResolvedValue(undefined),
+        activateIfDraft: vi.fn(),
       },
       fabFiles: {
         findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
@@ -1469,7 +1474,7 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
     }) as IDataLakeBatchDocument;
 
   const makeDb = () => ({
-    dataLakes: { findById: vi.fn().mockResolvedValue(lake()), setStats: vi.fn() },
+    dataLakes: { findById: vi.fn().mockResolvedValue(lake()), setStats: vi.fn(), activateIfDraft: vi.fn() },
     batches: { markTerminalIfActive: vi.fn().mockResolvedValue(batch({ status: 'completed_with_errors' })) },
     fabFiles: { computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }) },
   });
@@ -1566,7 +1571,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
 
   const makeAdapters = (file: unknown = fileInLake) => ({
     db: {
-      dataLakes: { findById: vi.fn().mockResolvedValue(lake()), setStats: vi.fn() },
+      dataLakes: { findById: vi.fn().mockResolvedValue(lake()), setStats: vi.fn(), activateIfDraft: vi.fn() },
       fabFiles: {
         findById: vi.fn().mockResolvedValue(file),
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),

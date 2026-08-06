@@ -12,7 +12,7 @@ import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 
 interface ArchiveDataLakeAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'find'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'find'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'archiveByDataLakeTag' | 'computeDataLakeStats' | 'findIdsByDataLakeTag'>;
   };

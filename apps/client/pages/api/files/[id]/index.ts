@@ -16,7 +16,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { findLakeAccessibleFabFile } from '@server/dataLakes';
-import { recomputeStatsForDeletedFiles } from '@server/dataLakes/recomputeStatsForDeletedFiles';
+import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
 import { Request } from 'express';
 import { Types } from 'mongoose';
@@ -224,7 +224,7 @@ const handler = baseApi()
     // After the transaction, so the aggregation sees the committed `deletedAt`. The shared helper
     // also backs bulk-delete; see it for why only the 'deleted' outcome moves lake membership.
     if (deleteAction === 'deleted') {
-      await recomputeStatsForDeletedFiles(
+      await recomputeStatsForLakeTags(
         (fabFile?.tags ?? []).map(tag => tag?.name),
         { logger: req.logger }
       );

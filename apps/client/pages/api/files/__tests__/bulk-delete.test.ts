@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   findByDatalakeTag: vi.fn(),
   computeDataLakeStats: vi.fn(),
   setStats: vi.fn(),
+  activateIfDraft: vi.fn(),
   storageDelete: vi.fn(),
 }));
 

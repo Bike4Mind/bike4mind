@@ -124,7 +124,9 @@ handler.get(async (req, res) => {
   if (!READABLE_PRINCIPAL_KINDS.includes(kind as PrincipalKind)) {
     return res
       .status(400)
-      .json({ error: `Unsupported principal kind '${kind}'. Expected one of: ${READABLE_PRINCIPAL_KINDS.join(', ')}.` });
+      .json({
+        error: `Unsupported principal kind '${kind}'. Expected one of: ${READABLE_PRINCIPAL_KINDS.join(', ')}.`,
+      });
   }
 
   // Defense-in-depth: a user may only read their OWN user-memory. Each store already owner-scopes its

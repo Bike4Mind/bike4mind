@@ -766,8 +766,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   /**
    * Authoritative lake stats from source records via an aggregate - counts only live files
-   * (not archived, not deleted). Runs at batch completion AND on the reconcile read path, so
-   * it must NOT load-all-and-count.
+   * (not archived, not deleted, not an orphan upload still `pending`). Runs at batch completion
+   * AND on the reconcile read path, so it must NOT load-all-and-count.
+   *
+   * `status: { $ne: 'pending' }` matters here specifically because this count also drives
+   * `activateIfDraft` (recomputeLakeStats.ts): a presigned FabFile row is tagged into the lake
+   * before a byte is sent, and without this exclusion an upload that never completed could
+   * still count toward "the lake has a member" and activate it - permanently, since the
+   * transition is one-way. Same exclusion as findByContentHashes, for the same reason.
    *
    * The `{ 'tags.name': 1, archivedAt: 1, deletedAt: 1 }` index bounds the meta-tag arm fully.
    * The prefix arm only gets a range on the leading key (an anchored regex) and its `userId`
@@ -776,7 +782,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    */
   async computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }> {
     const [agg] = await this.fabFileModel.aggregate<{ fileCount: number; totalSizeBytes: number }>([
-      { $match: { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null } },
+      {
+        $match: {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+        },
+      },
       { $group: { _id: null, fileCount: { $sum: 1 }, totalSizeBytes: { $sum: { $ifNull: ['$fileSize', 0] } } } },
       { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1 } },
     ]);
@@ -798,6 +811,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           ...buildDataLakeMembershipFilter(scope),
           deletedAt: null,
           archivedAt: null,
+          status: { $ne: 'pending' },
         })
       )
     );

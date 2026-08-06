@@ -384,6 +384,19 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     );
     return (doc?.toJSON() as IDataLakeDocument) ?? null;
   }
+
+  async activateIfDraft(id: string): Promise<boolean> {
+    // The status guard lives in the FILTER, not in a prior read: the membership doors that call
+    // this hand over a lake document they fetched before their own status writes, so testing the
+    // caller's copy could flip a lake that is already archiving. `null` also matches a missing
+    // field - lakes written before `status` existed have none, and they are just as invisible to
+    // the catalog as a draft.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: { $in: ['draft', null] } },
+      { $set: { status: 'active' } }
+    );
+    return res.modifiedCount === 1;
+  }
 }
 
 export const dataLakeRepository = new DataLakeRepository(DataLakeModel);

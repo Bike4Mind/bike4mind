@@ -34,7 +34,9 @@ const handler = baseApi().post(async (req, res) => {
   if (!WRITABLE_PRINCIPAL_KINDS.includes(kind as PrincipalKind)) {
     return res
       .status(400)
-      .json({ error: `Unsupported principal kind '${kind}'. Expected one of: ${WRITABLE_PRINCIPAL_KINDS.join(', ')}.` });
+      .json({
+        error: `Unsupported principal kind '${kind}'. Expected one of: ${WRITABLE_PRINCIPAL_KINDS.join(', ')}.`,
+      });
   }
   if (kind !== 'user' || id !== ownerUserId) {
     return res.status(403).json({ error: 'You can only append to your own user memory for now.' });

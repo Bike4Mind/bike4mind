@@ -46,7 +46,7 @@ interface UpdateFabFileAdapters {
       IFabFileRepository,
       'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
     >;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'find'>;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
   };
   /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };

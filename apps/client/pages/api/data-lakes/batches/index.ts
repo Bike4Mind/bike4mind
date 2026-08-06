@@ -64,10 +64,10 @@ const handler = baseApi()
     const userId = req.user.id;
     const data = CreateBatchRequestInput.parse(req.body);
 
-    // Creating a batch flips a draft lake to active and opens it for uploads - a WRITE. Gate it
-    // with the creator/admin check (not just read access) so a read-only member can't inject
-    // files into a lake they don't own. Not-found-style denial when the lake isn't even
-    // readable; manage-denied when readable but not owned.
+    // Creating a batch opens the lake for uploads - a WRITE. Gate it with the creator/admin
+    // check (not just read access) so a read-only member can't inject files into a lake they
+    // don't own. Not-found-style denial when the lake isn't even readable; manage-denied when
+    // readable but not owned.
     const dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeId, await toAccessContext(req), {
       db: { dataLakes: dataLakeRepository },
     });
@@ -98,11 +98,11 @@ const handler = baseApi()
       taxonomyStatus: 'none',
     });
 
-    // Creating the first batch flips a draft lake to active (one-way).
-    if (dataLake.status === 'draft') {
-      await dataLakeRepository.update({ id: dataLake.id, status: 'active' });
-    }
-
+    // No status write here. Activation is `recomputeLakeStats`'s, keyed on the lake actually
+    // having a member file - and `computeDataLakeStats` excludes status:'pending' rows, so a
+    // presigned-but-never-uploaded file (client fails outright, or the tab closes before any
+    // byte lands) cannot count toward that membership no matter which door recomputes the lake
+    // or how long the row survives.
     return res.json(batch);
   });
 
