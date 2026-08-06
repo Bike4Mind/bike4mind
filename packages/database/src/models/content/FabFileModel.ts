@@ -804,6 +804,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return Object.fromEntries(scopes.map((scope, i) => [scope.datalakeTag, counts[i]]));
   }
 
+  // The delete/restore pair below is stamp-keyed. Phase-1 delete passes `at` to write one shared
+  // stamp across every row it flips, records that value on the lake, and restore passes it back as
+  // `stampedAt` to reverse exactly that batch. Equality, not a range: a lower bound would also match
+  // a file the creator deleted DURING the deleted window (the per-file delete routes stamp
+  // `deletedAt` too), and those deletions are the creator's to keep, not the teardown's to reverse.
+  // Omitting `stampedAt` matches every stamped row, which is the pre-mark behavior and the fallback
+  // for a lake torn down before the mark existed.
+  //
+  // The archive axis deliberately stays unstamped: `archiveByDataLakeTag` is the only writer of a
+  // non-null `archivedAt`, so there is no independently-archived file to protect, and bounding it
+  // would strand any row still holding a stamp its lake no longer names.
+
   async archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
     const result = await this.fabFileModel.updateMany(
       { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null },
@@ -829,28 +841,35 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
-  async findDeletedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]> {
+  async findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]> {
+    // `includeDeleted` is load-bearing for BOTH forms, not just tidiness: the soft-delete plugin's
+    // find hook does `this.where({ deletedAt: null })`, which REPLACES the condition on that key, so
+    // without the option this query silently returns nothing.
     const result = await this.fabFileModel
-      .find({ ...buildDataLakeMembershipFilter(scope), deletedAt: { $ne: null } })
+      .find({ ...buildDataLakeMembershipFilter(scope), deletedAt: stampedAt ?? { $ne: null } })
       .setOptions({ includeDeleted: true });
     return result.map(d => d.toJSON());
   }
 
-  async undeleteByDataLakeTag(scope: DataLakeMembershipScope, excludeIds: string[] = []): Promise<number> {
+  async undeleteByDataLakeTag(
+    scope: DataLakeMembershipScope,
+    excludeIds: string[] = [],
+    stampedAt?: Date
+  ): Promise<number> {
     const filter: Record<string, unknown> = {
       ...buildDataLakeMembershipFilter(scope),
-      deletedAt: { $ne: null },
+      deletedAt: stampedAt ?? { $ne: null },
     };
     if (excludeIds.length > 0) filter._id = { $nin: excludeIds };
     const result = await this.fabFileModel.updateMany(filter, { $set: { deletedAt: null } });
     return result.modifiedCount;
   }
 
-  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
+  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<string[]> {
     const docs = await this.fabFileModel.find({ ...buildDataLakeMembershipFilter(scope), deletedAt: null }, { _id: 1 });
     const ids = docs.map(d => d._id.toString());
     if (ids.length === 0) return [];
-    await this.fabFileModel.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: new Date() } });
+    await this.fabFileModel.updateMany({ _id: { $in: ids } }, { $set: { deletedAt: at } });
     return ids;
   }
 

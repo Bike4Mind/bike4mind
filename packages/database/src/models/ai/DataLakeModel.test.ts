@@ -853,3 +853,66 @@ describe('DataLakeRepository — systemPrompt round-trip (#843)', () => {
     expect(found?.systemPrompt).toBeUndefined();
   });
 });
+
+describe('DataLakeRepository teardown stamp', () => {
+  setupMongoTest();
+
+  // Phase-1 delete keys the restore to the stamp it records here. If the schema were missing the
+  // field mongoose would drop it on write without complaint, and every restore would silently fall
+  // back to reversing the whole lake - which a service-level mock cannot detect.
+  it('round-trips the stamp as a Date', async () => {
+    const stamp = new Date('2026-06-01T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'torn-down' }));
+
+    await dataLakeRepository.update({ id: created.id, filesDeletedAt: stamp });
+
+    const found = await dataLakeRepository.findById(created.id);
+    expect(found?.filesDeletedAt).toBeInstanceOf(Date);
+    expect(found?.filesDeletedAt?.getTime()).toBe(stamp.getTime());
+  });
+
+  it('clears a spent stamp back to null', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'restored', filesDeletedAt: new Date('2026-06-01T00:00:00.000Z') })
+    );
+
+    await dataLakeRepository.update({ id: created.id, filesDeletedAt: null });
+
+    expect((await dataLakeRepository.findById(created.id))?.filesDeletedAt ?? null).toBeNull();
+  });
+
+  it('leaves the stamp unset on a lake that was never torn down', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'untouched' }));
+    expect((await dataLakeRepository.findById(created.id))?.filesDeletedAt ?? null).toBeNull();
+  });
+
+  it('claims an unset stamp and echoes it back', async () => {
+    const at = new Date('2026-06-01T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'claiming' }));
+
+    expect((await dataLakeRepository.claimFilesDeletedAt(created.id, at))?.getTime()).toBe(at.getTime());
+    expect((await dataLakeRepository.findById(created.id))?.filesDeletedAt?.getTime()).toBe(at.getTime());
+  });
+
+  it('refuses to overwrite a claimed stamp and hands back the holder', async () => {
+    // The concurrency guard: the second teardown must sweep under the first one's stamp, or it
+    // records a mark no row carries and the restore keyed to it reverses nothing.
+    const first = new Date('2026-06-01T00:00:00.000Z');
+    const second = new Date('2026-06-02T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'contended' }));
+    await dataLakeRepository.claimFilesDeletedAt(created.id, first);
+
+    expect((await dataLakeRepository.claimFilesDeletedAt(created.id, second))?.getTime()).toBe(first.getTime());
+    expect((await dataLakeRepository.findById(created.id))?.filesDeletedAt?.getTime()).toBe(first.getTime());
+  });
+
+  it('claims again once a restore has cleared the stamp', async () => {
+    const first = new Date('2026-06-01T00:00:00.000Z');
+    const second = new Date('2026-06-02T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'recycled' }));
+    await dataLakeRepository.claimFilesDeletedAt(created.id, first);
+    await dataLakeRepository.update({ id: created.id, filesDeletedAt: null });
+
+    expect((await dataLakeRepository.claimFilesDeletedAt(created.id, second))?.getTime()).toBe(second.getTime());
+  });
+});
