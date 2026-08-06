@@ -167,6 +167,7 @@ export const SettingKeySchema = z.enum([
   'EnableLatticeDefault',
   'EnableDataLakes',
   'EnableDataLakesDefault',
+  'EnableDataLakeSlackAdd',
   'EnableDataLakeVectorSearch',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
@@ -1756,6 +1757,17 @@ export const settingsMap = {
     order: 89,
     dependsOn: 'EnableDataLakes',
   }),
+  EnableDataLakeSlackAdd: makeBooleanSetting({
+    key: 'EnableDataLakeSlackAdd',
+    name: 'Data Lakes: Slack "@datalake add" path',
+    defaultValue: false,
+    description:
+      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". Off by default - the Slack command is intercepted deterministically but performs no ingest until this is turned on.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 90,
+    dependsOn: 'EnableDataLakes',
+  }),
   EnableDataLakeVectorSearch: makeBooleanSetting({
     key: 'EnableDataLakeVectorSearch',
     name: 'Data Lakes: Use Atlas $vectorSearch',
@@ -1764,7 +1776,7 @@ export const settingsMap = {
       'Kill-switch for the Atlas $vectorSearch cutover on Data Lake semantic search. Off by default; even when on, only files whose chunks are fully re-indexed on an Atlas backend actually use it - everything else keeps using the brute-force scan.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 90,
+    order: 91,
     dependsOn: 'EnableDataLakes',
   }),
   EnableBriefcase: makeBooleanSetting({

@@ -432,22 +432,118 @@ describe('DataLakeRepository — slug is unique per org', () => {
 
   it('rejects a second lake with the same slug in the same org', async () => {
     // Distinct datalakeTags so the rejection is attributable to the (organizationId, slug)
-    // index, not the separate unique index on datalakeTag.
+    // index, not the separate unique index on datalakeTag. Distinct creators for the same
+    // reason against the (createdByUserId, fileTagPrefix) index tested separately below -
+    // baseLake defaults fileTagPrefix off the slug, and same-slug-same-creator would otherwise
+    // also collide there.
     await dataLakeRepository.create(
-      baseLake({ slug: 'dupe', organizationId: 'orgA', datalakeTag: 'datalake:orgA:dupe-1' })
+      baseLake({ slug: 'dupe', organizationId: 'orgA', createdByUserId: 'ownerA', datalakeTag: 'datalake:orgA:dupe-1' })
     );
     await expect(
-      dataLakeRepository.create(baseLake({ slug: 'dupe', organizationId: 'orgA', datalakeTag: 'datalake:orgA:dupe-2' }))
+      dataLakeRepository.create(
+        baseLake({
+          slug: 'dupe',
+          organizationId: 'orgA',
+          createdByUserId: 'ownerB',
+          datalakeTag: 'datalake:orgA:dupe-2',
+        })
+      )
     ).rejects.toThrow();
   });
 
   it('allows the same slug in different orgs (unique per org, not global)', async () => {
+    // Distinct creators so this is attributable to the (organizationId, slug) index alone -
+    // baseLake defaults fileTagPrefix off the slug, and same-slug would otherwise also collide
+    // on the (createdByUserId, fileTagPrefix) index tested separately below.
     await dataLakeRepository.create(
-      baseLake({ slug: 'shared', organizationId: 'orgA', datalakeTag: 'datalake:orgA:shared' })
+      baseLake({
+        slug: 'shared',
+        organizationId: 'orgA',
+        createdByUserId: 'ownerA',
+        datalakeTag: 'datalake:orgA:shared',
+      })
     );
     await expect(
       dataLakeRepository.create(
-        baseLake({ slug: 'shared', organizationId: 'orgB', datalakeTag: 'datalake:orgB:shared' })
+        baseLake({
+          slug: 'shared',
+          organizationId: 'orgB',
+          createdByUserId: 'ownerB',
+          datalakeTag: 'datalake:orgB:shared',
+        })
+      )
+    ).resolves.toBeDefined();
+  });
+});
+
+describe('DataLakeRepository - fileTagPrefix is unique per creator (DB backstop)', () => {
+  setupMongoTest();
+
+  // cleanupTestDB drops the whole DB before each test, so (re)build the model's indexes
+  // (including the { createdByUserId, fileTagPrefix } unique index) before asserting the
+  // constraint.
+  beforeEach(async () => {
+    await DataLakeModel.ensureIndexes();
+  });
+
+  it('rejects a second lake with the same prefix for the same creator, regardless of org', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'first', fileTagPrefix: 'acme:', createdByUserId: 'owner', datalakeTag: 'datalake:first' })
+    );
+    await expect(
+      dataLakeRepository.create(
+        baseLake({
+          slug: 'second',
+          fileTagPrefix: 'acme:',
+          createdByUserId: 'owner',
+          organizationId: 'orgA',
+          datalakeTag: 'datalake:orgA:second',
+        })
+      )
+    ).rejects.toThrow();
+  });
+
+  it('allows the same prefix for different creators in the same org (org-scope collisions stay app-level only)', async () => {
+    await dataLakeRepository.create(
+      baseLake({
+        slug: 'first',
+        fileTagPrefix: 'acme:',
+        createdByUserId: 'ownerA',
+        organizationId: 'orgA',
+        datalakeTag: 'datalake:orgA:first',
+      })
+    );
+    await expect(
+      dataLakeRepository.create(
+        baseLake({
+          slug: 'second',
+          fileTagPrefix: 'acme:',
+          createdByUserId: 'ownerB',
+          organizationId: 'orgA',
+          datalakeTag: 'datalake:orgA:second',
+        })
+      )
+    ).resolves.toBeDefined();
+  });
+
+  it('allows the same prefix for different creators who are both org-less (personal lakes)', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'first', fileTagPrefix: 'acme:', createdByUserId: 'ownerA', datalakeTag: 'datalake:first' })
+    );
+    await expect(
+      dataLakeRepository.create(
+        baseLake({ slug: 'second', fileTagPrefix: 'acme:', createdByUserId: 'ownerB', datalakeTag: 'datalake:second' })
+      )
+    ).resolves.toBeDefined();
+  });
+
+  it('allows a nested (not exact-equal) prefix for the same creator - nesting stays app-level only', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'outer', fileTagPrefix: 'acme:', createdByUserId: 'owner', datalakeTag: 'datalake:outer' })
+    );
+    await expect(
+      dataLakeRepository.create(
+        baseLake({ slug: 'inner', fileTagPrefix: 'acme:hr:', createdByUserId: 'owner', datalakeTag: 'datalake:inner' })
       )
     ).resolves.toBeDefined();
   });
@@ -851,5 +947,68 @@ describe('DataLakeRepository — systemPrompt round-trip (#843)', () => {
     const created = await dataLakeRepository.create(baseLake({ slug: 'unprompted' }));
     const found = await dataLakeRepository.findById(created.id);
     expect(found?.systemPrompt).toBeUndefined();
+  });
+});
+
+describe('DataLakeRepository teardown stamp', () => {
+  setupMongoTest();
+
+  // Phase-1 delete keys the restore to the stamp it records here. If the schema were missing the
+  // field mongoose would drop it on write without complaint, and every restore would silently fall
+  // back to reversing the whole lake - which a service-level mock cannot detect.
+  it('round-trips the stamp as a Date', async () => {
+    const stamp = new Date('2026-06-01T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'torn-down' }));
+
+    await dataLakeRepository.update({ id: created.id, filesDeletedAt: stamp });
+
+    const found = await dataLakeRepository.findById(created.id);
+    expect(found?.filesDeletedAt).toBeInstanceOf(Date);
+    expect(found?.filesDeletedAt?.getTime()).toBe(stamp.getTime());
+  });
+
+  it('clears a spent stamp back to null', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'restored', filesDeletedAt: new Date('2026-06-01T00:00:00.000Z') })
+    );
+
+    await dataLakeRepository.update({ id: created.id, filesDeletedAt: null });
+
+    expect((await dataLakeRepository.findById(created.id))?.filesDeletedAt ?? null).toBeNull();
+  });
+
+  it('leaves the stamp unset on a lake that was never torn down', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'untouched' }));
+    expect((await dataLakeRepository.findById(created.id))?.filesDeletedAt ?? null).toBeNull();
+  });
+
+  it('claims an unset stamp and echoes it back', async () => {
+    const at = new Date('2026-06-01T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'claiming' }));
+
+    expect((await dataLakeRepository.claimFilesDeletedAt(created.id, at))?.getTime()).toBe(at.getTime());
+    expect((await dataLakeRepository.findById(created.id))?.filesDeletedAt?.getTime()).toBe(at.getTime());
+  });
+
+  it('refuses to overwrite a claimed stamp and hands back the holder', async () => {
+    // The concurrency guard: the second teardown must sweep under the first one's stamp, or it
+    // records a mark no row carries and the restore keyed to it reverses nothing.
+    const first = new Date('2026-06-01T00:00:00.000Z');
+    const second = new Date('2026-06-02T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'contended' }));
+    await dataLakeRepository.claimFilesDeletedAt(created.id, first);
+
+    expect((await dataLakeRepository.claimFilesDeletedAt(created.id, second))?.getTime()).toBe(first.getTime());
+    expect((await dataLakeRepository.findById(created.id))?.filesDeletedAt?.getTime()).toBe(first.getTime());
+  });
+
+  it('claims again once a restore has cleared the stamp', async () => {
+    const first = new Date('2026-06-01T00:00:00.000Z');
+    const second = new Date('2026-06-02T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'recycled' }));
+    await dataLakeRepository.claimFilesDeletedAt(created.id, first);
+    await dataLakeRepository.update({ id: created.id, filesDeletedAt: null });
+
+    expect((await dataLakeRepository.claimFilesDeletedAt(created.id, second))?.getTime()).toBe(second.getTime());
   });
 });

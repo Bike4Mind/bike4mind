@@ -3,7 +3,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parseCommand, selectAgent, buildSystemPrompt, parseImageModelOverride } from './agent-parser';
+import {
+  parseCommand,
+  selectAgent,
+  buildSystemPrompt,
+  parseImageModelOverride,
+  parseDataLakeCommand,
+  isDataLakeCommand,
+  AGENT_REGISTRY,
+} from './agent-parser';
 import { ImageModels } from '@bike4mind/common';
 
 // Prevent importing SST Resource-backed modules during unit tests.
@@ -193,5 +201,102 @@ describe('parseImageModelOverride', () => {
 
   it('should NOT false-positive on "with flux-powered engines"', () => {
     expect(parseImageModelOverride('draw a robot with flux-powered engines')).toBeUndefined();
+  });
+});
+
+describe('@datalake command', () => {
+  it('registers `datalake` in AGENT_REGISTRY so the channel-gate pattern matches it', () => {
+    expect(AGENT_REGISTRY.datalake).toBeDefined();
+  });
+
+  it('isDataLakeCommand is true only for the datalake agent', () => {
+    expect(isDataLakeCommand(parseCommand('@datalake add to sales https://x.com'))).toBe(true);
+    expect(isDataLakeCommand(parseCommand('@dev create an issue'))).toBe(false);
+    expect(isDataLakeCommand(parseCommand('summarize this thread'))).toBe(false);
+  });
+
+  it('intercepts a bare `@datalake` mention with no args (would otherwise leak to the LLM)', () => {
+    expect(isDataLakeCommand(parseCommand('@datalake'))).toBe(true);
+    expect(isDataLakeCommand(parseCommand('@datalake   '))).toBe(true);
+    expect(isDataLakeCommand(parseCommand('<@U12345> @datalake'))).toBe(true);
+    // not a leading mention, and word-boundary guard
+    expect(isDataLakeCommand(parseCommand('hey @datalake'))).toBe(false);
+    expect(isDataLakeCommand(parseCommand('@datalaked add'))).toBe(false);
+  });
+
+  it('selectAgent never routes @datalake to an LLM persona (falls back to the general agent)', () => {
+    expect(selectAgent(parseCommand('@datalake add to sales https://x.com'))).toBe(AGENT_REGISTRY.agent);
+    // sanity: a real persona still resolves
+    expect(selectAgent(parseCommand('@dev create an issue'))).toBe(AGENT_REGISTRY.dev);
+  });
+
+  describe('parseDataLakeCommand grammar', () => {
+    it('parses `add to <lake> <link>`', () => {
+      const r = parseDataLakeCommand('@datalake add to sales https://example.com/doc');
+      expect(r).toMatchObject({ subcommand: 'add', lakeSlug: 'sales', link: 'https://example.com/doc' });
+    });
+
+    it('parses `add <link> to <lake>` (order-independent)', () => {
+      const r = parseDataLakeCommand('@datalake add https://example.com/doc to sales');
+      expect(r).toMatchObject({ subcommand: 'add', lakeSlug: 'sales', link: 'https://example.com/doc' });
+    });
+
+    it('parses `add to <lake>` with no link (file-attachment case)', () => {
+      const r = parseDataLakeCommand('@datalake add to sales');
+      expect(r).toMatchObject({ subcommand: 'add', lakeSlug: 'sales' });
+      expect(r.link).toBeUndefined();
+    });
+
+    it('does not treat a URL as the lake slug when written as `add to <link>`', () => {
+      const r = parseDataLakeCommand('@datalake add to https://example.com/doc');
+      expect(r.subcommand).toBe('add');
+      expect(r.lakeSlug).toBeUndefined();
+      expect(r.link).toBe('https://example.com/doc');
+    });
+
+    it('unwraps a Slack-formatted URL `<url>` in the link', () => {
+      const r = parseDataLakeCommand('@datalake add <https://example.com/doc> to sales');
+      expect(r).toMatchObject({ subcommand: 'add', lakeSlug: 'sales', link: 'https://example.com/doc' });
+    });
+
+    it('strips the `|label` from a Slack `<url|label>` link', () => {
+      const r = parseDataLakeCommand('@datalake add <https://example.com/doc|My Doc> to sales');
+      expect(r.link).toBe('https://example.com/doc');
+      expect(r.lakeSlug).toBe('sales');
+    });
+
+    it('does not treat a Slack-wrapped URL as the lake slug in `add to <link>`', () => {
+      const r = parseDataLakeCommand('@datalake add to <https://example.com/doc>');
+      expect(r.subcommand).toBe('add');
+      expect(r.lakeSlug).toBeUndefined();
+      expect(r.link).toBe('https://example.com/doc');
+    });
+
+    it('anchors the `to <lake>` capture to the add subcommand only', () => {
+      expect(parseDataLakeCommand('@datalake list to sales').lakeSlug).toBeUndefined();
+      expect(parseDataLakeCommand('@datalake help to sales').lakeSlug).toBeUndefined();
+    });
+
+    it('strips a Slack-wrapped slug symmetrically (leading < and trailing >)', () => {
+      expect(parseDataLakeCommand('@datalake add to <sales>').lakeSlug).toBe('sales');
+    });
+
+    it('parses `list` and `help`', () => {
+      expect(parseDataLakeCommand('@datalake list').subcommand).toBe('list');
+      expect(parseDataLakeCommand('@datalake help').subcommand).toBe('help');
+    });
+
+    it('treats a bare `@datalake` as help', () => {
+      expect(parseDataLakeCommand('@datalake').subcommand).toBe('help');
+    });
+
+    it('flags an unrecognized subcommand', () => {
+      expect(parseDataLakeCommand('@datalake frobnicate stuff').subcommand).toBe('unknown');
+    });
+
+    it('strips leading Slack user mentions before the @datalake token', () => {
+      const r = parseDataLakeCommand('<@U12345> @datalake add to sales https://example.com/doc');
+      expect(r).toMatchObject({ subcommand: 'add', lakeSlug: 'sales', link: 'https://example.com/doc' });
+    });
   });
 });

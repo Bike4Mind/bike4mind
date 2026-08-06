@@ -3,6 +3,7 @@ import { setModelCatalogProvider, setModelPriceRowsProvider } from '@bike4mind/l
 import { modelPriceRepository } from './models/billing/ModelPriceModel';
 import { ModelCatalog, modelCatalogRepository } from './models/ai/ModelCatalogModel';
 import { ModelDiscoveryState } from './models/ai/ModelDiscoveryStateModel';
+import { DataLakeModel } from './models/ai/DataLakeModel';
 import { seedModelCatalog } from './seeds/seedModelCatalog';
 import { seedModelPrices } from './seeds/seedModelPrices';
 
@@ -31,6 +32,15 @@ export const whenCatalogSeeded = (): Promise<boolean> => catalogSeedSettled ?? P
  * ModelDiscoveryState are both new collections, so every deployment gets exactly
  * that cold start. ModelPrice is deliberately absent - its collection and index
  * predate this.
+ *
+ * DataLakeModel is here for a different reason: its new
+ * { createdByUserId, fileTagPrefix } unique index lands on an EXISTING,
+ * populated collection, so a stage with legacy same-creator-prefix duplicates
+ * fails this build on every boot, not just the first - awaiting it turns that
+ * into a warning any deployer watching boot logs sees, instead of a Node
+ * unhandled-rejection with no attribution. The pre-deploy check script
+ * (packages/scripts/migrate/check-datalake-prefix-dupes.ts) is what actually
+ * finds and resolves the duplicates; this only makes a failed build loud.
  *
  * A failed build must not skip the seeding it precedes: an already-duplicated
  * collection would then never receive its rows.
@@ -63,6 +73,7 @@ async function seedCatalogs(): Promise<boolean> {
   await Promise.all([
     ensureUniqueIndex('modelCatalog', ModelCatalog),
     ensureUniqueIndex('modelDiscoveryState', ModelDiscoveryState),
+    ensureUniqueIndex('dataLake', DataLakeModel),
   ]);
 
   let catalogSeeded = true;

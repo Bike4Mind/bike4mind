@@ -20,7 +20,7 @@ import { setLakeVisibility } from './setLakeVisibility';
 import { updateDataLake } from './updateDataLake';
 import { reconcileStuckBatches, DEFAULT_STUCK_BATCH_TIMEOUT_MS } from './reconcileStuckBatches';
 import { listDataLakes, listAllDataLakes, listArchivedDataLakes, listDeletedDataLakes } from './listDataLakes';
-import { redactLakeForActor, READER_LAKE_FIELDS } from './redactLakeForActor';
+import { redactLakeForActor, READER_LAKE_FIELDS, LAKE_FIELD_VISIBILITY } from './redactLakeForActor';
 import { browsePublicDataLakes } from './browsePublicDataLakes';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
@@ -548,9 +548,22 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     expect('systemPrompt' in visible).toBe(false);
   });
 
-  it('pins the reader allow-list so a new IDataLake field forces a visibility decision', () => {
-    // If this fails, a field was added to IDataLake (or READER_LAKE_FIELDS changed) without deciding
-    // whether a non-editor may receive it. Add it to READER_LAKE_FIELDS on purpose, or leave it out.
+  it('keeps the field classification and the allow-list in step', () => {
+    // LAKE_FIELD_VISIBILITY is what actually forces a decision on a new IDataLake field (it is keyed
+    // by `keyof IDataLake`, so an unclassified field fails to compile - in the source module, which
+    // tsc checks; this file is excluded from typecheck). This pins the two against each other.
+    const readable = Object.entries(LAKE_FIELD_VISIBILITY)
+      .filter(([, visibility]) => visibility === 'reader')
+      .map(([field]) => field);
+    // READER_LAKE_FIELDS also carries the IMongoDocument keys (id/createdAt/updatedAt), which are
+    // not IDataLake fields, so compare on the intersection.
+    expect(readable.sort()).toEqual(
+      (READER_LAKE_FIELDS as readonly string[]).filter(f => f in LAKE_FIELD_VISIBILITY).sort()
+    );
+  });
+
+  it('pins the reader allow-list against an accidental widening', () => {
+    // The list itself, so adding a field to READER_LAKE_FIELDS is a deliberate edit here too.
     expect([...READER_LAKE_FIELDS].sort()).toEqual(
       [
         'createdAt',
@@ -867,6 +880,38 @@ describe('createDataLake', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it('maps a concurrent-create prefix-index collision to the same friendly error, not a raw 500', async () => {
+    // assertPrefixAvailable's read arm passed (find() sees nothing yet), but another request
+    // from the same creator won the { createdByUserId, fileTagPrefix } unique index between that
+    // read and this write - exactly the race the index exists to catch.
+    const create = vi.fn().mockRejectedValue(
+      Object.assign(new Error('E11000 duplicate key error'), {
+        code: 11000,
+        keyPattern: { createdByUserId: 1, fileTagPrefix: 1 },
+      })
+    );
+    const find = vi.fn().mockResolvedValue([]);
+    await expect(
+      createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
+    ).rejects.toThrow(/overlaps an existing data lake/i);
+  });
+
+  it('does not mislabel a duplicate-key collision on a DIFFERENT index as a prefix overlap', async () => {
+    // This collection also has unique indexes on datalakeTag and { organizationId, slug } -
+    // disambiguateSlug's 50-attempt pre-check makes hitting either here vanishingly rare, but
+    // a rare hit must still surface as itself, not get relabeled "prefix overlaps".
+    const create = vi.fn().mockRejectedValue(
+      Object.assign(new Error('E11000 duplicate key error'), {
+        code: 11000,
+        keyPattern: { organizationId: 1, slug: 1 },
+      })
+    );
+    const find = vi.fn().mockResolvedValue([]);
+    await expect(
+      createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
+    ).rejects.toThrow('E11000 duplicate key error');
+  });
+
   it('names the clashing lake only when the caller created it', async () => {
     // An org lake gated by a tag the caller lacks is invisible to them everywhere else, so echoing
     // its name here would confirm it exists.
@@ -1011,7 +1056,7 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
     const result = await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       db: { dataLakes, fabFiles },
     });
-    expect(fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['d1']);
+    expect(fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['d1'], undefined);
     // Same narrow probe as the unarchive path, for the same reason.
     expect(fabFiles.findByContentHashesInDataLake).toHaveBeenCalledWith(['h1', 'h2'], 'datalake:lake');
     expect(result.skippedDuplicates).toBe(1);
@@ -1098,6 +1143,7 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
           .fn()
           .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
         find: vi.fn().mockResolvedValue([]),
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
       },
       batches: {
         findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
@@ -1140,7 +1186,7 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
     const adapters = makeAdapters();
     await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
-    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope);
+    expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
   });
 
   it('survives a member-id lookup that itself fails', async () => {
@@ -1153,6 +1199,148 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
       expect.stringContaining('Best-effort index removal failed for datalake:lake'),
       expect.any(Error)
     );
+  });
+});
+
+describe('teardown stamp bookkeeping', () => {
+  const RECORDED = new Date('2026-06-01T00:00:00.000Z');
+
+  const teardownAdapters = (existing: IDataLakeDocument) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(existing),
+        update: vi
+          .fn()
+          .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
+        find: vi.fn().mockResolvedValue([]),
+        // The real claim echoes back the stamp in force, which is the offered one when unclaimed.
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
+      },
+    },
+  });
+
+  const reversalAdapters = (existing: IDataLakeDocument) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockResolvedValue(lake()),
+        setStats: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+        undeleteByDataLakeTag: vi.fn().mockResolvedValue(2),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 2, totalSizeBytes: 20 }),
+      },
+    },
+  });
+
+  const owner = { userId: 'owner', isAdmin: false };
+
+  describe('deleteDataLake', () => {
+    it('claims the stamp before it sweeps', async () => {
+      const adapters = teardownAdapters(lake());
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      const claim = adapters.db.dataLakes.claimFilesDeletedAt;
+      const sweep = adapters.db.fabFiles.softDeleteByDataLakeTag;
+      expect(claim).toHaveBeenCalledWith('lake1', expect.any(Date));
+      expect(claim.mock.invocationCallOrder[0]).toBeLessThan(sweep.mock.invocationCallOrder[0]);
+    });
+
+    it('sweeps with the stamp the claim RETURNED, not the one it offered', async () => {
+      // The race: a concurrent teardown already holds the mark, so the claim hands this one the
+      // winner's stamp. Sweeping with its own Date instead would stamp rows under a mark the lake
+      // does not name, and the restore keyed to that mark reverses nothing - permanently.
+      const adapters = teardownAdapters(lake());
+      adapters.db.dataLakes.claimFilesDeletedAt = vi.fn().mockResolvedValue(RECORDED);
+
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      const offered = adapters.db.dataLakes.claimFilesDeletedAt.mock.calls[0][1];
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][1]).toBe(RECORDED);
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag.mock.calls[0][1]).not.toBe(offered);
+    });
+
+    it('settles to deleted without touching the stamp', async () => {
+      const adapters = teardownAdapters(lake());
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.dataLakes.update.mock.calls[0][0]).toEqual({ id: 'lake1', status: 'deleting' });
+      expect(adapters.db.dataLakes.update.mock.calls[1][0]).toEqual({ id: 'lake1', status: 'deleted' });
+    });
+
+    it('leaves a teardown that predates the stamp unmarked, so its restore stays unbounded', async () => {
+      // Mid-flight when this shipped: rows already carry a stamp nothing recorded, and marking them
+      // now with a later one would strand them deleted forever.
+      const adapters = teardownAdapters(lake({ status: 'deleting' }));
+      await deleteDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.dataLakes.claimFilesDeletedAt).not.toHaveBeenCalled();
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+    });
+
+    it('warns when no stamp comes back, since that lake restores unbounded', async () => {
+      // The claim lost AND its fallback read found nothing, so a restore cleared the mark between
+      // the two round trips. The sweep still runs unmarked and the only other symptom is a restore
+      // that over-restores much later, which is why this one has to be audible.
+      const adapters = teardownAdapters(lake());
+      adapters.db.dataLakes.claimFilesDeletedAt = vi.fn().mockResolvedValue(null);
+      const logger = { warn: vi.fn() };
+
+      await deleteDataLake(owner, 'lake1', { ...adapters, logger });
+
+      expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('restore unbounded'), {
+        dataLakeId: 'lake1',
+      });
+    });
+
+    it('says nothing when the claim succeeds', async () => {
+      // A warning that fires on the healthy path is one nobody reads on the unhealthy one.
+      const adapters = teardownAdapters(lake());
+      const logger = { warn: vi.fn() };
+
+      await deleteDataLake(owner, 'lake1', { ...adapters, logger });
+
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('restoreDeletedDataLake', () => {
+    it('hands the recorded stamp to the dedup read and the flip', async () => {
+      const adapters = reversalAdapters(lake({ status: 'deleted', filesDeletedAt: RECORDED }));
+      await restoreDeletedDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.fabFiles.findDeletedByDataLakeTag).toHaveBeenCalledWith(lakeScope, RECORDED);
+      expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, [], RECORDED);
+    });
+
+    it('clears the spent stamp with null as it settles', async () => {
+      const adapters = reversalAdapters(lake({ status: 'deleted', filesDeletedAt: RECORDED }));
+      await restoreDeletedDataLake(owner, 'lake1', adapters);
+
+      const settle = adapters.db.dataLakes.update.mock.calls.at(-1)?.[0];
+      expect(settle).toEqual({ id: 'lake1', status: 'active', filesDeletedAt: null });
+      // undefined would be dropped on the way to mongo and leave the spent mark in place.
+      expect(settle.filesDeletedAt).toBeNull();
+    });
+
+    it('reverses unbounded when the lake carries no stamp', async () => {
+      const adapters = reversalAdapters(lake({ status: 'deleted' }));
+      await restoreDeletedDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.fabFiles.findDeletedByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+      expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, [], undefined);
+    });
   });
 });
 
@@ -1431,12 +1619,25 @@ describe('removeFileFromDataLake — single-file removal', () => {
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 
-  it('lets an admin remove a prefix-only file they do not own', async () => {
+  it('refuses even an admin removing a prefix-only file the lake creator does not own', async () => {
+    // The prefix arm is anchored to the LAKE'S CREATOR, matching the read path's own membership
+    // predicate - an admin bypass here would let an admin strip a tag off a file the read path
+    // never actually admitted to this lake.
     const someoneElses = { id: 'f1', userId: 'victim', tags: [{ name: 'lk:invoices', strength: 1 }] };
     const adapters = makeAdapters(someoneElses);
     await expect(
       removeFileFromDataLake({ userId: 'root', isAdmin: true }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin remove a prefix-only file the lake creator DOES own', async () => {
+    const creatorsFile = { id: 'f1', userId: 'owner', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(creatorsFile);
+    await expect(
+      removeFileFromDataLake({ userId: 'root', isAdmin: true }, 'lake1', 'f1', adapters as any)
     ).resolves.toMatchObject({ success: true });
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
   });
 
   it('ignores a fileTagPrefix no read arm would match, rather than clearing every tag', async () => {
