@@ -58,11 +58,13 @@ function projectNameToSpecKey(projectName: string): string {
   return projectName.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
 }
 
-/** Access token + userId for the spec user backing an authenticated project, or null for projects
- *  that seed no user (unauthenticated, admin, setup) or before core data exists. */
+/** Access token + userId for the user backing an authenticated project, or null for projects that
+ *  seed no user (unauthenticated, setup) or before core data exists. The `admin` project runs off
+ *  the shared core admin rather than a per-spec user. */
 function specAuthForProject(projectName: string): SpecAuth | null {
   try {
-    const u = getTestUsers().specUsers[projectNameToSpecKey(projectName)];
+    const users = getTestUsers();
+    const u = projectName === 'admin' ? users.admin : users.specUsers[projectNameToSpecKey(projectName)];
     return u ? { accessToken: u.accessToken, userId: u.userId } : null;
   } catch {
     return null;
