@@ -675,6 +675,51 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect((quest.promptMeta as { warnings?: string[] }).warnings).toHaveLength(1);
   });
 
+  // The injected context described the corpus only as "the curated library", while the product calls
+  // it a Data Lake. With no lexical bridge, a model hitting something retrieval cannot do (counting -
+  // this path returns ranked passages and never a total) stopped treating "data lake" as this corpus
+  // and answered about generic cloud infrastructure instead: offering SELECT COUNT(*), pointing at a
+  // storage console, recommending a recursive object count. Naming the collection and naming the
+  // limit is what replaces the fabrication with an honest "I can search this but not count it".
+  describe('capability note (cardinality honesty)', () => {
+    it('names the collection as the product does, in both citation styles', async () => {
+      for (const style of ['named', 'indexed'] as const) {
+        const { content } = await run(makeCtx({}), style);
+        expect(content).toContain('Data Lake');
+        expect(content).toContain('curated library');
+      }
+    });
+
+    it('states that the library can be searched but not counted, and forbids inventing a total', async () => {
+      const { content } = await run(makeCtx({}));
+      expect(content).toContain('you cannot count');
+      expect(content).toContain('can search this library but cannot count it');
+      expect(content).toContain('Never guess a number');
+    });
+
+    it('rules out the specific infrastructure answers observed in the wild', async () => {
+      const { content } = await run(makeCtx({}));
+      expect(content).toContain('no database, SQL or storage-console access');
+      expect(content).toContain('never suggest queries, consoles or other infrastructure steps');
+    });
+
+    it('is present on a full-coverage turn, where no coverage note fires', async () => {
+      // The honesty line must not ride on partialCoverage: a lake under the candidate cap answers
+      // count questions just as poorly, and has no coverage note to lean on.
+      const { content } = await run(makeCtx({}));
+      expect(content).not.toContain('Coverage note');
+      expect(content).toContain('cannot count it');
+    });
+
+    it('still passes no raw counts through - the compliance-path policy is unchanged', async () => {
+      // The fix is a capability statement, not a smuggled total. `total` here is deliberately
+      // larger than the retrieved set; it must not appear in the prompt.
+      const { content } = await run(makeCtx({ total: 585, hasMore: true }));
+      expect(content).not.toContain('585');
+      expect(content).toContain('totals are shown on its page in the product');
+    });
+  });
+
   it('the exclusion filter dropping a file is NOT partial coverage', async () => {
     // `total` counts rows the in-memory post-filter later drops, so keying on it would warn on
     // every single turn of any session configured with a filename-marker exclusion.
