@@ -97,6 +97,7 @@ export interface IFabFile {
    * stale number in place. Readers must treat null as "not measured", not as zero characters.
    */
   extractedCharCount?: number | null;
+
   /** This is the path to the file in the storage bucket. Eg: `fab-files/1234.json` */
   filePath?: string;
   mimeType: string;
@@ -220,6 +221,23 @@ export interface IFabFile {
 }
 
 export interface IFabFileDocument extends IFabFile, IShareableDocument {}
+
+/**
+ * Spread into the `$set` of EVERY update that rewrites a FabFile's bytes in place.
+ *
+ * A cached `extractedCharCount` describes the previous content, and a stale one makes the pre-send
+ * attachment warning silent about a file that no longer fits - the failure that warning exists to
+ * prevent. An AI edit growing a 4k file to 44k is the live case: the doc would still say 4,000 and the
+ * dry-run would short-circuit to "fits".
+ *
+ * A shared fragment rather than a literal at each site, because the sites are the problem: the first
+ * version of this fix covered only fabFileService/update and missed three live edit routes. A guard
+ * test enumerates the rewrite sites and fails if one does not reference this.
+ *
+ * null, NOT undefined - Mongoose strips undefined from a `$set`, so the undefined form of this leaves
+ * the stale number in place and only looks correct.
+ */
+export const FAB_FILE_CONTENT_REWRITE_PATCH = { extractedCharCount: null } as const;
 
 export interface IFabFileListItem {
   userId: string;

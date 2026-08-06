@@ -56,9 +56,25 @@ interface DryRunBody {
   modelType?: string;
 }
 
+/**
+ * Upper bound on files measured per call. Each id can cost a signed-URL mint, an S3 GetObject and a
+ * write-through, and this route fires on attachment changes - so an unbounded list is a cheap way to
+ * make one request do a lot of work. Well above the handful a composer realistically carries.
+ */
+const MAX_FILES_PER_CALL = 40;
+
+/** Concurrency for first-time measurement. Bounded rather than Promise.all over the whole list: the
+ * work is S3 downloads plus parsing, and the point is to flatten latency on the visible path without
+ * letting one request open forty sockets. */
+const EXTRACTION_CONCURRENCY = 5;
+
 const handler = baseApi().post(async (req: Request<{}, {}, DryRunBody>, res) => {
   const body = req.body ?? {};
-  const fileIds = Array.isArray(body.fileIds) ? body.fileIds.filter(id => typeof id === 'string') : [];
+  const requestedIds = Array.isArray(body.fileIds) ? body.fileIds.filter(id => typeof id === 'string') : [];
+  if (requestedIds.length > MAX_FILES_PER_CALL) {
+    return res.status(400).json({ error: `fileIds is limited to ${MAX_FILES_PER_CALL} files per request` });
+  }
+  const fileIds = requestedIds;
   const contextWindow = clampPositive(body.contextWindow, 0);
 
   // A window we cannot size tells us nothing, and guessing one would produce a confident wrong answer.
@@ -107,8 +123,10 @@ const handler = baseApi().post(async (req: Request<{}, {}, DryRunBody>, res) => 
   const perFileBudgetTokens = Math.max(1, Math.floor(extractionBudget / Math.max(1, textFiles.length)));
   const perFileBudgetChars = perFileBudgetTokens * CHARS_PER_TOKEN;
 
-  const files = [];
-  for (const file of accessibleFiles as {
+  // Bounded concurrency rather than a serial await per file: first-attach latency is on the visible
+  // path, and the work is an S3 download plus a parse. Bounded rather than Promise.all over the whole
+  // list so one request cannot open a socket per attachment.
+  const measureOne = async (file: {
     id?: string;
     _id?: string;
     fileName?: string;
@@ -117,7 +135,7 @@ const handler = baseApi().post(async (req: Request<{}, {}, DryRunBody>, res) => 
     fileSize?: number;
     extractedCharCount?: number;
     moderationStatus?: string | null;
-  }[]) {
+  }) => {
     const id = String(file.id ?? file._id ?? '');
     const isImage = String(file.mimeType ?? '').startsWith('image');
     let chars = typeof file.extractedCharCount === 'number' ? file.extractedCharCount : undefined;
@@ -153,7 +171,7 @@ const handler = baseApi().post(async (req: Request<{}, {}, DryRunBody>, res) => 
     // decide how loudly to speak.
     const effectiveChars = chars ?? file.fileSize ?? 0;
     const estimatedTokens = Math.ceil(effectiveChars / CHARS_PER_TOKEN);
-    files.push({
+    return {
       id,
       fileName: file.fileName ?? '',
       isImage,
@@ -166,8 +184,22 @@ const handler = baseApi().post(async (req: Request<{}, {}, DryRunBody>, res) => 
         isImage || measured === 'pending' || effectiveChars === 0
           ? 1
           : Math.min(1, perFileBudgetChars / effectiveChars),
-    });
-  }
+    };
+  };
+
+  // Order preserved: the client keys its cache on the id list, and a response whose order shifts per
+  // call would look like a different answer to the same question.
+  const queue = [...(accessibleFiles as Parameters<typeof measureOne>[0][])];
+  const files: Awaited<ReturnType<typeof measureOne>>[] = new Array(queue.length);
+  let nextIndex = 0;
+  const worker = async () => {
+    for (let i = nextIndex++; i < queue.length; i = nextIndex++) {
+      // Written to its own slot, so results keep request order without a re-sort: the client keys its
+      // cache on the id list, and an order that shifts per call reads as a different answer.
+      files[i] = await measureOne(queue[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(EXTRACTION_CONCURRENCY, Math.max(1, queue.length)) }, worker));
 
   return res.json({
     maxSafeInputTokens,

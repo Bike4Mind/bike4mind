@@ -241,6 +241,32 @@ describe('POST /api/ai/context-dry-run', () => {
     expect(body.files[0].deliveredFraction).toBeLessThan(1);
   });
 
+  // Unbounded fileIds is a cheap way to make one request mint N signed URLs, do N S3 reads and N
+  // writes, on a route that fires whenever attachments change.
+  it('refuses more files than it will measure in one call', async () => {
+    const { status, body } = await run({ ...LLAMA_8K, fileIds: Array.from({ length: 41 }, (_, i) => `f${i}`) });
+
+    expect(status).toBe(400);
+    expect(String(body.error)).toContain('40');
+    expect(mockListFabFiles).not.toHaveBeenCalled();
+  });
+
+  // Measured concurrently now; the client keys its react-query cache on the id list, so a response
+  // whose order shifts between calls reads as a different answer to the same question.
+  it('returns files in request order despite concurrent measurement', async () => {
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
+    mockListFabFiles.mockResolvedValue(ids.map(id => file({ id, fileName: `${id}.csv` })));
+    // Resolve out of order: later files finish first.
+    mockGetFileContent.mockImplementation(async () => {
+      await new Promise(r => setTimeout(r, Math.floor(Math.random() * 8)));
+      return csv(1000);
+    });
+
+    const { body } = await run({ ...LLAMA_8K, fileIds: ids });
+
+    expect(body.files.map((f: { id: string }) => f.id)).toEqual(ids);
+  });
+
   // A dry run must not shape later real completions. The pipeline features that would - mementos
   // writing durable user memory, context summarization writing session.contextSummary - are not
   // reachable from here, and this fails if a future edit wires them in.

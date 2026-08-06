@@ -267,7 +267,17 @@ export async function toPromptDetails(
     // Tokens are counted over survivors only, so a dropped source reports zero rather than billing the
     // model for text it never saw. Partial survival still counts as included: some of the source's
     // guidance did reach the model.
-    const delivered = includedMessages ? messages.filter(message => includedMessages.has(message)) : messages;
+    //
+    // Applied to SYSTEM messages only, because identity is what the check relies on and only system
+    // messages keep it: they are selected and emitted as-is, never routed through processMessages. A
+    // user-role source (an attached file, URL content) IS routed through it, and truncation returns a
+    // fresh object - so an identity test would report a file that arrived shortened as not delivered at
+    // all, and bill it zero tokens. Content truncation has its own reporting channel; this field is
+    // about the budget dropping a block whole.
+    const identityIsReliable = (message: IMessage) => message.role === 'system';
+    const delivered = includedMessages
+      ? messages.filter(message => !identityIsReliable(message) || includedMessages.has(message))
+      : messages;
     const { origin, name } = PROMPT_SOURCE_METADATA[source];
     details.push({
       source: origin,
