@@ -94,7 +94,8 @@ export async function handler(_event: unknown, context: Context) {
         const internalRow = internalCogs.find(r => r.month === month && r.provider === providerConfig.provider);
         const internalUsd = internalRow?.cogsUsd ?? 0;
         const deltaUsd = result.providerUsd - internalUsd;
-        const deltaPct = result.providerUsd > 0 ? (Math.abs(deltaUsd) / result.providerUsd) * 100 : 0;
+        const denominator = Math.max(result.providerUsd, internalUsd);
+        const deltaPct = denominator > 0 ? (Math.abs(deltaUsd) / denominator) * 100 : 0;
 
         await spendReconciliationRepository.append({
           month,

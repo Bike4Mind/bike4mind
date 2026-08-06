@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Box, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
+import { Alert, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
@@ -22,7 +22,7 @@ export const ReconciliationBanner: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetch = useCallback(async () => {
+  const fetchReconciliation = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
@@ -38,15 +38,12 @@ export const ReconciliationBanner: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    fetch();
-  }, [fetch]);
+    fetchReconciliation();
+  }, [fetchReconciliation]);
 
+  // Nothing to show until the first reconciliation runs.
   if (isLoading && !rows) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', p: 1 }}>
-        <CircularProgress size="sm" />
-      </Box>
-    );
+    return <CircularProgress size="sm" sx={{ my: 1 }} />;
   }
 
   if (error) {
@@ -57,18 +54,9 @@ export const ReconciliationBanner: React.FC = () => {
     );
   }
 
-  if (!rows || rows.length === 0) {
-    return (
-      <Alert color="neutral" size="sm" variant="soft" data-testid="reconciliation-banner-empty">
-        <Typography level="body-sm">
-          No provider spend reconciliation data yet. Configure ANTHROPIC_ADMIN_API_KEY / OPENAI_ADMIN_API_KEY to enable
-          nightly reconciliation.
-        </Typography>
-      </Alert>
-    );
-  }
+  // No data yet — hide the banner entirely rather than showing a setup prompt.
+  if (!rows || rows.length === 0) return null;
 
-  // Compute worst status across all providers for the banner color.
   const worstDelta = Math.max(...rows.map(r => r.deltaPct));
   const overall = statusFromDelta(worstDelta);
 
@@ -80,7 +68,13 @@ export const ReconciliationBanner: React.FC = () => {
       startDecorator={<overall.Icon />}
       data-testid="reconciliation-banner"
       endDecorator={
-        <IconButton size="sm" variant="plain" color={overall.color} onClick={fetch} disabled={isLoading}>
+        <IconButton
+          size="sm"
+          variant="plain"
+          color={overall.color}
+          onClick={fetchReconciliation}
+          disabled={isLoading}
+        >
           <RefreshIcon fontSize="small" />
         </IconButton>
       }
@@ -89,11 +83,13 @@ export const ReconciliationBanner: React.FC = () => {
         <Typography level="title-sm">Provider Reconciliation</Typography>
         {rows.map(row => {
           const status = statusFromDelta(row.deltaPct);
+          const tooltip =
+            `${row.month}: provider $${row.providerUsd.toFixed(2)}` +
+            ` vs internal $${row.internalUsd.toFixed(2)}` +
+            ` (${signedUsd(row.deltaUsd)}, ${row.deltaPct.toFixed(1)}%)` +
+            (row.note ? ` -- ${row.note}` : '');
           return (
-            <Tooltip
-              key={row.provider}
-              title={`${row.month}: provider $${row.providerUsd.toFixed(2)} vs internal $${row.internalUsd.toFixed(2)} (${signedUsd(row.deltaUsd)}, ${row.deltaPct.toFixed(1)}%)${row.note ? ` -- ${row.note}` : ''}`}
-            >
+            <Tooltip key={row.provider} title={tooltip}>
               <Chip size="sm" color={status.color} variant="solid" data-testid={`reconciliation-chip-${row.provider}`}>
                 {row.provider}: {signedUsd(row.deltaUsd)} ({row.deltaPct.toFixed(1)}%)
               </Chip>

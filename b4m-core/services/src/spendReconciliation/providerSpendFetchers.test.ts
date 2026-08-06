@@ -79,12 +79,12 @@ describe('fetchOpenAISpend', () => {
         data: [
           {
             results: [
-              { line_item: 'gpt-4o', amount: { value: 5000, currency: 'usd' } },
-              { line_item: 'gpt-4o-mini', amount: { value: 1200, currency: 'usd' } },
+              { line_item: 'gpt-4o', amount: { value: 50.0, currency: 'usd' } },
+              { line_item: 'gpt-4o-mini', amount: { value: 12.0, currency: 'usd' } },
             ],
           },
           {
-            results: [{ line_item: 'gpt-4o', amount: { value: 3000, currency: 'usd' } }],
+            results: [{ line_item: 'gpt-4o', amount: { value: 30.0, currency: 'usd' } }],
           },
         ],
       }),
@@ -93,8 +93,8 @@ describe('fetchOpenAISpend', () => {
     const result = await fetchOpenAISpend('sk-admin-test', '2026-07');
 
     expect(result).not.toBeNull();
-    expect(result!.providerUsd).toBeCloseTo(92); // (5000 + 1200 + 3000) / 100
-    expect(result!.breakdown['gpt-4o']).toBeCloseTo(80);
+    expect(result!.providerUsd).toBeCloseTo(92); // 50 + 12 + 30
+    expect(result!.breakdown['gpt-4o']).toBeCloseTo(80); // 50 + 30
     expect(result!.breakdown['gpt-4o-mini']).toBeCloseTo(12);
   });
 

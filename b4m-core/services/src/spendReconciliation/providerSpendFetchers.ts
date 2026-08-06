@@ -20,6 +20,8 @@ export interface ProviderSpendResult {
  * for the requested month.
  *
  * Docs: https://docs.anthropic.com/en/docs/administration/administration-api
+ *
+ * TODO: paginate via cursor for orgs with many API keys.
  */
 export async function fetchAnthropicSpend(adminApiKey: string, month: string): Promise<ProviderSpendResult | null> {
   if (!adminApiKey || adminApiKey === 'not-configured') return null;
@@ -75,8 +77,11 @@ interface AnthropicUsageResponse {
 /**
  * OpenAI: GET /v1/organization/costs
  * Requires an admin API key. Returns daily cost buckets with line items.
+ * Amounts are in USD (not cents).
  *
  * Docs: https://platform.openai.com/docs/api-reference/usage
+ *
+ * TODO: paginate via `next_page` cursor for orgs with many line items.
  */
 export async function fetchOpenAISpend(adminApiKey: string, month: string): Promise<ProviderSpendResult | null> {
   if (!adminApiKey || adminApiKey === 'not-configured') return null;
@@ -110,8 +115,7 @@ export async function fetchOpenAISpend(adminApiKey: string, month: string): Prom
   for (const bucket of data.data ?? []) {
     for (const item of bucket.results ?? []) {
       const lineItem = typeof item.line_item === 'string' ? item.line_item : 'unknown';
-      // OpenAI reports costs in cents; convert to USD.
-      const cost = typeof item.amount?.value === 'number' ? item.amount.value / 100 : 0;
+      const cost = typeof item.amount?.value === 'number' ? item.amount.value : 0;
       breakdown[lineItem] = (breakdown[lineItem] ?? 0) + cost;
       total += cost;
     }
