@@ -129,11 +129,18 @@ export const createDataLake = async (
     // unique index between the assertPrefixAvailable read above and this write (that race is
     // this index's whole reason to exist) - map the raw duplicate-key to the same friendly
     // error the read-arm check produces, rather than surfacing a 500. (Same pattern as
-    // setLakeVisibility.ts's slug-index race.)
-    if ((err as { code?: number })?.code === 11000) {
-      throw new BadRequestError(
-        `Tag prefix "${params.fileTagPrefix}" overlaps an existing data lake - choose a different prefix.`
-      );
+    // setLakeVisibility.ts's slug-index race.) Keyed on `keyPattern.fileTagPrefix`, not a bare
+    // code check: this collection also has unique indexes on `datalakeTag` and
+    // { organizationId, slug } - disambiguateSlug's pre-check makes hitting either of those
+    // here vanishingly rare, but a bare code===11000 would still mislabel that rare collision
+    // as a prefix overlap.
+    if ((err as { code?: number; keyPattern?: Record<string, unknown> })?.code === 11000) {
+      const keyPattern = (err as { keyPattern?: Record<string, unknown> }).keyPattern;
+      if (keyPattern && 'fileTagPrefix' in keyPattern) {
+        throw new BadRequestError(
+          `Tag prefix "${params.fileTagPrefix}" overlaps an existing data lake - choose a different prefix.`
+        );
+      }
     }
     throw err;
   }

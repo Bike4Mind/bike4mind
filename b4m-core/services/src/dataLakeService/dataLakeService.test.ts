@@ -867,15 +867,36 @@ describe('createDataLake', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it('maps a concurrent-create index collision to the same friendly error, not a raw 500', async () => {
+  it('maps a concurrent-create prefix-index collision to the same friendly error, not a raw 500', async () => {
     // assertPrefixAvailable's read arm passed (find() sees nothing yet), but another request
     // from the same creator won the { createdByUserId, fileTagPrefix } unique index between that
     // read and this write - exactly the race the index exists to catch.
-    const create = vi.fn().mockRejectedValue(Object.assign(new Error('E11000 duplicate key error'), { code: 11000 }));
+    const create = vi.fn().mockRejectedValue(
+      Object.assign(new Error('E11000 duplicate key error'), {
+        code: 11000,
+        keyPattern: { createdByUserId: 1, fileTagPrefix: 1 },
+      })
+    );
     const find = vi.fn().mockResolvedValue([]);
     await expect(
       createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
     ).rejects.toThrow(/overlaps an existing data lake/i);
+  });
+
+  it('does not mislabel a duplicate-key collision on a DIFFERENT index as a prefix overlap', async () => {
+    // This collection also has unique indexes on datalakeTag and { organizationId, slug } -
+    // disambiguateSlug's 50-attempt pre-check makes hitting either here vanishingly rare, but
+    // a rare hit must still surface as itself, not get relabeled "prefix overlaps".
+    const create = vi.fn().mockRejectedValue(
+      Object.assign(new Error('E11000 duplicate key error'), {
+        code: 11000,
+        keyPattern: { organizationId: 1, slug: 1 },
+      })
+    );
+    const find = vi.fn().mockResolvedValue([]);
+    await expect(
+      createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
+    ).rejects.toThrow('E11000 duplicate key error');
   });
 
   it('names the clashing lake only when the caller created it', async () => {
