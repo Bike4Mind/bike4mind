@@ -107,11 +107,7 @@ const handler = baseApi()
               { ability: req.ability, session }
             );
             results.unshared.push(fileId);
-          } else {
-            // 'not_found' and 'denied' surface identically to the caller - deleteFabFile already
-            // logs the denied case server-side, but the response must not let a caller distinguish
-            // "doesn't exist" from "exists but you can't access it" (same no-enumeration convention
-            // as fabFileService/get.ts, edit.ts, addFavorite.ts et al).
+          } else if (fabFilesService.toPublicDeleteAction(result.action) === 'not_found') {
             results.notFound.push(fileId);
           }
         });
@@ -153,7 +149,9 @@ const handler = baseApi()
     if (results.unshared.length > 0) parts.push(`Removed ${results.unshared.length} shared file(s) from your library`);
     if (results.notFound.length > 0) parts.push(`${results.notFound.length} file(s) not found`);
     if (results.failed.length > 0) parts.push(`Failed to process ${results.failed.length} file(s)`);
-    const message = parts.join(', ') || `0 of ${fileIds.length} file(s) resolved`;
+    // Every id lands in exactly one bucket above and the schema requires at least one id, so
+    // `parts` is never empty.
+    const message = parts.join(', ');
 
     return res.json({
       message,

@@ -187,6 +187,42 @@ describe('bulk-delete - not-found reporting', () => {
     expect(body.results).not.toHaveProperty('denied');
     expect(body.message).toBe('1 file(s) not found');
   });
+
+  it('composes the message correctly when a batch deletes, not-founds, and fails all at once', async () => {
+    const DELETED_ID = '507f1f77bcf86cd799439021';
+    const MISSING_ID = '507f1f77bcf86cd799439022';
+    const FAILING_ID = '507f1f77bcf86cd799439023';
+
+    const deletedFile = { id: DELETED_ID, userId: OWNER, fileName: 'a.txt', tags: [], users: [] };
+    const failingFile = {
+      id: FAILING_ID,
+      userId: OWNER,
+      fileName: 'b.txt',
+      tags: [],
+      users: [],
+      filePath: 'uploads/b.txt',
+    };
+
+    h.findByIdAndUserId.mockImplementation(async (id: string) =>
+      id === DELETED_ID ? deletedFile : id === FAILING_ID ? failingFile : null
+    );
+    h.findById.mockImplementation(async (id: string) =>
+      id === DELETED_ID ? deletedFile : id === FAILING_ID ? failingFile : null
+    );
+    h.storageDelete.mockImplementation(async (path: string) => {
+      if (path === 'uploads/b.txt') throw new Error('S3 unavailable');
+    });
+
+    const { res, json } = makeRes();
+
+    await run([DELETED_ID, MISSING_ID, FAILING_ID], res);
+
+    const body = json.mock.calls[0][0];
+    expect(body.results.deleted).toEqual([DELETED_ID]);
+    expect(body.results.notFound).toEqual([MISSING_ID]);
+    expect(body.results.failed).toEqual([{ id: FAILING_ID, error: 'S3 unavailable' }]);
+    expect(body.message).toBe('Deleted 1 file(s), 1 file(s) not found, Failed to process 1 file(s)');
+  });
 });
 
 // Deleting files changes which files carry a tag, so each one is marked as recently used. The

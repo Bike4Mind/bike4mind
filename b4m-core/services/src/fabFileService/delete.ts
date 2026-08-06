@@ -22,6 +22,18 @@ export interface DeleteFabFileResult {
   fabFile: IFabFileDocument | null;
 }
 
+export type PublicDeleteFabFileAction = Exclude<DeleteFabFileAction, 'denied'>;
+
+/**
+ * Maps deleteFabFile's action to what's safe to expose to a caller. Collapses 'denied' into
+ * 'not_found' so a response can never be used to tell "doesn't exist" apart from "exists but you
+ * can't access it" - the same no-enumeration convention as get.ts, edit.ts, addFavorite.ts, et al.
+ * Every consumer that returns deleteFabFile's action to a client must go through this, rather than
+ * re-deriving the fold inline, so a future action value can't slip through unmapped.
+ */
+export const toPublicDeleteAction = (action: DeleteFabFileAction): PublicDeleteFabFileAction =>
+  action === 'denied' ? 'not_found' : action;
+
 export interface DeleteFabFileAdapter {
   db: {
     fabFiles: Pick<

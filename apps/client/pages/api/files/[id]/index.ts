@@ -164,9 +164,7 @@ const handler = baseApi()
 
     let sizeToDeduct = 0;
 
-    let deleteAction: string = 'not_found';
-
-    await withTransaction(async session => {
+    const deleteAction = await withTransaction(async session => {
       const result = await fabFilesService.deleteFabFile(
         userId,
         { id: fabFileId },
@@ -184,8 +182,6 @@ const handler = baseApi()
         }
       );
 
-      deleteAction = result.action;
-
       if (result.action === 'deleted') {
         await logEvent(
           { userId, type: FileEvents.DELETE_FILE, metadata: { fileId: fabFileId } },
@@ -201,6 +197,8 @@ const handler = baseApi()
           { ability: req.ability, session }
         );
       }
+
+      return result.action;
     });
 
     // Deduct storage size after successful deletion
@@ -230,11 +228,9 @@ const handler = baseApi()
       );
     }
 
-    // 'denied' collapses to 'not_found' here too: the response must not let a caller distinguish
-    // "doesn't exist" from "exists but you can't access it" (see bulk-delete.ts for the same rule).
     return res.json({
       msg: 'Fab file deleted',
-      action: deleteAction === 'denied' ? 'not_found' : deleteAction,
+      action: fabFilesService.toPublicDeleteAction(deleteAction),
     });
   });
 
