@@ -85,6 +85,7 @@ interface BulkDeleteResponse {
   results: {
     deleted: string[];
     unshared: string[];
+    notFound: string[];
     /** @deprecated Use deleted/unshared instead */
     success?: string[];
     failed: {
@@ -105,7 +106,13 @@ export function useBulkDeleteFiles(options?: { onSuccess?: () => void; onError?:
       queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
       // Invalidate the tag query to refresh the number of files with that tag
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
-      toast.success(data.message);
+      // A batch that only hit notFound/failed removed nothing - don't show a green toast for it.
+      const removedSomething = data.results.deleted.length > 0 || data.results.unshared.length > 0;
+      if (removedSomething) {
+        toast.success(data.message);
+      } else {
+        toast.error(data.message);
+      }
       options?.onSuccess?.();
     },
     onError: error => {

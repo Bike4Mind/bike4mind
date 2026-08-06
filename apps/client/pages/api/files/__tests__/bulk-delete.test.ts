@@ -152,7 +152,7 @@ describe('bulk-delete - data-lake stats', () => {
   });
 });
 
-describe('bulk-delete - not-found and denied reporting', () => {
+describe('bulk-delete - not-found reporting', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.userFindById.mockResolvedValue({ id: OWNER });
@@ -168,12 +168,13 @@ describe('bulk-delete - not-found and denied reporting', () => {
 
     const body = json.mock.calls[0][0];
     expect(body.results.notFound).toEqual(['507f1f77bcf86cd799439011']);
-    expect(body.results.denied).toEqual([]);
     expect(body.message).toBe('1 file(s) not found');
   });
 
-  it('reports a file the actor has no access to under denied, distinct from notFound', async () => {
-    // Exists, but the actor is neither owner nor in the share list.
+  it('reports a file the actor has no access to under the same notFound bucket, not a distinct "denied" one', async () => {
+    // Exists, but the actor is neither owner nor in the share list. The response must not let a
+    // caller distinguish this from genuine absence - that would let bulk-delete be used to probe
+    // for other users' file ids (see fabFileService/get.ts et al for the same no-enumeration rule).
     const inaccessible = { ...memberFile('507f1f77bcf86cd799439011', 'someone-else'), users: [] };
     h.findById.mockResolvedValue(inaccessible);
     h.findByIdAndUserId.mockResolvedValue(null);
@@ -182,9 +183,9 @@ describe('bulk-delete - not-found and denied reporting', () => {
     await run(['507f1f77bcf86cd799439011'], res);
 
     const body = json.mock.calls[0][0];
-    expect(body.results.denied).toEqual(['507f1f77bcf86cd799439011']);
-    expect(body.results.notFound).toEqual([]);
-    expect(body.message).toBe('Access denied for 1 file(s)');
+    expect(body.results.notFound).toEqual(['507f1f77bcf86cd799439011']);
+    expect(body.results).not.toHaveProperty('denied');
+    expect(body.message).toBe('1 file(s) not found');
   });
 });
 

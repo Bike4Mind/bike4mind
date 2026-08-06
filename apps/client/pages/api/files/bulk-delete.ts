@@ -39,7 +39,6 @@ const handler = baseApi()
       deleted: [] as string[],
       unshared: [] as string[],
       notFound: [] as string[],
-      denied: [] as string[],
       failed: [] as { id: string; error: string }[],
     };
 
@@ -108,11 +107,11 @@ const handler = baseApi()
               { ability: req.ability, session }
             );
             results.unshared.push(fileId);
-          } else if (result.action === 'denied') {
-            // File exists but the actor is neither owner nor sharee - a denial, not a no-op.
-            results.denied.push(fileId);
           } else {
-            // 'not_found': file genuinely absent, or already soft-deleted by an earlier run.
+            // 'not_found' and 'denied' surface identically to the caller - deleteFabFile already
+            // logs the denied case server-side, but the response must not let a caller distinguish
+            // "doesn't exist" from "exists but you can't access it" (same no-enumeration convention
+            // as fabFileService/get.ts, edit.ts, addFavorite.ts et al).
             results.notFound.push(fileId);
           }
         });
@@ -152,7 +151,6 @@ const handler = baseApi()
     const parts: string[] = [];
     if (results.deleted.length > 0) parts.push(`Deleted ${results.deleted.length} file(s)`);
     if (results.unshared.length > 0) parts.push(`Removed ${results.unshared.length} shared file(s) from your library`);
-    if (results.denied.length > 0) parts.push(`Access denied for ${results.denied.length} file(s)`);
     if (results.notFound.length > 0) parts.push(`${results.notFound.length} file(s) not found`);
     if (results.failed.length > 0) parts.push(`Failed to process ${results.failed.length} file(s)`);
     const message = parts.join(', ') || `0 of ${fileIds.length} file(s) resolved`;

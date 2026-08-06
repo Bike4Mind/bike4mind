@@ -230,7 +230,12 @@ const handler = baseApi()
       );
     }
 
-    return res.json({ msg: 'Fab file deleted', action: deleteAction });
+    // 'denied' collapses to 'not_found' here too: the response must not let a caller distinguish
+    // "doesn't exist" from "exists but you can't access it" (see bulk-delete.ts for the same rule).
+    return res.json({
+      msg: 'Fab file deleted',
+      action: deleteAction === 'denied' ? 'not_found' : deleteAction,
+    });
   });
 
 export const config = {
