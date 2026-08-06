@@ -41,9 +41,8 @@ export function useComputeHashes() {
       updateHashingProgress({ total: included.length, completed: 0, status: 'hashing' });
 
       let completed = 0;
-      const queue = [...included];
 
-      await runWithConcurrency(queue, HASH_CONCURRENCY, async file => {
+      await runWithConcurrency(included, HASH_CONCURRENCY, async file => {
         try {
           const hash = await computeFileHash(file.file);
           setFileHash(file.relativePath, hash);

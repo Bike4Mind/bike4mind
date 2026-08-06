@@ -24,14 +24,12 @@ export function foldersTagsForBatch(
   return Array.from(byName, ([name, strength]) => ({ name, strength }));
 }
 
-// -- Hashing & Deduplication --------------------------------------------------
+// -- Constants -----------------------------------------------------------------
 
 export const HASH_CONCURRENCY = 10;
 
-// -- Batch Upload --------------------------------------------------------------
-
-export const UPLOAD_CONCURRENCY = 5;
-export const BATCH_CHUNK_SIZE = 100; // Max files per presigned URL request
+const UPLOAD_CONCURRENCY = 5;
+const BATCH_CHUNK_SIZE = 100; // Max files per presigned URL request
 
 /**
  * Canonical offline message. Shared by the mutation's pre-flight guard, the error
@@ -134,48 +132,58 @@ export function classifyUploadError(
  * S3 presigned URL (hosted). The auth routing (authenticated api client vs raw axios) lives
  * in uploadFileToUrl so this and the single-file path stay in sync.
  */
-export async function uploadFileToS3(url: string, file: File): Promise<void> {
+async function uploadFileToS3(url: string, file: File): Promise<void> {
   await uploadFileToUrl(url, file, file.type);
 }
 
 /**
- * Run `worker` over every item in `queue` with at most `limit` in flight at once.
+ * Run `worker` over every item in `items` with at most `limit` in flight at once.
  * Never rejects: a worker failure is the caller's job to account for (both call
  * sites track their own per-item success/failure inside the worker closure), so a
  * throw here is swallowed rather than aborting the other in-flight items.
  */
 export async function runWithConcurrency<T>(
-  queue: T[],
+  items: readonly T[],
   limit: number,
   worker: (item: T) => Promise<void>
 ): Promise<void> {
-  const items = [...queue];
-  const total = items.length;
+  const queue = [...items];
+  const total = queue.length;
   if (total === 0) return;
+  // Guard a non-positive limit so the pump can always make progress instead of hanging forever.
+  const cap = Math.max(1, limit);
 
   return new Promise<void>(resolve => {
     let active = 0;
     let done = 0;
 
     function processNext() {
-      while (active < limit && items.length > 0) {
-        const item = items.shift()!;
+      while (active < cap && queue.length > 0) {
+        const item = queue.shift()!;
         active++;
 
-        worker(item)
-          .catch(() => {
-            // Swallow: the pump's contract is "never rejects" - the worker already
-            // recorded its own failure (progress/counters) before this catch runs.
-          })
-          .finally(() => {
-            active--;
-            done++;
-            if (done === total) {
-              resolve();
-            } else {
-              processNext();
-            }
-          });
+        const settle = () => {
+          active--;
+          done++;
+          if (done === total) {
+            resolve();
+          } else {
+            processNext();
+          }
+        };
+
+        try {
+          worker(item)
+            .catch(() => {
+              // Swallow: the pump's contract is "never rejects" - the worker already
+              // recorded its own failure (progress/counters) before this catch runs.
+            })
+            .finally(settle);
+        } catch {
+          // Swallow a synchronous throw from `worker` itself too, so a non-async
+          // worker can't leak this slot or escape the pump's "never rejects" contract.
+          settle();
+        }
       }
     }
 
@@ -187,12 +195,16 @@ export async function runWithConcurrency<T>(
 
 /**
  * Callbacks the caller (useBatchUpload) supplies so this pure-ish orchestration
- * function can drive the wizard's store/step and react to completion without
- * importing React or the store's write actions directly.
+ * function can drive the wizard's store/step and react to completion - the seam
+ * keeps this module's store coupling read-only (getState only), never importing
+ * React or the store's write actions directly.
  */
 export interface BatchUploadCallbacks {
+  /** Store writers, injected so the pipeline never subscribes to react state. */
   updateUploadProgress: (progress: Partial<UploadProgress>) => void;
+  /** Store writers, injected so the pipeline never subscribes to react state. */
   setStep: (step: WizardStep) => void;
+  /** Invalidate the lake list + gears status after upload-complete (the hook passes a closure over queryClient). */
   onUploadComplete: () => void;
 }
 
