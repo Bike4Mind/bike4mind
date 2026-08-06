@@ -30,12 +30,14 @@ interface RemoveFileFromDataLakeAdapters {
  * by the LAKE'S CREATOR, because fileTagPrefix is user-chosen and not org-scope unique: without
  * that conjunct, minting a lake with someone else's prefix would be a licence to strip their tags.
  *
- * The whole-lake predicate requires the same ownership conjunct on its prefix arm
- * (buildDataLakeMembershipFilter), so both this endpoint and the lake-wide sweep now ask the
- * identical question - "is this file the creator's" - matching the read path's own membership
- * predicate exactly. An admin may call this without owning the file themselves, but the file
- * itself must still belong to the lake's creator; an admin cannot use this to strip a prefixed
- * tag off a file the read path never actually admitted to this lake.
+ * The whole-lake predicate (buildDataLakeMembershipFilter, the single-lake browse's own
+ * membership check) requires the same ownership conjunct on its prefix arm, so both this
+ * endpoint and the lake-wide sweep now ask the identical question - "is this file the creator's".
+ * An admin may call this without owning the file themselves, but the file itself must still
+ * belong to the lake's creator; an admin cannot use this to strip a prefixed tag off a file that
+ * predicate never actually admitted to this lake. Other lake readers (the aggregate browse,
+ * semantic search, chat KB tools) still match the prefix within the VIEWER's own access - a
+ * different, ownership-of-the-file question this endpoint does not touch.
  *
  * A second lake sharing this prefix - not necessarily the caller's, since fileTagPrefix has no
  * org-scope uniqueness (same-creator collisions are blocked by a DB index; see the comment on

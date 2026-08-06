@@ -1,4 +1,4 @@
-import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, normalizeTagPrefix } from '@bike4mind/common';
+import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, isReservedTagPrefix, normalizeTagPrefix } from '@bike4mind/common';
 import type { IDataLakeDocument, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
@@ -47,13 +47,19 @@ export const removeFileFromLake = async (
 
   const file = await db.fabFiles.findById(fabFileId);
   const tagNames = (file?.tags ?? []).map(t => t.name).filter((name): name is string => typeof name === 'string');
-  // Normalized through the same predicate the read arms use, so a lake whose prefix no query
-  // matches (empty, or missing its trailing colon) also gets nothing cleared by prefix.
-  const prefix = normalizeTagPrefix(lake.fileTagPrefix);
+  // Normalized through the same predicate buildDataLakeMembershipFilter uses, so a lake whose
+  // prefix no query matches (empty, missing its trailing colon, or - a legacy row predating the
+  // create-time guard - inside the reserved datalake: namespace) also gets nothing cleared by
+  // prefix, matching that its read arm drops the same cases rather than matching every OTHER
+  // lake's meta-tag.
+  const prefix = isReservedTagPrefix(lake.fileTagPrefix) ? null : normalizeTagPrefix(lake.fileTagPrefix);
   // Positive ownership, anchored to the LAKE'S CREATOR (not the acting admin) so this matches
-  // the read path's own membership predicate exactly: both ids must be present AND equal, so a
-  // file with no owner does not fall through as a match, and an admin cannot strip a prefixed
-  // tag off a file the read path never actually admitted to this lake.
+  // buildDataLakeMembershipFilter's own ownership conjunct on the single-lake browse: both ids
+  // must be present AND equal, so a file with no owner does not fall through as a match, and an
+  // admin cannot strip a prefixed tag off a file that predicate never actually admitted to this
+  // lake. Other lake readers (the aggregate browse, semantic search, chat KB tools) still match
+  // the prefix within the VIEWER's own access - that is ownership of the file, not membership in
+  // this lake, and unaffected by this write.
   const ownsFile = !!file?.userId && file.userId === lake.createdByUserId;
   const prefixedTags = prefix ? tagNames.filter(name => name.startsWith(prefix)) : [];
   const inLake = !!file && (tagNames.includes(lake.datalakeTag) || (ownsFile && prefixedTags.length > 0));

@@ -131,4 +131,25 @@ describe('removeFileFromLake', () => {
     );
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
+
+  it('ignores a legacy reserved-namespace fileTagPrefix rather than matching every other lake', async () => {
+    // A prefix inside datalake: (predates the create-time guard that now rejects it) must not
+    // treat an unrelated lake's meta-tag as this lake's own prefix-tagged content.
+    const reservedPrefixLake = lake({ fileTagPrefix: 'datalake:evil:' });
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi
+            .fn()
+            .mockResolvedValue({ id: 'f1', userId: 'owner', tags: [{ name: 'datalake:other', strength: 1 }] }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    await expect(removeFileFromLake(owner, reservedPrefixLake, 'f1', adapters)).rejects.toThrow(
+      /not found in this data lake/i
+    );
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
 });

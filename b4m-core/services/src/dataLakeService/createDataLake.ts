@@ -56,14 +56,15 @@ async function disambiguateSlug(
  * Refuses a `fileTagPrefix` that another lake in scope already matches.
  *
  * Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting one would
- * destroy files that only the other holds - the prefix arm has no uniqueness constraint to stop
- * it. Rejecting rather than auto-suffixing like the slug: `acme:-1` is not a meaningful prefix,
- * and silently rewriting it would change every tag the taxonomy step just showed the user.
+ * destroy files that only the other holds - overlap (exact or nested) has no DB-level constraint
+ * to stop it. Rejecting rather than auto-suffixing like the slug: `acme:-1` is not a meaningful
+ * prefix, and silently rewriting it would change every tag the taxonomy step just showed the user.
  *
- * Read-then-write, so two concurrent creates in one scope can both pass. Left as-is: the correct
- * key is conditional (org arm OR creator arm) and overlap-aware, which no single unique index
- * expresses, and a case-insensitive one would need a collation and would fail to build on rows
- * that already collide.
+ * Read-then-write, so two concurrent creates in one scope can still both pass for an OVERLAPPING
+ * (not exact-equal) prefix, or for an org-scope exact match - the correct key for either is
+ * conditional (org arm OR creator arm) and overlap-aware, which no single unique index expresses.
+ * A same-creator EXACT match is now backstopped by a real unique index on DataLakeModel
+ * ({ createdByUserId, fileTagPrefix }), closing that one slice of the race.
  */
 async function assertPrefixAvailable(
   db: CreateDataLakeAdapters['db'],

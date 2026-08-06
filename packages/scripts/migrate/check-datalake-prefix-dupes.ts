@@ -1,5 +1,4 @@
 import { connectDB, DataLakeModel } from '@bike4mind/database';
-import { normalizeTagPrefix } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { Config } from '../utils/config';
 
@@ -11,9 +10,11 @@ import { Config } from '../utils/config';
  * groups exist - so we must confirm zero duplicates first. Exits non-zero (and prints the
  * offending ids) if any are found, so it can gate a deploy.
  *
- * Excludes groups whose prefix normalizeTagPrefix rejects (no trailing colon, blank): those
- * values contribute no read-path arm today, so two lakes sharing one is inert junk, not a real
- * collision worth blocking a deploy over.
+ * Reports every raw duplicate, including a colon-less or blank prefix: the index has no
+ * `sparse`/partial filter, so it compares the stored string as-is regardless of whether
+ * normalizeTagPrefix would treat it as usable. This must predict the index build 1:1 - filtering
+ * by read-path usability (as check-datalake-prefix-overlaps.ts correctly does for ITS job) would
+ * report "safe to deploy" for rows the index build then rejects.
  *
  * Org-scope collisions are NOT checked here - there is no org-scope index (see the comment on
  * the index itself in DataLakeModel.ts for why) and existing org-scope overlaps, including exact
@@ -44,7 +45,7 @@ async function main() {
     },
     { $match: { n: { $gt: 1 } } },
     { $sort: { n: -1 } },
-  ]).then(groups => groups.filter(g => normalizeTagPrefix(g._id.fileTagPrefix) !== null));
+  ]);
 
   const total = await DataLakeModel.estimatedDocumentCount();
   console.log(`Scanned ~${total} data lakes.`);

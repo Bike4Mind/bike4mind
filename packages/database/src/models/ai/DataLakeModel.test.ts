@@ -432,12 +432,22 @@ describe('DataLakeRepository — slug is unique per org', () => {
 
   it('rejects a second lake with the same slug in the same org', async () => {
     // Distinct datalakeTags so the rejection is attributable to the (organizationId, slug)
-    // index, not the separate unique index on datalakeTag.
+    // index, not the separate unique index on datalakeTag. Distinct creators for the same
+    // reason against the (createdByUserId, fileTagPrefix) index tested separately below -
+    // baseLake defaults fileTagPrefix off the slug, and same-slug-same-creator would otherwise
+    // also collide there.
     await dataLakeRepository.create(
-      baseLake({ slug: 'dupe', organizationId: 'orgA', datalakeTag: 'datalake:orgA:dupe-1' })
+      baseLake({ slug: 'dupe', organizationId: 'orgA', createdByUserId: 'ownerA', datalakeTag: 'datalake:orgA:dupe-1' })
     );
     await expect(
-      dataLakeRepository.create(baseLake({ slug: 'dupe', organizationId: 'orgA', datalakeTag: 'datalake:orgA:dupe-2' }))
+      dataLakeRepository.create(
+        baseLake({
+          slug: 'dupe',
+          organizationId: 'orgA',
+          createdByUserId: 'ownerB',
+          datalakeTag: 'datalake:orgA:dupe-2',
+        })
+      )
     ).rejects.toThrow();
   });
 
