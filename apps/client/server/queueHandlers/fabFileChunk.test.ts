@@ -15,10 +15,12 @@ const h = vi.hoisted(() => ({
   markFailedIfNotAlready: vi.fn(),
   updateFileStatus: vi.fn(),
   incrementCounter: vi.fn(),
+  claimFileStatus: vi.fn(),
   getSettingsValue: vi.fn(),
   sendToClient: vi.fn(),
   finalizeBatchIfComplete: vi.fn(),
   isBatchComplete: vi.fn(),
+  deferFailureIfRetryable: vi.fn(),
   fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
 }));
 
@@ -27,7 +29,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: {
     updateFileStatus: h.updateFileStatus,
     incrementCounter: h.incrementCounter,
-    claimFileStatus: vi.fn(),
+    claimFileStatus: h.claimFileStatus,
   },
   fabFileChunkRepository: {},
   fabFileRepository: {
@@ -47,6 +49,7 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: (...a: unknown[]) => h.finalizeBatchIfComplete(...a),
   isBatchComplete: (...a: unknown[]) => h.isBatchComplete(...a),
+  deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
 vi.mock('@bike4mind/common', () => ({ isSupportedEmbeddingModel: vi.fn(() => true) }));
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));
@@ -56,6 +59,7 @@ vi.mock('sst', () => ({
 
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from './sqsDelivery';
 import { dispatch } from './fabFileChunk';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -106,6 +110,71 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
     expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: true } });
     expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
+  });
+});
+
+describe('fabFileChunk handler - retry gating (#1412)', () => {
+  // The gate's own attempt-counting/heartbeat behavior is unit-tested directly against
+  // deferFailureIfRetryable in dataLakeBatchProgress.test.ts; here we only need to prove the
+  // handler wires it correctly: defer -> rethrow with nothing accounted, no-defer -> account
+  // exactly like before this fix existed.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+    h.incrementCounter.mockResolvedValue({ failedFiles: 1, vectorizedFiles: 0, totalFiles: 3 });
+    h.isBatchComplete.mockReturnValue(false);
+    h.chunkFabfile.mockRejectedValue(new Error(CHUNK_ERR));
+  });
+
+  it('when deferred (non-final attempt), rethrows with no batch/file accounting', async () => {
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
+    expect(h.deferFailureIfRetryable).toHaveBeenCalledWith(expect.anything(), FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
+      fabFileId: 'ff1',
+      batchId: 'batch-1',
+      action: 'Chunking',
+      errorMessage: CHUNK_ERR,
+      logger: mockLogger,
+    });
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.updateFileStatus).not.toHaveBeenCalled();
+    expect(h.incrementCounter).not.toHaveBeenCalled();
+    expect(h.finalizeBatchIfComplete).not.toHaveBeenCalled();
+    expect(h.sendToClient).not.toHaveBeenCalled();
+  });
+
+  it('still clears isChunking when deferred', async () => {
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
+  });
+
+  it('when not deferred (final attempt), accounts the failure exactly like today', async () => {
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', CHUNK_ERR);
+    expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', CHUNK_ERR);
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'failedFiles');
+  });
+
+  it('a deferred failure followed by a successful retry never touches failedFiles', async () => {
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
+    expect(h.incrementCounter).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    h.claimFileStatus.mockResolvedValue(true);
+    h.incrementCounter.mockResolvedValue({ chunkedFiles: 1, failedFiles: 0, totalFiles: 1 });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['uploaded', 'pending'], 'chunking');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'chunkedFiles');
+    expect(h.incrementCounter).not.toHaveBeenCalledWith('batch-1', 'failedFiles');
   });
 });
 

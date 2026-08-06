@@ -15,7 +15,12 @@ import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
 import { ChunkSchema, EmbeddingFactory, resolveEmbeddingConfig, isEmbeddingAuthError } from '@bike4mind/fab-pipeline';
 import { apiKeyService, embeddingCacheService } from '@bike4mind/services';
-import { finalizeBatchIfComplete, isBatchComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import {
+  finalizeBatchIfComplete,
+  isBatchComplete,
+  deferFailureIfRetryable,
+} from '@server/queueHandlers/dataLakeBatchProgress';
+import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
@@ -274,9 +279,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await fabFileRepository.update({ id: fabFileId, error: null });
     }
   } catch (err) {
-    // On vectorization failure, increment the batch's failedFiles counter so
+    // On the FINAL vectorization attempt, increment the batch's failedFiles counter so
     // the batch can transition out of 'processing' state when all files are accounted for.
-    // Use atomic mark-failed to prevent double-counting on SQS retries.
+    // Use atomic mark-failed to prevent double-counting on SQS retries. An earlier, non-final
+    // attempt just logs and rethrows (see the gate below) - it may still succeed on retry.
     const errorMessage = err instanceof Error ? err.message : String(err);
     // The stored message surfaces to the end user on the file. An embedding-auth failure carries
     // operator instructions (set OPENAI_API_KEY / OLLAMA_BASE_URL) that a user can neither see nor
@@ -295,6 +301,22 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     if (isAuthFailure) {
       logger.warn(`Vectorization failed for ${fabFileId} (embedding auth): ${errorMessage}`);
     }
+
+    // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
+    // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave
+    // 'failed' status untouched.
+    if (
+      await deferFailureIfRetryable(event, FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT, {
+        fabFileId,
+        batchId: existingFabFile.batchId,
+        action: 'Vectorization',
+        errorMessage,
+        logger,
+      })
+    ) {
+      throw err; // Re-throw so SQS retries
+    }
+
     // markFailedIfNotAlready is the file-level idempotency guard: only the first
     // failure increments the counter, so SQS redelivery of a failed message is a no-op.
     const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, storedError);

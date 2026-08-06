@@ -20,7 +20,40 @@ import {
   LAKE_MEMORY_RATE_LIMIT_WINDOW_MS,
   lakeMemoryRateLimitKey,
 } from '@server/dataLakes/lakeMemoryRateLimit';
+import { isFinalDeliveryAttempt, getDeliveryAttempt } from '@server/queueHandlers/sqsDelivery';
+import type { SQSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
+
+/**
+ * Non-final-attempt guard shared by fabFileChunk.ts/fabFileVectorize.ts's catch blocks: on any
+ * SQS delivery that is not the last one before DLQ, log a warning and heartbeat the batch (via
+ * touchIfActive, so the read-time stuck-batch reconciler doesn't force it terminal while a retry
+ * is still pending) WITHOUT touching file/batch failure state - marking a file 'failed' before a
+ * retry gets its chance is unrecoverable, since claimFileStatus's success-path claim can never
+ * transition a manifest entry back out of 'failed' (#1412). Returns true when the caller should
+ * just rethrow; false means this is the final attempt and the caller should run its normal
+ * failure accounting instead.
+ */
+export async function deferFailureIfRetryable(
+  event: SQSEvent,
+  maxReceiveCount: number,
+  params: {
+    fabFileId: string;
+    batchId: string | undefined;
+    action: string;
+    errorMessage: string;
+    logger: { warn: (msg: string) => void };
+  }
+): Promise<boolean> {
+  if (isFinalDeliveryAttempt(event, maxReceiveCount)) return false;
+  const { fabFileId, batchId, action, errorMessage, logger } = params;
+  const attempt = getDeliveryAttempt(event);
+  logger.warn(
+    `${action} failed for ${fabFileId} on attempt ${attempt}/${maxReceiveCount} (not final - letting SQS retry): ${errorMessage}`
+  );
+  if (batchId) await dataLakeBatchRepository.touchIfActive(batchId);
+  return true;
+}
 
 /**
  * Guarded batch finalization shared by the chunk and vectorize handlers. When the

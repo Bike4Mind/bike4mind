@@ -13,7 +13,12 @@ import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { finalizeBatchIfComplete, isBatchComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import {
+  finalizeBatchIfComplete,
+  isBatchComplete,
+  deferFailureIfRetryable,
+} from '@server/queueHandlers/dataLakeBatchProgress';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from '@server/worker/chunkScan';
@@ -91,12 +96,28 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
       )
     ).catch(async (err: unknown) => {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+
+      // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
+      // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave
+      // 'failed' status untouched.
+      if (
+        await deferFailureIfRetryable(event, FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
+          fabFileId,
+          batchId: fabFile.batchId,
+          action: 'Chunking',
+          errorMessage,
+          logger,
+        })
+      ) {
+        throw err;
+      }
+
       // chunkFabfile can throw on a genuinely bad file (e.g. a corrupt PDF). Without this,
       // the file would sit at chunkCount:0 with no error - visually identical to a
       // silently-dropped record. Persist a per-file error and account it as failed in its
       // batch (so the batch still reaches a terminal state), mirroring fabFileVectorize's
       // failure handling, then re-throw so SQS retries then routes to the DLQ.
-      const errorMessage = err instanceof Error ? err.message : String(err);
       const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, errorMessage);
       if (fabFile.batchId && isFirstFailure) {
         try {
