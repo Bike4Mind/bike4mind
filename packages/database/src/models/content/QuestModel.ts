@@ -33,6 +33,15 @@ const MessageTruncationSchema = subSchema({
   },
 });
 
+// A dedicated sub-schema (not an inline nested object) so `default: undefined` can suppress Mongoose
+// auto-vivification: the `dataLakeTags` array would otherwise default to `[]` and materialize a
+// `lakeMemory: { dataLakeTags: [] }` on EVERY quest, which then fails the Zod re-parse on read (the Zod
+// `beliefCount` is required). Absent-or-fully-present, matching how the feature writes it.
+const LakeMemorySchema = subSchema({
+  beliefCount: { type: Number, required: false },
+  dataLakeTags: [{ type: String, required: false }],
+});
+
 // `content` is deliberately absent - see the exclusion note on the context path below.
 const SystemPromptSourceSchema = subSchema({
   fileId: { type: String, required: false },
@@ -222,10 +231,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         minInlineTokensPerDoc: { type: Number, required: false },
       },
       // Must stay in sync with the Zod PromptMeta `context.lakeMemory` (parity test enforces it).
-      lakeMemory: {
-        beliefCount: { type: Number, required: false },
-        dataLakeTags: [{ type: String, required: false }],
-      },
+      // Sub-schema + default:undefined so it never auto-vivifies to a partial object (see above).
+      lakeMemory: { type: LakeMemorySchema, required: false, default: undefined },
       messageTruncation: { type: MessageTruncationSchema, required: false, default: undefined },
       tokensBySource: {
         systemPrompts: { type: Number, required: false },
