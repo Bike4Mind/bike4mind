@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { FabFile, Session } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
@@ -14,9 +15,9 @@ import { type MigrationFile } from './index';
  *
  * This migration only counts and logs; it does not decide anything, because "re-point",
  * "delete", or "notify the affected owner" all depend on the actual row and cannot be chosen
- * generically. It runs automatically on every deploy (see updateDatabase in
- * apps/client/server/utils/manageDatabase.ts), so the real count for a given stage shows up in
- * that deploy's logs.
+ * generically. The migration runner (see updateDatabase in
+ * apps/client/server/utils/manageDatabase.ts) runs on every deploy, so this migration itself
+ * runs once, on the first deploy after merge, and its output lands in that deploy's logs.
  *
  * Idempotent: a second run finds the same rows (nothing here is mutated) and logs the same count.
  */
@@ -78,6 +79,8 @@ const migration: MigrationFile = {
   name: 'audit-fabfile-session-owner-mismatch',
 
   up: async () => {
+    // deletedAt: null is belt-and-suspenders here - softDeletePlugin's pre('find') hook already
+    // applies it by default - but kept explicit so the query's intent doesn't depend on that hook.
     const fabFiles = (await FabFile.find({ deletedAt: null, sessionId: { $exists: true, $nin: [null, ''] } })
       .select('userId sessionId fileName createdAt')
       .lean()) as unknown as FabFileLean[];
@@ -87,7 +90,13 @@ const migration: MigrationFile = {
       return;
     }
 
-    const sessionIds = [...new Set(fabFiles.map(f => f.sessionId))];
+    const candidateSessionIds = [...new Set(fabFiles.map(f => f.sessionId))];
+    // A hand-stamped sessionId (PUT /api/files/[id], no format check) need not be a valid
+    // ObjectId at all. Session._id casts every $in element, so one bad string would throw and
+    // fail the whole migration - filter those out up front instead of querying with them.
+    const malformedSessionIds = new Set(candidateSessionIds.filter(id => !mongoose.isValidObjectId(id)));
+    const sessionIds = candidateSessionIds.filter(id => !malformedSessionIds.has(id));
+
     // includeDeleted: a session's recorded owner does not change because the session was later
     // soft-deleted, and a mismatch predating that deletion is exactly as real.
     const sessions = (await Session.find({ _id: { $in: sessionIds } })
@@ -96,7 +105,10 @@ const migration: MigrationFile = {
       .lean()) as unknown as { _id: unknown; userId: string }[];
     const sessionOwnerById = new Map(sessions.map(s => [String(s._id), s.userId]));
 
-    const { mismatches, orphanedSessionIds } = findOwnerMismatches(fabFiles, sessionOwnerById);
+    const { mismatches, orphanedSessionIds } = findOwnerMismatches(
+      fabFiles.filter(f => !malformedSessionIds.has(f.sessionId)),
+      sessionOwnerById
+    );
 
     console.log(
       `[audit-fabfile-session-owner-mismatch] scanned ${fabFiles.length} FabFile(s) with a sessionId, found ${mismatches.length} owner mismatch(es)`
@@ -108,6 +120,12 @@ const migration: MigrationFile = {
     if (orphanedSessionIds.length > 0) {
       console.log(
         `[audit-fabfile-session-owner-mismatch] ${orphanedSessionIds.length} sessionId(s) with no matching Session doc, not counted above: ${JSON.stringify(orphanedSessionIds)}`
+      );
+    }
+
+    if (malformedSessionIds.size > 0) {
+      console.log(
+        `[audit-fabfile-session-owner-mismatch] ${malformedSessionIds.size} sessionId(s) that are not a valid ObjectId at all, not counted above: ${JSON.stringify([...malformedSessionIds])}`
       );
     }
   },

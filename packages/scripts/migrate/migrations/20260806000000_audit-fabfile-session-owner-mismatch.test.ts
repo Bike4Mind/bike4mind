@@ -95,6 +95,8 @@ describe('findOwnerMismatches', () => {
   });
 });
 
+const SID1 = '507f1f77bcf86cd799439011';
+
 describe('audit-fabfile-session-owner-mismatch migration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -111,22 +113,37 @@ describe('audit-fabfile-session-owner-mismatch migration', () => {
   });
 
   it('reads sessions with includeDeleted, so a since-deleted session still resolves an owner', async () => {
-    mockFabFileLean.mockResolvedValue([fabFile()]);
-    mockSessionLean.mockResolvedValue([{ _id: 's1', userId: 'u1' }]);
+    mockFabFileLean.mockResolvedValue([fabFile({ sessionId: SID1 })]);
+    mockSessionLean.mockResolvedValue([{ _id: SID1, userId: 'u1' }]);
 
     await migration.up();
 
-    expect(mockSessionFind).toHaveBeenCalledWith({ _id: { $in: ['s1'] } });
+    expect(mockSessionFind).toHaveBeenCalledWith({ _id: { $in: [SID1] } });
     expect(mockSessionSetOptions).toHaveBeenCalledWith({ includeDeleted: true });
   });
 
   it('dedupes sessionIds shared by multiple FabFiles before querying sessions', async () => {
-    mockFabFileLean.mockResolvedValue([fabFile({ _id: 'a', sessionId: 's1' }), fabFile({ _id: 'b', sessionId: 's1' })]);
-    mockSessionLean.mockResolvedValue([{ _id: 's1', userId: 'u1' }]);
+    mockFabFileLean.mockResolvedValue([fabFile({ _id: 'a', sessionId: SID1 }), fabFile({ _id: 'b', sessionId: SID1 })]);
+    mockSessionLean.mockResolvedValue([{ _id: SID1, userId: 'u1' }]);
 
     await migration.up();
 
-    expect(mockSessionFind).toHaveBeenCalledWith({ _id: { $in: ['s1'] } });
+    expect(mockSessionFind).toHaveBeenCalledWith({ _id: { $in: [SID1] } });
+  });
+
+  it('drops a malformed (non-ObjectId) sessionId before querying Session.find, and logs it separately', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    mockFabFileLean.mockResolvedValue([
+      fabFile({ _id: 'good', sessionId: SID1 }),
+      fabFile({ _id: 'bad', sessionId: 'not-an-object-id' }),
+    ]);
+    mockSessionLean.mockResolvedValue([{ _id: SID1, userId: 'u1' }]);
+
+    await migration.up();
+
+    expect(mockSessionFind).toHaveBeenCalledWith({ _id: { $in: [SID1] } });
+    expect(logSpy.mock.calls.map(c => c[0]).join('\n')).toContain('not-an-object-id');
+    logSpy.mockRestore();
   });
 
   it('down is a no-op (read-only)', async () => {
