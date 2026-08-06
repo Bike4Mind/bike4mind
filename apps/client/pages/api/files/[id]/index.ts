@@ -164,9 +164,7 @@ const handler = baseApi()
 
     let sizeToDeduct = 0;
 
-    let deleteAction: string = 'not_found';
-
-    await withTransaction(async session => {
+    const deleteAction = await withTransaction(async session => {
       const result = await fabFilesService.deleteFabFile(
         userId,
         { id: fabFileId },
@@ -184,8 +182,6 @@ const handler = baseApi()
         }
       );
 
-      deleteAction = result.action;
-
       if (result.action === 'deleted') {
         await logEvent(
           { userId, type: FileEvents.DELETE_FILE, metadata: { fileId: fabFileId } },
@@ -201,6 +197,8 @@ const handler = baseApi()
           { ability: req.ability, session }
         );
       }
+
+      return result.action;
     });
 
     // Deduct storage size after successful deletion
@@ -230,7 +228,10 @@ const handler = baseApi()
       );
     }
 
-    return res.json({ msg: 'Fab file deleted', action: deleteAction });
+    return res.json({
+      msg: 'Fab file deleted',
+      action: fabFilesService.toPublicDeleteAction(deleteAction),
+    });
   });
 
 export const config = {
