@@ -655,3 +655,22 @@ ul.custom-mentions-menu-upward > li[aria-selected="true"] {
     color: var(--joy-palette-text-primary, #1a1a1a);
   }
 }
+
+/* Sonner toaster (mounted in app/providers.tsx).
+   The toaster is a fixed overlay that lands on top of bottom-right modal footers, so a
+   transient toast would otherwise swallow clicks aimed at the primary button underneath it.
+   Only a toast's own controls stay hit-testable; the tradeoff is losing hover-to-pause,
+   hover-to-expand and swipe-to-dismiss. Sonner sets no pointer-events of its own on these
+   elements, so nothing here is overriding upstream styles. */
+[data-sonner-toaster],
+[data-sonner-toast] {
+  pointer-events: none;
+}
+
+/* Scoped to visible toasts so controls on an exiting toast, which sonner has already
+   made pointer-events: none, do not come back to life mid-animation. */
+[data-sonner-toast][data-visible='true'] a,
+[data-sonner-toast][data-visible='true'] button,
+[data-sonner-toast][data-visible='true'] [role='button'] {
+  pointer-events: auto;
+}
