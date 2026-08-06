@@ -29,16 +29,24 @@ export function activeOrgId(): string | undefined {
 /**
  * Fetches all data lakes accessible to the current user. Manage-gated shape: the server attaches
  * the editor-only fields (systemPrompt) per lake, and only where `canManage` holds - so a lake the
- * caller can merely read arrives without them. Keep this in sync with the twin inline type on
- * `useDataLakes` (hooks/data/dataLakeWizard.ts), which reads the same endpoint.
+ * caller can merely read arrives without them.
+ *
+ * Data lakes are an admin-gated feature (EnableDataLakes, default off); the endpoint 403s when
+ * disabled. Callers that mount app-wide (e.g. a closed modal) pass `enabled: false` until the
+ * list is actually needed, and the gate rejection is never retried, so a disabled feature can't
+ * spam a 403 on every page.
  */
-export function useGetDataLakes() {
+export function useGetDataLakes(enabled = true) {
   return useQuery({
     queryKey: dataLakeKeys.list,
+    enabled,
+    retry: false,
     queryFn: async () => {
       const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
       return response.data.data;
     },
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 2,
   });
 }
 

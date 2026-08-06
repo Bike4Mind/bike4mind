@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { IMessageDataToClient, IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
+import type { IMessageDataToClient, IFabFileDocument } from '@bike4mind/common';
 import { isSupportedFabFileMimeType, folderTagForFile } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
@@ -692,31 +692,6 @@ export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: n
     enabled: !!dataLakeId,
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5,
-  });
-}
-
-/**
- * Hook: List all data lakes accessible to the current user.
- */
-export function useDataLakes(enabled = true) {
-  return useQuery({
-    queryKey: ['data-lakes'],
-    // Data lakes are an admin-gated feature (EnableDataLakes, default off); the
-    // endpoint 403s when disabled. Skip the call until the consumer actually
-    // needs it (e.g. the modal is open) and don't retry the gate rejection, so
-    // a closed app-wide modal doesn't spam a 403 on every page.
-    enabled,
-    retry: false,
-    queryFn: async () => {
-      // The server's own shape, not a hand-maintained twin: `canManage` and the editor-only
-      // `systemPrompt` are attached per lake by listDataLakes, and the latter only when the
-      // caller may manage that lake. The former inline type also declared `createdAt` and
-      // `fileCount`, neither of which this projection returns.
-      const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
-      return response.data.data;
-    },
-    refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
   });
 }
 

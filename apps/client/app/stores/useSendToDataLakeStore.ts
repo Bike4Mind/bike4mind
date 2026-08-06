@@ -19,7 +19,7 @@ interface SendToDataLakeStore extends Required<SendToDataLakePayload> {
  * Drives the single, app-level SendToDataLakeModal (mounted once in ProviderBundle).
  * Call `open({...})` from any "Send to Data Lake" affordance instead of mounting a modal
  * per call site - previously the modal was rendered inside every chat message, so a long
- * session mounted N copies each subscribing to useDataLakes().
+ * session mounted N copies each subscribing to useGetDataLakes().
  */
 export const useSendToDataLakeStore = create<SendToDataLakeStore>(set => ({
   isOpen: false,

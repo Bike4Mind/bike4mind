@@ -19,7 +19,7 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload, updateFabFileOnServer } from '@client/app/utils/filesAPICalls';
-import { useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
+import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 
@@ -28,7 +28,7 @@ import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStor
  * arbitrary text into it as a tagged file. Open it from anywhere via
  * `useSendToDataLakeStore.open({ content, fileName, sourceLabel })` rather than mounting a
  * modal per call site - previously one was rendered inside every chat message, so a long
- * session mounted N copies each subscribing to useDataLakes().
+ * session mounted N copies each subscribing to useGetDataLakes().
  *
  * Composes the existing primitives: create a FabFile (which uploads to S3 and triggers the
  * standard chunk/vectorize pipeline) then tag it with the lake's datalakeTag so it shows up
@@ -42,7 +42,7 @@ export default function SendToDataLakeModal() {
   // singleton fires the admin-gated /api/data-lakes call on every page, which 403s when
   // EnableDataLakes is off. The flag defaults closed while settings load, so no fetch races in.
   const { isFeatureEnabled } = useAdminSettingsCache();
-  const { data: lakes, isLoading } = useDataLakes(isOpen && isFeatureEnabled('EnableDataLakes'));
+  const { data: lakes, isLoading } = useGetDataLakes(isOpen && isFeatureEnabled('EnableDataLakes'));
   // Sending a file tags it into the lake - a write - so only lakes the caller can manage are
   // valid targets. The list also carries other users' read-only public lakes; exclude them.
   const manageableLakes = lakes?.filter(l => l.canManage);
