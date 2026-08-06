@@ -95,6 +95,9 @@ export class AdminPage extends BasePage {
     // Dropdown options can be detached by React re-renders. Retry: re-open the dropdown.
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
+        // The floating AI chat can re-open and overlay the sort controls, intercepting pointer
+        // events (same guard as toggleSortOrder). Re-close each attempt in case it reopened.
+        await this.closeFloatingChat();
         // Bound the click so a stuck dropdown-open (unbounded stability check) fails fast into
         // the retry rather than hanging; keeping it inside the try lets a throw retry too.
         await this.page.getByTestId('admin-sort-by-select').click({ timeout: TIMEOUTS.ELEMENT_STATE });
