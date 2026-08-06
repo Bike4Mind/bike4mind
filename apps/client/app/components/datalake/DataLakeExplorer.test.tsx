@@ -23,7 +23,8 @@ vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
   setSessionLayout,
 }));
 
-vi.mock('@client/app/hooks/data/fabFiles', () => ({
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  activeOrgId: () => undefined,
   useGetDataLakeTagCounts: () => ({
     data: { tagCounts: [], uniqueArticleCounts: { total: 0 } },
     isLoading: false,
@@ -34,6 +35,8 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
     data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
     isLoading: false,
   }),
+}));
+vi.mock('@client/app/hooks/data/fabFiles', () => ({
   // Page mode renders DataLakeArticle, which reads the selected file's body.
   useGetFabFileContent: () => ({ data: undefined, isLoading: false }),
 }));

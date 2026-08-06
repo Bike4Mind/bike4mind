@@ -30,11 +30,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
-import {
-  useDataLakeFiles,
-  useReprocessFabFile,
-  useRemoveFileFromDataLake,
-} from '@client/app/hooks/data/dataLakeWizard';
+import { useDataLakeFiles, useReprocessFabFile, useRemoveFileFromDataLake } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { satisfiesTagPrefix } from '@bike4mind/common';

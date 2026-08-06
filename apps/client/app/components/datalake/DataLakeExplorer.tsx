@@ -16,8 +16,8 @@ import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsC
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
-import { useGetDataLakeArticles, useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
-import type { DataLakeBrowseSource } from '@client/app/hooks/data/fabFiles';
+import { useGetDataLakeArticles, useGetDataLakeTagCounts } from '@client/app/hooks/data/dataLakes';
+import type { DataLakeBrowseSource } from '@client/app/hooks/data/dataLakes';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
 import { readDroppedItems } from '@client/app/utils/dropReader';
