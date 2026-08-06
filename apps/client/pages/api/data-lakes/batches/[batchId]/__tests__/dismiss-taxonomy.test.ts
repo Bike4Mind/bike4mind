@@ -42,16 +42,8 @@ describe('POST /api/data-lakes/batches/[batchId]/dismiss-taxonomy', () => {
     h.dismissTaxonomySuggestion.mockResolvedValue({ success: true });
   });
 
-  it('delegates to the service with the batchId and returns its result', async () => {
+  it('delegates to the service with the caller identity and batchId, and returns its result', async () => {
     const { res, json } = makeRes();
-    await run('b1', res);
-
-    expect(h.dismissTaxonomySuggestion).toHaveBeenCalledWith({ userId: 'u1', isAdmin: false }, 'b1', expect.anything());
-    expect(json).toHaveBeenCalledWith({ success: true });
-  });
-
-  it('passes the caller identity through for the service to authorize', async () => {
-    const { res } = makeRes();
     await run('b1', res, { id: 'admin1', isAdmin: true });
 
     expect(h.dismissTaxonomySuggestion).toHaveBeenCalledWith(
@@ -59,5 +51,6 @@ describe('POST /api/data-lakes/batches/[batchId]/dismiss-taxonomy', () => {
       'b1',
       expect.anything()
     );
+    expect(json).toHaveBeenCalledWith({ success: true });
   });
 });
