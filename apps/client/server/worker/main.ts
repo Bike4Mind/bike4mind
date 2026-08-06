@@ -15,6 +15,10 @@ import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscove
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { buildFabFileChunkScanFilter, CHUNK_SCAN_BATCH, CHUNK_SCAN_MIN_AGE_MS } from './chunkScan';
+import {
+  FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
+  FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+} from '@server/queueHandlers/sqsDelivery';
 
 /**
  * Self-host background worker entrypoint.
@@ -63,9 +67,14 @@ async function main() {
   // fabFileChunk fans out to fabFileVectorizeQueue. Same dispatch handlers as hosted.
   worker.registerQueueHandler('fabFileChunkQueue', Resource.fabFileChunkQueue.url, fabFileChunkDispatch, {
     visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+    // Explicit rather than relying on registerQueueHandler's own default: this is the same
+    // number fabFileChunk.ts's isFinalDeliveryAttempt gate uses, so a future change to one
+    // can't silently drift from the other (previously synced only by a comment).
+    maxReceiveCount: FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   });
   worker.registerQueueHandler('fabFileVectorizeQueue', Resource.fabFileVectorizeQueue.url, fabFileVectorizeDispatch, {
     visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+    maxReceiveCount: FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
   });
 
   // Background AI-tag suggestion, opted into per-batch on the create wizard. Optional
