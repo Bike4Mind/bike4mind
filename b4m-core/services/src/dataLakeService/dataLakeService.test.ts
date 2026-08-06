@@ -880,6 +880,38 @@ describe('createDataLake', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it('maps a concurrent-create prefix-index collision to the same friendly error, not a raw 500', async () => {
+    // assertPrefixAvailable's read arm passed (find() sees nothing yet), but another request
+    // from the same creator won the { createdByUserId, fileTagPrefix } unique index between that
+    // read and this write - exactly the race the index exists to catch.
+    const create = vi.fn().mockRejectedValue(
+      Object.assign(new Error('E11000 duplicate key error'), {
+        code: 11000,
+        keyPattern: { createdByUserId: 1, fileTagPrefix: 1 },
+      })
+    );
+    const find = vi.fn().mockResolvedValue([]);
+    await expect(
+      createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
+    ).rejects.toThrow(/overlaps an existing data lake/i);
+  });
+
+  it('does not mislabel a duplicate-key collision on a DIFFERENT index as a prefix overlap', async () => {
+    // This collection also has unique indexes on datalakeTag and { organizationId, slug } -
+    // disambiguateSlug's 50-attempt pre-check makes hitting either here vanishingly rare, but
+    // a rare hit must still surface as itself, not get relabeled "prefix overlaps".
+    const create = vi.fn().mockRejectedValue(
+      Object.assign(new Error('E11000 duplicate key error'), {
+        code: 11000,
+        keyPattern: { organizationId: 1, slug: 1 },
+      })
+    );
+    const find = vi.fn().mockResolvedValue([]);
+    await expect(
+      createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
+    ).rejects.toThrow('E11000 duplicate key error');
+  });
+
   it('names the clashing lake only when the caller created it', async () => {
     // An org lake gated by a tag the caller lacks is invisible to them everywhere else, so echoing
     // its name here would confirm it exists.
@@ -1592,12 +1624,25 @@ describe('removeFileFromDataLake — single-file removal', () => {
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 
-  it('lets an admin remove a prefix-only file they do not own', async () => {
+  it('refuses even an admin removing a prefix-only file the lake creator does not own', async () => {
+    // The prefix arm is anchored to the LAKE'S CREATOR, matching the read path's own membership
+    // predicate - an admin bypass here would let an admin strip a tag off a file the read path
+    // never actually admitted to this lake.
     const someoneElses = { id: 'f1', userId: 'victim', tags: [{ name: 'lk:invoices', strength: 1 }] };
     const adapters = makeAdapters(someoneElses);
     await expect(
       removeFileFromDataLake({ userId: 'root', isAdmin: true }, 'lake1', 'f1', adapters as any)
+    ).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin remove a prefix-only file the lake creator DOES own', async () => {
+    const creatorsFile = { id: 'f1', userId: 'owner', tags: [{ name: 'lk:invoices', strength: 1 }] };
+    const adapters = makeAdapters(creatorsFile);
+    await expect(
+      removeFileFromDataLake({ userId: 'root', isAdmin: true }, 'lake1', 'f1', adapters as any)
     ).resolves.toMatchObject({ success: true });
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
   });
 
   it('ignores a fileTagPrefix no read arm would match, rather than clearing every tag', async () => {

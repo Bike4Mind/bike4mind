@@ -26,23 +26,25 @@ interface RemoveFileFromDataLakeAdapters {
  * the stats reported it as removed.
  *
  * Membership is TESTED against both signals too, so a file carrying only a prefixed tag can
- * be removed rather than 404ing forever. The prefix arm additionally requires the ACTOR to own
- * the file, because fileTagPrefix is user-chosen and neither unique nor reserved: without that
- * conjunct, minting a lake with someone else's prefix would be a licence to strip their tags.
+ * be removed rather than 404ing forever. The prefix arm additionally requires the file be owned
+ * by the LAKE'S CREATOR, because fileTagPrefix is user-chosen and not org-scope unique: without
+ * that conjunct, minting a lake with someone else's prefix would be a licence to strip their tags.
  *
- * The whole-lake predicate requires ownership on its prefix arm too, but anchored to the lake's
- * CREATOR rather than the actor (buildDataLakeMembershipFilter). Neither rides a read share: both
- * are destructive, and a file someone else owns is not the lake's to hide or purge. The asymmetry
- * is only in WHOSE ownership counts - this endpoint strips tags on behalf of its caller, so it asks
- * "may THIS actor edit this file", while archive and delete act on the lake and ask "is this file
- * the creator's". So an admin removing one file must own it, while the lake-wide sweep they trigger
- * takes the creator's files instead.
+ * The whole-lake predicate (buildDataLakeMembershipFilter, the single-lake browse's own
+ * membership check) requires the same ownership conjunct on its prefix arm, so both this
+ * endpoint and the lake-wide sweep now ask the identical question - "is this file the creator's".
+ * An admin may call this without owning the file themselves, but the file itself must still
+ * belong to the lake's creator; an admin cannot use this to strip a prefixed tag off a file that
+ * predicate never actually admitted to this lake. Other lake readers (the aggregate browse,
+ * semantic search, chat KB tools) still match the prefix within the VIEWER's own access - a
+ * different, ownership-of-the-file question this endpoint does not touch.
  *
- * A second lake sharing this prefix - not necessarily the caller's, since nothing makes
- * fileTagPrefix unique - loses the shared prefixed tag too. A lake holding its own meta-tag on
- * the file keeps it and only loses the folder grouping, but a lake whose membership was
- * prefix-only loses the file outright. One tag string cannot be cleared for one lake and kept
- * for another.
+ * A second lake sharing this prefix - not necessarily the caller's, since fileTagPrefix has no
+ * org-scope uniqueness (same-creator collisions are blocked by a DB index; see the comment on
+ * that index in DataLakeModel.ts for why org-scope is not) - loses the shared prefixed tag too.
+ * A lake holding its own meta-tag on the file keeps it and only loses the folder grouping, but a
+ * lake whose membership was prefix-only loses the file outright. One tag string cannot be
+ * cleared for one lake and kept for another.
  *
  * That "only loses the folder grouping" now costs more than it reads. Every lake file carries a
  * tag under its lake's prefix (see `fallbackLakeTags`), so for a co-prefixed second lake the

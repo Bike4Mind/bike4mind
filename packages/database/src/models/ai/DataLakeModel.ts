@@ -93,6 +93,18 @@ DataLakeSchema.index({ datalakeTag: 1 }, { unique: true, sparse: true });
 // Slug is unique PER SCOPE (org). Replaces the former global unique on `slug`.
 // NOTE: deploying this requires dropping the legacy `slug_1` unique index in Mongo.
 DataLakeSchema.index({ organizationId: 1, slug: 1 }, { unique: true });
+// Backstop for the create-time collision guard in createDataLake.ts (assertPrefixAvailable),
+// which is read-then-write and can race under two concurrent creates by the same user.
+// Creator-scope only: createDataLake.ts always sets createdByUserId from the authenticated
+// actor, never empty, for every document this index actually covers (the only
+// createdByUserId: '' in this codebase is a synthetic registry-lake fallback with no backing
+// document - see assertLakeAccess.ts - so it never reaches this index). There is deliberately
+// NO org-scope companion index - org-less lakes persist with organizationId as an explicit null
+// OR empty string (see the `$in: [null, '']` scope elsewhere in this file), so a partial index
+// on `{ $exists: true }` would fold every personal lake in the system into one collision group
+// and fail to build. Org-scope collisions stay app-level only: tagPrefixCollision.ts's
+// creator-OR-org scope rule is an OR, which no single Mongo unique index key can express.
+DataLakeSchema.index({ createdByUserId: 1, fileTagPrefix: 1 }, { unique: true });
 
 export const DataLakeModel =
   (mongoose.models['DataLake'] as unknown as mongoose.Model<IDataLakeDocument>) ||
