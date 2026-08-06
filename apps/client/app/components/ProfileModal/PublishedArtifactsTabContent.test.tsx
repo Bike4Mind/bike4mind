@@ -5,14 +5,17 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 
-const { mockList, mockExport, mockDownloadData, mockToastError, mockToastSuccess, mockRefresh } = vi.hoisted(() => ({
-  mockList: vi.fn(),
-  mockExport: vi.fn(),
-  mockDownloadData: vi.fn(),
-  mockToastError: vi.fn(),
-  mockToastSuccess: vi.fn(),
-  mockRefresh: vi.fn(),
-}));
+const { mockList, mockExport, mockDownloadData, mockToastError, mockToastSuccess, mockRefresh, mockPrint } = vi.hoisted(
+  () => ({
+    mockList: vi.fn(),
+    mockExport: vi.fn(),
+    mockDownloadData: vi.fn(),
+    mockToastError: vi.fn(),
+    mockToastSuccess: vi.fn(),
+    mockRefresh: vi.fn(),
+    mockPrint: vi.fn(),
+  })
+);
 
 vi.mock('sonner', () => ({ toast: { error: mockToastError, success: mockToastSuccess } }));
 
@@ -32,6 +35,10 @@ vi.mock('@client/app/utils/publishApi', () => ({
 
 vi.mock('@client/app/utils/download', () => ({
   downloadData: (...a: unknown[]) => mockDownloadData(...a),
+}));
+
+vi.mock('@client/app/utils/printToPdf', () => ({
+  printHtmlForPdf: (...a: unknown[]) => mockPrint(...a),
 }));
 
 // Stub the panel so this test targets the toggle wiring, not the panel's fetch.
@@ -75,6 +82,7 @@ beforeEach(() => {
   mockRefresh.mockReset().mockResolvedValue({ publicId: 'pub-3' });
   mockToastError.mockReset();
   mockToastSuccess.mockReset();
+  mockPrint.mockReset();
 });
 
 describe('PublishedArtifactsTabContent - manage toggle', () => {
@@ -138,6 +146,30 @@ describe('PublishedArtifactsTabContent - export actions (issue #1142)', () => {
     fireEvent.click(screen.getByTestId('published-artifact-save-html-pub-1'));
     await waitFor(() => expect(mockToastError).toHaveBeenCalled());
     expect(mockDownloadData).not.toHaveBeenCalled();
+  });
+
+  it('saves as PDF by printing the HTML export - offered for every kind', async () => {
+    mockExport.mockResolvedValue('<html><body>bundle</body></html>');
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+
+    // Present on a bundle, which has no faithful Markdown form - PDF is not gated.
+    fireEvent.click(screen.getByTestId('published-artifact-save-pdf-pub-1'));
+    // Reuses the HTML export as the source of truth, then hands it to the print frame.
+    expect(mockExport).toHaveBeenCalledWith('/p/u/erik/s', 'html');
+    await waitFor(() => expect(mockPrint).toHaveBeenCalledWith('<html><body>bundle</body></html>'));
+    // Never downloaded: PDF is the browser's dialog, not a file we emit.
+    expect(mockDownloadData).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a failure to fetch the export for printing', async () => {
+    mockExport.mockRejectedValue(new Error('boom'));
+    renderTab();
+    await screen.findByTestId('published-artifact-pub-1');
+
+    fireEvent.click(screen.getByTestId('published-artifact-save-pdf-pub-1'));
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+    expect(mockPrint).not.toHaveBeenCalled();
   });
 });
 

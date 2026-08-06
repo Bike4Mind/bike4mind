@@ -21,6 +21,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import CodeIcon from '@mui/icons-material/Code';
 import NotesIcon from '@mui/icons-material/Notes';
 import DownloadIcon from '@mui/icons-material/Download';
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import PublishedWithChangesIcon from '@mui/icons-material/PublishedWithChanges';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
@@ -39,6 +40,7 @@ import {
 } from '@client/app/utils/publishApi';
 import { EXPORT_CONTENT_TYPE, exportFilename, supportsExport } from '@client/app/utils/publishExport';
 import { downloadData } from '@client/app/utils/download';
+import { printHtmlForPdf } from '@client/app/utils/printToPdf';
 import { ManageSharingPanel } from '@client/app/components/common/ManageSharingPanel';
 
 const QUERY_KEY = ['published-artifacts', 'mine'] as const;
@@ -145,6 +147,25 @@ export default function PublishedArtifactsTabContent() {
       }
     } catch (e) {
       toast.error(apiError(e, format === 'md' ? 'Could not copy as Markdown' : 'Could not save as HTML'));
+    } finally {
+      setExporting(cur => (cur === key ? null : cur));
+    }
+  };
+
+  /**
+   * Save as PDF via the browser's print dialog (issue #1142 item 2). Reuses the HTML
+   * export as the source of truth and hands it to an isolated print frame rather than
+   * opening author HTML in the app origin - see printToPdf.ts. Owner-only (the public
+   * footers are CSP-locked); offered for every kind since the browser renders it.
+   */
+  const runPrint = async (a: ManagedArtifact) => {
+    const key = `${a.publicId}:pdf`;
+    setExporting(key);
+    try {
+      const content = await fetchPublishedExport(sharePath(a), 'html');
+      printHtmlForPdf(content);
+    } catch (e) {
+      toast.error(apiError(e, 'Could not open the print view'));
     } finally {
       setExporting(cur => (cur === key ? null : cur));
     }
@@ -320,6 +341,22 @@ export default function PublishedArtifactsTabContent() {
                       data-testid={`published-artifact-save-html-${a.publicId}`}
                     >
                       <DownloadIcon />
+                    </IconButton>
+                  </Tooltip>
+
+                  {/* PDF is produced client-side by printing the HTML export from an
+                      isolated frame (printToPdf), not a server export format. Offered
+                      for every kind - the browser renders it visually. */}
+                  <Tooltip title="Save as PDF (opens print dialog)">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      loading={exporting === `${a.publicId}:pdf`}
+                      onClick={() => void runPrint(a)}
+                      data-testid={`published-artifact-save-pdf-${a.publicId}`}
+                    >
+                      <PictureAsPdfIcon />
                     </IconButton>
                   </Tooltip>
 
