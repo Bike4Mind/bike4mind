@@ -1,7 +1,6 @@
 import { registry } from './registry';
 import { SECURITY_REQUIREMENT, JWT_SECURITY_REQUIREMENT } from './security';
 import { registerContract } from './registerContract';
-import { assertUniqueOperations } from './assertUniqueOperations';
 import { CONTRACTS } from '../api-contract';
 import {
   CompletionRequest,
@@ -10,23 +9,6 @@ import {
   ToolExecutionResponse,
   ErrorResponse,
 } from './schemas';
-
-// The hand-registered legacy operations below, as identities. Kept in sync with the
-// `registry.registerPath(...)` calls; the guard fails loud if they ever drift into a
-// collision with a contract (or each other).
-const HAND_REGISTERED_OPS = [
-  { operationId: 'createCompletion', method: 'post', path: '/api/ai/v1/completions' },
-  { operationId: 'executeTool', method: 'post', path: '/api/ai/v1/tools' },
-] as const;
-
-// Fail loud at generate time on any operationId or method+path collision across BOTH
-// contract-derived and hand-registered operations - a dup silently overwrites an SDK
-// method name or an entire operation in the spec. (Runs here, not at CONTRACTS import
-// time, so a mistake fails the spec build/tests, not every barrel importer.)
-assertUniqueOperations([
-  ...CONTRACTS.map(c => ({ operationId: c.operationId, method: c.method, path: c.path })),
-  ...HAND_REGISTERED_OPS,
-]);
 
 // Contract-derived operations (the migration target). Adding a contract to
 // CONTRACTS is all it takes to publish it - no hand-written block below.

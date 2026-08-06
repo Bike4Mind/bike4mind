@@ -45,25 +45,6 @@ export function registerContract(contract: EndpointContract): void {
     };
   }
 
-  // Same reasoning for the auth failures every authenticated route can return:
-  // apiKeyAuth 401s a missing/invalid credential and 403s an under-scoped key.
-  // Documenting them centrally keeps generated SDKs honest without every author
-  // remembering to declare them. A contract may still override either.
-  if (contract.auth !== 'public') {
-    if (!responses['401']) {
-      responses['401'] = {
-        description: 'Missing or invalid credentials.',
-        content: { 'application/json': { schema: ErrorResponse } },
-      };
-    }
-    if (contract.scopes?.length && !responses['403']) {
-      responses['403'] = {
-        description: 'The API key does not hold any of the required scopes.',
-        content: { 'application/json': { schema: ErrorResponse } },
-      };
-    }
-  }
-
   const requestSchema = contract.requestDoc ?? contract.request;
 
   registry.registerPath({

@@ -9,9 +9,3 @@ import { chatContract } from './chat.contract';
  * during migration - the two coexist.
  */
 export const CONTRACTS: readonly EndpointContract[] = [chatContract];
-
-// Duplicate-operation detection (operationId / method+path collisions, including
-// against the hand-registered ops) runs at spec-generation time via
-// assertUniqueOperations in openapi/operations.ts - NOT here at import time, so a
-// mistake fails the spec build/tests rather than crashing every module that imports
-// the @bike4mind/common barrel.

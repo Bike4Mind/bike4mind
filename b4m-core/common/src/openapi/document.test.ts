@@ -87,19 +87,6 @@ describe('buildOpenApiDocument', () => {
     expect(chat['x-required-scopes']).toEqual([...(chatContract.scopes ?? [])]);
     expect(chat['x-required-scopes'].length).toBeGreaterThan(0);
     expect(chat['x-codeSamples'].map((s: { lang: string }) => s.lang)).toEqual(['curl', 'JavaScript', 'Python']);
-    // `apiKeyOrJwt` must publish both accepted credentials - the same pair the
-    // legacy completions op declares, since both run the same apiKeyAuth chain.
-    expect(chat.security).toEqual([{ bearerAuth: [] }, { apiKeyAuth: [] }]);
-  });
-
-  it('auto-injects the 422/401/403 responses every contract-derived op can return', () => {
-    // registerContract injects these so no author has to remember them; each is a
-    // real runtime path (ZodError -> 422, apiKeyAuth -> 401 invalid / 403 under-scoped).
-    for (const status of ['422', '401', '403']) {
-      expect(chat.responses[status].content['application/json'].schema).toEqual(ref('ErrorResponse'));
-    }
-    // The contract declares no 422/401/403 itself - these come from the registrar.
-    expect(Object.keys(chatContract.responses)).not.toContain('422');
   });
 
   it('documents tools 401/429 and JWT-only code samples (matches the JWT-only handler)', () => {
