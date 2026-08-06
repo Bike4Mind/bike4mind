@@ -1483,6 +1483,14 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
     db = makeDb();
   });
 
+  it('is at least the worst-case chunk-queue SQS retry window (2 visibility waits + 3 Lambda runs), so a legitimately-retrying batch is never forced terminal mid-retry (#1412)', () => {
+    // fabFileChunkQueue: 60-minute visibility timeout, 13-minute Lambda timeout, 3 delivery
+    // attempts (infra/queues.ts). Mirrors the worst-case computation in this constant's own
+    // doc comment - if that infra config ever changes, this drifts and should be revisited.
+    const chunkQueueWorstCaseMs = (2 * 60 + 3 * 13) * 60 * 1000;
+    expect(DEFAULT_STUCK_BATCH_TIMEOUT_MS).toBeGreaterThan(chunkQueueWorstCaseMs);
+  });
+
   it('forces a stuck non-terminal batch terminal (marked reconciler) and recomputes stats', async () => {
     const now = DEFAULT_STUCK_BATCH_TIMEOUT_MS + 10_000;
     const forced = await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db }, now);

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   markTerminalIfActive: vi.fn(),
   setTaxonomyStatusIfActive: vi.fn(),
-  touchIfActive: vi.fn(),
+  touchIfActive: vi.fn(async () => undefined),
   findById: vi.fn(),
   recomputeLakeStats: vi.fn(),
   recordBatchCompletion: vi.fn(),
@@ -248,7 +248,7 @@ describe('deferFailureIfRetryable - shared non-final-attempt guard (#1412)', () 
         },
       ],
     }) as never;
-  const logger2 = { warn: vi.fn() };
+  const logger2 = { warn: vi.fn(), error: vi.fn() };
   const params = (batchId: string | undefined) => ({
     fabFileId: 'ff1',
     batchId,
@@ -269,6 +269,12 @@ describe('deferFailureIfRetryable - shared non-final-attempt guard (#1412)', () 
   it('does not heartbeat when there is no batchId', async () => {
     await deferFailureIfRetryable(makeEvent(1), 3, params(undefined));
     expect(h.touchIfActive).not.toHaveBeenCalled();
+  });
+
+  it('a heartbeat failure never replaces the deferral - still returns true, logs, does not throw', async () => {
+    h.touchIfActive.mockRejectedValueOnce(new Error('mongo blip'));
+    await expect(deferFailureIfRetryable(makeEvent(1), 3, params('batch-1'))).resolves.toBe(true);
+    expect(logger2.error).toHaveBeenCalledWith(expect.stringContaining('batch-1'));
   });
 
   it.each([3, 4, undefined])('returns false (final) on attempt %s of 3, without heartbeating', async count => {

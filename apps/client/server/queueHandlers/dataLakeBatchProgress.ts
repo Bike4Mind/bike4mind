@@ -42,7 +42,7 @@ export async function deferFailureIfRetryable(
     batchId: string | undefined;
     action: string;
     errorMessage: string;
-    logger: { warn: (msg: string) => void };
+    logger: { warn: (msg: string) => void; error: (msg: string) => void };
   }
 ): Promise<boolean> {
   if (isFinalDeliveryAttempt(event, maxReceiveCount)) return false;
@@ -51,7 +51,13 @@ export async function deferFailureIfRetryable(
   logger.warn(
     `${action} failed for ${fabFileId} on attempt ${attempt}/${maxReceiveCount} (not final - letting SQS retry): ${errorMessage}`
   );
-  if (batchId) await dataLakeBatchRepository.touchIfActive(batchId);
+  // Purely observational - must never let a heartbeat hiccup replace the real error the caller
+  // is about to rethrow.
+  if (batchId) {
+    await dataLakeBatchRepository
+      .touchIfActive(batchId)
+      .catch(err => logger.error(`Error heartbeating batch ${batchId} on a deferred failure: ${err}`));
+  }
   return true;
 }
 
