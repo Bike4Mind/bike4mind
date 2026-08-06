@@ -27,11 +27,13 @@
 # Every mode is the same code path: parse a unified diff, look only at added lines. --all gets
 # there by diffing against the empty tree, which presents every tracked file as all-added.
 #
-# MUST STAY IN SYNC with check-no-control-bytes.sh: a .ts that git classifies as BINARY (which is
-# what a NUL does) yields "Binary files ... differ" with no +++ or @@ records, so this guard skips
-# it entirely. That is safe only because the control-byte guard runs alongside it in both the hook
-# and CI, scans whole files, and rejects the NUL that caused the classification. If that guard is
-# ever removed, a binary .ts becomes an unscanned hole here.
+# Anything that makes git call the file BINARY would otherwise blind this guard completely: git
+# emits "Binary files ... differ" with no +++ or @@ records, so the scan sees nothing and exits 0
+# on a real violation. Two routes reach that state -- a NUL byte in the content, and a tracked
+# `.gitattributes` line such as `*.ts -diff`, which needs no NUL and no malice. `--text` in DIFF
+# below forces a readable body in both cases, so this guard stands on its own rather than relying
+# on check-no-control-bytes.sh to catch the cause. (The sibling guard would not have backstopped
+# the .gitattributes route anyway: it only looks for control bytes, and an em-dash is not one.)
 #
 # Fails closed: a missing or erroring perl, and a failing git diff, both exit non-zero rather
 # than reporting "clean".
@@ -58,7 +60,10 @@ GIT=(git -c core.quotePath=false -c diff.noprefix=false -c diff.mnemonicPrefix=f
 # guard, so this guard avoids needing the filter at all.
 # --no-ext-diff/--no-textconv: a configured external differ or textconv filter would rewrite the
 # diff body out from under the parser.
-DIFF=(-U0 --no-ext-diff --no-textconv)
+# --text is load-bearing, not cosmetic: without it a binary-classified file (NUL content, or a
+# `*.ts -diff` line in a tracked .gitattributes) produces no diff body at all and the guard exits 0
+# on a real violation. See the note above.
+DIFF=(-U0 --text --no-ext-diff --no-textconv)
 # .mts/.cts are included even though only one is tracked today: the cost is zero (added lines
 # only) and a new module-syntax file should not arrive unguarded.
 PATHSPEC=('*.ts' '*.tsx' '*.mts' '*.cts')
