@@ -52,12 +52,12 @@ import {
 } from '@client/app/components/datalake/treeChrome';
 import type { TreeSortMode } from '@client/app/components/datalake/treeChrome';
 import { gray } from '@client/app/utils/themes/colors';
-import { useDataLakeFiles } from '@client/app/hooks/data/dataLakeWizard';
 import { useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import {
   useActiveDataLakeBatches,
   useArchiveDataLake,
   useCleanupDataLake,
+  useDataLakeFiles,
   useGetArchivedDataLakes,
   useGetDataLakes,
   useGetDeletedDataLakes,

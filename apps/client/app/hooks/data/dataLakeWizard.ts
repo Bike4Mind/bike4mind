@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
-import type { IMessageDataToClient, IFabFileDocument } from '@bike4mind/common';
+import type { IMessageDataToClient } from '@bike4mind/common';
 import { isSupportedFabFileMimeType, folderTagForFile } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   useDataLakeWizardStore,
@@ -672,83 +672,4 @@ export function useBatchProgressListener() {
 
     return unsubscribe;
   }, [batchId, subscribeToAction, updateUploadProgress]);
-}
-
-// ── Data Lake File Viewer ───────────────────────────────────────────────────
-
-/**
- * Hook: Fetch files belonging to a specific data lake by ID.
- */
-export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: number }) {
-  return useQuery({
-    queryKey: ['dataLakeFiles', dataLakeId, params],
-    queryFn: async () => {
-      const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
-        `/api/data-lakes/${dataLakeId}/articles`,
-        { params: { limit: params?.limit ?? 100 } }
-      );
-      return response.data;
-    },
-    enabled: !!dataLakeId,
-    refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 5,
-  });
-}
-
-/**
- * Hook: Re-run chunking + vectorization for a single fabFile in a data lake.
- * Useful for files that landed with 0 chunks (failed/partial extraction).
- */
-export function useReprocessFabFile(dataLakeId: string | null) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (fabFileId: string) => {
-      const res = await api.post<{ messageId: string }>('/api/files/reprocess', { fabFileId });
-      return res.data;
-    },
-    onSuccess: () => {
-      toast.success('Re-processing started — chunking and vectorization will re-run.');
-      if (dataLakeId) queryClient.invalidateQueries({ queryKey: ['dataLakeFiles', dataLakeId] });
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || 'Failed to re-process file');
-    },
-  });
-}
-
-/**
- * Hook: Remove a single file from a data lake. Drops the lake's membership tags from the file
- * and leaves the file itself alone - no soft-delete, no chunk teardown. Owner/admin only; the
- * server verifies the file actually belongs to the lake.
- */
-export function useRemoveFileFromDataLake(dataLakeId: string | null) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (fabFileId: string) => {
-      const res = await api.delete<{ success: true; fileCount: number; totalSizeBytes: number }>(
-        `/api/data-lakes/${dataLakeId}/files/${fabFileId}`
-      );
-      return res.data;
-    },
-    onSuccess: () => {
-      toast.success('File removed from data lake.');
-      if (dataLakeId) queryClient.invalidateQueries({ queryKey: ['dataLakeFiles', dataLakeId] });
-      // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
-      // files only, so removing a file that was in the lake by prefix alone drops a row from
-      // the list without moving the count.
-      queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
-      // Removal also drops the file's tags under the lake's prefix, so every tag-derived view
-      // is stale (incl. the manager's count-chip fallback). Invalidate on the bare key
-      // prefixes: these are keyed by an opti/datalakes source discriminator, and a
-      // fully-specified key would refresh only one surface.
-      queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
-      queryClient.invalidateQueries({ queryKey: ['dataLakeArticles'] });
-      // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
-      // so dropping tags here staled the list too, not only the counts endpoint.
-      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || 'Failed to remove file from data lake');
-    },
-  });
 }

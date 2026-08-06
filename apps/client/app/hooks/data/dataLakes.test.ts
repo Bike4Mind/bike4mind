@@ -13,8 +13,9 @@ import type { BrowsePublicDataLakesResult, PublicDataLakeSummary } from '@bike4m
  */
 
 const apiGet = vi.fn();
+const apiDelete = vi.fn();
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: (...args: unknown[]) => apiGet(...args) },
+  api: { get: (...args: unknown[]) => apiGet(...args), delete: (...args: unknown[]) => apiDelete(...args) },
 }));
 // dataLakes.ts value-imports these at module load for its OTHER hooks; the browse hook touches
 // none of them, and AccountSelector alone would pull in MUI Joy plus two React contexts.
@@ -24,7 +25,7 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
 }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
-import { useBrowsePublicDataLakes } from './dataLakes';
+import { useBrowsePublicDataLakes, useRemoveFileFromDataLake } from './dataLakes';
 
 const PAGE_SIZE = 24;
 
@@ -145,5 +146,33 @@ describe('useBrowsePublicDataLakes', () => {
     // than on result.current.data.
     await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(3));
     expect(requestedUrls()[2]).toBe('/api/data-lakes/public?q=sales&limit=24&offset=0');
+  });
+});
+
+describe('useRemoveFileFromDataLake cache invalidation', () => {
+  it('invalidates every tag-derived view, not just the lake file list', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 0, totalSizeBytes: 0 } });
+
+    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('f1');
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    // Removal drops the file's tags under the lake prefix, so the tag tree and the article
+    // surfaces are stale too. Bare key prefixes: both are keyed by a source discriminator,
+    // and a fully-specified key would refresh only one of the two surfaces.
+    expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
+    expect(keys).toContain(JSON.stringify(['dataLakeArticles']));
+    // The bare file-tags prefix, not ['file-tags','counts']: the tag list itself carries a
+    // fileCount derived from the files holding each tag, and invalidating only the longer
+    // key leaves that list stale. Prefix matching covers the counts endpoint too.
+    expect(keys).toContain(JSON.stringify(['file-tags']));
   });
 });

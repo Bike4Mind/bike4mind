@@ -22,6 +22,12 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useGetDeletedDataLakes: () => ({ data: undefined }),
     useActiveDataLakeBatches: () => useActiveDataLakeBatches(),
     useGetDataLakes: () => useGetDataLakes(),
+    // Per-lake files: only the selected lake queries (id != null).
+    useDataLakeFiles: (id: string | null) => ({
+      data: id ? { data: lakeFiles } : undefined,
+      isLoading: false,
+      isError: false,
+    }),
   };
 });
 
@@ -62,14 +68,6 @@ const lakeFiles = [
 ];
 
 const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
-vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
-  // Per-lake files: only the selected lake queries (id != null).
-  useDataLakeFiles: (id: string | null) => ({
-    data: id ? { data: lakeFiles } : undefined,
-    isLoading: false,
-    isError: false,
-  }),
-}));
 
 // Per-lake counts come from lakeFileCounts (membership), NOT from the per-prefix tag counts.
 // The two disagree here on purpose: `theirs` has taxonomy tags but only 2 member files, and
