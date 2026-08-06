@@ -151,7 +151,7 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    * @param organizationId - The ID of the organization
    * @param member - The member identity to seed (id + email/name for the row's display fields)
    */
-  ensureUserDetails(organizationId: string, member: { id: string; email?: string; name: string }): Promise<void>;
+  ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void>;
 
   /**
    * Update a user's usage details within an organization.

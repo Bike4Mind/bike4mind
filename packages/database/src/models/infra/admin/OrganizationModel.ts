@@ -414,7 +414,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * must seed the row so `users[]` and `userDetails[]` stay in sync at the grant point
    * (schema comment above).
    */
-  async ensureUserDetails(organizationId: string, member: { id: string; email?: string; name: string }): Promise<void> {
+  async ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void> {
     await this.organizationModel.updateOne(
       { _id: organizationId, 'userDetails.id': { $ne: member.id } },
       {
