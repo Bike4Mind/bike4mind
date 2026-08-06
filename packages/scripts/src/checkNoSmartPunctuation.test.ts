@@ -280,18 +280,62 @@ describe('check-no-smart-punctuation.sh', () => {
     });
   });
 
-  // Documents the boundary between the two guards rather than asserting a desirable outcome: a
-  // NUL makes git classify the file as binary, which emits "Binary files ... differ" with no
-  // +++/@@ records, so this guard cannot see the em-dash next to it. Safe only because
-  // check-no-control-bytes.sh runs alongside in the hook and CI and rejects the NUL itself. This
-  // test exists so that removing that guard visibly breaks the assumption recorded here.
-  it('skips a binary-classified .ts, which the control-byte guard covers instead', () => {
+  // Anything that makes git classify a file as binary emits "Binary files ... differ" with no
+  // +++/@@ records, so the scan would see nothing and exit 0 on a real violation. `--text` forces
+  // a readable body. Both routes into that state are pinned: NUL content, and a tracked
+  // .gitattributes `-diff` entry, which needs no NUL at all.
+  describe('binary-classified files must still be scanned (--text)', () => {
+    it('catches a violation in a NUL-containing .ts', () => {
+      const { dir } = makeRepo();
+      fs.writeFileSync(path.join(dir, 'bin.ts'), Buffer.from(`// bad ${EM} dash\0 with a NUL\n`, 'utf8'));
+      git(dir, 'add', 'bin.ts');
+      // Guard against the fixture silently not being binary any more, which would void the test.
+      expect(git(dir, 'diff', '--cached')).toContain('Binary files');
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('bin.ts:1:');
+    });
+
+    // The route with no backstop: `*.ts -diff` marks every .ts non-diffable, so the file needs no
+    // NUL, and the control-byte guard sees nothing wrong with it either (an em-dash is not a
+    // control byte). One line in a normal tracked file would otherwise disable this guard
+    // entirely, in both the hook and CI.
+    it('catches a violation despite a tracked .gitattributes "-diff" entry', () => {
+      const { dir } = makeRepo();
+      write(dir, '.gitattributes', '*.ts -diff\n');
+      write(dir, 'bad.ts', `// a title ${EM} with an em-dash\n`);
+      git(dir, 'add', '-A');
+      expect(git(dir, 'diff', '--cached', '--', 'bad.ts')).toContain('Binary files');
+      const r = runGuard(dir);
+      expect(r.status).toBe(1);
+      expect(r.stdout).toContain('bad.ts:1:');
+    });
+  });
+
+  // Every other case stages a single file, so the `diff --git` state reset is never exercised
+  // against a real second file header. Without the reset, a violation in the second file is
+  // reported under the FIRST file's path: the commit still fails, but it sends the author to the
+  // wrong file.
+  it('attributes a violation to the right file in a multi-file diff', () => {
     const { dir } = makeRepo();
-    fs.writeFileSync(path.join(dir, 'bin.ts'), Buffer.from(`// bad ${EM} dash\0 with a NUL\n`, 'utf8'));
-    git(dir, 'add', 'bin.ts');
-    // Guard against the fixture silently not being binary any more.
-    expect(git(dir, 'diff', '--cached')).toContain('Binary files');
-    expect(runGuard(dir).status).toBe(0);
+    write(dir, 'a-clean.ts', '// entirely - ASCII\n');
+    write(dir, 'b-bad.ts', ['export const x = 1;', `// prose ${EM} here`].join('\n') + '\n');
+    git(dir, 'add', '-A');
+    const r = runGuard(dir);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('b-bad.ts:2:');
+    expect(r.stdout).not.toContain('a-clean.ts');
+  });
+
+  // The two guards are wired side by side in both entry points, and this guard's header comment
+  // reasons about the pair. A future PR dropping or reordering one should break a test rather than
+  // quietly reduce coverage.
+  describe('both guards stay co-wired in the hook and CI', () => {
+    it.each(['.husky/pre-commit', '.github/workflows/ci.yml'])('%s invokes both guards', relPath => {
+      const contents = fs.readFileSync(path.join(REPO_ROOT, relPath), 'utf8');
+      expect(contents).toContain('check-no-control-bytes.sh');
+      expect(contents).toContain('check-no-smart-punctuation.sh');
+    });
   });
 
   describe('--all mode', () => {
