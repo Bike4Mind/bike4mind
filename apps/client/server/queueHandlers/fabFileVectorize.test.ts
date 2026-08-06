@@ -14,7 +14,7 @@ const h = vi.hoisted(() => ({
   getVector: vi.fn(),
   getEmbedding: vi.fn(),
   updateFileStatus: vi.fn(),
-  incrementCounter: vi.fn(async () => ({ failedFiles: 1 })),
+  incrementCounter: vi.fn(async () => ({ failedFiles: 1, processingFailedFiles: 1 })),
   claimFileStatus: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdate: vi.fn(),
@@ -229,7 +229,7 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
   });
 
-  it('when not deferred (final attempt), accounts the failure exactly like today', async () => {
+  it('when not deferred (final attempt), accounts the failure into both counters', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.getVector.mockRejectedValue(new Error(RATE_LIMIT_ERR));
     h.deferFailureIfRetryable.mockResolvedValue(false);
@@ -238,6 +238,8 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', RATE_LIMIT_ERR);
     expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', RATE_LIMIT_ERR);
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'failedFiles');
+    // Separate counter so the client can tell a processing failure from an upload one (#1412).
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'processingFailedFiles');
   });
 
   it('a deferred failure followed by a successful retry never touches failedFiles', async () => {

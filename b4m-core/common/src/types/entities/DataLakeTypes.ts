@@ -252,6 +252,9 @@ export interface IDataLakeBatch {
   vectorizedFiles: number;
   failedFiles: number;
   failedFileNames?: string[];
+  /** Subset of failedFiles caused by chunk/vectorize (vs a browser upload failure) - see the
+   * schema comment on this field for why it's tracked separately. */
+  processingFailedFiles: number;
   skippedFiles: number;
 
   // Size tracking
@@ -302,7 +305,8 @@ export type IDataLakeBatchSummary = Omit<IDataLakeBatchDocument, 'files' | 'taxo
   taxonomySuggestions?: Omit<TaxonomyTagSet, 'fileAssignments'>;
 };
 
-export type BatchCounterField = 'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'skippedFiles';
+export type BatchCounterField =
+  'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'processingFailedFiles' | 'skippedFiles';
 
 export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatchDocument> {
   findActiveByUserId(userId: string): Promise<IDataLakeBatchSummary[]>;

@@ -141,6 +141,7 @@ describe('fabFileVectorize retry gating (#1412) - real repos + real Mongo transa
 
     const afterAttempt1 = await dataLakeBatchRepository.findById(batchId);
     expect(afterAttempt1?.failedFiles).toBe(0);
+    expect(afterAttempt1?.processingFailedFiles).toBe(0);
     expect(afterAttempt1?.vectorizedFiles).toBe(0);
     // Untouched: the exact manifest entry a premature write would have poisoned unrecoverably.
     expect(afterAttempt1?.files[0].status).toBe('uploaded');
@@ -169,11 +170,33 @@ describe('fabFileVectorize retry gating (#1412) - real repos + real Mongo transa
     expect(afterAttempt2?.files[0].status).toBe('complete');
     expect(afterAttempt2?.vectorizedFiles).toBe(1);
     expect(afterAttempt2?.failedFiles).toBe(0);
+    expect(afterAttempt2?.processingFailedFiles).toBe(0);
     // Not 'completed_with_errors': the earlier transient failure left no trace on the counters.
     expect(afterAttempt2?.status).toBe('completed');
 
     const fileAfterAttempt2 = await fabFileRepository.findById(fabFileId);
     expect(fileAfterAttempt2?.error).toBeFalsy();
     expect(fileAfterAttempt2?.vectorized).toBe(true);
+  });
+
+  it('a genuine final failure lands in processingFailedFiles, distinct from a browser upload failure (#1412 AC2)', async () => {
+    const { batchId, fabFileId, chunkId, userId } = await seed();
+    const payload = { userId, fabFileId, embeddingModel: 'text-embedding-3-small', chunkIds: [chunkId] };
+
+    h.getVector.mockRejectedValue(new Error('rate limit exceeded'));
+
+    // Final attempt (3 of FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT) - retries genuinely exhausted.
+    await expect(dispatch(makeEvent(payload, 3), {} as never, mockLogger)).rejects.toThrow('rate limit exceeded');
+
+    const afterFinal = await dataLakeBatchRepository.findById(batchId);
+    // The real signal the client's Upload Complete dialog now reads to say "failed to
+    // process" instead of a bare "failed" (which would misread as an upload failure).
+    expect(afterFinal?.processingFailedFiles).toBe(1);
+    expect(afterFinal?.failedFiles).toBe(1);
+    expect(afterFinal?.files[0].status).toBe('failed');
+    expect(afterFinal?.status).toBe('completed_with_errors');
+
+    const fileAfterFinal = await fabFileRepository.findById(fabFileId);
+    expect(fileAfterFinal?.error).toBeTruthy();
   });
 });

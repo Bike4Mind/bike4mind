@@ -72,7 +72,12 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
     h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
     h.markFailedIfNotAlready.mockResolvedValue(true);
-    h.incrementCounter.mockResolvedValue({ failedFiles: 1, vectorizedFiles: 0, totalFiles: 3 });
+    h.incrementCounter.mockResolvedValue({
+      failedFiles: 1,
+      processingFailedFiles: 1,
+      vectorizedFiles: 0,
+      totalFiles: 3,
+    });
     h.isBatchComplete.mockReturnValue(false);
     h.chunkFabfile.mockRejectedValue(new Error(CHUNK_ERR));
   });
@@ -82,7 +87,13 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', CHUNK_ERR);
     expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', CHUNK_ERR);
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'failedFiles');
-    expect(h.sendToClient).toHaveBeenCalledTimes(1);
+    // Separate counter so the client can tell a processing failure from an upload one (#1412).
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'processingFailedFiles');
+    expect(h.sendToClient).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ failedFiles: 1, processingFailedFiles: 1 })
+    );
     // Batch id is attached to log metadata for a data-lake file (incident triage).
     expect(mockLogger.updateMetadata).toHaveBeenCalledWith({ batchId: 'batch-1' });
   });
@@ -151,12 +162,13 @@ describe('fabFileChunk handler - retry gating (#1412)', () => {
     expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
   });
 
-  it('when not deferred (final attempt), accounts the failure exactly like today', async () => {
+  it('when not deferred (final attempt), accounts the failure into both counters', async () => {
     h.deferFailureIfRetryable.mockResolvedValue(false);
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', CHUNK_ERR);
     expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', CHUNK_ERR);
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'failedFiles');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'processingFailedFiles');
   });
 
   it('a deferred failure followed by a successful retry never touches failedFiles', async () => {

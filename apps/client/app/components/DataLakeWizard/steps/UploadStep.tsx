@@ -41,6 +41,26 @@ function TaxonomyStatusRow({ status }: { status: string | undefined }) {
   );
 }
 
+/**
+ * Splits the batch's total failedFiles into its two possible causes and phrases each in its own
+ * terms, rather than a bare "N file(s) failed" that reads as an upload failure either way
+ * (#1412) - `failedFiles` is the total the batch counters agree on; `processingFailedFiles` is
+ * server-reported and always a subset of it, so upload-only failures are the remainder.
+ */
+function describeFailures(failedFiles: number, processingFailedFiles: number): string {
+  const uploadFailed = failedFiles - processingFailedFiles;
+  const parts: string[] = [];
+  if (uploadFailed > 0) {
+    parts.push(`${uploadFailed.toLocaleString()} ${uploadFailed === 1 ? 'file' : 'files'} failed to upload`);
+  }
+  if (processingFailedFiles > 0) {
+    parts.push(
+      `${processingFailedFiles.toLocaleString()} ${processingFailedFiles === 1 ? 'file' : 'files'} failed to process`
+    );
+  }
+  return parts.join('; ');
+}
+
 function ProgressRow({ label, current, total }: { label: string; current: number; total: number }) {
   const pct = total > 0 ? Math.round((current / total) * 100) : 0;
   return (
@@ -92,8 +112,7 @@ export default function UploadStep() {
     completionSummary = `${uploadedFiles.toLocaleString()} ${fileWord} uploaded - chunking and vectorizing in progress.`;
   }
   if (progress.failedFiles > 0) {
-    const failedWord = progress.failedFiles === 1 ? 'file' : 'files';
-    completionSummary += ` ${progress.failedFiles.toLocaleString()} ${failedWord} failed.`;
+    completionSummary += ` ${describeFailures(progress.failedFiles, progress.processingFailedFiles)}.`;
   }
 
   return (
@@ -120,7 +139,9 @@ export default function UploadStep() {
 
           {progress.failedFiles > 0 && (
             <Alert color="warning" startDecorator={<ErrorOutlineIcon />}>
-              {progress.failedFiles} file{progress.failedFiles !== 1 ? 's' : ''} failed
+              {describeFailures(progress.failedFiles, progress.processingFailedFiles)}
+              {/* failedFileNames only ever names browser-upload failures - the pipeline never
+                  writes it - so it belongs under that half of the count, not the total. */}
               {progress.failedFileNames.length > 0 && (
                 <Typography level="body-xs" sx={{ mt: 0.5 }}>
                   {progress.failedFileNames.slice(0, 5).join(', ')}

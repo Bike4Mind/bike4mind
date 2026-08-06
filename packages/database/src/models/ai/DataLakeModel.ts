@@ -435,6 +435,11 @@ const DataLakeBatchSchema = new mongoose.Schema(
     vectorizedFiles: { type: Number, default: 0 },
     failedFiles: { type: Number, default: 0 },
     failedFileNames: [{ type: String }],
+    // Subset of failedFiles caused by the chunk/vectorize pipeline (as opposed to a browser
+    // upload failure) - lets the UI say WHICH stage a file failed at instead of a bare "failed"
+    // (#1412). Only ever incremented by fabFileChunk.ts/fabFileVectorize.ts's final-attempt
+    // accounting; upload-complete.ts's browser-reported failures never touch it.
+    processingFailedFiles: { type: Number, default: 0 },
     skippedFiles: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     uploadedSizeBytes: { type: Number, default: 0 },

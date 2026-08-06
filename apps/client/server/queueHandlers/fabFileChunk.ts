@@ -122,12 +122,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       if (fabFile.batchId && isFirstFailure) {
         try {
           await dataLakeBatchRepository.updateFileStatus(fabFile.batchId, fabFileId, 'failed', errorMessage);
-          const batch = await dataLakeBatchRepository.incrementCounter(fabFile.batchId, 'failedFiles');
+          await dataLakeBatchRepository.incrementCounter(fabFile.batchId, 'failedFiles');
+          // Separate counter so the client can say "failed to process" rather than a bare
+          // "failed" that reads as an upload failure (#1412) - incrementCounter returns the
+          // whole post-update doc, so this second call's result also carries the fresh
+          // failedFiles from the increment just above.
+          const batch = await dataLakeBatchRepository.incrementCounter(fabFile.batchId, 'processingFailedFiles');
           await finalizeBatchIfComplete(batch, logger);
           await sendToClient(userId, Resource.websocket.managementEndpoint, {
             action: 'data_lake_batch_progress',
             batchId: fabFile.batchId,
             failedFiles: batch?.failedFiles ?? 1,
+            processingFailedFiles: batch?.processingFailedFiles ?? 1,
             status: isBatchComplete(batch)
               ? batch!.failedFiles > 0
                 ? 'completed_with_errors'
