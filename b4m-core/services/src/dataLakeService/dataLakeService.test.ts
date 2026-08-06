@@ -867,6 +867,17 @@ describe('createDataLake', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it('maps a concurrent-create index collision to the same friendly error, not a raw 500', async () => {
+    // assertPrefixAvailable's read arm passed (find() sees nothing yet), but another request
+    // from the same creator won the { createdByUserId, fileTagPrefix } unique index between that
+    // read and this write - exactly the race the index exists to catch.
+    const create = vi.fn().mockRejectedValue(Object.assign(new Error('E11000 duplicate key error'), { code: 11000 }));
+    const find = vi.fn().mockResolvedValue([]);
+    await expect(
+      createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
+    ).rejects.toThrow(/overlaps an existing data lake/i);
+  });
+
   it('names the clashing lake only when the caller created it', async () => {
     // An org lake gated by a tag the caller lacks is invisible to them everywhere else, so echoing
     // its name here would confirm it exists.
