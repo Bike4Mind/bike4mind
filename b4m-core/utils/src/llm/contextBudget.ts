@@ -18,7 +18,12 @@
  * will fit does not have to build a completion to find out.
  */
 
-import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, type ModelInfo } from '@bike4mind/common';
+import {
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  DEFAULT_UNKNOWN_CONTEXT_WINDOW,
+  isMediaModelType,
+  type ModelInfo,
+} from '@bike4mind/common';
 
 /**
  * The context window a caller should reason against: the catalog's own figure, except for a media
@@ -34,9 +39,11 @@ import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, type ModelInfo } from '@bike4mind/
  * video's dynamic-history sizing both read the raw catalog value directly).
  */
 export function effectiveContextWindow(modelInfo: Pick<ModelInfo, 'contextWindow' | 'type'>): number {
-  const returnsMedia = modelInfo.type === 'image' || modelInfo.type === 'video';
+  const returnsMedia = isMediaModelType(modelInfo.type);
   const rawContextWindow = modelInfo.contextWindow;
-  return returnsMedia && !rawContextWindow ? 200000 : (rawContextWindow ?? 200000);
+  return returnsMedia && !rawContextWindow
+    ? DEFAULT_UNKNOWN_CONTEXT_WINDOW
+    : (rawContextWindow ?? DEFAULT_UNKNOWN_CONTEXT_WINDOW);
 }
 
 /**
@@ -62,7 +69,7 @@ export function safeInputWindow(
   requestedMaxTokens: number,
   safetyBuffer = CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS
 ): number {
-  const returnsMedia = modelInfo.type === 'image' || modelInfo.type === 'video';
+  const returnsMedia = isMediaModelType(modelInfo.type);
   const contextLimit = effectiveContextWindow(modelInfo);
   const modelMaxOutput = modelInfo.max_tokens ?? 16384;
   const reservedOutput = returnsMedia ? 0 : Math.min(requestedMaxTokens, modelMaxOutput);

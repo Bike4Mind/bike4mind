@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_UNKNOWN_CONTEXT_WINDOW } from '@bike4mind/common';
 import {
   ATTACHED_CONTENT_EXTRACTION_SHARE,
   attachedContentAssemblyFloor,
@@ -29,7 +30,7 @@ describe('effectiveContextWindow', () => {
   });
 
   it('falls back like an absent value for a media row whose window arrives as 0', () => {
-    expect(effectiveContextWindow({ contextWindow: 0, type: 'video' })).toBe(200000);
+    expect(effectiveContextWindow({ contextWindow: 0, type: 'video' })).toBe(DEFAULT_UNKNOWN_CONTEXT_WINDOW);
   });
 
   it('keeps 0 literal for a text row', () => {
@@ -55,7 +56,9 @@ describe('safeInputWindow', () => {
   // negative and the caller's empty-prompt guard threw on every image/video request once a
   // discovery run wrote that shape over an existing row.
   it('falls back like an absent value when a media row reports its window as 0', () => {
-    expect(safeInputWindow({ contextWindow: 0, max_tokens: 10_000, type: 'image' }, 10_000)).toBe(200000 - 1000);
+    expect(safeInputWindow({ contextWindow: 0, max_tokens: 10_000, type: 'image' }, 10_000)).toBe(
+      DEFAULT_UNKNOWN_CONTEXT_WINDOW - 1000
+    );
   });
 
   it('still goes negative on a TEXT row whose window arrives as 0, preserving the misconfiguration guard', () => {

@@ -25,6 +25,7 @@ import {
   isExperimentalFeatureEnabled,
   isImageAttachment,
   isImageServeable,
+  isMediaModelType,
   isUnlimitedHistory,
   normalizeRequestedHistoryCount,
   resolveHistoryFetchLimit,
@@ -1597,11 +1598,11 @@ export class ChatCompletionProcess {
       // based on model's actual context window
       const contextWindow = effectiveContextWindow(modelInfo);
 
-      // Image models generate from the current prompt alone: the image backend
+      // Image and video models generate from the current prompt alone: the media backend
       // ignores conversation history. Sending history only inflates the token count
-      // and trips a false context-overflow against the image model's small context
+      // and trips a false context-overflow against the media model's small context
       // window (e.g. FLUX Pro 1.1 at 10k).
-      if (modelInfo.type === 'image') {
+      if (isMediaModelType(modelInfo.type)) {
         historyCount = 0;
       }
 
