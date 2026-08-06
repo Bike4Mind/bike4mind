@@ -295,6 +295,7 @@ const handler = baseApi()
           dataLakeTagPrefixes,
           scopedTagPrefixes, // dynamic-lake prefixes - matched only within owner/org access
           budgets: await dataLakeService.resolveSearchBudgets({ adminSettings: adminSettingsRepository }, req.logger),
+          vectorSearchEnabled: (await adminSettingsRepository.getSettingsValue('EnableDataLakeVectorSearch')) ?? false,
           logger: req.logger,
         },
         { db: { fabfiles: fabFileRepository, fabfilechunks: fabFileChunkRepository } }
