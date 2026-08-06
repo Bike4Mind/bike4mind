@@ -3,9 +3,13 @@ import {
   dataLakeBatchRepository,
   fabFileRepository,
   fabFileChunkRepository,
+  memoryLedgerRepository,
+  memoryPrincipalKeyRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
+import { createKeyProvider } from '@server/memory/factCipher';
 import { BadRequestError } from '@bike4mind/utils';
 import { z, ZodError } from 'zod';
 
@@ -32,6 +36,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,
+      },
+      // Crypto-shred the lake's memory profile as part of the purge (#1440) - destroy the DEK and mark
+      // the ledger shredded, so a deleted lake leaves no readable belief ledger behind.
+      shredMemory: async ({ datalakeTag, ownerUserId }) => {
+        await shredPrincipalMemory(
+          memoryLedgerRepository,
+          createKeyProvider(memoryPrincipalKeyRepository),
+          { kind: 'lake', id: datalakeTag },
+          ownerUserId
+        );
       },
       logger,
     });

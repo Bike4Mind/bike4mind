@@ -33,7 +33,9 @@ const dataLakeTaxonomyQueue = new sst.aws.Queue('dataLakeTaxonomyQueue', {
 // like taxonomy (a dropped run is re-covered by the next finalize's whole-lake re-scan).
 const lakeMemoryQueueDLQ = new sst.aws.Queue('lakeMemoryQueueDLQ', {});
 const lakeMemoryQueue = new sst.aws.Queue('lakeMemoryQueue', {
-  visibilityTimeout: '6 minutes',
+  // Must exceed the handler's 10-minute timeout (below), or SQS redelivers the message while the run
+  // is still in flight and a duplicate extraction runs concurrently.
+  visibilityTimeout: '12 minutes',
   dlq: {
     queue: lakeMemoryQueueDLQ.arn,
     retry: 2,
@@ -716,13 +718,15 @@ const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
 );
 
 // Lake Memory Extraction subscription (#1440 producer). Reads a lake's chunk text and calls the LLM
-// per document, so a 5-minute timeout matches taxonomy; SINGLE_RECORD_BATCH so one lake fails in
-// isolation and DLQs on its own.
+// per document (sequential, up to MAX_DOCS_PER_RUN=100), so it gets a 10-minute timeout - longer than
+// taxonomy because it does per-document LLM work across the whole lake, not a single inference (the
+// queue's visibilityTimeout is set to 12 min above to stay ahead of it). SINGLE_RECORD_BATCH so one
+// lake fails in isolation and DLQs on its own.
 const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
   {
     handler: 'apps/client/server/queueHandlers/lakeMemoryExtraction.dispatch',
     runtime: 'nodejs24.x',
-    timeout: '5 minutes',
+    timeout: '10 minutes',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
     logging: {

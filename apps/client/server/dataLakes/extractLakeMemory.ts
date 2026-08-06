@@ -37,13 +37,15 @@ export function evidenceTierForDoc(tagNames: string[]): EvidenceTier {
 /** Cap the text sent to the extractor per document, so one huge file cannot dominate the LLM budget. */
 const MAX_DOC_CHARS = 24_000;
 /**
- * Timeout-safe bound on documents per run. Extraction is sequential and each doc costs one LLM call
- * plus embeds/appends (~5s), while the job runs in a 5-minute Lambda - so this is the most that
- * reliably completes in one pass. A lake larger than this extracts its first slice and LOGS the
- * remainder (never a silent drop); full coverage for large lakes is the bounded-continuation
- * follow-up. Small measurement lakes (the rollout target) fit entirely.
+ * Timeout-safe bound on LIVE documents per run. Extraction is sequential and each doc costs one LLM
+ * call plus embeds/appends (~2-5s), and the job's Lambda has a 10-minute timeout (infra/queues.ts), so
+ * ~100 docs is the ceiling that reliably completes in one pass. Chosen to clear the internal eval
+ * corpus (47 docs) with headroom. A lake larger than this extracts its first slice and LOGS the
+ * remainder (never a silent drop); full coverage for genuinely large lakes is the bounded-continuation
+ * follow-up (a cursor + re-enqueue). The cap applies AFTER tombstones are filtered, so it is a bound on
+ * real work, not on tombstones.
  */
-const MAX_DOCS_PER_RUN = 40;
+const MAX_DOCS_PER_RUN = 100;
 /** Chunk page size when reconstructing a document's text. */
 const CHUNK_PAGE_LIMIT = 1_000;
 
@@ -92,52 +94,62 @@ export async function extractLakeMemoryForBatch(
 
   const extractor = new LakeMemoryExtractionService(logger);
   const allDocIds = await fabFileRepository.findIdsByDataLakeTag(dataLakeService.lakeMembershipScope(lake));
-  const docIds = allDocIds.slice(0, MAX_DOCS_PER_RUN);
-  if (allDocIds.length > docIds.length) {
+  // Fetch the docs and drop tombstones BEFORE applying the cap. `findIdsByDataLakeTag` includes
+  // soft-deleted/archived ids (it must, for lifecycle), so slicing first would let tombstones consume
+  // cap slots and push live docs out - a lake of 40 tombstones + 10 live would fold nothing. Filtering
+  // first also replaces the per-doc findById with one batched read.
+  const liveDocs = (await fabFileRepository.findAllByIds(allDocIds)).filter(f => !f.deletedAt && !f.archivedAt);
+  const docs = liveDocs.slice(0, MAX_DOCS_PER_RUN);
+  if (liveDocs.length > docs.length) {
     // Never silently truncate: a large lake covers only its first slice this run. Surfacing the
     // remainder is what keeps "the card looks complete" from masking a partial extraction.
     logger.warn(
-      `[lakeMemory] lake ${datalakeTag} has ${allDocIds.length} docs; extracting ${docIds.length} this run, ` +
-        `${allDocIds.length - docIds.length} not yet covered (bounded-continuation follow-up)`
+      `[lakeMemory] lake ${datalakeTag} has ${liveDocs.length} live docs; extracting ${docs.length} this run, ` +
+        `${liveDocs.length - docs.length} not yet covered (bounded-continuation follow-up)`
     );
   }
 
   let docsProcessed = 0;
   let factsWritten = 0;
-  for (const docId of docIds) {
-    const file = await fabFileRepository.findById(docId);
-    // Only LIVE docs contribute - a deleted/archived doc is not citable, so its facts would be dropped
-    // by the consumer's reachability gate anyway (findIdsByDataLakeTag includes soft-deleted).
-    if (!file || file.deletedAt || file.archivedAt) continue;
+  for (const file of docs) {
+    try {
+      const chunks = await fabFileChunkRepository.findTextsByFabFileId(file.id, { limit: CHUNK_PAGE_LIMIT });
+      const text = chunks
+        .map(c => c.text)
+        .join('\n')
+        .slice(0, MAX_DOC_CHARS);
+      if (!text.trim()) continue;
 
-    const chunks = await fabFileChunkRepository.findTextsByFabFileId(docId, { limit: CHUNK_PAGE_LIMIT });
-    const text = chunks
-      .map(c => c.text)
-      .join('\n')
-      .slice(0, MAX_DOC_CHARS);
-    if (!text.trim()) continue;
-
-    docsProcessed++;
-    const facts = await extractor.evaluate({
-      apiKeyTable,
-      docTitle: file.fileName,
-      docText: text,
-      endUserId: ownerUserId,
-    });
-    if (!facts?.length) continue;
-
-    const tier = evidenceTierForDoc((file.tags ?? []).map(t => t.name));
-    for (const { fact } of facts) {
-      const embedding = await embed(fact).catch(() => undefined);
-      await appendFactToLedger({
-        principal: { kind: 'lake', id: datalakeTag },
-        ownerUserId,
-        summary: fact,
-        evidenceTier: tier,
-        sources: [docId],
-        embedding,
+      docsProcessed++;
+      const facts = await extractor.evaluate({
+        apiKeyTable,
+        docTitle: file.fileName,
+        docText: text,
+        endUserId: ownerUserId,
       });
-      factsWritten++;
+      if (!facts?.length) continue;
+
+      const tier = evidenceTierForDoc((file.tags ?? []).map(t => t.name));
+      for (const { fact } of facts) {
+        const embedding = await embed(fact).catch(() => undefined);
+        await appendFactToLedger({
+          principal: { kind: 'lake', id: datalakeTag },
+          ownerUserId,
+          summary: fact,
+          evidenceTier: tier,
+          sources: [file.id],
+          embedding,
+        });
+        factsWritten++;
+      }
+    } catch (err) {
+      // One bad document must not abort the whole lake. Without this, a doc that reliably throws in
+      // extractor.evaluate aborts the run, SQS redelivers, every earlier doc is re-billed (the LLM call
+      // precedes the ledger de-dup), it throws again, and the run DLQs - docs after it never fold. Skip
+      // + log so the rest of the lake still folds; the next finalize's re-scan retries the bad doc.
+      logger.warn(
+        `[lakeMemory] doc ${file.id} failed; skipping it this run: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
 

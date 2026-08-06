@@ -47,6 +47,7 @@ import {
   isSupportedEmbeddingModel,
   resolveHistoryFetchLimit,
   buildMemoryContext,
+  buildLakeMemoryContext,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
@@ -571,11 +572,18 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
   private logger: Logger;
   private user: IUserDocument;
   private retrievalFilter: RetrievalExclusionOptions;
+  /** Session's lake allowlist. When non-empty, scope the card to these tags (mirrors forced retrieval). */
+  private retrievalTags: string[];
 
-  constructor(chatCompletion: ChatCompletionContext, retrievalFilter?: RetrievalExclusionOptions) {
+  constructor(
+    chatCompletion: ChatCompletionContext,
+    retrievalTags?: string[],
+    retrievalFilter?: RetrievalExclusionOptions
+  ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
     this.user = chatCompletion.user;
+    this.retrievalTags = Array.isArray(retrievalTags) ? retrievalTags : [];
     this.retrievalFilter = retrievalFilter ?? {};
   }
 
@@ -599,11 +607,18 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       // The SAME entitlement-aware resolver forced retrieval and the knowledge tools use, so the card
       // spans exactly the lakes this user may read - the offer and the read can't disagree.
       const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
-      const { dataLakeTags } = await getDynamicDataLakeAccess({
+      const { dataLakeTags: entitledTags } = await getDynamicDataLakeAccess({
         db: this.chatCompletion.db,
         user: this.user,
         entitlementKeys,
       });
+      // SCOPE to the session's selected lakes, mirroring KnowledgeRetrievalFeature (which narrows by
+      // `retrievalTags`). Without this the card would inject EVERY entitled lake's beliefs into every
+      // turn regardless of which lake the session is about - the always-on injection #1108 removed for
+      // lake prompts. Empty `retrievalTags` means "no per-lake scoping" (the session picker sets none
+      // today), so it falls back to the full entitled set, same as forced retrieval.
+      const dataLakeTags =
+        this.retrievalTags.length > 0 ? entitledTags.filter(tag => this.retrievalTags.includes(tag)) : entitledTags;
       if (dataLakeTags.length === 0) return [];
 
       const beliefs = await this.chatCompletion.recallLakeMemory({
@@ -621,9 +636,10 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       quest.promptMeta.context.lakeMemory = { beliefCount: beliefs.length, dataLakeTags };
 
       this.logger.log(`🌊 Lake memory: injecting ${beliefs.length} belief(s) from ${dataLakeTags.length} lake(s)`);
-      // ONE framed block, the same friend-who-remembers framing V2 mementos use (buildMemoryContext) -
-      // never one note-card per fact, which is what makes the model recite its memory instead of using it.
-      const context = buildMemoryContext(beliefs.map(b => b.fact));
+      // Lake-specific framing (buildLakeMemoryContext): reference material, NOT personal memory, and it
+      // sanitizes + length-bounds each fact (uploaded-doc content is untrusted). Distinct from the
+      // memento framing used above.
+      const context = buildLakeMemoryContext(beliefs.map(b => b.fact));
       return context ? [{ role: 'system' as const, content: context }] : [];
     } catch (error) {
       this.logger.warn(

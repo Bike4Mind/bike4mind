@@ -27,8 +27,15 @@ export async function recallLakeMemoryForSession(input: {
   const lakes = (
     await Promise.all(
       input.dataLakeTags.map(async (datalakeTag): Promise<AccessibleLake | null> => {
+        // `findByDatalakeTag` is a bare tag lookup with no status/deletedAt filter, whereas the
+        // authorizing access query only admits `status: 'active'` lakes. Re-apply that gate here so a
+        // lake archived or soft-deleted MID-SESSION stops decrypting memory the moment it leaves the
+        // active set - otherwise the read would outlive the authorization that granted it.
+        // `status` is the lake's lifecycle state: only 'active' is authorized to read (draft, archived,
+        // deleting, and deleted all fall out here), matching the authorizing access query.
         const lake = await dataLakeRepository.findByDatalakeTag(datalakeTag);
-        return lake?.createdByUserId ? { datalakeTag, ownerUserId: lake.createdByUserId } : null;
+        if (!lake?.createdByUserId || lake.status !== 'active') return null;
+        return { datalakeTag, ownerUserId: lake.createdByUserId };
       })
     )
   ).filter((lake): lake is AccessibleLake => lake !== null);

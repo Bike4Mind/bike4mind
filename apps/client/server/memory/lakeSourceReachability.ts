@@ -17,9 +17,12 @@ export type CitableFileFields = Pick<
 /**
  * Is this source document still retrievable for citation by the knowledge tool RIGHT NOW?
  *
- * The SAME reachability the corpus defer gate enforces (ChatCompletionProcess.resolveCorpusInlinePlan
- * + #1464): a lake belief must only lean on a doc that `search_knowledge_base`'s semantic arm can
- * actually surface, or its citation dangles. Conditions:
+ * MUST STAY IN SYNC with the corpus defer gate in ChatCompletionProcess.resolveCorpusInlinePlan
+ * (b4m-core/services) - this is the same "can the knowledge tool actually reach this doc" predicate,
+ * duplicated across packages with no shared symbol. Change one, change the other.
+ *
+ * The SAME reachability that gate enforces (+ #1464): a lake belief must only lean on a doc that
+ * `search_knowledge_base`'s semantic arm can actually surface, or its citation dangles. Conditions:
  *  - live: not soft-deleted or archived, and not retrieval-excluded by the session filter;
  *  - fully vectorized: `vectorizedChunkCount >= chunkCount` (> 0) - a partially/never-vectorized doc
  *    is not reliably in the vector index;

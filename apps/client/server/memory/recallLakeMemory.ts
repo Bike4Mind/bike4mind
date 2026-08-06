@@ -68,8 +68,10 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
   const keys = createKeyProvider(memoryPrincipalKeyRepository);
 
   // Read each lake's profile under ITS OWN DEK owner - lakes can have different creators. Independent
-  // reads run concurrently; a lake whose ledger is empty (nothing extracted yet) folds to null.
-  const profiles = await Promise.all(
+  // reads run concurrently, and DEGRADE PER LAKE: a single lake's failure (decrypt error, missing DEK,
+  // an archived lake) must not sink the others' memory, so a rejection drops that one lake and logs,
+  // rather than rejecting the whole recall (which would lose ALL lake grounding for the turn).
+  const settled = await Promise.allSettled(
     opts.lakes.map(({ datalakeTag, ownerUserId }) =>
       createLedgerMemoryStore({ ledger: memoryLedgerRepository, keys, ownerUserId }).readProfile({
         kind: 'lake',
@@ -77,6 +79,15 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
       })
     )
   );
+  const profiles = settled.map((result, i) => {
+    if (result.status === 'fulfilled') return result.value;
+    console.warn(
+      `[lakeMemory] profile read failed for lake ${opts.lakes[i].datalakeTag}; skipping it this turn: ${
+        result.reason instanceof Error ? result.reason.message : String(result.reason)
+      }`
+    );
+    return null;
+  });
 
   // Beliefs from different lakes never collide: `belief.id` is an HMAC under each lake's own key, so a
   // cross-lake merge needs no dedup. `foldEvents` already deduped within each lake.
@@ -88,7 +99,16 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
   const allSourceIds = [...new Set(beliefs.flatMap(b => b.sources ?? []))];
   const [reachable, embedded] = await Promise.all([
     opts.resolveReachableSources(allSourceIds),
-    embedMementoQuery(opts.userId, opts.query).catch(() => ({ vector: [] as number[], model: '' })),
+    embedMementoQuery(opts.userId, opts.query).catch(err => {
+      // Degrade to the lexical scorer, but LOUDLY: a silent empty vector makes a failed embed look
+      // identical to an empty profile, which is a painful misdiagnosis during the eval.
+      console.warn(
+        `[lakeMemory] query embedding failed; recall degraded to lexical this turn: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+      return { vector: [] as number[], model: '' };
+    }),
   ]);
 
   // Keep a belief only if at least one source doc is citable. A belief carrying no sources cannot be
