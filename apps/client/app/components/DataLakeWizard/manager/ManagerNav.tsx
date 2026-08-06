@@ -233,7 +233,9 @@ export default function ManagerNav({
   const managerTreeChrome: DataLakeTreeChrome = {
     containerSx: { display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1, overflow: 'hidden' },
     // Dormant under hideToolbar (ManagerNav renders its own toolbar above) - kept accurate in
-    // case a future host drops hideToolbar.
+    // case a future host drops hideToolbar. No data-testid/data-sort here: the real toolbar
+    // above already emits datalake-manager-sort-toggle, and duplicating it on this dormant
+    // copy would be a latent duplicate-locator hazard if hideToolbar is ever dropped.
     toolbarSx: { mt: '12px', mb: '12px', px: '12px', display: 'flex', gap: '10px', alignItems: 'center' },
     searchPlaceholder: 'Search',
     searchSx: { flex: 1, '--Input-minHeight': '32px', color: 'text.primary', boxShadow: 'none' },
@@ -244,14 +246,7 @@ export default function ManagerNav({
           title={sortMode === 'count' ? 'Sort: by count (click for A-Z)' : 'Sort: A-Z (click for count)'}
           size="sm"
         >
-          <IconButton
-            variant="outlined"
-            color="neutral"
-            onClick={toggle}
-            data-testid="datalake-manager-sort-toggle"
-            data-sort={sortMode}
-            sx={{ ...ICON_BTN_SX, flexShrink: 0 }}
-          >
+          <IconButton variant="outlined" color="neutral" onClick={toggle} sx={{ ...ICON_BTN_SX, flexShrink: 0 }}>
             <SortIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Tooltip>
@@ -558,8 +553,8 @@ export default function ManagerNav({
               <ModalDialog data-testid="datalake-purge-confirm" role="alertdialog">
                 <DialogTitle>Permanently purge data lake?</DialogTitle>
                 <DialogContent>
-                  This irreversibly deletes “{purgeTarget?.name}” and all its files, chunks, and batches. This cannot be
-                  undone.
+                  This irreversibly deletes &ldquo;{purgeTarget?.name}&rdquo; and all its files, chunks, and batches.
+                  This cannot be undone.
                 </DialogContent>
                 <DialogActions>
                   <Button
@@ -599,6 +594,7 @@ export default function ManagerNav({
           onSortChange={setSortBy}
           hideToolbar
           leafMinDepth={seedDepth}
+          alwaysShowBackRow
           testIds={{ container: 'datalake-manager-tree', error: 'datalake-manager-error' }}
         />
       )}

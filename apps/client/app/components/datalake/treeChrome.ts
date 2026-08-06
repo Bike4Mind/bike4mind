@@ -13,8 +13,8 @@ import type { TreeSortMode } from './DataLakeTreeView';
  * Row/hover styling mirrors the main app sidenav (layouts/Notebook/Sidenav).
  */
 
-/** How the tree lists order their rows. Both surfaces hold this in state; declared in
- *  DataLakeTreeView (the source of truth) and re-exported here for chat-tree callers. */
+/** How the tree lists order their rows. Declared in DataLakeTreeView (which owns the sort
+ *  state); re-exported here so treeChrome's public surface stays intact for existing importers. */
 export type { TreeSortMode } from './DataLakeTreeView';
 
 /**

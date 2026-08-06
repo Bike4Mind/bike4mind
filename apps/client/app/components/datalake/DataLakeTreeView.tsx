@@ -78,11 +78,19 @@ export interface DataLakeTreeViewProps {
   footer?: ReactNode;
   /** Controlled search query; falls back to internal state when omitted. */
   search?: string;
-  /** Reports search changes when `search` is controlled; also called for uncontrolled usage. */
+  /**
+   * Called on every search change regardless of control mode. When `search` is omitted
+   * (uncontrolled), internal state still updates too, so a host that only wants to observe
+   * changes can pass this alone without breaking typing.
+   */
   onSearchChange?: (q: string) => void;
   /** Controlled sort mode; falls back to internal state when omitted. */
   sort?: TreeSortMode;
-  /** Reports sort changes when `sort` is controlled; also called for uncontrolled usage. */
+  /**
+   * Called on every sort change regardless of control mode. When `sort` is omitted
+   * (uncontrolled), internal state still updates too, so a host that only wants to observe
+   * changes can pass this alone without breaking the toggle.
+   */
   onSortChange?: (s: TreeSortMode) => void;
   /** Skips the search/sort toolbar entirely (a host that supplies its own). */
   hideToolbar?: boolean;
@@ -91,9 +99,14 @@ export interface DataLakeTreeViewProps {
    * so a host (e.g. the manager, seeded at a lake's own root) can nest TreeView below its own
    * navigation without the seeded root itself being mistaken for a leaf. The seeded root's own
    * back row is the HOST's concern (e.g. ManagerNav renders its own back row above TreeView);
-   * TreeView's back row still only requires `breadcrumb.length > 0`, same as always.
+   * TreeView's back row still only requires `breadcrumb.length > 0` (or `alwaysShowBackRow`).
    */
   leafMinDepth?: number;
+  /**
+   * Render the back row even at an empty breadcrumb - for hosts whose back affordance doubles
+   * as an exit control (the chrome's renderBackRow typically supplies its own label/handler then).
+   */
+  alwaysShowBackRow?: boolean;
   /** Renamed test ids for hosts embedding more than one TreeView instance. */
   testIds?: { container?: string; error?: string };
 }
@@ -117,14 +130,21 @@ export default function DataLakeTreeView({
   onSortChange,
   hideToolbar,
   leafMinDepth = 0,
+  alwaysShowBackRow,
   testIds,
 }: DataLakeTreeViewProps) {
   const [internalSearch, setInternalSearch] = useState('');
   const [internalSort, setInternalSort] = useState<TreeSortMode>('count');
   const searchQuery = search ?? internalSearch;
   const sortBy = sort ?? internalSort;
-  const setSearch = onSearchChange ?? setInternalSearch;
-  const setSort = onSortChange ?? setInternalSort;
+  const setSearch = (q: string) => {
+    if (search === undefined) setInternalSearch(q);
+    onSearchChange?.(q);
+  };
+  const setSort = (s: TreeSortMode) => {
+    if (sort === undefined) setInternalSort(s);
+    onSortChange?.(s);
+  };
   const containerTestId = testIds?.container ?? 'datalake-tree';
   const errorTestId = testIds?.error ?? 'datalake-error';
 
@@ -142,8 +162,12 @@ export default function DataLakeTreeView({
   }, [currentNodes, searchQuery, sortBy]);
 
   // The synthetic bucket intercepts before leaf-tag resolution: its key is not a real tag.
+  // The bucket always lands exactly one level below the seeded root, so this is an equality
+  // check, not a floor - a deeper breadcrumb can't coincidentally end in the synthetic key.
   const isUncategorized =
-    !!uncategorized && breadcrumb.length > leafMinDepth && breadcrumb[breadcrumb.length - 1] === UNCATEGORIZED_KEY;
+    !!uncategorized &&
+    breadcrumb.length === leafMinDepth + 1 &&
+    breadcrumb[breadcrumb.length - 1] === UNCATEGORIZED_KEY;
 
   // At a leaf node (no children) below the seeded root, files are filtered locally by the leaf tag.
   const leafTag =
@@ -162,12 +186,14 @@ export default function DataLakeTreeView({
   // The bucket standing in for an empty root is still content - don't show "No categories" under it.
   const showNodeEmpty = filteredNodes.length === 0 && !showBucketRow;
 
-  // The seeded-root back row (if any) is the host's concern (e.g. ManagerNav renders its own);
-  // TreeView's own back row only cares whether it has somewhere to go back to.
+  // The seeded-root back row (if any) is normally the host's concern (e.g. ManagerNav renders
+  // its own); TreeView's own back row cares whether it has somewhere to go back to, OR whether
+  // the host opted into `alwaysShowBackRow` because its back affordance doubles as an exit
+  // control (a degenerate seeded root can otherwise silently remove the only way out).
   const backRow =
-    breadcrumb.length > 0
+    breadcrumb.length > 0 || alwaysShowBackRow
       ? chrome.renderBackRow(
-          breadcrumb.length === 1
+          breadcrumb.length <= 1
             ? chrome.allCategoriesLabel
             : chrome.humanize(breadcrumb[breadcrumb.length - 2], breadcrumb.length - 2),
           () => onNavigate(breadcrumb.slice(0, -1))
