@@ -331,10 +331,12 @@ describe('check-no-smart-punctuation.sh', () => {
   // reasons about the pair. A future PR dropping or reordering one should break a test rather than
   // quietly reduce coverage.
   describe('both guards stay co-wired in the hook and CI', () => {
+    // Matches the `bash scripts/...` invocation rather than the bare filename, so a comment that
+    // merely mentions a guard cannot satisfy the assertion while the call itself is gone.
     it.each(['.husky/pre-commit', '.github/workflows/ci.yml'])('%s invokes both guards', relPath => {
       const contents = fs.readFileSync(path.join(REPO_ROOT, relPath), 'utf8');
-      expect(contents).toContain('check-no-control-bytes.sh');
-      expect(contents).toContain('check-no-smart-punctuation.sh');
+      expect(contents).toMatch(/bash\s+scripts\/check-no-control-bytes\.sh/);
+      expect(contents).toMatch(/bash\s+scripts\/check-no-smart-punctuation\.sh/);
     });
   });
 
