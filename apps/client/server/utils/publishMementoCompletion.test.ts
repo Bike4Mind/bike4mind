@@ -94,6 +94,51 @@ describe('publishMementoCompletion', () => {
     expect(logger.info).not.toHaveBeenCalled();
   });
 
+  it('OMITS enableMementosV2 when the opt-in lookup failed, so the subscriber resolves it instead', async () => {
+    // A `v2: false` from a rejected lookup is "we could not tell", not "opted out". Asserting it would
+    // cost a V2 user a turn of learning over a Mongo blip; omitting the field lets the subscriber
+    // resolve the opt-in on its own, which is what this surface did before it published explicit
+    // booleans. V1 is on here because that is the only way the event exists at all in this case.
+    const logger = makeLogger();
+    await publishMementoCompletion(makeExecution(), { v1: true, v2: false, v2OptInLookupFailed: true }, logger);
+
+    expect(publishMock).toHaveBeenCalledTimes(1);
+    const payload = publishMock.mock.calls[0][0];
+    expect(payload).toMatchObject({ enableMementos: true });
+    expect('enableMementosV2' in payload).toBe(false);
+    expect(logger.info).toHaveBeenCalledWith('[Mementos] Published completion event', {
+      executionId: 'exec-1',
+      enableMementos: true,
+      enableMementosV2: 'deferred-to-subscriber (opt-in lookup failed)',
+    });
+  });
+
+  it('publishes an explicit enableMementosV2: false when the opt-in genuinely resolved off', async () => {
+    // The contrast case for the test above - a real resolved `false` MUST still be asserted, or the
+    // subscriber would re-resolve and could write for a user who is legitimately not opted in.
+    await publishMementoCompletion(makeExecution(), { v1: true, v2: false, v2OptInLookupFailed: false }, makeLogger());
+
+    expect(publishMock).toHaveBeenCalledWith(expect.objectContaining({ enableMementosV2: false }));
+  });
+
+  it('skips publish for a BACKGROUND subagent, which sets spawnedByExecutionId and NO parentExecutionId', async () => {
+    // The leak this closes (#1337): a background child is created with `parentExecutionId` deliberately
+    // unset (it bills and counts independently) and `spawnedByExecutionId` set, and `baseFields` never
+    // copies the parent's `enableMementos` - so the child arrives `undefined` and resolves V2 back ON
+    // for any opted-in user, writing beliefs from a turn the parent opted out of. Gates are BOTH on
+    // here on purpose: the guard must refuse a background child on its lineage alone, independently of
+    // how the gates resolved, or this test would pass for the wrong reason.
+    const logger = makeLogger();
+    await publishMementoCompletion(
+      makeExecution({ spawnedByExecutionId: 'spawner-exec-42' }),
+      { v1: true, v2: true },
+      logger
+    );
+
+    expect(publishMock).not.toHaveBeenCalled();
+    expect(logger.info).not.toHaveBeenCalled();
+  });
+
   it('swallows publish errors and warn-logs without throwing', async () => {
     const logger = makeLogger();
     publishMock.mockRejectedValueOnce(new Error('SNS down'));

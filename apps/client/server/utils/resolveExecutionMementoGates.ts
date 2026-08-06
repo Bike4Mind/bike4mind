@@ -15,6 +15,7 @@
  * opt-out). Collapsing them with `=== true` is exactly the leak this file closes.
  */
 
+import type { Logger } from '@bike4mind/observability';
 import type { IAgentExecution } from '@bike4mind/database';
 import type { IAdminSettingsRepository } from '@bike4mind/common';
 import { resolveMementoGates, type MementoGates } from '@bike4mind/services';
@@ -26,22 +27,56 @@ export interface MementoGateAdapters {
   db: { adminSettings: Pick<IAdminSettingsRepository, 'getSettingsValue'> };
 }
 
+export interface ResolvedMementoGates extends MementoGates {
+  /**
+   * True when the V2 opt-in lookup REJECTED, as opposed to returning a legitimate `false`. `v2` is
+   * fail-closed to `false` either way, but the write side has to tell them apart: publishing an
+   * explicit `enableMementosV2: false` that actually came from a Mongo blip asserts a permanent opt-out
+   * to the subscriber, whereas OMITTING the field lets the subscriber resolve the opt-in itself. Before
+   * this surface published explicit booleans it always omitted the field when V1 was on, so the
+   * subscriber's independent retry was the fallback; keeping that fallback for the failure case is what
+   * stops a transient error from silently costing a V2 user a turn of learning.
+   */
+  v2OptInLookupFailed: boolean;
+}
+
 export async function resolveExecutionMementoGates(
   execution: MementoGateExecution,
-  adapters: MementoGateAdapters
-): Promise<MementoGates> {
+  adapters: MementoGateAdapters,
+  logger: Logger
+): Promise<ResolvedMementoGates> {
   // An explicit per-request opt-out disables both pipelines regardless of the admin setting or the V2
   // opt-in (resolveMementoGates(false, ...) is always { v1: false, v2: false }). It is also the
   // highest-volume input this resolver sees - the Slack senders and the voice proxy all hard-code
   // false - so short-circuiting skips both round trips and keeps the dominant flow off the reads below.
-  if (execution.enableMementos === false) return { v1: false, v2: false };
+  if (execution.enableMementos === false) return { v1: false, v2: false, v2OptInLookupFailed: false };
 
   // Both lookups fail closed to "not enabled" (memory degrades, it never fails the turn - the same
   // convention the chat and read paths use) and are independent - one AdminSettings read, one user
   // read - so run them concurrently rather than paying their sum on this critical path.
+  // Each catch WARNS rather than swallowing: a resolved-off gate and a failed lookup produce the same
+  // silent "memory just didn't happen" from the outside, and an operator needs to tell a Mongo blip
+  // from a legitimate opt-out.
+  let v2OptInLookupFailed = false;
   const [adminEnabled, v2OptIn] = await Promise.all([
-    adapters.db.adminSettings.getSettingsValue('EnableMementos').catch(() => false),
-    isMementosV2Enabled(execution.userId).catch(() => false),
+    adapters.db.adminSettings.getSettingsValue('EnableMementos').catch(err => {
+      logger.warn('[Mementos] EnableMementos admin-setting lookup failed; failing closed to V1 off', {
+        userId: execution.userId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }),
+    isMementosV2Enabled(execution.userId).catch(err => {
+      v2OptInLookupFailed = true;
+      logger.warn('[Mementos] V2 opt-in lookup failed; failing closed to V2 off for this turn', {
+        userId: execution.userId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }),
   ]);
-  return resolveMementoGates(execution.enableMementos, Boolean(adminEnabled), v2OptIn);
+  return {
+    ...resolveMementoGates(execution.enableMementos, Boolean(adminEnabled), v2OptIn),
+    v2OptInLookupFailed,
+  };
 }

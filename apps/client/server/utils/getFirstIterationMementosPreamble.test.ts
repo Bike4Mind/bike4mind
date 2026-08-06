@@ -133,6 +133,23 @@ describe('getFirstIterationMementosPreamble', () => {
     expect(getRelevantMementosMock).not.toHaveBeenCalled();
   });
 
+  it('returns empty preamble for a BACKGROUND subagent, which sets spawnedByExecutionId and NO parentExecutionId', async () => {
+    // Read-side half of the #1337 background-child leak. `V2_ONLY` on purpose: a background child of an
+    // opted-out parent resolves V2 back on (its own `enableMementos` is undefined), so the gates cannot
+    // be what stops it - only the lineage check can.
+    const { preamble, mementoIds } = await getFirstIterationMementosPreamble(
+      makeExecution({ spawnedByExecutionId: 'spawner-exec-42' }),
+      V2_ONLY,
+      makeAdapters(),
+      makeLogger()
+    );
+
+    expect(preamble).toBe('');
+    expect(mementoIds).toEqual([]);
+    expect(recallMementosV2Mock).not.toHaveBeenCalled();
+    expect(getRelevantMementosMock).not.toHaveBeenCalled();
+  });
+
   it('returns empty preamble and empty mementoIds when no V1 mementos clear the similarity threshold', async () => {
     getRelevantMementosMock.mockResolvedValueOnce([]);
     const logger = makeLogger();
