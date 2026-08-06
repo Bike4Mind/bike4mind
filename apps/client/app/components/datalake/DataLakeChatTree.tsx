@@ -140,6 +140,8 @@ export default function DataLakeChatTree({
   );
 
   const footer = (onManage || onCreateLake) && (
+    // Sticky bottom bar: manage / create lakes. Pinned below the scrollable list by being
+    // TreeView's footer slot, outside the scroll pane.
     <Box
       className="datalake-tree-footer"
       sx={{

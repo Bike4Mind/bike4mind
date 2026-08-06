@@ -108,13 +108,14 @@ export default function DataLakeTreeView({
   // At a leaf node (no children), files are filtered locally by the leaf tag.
   const leafTag = !isUncategorized && breadcrumb.length > 0 && currentNodes.length === 0 ? breadcrumb.join(':') : null;
   const showFiles = isUncategorized || !!leafTag;
+  const bucketFiles = uncategorized?.files;
   const files = useMemo(() => {
-    if (isUncategorized) return uncategorized!.files;
+    if (isUncategorized) return bucketFiles!;
     if (!leafTag) return [];
     return [...articles]
       .filter(f => (f.tags ?? []).some(t => t.name === leafTag))
       .sort((a, b) => a.fileName.localeCompare(b.fileName));
-  }, [isUncategorized, uncategorized, leafTag, articles]);
+  }, [isUncategorized, bucketFiles, leafTag, articles]);
 
   const showBucketRow = !!uncategorized && breadcrumb.length === 0 && !searchQuery && uncategorized.files.length > 0;
   // The bucket standing in for an empty root is still content - don't show "No categories" under it.
