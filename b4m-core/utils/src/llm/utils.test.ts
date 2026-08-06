@@ -2710,10 +2710,11 @@ describe('allocation under a production-shaped system-prompt load', () => {
     );
   });
 
-  it('truncates a 4k file on an 8k model and says so, rather than faking the tail', async () => {
-    // QA attached exactly this and expected the trailing marker. It cannot arrive: after 1.5k of system
-    // instructions the content share is around 900 tokens, so roughly 2.9k of 4k characters is the
-    // ceiling. What matters is that the cut is declared.
+  it('delivers a 4k file whole on an 8k model under a full system load', async () => {
+    // QA attached exactly this and expected the trailing marker. It used to be unreachable: the content
+    // floor was a share of what survived the system stack, about 900 tokens, so ~2.9k of 4k characters
+    // was the ceiling. The floor is now a share of the pre-system budget - ~1,445 tokens against the
+    // file's ~1,143 - so the whole file fits and the marker arrives.
     const tokenizer = createMockTokenizer();
 
     const result = await buildAndSortMessages(
@@ -2732,17 +2733,22 @@ describe('allocation under a production-shaped system-prompt load', () => {
     );
     expect(delivered).toBeDefined();
     const text = delivered!.content as string;
-    expect(text).toContain(NOTICE);
-    expect(text).not.toContain('FINAL_ROW_MARKER');
+    expect(text).toContain('FINAL_ROW_MARKER: apricot');
+    expect(text).not.toContain(NOTICE);
+    // The system load fits alongside it rather than being traded away for the file.
+    expect(result.some(m => m.role === 'system')).toBe(true);
+    // Nothing was lost, so nothing should be reported as lost.
+    expect(mockLogger.warn).not.toHaveBeenCalled();
     expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
       LLAMA_8K_INPUT_BUDGET
     );
   });
 
-  it('states the file could not be included rather than sending an unusable sliver', async () => {
-    // GPT-4's 4k output reserve leaves so little that the file's share collapses to a few dozen tokens.
-    // A fragment that small does not read as a truncated file - it reads as no file, and the model then
-    // tells the user it cannot see attachments at all. That is the failure this replaces.
+  it('sheds system instructions rather than the file when both cannot fit', async () => {
+    // GPT-4's 4k output reserve leaves ~2,081 tokens to divide. The file's floor is 35% of that, and
+    // system instructions are capped at the remaining 65% (~1,353), which this 1,500-token load exceeds
+    // - so it is dropped deliberately and the file still arrives usefully cut rather than being
+    // declared undeliverable. The trade is the point: the user attached the file.
     const tokenizer = createMockTokenizer();
 
     const result = await buildAndSortMessages(
@@ -2756,17 +2762,196 @@ describe('allocation under a production-shaped system-prompt load', () => {
       tokenizer
     );
 
-    const note = result.find(
-      m => typeof m.content === 'string' && (m.content as string).includes('could not be included')
+    const delivered = result.find(
+      m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color')
     );
-    expect(note).toBeDefined();
-    // The model must not be left free to report the file as absent.
-    expect(note!.content as string).toContain('do not tell the user that no file was provided');
-    // And no unusable fragment of the CSV is sent alongside it.
-    expect(result.some(m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color'))).toBe(
-      false
+    expect(delivered).toBeDefined();
+    // Cut, and said so - a silent cut is the failure this area exists to prevent.
+    expect(delivered!.content as string).toContain(NOTICE);
+    // Not the pre-fix outcome, where the file's share collapsed and it was declared undeliverable.
+    expect(
+      result.some(m => typeof m.content === 'string' && (m.content as string).includes('could not be included'))
+    ).toBe(false);
+    expect(result.some(m => m.role === 'system')).toBe(false);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('No system instructions fit the budget'));
+    expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+      GPT4_8K_INPUT_BUDGET
     );
-    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('could not be delivered usefully'));
+  });
+});
+
+// Which system messages survive a squeeze, and in what order they are sent. Before this the answer to
+// both was "assembly position", so a caller's org prompt lost to whatever happened to precede it.
+describe('system-message retention under a capped budget', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const sysOf = (tokens: number, tag: string): IMessage => ({
+    role: 'system',
+    content: `${tag}:` + 'S'.repeat(Math.max(0, tokens * 3.5 - tag.length - 1)),
+  });
+  const ask: IMessage[] = [{ role: 'user', content: 'hello' }];
+  const tagsIn = (result: IMessage[]) =>
+    result.filter(m => m.role === 'system').map(m => (m.content as string).split(':')[0]);
+
+  it('sends survivors in assembly order, not in priority order', async () => {
+    const first = sysOf(100, 'first');
+    const second = sysOf(100, 'second');
+    const third = sysOf(100, 'third');
+    // Priorities deliberately disagree with assembly order; all three fit, so nothing is dropped and
+    // only the ordering is under test. Reordering the payload would cost the Anthropic cached prefix.
+    const priority = new Map<IMessage, number>([
+      [first, 2],
+      [second, 0],
+      [third, 1],
+    ]);
+
+    const result = await buildAndSortMessages(
+      [],
+      [first, second, third],
+      ask,
+      20_000,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, systemMessagePriority: m => priority.get(m) }
+    );
+
+    expect(tagsIn(result)).toEqual(['first', 'second', 'third']);
+  });
+
+  it('skips an oversized prompt and still admits a smaller one behind it', async () => {
+    const oversized = sysOf(6000, 'oversized');
+    const small = sysOf(50, 'small');
+    // Priority puts the oversized one first, which is exactly the case the old `break` mishandled: it
+    // stopped at the first message over budget and discarded everything after it.
+    const priority = new Map<IMessage, number>([
+      [oversized, 0],
+      [small, 1],
+    ]);
+
+    const result = await buildAndSortMessages(
+      [],
+      [oversized, small],
+      ask,
+      6000,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, systemMessagePriority: m => priority.get(m) }
+    );
+
+    expect(tagsIn(result)).toEqual(['small']);
+  });
+
+  it('drops the lowest-priority prompt first when they cannot all fit', async () => {
+    const keep = sysOf(2000, 'keep');
+    const shed = sysOf(2000, 'shed');
+    const priority = new Map<IMessage, number>([
+      [keep, 10],
+      [shed, 30],
+    ]);
+
+    // Room for one of the two, so the choice between them is the whole assertion.
+    const result = await buildAndSortMessages(
+      [],
+      [shed, keep],
+      ask,
+      3600,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, systemMessagePriority: m => priority.get(m) }
+    );
+
+    expect(tagsIn(result)).toEqual(['keep']);
+  });
+
+  // Array content is legal on a system message and arrives that way from extraContextMessages, a public
+  // request field. Sized by a bare `content as string` cast, an array's ELEMENT COUNT was divided by
+  // CHARS_PER_TOKEN, so one huge block measured ~1 token: it cleared the cap for free and the file paid
+  // for it at the safety pass, which shrinks content but never system messages.
+  it('measures a system message with array content by its text, not its block count', async () => {
+    const huge: IMessage = { role: 'system', content: [{ type: 'text', text: 'S'.repeat(25_000) }] as any };
+    const marker = 'FINAL_ROW_MARKER: apricot';
+    const csv = 'id,fruit,color\n' + 'r,apple,red\n'.repeat(100) + marker;
+
+    const result = await buildAndSortMessages(
+      [],
+      [huge, { role: 'user', content: csv }],
+      ask,
+      6000,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    // ~7,150 real tokens against a cap near 3,250: too big to admit, so it is dropped deliberately.
+    expect(result.some(m => m.role === 'system')).toBe(false);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('No system instructions fit the budget'));
+    // And the attachment keeps its budget rather than paying for an unmeasured block.
+    const delivered = result.find(m => typeof m.content === 'string' && m.content.startsWith('id,fruit,color'));
+    expect(delivered?.content as string).toContain(marker);
+  });
+
+  it('still admits a small array-content system message', async () => {
+    const small: IMessage = { role: 'system', content: [{ type: 'text', text: 'be brief' }] as any };
+
+    const result = await buildAndSortMessages([], [small], ask, 6000, {}, 20, mockLogger as any, createMockTokenizer());
+
+    expect(result.some(m => m.role === 'system')).toBe(true);
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+  });
+
+  // The unlimited-history path splits the budget 70/30 instead of using the floor, and 70% of what
+  // survived a heavy system stack is LESS than 35% of the budget before it. Without the floor on this
+  // branch too, the same file that arrives whole on a windowed turn was cut on an unwindowed one.
+  it('honours the content floor on an unwindowed request as well', async () => {
+    const heavy = sysOf(2600, 'heavy');
+    const csv = 'id,fruit,color\n' + 'r,apple,red\n'.repeat(330) + 'FINAL_ROW_MARKER: apricot';
+
+    const result = await buildAndSortMessages(
+      Array.from({ length: 40 }, (_, i) => ({
+        role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+        content: `history-${i}-` + 'h'.repeat(240),
+      })),
+      [heavy, { role: 'user', content: csv }],
+      ask,
+      5144,
+      {},
+      // UNLIMITED_HISTORY_COUNT, so allocation takes the 70/30 branch rather than the windowed floor.
+      // It is -1, not a large count: the in-range sentinel it replaced could collide with a real one.
+      -1,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const delivered = result.find(
+      m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color')
+    );
+    expect(delivered).toBeDefined();
+    expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
+  });
+
+  // The reserve only exists to protect an attachment, so a turn without one must not pay for it. This
+  // is the pair of assertions that pins the condition in both directions.
+  it('caps system instructions only when the turn carries an attachment', async () => {
+    const heavy = () => sysOf(4000, 'heavy');
+    const run = (fabMessages: IMessage[]) =>
+      buildAndSortMessages([], fabMessages, ask, 6000, {}, 20, mockLogger as any, createMockTokenizer());
+
+    const withoutAttachment = await run([heavy()]);
+    const withAttachment = await run([heavy(), { role: 'user', content: 'id,fruit\n' + 'r,apple\n'.repeat(50) }]);
+
+    // ~4,990 of pre-system budget, so 4,000 tokens of instructions fit when nothing is reserved.
+    expect(tagsIn(withoutAttachment)).toEqual(['heavy']);
+    // With a file present the cap falls to ~3,244 and the same stack no longer fits.
+    expect(tagsIn(withAttachment)).toEqual([]);
   });
 });
 
@@ -2793,11 +2978,14 @@ describe('unusable attachments are judged one at a time', () => {
     }));
     const bigCsv = (tag: string) => ({ role: 'user' as const, content: `${tag},col\n` + 'r,1\n'.repeat(3000) });
 
+    // 2200 rather than the 3096 this used at first: raising the content floor to a share of the
+    // pre-system budget lifted both files clear of the usability threshold, so the sliver case this
+    // test exists for now needs a genuinely smaller window to reach.
     const result = await buildAndSortMessages(
       history,
       [{ role: 'system', content: 'S'.repeat(1500 * 3.5) }, bigCsv('alpha'), bigCsv('bravo')],
       [{ role: 'user', content: 'What do the attached files contain?' }],
-      3096,
+      2200,
       {},
       20,
       mockLogger as any,

@@ -70,6 +70,12 @@ const DataLakeSchema = new mongoose.Schema(
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     lastSyncAt: { type: Date },
+    // Teardown batch key (see IDataLake.filesDeletedAt): the exact stamp phase-1 delete wrote on
+    // the lake's member files, matched by equality on restore. Set only through
+    // claimFilesDeletedAt, never a plain update - a stamp written past the claim can name a batch
+    // no sweep ever wrote, and the restore keyed to it reverses nothing. Restore clears it to null.
+    // No index - the lakes collection is tiny, and it is only ever read from a lake already in hand.
+    filesDeletedAt: { type: Date },
   },
   {
     timestamps: true,
@@ -87,6 +93,18 @@ DataLakeSchema.index({ datalakeTag: 1 }, { unique: true, sparse: true });
 // Slug is unique PER SCOPE (org). Replaces the former global unique on `slug`.
 // NOTE: deploying this requires dropping the legacy `slug_1` unique index in Mongo.
 DataLakeSchema.index({ organizationId: 1, slug: 1 }, { unique: true });
+// Backstop for the create-time collision guard in createDataLake.ts (assertPrefixAvailable),
+// which is read-then-write and can race under two concurrent creates by the same user.
+// Creator-scope only: createDataLake.ts always sets createdByUserId from the authenticated
+// actor, never empty, for every document this index actually covers (the only
+// createdByUserId: '' in this codebase is a synthetic registry-lake fallback with no backing
+// document - see assertLakeAccess.ts - so it never reaches this index). There is deliberately
+// NO org-scope companion index - org-less lakes persist with organizationId as an explicit null
+// OR empty string (see the `$in: [null, '']` scope elsewhere in this file), so a partial index
+// on `{ $exists: true }` would fold every personal lake in the system into one collision group
+// and fail to build. Org-scope collisions stay app-level only: tagPrefixCollision.ts's
+// creator-OR-org scope rule is an OR, which no single Mongo unique index key can express.
+DataLakeSchema.index({ createdByUserId: 1, fileTagPrefix: 1 }, { unique: true });
 
 export const DataLakeModel =
   (mongoose.models['DataLake'] as unknown as mongoose.Model<IDataLakeDocument>) ||
@@ -343,6 +361,21 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return { lakes: results.map(r => r.toJSON() as IDataLakeDocument), total };
   }
 
+  async claimFilesDeletedAt(id: string, at: Date): Promise<Date | null> {
+    // Conditional on the field being unset, so two teardowns racing on the same lake cannot both
+    // win: the loser's findOneAndUpdate matches nothing and it reads back the winner's stamp. A
+    // plain $set would let the loser record a stamp its sweep never wrote on any row, and the
+    // restore keyed to it would then reverse nothing.
+    const claimed = await this.dataLakeModel.findOneAndUpdate(
+      { _id: id, $or: [{ filesDeletedAt: null }, { filesDeletedAt: { $exists: false } }] },
+      { $set: { filesDeletedAt: at } },
+      { new: true }
+    );
+    if (claimed) return claimed.filesDeletedAt ?? null;
+    const holder = await this.dataLakeModel.findById(id);
+    return holder?.filesDeletedAt ?? null;
+  }
+
   async setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null> {
     const doc = await this.dataLakeModel.findByIdAndUpdate(
       id,
@@ -350,6 +383,19 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       { new: true }
     );
     return (doc?.toJSON() as IDataLakeDocument) ?? null;
+  }
+
+  async activateIfDraft(id: string): Promise<boolean> {
+    // The status guard lives in the FILTER, not in a prior read: the membership doors that call
+    // this hand over a lake document they fetched before their own status writes, so testing the
+    // caller's copy could flip a lake that is already archiving. `null` also matches a missing
+    // field - lakes written before `status` existed have none, and they are just as invisible to
+    // the catalog as a draft.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: { $in: ['draft', null] } },
+      { $set: { status: 'active' } }
+    );
+    return res.modifiedCount === 1;
   }
 }
 

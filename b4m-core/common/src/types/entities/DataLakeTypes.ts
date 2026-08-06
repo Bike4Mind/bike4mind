@@ -5,8 +5,9 @@ import { IBaseRepository, type IMongoDocument } from '.';
 /**
  * Lake lifecycle. Stable states (draft/active/archived/deleted) plus transitional
  * states (archiving/restoring/deleting) that exist to drive UI and make a crashed
- * mid-operation observable. draft -> active is one-way and happens implicitly on
- * first batch creation.
+ * mid-operation observable. draft -> active is one-way. It happens implicitly once the lake
+ * holds its first member file (see `activateIfDraft` below), and unconditionally when an
+ * archived or deleted lake is restored, which is how an empty lake can end up active.
  */
 export type DataLakeStatus = 'draft' | 'active' | 'archiving' | 'archived' | 'restoring' | 'deleting' | 'deleted';
 
@@ -96,6 +97,17 @@ export interface IDataLake {
   totalSizeBytes?: number;
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
+  /**
+   * The exact `deletedAt` stamp phase-1 delete wrote on this lake's members, so restore can
+   * un-delete that batch and nothing else. Not a time window: it is matched by EQUALITY, which is
+   * what keeps a file the creator deleted independently - before OR during the deleted window -
+   * from riding back in. Claimed set-if-unset, so two overlapping teardowns agree on one stamp
+   * instead of the loser recording a mark no row carries; restore clears it.
+   *
+   * Absent on a lake torn down before this field existed, which restores unbounded (the old
+   * behavior) rather than restoring nothing.
+   */
+  filesDeletedAt?: Date | null;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
@@ -155,6 +167,22 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
   setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null>;
+  /**
+   * One-way draft -> active, the transition that makes a lake reachable from `findPublicLakes`
+   * and the `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale
+   * copy of the document cannot resurrect an archived or deleted lake. Returns whether this call
+   * was the one that flipped it.
+   */
+  activateIfDraft(id: string): Promise<boolean>;
+  /**
+   * Claim `filesDeletedAt` for a phase-1 teardown: writes `at` only if the lake carries no stamp,
+   * and returns the stamp now in force - the existing one when a concurrent teardown or a crashed
+   * prior attempt already claimed it. Callers must sweep with the RETURNED value, not their own,
+   * or they stamp rows under a mark the lake does not name. Null means no stamp is in force: the
+   * lake vanished, or a restore cleared it between the claim and the fallback read - so a null
+   * caller sweeps unmarked and must say so, since that lake then restores unbounded.
+   */
+  claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────

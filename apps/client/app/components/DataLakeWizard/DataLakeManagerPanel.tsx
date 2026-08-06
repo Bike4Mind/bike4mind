@@ -52,13 +52,14 @@ import {
 } from '@client/app/components/datalake/treeChrome';
 import type { TreeSortMode } from '@client/app/components/datalake/treeChrome';
 import { gray } from '@client/app/utils/themes/colors';
-import { useDataLakeFiles, useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
-import { useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import {
   useActiveDataLakeBatches,
   useArchiveDataLake,
   useCleanupDataLake,
+  useDataLakeFiles,
   useGetArchivedDataLakes,
+  useGetDataLakes,
+  useGetDataLakeTagCounts,
   useGetDeletedDataLakes,
   usePermanentDeleteDataLake,
   useRestoreDeletedDataLake,
@@ -77,7 +78,7 @@ import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
 import { satisfiesTagPrefix } from '@bike4mind/common';
 
-type ManagerLake = NonNullable<ReturnType<typeof useDataLakes>['data']>[number];
+type ManagerLake = NonNullable<ReturnType<typeof useGetDataLakes>['data']>[number];
 
 /** Synthetic category for lake files that carry no prefix-matching tag (e.g. appended or
  *  meta-tag-only files), so every file is always reachable in the manager. */
@@ -96,7 +97,7 @@ const prefixSegments = (fileTagPrefix: string) => fileTagPrefix.replace(/:+$/, '
  * the archived/deleted lifecycle sections. Replaces the old stacked list + viewer modals.
  */
 export default function DataLakeManagerPanel() {
-  const { data: dataLakes, isLoading } = useDataLakes();
+  const { data: dataLakes, isLoading } = useGetDataLakes();
   const { data: activeBatches } = useActiveDataLakeBatches();
   // Id only, not the batch object - `reviewingBatch` below is derived from the live, polled
   // `activeBatches` list so a re-analyze's cache refresh flows into the open review panel

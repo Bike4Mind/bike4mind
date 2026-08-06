@@ -12,7 +12,7 @@ export const DEFAULT_STUCK_BATCH_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 interface ReconcileStuckBatchesAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
     batches: Pick<IDataLakeBatchRepository, 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'computeDataLakeStats'>;
   };

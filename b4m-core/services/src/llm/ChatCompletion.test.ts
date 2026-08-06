@@ -35,6 +35,7 @@ import {
   type IMessage,
 } from '@bike4mind/common';
 import { ToolBuilder } from './tools/ToolBuilder';
+import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import type { ISkill } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
@@ -57,7 +58,11 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
     }),
   };
 });
-vi.mock('@bike4mind/utils', () => ({
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  // The context-budget helpers are pure arithmetic the assembly path reads directly, so they keep
+  // their real implementations - stubbing them would make every budget figure below undefined and
+  // silently disable the guards that depend on a real window.
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   calculateTotalTokenLength: vi.fn(),
   buildAndSortMessages: vi.fn(),
   fetchAndProcessPreviousMessages: vi.fn(),
@@ -2041,6 +2046,41 @@ describe('ChatCompletionProcess', () => {
 
       expect(systemText).not.toContain('Available Skills');
       expect(systemText).not.toContain('Skill Invoked');
+    });
+
+    // The priority table decides nothing unless the builder is handed the resolver. Dropping
+    // systemMessagePriority from buildOptions leaves every table-level unit test passing and quietly
+    // restores retention-by-array-position, so the wiring is asserted here rather than assumed.
+    describe('retention priority reaches the builder', () => {
+      const captureBuildOptions = async () => {
+        await runAndCaptureSystemText({ message: 'just chatting' });
+        const calls = mockedBuildAndSortMessages.mock.calls;
+        expect(calls.length).toBeGreaterThan(0);
+        return {
+          options: calls[0]?.[8] as { systemMessagePriority?: (m: IMessage) => number | undefined },
+          contextMessages: (calls[0]?.[1] ?? []) as IMessage[],
+        };
+      };
+
+      it('resolves the date-context block to its table priority', async () => {
+        const { options, contextMessages } = await captureBuildOptions();
+
+        const dateContext = contextMessages.find(
+          m => typeof m.content === 'string' && m.content.includes('Current date')
+        );
+        // Guards against a vacuous pass: with no date-context message there is nothing to resolve.
+        expect(dateContext).toBeDefined();
+        expect(options.systemMessagePriority?.(dateContext!)).toBe(SYSTEM_PROMPT_PRIORITY.dateContext);
+      });
+
+      it('resolves a block the assembly never produced to undefined, so the builder defaults it last', async () => {
+        const { options } = await captureBuildOptions();
+
+        // Asserted before the call, since an absent resolver would also yield undefined and make the
+        // expectation below pass on exactly the wiring regression this describe exists to catch.
+        expect(typeof options.systemMessagePriority).toBe('function');
+        expect(options.systemMessagePriority!({ role: 'system', content: 'not from this assembly' })).toBeUndefined();
+      });
     });
   });
 

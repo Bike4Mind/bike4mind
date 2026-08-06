@@ -15,7 +15,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import EditIcon from '@mui/icons-material/Edit';
 import CheckIcon from '@mui/icons-material/Check';
 import GroupWorkOutlinedIcon from '@mui/icons-material/GroupWorkOutlined';
-import { getGroupType, IOrganizationDocument, IUserDocument, WithId } from '@bike4mind/common';
+import { getGroupType, IOrganizationDocument, isKnownGroupType, IUserDocument, WithId } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useGetOrganizationUsers } from '@client/app/hooks/data/user';
@@ -114,6 +114,12 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
     onError: error => toast.error(getErrorMessage(error)),
   });
 
+  // The billing owner implicitly holds every granted group type without a users[] row (#1226), so
+  // they never appear in group.memberIds - surface that here rather than let 0 assigned members
+  // read as "owner has no access" (#1445).
+  const owner = membersById.get(organization.userId);
+  const allowedGroupTypes = organization.allowedGroupTypes ?? [];
+
   const groups = groupsQuery.data ?? [];
 
   // Render nothing for a personal org rather than the permanent "Loading groups..." a disabled
@@ -150,6 +156,7 @@ export const OrganizationGroupsList: FC<OrganizationGroupsListProps> = ({
             group={group}
             membersById={membersById}
             members={assignableMembers}
+            owner={isKnownGroupType(group.type) && allowedGroupTypes.includes(group.type) ? owner : undefined}
             onRename={name => renameMutation.mutate({ groupId: group.id, name })}
             onAssign={userId => assignMutation.mutate({ groupId: group.id, userId })}
             onUnassign={userId => unassignMutation.mutate({ groupId: group.id, userId })}
@@ -166,11 +173,13 @@ const GroupCard: FC<{
   group: GroupWithMembers;
   membersById: Map<string, IUserDocument>;
   members: IUserDocument[];
+  /** The org's billing owner, when they implicitly hold this group's type (#1445). Undefined otherwise. */
+  owner: IUserDocument | undefined;
   onRename: (name: string) => void;
   onAssign: (userId: string) => void;
   onUnassign: (userId: string) => void;
   isMutating: boolean;
-}> = ({ group, membersById, members, onRename, onAssign, onUnassign, isMutating }) => {
+}> = ({ group, membersById, members, owner, onRename, onAssign, onUnassign, isMutating }) => {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(group.name);
 
@@ -266,6 +275,13 @@ const GroupCard: FC<{
         </Stack>
 
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          {owner && (
+            // Not removable - owner access comes from billing ownership, not a users[] row, so
+            // there is nothing here for ChipDelete to unassign.
+            <Chip size="sm" variant="soft" color="neutral" data-testid={`org-group-owner-${group.type}`}>
+              {owner.name || owner.email || 'Owner'} - Owner (implicit)
+            </Chip>
+          )}
           {group.memberIds.length === 0 ? (
             <Typography level="body-sm" color="neutral">
               No members assigned.

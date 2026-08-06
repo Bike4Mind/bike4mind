@@ -45,6 +45,37 @@ describe('buildAlwaysOnFloorDetails', () => {
     });
   });
 
+  // An enabled block the input budget could not fit is excluded for a completely different reason than
+  // one an admin switched off, and reading 'disabled' would send someone to the wrong settings page.
+  it('blames the token limit, not configuration, when the budget dropped an enabled block', async () => {
+    const details = await buildAlwaysOnFloorDetails({ ...base, artifactEmissionDelivered: false }, lengthCounter);
+
+    expect(details.find(d => d.name === 'artifact_emission')).toEqual({
+      source: 'admin',
+      name: 'artifact_emission',
+      tokenCount: 0,
+      wasIncluded: false,
+      exclusionReason: 'token_limit',
+    });
+  });
+
+  it('still blames configuration when the block was off, however it was delivered', async () => {
+    const details = await buildAlwaysOnFloorDetails(
+      { ...base, isLocalModel: true, helpCenterDelivered: false },
+      lengthCounter
+    );
+
+    expect(details.find(d => d.name === 'help_center')?.exclusionReason).toBe('disabled');
+  });
+
+  // Callers that do not track delivery keep their existing rows, so the field is additive.
+  it('treats an enabled block as delivered when the caller does not say', async () => {
+    const details = await buildAlwaysOnFloorDetails(base, lengthCounter);
+
+    expect(details.every(d => d.wasIncluded)).toBe(true);
+    expect(details.some(d => d.exclusionReason)).toBe(false);
+  });
+
   it('does not count tokens for an excluded block (no wasted tokenizer work)', async () => {
     const counter = vi.fn(lengthCounter);
     await buildAlwaysOnFloorDetails({ ...base, artifactEmissionEnabled: false, isLocalModel: true }, counter);

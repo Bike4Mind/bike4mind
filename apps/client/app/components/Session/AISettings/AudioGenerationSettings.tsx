@@ -4,16 +4,12 @@ import GraphicEqIcon from '@mui/icons-material/GraphicEq';
 import {
   AVAILABLE_TTS_VOICES,
   supportedVoiceGenerationVendor,
+  VOICE_VENDOR_LABELS,
   VOICE_VENDOR_SUPPORTED_FORMATS,
   type VoiceGenerationVendor,
   type VoiceOutputFormat,
 } from '@bike4mind/common';
 import { useAudioGenSettings, type AudioGenMode } from '@client/app/stores/useAudioGenSettings';
-
-const PROVIDER_LABELS: Record<VoiceGenerationVendor, string> = {
-  openai: 'OpenAI',
-  elevenlabs: 'ElevenLabs',
-};
 
 const PROVIDERS = supportedVoiceGenerationVendor.options;
 
@@ -101,7 +97,7 @@ export const AudioGenerationSettings: React.FC<{ mode?: AudioGenMode }> = ({ mod
         >
           {PROVIDERS.map(provider => (
             <Option key={provider} value={provider}>
-              {PROVIDER_LABELS[provider]}
+              {VOICE_VENDOR_LABELS[provider]}
             </Option>
           ))}
         </Select>

@@ -442,6 +442,7 @@ export const DataLakeBatchProgressAction = z.object({
   chunkedFiles: z.number().optional(),
   vectorizedFiles: z.number().optional(),
   failedFiles: z.number().optional(),
+  skippedFiles: z.number().optional(),
   totalFiles: z.number().optional(),
   status: z
     .enum(['preparing', 'uploading', 'processing', 'completed', 'completed_with_errors', 'failed', 'cancelled'])

@@ -167,6 +167,7 @@ export const SettingKeySchema = z.enum([
   'EnableLatticeDefault',
   'EnableDataLakes',
   'EnableDataLakesDefault',
+  'EnableDataLakeSlackAdd',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -1753,6 +1754,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeSlackAdd: makeBooleanSetting({
+    key: 'EnableDataLakeSlackAdd',
+    name: 'Data Lakes: Slack "@datalake add" path',
+    defaultValue: false,
+    description:
+      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". Off by default - the Slack command is intercepted deterministically but performs no ingest until this is turned on.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 90,
     dependsOn: 'EnableDataLakes',
   }),
   EnableBriefcase: makeBooleanSetting({
