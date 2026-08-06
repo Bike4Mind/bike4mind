@@ -432,22 +432,118 @@ describe('DataLakeRepository — slug is unique per org', () => {
 
   it('rejects a second lake with the same slug in the same org', async () => {
     // Distinct datalakeTags so the rejection is attributable to the (organizationId, slug)
-    // index, not the separate unique index on datalakeTag.
+    // index, not the separate unique index on datalakeTag. Distinct creators for the same
+    // reason against the (createdByUserId, fileTagPrefix) index tested separately below -
+    // baseLake defaults fileTagPrefix off the slug, and same-slug-same-creator would otherwise
+    // also collide there.
     await dataLakeRepository.create(
-      baseLake({ slug: 'dupe', organizationId: 'orgA', datalakeTag: 'datalake:orgA:dupe-1' })
+      baseLake({ slug: 'dupe', organizationId: 'orgA', createdByUserId: 'ownerA', datalakeTag: 'datalake:orgA:dupe-1' })
     );
     await expect(
-      dataLakeRepository.create(baseLake({ slug: 'dupe', organizationId: 'orgA', datalakeTag: 'datalake:orgA:dupe-2' }))
+      dataLakeRepository.create(
+        baseLake({
+          slug: 'dupe',
+          organizationId: 'orgA',
+          createdByUserId: 'ownerB',
+          datalakeTag: 'datalake:orgA:dupe-2',
+        })
+      )
     ).rejects.toThrow();
   });
 
   it('allows the same slug in different orgs (unique per org, not global)', async () => {
+    // Distinct creators so this is attributable to the (organizationId, slug) index alone -
+    // baseLake defaults fileTagPrefix off the slug, and same-slug would otherwise also collide
+    // on the (createdByUserId, fileTagPrefix) index tested separately below.
     await dataLakeRepository.create(
-      baseLake({ slug: 'shared', organizationId: 'orgA', datalakeTag: 'datalake:orgA:shared' })
+      baseLake({
+        slug: 'shared',
+        organizationId: 'orgA',
+        createdByUserId: 'ownerA',
+        datalakeTag: 'datalake:orgA:shared',
+      })
     );
     await expect(
       dataLakeRepository.create(
-        baseLake({ slug: 'shared', organizationId: 'orgB', datalakeTag: 'datalake:orgB:shared' })
+        baseLake({
+          slug: 'shared',
+          organizationId: 'orgB',
+          createdByUserId: 'ownerB',
+          datalakeTag: 'datalake:orgB:shared',
+        })
+      )
+    ).resolves.toBeDefined();
+  });
+});
+
+describe('DataLakeRepository - fileTagPrefix is unique per creator (DB backstop)', () => {
+  setupMongoTest();
+
+  // cleanupTestDB drops the whole DB before each test, so (re)build the model's indexes
+  // (including the { createdByUserId, fileTagPrefix } unique index) before asserting the
+  // constraint.
+  beforeEach(async () => {
+    await DataLakeModel.ensureIndexes();
+  });
+
+  it('rejects a second lake with the same prefix for the same creator, regardless of org', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'first', fileTagPrefix: 'acme:', createdByUserId: 'owner', datalakeTag: 'datalake:first' })
+    );
+    await expect(
+      dataLakeRepository.create(
+        baseLake({
+          slug: 'second',
+          fileTagPrefix: 'acme:',
+          createdByUserId: 'owner',
+          organizationId: 'orgA',
+          datalakeTag: 'datalake:orgA:second',
+        })
+      )
+    ).rejects.toThrow();
+  });
+
+  it('allows the same prefix for different creators in the same org (org-scope collisions stay app-level only)', async () => {
+    await dataLakeRepository.create(
+      baseLake({
+        slug: 'first',
+        fileTagPrefix: 'acme:',
+        createdByUserId: 'ownerA',
+        organizationId: 'orgA',
+        datalakeTag: 'datalake:orgA:first',
+      })
+    );
+    await expect(
+      dataLakeRepository.create(
+        baseLake({
+          slug: 'second',
+          fileTagPrefix: 'acme:',
+          createdByUserId: 'ownerB',
+          organizationId: 'orgA',
+          datalakeTag: 'datalake:orgA:second',
+        })
+      )
+    ).resolves.toBeDefined();
+  });
+
+  it('allows the same prefix for different creators who are both org-less (personal lakes)', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'first', fileTagPrefix: 'acme:', createdByUserId: 'ownerA', datalakeTag: 'datalake:first' })
+    );
+    await expect(
+      dataLakeRepository.create(
+        baseLake({ slug: 'second', fileTagPrefix: 'acme:', createdByUserId: 'ownerB', datalakeTag: 'datalake:second' })
+      )
+    ).resolves.toBeDefined();
+  });
+
+  it('allows a nested (not exact-equal) prefix for the same creator - nesting stays app-level only', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'outer', fileTagPrefix: 'acme:', createdByUserId: 'owner', datalakeTag: 'datalake:outer' })
+    );
+    await expect(
+      dataLakeRepository.create(
+        baseLake({ slug: 'inner', fileTagPrefix: 'acme:hr:', createdByUserId: 'owner', datalakeTag: 'datalake:inner' })
       )
     ).resolves.toBeDefined();
   });

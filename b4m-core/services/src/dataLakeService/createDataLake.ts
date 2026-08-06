@@ -56,14 +56,15 @@ async function disambiguateSlug(
  * Refuses a `fileTagPrefix` that another lake in scope already matches.
  *
  * Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting one would
- * destroy files that only the other holds - the prefix arm has no uniqueness constraint to stop
- * it. Rejecting rather than auto-suffixing like the slug: `acme:-1` is not a meaningful prefix,
- * and silently rewriting it would change every tag the taxonomy step just showed the user.
+ * destroy files that only the other holds - overlap (exact or nested) has no DB-level constraint
+ * to stop it. Rejecting rather than auto-suffixing like the slug: `acme:-1` is not a meaningful
+ * prefix, and silently rewriting it would change every tag the taxonomy step just showed the user.
  *
- * Read-then-write, so two concurrent creates in one scope can both pass. Left as-is: the correct
- * key is conditional (org arm OR creator arm) and overlap-aware, which no single unique index
- * expresses, and a case-insensitive one would need a collation and would fail to build on rows
- * that already collide.
+ * Read-then-write, so two concurrent creates in one scope can still both pass for an OVERLAPPING
+ * (not exact-equal) prefix, or for an org-scope exact match - the correct key for either is
+ * conditional (org arm OR creator arm) and overlap-aware, which no single unique index expresses.
+ * A same-creator EXACT match is now backstopped by a real unique index on DataLakeModel
+ * ({ createdByUserId, fileTagPrefix }), closing that one slice of the race.
  */
 async function assertPrefixAvailable(
   db: CreateDataLakeAdapters['db'],
@@ -106,20 +107,41 @@ export const createDataLake = async (
   const datalakeTag = buildDatalakeTag(slug, organizationId);
 
   // Lakes start in 'draft'; the first batch flips them to 'active' (one-way).
-  const dataLake = await db.dataLakes.create({
-    name: params.name,
-    slug,
-    description: params.description,
-    fileTagPrefix: params.fileTagPrefix,
-    datalakeTag,
-    requiredUserTag: params.requiredUserTag,
-    requiredEntitlement: params.requiredEntitlement ? normalizeEntitlementKey(params.requiredEntitlement) : undefined,
-    createdByUserId: userId,
-    organizationId,
-    status: 'draft',
-    fileCount: 0,
-    totalSizeBytes: 0,
-  } as Omit<IDataLakeDocument, 'id' | 'createdAt' | 'updatedAt'>);
+  try {
+    const dataLake = await db.dataLakes.create({
+      name: params.name,
+      slug,
+      description: params.description,
+      fileTagPrefix: params.fileTagPrefix,
+      datalakeTag,
+      requiredUserTag: params.requiredUserTag,
+      requiredEntitlement: params.requiredEntitlement ? normalizeEntitlementKey(params.requiredEntitlement) : undefined,
+      createdByUserId: userId,
+      organizationId,
+      status: 'draft',
+      fileCount: 0,
+      totalSizeBytes: 0,
+    } as Omit<IDataLakeDocument, 'id' | 'createdAt' | 'updatedAt'>);
 
-  return dataLake;
+    return dataLake;
+  } catch (err) {
+    // A concurrent create by the same user can win the { createdByUserId, fileTagPrefix }
+    // unique index between the assertPrefixAvailable read above and this write (that race is
+    // this index's whole reason to exist) - map the raw duplicate-key to the same friendly
+    // error the read-arm check produces, rather than surfacing a 500. (Same pattern as
+    // setLakeVisibility.ts's slug-index race.) Keyed on `keyPattern.fileTagPrefix`, not a bare
+    // code check: this collection also has unique indexes on `datalakeTag` and
+    // { organizationId, slug } - disambiguateSlug's pre-check makes hitting either of those
+    // here vanishingly rare, but a bare code===11000 would still mislabel that rare collision
+    // as a prefix overlap.
+    if ((err as { code?: number; keyPattern?: Record<string, unknown> })?.code === 11000) {
+      const keyPattern = (err as { keyPattern?: Record<string, unknown> }).keyPattern;
+      if (keyPattern && 'fileTagPrefix' in keyPattern) {
+        throw new BadRequestError(
+          `Tag prefix "${params.fileTagPrefix}" overlaps an existing data lake - choose a different prefix.`
+        );
+      }
+    }
+    throw err;
+  }
 };
