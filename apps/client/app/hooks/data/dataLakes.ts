@@ -13,8 +13,7 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClie
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
-
-const DATA_LAKES_KEY = ['data-lakes'];
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 
 /**
  * The active account-switcher org to scope a data-lake write to, or undefined for the
@@ -35,7 +34,7 @@ export function activeOrgId(): string | undefined {
  */
 export function useGetDataLakes() {
   return useQuery({
-    queryKey: DATA_LAKES_KEY,
+    queryKey: dataLakeKeys.list,
     queryFn: async () => {
       const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
       return response.data.data;
@@ -85,7 +84,7 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
       return response.data;
     },
     onSuccess: data => {
-      queryClient.invalidateQueries({ queryKey: DATA_LAKES_KEY });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       // Reveal the 'datalakes' nav slot immediately rather than after the
       // gears/status staleTime elapses (#833).
       invalidateGearsStatusWhileLocked(queryClient, ['datalakes']);
@@ -110,7 +109,7 @@ export function useUpdateDataLake() {
       return response.data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: DATA_LAKES_KEY });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       toast.success('Data lake updated');
     },
     onError: (error: Error) => {
@@ -148,7 +147,7 @@ export function useSetLakeVisibility() {
       return response.data;
     },
     onSuccess: (_data, { visibility }) => {
-      queryClient.invalidateQueries({ queryKey: DATA_LAKES_KEY });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       toast.success(VISIBILITY_TOAST[visibility]);
     },
     onError: (error: Error) => {
@@ -156,8 +155,6 @@ export function useSetLakeVisibility() {
     },
   });
 }
-
-const PUBLIC_LAKES_KEY = ['data-lakes', 'public'];
 
 /** One page of the public-lake discovery catalog. Fixed so `limit` always stays <= the API cap. */
 export const PUBLIC_LAKES_PAGE_SIZE = 24;
@@ -171,7 +168,7 @@ export const PUBLIC_LAKES_PAGE_SIZE = 24;
  */
 export function useBrowsePublicDataLakes(search: string) {
   return useInfiniteQuery({
-    queryKey: [...PUBLIC_LAKES_KEY, { search }],
+    queryKey: dataLakeKeys.public(search),
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
       const params = new URLSearchParams();
@@ -193,9 +190,6 @@ export function useBrowsePublicDataLakes(search: string) {
 
 type LifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup';
 
-const ARCHIVED_LAKES_KEY = ['data-lakes', 'archived'];
-const DELETED_LAKES_KEY = ['data-lakes', 'deleted'];
-
 function useLifecycleMutation(action: LifecycleAction, successMessage: string, errorMessage: string) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -204,9 +198,9 @@ function useLifecycleMutation(action: LifecycleAction, successMessage: string, e
       return response.data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: DATA_LAKES_KEY });
-      queryClient.invalidateQueries({ queryKey: ARCHIVED_LAKES_KEY });
-      queryClient.invalidateQueries({ queryKey: DELETED_LAKES_KEY });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.archived });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.deleted });
       toast.success(successMessage);
     },
     onError: (error: Error) => {
@@ -243,7 +237,7 @@ export function useCleanupDataLake() {
 /** Lists archived data lakes (management view). */
 export function useGetArchivedDataLakes(enabled = true) {
   return useQuery({
-    queryKey: ARCHIVED_LAKES_KEY,
+    queryKey: dataLakeKeys.archived,
     enabled,
     queryFn: async () => {
       const response = await api.get<{ data: DataLakeConfig[] }>('/api/data-lakes/archived');
@@ -255,7 +249,7 @@ export function useGetArchivedDataLakes(enabled = true) {
 /** Lists soft-deleted data lakes (management view: restore / purge). */
 export function useGetDeletedDataLakes(enabled = true) {
   return useQuery({
-    queryKey: DELETED_LAKES_KEY,
+    queryKey: dataLakeKeys.deleted,
     enabled,
     queryFn: async () => {
       const response = await api.get<{ data: DataLakeConfig[] }>('/api/data-lakes/deleted');
@@ -266,7 +260,6 @@ export function useGetDeletedDataLakes(enabled = true) {
 
 // ── Batch progress / background AI tagging ──────────────────────────────────
 
-const ACTIVE_BATCHES_KEY = ['data-lake-batches', 'active'];
 /** Polling cadence for the list's ingest/AI-tagging badges - no per-batch WebSocket wiring
  * needed for a list view; a short poll is simple and good enough for background progress. */
 const ACTIVE_BATCHES_POLL_MS = 10_000;
@@ -279,7 +272,7 @@ const ACTIVE_BATCHES_POLL_MS = 10_000;
  */
 export function useActiveDataLakeBatches(enabled = true) {
   return useQuery({
-    queryKey: ACTIVE_BATCHES_KEY,
+    queryKey: dataLakeKeys.activeBatches,
     enabled,
     queryFn: async () => {
       const response = await api.get<{ data: IDataLakeBatchSummary[] }>('/api/data-lakes/batches');
@@ -309,9 +302,9 @@ export function useApplyTaxonomySuggestions(batchId: string) {
       toast.success(
         `Tags applied to ${result.filesUpdated.toLocaleString()} file${result.filesUpdated === 1 ? '' : 's'}`
       );
-      queryClient.invalidateQueries({ queryKey: ACTIVE_BATCHES_KEY });
-      queryClient.invalidateQueries({ queryKey: ['dataLakeFiles'] });
-      queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to apply tag suggestions');
@@ -330,7 +323,7 @@ export function useReanalyzeTaxonomy(batchId: string) {
       return res.data;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ACTIVE_BATCHES_KEY });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to re-analyze tags');
