@@ -22,7 +22,11 @@ import CloseIcon from '@mui/icons-material/Close';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { memo, useEffect, useState } from 'react';
 import type { IDataLakeBatchSummary, TaxonomyTag } from '@bike4mind/common';
-import { useApplyTaxonomySuggestions, useReanalyzeTaxonomy } from '@client/app/hooks/data/dataLakes';
+import {
+  useApplyTaxonomySuggestions,
+  useDismissTaxonomy,
+  useReanalyzeTaxonomy,
+} from '@client/app/hooks/data/dataLakes';
 
 // Confidence tier helpers
 
@@ -220,6 +224,7 @@ export default function TaxonomyReviewPanel({
   const [tags, setTags] = useState<TaxonomyTag[]>(batch.taxonomySuggestions?.tags ?? []);
   const applyMutation = useApplyTaxonomySuggestions(batch.id);
   const reanalyzeMutation = useReanalyzeTaxonomy(batch.id);
+  const dismissMutation = useDismissTaxonomy(batch.id);
 
   // Re-seed local edits whenever the batch's stored suggestions change identity (e.g. after
   // a re-analyze completes and the list refetches with a fresh taxonomySuggestions object).
@@ -328,6 +333,15 @@ export default function TaxonomyReviewPanel({
             onClick={() => reanalyzeMutation.mutate(undefined)}
           >
             Re-analyze
+          </Button>
+          <Button
+            variant="outlined"
+            color="neutral"
+            data-testid="taxonomy-dismiss-btn"
+            loading={dismissMutation.isPending}
+            onClick={() => dismissMutation.mutate(undefined, { onSuccess: onClose })}
+          >
+            Dismiss
           </Button>
           <Button variant="plain" color="neutral" onClick={onClose}>
             Close

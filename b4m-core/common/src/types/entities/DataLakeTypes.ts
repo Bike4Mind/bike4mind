@@ -193,7 +193,8 @@ export interface IDataLakeBatchFile {
  * "completed" batch look reopened. `'none'` covers both "never opted in" and append-mode
  * batches (which never offer the opt-in at all).
  */
-export type TaxonomyStatus = 'none' | 'queued' | 'analyzing' | 'ready' | 'applying' | 'applied' | 'failed';
+export type TaxonomyStatus =
+  'none' | 'queued' | 'analyzing' | 'ready' | 'applying' | 'applied' | 'failed' | 'dismissed';
 
 /** Non-terminal taxonomy phases - the ones the stuck-job reconciler may force to 'failed'. */
 export const TAXONOMY_NON_TERMINAL_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'applying'];
@@ -201,10 +202,11 @@ export const TAXONOMY_NON_TERMINAL_STATUSES: TaxonomyStatus[] = ['queued', 'anal
 /**
  * Every phase the Data Lakes list needs to show a badge for: still running, OR finished and
  * awaiting the user (ready to review / failed and dismissible). Excludes 'none' (never opted
- * in) and 'applied' (already resolved, nothing left to surface). Includes 'applying' so a
- * batch stuck there (e.g. an apply request that errored or hit the Lambda timeout mid-write)
- * stays visible to the list and the fast read-time reconciler instead of only being reachable
- * by the daily cron sweep.
+ * in) and both resolved terminal outcomes, 'applied' and 'dismissed' (nothing left to surface
+ * for either - a dismissed batch's suggestions are never shown again, same as an applied one).
+ * Includes 'applying' so a batch stuck there (e.g. an apply request that errored or hit the
+ * Lambda timeout mid-write) stays visible to the list and the fast read-time reconciler instead
+ * of only being reachable by the daily cron sweep.
  */
 export const TAXONOMY_ATTENTION_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'ready', 'applying', 'failed'];
 

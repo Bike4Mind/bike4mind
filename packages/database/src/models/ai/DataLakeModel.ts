@@ -409,7 +409,7 @@ const DataLakeBatchSchema = new mongoose.Schema(
     wantsTaxonomy: { type: Boolean, default: false },
     taxonomyStatus: {
       type: String,
-      enum: ['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed'],
+      enum: ['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed', 'dismissed'],
       default: 'none',
     },
     taxonomyStartedAt: { type: Date },
