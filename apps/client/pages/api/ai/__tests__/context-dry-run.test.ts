@@ -46,8 +46,11 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn(async () => 'https://x') }) }));
 
+// Captures the options so the scope gate is asserted rather than silently stripped by the mock.
+const baseApiOptions: unknown[] = [];
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (opts?: unknown) => {
+    baseApiOptions.push(opts);
     const chain: Record<string, unknown> = {};
     chain.use = () => chain;
     chain.post = (handler: (...a: unknown[]) => unknown) => handler;
@@ -265,6 +268,14 @@ describe('POST /api/ai/context-dry-run', () => {
     const { body } = await run({ ...LLAMA_8K, fileIds: ids });
 
     expect(body.files.map((f: { id: string }) => f.id)).toEqual(ids);
+  });
+
+  // An API key with route access should not automatically be able to measure files. Peer AI routes gate
+  // a scope; this one reads files, so it gates the read-files scope rather than the generate scope.
+  it('gates on the files:read scope', async () => {
+    await run({ ...LLAMA_8K, fileIds: [] });
+
+    expect(baseApiOptions[0]).toMatchObject({ requiredScopes: ['files:read'] });
   });
 
   // A dry run must not shape later real completions. The pipeline features that would - mementos
