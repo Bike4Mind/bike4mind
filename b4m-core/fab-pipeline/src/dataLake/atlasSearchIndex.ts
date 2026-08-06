@@ -27,20 +27,23 @@ const FABFILECHUNK_COLLECTION = 'fabfilechunks'; // must match FabFileChunk's mo
 const VECTOR_PATH = 'vector';
 const FILTER_PATHS = ['fabFileId', 'embeddingModel'] as const;
 
-const ALL_MODEL_DIMENSIONS: Record<string, number> = Object.fromEntries(
+// A Map, not a plain object: a bracket lookup on an object literal returns inherited
+// prototype values (e.g. 'constructor') instead of undefined, so an unrecognized model would
+// fail OPEN with a garbage AtlasIndexTarget rather than closed to null.
+const ALL_MODEL_DIMENSIONS: Map<string, number> = new Map(
   [
     ...Object.values(OPENAI_EMBEDDING_MODEL_MAP),
     ...Object.values(VOYAGEAI_EMBEDDING_MODEL_MAP),
     ...Object.values(BEDROCK_EMBEDDING_MODEL_MAP),
     ...Object.values(OLLAMA_EMBEDDING_MODEL_MAP),
-  ].map(info => [info.model, info.dimensions[0]])
+  ].map(info => [info.model, info.dimensions[0]] as const)
 );
 
-export const getEmbeddingDimensions = (model: string): number | null => ALL_MODEL_DIMENSIONS[model] ?? null;
+export const getEmbeddingDimensions = (model: string): number | null => ALL_MODEL_DIMENSIONS.get(model) ?? null;
 
 /** Every registered model whose write-time width equals `numDimensions` - used to guess a legacy chunk's model from its stored vector length. */
 export const modelsWithDimensions = (numDimensions: number): string[] =>
-  Object.entries(ALL_MODEL_DIMENSIONS)
+  [...ALL_MODEL_DIMENSIONS.entries()]
     .filter(([, dims]) => dims === numDimensions)
     .map(([model]) => model)
     .sort();
@@ -90,7 +93,7 @@ export const buildAtlasVectorIndexDefinition = (model: string): AtlasVectorIndex
 };
 
 export const allAtlasVectorIndexDefinitions = (): AtlasVectorIndexDefinition[] =>
-  Object.keys(ALL_MODEL_DIMENSIONS)
+  [...ALL_MODEL_DIMENSIONS.keys()]
     .map(buildAtlasVectorIndexDefinition)
     .filter((def): def is AtlasVectorIndexDefinition => def !== null);
 
