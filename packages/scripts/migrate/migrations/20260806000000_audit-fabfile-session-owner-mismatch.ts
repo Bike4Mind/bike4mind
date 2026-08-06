@@ -5,9 +5,9 @@ import { type MigrationFile } from './index';
  * Audit (read-only): FabFiles whose sessionId points at a session owned by a different user.
  *
  * The session summarizer has always created a summary FabFile with session.userId as its
- * owner (sessionSummarization.ts). Before that summarizer's lookup was scoped to the session
- * owner (see the sibling fix), re-summarizing a notebook could overwrite a FabFile it did not
- * own, leaving that file's userId disagreeing with its own sessionId's owner - and that lookup
+ * owner (sessionSummarization.ts). Before that summarizer's own-file lookup was scoped to the
+ * session owner too, re-summarizing a notebook could overwrite a FabFile it did not own,
+ * leaving that file's userId disagreeing with its own sessionId's owner - and that lookup
  * being unscoped is not the only way to get here: PUT /api/files/[id] lets a caller hand-stamp
  * any sessionId onto their own file with no check that they own the session it now claims to
  * belong to.
