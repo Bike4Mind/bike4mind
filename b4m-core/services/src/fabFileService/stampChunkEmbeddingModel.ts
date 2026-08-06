@@ -20,17 +20,23 @@ interface StampChunkEmbeddingModelAdapters {
  * (see atlasSearchIndex.ts / vectorSearchEligibility.ts) - it must be set AFTER the chunk stamp
  * commits, never before, or a reader could see "ready" while chunks are still unstamped.
  *
- * Both writes run in one transaction: without it, a crash between them would leave the chunks
- * correctly stamped but the readiness stamp permanently unset - the vectorize handler's own
- * idempotency check already treats this file as done, so no later SQS redelivery would retry it.
+ * All writes run in one transaction: without it, a crash mid-way would leave the chunks correctly
+ * stamped but the readiness stamp permanently unset - the vectorize handler's own idempotency
+ * check already treats this file as done, so no later SQS redelivery would retry it.
+ *
+ * `fileUpdate` lets a caller fold its OWN fabFile write into this same transaction (e.g. the
+ * vectorize handler's `vectorized: true` flip) instead of committing it in a separate write
+ * beforehand - that ordering is exactly the gap above, just one level up: a crash between "mark
+ * vectorized" and "stamp the model" leaves the same permanently-unretryable state.
  */
 export const stampChunkEmbeddingModel = async (
   fabFileId: string,
   embeddingModel: string,
-  { db }: StampChunkEmbeddingModelAdapters
+  { db }: StampChunkEmbeddingModelAdapters,
+  fileUpdate: { vectorized?: boolean; vectorizedChunkCount?: number; isVectorizing?: boolean } = {}
 ): Promise<void> => {
   await withTransaction(async () => {
     await db.fabFileChunks.updateEmbeddingModel(fabFileId, embeddingModel);
-    await db.fabFiles.update({ id: fabFileId, chunkEmbeddingModelStampedAt: new Date() });
+    await db.fabFiles.update({ id: fabFileId, chunkEmbeddingModelStampedAt: new Date(), ...fileUpdate });
   });
 };

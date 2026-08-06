@@ -40,4 +40,24 @@ describe('stampChunkEmbeddingModel', () => {
 
     expect(update).not.toHaveBeenCalled();
   });
+
+  it('folds an optional caller fileUpdate into the same file write as the readiness stamp', async () => {
+    const updateEmbeddingModel = vi.fn();
+    const update = vi.fn().mockResolvedValue(null);
+
+    await stampChunkEmbeddingModel(
+      'file-1',
+      'text-embedding-3-small',
+      { db: { fabFiles: { update }, fabFileChunks: { updateEmbeddingModel } } },
+      { vectorized: true, vectorizedChunkCount: 3, isVectorizing: false }
+    );
+
+    expect(update).toHaveBeenCalledWith({
+      id: 'file-1',
+      chunkEmbeddingModelStampedAt: expect.any(Date),
+      vectorized: true,
+      vectorizedChunkCount: 3,
+      isVectorizing: false,
+    });
+  });
 });

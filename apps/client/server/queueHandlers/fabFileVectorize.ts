@@ -249,23 +249,32 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     // >= with chunkCount>0 guard so an under-counted chunk can't permanently block completion.
     const isFileVectorized = !!fabFile.chunkCount && vectorizedChunkCount >= fabFile.chunkCount;
-    await fabFileRepository.update({
-      id: fabFileId,
-      vectorized: true,
-      vectorizedChunkCount,
-      isVectorizing: !isFileVectorized,
-    });
+
+    if (isFileVectorized) {
+      // Stamp every chunk with its embeddingModel only once the WHOLE file is vectorized - a
+      // partial stamp mid-batch would let the Atlas cutover read path treat a still-vectorizing
+      // file as ready. Folds the `vectorized: true` flip into the SAME transaction as the stamp:
+      // writing it separately first would reopen the exact gap the stamp's own transaction
+      // closes, just one level up - a crash between the two writes would mark the file vectorized
+      // with no stamp, and the idempotency check below would then never retry it.
+      await fabFilesService.stampChunkEmbeddingModel(
+        fabFileId,
+        embeddingModel,
+        { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository } },
+        { vectorized: true, vectorizedChunkCount, isVectorizing: false }
+      );
+    } else {
+      await fabFileRepository.update({
+        id: fabFileId,
+        vectorized: true,
+        vectorizedChunkCount,
+        isVectorizing: true,
+      });
+    }
     fabFile.vectorizedChunkCount = vectorizedChunkCount;
     fabFile.isVectorizing = !isFileVectorized;
 
     if (isFileVectorized) {
-      // Stamp every chunk with its embeddingModel only once the WHOLE file is vectorized -
-      // a partial stamp mid-batch would let the Atlas cutover read path treat a still-vectorizing
-      // file as ready.
-      await fabFilesService.stampChunkEmbeddingModel(fabFileId, embeddingModel, {
-        db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository },
-      });
-
       await sendToClient(userId, Resource.websocket.managementEndpoint, {
         action: 'update_file_chunk_vector_status',
         fabFileId,

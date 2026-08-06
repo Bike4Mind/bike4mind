@@ -57,6 +57,11 @@ export async function atlasVectorSearch(args: {
     // Narrow on `file` directly rather than on classifyAnnHit's return - it decides the skip
     // REASON, but the type-narrowing must not depend on a helper that could later classify a
     // non-null file as skippable too.
+    //
+    // hitsSkippedUnknownFile counts both branches. classifyAnnHit currently only returns
+    // 'unknownFile' for a falsy parentFile, so the count is accurate today; if it ever grows a
+    // reason for a TRUTHY file (dimension/model mismatch), that hit would be counted here too
+    // and the name would undercount its own scope - rename or split the counter at that point.
     if (!file || classifyAnnHit({ parentFile: file })) {
       hitsSkippedUnknownFile++;
       continue;

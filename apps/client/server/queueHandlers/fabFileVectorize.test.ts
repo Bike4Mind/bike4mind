@@ -186,7 +186,8 @@ describe('fabFileVectorize handler - embeddingModel discriminator stamp', () => 
     expect(h.stampChunkEmbeddingModel).toHaveBeenCalledWith(
       'ff1',
       'text-embedding-3-small',
-      expect.objectContaining({ db: expect.anything() })
+      expect.objectContaining({ db: expect.anything() }),
+      { vectorized: true, vectorizedChunkCount: 1, isVectorizing: false }
     );
   });
 
