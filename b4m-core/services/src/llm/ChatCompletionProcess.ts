@@ -108,6 +108,7 @@ import {
   ChatCompletionFeature,
   ContextSummarizationFeature,
   MementoFeature,
+  LakeMemoryFeature,
   OrganizationPromptFeature,
   SessionPromptFeature,
   KnowledgeRetrievalFeature,
@@ -676,6 +677,7 @@ export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
   public recallMementosV2: IChatCompletionServiceOptions['recallMementosV2'];
+  public recallLakeMemory: IChatCompletionServiceOptions['recallLakeMemory'];
   public loadSystemPromptById: IChatCompletionServiceOptions['loadSystemPromptById'];
   public logger: Logger;
   public user: IUserDocument;
@@ -740,6 +742,7 @@ export class ChatCompletionProcess {
     this.db = options.db;
     this.invokeCreateMemento = options.invokeCreateMemento;
     this.recallMementosV2 = options.recallMementosV2;
+    this.recallLakeMemory = options.recallLakeMemory;
     this.loadSystemPromptById = options.loadSystemPromptById;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
@@ -5293,6 +5296,14 @@ When using tools that require file IDs (like edit_image), use the ID shown above
         'knowledgeRetrieval',
         new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter)
       );
+
+      // Lake memory hot-card (#1440) rides the same Data-Lake toggle: a durable identity/context layer
+      // alongside the forced chunk retrieval. Only when the host wired the app-layer ledger read, so it
+      // is inert until a lake profile exists.
+      if (this.recallLakeMemory) {
+        this.logger.log('  - Enabling LakeMemory (hot-card) feature');
+        this.features.set('lakeMemory', new LakeMemoryFeature(this, retrievalFilter));
+      }
     }
 
     this.logger.log(`🛠️ Features enabled: ${Array.from(this.features.keys()).join(', ')}`);

@@ -167,6 +167,7 @@ export type featureNames =
   | 'organizationPrompt'
   | 'sessionPrompt'
   | 'knowledgeRetrieval'
+  | 'lakeMemory'
   | 'contextSummarization'
   | 'skills';
 export interface IChatCompletionServiceOptions {
@@ -206,6 +207,19 @@ export interface IChatCompletionServiceOptions {
     query: string,
     opts?: { enabled?: boolean }
   ) => Promise<{ fact: string; relevance: number }[] | null>;
+  /**
+   * Read the lake memory hot-card for a Data-Lake-mode turn (#1440): fold each of the user's entitled
+   * lakes' ledgers, keep beliefs whose source doc is still citable, and recall the top ones for the
+   * query. Distinct from `recallMementosV2` (the USER's own memory) - this reads the `lake` principal,
+   * gated on `session.forceKnowledgeRetrieval`. Injected so the core takes no dependency on the
+   * app-layer ledger/data-lake repositories. Returns [] when nothing qualifies.
+   */
+  recallLakeMemory?: (input: {
+    userId: string;
+    query: string;
+    dataLakeTags: string[];
+    retrievalFilter?: RetrievalExclusionOptions;
+  }) => Promise<{ fact: string; relevance: number; sources: string[] }[]>;
   /**
    * Resolve a session-activatable registry prompt's CURRENT content by id (e.g. 'triage_router').
    * Injected so the core takes no dependency on the app-layer prompt registry; the injector also
@@ -353,6 +367,7 @@ export type ChatCompletionContext = Pick<
   | 'autoNameSession'
   | 'invokeCreateMemento'
   | 'recallMementosV2'
+  | 'recallLakeMemory'
   | 'logEvent'
   | 'db'
   | 'sessionId'
@@ -536,6 +551,87 @@ export class MementoFeature implements ChatCompletionFeature {
       enableMementos: this.writeV1,
       enableMementosV2: this.writeV2,
     });
+  }
+}
+
+/**
+ * Lake memory hot-card (#1440): on a Data-Lake-mode turn (`session.forceKnowledgeRetrieval`), inject a
+ * durable, curated summary of the user's accessible data lakes - the identity/context layer that sits
+ * ALONGSIDE the forced chunk retrieval (KnowledgeRetrievalFeature). Where forced retrieval answers THIS
+ * question from the corpus, the card carries the lake's stable, top-of-mind facts so the model is
+ * grounded before it reads a chunk.
+ *
+ * Constructed only when the session forces retrieval AND the host wired `recallLakeMemory` (the
+ * app-layer ledger read), so it is inert on deployments that have populated no lake profile. The recall
+ * is fail-open: a fault degrades to no card, never a failed turn - memory enriches an answer, it does
+ * not gate one.
+ */
+export class LakeMemoryFeature implements ChatCompletionFeature {
+  private chatCompletion: ChatCompletionContext;
+  private logger: Logger;
+  private user: IUserDocument;
+  private retrievalFilter: RetrievalExclusionOptions;
+
+  constructor(chatCompletion: ChatCompletionContext, retrievalFilter?: RetrievalExclusionOptions) {
+    this.chatCompletion = chatCompletion;
+    this.logger = chatCompletion.logger;
+    this.user = chatCompletion.user;
+    this.retrievalFilter = retrievalFilter ?? {};
+  }
+
+  async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
+    return { shouldContinue: true };
+  }
+
+  // Read-only feature: the hot-card is injected at context-build time and there is nothing to persist
+  // or reconcile once the turn completes (unlike MementoFeature, which WRITES back on completion).
+  async onComplete(): Promise<void> {}
+
+  async getContextMessages(
+    quest: IChatHistoryItemDocument,
+    _embeddingFactory: EmbeddingFactory,
+    message: string
+  ): Promise<IMessage[]> {
+    const query = message?.trim();
+    if (!query || !this.chatCompletion.recallLakeMemory) return [];
+
+    try {
+      // The SAME entitlement-aware resolver forced retrieval and the knowledge tools use, so the card
+      // spans exactly the lakes this user may read - the offer and the read can't disagree.
+      const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
+      const { dataLakeTags } = await getDynamicDataLakeAccess({
+        db: this.chatCompletion.db,
+        user: this.user,
+        entitlementKeys,
+      });
+      if (dataLakeTags.length === 0) return [];
+
+      const beliefs = await this.chatCompletion.recallLakeMemory({
+        userId: this.user.id,
+        query,
+        dataLakeTags,
+        retrievalFilter: this.retrievalFilter,
+      });
+      if (beliefs.length === 0) return [];
+
+      // Telemetry: record that the card fired and from which lakes, so an eval row shows lake grounding
+      // independent of whether the model then also called the knowledge tools.
+      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta.context = quest.promptMeta.context ?? {};
+      quest.promptMeta.context.lakeMemory = { beliefCount: beliefs.length, dataLakeTags };
+
+      this.logger.log(`🌊 Lake memory: injecting ${beliefs.length} belief(s) from ${dataLakeTags.length} lake(s)`);
+      // ONE framed block, the same friend-who-remembers framing V2 mementos use (buildMemoryContext) -
+      // never one note-card per fact, which is what makes the model recite its memory instead of using it.
+      const context = buildMemoryContext(beliefs.map(b => b.fact));
+      return context ? [{ role: 'system' as const, content: context }] : [];
+    } catch (error) {
+      this.logger.warn(
+        '🌊 Lake memory: recall failed; proceeding without the hot card for this turn: ' +
+          (error instanceof Error ? `${error.name}: ${error.message}` : String(error))
+      );
+      return [];
+    }
   }
 }
 

@@ -221,6 +221,11 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         deferredToRetrieval: { type: Boolean, required: false },
         minInlineTokensPerDoc: { type: Number, required: false },
       },
+      // Must stay in sync with the Zod PromptMeta `context.lakeMemory` (parity test enforces it).
+      lakeMemory: {
+        beliefCount: { type: Number, required: false },
+        dataLakeTags: [{ type: String, required: false }],
+      },
       messageTruncation: { type: MessageTruncationSchema, required: false, default: undefined },
       tokensBySource: {
         systemPrompts: { type: Number, required: false },
