@@ -5188,6 +5188,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
     const adminSettingsEnableAgents = getSettingsValue('EnableAgents', adminSettings);
+    const adminSettingsEnableLakeMemory = getSettingsValue('EnableLakeMemory', adminSettings);
     const adminSettingsAutoNameNotebook = getSettingsValue('AutoNameNotebook', adminSettings);
 
     // Only build features that are in the optimized list
@@ -5298,9 +5299,11 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       );
 
       // Lake memory hot-card (#1440) rides the same Data-Lake toggle: a durable identity/context layer
-      // alongside the forced chunk retrieval. Only when the host wired the app-layer ledger read, so it
-      // is inert until a lake profile exists.
-      if (this.recallLakeMemory) {
+      // alongside the forced chunk retrieval. Gated on the SAME `EnableLakeMemory` flag as the producer,
+      // so the flag is a complete kill-switch for BOTH sides: turning it off stops new extraction AND
+      // stops injecting already-extracted beliefs (otherwise a lake extracted while it was on would keep
+      // being read forever). Also needs the host to have wired the app-layer ledger read.
+      if (adminSettingsEnableLakeMemory && this.recallLakeMemory) {
         this.logger.log('  - Enabling LakeMemory (hot-card) feature');
         this.features.set('lakeMemory', new LakeMemoryFeature(this, retrievalFilter));
       }
