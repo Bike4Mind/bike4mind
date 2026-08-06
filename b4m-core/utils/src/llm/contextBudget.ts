@@ -21,6 +21,25 @@
 import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, type ModelInfo } from '@bike4mind/common';
 
 /**
+ * The context window a caller should reason against: the catalog's own figure, except for a media
+ * (image/video) row whose window arrives as the literal 0, which falls back the same as an absent
+ * one. Two provider feeds report a media row that way on purpose to mean "not applicable" (see
+ * ModelCatalogTypes.ts), not a real zero-token budget - a text row keeps 0 literal, since a
+ * misconfigured text row is exactly what safeInputWindow's caller-side empty-prompt guard exists to
+ * catch, and that guard has to see a non-positive budget to fire.
+ *
+ * Extracted so every ChatCompletionProcess call site that reasons about the window - not just the
+ * one computing the input budget - shares this fallback instead of each redeclaring `?? 200000` and
+ * drifting from it for exactly this shape (telemetry's contextWindowLimit/utilizationPercentage and
+ * video's dynamic-history sizing both read the raw catalog value directly).
+ */
+export function effectiveContextWindow(modelInfo: Pick<ModelInfo, 'contextWindow' | 'type'>): number {
+  const returnsMedia = modelInfo.type === 'image' || modelInfo.type === 'video';
+  const rawContextWindow = modelInfo.contextWindow;
+  return returnsMedia && !rawContextWindow ? 200000 : (rawContextWindow ?? 200000);
+}
+
+/**
  * Usable input window: the context window less the output this request will reserve, less a safety
  * buffer. Deliberately NOT clamped at zero - the caller's empty-prompt guard depends on seeing a
  * non-positive budget for a genuinely misconfigured text model.
@@ -33,9 +52,7 @@ import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, type ModelInfo } from '@bike4mind/
  *
  * The static catalog tables are held to the positive-budget property by
  * modelCatalogInputBudget.test.ts, and a discovered claim that would break it for a TEXT row is
- * refused in modelDiscoveryService/catalogWrite. A media row whose window arrives as 0 from a feed
- * falls back the same as an absent one, below - two provider sources report it that way on purpose to
- * mean "not applicable" (see ModelCatalogTypes.ts), not a real zero-token budget.
+ * refused in modelDiscoveryService/catalogWrite.
  *
  * The buffer figure is imported rather than redeclared here: common owns it, and two copies of the
  * same number is the drift that made it a shared export in the first place.
@@ -46,10 +63,7 @@ export function safeInputWindow(
   safetyBuffer = CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS
 ): number {
   const returnsMedia = modelInfo.type === 'image' || modelInfo.type === 'video';
-  // A text row keeps 0 literal: a misconfigured text row is exactly what the caller's empty-prompt
-  // guard exists to catch, and that has to see a non-positive budget to fire.
-  const rawContextWindow = modelInfo.contextWindow;
-  const contextLimit = returnsMedia && !rawContextWindow ? 200000 : (rawContextWindow ?? 200000);
+  const contextLimit = effectiveContextWindow(modelInfo);
   const modelMaxOutput = modelInfo.max_tokens ?? 16384;
   const reservedOutput = returnsMedia ? 0 : Math.min(requestedMaxTokens, modelMaxOutput);
   return contextLimit - reservedOutput - safetyBuffer;

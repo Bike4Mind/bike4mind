@@ -4,6 +4,7 @@ import {
   attachedContentAssemblyFloor,
   attachedContentBudgetsAgree,
   attachedContentExtractionBudget,
+  effectiveContextWindow,
   EXTRACTION_SYSTEM_RESERVE_MAX_SHARE,
   MIN_ATTACHED_CONTENT_EXTRACTION_SHARE,
   safeInputWindow,
@@ -21,6 +22,24 @@ const GPT4_8K = { contextWindow: 8192, max_tokens: 4096, type: 'text' as const }
 const CLAUDE_200K = { contextWindow: 200_000, max_tokens: 8192, type: 'text' as const };
 
 const CHARS_PER_TOKEN = 3.5;
+
+describe('effectiveContextWindow', () => {
+  it('returns the catalog figure unchanged for a healthy media row', () => {
+    expect(effectiveContextWindow({ contextWindow: 10_000, type: 'image' })).toBe(10_000);
+  });
+
+  it('falls back like an absent value for a media row whose window arrives as 0', () => {
+    expect(effectiveContextWindow({ contextWindow: 0, type: 'video' })).toBe(200000);
+  });
+
+  it('keeps 0 literal for a text row', () => {
+    expect(effectiveContextWindow({ contextWindow: 0, type: 'text' })).toBe(0);
+  });
+
+  it('returns the catalog figure unchanged for a healthy text row', () => {
+    expect(effectiveContextWindow({ contextWindow: 128_000, type: 'text' })).toBe(128_000);
+  });
+});
 
 describe('safeInputWindow', () => {
   it('reserves the requested output and the safety buffer', () => {
