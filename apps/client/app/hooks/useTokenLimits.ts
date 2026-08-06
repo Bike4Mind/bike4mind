@@ -3,6 +3,7 @@ import { computeDefaultMaxTokens } from '../utils/aiSettingsUtils';
 
 interface ModelInfoEntry {
   id: string;
+  type?: string;
   contextWindow?: number;
   max_tokens?: number;
 }
@@ -23,7 +24,13 @@ export function useTokenLimits({ model, modelInfo, max_tokens, chatInputLength }
   const safeMaxTokens = max_tokens ?? 2048;
 
   const activeModelEntry = useMemo(() => modelInfo?.find(m => m.id === model), [model, modelInfo]);
-  const contextWindowLimit = activeModelEntry?.contextWindow ?? 0;
+  const returnsMedia = activeModelEntry?.type === 'image' || activeModelEntry?.type === 'video';
+  // A media row's contextWindow arriving as the literal 0 means "not applicable" (two provider
+  // feeds report it that way on purpose - see safeInputWindow in @bike4mind/utils), not a real
+  // zero-token budget. Falls back the same way an absent window would; a text row keeps 0
+  // literal, so contextWindowLimit === 0 still means "modelInfo hasn't loaded yet" below.
+  const rawContextWindow = activeModelEntry?.contextWindow;
+  const contextWindowLimit = returnsMedia && !rawContextWindow ? 200000 : (rawContextWindow ?? 0);
   const modelCatalogMaxOutput = activeModelEntry?.max_tokens ?? 0;
 
   // Must agree with the store's default (computeDefaultMaxTokens) - this only stands in for the
