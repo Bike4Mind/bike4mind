@@ -31,6 +31,18 @@ describe('safeInputWindow', () => {
     expect(safeInputWindow({ contextWindow: 10_000, max_tokens: 10_000, type: 'image' }, 10_000)).toBe(9000);
   });
 
+  // A media row's contextWindow arriving as the literal 0 means "not applicable" (two provider
+  // feeds report it that way on purpose), not a real zero-token budget. Before the fix this went
+  // negative and the caller's empty-prompt guard threw on every image/video request once a
+  // discovery run wrote that shape over an existing row.
+  it('falls back like an absent value when a media row reports its window as 0', () => {
+    expect(safeInputWindow({ contextWindow: 0, max_tokens: 10_000, type: 'image' }, 10_000)).toBe(200000 - 1000);
+  });
+
+  it('still goes negative on a TEXT row whose window arrives as 0, preserving the misconfiguration guard', () => {
+    expect(safeInputWindow({ contextWindow: 0, max_tokens: 4096, type: 'text' }, 4096)).toBeLessThan(0);
+  });
+
   it('caps the reservation at what the model can actually emit', () => {
     expect(safeInputWindow(LLAMA_8K, 999_999)).toBe(8000 - 2048 - 1000);
   });
