@@ -101,7 +101,28 @@ describe('extractLakeMemoryForBatch deadline guard (#1440)', () => {
     expect(result.docsProcessed).toBe(2);
     expect(appendFactToLedgerMock).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('ran out of time after 2/10 docs'));
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('8 not yet covered'));
+    // The wording must not imply a follow-up run that does not exist: there is no cursor, no cron, and
+    // no self-re-enqueue, so the uncovered docs wait for the next batch finalize on this lake.
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('8 document(s) are NOT extracted'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('nothing will retry them'));
+  });
+
+  it('falls back to the wall clock when the Lambda clock reports a non-finite value', async () => {
+    // NaN is not nullish, and every comparison against it is false - so without an explicit finite check
+    // the guard would be silently disabled rather than falling back.
+    seedLake(4);
+    const logger = makeLogger();
+    const nowSpy = vi.spyOn(Date, 'now');
+    nowSpy.mockReturnValueOnce(0).mockReturnValue(10 * 60_000);
+
+    const result = await extractLakeMemoryForBatch(
+      { dataLakeId: 'lake-1', getRemainingTimeInMillis: () => Number.NaN },
+      logger as never
+    );
+
+    expect(result.docsProcessed).toBe(0);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('ran out of time'));
+    nowSpy.mockRestore();
   });
 
   it('does not throw when the deadline hits - a redelivery would re-bill the whole lake', async () => {

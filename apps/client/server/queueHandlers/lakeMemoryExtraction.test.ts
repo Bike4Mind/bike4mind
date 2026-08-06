@@ -56,11 +56,13 @@ describe('lakeMemoryExtraction handler (#1440)', () => {
     expect(extractMock).not.toHaveBeenCalled();
   });
 
-  it('fails closed when the flag lookup rejects - never writes on an unknown flag state', async () => {
+  it('rethrows when the flag lookup rejects, so SQS retries instead of the work being dropped', async () => {
+    // Fails closed for this attempt (nothing extracts) WITHOUT discarding the message. Collapsing an
+    // indeterminate lookup into a definitive off would silently delete the extraction over a transient
+    // blip - the same failed-lookup-vs-resolved-false distinction the memento gate resolver draws.
     getSettingsValueMock.mockRejectedValue(new Error('mongo down'));
 
-    await dispatch(event(PAYLOAD), context());
-
+    await expect(dispatch(event(PAYLOAD), context())).rejects.toThrow('mongo down');
     expect(extractMock).not.toHaveBeenCalled();
   });
 

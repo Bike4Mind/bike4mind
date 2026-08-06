@@ -25,7 +25,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // the queue for the full visibility window and across retries - so without this, turning the
     // kill-switch off would still let already-queued extractions write beliefs. The consumer side is
     // gated independently, so those beliefs would be inert; this makes the switch stop the WRITE too.
-    const enabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory').catch(() => false);
+    // Deliberately NOT `.catch(() => false)`. Failing closed is right, but dropping the message is not:
+    // a rejected lookup is "we could not tell", and collapsing that into a definitive off would delete
+    // the work with no retry and no DLQ over a transient Mongo blip. Letting it throw fails closed for
+    // THIS attempt (nothing is written) while leaving SQS to retry, which is the same
+    // failed-lookup-is-not-a-resolved-false distinction the memento gate resolver draws on the agent
+    // surface. Only a definitive `false` drops the message.
+    const enabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory');
     if (!enabled) {
       logger.info('[lakeMemory] EnableLakeMemory is off; dropping queued extraction', {
         dataLakeId: payload.dataLakeId,

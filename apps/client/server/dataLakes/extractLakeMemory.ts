@@ -95,7 +95,14 @@ export async function extractLakeMemoryForBatch(
   logger: Logger
 ): Promise<{ docsProcessed: number; factsWritten: number }> {
   const startedAt = Date.now();
-  const remainingMs = () => params.getRemainingTimeInMillis?.() ?? DEFAULT_RUN_BUDGET_MS - (Date.now() - startedAt);
+  // `?? ` alone would not be enough: a non-finite reading (NaN, Infinity) is not nullish, and every
+  // comparison against it is false - which would disable the guard silently rather than fall back.
+  const remainingMs = () => {
+    const reported = params.getRemainingTimeInMillis?.();
+    return typeof reported === 'number' && Number.isFinite(reported)
+      ? reported
+      : DEFAULT_RUN_BUDGET_MS - (Date.now() - startedAt);
+  };
   const lake = await dataLakeRepository.findById(params.dataLakeId);
   if (!lake?.createdByUserId || !lake.datalakeTag) {
     logger.warn('[lakeMemory] lake missing owner or tag; skipping extraction', { dataLakeId: params.dataLakeId });
@@ -147,10 +154,16 @@ export async function extractLakeMemoryForBatch(
     // Yield rather than get killed. Checked BEFORE starting a doc, since the expensive, unresumable
     // part (the LLM call) is at the start of one.
     if (remainingMs() < LAKE_EXTRACTION_DEADLINE_BUFFER_MS) {
+      // Word this as the dead end it is. There is no cursor, no cron, and no self-re-enqueue: the only
+      // producer trigger is a batch finalize (`enqueueLakeMemoryExtractionIfWanted`), itself capped at
+      // LAKE_MEMORY_DAILY_CAP per lake per day. So these documents are NOT picked up later by anything -
+      // they wait for the next upload to that lake. Saying "not yet covered this run" would imply a
+      // follow-up run that does not exist.
       logger.warn(
-        `[lakeMemory] lake ${datalakeTag} ran out of time after ${docsAttempted}/${docs.length} docs; ` +
-          `${docs.length - docsAttempted} not yet covered this run (bounded-continuation follow-up). ` +
-          `Stopping cleanly so the beliefs already written are kept and the lake is not re-billed by a redelivery.`
+        `[lakeMemory] lake ${datalakeTag} ran out of time after ${docsAttempted}/${docs.length} docs. ` +
+          `${docs.length - docsAttempted} document(s) are NOT extracted and nothing will retry them: the only ` +
+          `trigger is a new batch finalize for this lake. Beliefs already written are kept, and stopping here ` +
+          `avoids a redelivery re-billing the whole lake. Full coverage needs the bounded-continuation follow-up.`
       );
       break;
     }
