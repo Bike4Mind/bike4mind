@@ -139,7 +139,7 @@ export default function DataLakeTree(props: DataLakeTreeProps) {
         </ListItemButton>
       </ListItem>
     ),
-    humanize: (segment, depth) => (segment ? humanizeSegment(segment, depth, taxonomy) : ''),
+    humanize: (segment, depth) => humanizeSegment(segment, depth, taxonomy),
     allCategoriesLabel: copy.allCategoriesLabel,
     emptyFilesLabel: 'No articles found',
     errorLabel: 'Failed to load articles',

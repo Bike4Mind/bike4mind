@@ -143,6 +143,17 @@ describe('DataLakeTreeView back row', () => {
     expect(screen.queryByTestId('datalake-back')).toBeNull();
   });
 
+  it('never calls humanize at root breadcrumb', () => {
+    const humanizeSpy = vi.fn(() => 'x');
+    const spyChrome: DataLakeTreeChrome = {
+      ...testChrome,
+      humanize: humanizeSpy,
+    };
+    renderTree({ chrome: spyChrome });
+    expect(screen.queryByTestId('datalake-back')).toBeNull();
+    expect(humanizeSpy).not.toHaveBeenCalled();
+  });
+
   it('labels depth-1 with allCategoriesLabel and deeper with the humanized parent', () => {
     const first = renderTree({ breadcrumb: ['books'] });
     expect(screen.getByTestId('datalake-back').textContent).toBe('All Categories');

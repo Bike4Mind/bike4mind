@@ -120,12 +120,15 @@ export default function DataLakeTreeView({
   // The bucket standing in for an empty root is still content - don't show "No categories" under it.
   const showNodeEmpty = filteredNodes.length === 0 && !showBucketRow;
 
-  const backLabel =
-    breadcrumb.length === 1
-      ? chrome.allCategoriesLabel
-      : chrome.humanize(breadcrumb[breadcrumb.length - 2], breadcrumb.length - 2);
   const backRow =
-    breadcrumb.length > 0 ? chrome.renderBackRow(backLabel, () => onNavigate(breadcrumb.slice(0, -1))) : null;
+    breadcrumb.length > 0
+      ? chrome.renderBackRow(
+          breadcrumb.length === 1
+            ? chrome.allCategoriesLabel
+            : chrome.humanize(breadcrumb[breadcrumb.length - 2], breadcrumb.length - 2),
+          () => onNavigate(breadcrumb.slice(0, -1))
+        )
+      : null;
 
   return (
     <Box data-testid="datalake-tree" sx={chrome.containerSx}>
