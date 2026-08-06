@@ -348,6 +348,15 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
   ): Promise<IDataLakeBatchDocument | null>;
   /**
+   * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
+   * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is
+   * legitimately mid-retry doesn't go idle long enough for the stuck-batch reconciler (which
+   * keys off `updatedAt`) to force it terminal before the next attempt lands. Guarded the same
+   * way as `setStatusIfActive`/`markTerminalIfActive`, so it can never resurrect a batch the
+   * pipeline already finalized.
+   */
+  touchIfActive(batchId: string): Promise<void>;
+  /**
    * Guarded taxonomy-phase transition: set `taxonomyStatus` only if it is still one of `from`,
    * so a redelivered queue message or a race between the reconciler and a live worker can only
    * let one caller win. `extra` carries fields that travel with the transition (e.g.

@@ -566,6 +566,24 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   }
 
   /**
+   * Shared guard behind markTerminalIfActive/setStatusIfActive/touchIfActive: apply `set` only
+   * while the batch is still non-terminal, so a redelivered message, a reconciler race, or a
+   * client-driven status flip can never resurrect or double-finalize a batch another caller
+   * already settled.
+   */
+  private async guardedActiveUpdate(
+    batchId: string,
+    set: Record<string, unknown>
+  ): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
+      { $set: set },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  /**
    * Guarded terminal transition: only succeeds if the batch is still non-terminal,
    * so exactly one caller wins the finalization (the completion-crossing increment
    * OR the reconciler), never both. Returns the post-update doc to the winner.
@@ -577,28 +595,21 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   ): Promise<IDataLakeBatchDocument | null> {
     const set: Record<string, unknown> = { status, completedAt: new Date() };
     if (completionReason) set.completionReason = completionReason;
-    const doc = await this.batchModel.findOneAndUpdate(
-      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
-      { $set: set },
-      { new: true }
-    );
-    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+    return this.guardedActiveUpdate(batchId, set);
   }
 
   async setStatusIfActive(
     batchId: string,
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
   ): Promise<IDataLakeBatchDocument | null> {
-    // Guarded non-terminal transition: never resurrect a batch the pipeline already
-    // finalized. The client flips a batch to 'processing' after the browser upload phase,
-    // but a fast pipeline can finalize it first - an unguarded $set would revive the dead
-    // batch and strand it (no further events arrive). Mirrors markTerminalIfActive.
-    const doc = await this.batchModel.findOneAndUpdate(
-      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
-      { $set: { status } },
-      { new: true }
-    );
-    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+    // The client flips a batch to 'processing' after the browser upload phase, but a fast
+    // pipeline can finalize it first - an unguarded $set would revive the dead batch and
+    // strand it (no further events arrive).
+    return this.guardedActiveUpdate(batchId, { status });
+  }
+
+  async touchIfActive(batchId: string): Promise<void> {
+    await this.guardedActiveUpdate(batchId, { updatedAt: new Date() });
   }
 
   /**
