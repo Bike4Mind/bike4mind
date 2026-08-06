@@ -3,7 +3,7 @@ import { test as base, expect } from '@playwright/test';
 import { TIMEOUTS } from './constants';
 import { ConsoleTracker } from './helpers/console-tracker';
 import { LoginPage } from './pages/LoginPage';
-import { seedAuthOnPage } from './helpers/auth-seed';
+import { seedAuthOnPage, seedFreshRefreshCookie } from './helpers/auth-seed';
 import { NavigationPage } from './pages/NavigationPage';
 import { BasePage } from './pages/BasePage';
 import { SignupPage } from './pages/SignupPage';
@@ -50,13 +50,41 @@ type TestFixtures = {
   verifyAnswers: (answers: string | string[], options?: VerifyAnswersOptions) => Promise<void>;
 };
 
+// playwright.config project names are kebab-case (data-lake); spec-user keys are camelCase (dataLake).
+function projectNameToSpecKey(projectName: string): string {
+  return projectName.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+}
+
+/**
+ * Email of the spec user backing an authenticated spec project, or null for projects that seed no
+ * user (unauthenticated, admin, setup). Returns null rather than throwing when core data is absent
+ * so non-spec contexts stay unaffected.
+ */
+function specUserEmailForProject(projectName: string): string | null {
+  try {
+    return getTestUsers().specUsers[projectNameToSpecKey(projectName)]?.email ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export const test = base.extend<TestFixtures>({
   // Suppress the What's New modal globally - return empty modals so it never renders.
   // This eliminates flaky backdrop-interception failures without relying on timing hacks.
-  page: async ({ page }, use) => {
+  page: async ({ page, request }, use, testInfo) => {
     await page.route('**/api/modals**', route =>
       route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
     );
+
+    // Authenticated spec projects seed auth by planting the app's single-use refresh cookie. One
+    // token shared across the project (via storageState) is replayed by every test + retry and
+    // gets the session revoked by reuse-detection, bouncing later tests to /login. Mint a fresh
+    // token per test so the cold-load bootstrap consumes it exactly once. See seedFreshRefreshCookie.
+    const email = specUserEmailForProject(testInfo.project.name);
+    if (email) {
+      await seedFreshRefreshCookie(page, request, email);
+    }
+
     await use(page);
   },
 

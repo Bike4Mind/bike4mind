@@ -1,4 +1,5 @@
-import { type Page } from '@playwright/test';
+import { type Page, type APIRequestContext } from '@playwright/test';
+import { apiLoginViaOtc } from './api';
 
 /**
  * Cookie-seed auth helpers.
@@ -53,6 +54,29 @@ export async function seedAuthStorageState(page: Page, tokens: SeedTokens, path:
   await injectRefreshCookie(page, tokens);
   await page.goto('/');
   await page.context().storageState({ path });
+}
+
+/**
+ * Mint a FRESH single-use refresh cookie for `email` and plant it, WITHOUT navigating.
+ *
+ * The opaque refresh token is single-use: rotateSession's reuse-detection revokes the whole
+ * session the moment an already-rotated token is replayed (b4m-core/services/src/authSessionService/
+ * rotateSession.ts, 60s grace). A token baked once into a shared Playwright storageState is
+ * replayed by every test AND every retry that cold-loads from it; past the grace window the
+ * replay is treated as theft, the session is revoked, and every later cold load 401s -> /login.
+ * That is exactly the projects/agents/profile/tavern/search failure. Handing each test its OWN
+ * freshly-minted token means the app's bootstrap exchange (sessionBootstrap.ts) spends it exactly
+ * once, so reuse-detection never fires - which is what keeps the cookie-seed model compatible with
+ * single-use rotation.
+ *
+ * The caller must NOT have navigated yet: the test's own first `page.goto` performs the single
+ * cold-load exchange that consumes this token.
+ */
+export async function seedFreshRefreshCookie(page: Page, request: APIRequestContext, email: string): Promise<void> {
+  const tokens = await apiLoginViaOtc(request, email);
+  // Drop any stale cookie the per-project storageState planted, so only the fresh token is present.
+  await page.context().clearCookies({ name: REFRESH_COOKIE_NAME });
+  await injectRefreshCookie(page, tokens);
 }
 
 /**
