@@ -20,12 +20,10 @@ interface RestoreDeletedDataLakeAdapters {
  * duplicate is left discarded (not un-deleted). Owner or admin only. Mirrors
  * unarchiveDataLake but on the deletedAt axis. Only valid from the 'deleted' state.
  *
- * Known asymmetry: this un-deletes every member currently carrying deletedAt, not only the ones
- * phase 1 deleted, because nothing records which those were. So a member the creator had already
- * deleted on their own comes back with the lake. True for meta-tagged members before the prefix arm
- * existed; the arm widens the set to the creator's whole prefix namespace. Nothing is lost either
- * way - a file reappears rather than disappearing - and bounding it properly needs a recorded
- * teardown timestamp on the lake, which is not in this change's scope.
+ * Scoped to the batch phase 1 actually deleted, via the stamp it recorded in `filesDeletedAt`: a
+ * member the creator deleted on their own - before the teardown or while the lake sat deleted -
+ * carries a different stamp and stays deleted. A lake torn down before that field existed has no
+ * mark and restores unbounded, which is the old behavior and errs toward a file reappearing.
  */
 export const restoreDeletedDataLake = async (
   actor: { userId: string; isAdmin: boolean },
@@ -51,7 +49,10 @@ export const restoreDeletedDataLake = async (
   // re-uploaded while the lake was deleted - keep the live copy, leave the deleted
   // duplicate discarded (excluded from the un-delete).
   const scope = lakeMembershipScope(existing);
-  const deleted = await db.fabFiles.findDeletedByDataLakeTag(scope);
+  // The batch phase 1 recorded. undefined for a lake torn down before the mark existed, which keeps
+  // the old unbounded reversal rather than restoring nothing.
+  const stampedAt = existing.filesDeletedAt ?? undefined;
+  const deleted = await db.fabFiles.findDeletedByDataLakeTag(scope, stampedAt);
   const deletedHashes = deleted.map(f => f.contentHash).filter((h): h is string => !!h);
 
   let skippedDuplicates = 0;
@@ -65,9 +66,10 @@ export const restoreDeletedDataLake = async (
     skippedDuplicates = duplicateIds.length;
   }
 
-  const restoredCount = await db.fabFiles.undeleteByDataLakeTag(scope, duplicateIds);
+  const restoredCount = await db.fabFiles.undeleteByDataLakeTag(scope, duplicateIds, stampedAt);
 
-  await db.dataLakes.update({ id: dataLakeId, status: 'active' });
+  // Explicit null, not undefined, which mongoose would drop and leave the spent mark in place.
+  await db.dataLakes.update({ id: dataLakeId, status: 'active', filesDeletedAt: null });
   await recomputeLakeStats(existing, { db });
 
   return { restoredCount, skippedDuplicates };

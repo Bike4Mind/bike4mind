@@ -62,6 +62,10 @@ export const cleanupDeletedDataLake = async (
 
   await warnOnPrefixCollision(db, existing, logger);
   const scope = lakeMembershipScope(existing);
+  // Deliberately unbounded, unlike restore's stamp-keyed reversal: purge destroys the lake and
+  // everything the membership predicate still names, a member the creator deleted on their own
+  // included. The stamp bound only stops restore from reviving what it never deleted; it is not a
+  // claim that such a file outlives its lake.
   const fileIds = await db.fabFiles.findIdsByDataLakeTag(scope);
 
   // 1. Retrieval index first, and strict: a throw here must cost no progress (see ports.ts).

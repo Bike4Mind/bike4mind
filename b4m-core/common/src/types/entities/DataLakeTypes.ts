@@ -97,6 +97,17 @@ export interface IDataLake {
   totalSizeBytes?: number;
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
+  /**
+   * The exact `deletedAt` stamp phase-1 delete wrote on this lake's members, so restore can
+   * un-delete that batch and nothing else. Not a time window: it is matched by EQUALITY, which is
+   * what keeps a file the creator deleted independently - before OR during the deleted window -
+   * from riding back in. Claimed set-if-unset, so two overlapping teardowns agree on one stamp
+   * instead of the loser recording a mark no row carries; restore clears it.
+   *
+   * Absent on a lake torn down before this field existed, which restores unbounded (the old
+   * behavior) rather than restoring nothing.
+   */
+  filesDeletedAt?: Date | null;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
@@ -163,6 +174,15 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * was the one that flipped it.
    */
   activateIfDraft(id: string): Promise<boolean>;
+  /**
+   * Claim `filesDeletedAt` for a phase-1 teardown: writes `at` only if the lake carries no stamp,
+   * and returns the stamp now in force - the existing one when a concurrent teardown or a crashed
+   * prior attempt already claimed it. Callers must sweep with the RETURNED value, not their own,
+   * or they stamp rows under a mark the lake does not name. Null means no stamp is in force: the
+   * lake vanished, or a restore cleared it between the claim and the fallback read - so a null
+   * caller sweeps unmarked and must say so, since that lake then restores unbounded.
+   */
+  claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────
