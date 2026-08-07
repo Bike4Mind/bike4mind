@@ -35,6 +35,7 @@ export type {
   BackgroundDispatchResult,
 } from './agents/ServerSubagentOrchestrator';
 export * from './MementoEvaluationService';
+export * from './LakeMemoryExtractionService';
 export * from './SmallLLMService';
 export * from './smallLLMHelpers';
 export * from './reranker';
