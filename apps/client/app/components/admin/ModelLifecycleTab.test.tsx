@@ -158,11 +158,15 @@ describe('ModelLifecycleTab', () => {
     expect(screen.getByTestId('successor-cost-panel')).toHaveTextContent('no price on file');
   });
 
-  it('omits the cost surfaces when the response carries no rates', async () => {
+  // A response without rates degrades to the unverifiable verdict everywhere
+  // rather than throwing or reading as free.
+  it('marks both cost surfaces unpriced when the response carries no rates', async () => {
     mockGet.mockResolvedValue({ data: { ...STATUS, perMTokRates: undefined } });
     renderTab();
-    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
 
+    expect(await screen.findByTestId('successor-cost-chip-gpt-sunset')).toHaveTextContent('no price on file');
+
+    fireEvent.click(screen.getByTestId('model-lifecycle-accept-gpt-sunset'));
     expect(screen.getByTestId('successor-cost-panel')).toHaveTextContent('no price on file');
   });
 

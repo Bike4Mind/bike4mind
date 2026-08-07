@@ -34,9 +34,23 @@ const VERDICT_LABEL: Record<SuccessorCostVerdict, string> = {
   unverifiable: 'no price on file',
 };
 
-/** The larger of the two moves, which is the one that decides the verdict's headline. */
-const headlineChange = (input: RateChange, output: RateChange): RateChange =>
-  (output.pctChange ?? Infinity) > (input.pctChange ?? Infinity) ? output : input;
+/**
+ * The move the verdict is about: the steepest rise when the successor costs
+ * more, the deepest saving when it does not. Taking the larger signed move in
+ * both directions would headline a 67% input cut with a flat output as
+ * 'no change', which is the ordinary shape of a provider's next model.
+ */
+const headlineChange = (input: RateChange, output: RateChange, verdict: SuccessorCostVerdict): RateChange => {
+  const inputPct = input.pctChange ?? Infinity;
+  const outputPct = output.pctChange ?? Infinity;
+  return verdict === 'cheaper-or-equal'
+    ? outputPct < inputPct
+      ? output
+      : input
+    : outputPct > inputPct
+      ? output
+      : input;
+};
 
 /** Compact form for a table cell. */
 export const SuccessorCostChip: React.FC<SuccessorCostProps> = ({ modelId, successorId, rates }) => {
@@ -44,7 +58,7 @@ export const SuccessorCostChip: React.FC<SuccessorCostProps> = ({ modelId, succe
   const delta = successorCostDelta(modelId, successorId, rates);
   const summary =
     delta.input && delta.output
-      ? `${VERDICT_LABEL[delta.verdict]} ${formatPctChange(headlineChange(delta.input, delta.output).pctChange)}`
+      ? `${VERDICT_LABEL[delta.verdict]} ${formatPctChange(headlineChange(delta.input, delta.output, delta.verdict).pctChange)}`
       : VERDICT_LABEL[delta.verdict];
 
   return (

@@ -15,6 +15,9 @@ const RATES = {
   'grok-3-mini': { input: 0.3, output: 0.5 },
   'grok-4.5': { input: 2, output: 6 },
   'grok-4.5-cheap': { input: 0.1, output: 0.25 },
+  // A cut input against a held output: the ordinary shape of a next model, and
+  // the case where leading with the smaller move reads as 'no change'.
+  'grok-4.5-flat-output': { input: 0.1, output: 0.5 },
 };
 
 const renderWith = (ui: React.ReactElement) => render(<TestWrapper>{ui}</TestWrapper>);
@@ -30,7 +33,14 @@ describe('SuccessorCostChip', () => {
   it('marks a cheaper successor as no cost increase', () => {
     renderWith(<SuccessorCostChip modelId="grok-3-mini" successorId="grok-4.5-cheap" rates={RATES} />);
 
-    expect(screen.getByTestId('successor-cost-chip-grok-3-mini')).toHaveTextContent('no cost increase');
+    // Output falls 50% against input's 67%, so input is the headline saving.
+    expect(screen.getByTestId('successor-cost-chip-grok-3-mini')).toHaveTextContent('no cost increase -67%');
+  });
+
+  it('leads with the deeper saving when the other rate is held flat', () => {
+    renderWith(<SuccessorCostChip modelId="grok-3-mini" successorId="grok-4.5-flat-output" rates={RATES} />);
+
+    expect(screen.getByTestId('successor-cost-chip-grok-3-mini')).toHaveTextContent('no cost increase -67%');
   });
 
   it('says so rather than implying free when a rate is missing', () => {

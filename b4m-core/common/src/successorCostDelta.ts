@@ -81,8 +81,11 @@ export function formatPerMTok(rate: number): string {
  */
 export function formatPctChange(pctChange: number | undefined): string {
   if (pctChange === undefined) return 'from $0';
-  if (pctChange === 0) return 'no change';
-  const sign = pctChange > 0 ? '+' : '';
-  const pct = `${sign}${pctChange.toFixed(Math.abs(pctChange) < 10 ? 1 : 0)}%`;
-  return pctChange >= 100 ? `${pct} (${(1 + pctChange / 100).toFixed(1)}x)` : pct;
+  const precision = Math.abs(pctChange) < 10 ? 1 : 0;
+  // Branch on the rounded value, not the raw one, so the same displayed
+  // percentage never renders two ways (99.5 and 100 both show '+100%').
+  const rounded = Number(pctChange.toFixed(precision));
+  if (rounded === 0) return 'no change';
+  const pct = `${rounded > 0 ? '+' : ''}${rounded.toFixed(precision)}%`;
+  return rounded >= 100 ? `${pct} (${(1 + rounded / 100).toFixed(1)}x)` : pct;
 }

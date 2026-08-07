@@ -73,6 +73,14 @@ describe('formatPctChange', () => {
     expect(formatPctChange(0)).toBe('no change');
   });
 
+  it('decides the multiple on the displayed percentage, not the raw one', () => {
+    expect(formatPctChange(99.5)).toBe('+100% (2.0x)');
+  });
+
+  it('calls a move that rounds away no change rather than a signed zero', () => {
+    expect(formatPctChange(-0.04)).toBe('no change');
+  });
+
   it('names the unbounded case instead of printing Infinity', () => {
     expect(formatPctChange(undefined)).toBe('from $0');
   });

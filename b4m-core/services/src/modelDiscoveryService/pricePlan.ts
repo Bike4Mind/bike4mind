@@ -358,7 +358,9 @@ export interface PerTokenRates {
 /**
  * The per-token rates in force, by model. The auto-remap cost constraint
  * compares two models against each other rather than against a published rate,
- * so the stored unit is the right one and there is no 1e6 crossing to get wrong.
+ * so the stored unit is the right one for that comparison. Callers that show
+ * the same comparison to an operator do cross 1e6 (`toPerMTokRate` in
+ * `@bike4mind/common`), and must scale both sides of both models.
  */
 export function perTokenRatesInForce(rows: readonly IModelPrice[]): Map<string, PerTokenRates> {
   const rates = new Map<string, PerTokenRates>();
