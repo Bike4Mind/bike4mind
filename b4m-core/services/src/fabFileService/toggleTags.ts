@@ -44,6 +44,18 @@ const storedTagNames = (file: Pick<IFabFileDocument, 'tags'>): string[] =>
 const isDataLakeTag = (tag: string): boolean => tag.toLowerCase().startsWith(DATALAKE_TAG_PREFIX);
 
 /**
+ * The one toggle decision `toggleOrdinaryTag` (the real write) and `predictToggleResult` (its
+ * speculative fold, used only to decide the prefix-arm gate) must never disagree on: which stored
+ * spellings of `tag` are already present, matched case-insensitively. Both derive from this
+ * instead of each re-implementing the match, so the two cannot drift apart the way the bug this
+ * PR fixes did.
+ */
+const matchingStoredNames = (storedNames: readonly string[], tag: string): string[] => {
+  const key = tag.toLocaleLowerCase();
+  return storedNames.filter(name => name.toLocaleLowerCase() === key);
+};
+
+/**
  * Flip each named tag on or off for each named file: a tag the file already carries is removed,
  * one it does not is added.
  *
@@ -103,9 +115,8 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   const predictToggleResult = (currentNames: string[], requestedTags: readonly string[]): string[] => {
     let result = currentNames;
     for (const tag of requestedTags) {
-      const key = tag.toLocaleLowerCase();
-      const hadMatch = result.some(name => name.toLocaleLowerCase() === key);
-      result = hadMatch ? result.filter(name => name.toLocaleLowerCase() !== key) : [...result, tag];
+      const matches = matchingStoredNames(result, tag);
+      result = matches.length > 0 ? result.filter(name => !matches.includes(name)) : [...result, tag];
     }
     return result;
   };
@@ -194,10 +205,9 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   };
 
   const toggleOrdinaryTag = async (file: IFabFileDocument, tag: string): Promise<void> => {
-    const key = tag.toLocaleLowerCase();
     // Every stored casing, not just the first: legacy data can hold both `Foo` and `foo`, and
     // removing one while leaving the other reports the tag as off while it still matches.
-    const present = storedTagNames(file).filter(name => name.toLocaleLowerCase() === key);
+    const present = matchingStoredNames(storedTagNames(file), tag);
     if (present.length > 0) {
       await db.fabFiles.pullTagsByFabFileId(file.id, present);
       // Not gated on the pull's return: timestamps make it report a modification even when nothing

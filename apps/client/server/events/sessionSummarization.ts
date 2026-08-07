@@ -230,9 +230,17 @@ export const handler = withEventContext(async (event, logger) => {
         const storedTagNames = (fabfile.tags ?? [])
           .map(t => t?.name)
           .filter((name): name is string => typeof name === 'string');
-        const prefixArmLakes = await dataLakeService.loadPrefixArmCandidateLakes([fabfile.userId], {
-          db: { dataLakes: dataLakeRepository },
-        });
+        // Short-circuits the query when nothing stored could carry a prefix arm - every usable
+        // prefix ends in ':' (see `prefixArmTagNames`), and a meta-tag never matches one. Mirrors
+        // the guard `reconcileLakeTags`, `toggleTags`, and the bulk tag doors all use.
+        const couldCarryPrefixArm = storedTagNames.some(
+          name => !name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX) && name.includes(':')
+        );
+        const prefixArmLakes = couldCarryPrefixArm
+          ? await dataLakeService.loadPrefixArmCandidateLakes([fabfile.userId], {
+              db: { dataLakes: dataLakeRepository },
+            })
+          : [];
         // Computed once, not per tag: prefixArmTagNames re-scans the whole tag list per lake, so
         // calling it inside the filter below would redo that scan for every tag on the file.
         const prefixArmSignalNames = new Set(

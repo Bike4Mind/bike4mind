@@ -198,6 +198,20 @@ describe('sessionSummarization summary-file lookup', () => {
     );
   });
 
+  it('skips the candidate-lake query when no stored tag could carry a prefix arm', async () => {
+    h.fabFileStore.push({
+      id: 'fabfile-owner',
+      userId: OWNER,
+      sessionId: SESSION_ID,
+      fileName: 'Notebook Summary.txt',
+      tags: [{ name: 'plain', strength: 1 }],
+    });
+
+    await run();
+
+    expect(h.findPrefixArmLakes).not.toHaveBeenCalled();
+  });
+
   // The doc comment above the carry-through says the session's own tags never overlap a
   // membership signal - true in the normal case, but not an invariant the code can lean on.
   it('does not duplicate a membership tag the session itself also carries', async () => {
