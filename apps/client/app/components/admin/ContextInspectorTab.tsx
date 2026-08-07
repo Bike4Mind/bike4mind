@@ -1958,6 +1958,7 @@ export function ContextInspectorTab() {
             >
               <Option value={null}>All</Option>
               <Option value="context_overflow">Context Overflow</Option>
+              <Option value="high_utilization">High Utilization</Option>
               <Option value="high_truncation">High Truncation</Option>
               <Option value="tool_failure">Tool Failure</Option>
               <Option value="subagent_timeout">Subagent Timeout</Option>
