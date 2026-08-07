@@ -145,6 +145,12 @@ describe('buildUserActivityPipeline - metadata filters', () => {
     ]);
   });
 
+  it('matches an in filter against a numeric metadata field, not just its string form', () => {
+    expect(metadataMatch({ field: 'credits', operator: 'in', value: '250, web' })).toEqual([
+      { 'metadata.credits': { $in: [/^250$/i, 250, /^web$/i] } },
+    ]);
+  });
+
   it('applies every metadata filter, not just the first', () => {
     const { pipeline } = buildUserActivityPipeline({
       ...baseQuery,
