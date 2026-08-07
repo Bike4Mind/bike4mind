@@ -16,7 +16,7 @@ import {
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { Logger } from '@bike4mind/observability';
-import { supportsAtlasVectorSearch } from '@bike4mind/db-core';
+import { supportsAtlasVectorSearch, selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
   classifyLoadedChunk,
   createEmbeddingMismatchAccumulator,
@@ -28,6 +28,7 @@ import {
 import { BoundedTopK } from './boundedTopK';
 import { partitionByVectorSearchReadiness } from './vectorSearchEligibility';
 import { atlasVectorSearch, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
+import { openSearchVectorSearch, type OpenSearchVectorSearchAdapters } from './openSearchVectorSearch';
 
 /**
  * Shared vector/semantic search over FabFile chunks in a user's accessible data lakes.
@@ -206,6 +207,8 @@ export interface SemanticDataLakeSearchAdapters {
     fabfiles: Pick<IFabFileRepository, 'search'>;
     fabfilechunks: FabFileChunksAdapter;
   };
+  /** Self-host OpenSearch retrieval, undefined elsewhere - a separate cluster, not a Mongo repo method. */
+  vectorIndex?: OpenSearchVectorSearchAdapters;
 }
 
 /** Shape both entrypoints need from a scoped file's metadata. */
@@ -520,6 +523,7 @@ async function rankChunksForFiles(args: {
   vectorSearchEnabled: boolean;
   logger?: Logger;
   fabfilechunks: FabFileChunksAdapter;
+  vectorIndex?: OpenSearchVectorSearchAdapters;
 }): Promise<SemanticDataLakeSearchResult> {
   const { query, fileIds, fileById, topK, minScore, embeddingModel, apiKeyTable, budgets, logger } = args;
 
@@ -574,12 +578,12 @@ async function rankChunksForFiles(args: {
     };
   }
 
-  // Split same-model files into Atlas-eligible and scan-only BEFORE the scan runs, so an
+  // Split same-model files into ANN-eligible and scan-only BEFORE the scan runs, so an
   // ann-served file is never handed to scanAndRank and never spends its chunk budget - per-file
   // subset selection, not all-or-nothing. Every gate below defaults closed: the ann path only
   // engages when the caller opted in AND the backend/index are actually ready right now: a
-  // disabled/DocumentDB/self-host/not-yet-queryable deployment scans every rankable file exactly
-  // as it did before this cutover existed.
+  // disabled/DocumentDB/not-yet-queryable deployment scans every rankable file exactly as it did
+  // before this cutover existed.
   let annEligible: typeof rankable = [];
   let scanEligible = rankable;
   const canUseAtlas =
@@ -587,6 +591,12 @@ async function rankChunksForFiles(args: {
     supportsAtlasVectorSearch() &&
     !!args.fabfilechunks.vectorSearch &&
     !!args.fabfilechunks.getAtlasIndexStatus;
+  // Atlas and self-host OpenSearch are mutually exclusive: getVectorBackend() resolves to exactly
+  // one VectorBackend per deployment, so this is an if/else-if documenting that invariant, not two
+  // independent guards that happen never to both fire.
+  const canUseOpenSearch =
+    !canUseAtlas && args.vectorSearchEnabled && selfHostOpenSearchEnabled() && !!args.vectorIndex;
+
   if (canUseAtlas) {
     const indexStatus = await args.fabfilechunks.getAtlasIndexStatus!(embeddingModel);
     if (indexStatus?.queryable) {
@@ -594,6 +604,13 @@ async function rankChunksForFiles(args: {
       annEligible = split.annReady;
       scanEligible = split.scanOnly;
     }
+  } else if (canUseOpenSearch) {
+    // No mongot-style indexing-lag concept to check here - the readiness stamp still applies
+    // (same-model chunks must be fully vectorized+stamped), but "is it actually in the index yet"
+    // is instead covered below by the zero-raw-hits rebucket, same as Atlas's missedFiles case.
+    const split = partitionByVectorSearchReadiness(rankable, new Date());
+    annEligible = split.annReady;
+    scanEligible = split.scanOnly;
   }
 
   let annResult: Awaited<ReturnType<typeof atlasVectorSearch>> = {
@@ -604,21 +621,33 @@ async function rankChunksForFiles(args: {
   };
   if (annEligible.length > 0) {
     try {
-      annResult = await atlasVectorSearch({
-        fileIds: annEligible.map(f => f.id),
-        fileById,
-        queryVector: queryEmbedding,
-        model: embeddingModel,
-        limit: topK,
-        minScore,
-        adapters: args.fabfilechunks as AtlasVectorSearchAdapters,
-      });
+      annResult = canUseAtlas
+        ? await atlasVectorSearch({
+            fileIds: annEligible.map(f => f.id),
+            fileById,
+            queryVector: queryEmbedding,
+            model: embeddingModel,
+            limit: topK,
+            minScore,
+            adapters: args.fabfilechunks as AtlasVectorSearchAdapters,
+          })
+        : await openSearchVectorSearch({
+            fileIds: annEligible.map(f => f.id),
+            fileById,
+            queryVector: queryEmbedding,
+            model: embeddingModel,
+            limit: topK,
+            minScore,
+            adapters: args.vectorIndex!,
+          });
     } catch (error) {
-      // A broken Atlas index (transient mongot outage, IAM regression, quota exhaustion) must
-      // degrade to the scan path, not surface as a 500 - the whole point of the per-file split
-      // is that scanAndRank can always cover any file the ann path can't serve right now.
-      logger?.warn?.('[semanticSearch] $vectorSearch failed, falling back to scan for its files', {
+      // A broken ANN index (transient outage, IAM regression, quota exhaustion, unreachable
+      // self-host cluster) must degrade to the scan path, not surface as a 500 - the whole point
+      // of the per-file split is that scanAndRank can always cover any file the ann path can't
+      // serve right now.
+      logger?.warn?.('[semanticSearch] ANN vector search failed, falling back to scan for its files', {
         embeddingModel,
+        backend: canUseAtlas ? 'atlas' : 'opensearch',
         fileCount: annEligible.length,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -635,8 +664,9 @@ async function rankChunksForFiles(args: {
     // does not cost the rest their ANN path.
     const missedFiles = annEligible.filter(f => !annResult.filesWithHits.has(f.id));
     if (missedFiles.length > 0) {
-      logger?.warn?.('[semanticSearch] $vectorSearch returned no hits for ready files, scanning them instead', {
+      logger?.warn?.('[semanticSearch] ANN vector search returned no hits for ready files, scanning them instead', {
         embeddingModel,
+        backend: canUseAtlas ? 'atlas' : 'opensearch',
         fileCount: missedFiles.length,
       });
       scanEligible = [...scanEligible, ...missedFiles];
@@ -815,6 +845,7 @@ export async function semanticDataLakeSearch(
     vectorSearchEnabled: params.vectorSearchEnabled ?? false,
     logger,
     fabfilechunks: adapters.db.fabfilechunks,
+    vectorIndex: adapters.vectorIndex,
   });
 }
 
@@ -843,6 +874,8 @@ export interface FileScopedSemanticSearchAdapters {
     fabfiles: Pick<IFabFileRepository, 'getAccessibleFiles'>;
     fabfilechunks: FabFileChunksAdapter;
   };
+  /** Self-host OpenSearch retrieval, undefined elsewhere - a separate cluster, not a Mongo repo method. */
+  vectorIndex?: OpenSearchVectorSearchAdapters;
 }
 
 /**
@@ -899,5 +932,6 @@ export async function fileScopedSemanticSearch(
     vectorSearchEnabled: params.vectorSearchEnabled ?? false,
     logger,
     fabfilechunks: adapters.db.fabfilechunks,
+    vectorIndex: adapters.vectorIndex,
   });
 }
