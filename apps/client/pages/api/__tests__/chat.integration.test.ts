@@ -160,6 +160,7 @@ vi.mock('@server/auth/auth', async orig => {
 
 import handler from '../chat';
 import { ApiKeyScope } from '@bike4mind/common';
+import { Types } from 'mongoose';
 
 const VALID_KEY = 'sk-test-valid-key';
 
@@ -407,6 +408,61 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect((mockInvoke.mock.calls[0][0] as { body: { historyCount?: number } }).body.historyCount).toBe(10);
+    });
+  });
+
+  // req.user.organizationId arrives as a Mongo ObjectId (or, after a .populate(),
+  // a full Organization doc). It flows into the internal request at both top-level
+  // `organizationId` and `promptMeta.session.organizationId`, where a downstream
+  // schema parses it as z.string(). Un-normalized, an org-associated caller 422s
+  // ("expected string, received ObjectId"). The handler must coerce to a hex string
+  // at the boundary. The invoke stub here can't reproduce the downstream 422, so we
+  // assert the shape it receives instead - that IS the fix.
+  describe('organizationId boundary normalization', () => {
+    const invokedBody = () =>
+      mockInvoke.mock.calls[0][0] as {
+        body: { organizationId?: unknown; promptMeta?: { session?: { organizationId?: unknown } } };
+      };
+
+    it('coerces an ObjectId organizationId to a hex string on both surfaces (no 422)', async () => {
+      const orgId = new Types.ObjectId();
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      mockFindById.mockReturnValue(
+        Promise.resolve({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false, organizationId: orgId })
+      );
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const { body } = invokedBody();
+      expect(body.organizationId).toBe(orgId.toHexString());
+      expect(body.promptMeta?.session?.organizationId).toBe(orgId.toHexString());
+    });
+
+    it('flattens a populated Organization document to its _id hex string, never "[object Object]"', async () => {
+      const orgId = new Types.ObjectId();
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      mockFindById.mockReturnValue(
+        Promise.resolve({
+          id: 'user-1',
+          _id: 'user-1',
+          isBanned: false,
+          disputePending: false,
+          organizationId: { _id: orgId, name: 'Acme' },
+        })
+      );
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().body.organizationId).toBe(orgId.toHexString());
+    });
+
+    it('leaves organizationId absent for a personal (org-less) caller', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      // beforeEach already returns a user with organizationId: undefined.
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().body.organizationId).toBeUndefined();
     });
   });
 
