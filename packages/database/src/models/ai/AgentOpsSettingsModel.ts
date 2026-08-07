@@ -59,7 +59,8 @@ export enum AgentOpsLlmModel {
   GROK_4_5 = 'grok-4.5',
   GPT_4O = 'gpt-4o',
   GPT_4O_MINI = 'gpt-4o-mini',
-  // Retired upstream. resolveDeprecatedModelId upgrades a document still pinned to one at call time.
+  // Retired upstream and absent from the catalog, so no longer selectable; kept so a document
+  // still pinned to one loads. Model selection falls back to the default for those.
   GROK_3 = 'grok-3',
   CLAUDE_SONNET_4 = 'claude-sonnet-4-20250514',
   GPT_4_TURBO = 'gpt-4-turbo',

@@ -184,7 +184,8 @@ Please create a detailed system prompt that captures this agent's personality, c
     // Get the configured model from settings, or default to Claude 4 Opus
     const preferredModelId = settings?.generationLlmModel || 'claude-opus-4-20250514';
     const modelInfo =
-      models.find(m => m.id === preferredModelId) ||
+      // Skip a pinned model the catalog now reports as disabled, matching the save-time guard.
+      models.find(m => m.id === preferredModelId && !m.disabled) ||
       models.find(m => m.id === 'claude-opus-4-20250514') ||
       models.find(m => m.id === 'claude-sonnet-4-6') ||
       models[0];

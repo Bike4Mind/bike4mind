@@ -19,7 +19,19 @@ export function agentOpsModelOptions(models: ModelInfo[]): ModelInfo[] {
     );
 }
 
+/**
+ * Why an admin may not newly pin `modelId`, or null when they may. A disabled model is listed
+ * by the picker but not saveable, and its own `disabledReason` is what gets surfaced -- matching
+ * how ModelSelection and ChatCompletionInvoke report the same refusal.
+ */
+export function agentOpsModelRejection(models: ModelInfo[], modelId: string): string | null {
+  const model = models.find(m => m.type === 'text' && m.id === modelId);
+  if (!model) return 'Invalid LLM model specified';
+  if (model.disabled) return model.disabledReason || `${model.name} is not available`;
+  return null;
+}
+
 /** Whether an admin may newly pin `modelId`. Disabled models are listed but not saveable. */
 export function isSelectableAgentOpsModel(models: ModelInfo[], modelId: string): boolean {
-  return models.some(m => m.type === 'text' && !m.disabled && m.id === modelId);
+  return agentOpsModelRejection(models, modelId) === null;
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ModelInfo } from '@bike4mind/common';
 import { ModelBackend } from '@bike4mind/common';
-import { agentOpsModelOptions, isSelectableAgentOpsModel } from '../agentOpsModels';
+import { agentOpsModelOptions, agentOpsModelRejection, isSelectableAgentOpsModel } from '../agentOpsModels';
 
 /**
  * Agent-ops used to keep its own model lists -- an allowlist in the endpoint, a picker array in
@@ -81,5 +81,29 @@ describe('isSelectableAgentOpsModel', () => {
       .map(m => m.id);
 
     expect(offered.every(id => isSelectableAgentOpsModel(catalog, id))).toBe(true);
+  });
+});
+
+describe('agentOpsModelRejection', () => {
+  const catalog = [
+    model({ id: 'grok-4.5', name: 'Grok 4.5' }),
+    model({ id: 'gated', name: 'Gated', disabledReason: 'Requires an xAI key', disabled: true }),
+    model({ id: 'quiet', name: 'Quiet', disabled: true }),
+  ];
+
+  it('gives no reason for a selectable model', () => {
+    expect(agentOpsModelRejection(catalog, 'grok-4.5')).toBeNull();
+  });
+
+  it("surfaces a disabled model's own reason rather than blaming the input", () => {
+    expect(agentOpsModelRejection(catalog, 'gated')).toBe('Requires an xAI key');
+  });
+
+  it('names the model when it is disabled without a reason', () => {
+    expect(agentOpsModelRejection(catalog, 'quiet')).toContain('Quiet');
+  });
+
+  it('reports an unknown id as an invalid model', () => {
+    expect(agentOpsModelRejection(catalog, 'nonesuch')).toBe('Invalid LLM model specified');
   });
 });
