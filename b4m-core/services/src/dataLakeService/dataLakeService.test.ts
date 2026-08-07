@@ -1937,6 +1937,7 @@ describe('browsePublicDataLakes — public discover catalog projection', () => {
       findByIds: vi.fn().mockResolvedValue([
         { id: 'owner1', name: 'Ada Owner', username: 'ada', email: 'ada@example.com' },
         { id: 'owner2', username: 'onlyuser', email: 'nn@example.com' },
+        { id: 'owner3', email: 'ghost@example.com' },
       ]),
     },
   });
@@ -1962,6 +1963,13 @@ describe('browsePublicDataLakes — public discover catalog projection', () => {
     const { data } = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db } as any);
     expect(data[0].ownerDisplayName).toBe('onlyuser');
     // No summary field should ever carry an email address.
+    expect(JSON.stringify(data)).not.toContain('@example.com');
+  });
+
+  it('yields undefined (never the email) when the owner has neither name nor username', async () => {
+    const db = makeDb([publicLake({ id: 'pub3', slug: 'pub3', createdByUserId: 'owner3' })]);
+    const { data } = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db } as any);
+    expect(data[0].ownerDisplayName).toBeUndefined();
     expect(JSON.stringify(data)).not.toContain('@example.com');
   });
 
