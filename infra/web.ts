@@ -414,6 +414,12 @@ export const web = new sst.aws.Nextjs(
       ...($app.stage === 'production' && process.env.REDDIT_PIXEL_ID
         ? { NEXT_PUBLIC_REDDIT_PIXEL_ID: process.env.REDDIT_PIXEL_ID }
         : {}),
+      // Apex the GA cookie is pinned to, so the marketing site and this app resolve
+      // to ONE visitor across the subdomain hop (layout.tsx defaults to
+      // bike4mind.com). Deploy-overridable so a fork, or a preview served from
+      // another apex, is not stuck with this brand's domain. Not production-gated:
+      // it only shapes a cookie, and it is inert wherever GA is not injected.
+      ...(process.env.GA_COOKIE_DOMAIN ? { NEXT_PUBLIC_GA_COOKIE_DOMAIN: process.env.GA_COOKIE_DOMAIN } : {}),
     },
     // warm pings invoke the handler, keeping the lazy OpenNext bundle resident — the lever for
     // the #8985 cold-open tail (provisioned concurrency only pre-runs the ~165ms init, not the

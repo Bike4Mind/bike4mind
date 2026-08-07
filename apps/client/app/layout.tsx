@@ -8,7 +8,17 @@ import { ColorSchemeScript } from './ColorSchemeScript';
 import { SerwistProvider } from './serwist';
 import { Metadata } from 'next';
 
-// Configure Poppins font
+/**
+ * Apex to pin the GA cookie to, so the marketing site and this app resolve to ONE
+ * visitor across the subdomain hop. gtag defaults to `cookie_domain: 'auto'`,
+ * which normally resolves to the same apex - but "normally" is doing a lot of work
+ * in a funnel that has been hard to diagnose, so it is worth pinning explicitly.
+ *
+ * Env-only with NO brand fallback (the account-tied-id policy): unset simply
+ * leaves gtag on 'auto', i.e. exactly today's behaviour.
+ */
+const GA_COOKIE_DOMAIN = process.env.NEXT_PUBLIC_GA_COOKIE_DOMAIN;
+
 const poppins = Poppins({
   weight: ['400', '500', '600'],
   subsets: ['latin'],
@@ -46,7 +56,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 function gtag(){dataLayer.push(arguments);}
                 gtag('consent', 'default', { analytics_storage: 'denied' });
                 gtag('js', new Date());
-                gtag('config', '${process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID}');
+                gtag('config', '${process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID}'${
+                  GA_COOKIE_DOMAIN ? `, { cookie_domain: '${GA_COOKIE_DOMAIN}' }` : ''
+                });
               `}
             </Script>
           </>

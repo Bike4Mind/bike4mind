@@ -173,9 +173,13 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           # Account-tied: set these repo/org variables to your own resources (no brand fallback).
           # SUBSCRIBER_FANOUT_IMAGE is your published subscriber-fanout image reference (required
-          # in CI); GA_MEASUREMENT_ID is an optional GA4 property (empty == analytics disabled).
+          # in CI). GA_MEASUREMENT_ID and REDDIT_PIXEL_ID are optional analytics ids; infra/web.ts
+          # only injects each one on the production stage AND when it is non-empty, with no
+          # fallback - so an unset value means that tracker never mounts and every conversion
+          # event it would report is silently inert.
           SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
           GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
+          REDDIT_PIXEL_ID: ${{ vars.REDDIT_PIXEL_ID }}
 
       - name: Type check (excluding client)
         run: pnpm --recursive --filter=!client typecheck
@@ -199,9 +203,13 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           # Account-tied: set these repo/org variables to your own resources (no brand fallback).
           # SUBSCRIBER_FANOUT_IMAGE is your published subscriber-fanout image reference (required
-          # in CI); GA_MEASUREMENT_ID is an optional GA4 property (empty == analytics disabled).
+          # in CI). GA_MEASUREMENT_ID and REDDIT_PIXEL_ID are optional analytics ids; infra/web.ts
+          # only injects each one on the production stage AND when it is non-empty, with no
+          # fallback - so an unset value means that tracker never mounts and every conversion
+          # event it would report is silently inert.
           SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
           GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
+          REDDIT_PIXEL_ID: ${{ vars.REDDIT_PIXEL_ID }}
         run: |
           pnpm sst deploy --stage ${{ steps.config.outputs.stage }}
 
