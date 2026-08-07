@@ -140,8 +140,9 @@ const commonInputStyles = (_mode: string) => ({
   color: 'text.primary',
   // Same hover as the Reset button in this section's header, so every control here responds
   // identically. Kept in the shared helper rather than per control - the selects previously
-  // hovered to a neutral border while the inputs did not react at all.
-  '&:hover': {
+  // hovered to a neutral border while the inputs did not react at all. Excludes the disabled
+  // state, which Temperature uses on fixed-temperature models and which must not look clickable.
+  '&:not(.Mui-disabled):hover': {
     backgroundColor: 'primary.softHoverBg',
     borderColor: 'primary.main',
   },
