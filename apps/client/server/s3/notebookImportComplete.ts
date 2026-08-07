@@ -16,12 +16,39 @@ import {
   importHistoryJobRepository,
 } from '@bike4mind/database';
 import { withContext } from '@server/s3/utils';
+import type { ClientSession } from 'mongoose';
 import { Resource } from 'sst';
 import { getFilesStorage } from '@server/utils/storage';
 import { v4 as uuidv4 } from 'uuid';
 import { updateImportProgress, markImportComplete, markImportFailed } from '@server/utils/importHistoryProgress';
 
 const { NotebookImportService } = notebookImportService;
+
+/**
+ * The message writes an import performs. Exported so the invariant below is testable against a
+ * real database rather than a copy of it - see notebookImportOverwrite.e2e.test.ts.
+ */
+export const createChatHistoryWrites = (session?: ClientSession) => ({
+  bulkCreate: async (items: any[]) => {
+    // Insert, never upsert: an upsert on the incoming id re-pointed the *source* documents at
+    // the new notebook when an export was imported back into its own database, emptying the
+    // original.
+    //
+    // skipValidation keeps this as lenient as the update it replaces. Inserts validate where
+    // updates do not, and ChatHistoryItemSchema marks `prompt` required (QuestModel.ts) while
+    // the system writes empty ones - an assistant-first turn has no prompt - so validating here
+    // would fail imports that currently work.
+    const ops = items.map(({ id, ...rest }) => ({
+      insertOne: { document: id ? { _id: id, ...rest } : rest },
+    }));
+    return Quest.bulkWrite(ops, { session, skipValidation: true });
+  },
+  deleteMany: async (filter: any) => {
+    // Hard delete: the soft-delete default leaves the rows with their ids, so the replacement
+    // insert in bulkCreate collides with the documents it supersedes.
+    return Quest.deleteMany(filter, { session, hardDelete: true });
+  },
+});
 
 const processNotebookImport = async (
   userId: string,
@@ -72,20 +99,7 @@ const processNotebookImport = async (
         chatHistoryRepository: {
           ...questRepository,
           ctx: session,
-          bulkCreate: async (items: any[]) => {
-            // Use Quest model directly for bulk operations
-            const bulkOps = items.map(item => ({
-              updateOne: {
-                filter: { _id: item.id },
-                update: { $set: item },
-                upsert: true,
-              },
-            }));
-            return Quest.bulkWrite(bulkOps, { session });
-          },
-          deleteMany: async (filter: any) => {
-            return Quest.deleteMany(filter, { session });
-          },
+          ...createChatHistoryWrites(session),
         },
         knowledgeRepository: {
           create: async (data: any) => {
@@ -174,6 +188,13 @@ const processNotebookImport = async (
 
       const importService = new NotebookImportService(adapters);
       const result = await importService.importNotebooks(userId, importData, options);
+
+      // A failed write has already aborted this transaction server-side, so nothing persists -
+      // not even the notebooks the service counted as imported. Its collected errors must not
+      // reach the user as success.
+      if (result.errors?.length) {
+        throw new Error(`Imported no notebooks: ${result.errors.join('; ')}`);
+      }
 
       await markImportComplete(importHistoryJobId, userId, {
         processedItems: result.importedNotebooks + result.importedMessages,
