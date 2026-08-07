@@ -63,58 +63,55 @@ const resolveCandidates = async (
   return loadPrefixArmCandidateLakes([fileOwnerUserId], { db });
 };
 
-/**
- * Every lake a file is about to LEAVE by losing its only prefix-arm signal - the gap #1263 is
- * about. A lake is a leave candidate when: it is owned by the file's owner (the read arm's
- * anchor); the CURRENT tags satisfy its prefix arm; the RESULTING tags do not; and the lake's
- * meta-tag is absent both before and after (a meta-tag-driven join/leave is the existing,
- * already-gated path in `reconcileLakeTags`/`toggleTags` - this helper must not double-handle it).
- *
- * Callers gate each returned lake with `canManageLake` + `assertLakeWritable` before treating it
- * as authorized, exactly like the existing meta-tag leave path - a prefix-arm leave is the same
- * security-relevant transition (a file exiting lake membership) and gets the same gate.
- */
-export const findPrefixArmLeaves = async (
-  input: PrefixArmDiffInput,
-  adapters: PrefixArmAdapters
-): Promise<PrefixArmChange[]> => {
-  const candidates = await resolveCandidates(input, adapters);
-  const leaves: PrefixArmChange[] = [];
-  for (const lake of candidates) {
-    if (lake.createdByUserId !== input.fileOwnerUserId) continue;
-    if (input.currentTagNames.includes(lake.datalakeTag) || input.resultingTagNames.includes(lake.datalakeTag)) {
-      continue;
-    }
-    const signalTags = prefixArmTagNames(input.currentTagNames, lake.fileTagPrefix);
-    if (signalTags.length === 0) continue;
-    if (prefixArmTagNames(input.resultingTagNames, lake.fileTagPrefix).length > 0) continue;
-    leaves.push({ lake, signalTags });
-  }
-  return leaves;
-};
+export interface PrefixArmChanges {
+  /**
+   * Every lake a file is about to LEAVE by losing its only prefix-arm signal - the gap #1263 is
+   * about. Callers gate each one with `canManageLake` + `assertLakeWritable` before treating it
+   * as authorized, exactly like the existing meta-tag leave path - a prefix-arm leave is the same
+   * security-relevant transition (a file exiting lake membership) and gets the same gate.
+   */
+  leaves: PrefixArmChange[];
+  /**
+   * The mirror case: every lake a file is about to JOIN by newly satisfying a prefix arm it did
+   * not satisfy before. Stats-only - NOT gated by `canManageLake` - because tagging your own file
+   * with your own lake's folder tag is today's already-accepted "automatic membership" model (the
+   * fallback tagger stamps the same content tags with no permission check). Callers only need
+   * this to know which lakes to `recomputeLakeStats` for.
+   */
+  joins: PrefixArmChange[];
+}
 
 /**
- * The mirror of `findPrefixArmLeaves`: every lake a file is about to JOIN by newly satisfying a
- * prefix arm it did not satisfy before. Stats-only - NOT gated by `canManageLake` - because
- * tagging your own file with your own lake's folder tag is today's already-accepted "automatic
- * membership" model (the fallback tagger stamps the same content tags with no permission check).
- * Callers only need this to know which lakes to `recomputeLakeStats` for.
+ * Classifies every candidate lake as a LEAVE, a JOIN, or unaffected, in one pass over one
+ * resolved candidate set - `findPrefixArmLeaves`/`findPrefixArmJoins` used to be two separate
+ * functions that each independently resolved candidates and re-walked them, doubling both the
+ * query and the per-lake work for every caller (all of which need both anyway).
+ *
+ * A lake is a candidate at all only when: it is owned by the file's owner (the read arm's
+ * anchor); and its meta-tag is absent both before and after (a meta-tag-driven join/leave is the
+ * existing, already-gated path in `reconcileLakeTags`/`toggleTags` - this helper must not
+ * double-handle it). From there: CURRENT satisfies + RESULTING does not is a leave; the reverse
+ * is a join; anything else is unaffected.
  */
-export const findPrefixArmJoins = async (
+export const findPrefixArmChanges = async (
   input: PrefixArmDiffInput,
   adapters: PrefixArmAdapters
-): Promise<PrefixArmChange[]> => {
+): Promise<PrefixArmChanges> => {
   const candidates = await resolveCandidates(input, adapters);
+  const leaves: PrefixArmChange[] = [];
   const joins: PrefixArmChange[] = [];
   for (const lake of candidates) {
     if (lake.createdByUserId !== input.fileOwnerUserId) continue;
     if (input.currentTagNames.includes(lake.datalakeTag) || input.resultingTagNames.includes(lake.datalakeTag)) {
       continue;
     }
-    if (prefixArmTagNames(input.currentTagNames, lake.fileTagPrefix).length > 0) continue;
-    const signalTags = prefixArmTagNames(input.resultingTagNames, lake.fileTagPrefix);
-    if (signalTags.length === 0) continue;
-    joins.push({ lake, signalTags });
+    const currentSignal = prefixArmTagNames(input.currentTagNames, lake.fileTagPrefix);
+    const resultingSignal = prefixArmTagNames(input.resultingTagNames, lake.fileTagPrefix);
+    if (currentSignal.length > 0 && resultingSignal.length === 0) {
+      leaves.push({ lake, signalTags: currentSignal });
+    } else if (currentSignal.length === 0 && resultingSignal.length > 0) {
+      joins.push({ lake, signalTags: resultingSignal });
+    }
   }
-  return joins;
+  return { leaves, joins };
 };

@@ -389,7 +389,7 @@ describe('tagService - update', () => {
 
       await update(userId, { id: existingTagId, name: 'archived' }, adapters);
 
-      expect(mockDataLakeRepo.find).toHaveBeenCalledWith({ createdByUserId: userId });
+      expect(mockDataLakeRepo.find).toHaveBeenCalledWith({ createdByUserId: { $in: [userId] } });
       expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0 });
     });
 

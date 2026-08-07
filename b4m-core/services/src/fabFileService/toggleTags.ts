@@ -13,8 +13,7 @@ import { canManageLake } from '../dataLakeService/authorizeLakeWrite';
 import { createDataLakeFallbackTagger } from '../dataLakeService/fallbackLakeTags';
 import { addFileToLake, removeFileFromLake, type MembershipLake } from '../dataLakeService/lakeMembership';
 import {
-  findPrefixArmJoins,
-  findPrefixArmLeaves,
+  findPrefixArmChanges,
   loadPrefixArmCandidateLakes,
   type PrefixArmChange,
 } from '../dataLakeService/prefixArmMembership';
@@ -120,22 +119,18 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
       fabFiles.map(f => f.userId),
       { db }
     );
-    for (const file of fabFiles) {
-      const currentTagNames = storedTagNames(file);
-      const resultingTagNames = predictToggleResult(currentTagNames, tags);
-      const [leaves, joins] = await Promise.all([
-        findPrefixArmLeaves(
+    await Promise.all(
+      fabFiles.map(async file => {
+        const currentTagNames = storedTagNames(file);
+        const resultingTagNames = predictToggleResult(currentTagNames, tags);
+        const { leaves, joins } = await findPrefixArmChanges(
           { fileOwnerUserId: file.userId, currentTagNames, resultingTagNames },
           { db, candidateLakes }
-        ),
-        findPrefixArmJoins(
-          { fileOwnerUserId: file.userId, currentTagNames, resultingTagNames },
-          { db, candidateLakes }
-        ),
-      ]);
-      if (leaves.length > 0) prefixLeavesByFile.set(file.id, leaves);
-      if (joins.length > 0) prefixJoinsByFile.set(file.id, joins);
-    }
+        );
+        if (leaves.length > 0) prefixLeavesByFile.set(file.id, leaves);
+        if (joins.length > 0) prefixJoinsByFile.set(file.id, joins);
+      })
+    );
     for (const leaves of prefixLeavesByFile.values()) {
       for (const { lake } of leaves) {
         if (!canManageLake(lake, actor)) {

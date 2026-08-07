@@ -27,22 +27,24 @@ import { fabFilesService } from '@bike4mind/services';
  */
 
 let mongoServer: MongoMemoryServer;
-
-const OWNER = 'lake-owner';
-const EDITOR = 'shared-editor';
+let ownerId: string;
+let editorId: string;
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
-  await User.create({ username: OWNER, name: 'Owner' });
-  await User.create({ username: EDITOR, name: 'Editor' });
+  const owner = await User.create({ username: 'lake-owner', name: 'Owner' });
+  const editor = await User.create({ username: 'shared-editor', name: 'Editor' });
+  ownerId = owner.id as string;
+  editorId = editor.id as string;
 }, 30000);
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer?.stop();
 }, 30000);
 afterEach(async () => {
-  await mongoose.connection.dropDatabase();
+  await FabFile.deleteMany({});
+  await DataLakeModel.deleteMany({});
 });
 
 const makeLake = (overrides: Record<string, unknown> = {}) =>
@@ -51,22 +53,26 @@ const makeLake = (overrides: Record<string, unknown> = {}) =>
     slug: 'lake',
     fileTagPrefix: 'lk:',
     datalakeTag: 'datalake:lake',
-    createdByUserId: OWNER,
+    createdByUserId: ownerId,
     fileCount: 1,
     totalSizeBytes: 10,
     ...overrides,
   });
 
-// Shared with EDITOR (write access, not ownership) so a "shared editor, not the lake creator"
-// scenario is reachable at all - an unshared user is refused earlier, at the file-access gate.
-const makeFile = (tags: string[], userId = OWNER) =>
+// Shared with the editor (write access, not ownership) so a "shared editor, not the lake
+// creator" scenario is reachable at all - an unshared user is refused earlier, at the file-access
+// gate. `status: 'complete'` matters: computeDataLakeStats excludes the schema's own default
+// ('pending'), so a file left at the default is invisible to the aggregate regardless of tags -
+// that would make every assertion below pass whether or not the fix actually works.
+const makeFile = (tags: string[]) =>
   FabFile.create({
-    userId,
+    userId: ownerId,
     fileName: 'seed.txt',
     type: KnowledgeType.FILE,
     mimeType: 'text/plain',
+    status: 'complete',
     tags: tags.map(name => ({ name, strength: 1 })),
-    users: [{ userId: EDITOR, permissions: [Permission.read, Permission.update] }],
+    users: [{ userId: editorId, permissions: [Permission.read, Permission.update] }],
   });
 
 const storage = {
@@ -78,7 +84,7 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
   it('drops the prefix tag, clears membership, and recomputes stats to 0', async () => {
     const lake = await makeLake();
     const file = await makeFile(['lk:invoices']);
-    const user = { id: OWNER, isAdmin: false } as any;
+    const user = { id: ownerId, isAdmin: false } as any;
 
     await fabFilesService.updateFabFile(
       user,
@@ -95,7 +101,7 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
   it('refuses a shared editor who is not the lake creator, persisting nothing', async () => {
     await makeLake();
     const file = await makeFile(['lk:invoices']);
-    const editor = { id: EDITOR, isAdmin: false } as any;
+    const editor = { id: editorId, isAdmin: false } as any;
 
     await expect(
       fabFilesService.updateFabFile(
@@ -116,7 +122,7 @@ describe('toggleTags against real Mongo', () => {
     const file = await makeFile(['lk:invoices']);
 
     await fabFilesService.toggleTags(
-      OWNER,
+      ownerId,
       { ids: [file.id], tags: ['lk:invoices'] },
       {
         db: {
@@ -140,7 +146,7 @@ describe('toggleTags against real Mongo', () => {
 
     await expect(
       fabFilesService.toggleTags(
-        EDITOR,
+        editorId,
         { ids: [file.id], tags: ['lk:invoices'] },
         {
           db: {

@@ -47,6 +47,9 @@ const seedFile = async (tags: string[], overrides: Record<string, unknown> = {})
     fileName: 'seed.txt',
     type: KnowledgeType.FILE,
     mimeType: 'text/plain',
+    // The schema defaults to 'pending', which computeDataLakeStats excludes - leaving it at the
+    // default would make every prefix-arm recompute assertion below pass unconditionally.
+    status: 'complete',
     tags: tags.map(name => ({ name, strength: 1 })),
     ...overrides,
   });

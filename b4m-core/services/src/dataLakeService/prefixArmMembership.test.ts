@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MembershipLake } from './lakeMembership';
-import { findPrefixArmJoins, findPrefixArmLeaves, loadPrefixArmCandidateLakes } from './prefixArmMembership';
+import { findPrefixArmChanges, loadPrefixArmCandidateLakes } from './prefixArmMembership';
 
 const lake = (overrides: Partial<MembershipLake> = {}): MembershipLake => ({
   id: 'lake1',
@@ -14,10 +14,10 @@ const makeAdapters = (lakes: MembershipLake[]) => ({
   db: { dataLakes: { find: vi.fn().mockResolvedValue(lakes) } },
 });
 
-describe('findPrefixArmLeaves', () => {
+describe('findPrefixArmChanges - leaves', () => {
   it('detects a leave when the only prefix signal is dropped', async () => {
     const adapters = makeAdapters([lake()]);
-    const leaves = await findPrefixArmLeaves(
+    const { leaves } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: ['lk:invoices'], resultingTagNames: [] },
       adapters
     );
@@ -26,7 +26,7 @@ describe('findPrefixArmLeaves', () => {
 
   it('is not a leave when the file carried no tag under the prefix', async () => {
     const adapters = makeAdapters([lake()]);
-    const leaves = await findPrefixArmLeaves(
+    const { leaves } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: ['other'], resultingTagNames: [] },
       adapters
     );
@@ -35,7 +35,7 @@ describe('findPrefixArmLeaves', () => {
 
   it('is not a leave when a different tag under the same prefix survives', async () => {
     const adapters = makeAdapters([lake()]);
-    const leaves = await findPrefixArmLeaves(
+    const { leaves } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: ['lk:a', 'lk:b'], resultingTagNames: ['lk:b'] },
       adapters
     );
@@ -47,7 +47,7 @@ describe('findPrefixArmLeaves', () => {
     const inner = lake({ id: 'inner', datalakeTag: 'datalake:inner', fileTagPrefix: 'a:x:' });
     const adapters = makeAdapters([outer, inner]);
     // Dropping a:x:foo while adding a:bar - only the inner (a:x:) lake leaves.
-    const leaves = await findPrefixArmLeaves(
+    const { leaves } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: ['a:x:foo'], resultingTagNames: ['a:bar'] },
       adapters
     );
@@ -58,7 +58,7 @@ describe('findPrefixArmLeaves', () => {
     const a = lake({ id: 'a', datalakeTag: 'datalake:a' });
     const b = lake({ id: 'b', datalakeTag: 'datalake:b' });
     const adapters = makeAdapters([a, b]);
-    const leaves = await findPrefixArmLeaves(
+    const { leaves } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: ['lk:foo'], resultingTagNames: [] },
       adapters
     );
@@ -67,7 +67,7 @@ describe('findPrefixArmLeaves', () => {
 
   it('never fires for the reserved datalake: namespace', async () => {
     const adapters = makeAdapters([lake({ fileTagPrefix: 'datalake:' })]);
-    const leaves = await findPrefixArmLeaves(
+    const { leaves } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: ['datalake:foo'], resultingTagNames: [] },
       adapters
     );
@@ -76,7 +76,7 @@ describe('findPrefixArmLeaves', () => {
 
   it('is [] with no fileOwnerUserId, mirroring the read arm dropping the prefix clause', async () => {
     const adapters = makeAdapters([lake()]);
-    const leaves = await findPrefixArmLeaves(
+    const { leaves } = await findPrefixArmChanges(
       { fileOwnerUserId: undefined, currentTagNames: ['lk:invoices'], resultingTagNames: [] },
       adapters
     );
@@ -85,7 +85,7 @@ describe('findPrefixArmLeaves', () => {
 
   it('counts a bare prefix tag (no suffix) as a signal, unlike satisfiesTagPrefix', async () => {
     const adapters = makeAdapters([lake()]);
-    const leaves = await findPrefixArmLeaves(
+    const { leaves } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: ['lk:'], resultingTagNames: [] },
       adapters
     );
@@ -94,7 +94,7 @@ describe('findPrefixArmLeaves', () => {
 
   it('is case-sensitive, matching the unflagged read-arm regex', async () => {
     const adapters = makeAdapters([lake()]);
-    const leaves = await findPrefixArmLeaves(
+    const { leaves } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: ['LK:invoices'], resultingTagNames: [] },
       adapters
     );
@@ -103,7 +103,7 @@ describe('findPrefixArmLeaves', () => {
 
   it('defers to the existing meta-tag path when the lake also carries its meta-tag', async () => {
     const adapters = makeAdapters([lake()]);
-    const leaves = await findPrefixArmLeaves(
+    const { leaves } = await findPrefixArmChanges(
       {
         fileOwnerUserId: 'owner',
         currentTagNames: ['lk:invoices', 'datalake:lake1'],
@@ -116,7 +116,7 @@ describe('findPrefixArmLeaves', () => {
 
   it('issues no lake query when nothing dropped could carry a prefix', async () => {
     const adapters = makeAdapters([lake()]);
-    await findPrefixArmLeaves(
+    await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: ['plain'], resultingTagNames: [] },
       adapters
     );
@@ -125,7 +125,7 @@ describe('findPrefixArmLeaves', () => {
 
   it('uses a supplied candidate set without querying', async () => {
     const adapters = makeAdapters([]);
-    const leaves = await findPrefixArmLeaves(
+    const { leaves } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: ['lk:invoices'], resultingTagNames: [] },
       { ...adapters, candidateLakes: [lake()] }
     );
@@ -136,7 +136,7 @@ describe('findPrefixArmLeaves', () => {
   it('re-asserts the owner anchor against a batch-loaded candidate set', async () => {
     const mine = lake({ id: 'mine', datalakeTag: 'datalake:mine', createdByUserId: 'owner' });
     const theirs = lake({ id: 'theirs', datalakeTag: 'datalake:theirs', createdByUserId: 'someone-else' });
-    const leaves = await findPrefixArmLeaves(
+    const { leaves } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: ['lk:invoices'], resultingTagNames: [] },
       { db: { dataLakes: { find: vi.fn() } }, candidateLakes: [mine, theirs] }
     );
@@ -144,10 +144,10 @@ describe('findPrefixArmLeaves', () => {
   });
 });
 
-describe('findPrefixArmJoins', () => {
+describe('findPrefixArmChanges - joins', () => {
   it('detects a join when a tag newly satisfies a prefix arm', async () => {
     const adapters = makeAdapters([lake()]);
-    const joins = await findPrefixArmJoins(
+    const { joins } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: [], resultingTagNames: ['lk:invoices'] },
       adapters
     );
@@ -156,7 +156,7 @@ describe('findPrefixArmJoins', () => {
 
   it('is not a join when the meta-tag is present (existing gated path owns it)', async () => {
     const adapters = makeAdapters([lake()]);
-    const joins = await findPrefixArmJoins(
+    const { joins } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: [], resultingTagNames: ['lk:invoices', 'datalake:lake1'] },
       adapters
     );
@@ -165,11 +165,23 @@ describe('findPrefixArmJoins', () => {
 
   it('is not a join when the file already satisfied the prefix', async () => {
     const adapters = makeAdapters([lake()]);
-    const joins = await findPrefixArmJoins(
+    const { joins } = await findPrefixArmChanges(
       { fileOwnerUserId: 'owner', currentTagNames: ['lk:a'], resultingTagNames: ['lk:a', 'lk:b'] },
       adapters
     );
     expect(joins).toEqual([]);
+  });
+
+  it('classifies a leave and a join for two different lakes from one call', async () => {
+    const departing = lake({ id: 'departing', datalakeTag: 'datalake:departing', fileTagPrefix: 'a:' });
+    const arriving = lake({ id: 'arriving', datalakeTag: 'datalake:arriving', fileTagPrefix: 'b:' });
+    const adapters = makeAdapters([departing, arriving]);
+    const { leaves, joins } = await findPrefixArmChanges(
+      { fileOwnerUserId: 'owner', currentTagNames: ['a:foo'], resultingTagNames: ['b:bar'] },
+      adapters
+    );
+    expect(leaves.map(l => l.lake.id)).toEqual(['departing']);
+    expect(joins.map(j => j.lake.id)).toEqual(['arriving']);
   });
 });
 

@@ -188,7 +188,7 @@ describe('tagService - remove', () => {
 
       await remove(userId, { id: existingTagId }, adapters);
 
-      expect(mockDataLakeRepo.find).toHaveBeenCalledWith({ createdByUserId: userId });
+      expect(mockDataLakeRepo.find).toHaveBeenCalledWith({ createdByUserId: { $in: [userId] } });
       expect(mockFabFileRepo.computeDataLakeStats).toHaveBeenCalled();
       expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0 });
     });
@@ -227,7 +227,7 @@ describe('tagService - remove', () => {
 
       await remove(userId, { id: existingTagId }, adapters);
 
-      expect(mockDataLakeRepo.find).toHaveBeenCalledWith({ createdByUserId: userId });
+      expect(mockDataLakeRepo.find).toHaveBeenCalledWith({ createdByUserId: { $in: [userId] } });
       expect(mockDataLakeRepo.setStats).not.toHaveBeenCalled();
     });
   });

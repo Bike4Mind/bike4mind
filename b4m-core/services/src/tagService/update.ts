@@ -1,6 +1,7 @@
-import { IDataLakeRepository, IFabFileRepository, ITagRepository, prefixArmTagNames } from '@bike4mind/common';
+import { IDataLakeRepository, IFabFileRepository, ITagRepository, matchesTagPrefixArm } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
+import { loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import { foldTagName, isDataLakeTagName, normalizeTagName } from './tagName';
 
@@ -102,18 +103,15 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
   // Every usable fileTagPrefix ends in ':' (see prefixArmTagNames), so a colon-free name on
   // both sides of the rename can never touch one - skip the lake lookup for the common case.
   if (renaming && (tag.name.includes(':') || newName.includes(':'))) {
-    const candidateLakes = await db.dataLakes.find({ createdByUserId: userId });
+    const candidateLakes = await loadPrefixArmCandidateLakes([userId], { db });
     // Either the OLD name mattered to a lake's prefix (a possible leave) or the NEW one does (a
     // possible join) - recompute covers both directions without needing to know which files
-    // actually crossed the boundary, matching tagService/remove's reasoning.
+    // actually crossed the boundary, matching tagService/remove's reasoning. Independent
+    // per-lake recomputes, so run them concurrently rather than one at a time.
     const affectedLakes = candidateLakes.filter(
-      lake =>
-        prefixArmTagNames([tag.name], lake.fileTagPrefix).length > 0 ||
-        prefixArmTagNames([newName], lake.fileTagPrefix).length > 0
+      lake => matchesTagPrefixArm([tag.name], lake.fileTagPrefix) || matchesTagPrefixArm([newName], lake.fileTagPrefix)
     );
-    for (const lake of affectedLakes) {
-      await recomputeLakeStats(lake, { db });
-    }
+    await Promise.all(affectedLakes.map(lake => recomputeLakeStats(lake, { db })));
   }
 
   return buildData;

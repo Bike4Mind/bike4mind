@@ -1,6 +1,7 @@
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
-import { IDataLakeRepository, IFabFileRepository, ITagRepository, prefixArmTagNames } from '@bike4mind/common';
+import { IDataLakeRepository, IFabFileRepository, ITagRepository, matchesTagPrefixArm } from '@bike4mind/common';
 import { z } from 'zod';
+import { loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import { isDataLakeTagName } from './tagName';
 
@@ -59,14 +60,13 @@ export const remove = async (userId: string, params: TagRemoveParams, adapters: 
   // Every usable fileTagPrefix ends in ':' (see prefixArmTagNames), so a colon-free name can never
   // be one - skip the lake lookup entirely for the common plain-tag case.
   if (tag.name.includes(':')) {
-    const candidateLakes = await db.dataLakes.find({ createdByUserId: userId });
-    const affectedLakes = candidateLakes.filter(lake => prefixArmTagNames([tag.name], lake.fileTagPrefix).length > 0);
+    const candidateLakes = await loadPrefixArmCandidateLakes([userId], { db });
+    const affectedLakes = candidateLakes.filter(lake => matchesTagPrefixArm([tag.name], lake.fileTagPrefix));
     // Recomputes even for a lake where a surviving sibling tag kept some files members - harmless
     // (the aggregate re-derives the true count either way), and cheaper than re-deriving per file
-    // which of these lakes actually lost a member.
-    for (const lake of affectedLakes) {
-      await recomputeLakeStats(lake, { db });
-    }
+    // which of these lakes actually lost a member. Independent per-lake recomputes, so run them
+    // concurrently rather than one at a time.
+    await Promise.all(affectedLakes.map(lake => recomputeLakeStats(lake, { db })));
   }
 
   return { id: tag.id, name: tag.name, filesUpdated };

@@ -233,11 +233,9 @@ export const handler = withEventContext(async (event, logger) => {
         const lakeTags = (fabfile.tags ?? []).filter(t => {
           if (typeof t?.name !== 'string') return false;
           if (t.name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)) return true;
-          return prefixArmLakes.some(
-            lake =>
-              lake.createdByUserId === fabfile.userId &&
-              prefixArmTagNames(storedTagNames, lake.fileTagPrefix).includes(t.name)
-          );
+          // prefixArmLakes is already scoped to fabfile.userId (the $in query above), so no
+          // further owner check is needed here.
+          return prefixArmLakes.some(lake => prefixArmTagNames(storedTagNames, lake.fileTagPrefix).includes(t.name));
         });
         await fabFilesService.updateFabFile(
           user,
