@@ -41,16 +41,23 @@ describe('SpendTab', () => {
     }
   });
 
-  it('colors a delta red when a cost metric rises vs prior', () => {
-    // est. cost is higherIsBetter=false and rises in the fixture -> danger chip.
+  it('colors a rising cost metric red (higherIsBetter=false) and a rising good metric green', () => {
     const data: SpendData = {
       ...spendMockData,
       kpis: [
         { key: 'estCost', label: 'Est. Cost', value: 200, priorValue: 100, format: 'currency', higherIsBetter: false },
+        { key: 'requests', label: 'Requests', value: 200, priorValue: 100, format: 'number', higherIsBetter: true },
       ],
     };
     render(<SpendTab data={data} />, { wrapper: TestWrapper });
-    // +100% increase, rendered on the single KPI card.
-    expect(screen.getByText(/100\.0%/)).toBeInTheDocument();
+
+    // Both rose +100%, but the sign of higherIsBetter flips the semantic color.
+    const costDelta = screen.getByTestId('spend-kpi-delta-estCost');
+    expect(costDelta).toHaveTextContent('100.0%');
+    expect(costDelta.className).toMatch(/colorDanger/);
+    expect(costDelta).toHaveAttribute('title', 'Increased 100.0% vs prior period');
+
+    const requestsDelta = screen.getByTestId('spend-kpi-delta-requests');
+    expect(requestsDelta.className).toMatch(/colorSuccess/);
   });
 });

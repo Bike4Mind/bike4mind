@@ -29,19 +29,20 @@ const formatKpiValue = (value: number, format: SpendKpiFormat): string => {
   }
 };
 
-const formatCurrency = (value: number): string =>
-  `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
 /** Percent change vs the prior period; null when there is no prior baseline. */
 const computeDelta = (value: number, priorValue: number): number | null => {
   if (!priorValue) return null;
   return (value - priorValue) / priorValue;
 };
 
-const DeltaChip: React.FC<{ delta: number | null; higherIsBetter: boolean }> = ({ delta, higherIsBetter }) => {
+const DeltaChip: React.FC<{ delta: number | null; higherIsBetter: boolean; testId?: string }> = ({
+  delta,
+  higherIsBetter,
+  testId,
+}) => {
   if (delta === null) {
     return (
-      <Chip size="sm" variant="soft" color="neutral">
+      <Chip size="sm" variant="soft" color="neutral" data-testid={testId} title="No prior-period data">
         --
       </Chip>
     );
@@ -51,10 +52,19 @@ const DeltaChip: React.FC<{ delta: number | null; higherIsBetter: boolean }> = (
   const isGood = isFlat ? true : isPositiveChange === higherIsBetter;
   // Escaped so the source stays ASCII per repo convention; renders as up/down arrows.
   const arrow = isFlat ? '' : isPositiveChange ? '\u2191' : '\u2193';
+  const pct = `${Math.abs(delta * 100).toFixed(1)}%`;
+  // The arrow is decorative; `title` carries the direction for screen readers.
+  const direction = isFlat ? 'No change' : isPositiveChange ? 'Increased' : 'Decreased';
   return (
-    <Chip size="sm" variant="soft" color={isFlat ? 'neutral' : isGood ? 'success' : 'danger'}>
-      {arrow}
-      {Math.abs(delta * 100).toFixed(1)}%
+    <Chip
+      size="sm"
+      variant="soft"
+      color={isFlat ? 'neutral' : isGood ? 'success' : 'danger'}
+      data-testid={testId}
+      title={`${direction} ${pct} vs prior period`}
+    >
+      <span aria-hidden="true">{arrow}</span>
+      {pct}
     </Chip>
   );
 };
@@ -70,7 +80,7 @@ const KpiCard: React.FC<{ kpi: SpendKpi }> = ({ kpi }) => {
         {formatKpiValue(kpi.value, kpi.format)}
       </Typography>
       <Box sx={{ mt: 1 }}>
-        <DeltaChip delta={delta} higherIsBetter={kpi.higherIsBetter} />
+        <DeltaChip delta={delta} higherIsBetter={kpi.higherIsBetter} testId={`spend-kpi-delta-${kpi.key}`} />
       </Box>
     </Box>
   );
@@ -136,7 +146,8 @@ export const SpendTab: React.FC<SpendTabProps> = ({ data = spendMockData }) => {
         <Typography level="h4" sx={{ mb: 2 }}>
           Spend by Account
         </Typography>
-        <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
+        {/* Bounded height gives Table stickyHeader a scroll container to stick within. */}
+        <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto', maxHeight: 480 }}>
           <Table stickyHeader hoverRow size="sm" data-testid="spend-by-account-table">
             <thead>
               <tr>
@@ -151,7 +162,7 @@ export const SpendTab: React.FC<SpendTabProps> = ({ data = spendMockData }) => {
               {data.byAccount.map(row => (
                 <tr key={row.accountId}>
                   <td>{row.accountName}</td>
-                  <td style={{ textAlign: 'right' }}>{formatCurrency(row.estCost)}</td>
+                  <td style={{ textAlign: 'right' }}>{formatKpiValue(row.estCost, 'currency')}</td>
                   <td style={{ textAlign: 'right' }}>{row.requests.toLocaleString('en-US')}</td>
                   <td style={{ textAlign: 'right' }}>{row.creditsUsed.toLocaleString('en-US')}</td>
                   <td style={{ textAlign: 'right' }}>${row.costPerRequest.toFixed(4)}</td>
@@ -174,7 +185,7 @@ export const SpendTab: React.FC<SpendTabProps> = ({ data = spendMockData }) => {
                 <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ mb: 0.5 }}>
                   <Typography level="body-sm">{model.modelName}</Typography>
                   <Stack direction="row" spacing={2} alignItems="baseline">
-                    <Typography level="body-sm">{formatCurrency(model.estCost)}</Typography>
+                    <Typography level="body-sm">{formatKpiValue(model.estCost, 'currency')}</Typography>
                     <Typography level="body-xs" sx={{ color: 'text.secondary', minWidth: 40, textAlign: 'right' }}>
                       {(model.share * 100).toFixed(0)}%
                     </Typography>
