@@ -37,6 +37,33 @@ export const CacheKeys = {
     return `model-metrics:${hash}`;
   },
 
+  spend: (filters: { dateFrom?: string; dateTo?: string; userFilter?: string; modelFilter?: string }) => {
+    const normalizedFilters: Record<string, string> = {};
+
+    if (filters.dateFrom && filters.dateFrom !== '') {
+      normalizedFilters.dateFrom = filters.dateFrom;
+    }
+
+    if (filters.dateTo && filters.dateTo !== '') {
+      normalizedFilters.dateTo = filters.dateTo;
+    }
+
+    if (filters.userFilter && filters.userFilter !== '') {
+      normalizedFilters.userFilter = filters.userFilter;
+    }
+
+    if (filters.modelFilter && filters.modelFilter !== '') {
+      normalizedFilters.modelFilter = filters.modelFilter;
+    }
+
+    const sortedKeys = Object.keys(normalizedFilters).sort();
+    const filterString = sortedKeys.map(key => `${key}:${normalizedFilters[key]}`).join('|');
+
+    const hash = crypto.createHash('sha256').update(filterString).digest('hex').substring(0, 16);
+
+    return `admin-spend:${hash}`;
+  },
+
   userInvites: (userId: string, limit: number, page: number) => {
     return `userInvites:${userId}:${limit}:${page}`;
   },

@@ -31,7 +31,7 @@ export const USAGE_EVENT_FEATURES = [
 
 export type UsageEventFeature = (typeof USAGE_EVENT_FEATURES)[number];
 
-export const USAGE_EVENT_STATUSES = ['ok', 'error', 'timeout'] as const;
+export const USAGE_EVENT_STATUSES = ['ok', 'error', 'timeout', 'refusal'] as const;
 
 export type UsageEventStatus = (typeof USAGE_EVENT_STATUSES)[number];
 
@@ -335,6 +335,68 @@ export interface ISessionUsageSummary {
   byModel: ISessionModelUsage[];
 }
 
+/**
+ * Filters for the admin Spend rollup. Date bounds map to `createdAt` (inclusive);
+ * omitting a field spans all. `userId`/`model` mirror the ModelMetrics user/model
+ * filters. Status is intentionally not a filter here: it would distort the
+ * error-rate KPI, which is derived from the same event set.
+ */
+export interface ISpendSummaryFilters {
+  from?: Date;
+  to?: Date;
+  userId?: string;
+  model?: string;
+}
+
+/** Spend for one credit holder (the account behind the events) over the window. */
+export interface ISpendAccountBucket extends IUsageSpendBucket {
+  ownerId: string;
+  ownerType: CreditHolderType;
+}
+
+/** COGS for one UTC day (Spend daily-cost line point). */
+export interface ISpendCostDay {
+  day: string; // YYYY-MM-DD (UTC)
+  cogsUsd: number;
+}
+
+/** p50/p95 request latency in ms over the window; 0 when no event carries latencyMs. */
+export interface ISpendLatency {
+  p50: number;
+  p95: number;
+}
+
+/**
+ * Request-outcome counts over the window. The error rate folds `errors` and
+ * `timeouts` together (both are failed calls); `refusals` are counted separately
+ * so a model refusal reads as its own rate rather than an error.
+ */
+export interface ISpendStatusCounts {
+  total: number;
+  errors: number;
+  timeouts: number;
+  refusals: number;
+}
+
+/**
+ * One window's spend rolled up every way the admin Spend tab needs it, in a
+ * single aggregation so all cuts reconcile against the same event set. `byModel`
+ * and `byAccount` are descending by creditsCharged; `dailyCost` is ascending by
+ * day. p50/p95 latency and status counts are not available from the margin
+ * rollups, hence this dedicated summary. The API layer adds vs-prior deltas,
+ * owner-name resolution, and the client SpendData shape on top.
+ */
+export interface ISpendSummary {
+  totals: IUsageSpendBucket;
+  /** Distinct credit holders (ownerId) with at least one event in the window. */
+  activeAccounts: number;
+  latency: ISpendLatency;
+  status: ISpendStatusCounts;
+  byModel: IOwnerSpendModel[];
+  byAccount: ISpendAccountBucket[];
+  dailyCost: ISpendCostDay[];
+}
+
 /** One model's slice of an agent execution's iteration billing. */
 export interface ISessionAgentModelUsage {
   model: string;
@@ -379,6 +441,14 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** Monthly COGS per provider for invoice reconciliation, newest month first. */
   monthlyCogsByProvider(): Promise<IProviderMonthCogs[]>;
+
+  /**
+   * Spend rollup for the admin Spend tab over a bounded window, honoring optional
+   * user/model filters, in a single aggregation. Includes p50/p95 latency and
+   * status-outcome counts (neither available from the margin rollups). Call once
+   * per window (current + prior) to build vs-prior KPI deltas.
+   */
+  spendSummary(filters?: ISpendSummaryFilters): Promise<ISpendSummary>;
 
   /** Settlement-basis rollup over the trailing N days (default 30): provider-vs-local token delta and written-off credits. */
   settlementBreakdown(days?: number): Promise<ISettlementBreakdown[]>;

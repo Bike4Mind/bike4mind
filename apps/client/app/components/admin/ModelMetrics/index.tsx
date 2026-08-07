@@ -193,9 +193,9 @@ const ModelMetricsTab: React.FC = () => {
           />
         </TabPanel>
 
-        {/* Spend Tab (mock data, issue No. 1507) */}
+        {/* Spend Tab */}
         <TabPanel value="spend" sx={{ p: 1 }}>
-          <SpendTab />
+          <SpendTab filters={appliedFilters} />
         </TabPanel>
       </Tabs>
 

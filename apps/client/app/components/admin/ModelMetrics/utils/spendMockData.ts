@@ -1,12 +1,10 @@
 /**
- * Typed mock fixture for the Spend tab (issue No. 1507).
+ * Data contract for the Spend tab.
  *
- * The exported types below are the DATA CONTRACT for the wiring ticket: the
- * real backend query should return a `SpendData`-shaped payload so the Spend
- * tab can drop the mock and consume live data with no component changes.
- *
- * Everything here is fabricated. It only exists so the tab is reviewable as a
- * standalone visual PR; do not read anything into the numbers.
+ * The exported types below are the shared contract between the Spend tab and the
+ * `/api/admin/spend` endpoint, which returns a live `SpendData`-shaped payload.
+ * The `spendMockData` fixture is fabricated sample data retained only for tests;
+ * do not read anything into the numbers.
  */
 
 /** How a KPI's raw numeric value should be rendered. */

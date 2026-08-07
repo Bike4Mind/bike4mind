@@ -18,6 +18,10 @@ import {
   ISessionQuestUsage,
   ISessionUsageSummary,
   ISettlementBreakdown,
+  ISpendAccountBucket,
+  ISpendCostDay,
+  ISpendSummary,
+  ISpendSummaryFilters,
   IUsageEvent,
   IUsageEventInput,
   IUsageEventRepository,
@@ -29,6 +33,11 @@ import {
 } from '@bike4mind/common';
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
+
+// The Spend "by account" table shows top spenders, not every holder; the
+// activeAccounts count carries the true distinct total. Bounds the payload when
+// spend spans many accounts.
+const SPEND_ACCOUNT_LIMIT = 50;
 
 /**
  * One row per provider API call: provider-side quantities and
@@ -195,6 +204,101 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       },
       { $sort: { month: -1, provider: 1 } },
     ]);
+  }
+
+  async spendSummary(filters: ISpendSummaryFilters = {}): Promise<ISpendSummary> {
+    const { from, to, userId, model } = filters;
+
+    const match: Record<string, unknown> = {};
+    if (from || to) {
+      const createdAt: Record<string, Date> = {};
+      if (from) createdAt.$gte = from;
+      if (to) createdAt.$lte = to;
+      match.createdAt = createdAt;
+    }
+    if (userId) match.userId = userId;
+    if (model) match.model = model;
+
+    const spendSums = {
+      requests: { $sum: 1 },
+      cogsUsd: { $sum: '$costUsd' },
+      creditsCharged: { $sum: '$creditsCharged' },
+    } as const;
+    const spendFields = { requests: 1, cogsUsd: 1, creditsCharged: 1 } as const;
+
+    // One $match, fan out with $facet so every cut reconciles against the same
+    // event set in a single index scan.
+    const [result] = await this.model.aggregate<{
+      totals: IUsageSpendBucket[];
+      activeAccounts: Array<{ count: number }>;
+      latency: Array<{ values: number[] }>;
+      status: Array<{ _id: string; count: number }>;
+      byModel: IOwnerSpendModel[];
+      byAccount: ISpendAccountBucket[];
+      dailyCost: ISpendCostDay[];
+    }>([
+      { $match: match },
+      {
+        $facet: {
+          totals: [{ $group: { _id: null, ...spendSums } }, { $project: { _id: 0, ...spendFields } }],
+          activeAccounts: [{ $group: { _id: '$ownerId' } }, { $count: 'count' }],
+          latency: [
+            { $match: { latencyMs: { $ne: null } } },
+            {
+              $group: {
+                _id: null,
+                // $percentile (Mongo 7.0+) keeps this memory-bounded vs pushing every latency into
+                // one doc. any: the operator postdates mongoose's typed AccumulatorOperator.
+                values: { $percentile: { input: '$latencyMs', p: [0.5, 0.95], method: 'approximate' } } as any,
+              },
+            },
+          ],
+          status: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
+          byModel: [
+            { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
+            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
+            { $sort: { creditsCharged: -1 } },
+          ],
+          byAccount: [
+            { $group: { _id: { ownerId: '$ownerId', ownerType: '$ownerType' }, ...spendSums } },
+            { $project: { _id: 0, ownerId: '$_id.ownerId', ownerType: '$_id.ownerType', ...spendFields } },
+            { $sort: { creditsCharged: -1 } },
+            { $limit: SPEND_ACCOUNT_LIMIT },
+          ],
+          dailyCost: [
+            {
+              $group: {
+                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+                cogsUsd: { $sum: '$costUsd' },
+              },
+            },
+            { $project: { _id: 0, day: '$_id', cogsUsd: 1 } },
+            { $sort: { day: 1 } },
+          ],
+        },
+      },
+    ]);
+
+    const emptyTotals: IUsageSpendBucket = { requests: 0, cogsUsd: 0, creditsCharged: 0 };
+    const statusRows = result?.status ?? [];
+    const countFor = (s: string) => statusRows.find(r => r._id === s)?.count ?? 0;
+    // $percentile emits [p50, p95] in the requested order; empty window => no group => [].
+    const latencyValues = result?.latency?.[0]?.values ?? [];
+
+    return {
+      totals: result?.totals?.[0] ?? emptyTotals,
+      activeAccounts: result?.activeAccounts?.[0]?.count ?? 0,
+      latency: { p50: Math.round(latencyValues[0] ?? 0), p95: Math.round(latencyValues[1] ?? 0) },
+      status: {
+        total: statusRows.reduce((sum, r) => sum + r.count, 0),
+        errors: countFor('error'),
+        timeouts: countFor('timeout'),
+        refusals: countFor('refusal'),
+      },
+      byModel: result?.byModel ?? [],
+      byAccount: result?.byAccount ?? [],
+      dailyCost: result?.dailyCost ?? [],
+    };
   }
 
   async settlementBreakdown(days: number = 30): Promise<ISettlementBreakdown[]> {

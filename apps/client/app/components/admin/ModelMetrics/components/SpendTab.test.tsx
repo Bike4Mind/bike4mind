@@ -1,24 +1,30 @@
 import React from 'react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { SpendTab } from './SpendTab';
+import { SpendTab, SpendTabView } from './SpendTab';
 import { spendMockData, type SpendData } from '../utils/spendMockData';
+
+// Controls what the container's data hook returns per test.
+const mockUseSpend = vi.fn();
+vi.mock('../hooks/useSpend', () => ({
+  useSpend: (...args: unknown[]) => mockUseSpend(...args),
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-describe('SpendTab', () => {
-  it('renders the mockup badge so reviewers know the data is fake', () => {
-    render(<SpendTab />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('spend-mockup-badge')).toHaveTextContent('MOCKUP - FAKE DATA');
+describe('SpendTabView', () => {
+  it('renders the period label', () => {
+    render(<SpendTabView data={spendMockData} />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('spend-period-label')).toHaveTextContent('Last 30 days vs Prior 30 days');
   });
 
-  it('renders one KPI card per fixture KPI', () => {
-    render(<SpendTab />, { wrapper: TestWrapper });
+  it('renders one KPI card per KPI', () => {
+    render(<SpendTabView data={spendMockData} />, { wrapper: TestWrapper });
     const row = screen.getByTestId('spend-kpi-row');
     for (const kpi of spendMockData.kpis) {
       expect(within(row).getByText(kpi.label)).toBeInTheDocument();
@@ -26,7 +32,7 @@ describe('SpendTab', () => {
   });
 
   it('renders a spend-by-account row for every account', () => {
-    render(<SpendTab />, { wrapper: TestWrapper });
+    render(<SpendTabView data={spendMockData} />, { wrapper: TestWrapper });
     const table = screen.getByTestId('spend-by-account-table');
     for (const account of spendMockData.byAccount) {
       expect(within(table).getByText(account.accountName)).toBeInTheDocument();
@@ -34,7 +40,7 @@ describe('SpendTab', () => {
   });
 
   it('renders a cost-by-model bar for every model', () => {
-    render(<SpendTab />, { wrapper: TestWrapper });
+    render(<SpendTabView data={spendMockData} />, { wrapper: TestWrapper });
     const bars = screen.getByTestId('spend-by-model-bars');
     for (const model of spendMockData.byModel) {
       expect(within(bars).getByText(model.modelName)).toBeInTheDocument();
@@ -49,7 +55,7 @@ describe('SpendTab', () => {
         { key: 'requests', label: 'Requests', value: 200, priorValue: 100, format: 'number', higherIsBetter: true },
       ],
     };
-    render(<SpendTab data={data} />, { wrapper: TestWrapper });
+    render(<SpendTabView data={data} />, { wrapper: TestWrapper });
 
     // Both rose +100%, but the sign of higherIsBetter flips the semantic color.
     const costDelta = screen.getByTestId('spend-kpi-delta-estCost');
@@ -62,7 +68,7 @@ describe('SpendTab', () => {
   });
 
   it('formats the ms and percent KPI branches', () => {
-    render(<SpendTab />, { wrapper: TestWrapper });
+    render(<SpendTabView data={spendMockData} />, { wrapper: TestWrapper });
     const row = screen.getByTestId('spend-kpi-row');
     // p50Latency 812 -> "812ms" (ms branch), errorRate 0.021 -> "2.1%" (percent branch).
     expect(within(row).getByText('812ms')).toBeInTheDocument();
@@ -76,13 +82,13 @@ describe('SpendTab', () => {
         { key: 'estCost', label: 'Est. Cost', value: 10, priorValue: 0, format: 'currency', higherIsBetter: false },
       ],
     };
-    render(<SpendTab data={data} />, { wrapper: TestWrapper });
+    render(<SpendTabView data={data} />, { wrapper: TestWrapper });
     const chip = screen.getByTestId('spend-kpi-delta-estCost');
     expect(chip).toHaveTextContent('--');
     expect(chip).toHaveAttribute('title', 'No prior-period data');
   });
 
-  it('renders account, model, and period data from the data prop, not the mock', () => {
+  it('renders account, model, and period data from the data prop', () => {
     const data: SpendData = {
       periodLabel: 'Custom period',
       priorPeriodLabel: 'Custom prior',
@@ -105,13 +111,55 @@ describe('SpendTab', () => {
         { date: '2026-01-02', cost: 2 },
       ],
     };
-    render(<SpendTab data={data} />, { wrapper: TestWrapper });
+    render(<SpendTabView data={data} />, { wrapper: TestWrapper });
 
     expect(screen.getByText('Custom period vs Custom prior')).toBeInTheDocument();
     expect(within(screen.getByTestId('spend-by-account-table')).getByText('Zzyzx Corp')).toBeInTheDocument();
     expect(within(screen.getByTestId('spend-by-model-bars')).getByText('Custom Model One')).toBeInTheDocument();
-    // Mock fixture names must not leak through when a data prop is supplied.
-    expect(screen.queryByText('Northwind Labs')).not.toBeInTheDocument();
-    expect(screen.queryByText('Claude Opus 5')).not.toBeInTheDocument();
+  });
+});
+
+describe('SpendTab (container)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('passes the shared filters through to useSpend', () => {
+    mockUseSpend.mockReturnValue({ data: undefined, isLoading: true, isError: false });
+    render(<SpendTab filters={{ dateFrom: '2026-01-01', userFilter: 'u-1' }} />, { wrapper: TestWrapper });
+    expect(mockUseSpend).toHaveBeenCalledWith({
+      dateFrom: '2026-01-01',
+      dateTo: undefined,
+      userFilter: 'u-1',
+      modelFilter: undefined,
+    });
+  });
+
+  it('renders a loading state while fetching', () => {
+    mockUseSpend.mockReturnValue({ data: undefined, isLoading: true, isError: false });
+    render(<SpendTab />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('spend-loading')).toBeInTheDocument();
+  });
+
+  it('renders an error state when the query fails', () => {
+    mockUseSpend.mockReturnValue({ data: undefined, isLoading: false, isError: true });
+    render(<SpendTab />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('spend-error')).toBeInTheDocument();
+  });
+
+  it('renders an empty state when there is no spend in the window', () => {
+    mockUseSpend.mockReturnValue({
+      data: { ...spendMockData, byAccount: [], dailyCost: [] },
+      isLoading: false,
+      isError: false,
+    });
+    render(<SpendTab />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('spend-empty')).toBeInTheDocument();
+  });
+
+  it('renders the view once data arrives', () => {
+    mockUseSpend.mockReturnValue({ data: spendMockData, isLoading: false, isError: false });
+    render(<SpendTab />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('spend-kpi-row')).toBeInTheDocument();
   });
 });
