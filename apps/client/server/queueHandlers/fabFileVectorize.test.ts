@@ -398,6 +398,16 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
     expect(h.chunkUpdate).toHaveBeenCalled();
   });
 
+  it('stamps embeddingModel onto the chunks passed to indexChunks - not persisted per-chunk in Mongo yet at this point', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(undefined);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    const indexedChunks = h.indexChunks.mock.calls[0][0];
+    expect(indexedChunks).toEqual([expect.objectContaining({ id: 'c1', embeddingModel: 'text-embedding-3-small' })]);
+  });
+
   it('never calls indexChunks when self-host OpenSearch is disabled', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(false);
 

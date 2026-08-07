@@ -15,6 +15,7 @@ import {
 } from '@bike4mind/database';
 import { apiKeyService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
   ApiKeyType,
   getEmbeddingModelCost,
@@ -304,7 +305,10 @@ const handler = baseApi()
           vectorSearchEnabled: (await adminSettingsRepository.getSettingsValue('EnableDataLakeVectorSearch')) ?? false,
           logger: req.logger,
         },
-        { db: { fabfiles: fabFileRepository, fabfilechunks: fabFileChunkRepository } }
+        {
+          db: { fabfiles: fabFileRepository, fabfilechunks: fabFileChunkRepository },
+          vectorIndex: selfHostOpenSearchEnabled() ? dataLakeService.openSearchChunkAdapter : undefined,
+        }
       );
 
       // Record the query-embedding spend (the embed ran inside the search above).

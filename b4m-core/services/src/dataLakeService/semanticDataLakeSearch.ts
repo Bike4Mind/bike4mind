@@ -127,14 +127,14 @@ export interface SemanticSearchScanAccounting {
   /** Of those, skipped because their width differs from the query's (embedding model changed). */
   chunksSkippedDimensionMismatch: number;
   /**
-   * Files served by Atlas `$vectorSearch` instead of the brute-force scan. Additive to
-   * `filesScanned`, not a replacement for it - an ann-served file was never handed to the scan
-   * path at all, so `filesScanned + annFilesQueried` is the files actually searched by either
-   * route (still <= `filesScoped`; ineligible/not-yet-ready files may be searched by neither if
-   * a budget stopped the scan first).
+   * Files served by ANN retrieval (Atlas `$vectorSearch` or self-host OpenSearch) instead of the
+   * brute-force scan. Additive to `filesScanned`, not a replacement for it - an ann-served file
+   * was never handed to the scan path at all, so `filesScanned + annFilesQueried` is the files
+   * actually searched by either route (still <= `filesScoped`; ineligible/not-yet-ready files
+   * may be searched by neither if a budget stopped the scan first).
    */
   annFilesQueried: number;
-  /** Chunk hits returned by Atlas across all ann-queried files, before minScore/scope filtering. */
+  /** Chunk hits returned by ANN retrieval across all ann-queried files, before minScore/scope filtering. */
   annHits: number;
   /** Budgets in force, echoed so a caller can explain a truncation without guessing. */
   budgets: { maxFiles: number; maxChunks: number };
@@ -187,12 +187,13 @@ export interface SemanticDataLakeSearchParams {
    */
   retrievalFilter?: RetrievalExclusionOptions;
   /**
-   * Server-side kill-switch for the Atlas `$vectorSearch` cutover (admin setting
-   * `EnableDataLakeVectorSearch`) - the caller reads it, not this module, matching how
-   * `apiKeyTable`/`budgets` are already resolved by the caller and passed in. Off by default
-   * (undefined/false): every existing caller that omits this keeps today's scan-only behavior
-   * byte-for-byte. Even when true, the ann path only ever engages on an Atlas backend with a
-   * queryable index for `embeddingModel` - see rankChunksForFiles.
+   * Server-side kill-switch for ANN retrieval - both the Atlas `$vectorSearch` cutover and the
+   * self-host OpenSearch path share this one flag (admin setting `EnableDataLakeVectorSearch`) -
+   * the caller reads it, not this module, matching how `apiKeyTable`/`budgets` are already
+   * resolved by the caller and passed in. Off by default (undefined/false): every existing
+   * caller that omits this keeps today's scan-only behavior byte-for-byte. Even when true, the
+   * ann path only ever engages on a backend that's actually ready for `embeddingModel` right
+   * now (a queryable Atlas index, or self-host OpenSearch enabled) - see rankChunksForFiles.
    */
   vectorSearchEnabled?: boolean;
   logger?: Logger;
@@ -222,7 +223,7 @@ interface RankableFile {
    */
   embeddingModel?: string | null;
   vectorizedChunkCount?: number;
-  /** Atlas-cutover readiness signal - see vectorSearchEligibility.ts. */
+  /** ANN readiness signal, shared by the Atlas and self-host OpenSearch paths - see vectorSearchEligibility.ts. */
   chunkEmbeddingModelStampedAt?: Date | string | null;
 }
 
@@ -655,13 +656,15 @@ async function rankChunksForFiles(args: {
       annEligible = [];
     }
 
-    // A queryable index does not guarantee a given file's chunks are actually IN it yet: mongot's
-    // indexing lag can exceed VECTOR_SEARCH_READY_LAG_MS during a bulk backfill, or a re-embed
-    // mid-file can label chunks under the wrong model so mongot never indexes them. Either way the
-    // file returns zero raw hits (not "nothing scored well", since Atlas ranks by similarity
-    // before minScore is applied) and, with no scan fallback, would silently contribute zero
-    // results. Rebucket per file rather than all-or-nothing, so one un-indexed file in a batch
-    // does not cost the rest their ANN path.
+    // A queryable index does not guarantee a given file's chunks are actually IN it yet. On
+    // Atlas: mongot's indexing lag can exceed VECTOR_SEARCH_READY_LAG_MS during a bulk backfill,
+    // or a re-embed mid-file can label chunks under the wrong model so mongot never indexes
+    // them. On self-host OpenSearch: the file's chunks may simply predate the feature being
+    // enabled (see selfHostSearchIndex.ts - there is no backfill). Either way the file returns
+    // zero raw hits (not "nothing scored well", since both backends rank by similarity before
+    // minScore is applied) and, with no scan fallback, would silently contribute zero results.
+    // Rebucket per file rather than all-or-nothing, so one un-indexed file in a batch does not
+    // cost the rest their ANN path.
     const missedFiles = annEligible.filter(f => !annResult.filesWithHits.has(f.id));
     if (missedFiles.length > 0) {
       logger?.warn?.('[semanticSearch] ANN vector search returned no hits for ready files, scanning them instead', {
@@ -728,9 +731,9 @@ async function rankChunksForFiles(args: {
   // Warn only when NOTHING could be compared by EITHER path. A few withheld chunks mid-revectorize
   // are expected and must stay quiet - the same policy the truncation warning above applies, and
   // the reason unlabeled files and budgets do not raise the flag either. Excludes annResult.hitsReturned
-  // (not annEligible.length): a lake fully served by Atlas legitimately scores zero chunks on the
-  // scan path, and without this the warning would false-fire on every healthy all-ANN search that
-  // also happens to have an unrelated off-model file elsewhere in scope.
+  // (not annEligible.length): a lake fully served by ANN retrieval (either backend) legitimately
+  // scores zero chunks on the scan path, and without this the warning would false-fire on every
+  // healthy all-ANN search that also happens to have an unrelated off-model file elsewhere in scope.
   if (mismatchReport.partial && scanned.chunksScored === 0 && annResult.hitsReturned === 0) {
     logger?.warn?.('[semanticSearch] nothing could be compared in the query embedding space', {
       queryEmbeddingModel: embeddingModel,
@@ -753,7 +756,7 @@ async function rankChunksForFiles(args: {
   }
 
   logger?.debug?.(
-    `[semanticSearch] ${fileIds.length} files (${rankable.length} rankable, ${annEligible.length} via Atlas), ${scan.chunksScanned} chunks scanned + ${scan.annHits} ann hits -> ${scanned.chunksScored} scored, ${mergedResults.length} above min ${minScore}, top score ${mergedResults[0]?.score?.toFixed(3) ?? 'n/a'}`
+    `[semanticSearch] ${fileIds.length} files (${rankable.length} rankable, ${annEligible.length} via ${canUseAtlas ? 'atlas' : 'opensearch'}), ${scan.chunksScanned} chunks scanned + ${scan.annHits} ann hits -> ${scanned.chunksScored} scored, ${mergedResults.length} above min ${minScore}, top score ${mergedResults[0]?.score?.toFixed(3) ?? 'n/a'}`
   );
 
   return {

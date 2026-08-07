@@ -251,6 +251,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // failed - the Mongo write above already succeeded and is the source of truth).
     if (selfHostOpenSearchEnabled()) {
       try {
+        // embeddingModel is NOT persisted per-chunk yet at this point - stampChunkEmbeddingModel
+        // below writes it to Mongo in bulk, only once the whole file finishes. Setting it on
+        // these in-memory objects is accurate right now regardless (this IS the model `vectors`
+        // was generated with) and mapDocument requires it to build the right per-model index
+        // document; it does not touch Mongo or the file-completion timing invariant.
+        embeddableChunks.forEach(chunk => {
+          chunk.embeddingModel = embeddingModel;
+        });
         await FabFileChunkSearchIndex.indexChunks(embeddableChunks);
       } catch (error) {
         logger.warn(`Self-host OpenSearch indexing failed for FabFile ${fabFileId}, chunks remain scan-only`, {

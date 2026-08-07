@@ -37,3 +37,5 @@ export * from './getDataLakePrompts';
 export * from './semanticDataLakeSearch';
 export * from './boundedTopK';
 export * from './resolveSearchBudgets';
+export * from './openSearchVectorSearch';
+export * from './openSearchChunkAdapter';

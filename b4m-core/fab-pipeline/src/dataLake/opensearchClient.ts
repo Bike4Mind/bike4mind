@@ -144,8 +144,12 @@ export class OpenSearchClient {
 
   /**
    * k-NN vector search. `filter` restricts candidates to a subset (e.g. fabFileId/embeddingModel)
-   * before k-NN ranks them - required so a self-host retrieval query only searches the caller's
-   * accessible files, not the whole index.
+   * BEFORE k-NN ranks them - it must sit inside the `knn` clause itself (OpenSearch's lucene-
+   * engine efficient filtering), not as a separate post-filter stage. A per-model index is
+   * shared across every file using that model, so a caller scoped to a handful of files needs
+   * the filter applied during the HNSW/exact traversal, not after a global top-k pass - a
+   * post-filter would rank the whole index first and could return zero in-scope hits even when
+   * the caller's files ARE indexed, since their chunks may not make the global top-k.
    */
   async knnQuery(
     indexName: string,
@@ -153,8 +157,7 @@ export class OpenSearchClient {
     k: number,
     filter?: Record<string, any>
   ): Promise<Array<{ id: string; score: number; source: Record<string, any> }>> {
-    const knnClause = { vector: { vector, k } };
-    const query = filter ? { bool: { must: [{ knn: knnClause }], filter: [filter] } } : { knn: knnClause };
+    const query = { knn: { vector: filter ? { vector, k, filter } : { vector, k } } };
     const response = await this.withRetry(() =>
       this.client.search({
         index: indexName,

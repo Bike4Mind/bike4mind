@@ -146,6 +146,9 @@ async function main(opts: Options): Promise<number> {
   if (existingIds.length > 0) {
     console.log(`Removing ${existingIds.length} existing help fabfile(s) + their chunks…`);
     if (!opts.dryRun) {
+      // No self-host OpenSearch mirror needed here: this script only runs via `sst shell`
+      // against an SST-deployed (dev/production) stage, which never sets B4M_SELF_HOST - so
+      // selfHostOpenSearchEnabled() can never be true on a path that reaches this line.
       for (const id of existingIds) await fabFileChunkRepository.deleteManyByFabFileId(id);
       await fabFileRepository.deleteManyInIds(existingIds);
     }

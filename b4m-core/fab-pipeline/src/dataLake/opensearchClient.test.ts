@@ -197,7 +197,7 @@ describe('OpenSearchClient retry/backoff', () => {
     expect(results).toEqual([{ id: 'chunk-1', score: 0.9, source: { text: 'hello' } }]);
   });
 
-  it('knnQuery wraps the knn clause in a bool filter when a filter is given', async () => {
+  it('knnQuery puts the filter INSIDE the knn clause for efficient pre-filtering, not a post-filter', async () => {
     mockClient.search.mockResolvedValueOnce({ body: { hits: { hits: [] } } });
     const filter = { terms: { fabFileId: ['f1', 'f2'] } };
 
@@ -207,7 +207,7 @@ describe('OpenSearchClient retry/backoff', () => {
       index: 'idx',
       body: {
         size: 5,
-        query: { bool: { must: [{ knn: { vector: { vector: [0.1, 0.2], k: 5 } } }], filter: [filter] } },
+        query: { knn: { vector: { vector: [0.1, 0.2], k: 5, filter } } },
       },
     });
   });
