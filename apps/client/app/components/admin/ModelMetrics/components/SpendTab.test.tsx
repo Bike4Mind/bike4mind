@@ -44,16 +44,7 @@ describe('SpendTabView', () => {
   it('does not flag truncation when every account is shown', () => {
     const data: SpendData = {
       ...spendMockData,
-      kpis: [
-        {
-          key: 'activeAccounts',
-          label: 'Active Accounts',
-          value: 2,
-          priorValue: 2,
-          format: 'number',
-          higherIsBetter: true,
-        },
-      ],
+      activeAccounts: 2,
       byAccount: spendMockData.byAccount.slice(0, 2),
     };
     render(<SpendTabView data={data} />, { wrapper: TestWrapper });
@@ -114,6 +105,8 @@ describe('SpendTabView', () => {
     const data: SpendData = {
       periodLabel: 'Custom period',
       priorPeriodLabel: 'Custom prior',
+      hasData: true,
+      activeAccounts: 1,
       kpis: [
         { key: 'estCost', label: 'Est. Cost', value: 10, priorValue: 5, format: 'currency', higherIsBetter: false },
       ],
@@ -158,7 +151,9 @@ describe('SpendTab (states)', () => {
   });
 
   it('renders an empty state when there is no spend in the window', () => {
-    render(<SpendTab data={{ ...spendMockData, byAccount: [], dailyCost: [] }} />, { wrapper: TestWrapper });
+    render(<SpendTab data={{ ...spendMockData, hasData: false, byAccount: [], dailyCost: [] }} />, {
+      wrapper: TestWrapper,
+    });
     expect(screen.getByTestId('spend-empty')).toBeInTheDocument();
   });
 

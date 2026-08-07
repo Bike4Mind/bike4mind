@@ -114,10 +114,9 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
 
   const maxModelCost = Math.max(...data.byModel.map(m => m.estCost), 0);
 
-  // The by-account table is capped server-side; the Active Accounts KPI holds the
-  // true distinct count, so surface "top N of M" when the list is partial.
-  const totalActiveAccounts = data.kpis.find(k => k.key === 'activeAccounts')?.value;
-  const accountsTruncated = totalActiveAccounts != null && data.byAccount.length < totalActiveAccounts;
+  // The by-account table is capped server-side; data.activeAccounts is the true
+  // distinct count, so surface "top N of M" when the list is partial.
+  const accountsTruncated = data.byAccount.length < data.activeAccounts;
 
   const lineData = [
     {
@@ -153,8 +152,8 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
         </Typography>
         {accountsTruncated && (
           <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 2 }} data-testid="spend-account-truncation">
-            Showing top {data.byAccount.length.toLocaleString('en-US')} of{' '}
-            {totalActiveAccounts!.toLocaleString('en-US')} accounts by spend.
+            Showing top {data.byAccount.length.toLocaleString('en-US')} of {data.activeAccounts.toLocaleString('en-US')}{' '}
+            accounts by spend.
           </Typography>
         )}
         {/* Bounded height gives Table stickyHeader a scroll container to stick within. */}
@@ -294,8 +293,8 @@ export const SpendTab: React.FC<SpendTabProps> = ({ data, isLoading, isError }) 
     );
   }
 
-  // Nothing settled in the window: both the account and daily-cost cuts are empty.
-  if (data.byAccount.length === 0 && data.dailyCost.length === 0) {
+  // Nothing settled in the window (authoritative flag, not inferred from a cut).
+  if (!data.hasData) {
     return (
       <Box sx={{ p: 2 }} data-testid="spend-empty">
         <Typography level="body-sm" sx={{ color: 'text.secondary' }}>

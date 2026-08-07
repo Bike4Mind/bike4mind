@@ -8,6 +8,8 @@ import type { SpendData } from '@bike4mind/common';
 export const spendMockData: SpendData = {
   periodLabel: 'Last 30 days',
   priorPeriodLabel: 'Prior 30 days',
+  hasData: true,
+  activeAccounts: 47,
   kpis: [
     {
       key: 'estCost',

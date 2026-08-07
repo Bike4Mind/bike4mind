@@ -110,6 +110,18 @@ describe('GET /api/admin/spend', () => {
     expect(data.byAccount[0]).toMatchObject({ accountId: 'user-1', accountName: 'Ada Lovelace' });
     expect(data.byModel[0]).toMatchObject({ modelId: 'opus', share: 12 / 20 });
     expect(data.periodLabel).toBe('Last 30 days');
+    // Authoritative empty/truncation signals emitted on the contract, not inferred.
+    expect(data.hasData).toBe(true);
+    expect(data.activeAccounts).toBe(3);
+  });
+
+  it('reports hasData=false when the window has no requests', async () => {
+    mockSpendSummary.mockResolvedValue(
+      summary({ totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 }, activeAccounts: 0, byAccount: [] })
+    );
+    const { res, run } = call({ query: {} });
+    await run();
+    expect(res._getJSONData().hasData).toBe(false);
   });
 
   it('threads recache=true through to the cache envelope', async () => {

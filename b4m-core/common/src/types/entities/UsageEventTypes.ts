@@ -463,6 +463,18 @@ export interface SpendData {
   periodLabel: string;
   /** Human label for the prior comparison period. */
   priorPeriodLabel: string;
+  /**
+   * Whether any events settled in the window. Authoritative empty-state signal
+   * so the tab does not have to infer it from whichever derived cut happens to be
+   * empty.
+   */
+  hasData: boolean;
+  /**
+   * True distinct credit-holder count in the window. `byAccount` is capped to the
+   * top spenders, so the tab compares this against `byAccount.length` to tell when
+   * the table is partial.
+   */
+  activeAccounts: number;
   kpis: SpendKpi[];
   byAccount: SpendByAccountRow[];
   byModel: CostByModelRow[];

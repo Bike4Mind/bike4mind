@@ -73,6 +73,7 @@ function resolveWindows(dateFrom?: string, dateTo?: string) {
   const now = new Date();
   const to = parseDate(dateTo) ?? now;
   const from = parseDate(dateFrom) ?? new Date(to.getTime() - DEFAULT_WINDOW_DAYS * DAY_MS);
+  // Defensive floor: QuerySchema already rejects inverted ranges, so this stays >= 0.
   const windowMs = Math.max(to.getTime() - from.getTime(), 0);
   const priorTo = from;
   const priorFrom = new Date(from.getTime() - windowMs);
@@ -225,6 +226,8 @@ async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<Spend
   return {
     periodLabel,
     priorPeriodLabel,
+    hasData: currentSummary.totals.requests > 0,
+    activeAccounts: currentSummary.activeAccounts,
     kpis: buildKpis(currentSummary, priorSummary),
     byAccount,
     byModel,
