@@ -60,4 +60,58 @@ describe('SpendTab', () => {
     const requestsDelta = screen.getByTestId('spend-kpi-delta-requests');
     expect(requestsDelta.className).toMatch(/colorSuccess/);
   });
+
+  it('formats the ms and percent KPI branches', () => {
+    render(<SpendTab />, { wrapper: TestWrapper });
+    const row = screen.getByTestId('spend-kpi-row');
+    // p50Latency 812 -> "812ms" (ms branch), errorRate 0.021 -> "2.1%" (percent branch).
+    expect(within(row).getByText('812ms')).toBeInTheDocument();
+    expect(within(row).getByText('2.1%')).toBeInTheDocument();
+  });
+
+  it('shows a no-prior-data chip when a KPI has a zero prior value', () => {
+    const data: SpendData = {
+      ...spendMockData,
+      kpis: [
+        { key: 'estCost', label: 'Est. Cost', value: 10, priorValue: 0, format: 'currency', higherIsBetter: false },
+      ],
+    };
+    render(<SpendTab data={data} />, { wrapper: TestWrapper });
+    const chip = screen.getByTestId('spend-kpi-delta-estCost');
+    expect(chip).toHaveTextContent('--');
+    expect(chip).toHaveAttribute('title', 'No prior-period data');
+  });
+
+  it('renders account, model, and period data from the data prop, not the mock', () => {
+    const data: SpendData = {
+      periodLabel: 'Custom period',
+      priorPeriodLabel: 'Custom prior',
+      kpis: [
+        { key: 'estCost', label: 'Est. Cost', value: 10, priorValue: 5, format: 'currency', higherIsBetter: false },
+      ],
+      byAccount: [
+        {
+          accountId: 'x1',
+          accountName: 'Zzyzx Corp',
+          estCost: 12.34,
+          requests: 5,
+          creditsUsed: 1234,
+          costPerRequest: 2.468,
+        },
+      ],
+      byModel: [{ modelId: 'm1', modelName: 'Custom Model One', estCost: 12.34, requests: 5, share: 1 }],
+      dailyCost: [
+        { date: '2026-01-01', cost: 1 },
+        { date: '2026-01-02', cost: 2 },
+      ],
+    };
+    render(<SpendTab data={data} />, { wrapper: TestWrapper });
+
+    expect(screen.getByText('Custom period vs Custom prior')).toBeInTheDocument();
+    expect(within(screen.getByTestId('spend-by-account-table')).getByText('Zzyzx Corp')).toBeInTheDocument();
+    expect(within(screen.getByTestId('spend-by-model-bars')).getByText('Custom Model One')).toBeInTheDocument();
+    // Mock fixture names must not leak through when a data prop is supplied.
+    expect(screen.queryByText('Northwind Labs')).not.toBeInTheDocument();
+    expect(screen.queryByText('Claude Opus 5')).not.toBeInTheDocument();
+  });
 });

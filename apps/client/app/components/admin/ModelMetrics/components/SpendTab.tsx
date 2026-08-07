@@ -89,7 +89,7 @@ const KpiCard: React.FC<{ kpi: SpendKpi }> = ({ kpi }) => {
 export const SpendTab: React.FC<SpendTabProps> = ({ data = spendMockData }) => {
   const theme = useTheme();
 
-  // Shared with AnalyticsTab; keep the two in sync if either changes.
+  // Duplicated from AnalyticsTab's chartTheme (hand-rolled, not shared code).
   const chartTheme = {
     axis: {
       ticks: { text: { fill: theme.palette.text.tertiary } },
