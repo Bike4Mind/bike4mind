@@ -34,7 +34,7 @@ interface ProviderConfig {
   fetch: (
     key: string,
     month: string
-  ) => Promise<{ providerUsd: number; breakdown: Record<string, number>; note?: string } | null>;
+  ) => Promise<{ providerUsd: number; breakdown: Record<string, number> } | null>;
   getKey: () => string | undefined;
 }
 
@@ -106,7 +106,6 @@ export async function handler(_event: unknown, context: Context) {
           deltaPct,
           source: providerConfig.source,
           providerBreakdown: Object.keys(result.breakdown).length > 0 ? result.breakdown : undefined,
-          note: result.note,
         });
 
         reconciled++;
@@ -116,6 +115,8 @@ export async function handler(_event: unknown, context: Context) {
             `delta=${deltaUsd >= 0 ? '+' : ''}$${deltaUsd.toFixed(2)} (${deltaPct.toFixed(1)}%)`
         );
       } catch (err) {
+        // A transient provider error must not be stored as a $0 snapshot;
+        // count it and move on so the previous good snapshot stays current.
         failed++;
         logger.error(`[SpendReconciliation] ${providerConfig.provider} ${month} failed`, err);
       }

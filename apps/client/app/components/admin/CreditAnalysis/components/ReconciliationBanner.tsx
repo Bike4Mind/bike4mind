@@ -11,10 +11,10 @@ const signedUsd = (value: number) => `${value < 0 ? '-' : '+'}$${Math.abs(value)
 
 const statusFromDelta = (
   deltaPct: number
-): { color: 'success' | 'warning' | 'danger'; label: string; Icon: React.ElementType } => {
-  if (deltaPct < 2) return { color: 'success', label: 'match', Icon: CheckCircleOutlineIcon };
-  if (deltaPct <= 10) return { color: 'warning', label: 'review', Icon: WarningAmberIcon };
-  return { color: 'danger', label: 'gap', Icon: ErrorOutlineIcon };
+): { color: 'success' | 'warning' | 'danger'; Icon: React.ElementType } => {
+  if (deltaPct < 2) return { color: 'success', Icon: CheckCircleOutlineIcon };
+  if (deltaPct <= 10) return { color: 'warning', Icon: WarningAmberIcon };
+  return { color: 'danger', Icon: ErrorOutlineIcon };
 };
 
 export const ReconciliationBanner: React.FC = () => {
@@ -54,7 +54,7 @@ export const ReconciliationBanner: React.FC = () => {
     );
   }
 
-  // No data yet — hide the banner entirely rather than showing a setup prompt.
+  // No data yet - hide the banner entirely rather than showing a setup prompt.
   if (!rows || rows.length === 0) return null;
 
   const worstDelta = Math.max(...rows.map(r => r.deltaPct));

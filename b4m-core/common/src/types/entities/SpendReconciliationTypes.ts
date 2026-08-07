@@ -21,7 +21,7 @@ export const SpendReconciliation = z.object({
   internalUsd: z.number().finite().nonnegative(),
   /** providerUsd - internalUsd; positive = we underestimate. */
   deltaUsd: z.number().finite(),
-  /** Absolute delta as a percentage of providerUsd (0-100+). */
+  /** Absolute delta as a percentage of max(providerUsd, internalUsd) (0-100). */
   deltaPct: z.number().finite().nonnegative(),
   /** How the provider figure was obtained. */
   source: z.enum(['anthropic_admin_api', 'openai_usage_api', 'manual']),

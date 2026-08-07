@@ -3,122 +3,155 @@
  *
  * Each fetcher returns a total USD amount for the given month and an optional
  * per-key/per-model breakdown. When a provider's admin key is not configured
- * the fetcher returns null (skip, not error).
+ * the fetcher returns null (skip, not error). A non-ok HTTP response also
+ * returns null so the cron can distinguish "no data" from "provider says $X".
  */
+
+/** Per-request timeout for provider API calls (ms). */
+const FETCH_TIMEOUT_MS = 30_000;
 
 export interface ProviderSpendResult {
   providerUsd: number;
   breakdown: Record<string, number>;
-  note?: string;
 }
 
 // -- Anthropic Admin API ------------------------------------------------
 
 /**
- * Anthropic Admin API: GET /v1/organizations/usage
- * Requires an admin-scoped API key. Returns daily cost buckets; we sum them
- * for the requested month.
+ * Anthropic Cost Report: GET /v1/organizations/cost_report
+ * Requires an Admin API key (sk-ant-admin01-...).
  *
- * Docs: https://docs.anthropic.com/en/docs/administration/administration-api
+ * Params: starting_at / ending_at (RFC 3339), bucket_width=1d.
+ * Response: { data: [{ results: [{ amount: "cents-string", ... }] }], has_more, next_page }
+ * Amount is in lowest currency units (cents) as a decimal string.
  *
- * TODO: paginate via cursor for orgs with many API keys.
+ * Docs: https://platform.claude.com/docs/en/api/admin-api/usage-cost/get-cost-report
  */
 export async function fetchAnthropicSpend(adminApiKey: string, month: string): Promise<ProviderSpendResult | null> {
   if (!adminApiKey || adminApiKey === 'not-configured') return null;
 
-  const { startDate, endDate } = monthToDateRange(month);
-
-  const url = new URL('https://api.anthropic.com/v1/organizations/usage');
-  url.searchParams.set('start_date', startDate);
-  url.searchParams.set('end_date', endDate);
-  url.searchParams.set('grouping', 'api_key');
-
-  const res = await fetch(url.toString(), {
-    headers: {
-      'x-api-key': adminApiKey,
-      'anthropic-version': '2023-06-01',
-    },
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    return {
-      providerUsd: 0,
-      breakdown: {},
-      note: `Anthropic API ${res.status}: ${body.slice(0, 200)}`,
-    };
-  }
-
-  const data = (await res.json()) as AnthropicUsageResponse;
+  const { startIso, endIso } = monthToIsoRange(month);
   const breakdown: Record<string, number> = {};
   let total = 0;
+  let page: string | undefined;
 
-  for (const bucket of data.data ?? []) {
-    const key = typeof bucket.api_key_name === 'string' ? bucket.api_key_name : 'unknown';
-    const cost = typeof bucket.cost_usd === 'number' ? bucket.cost_usd : 0;
-    breakdown[key] = (breakdown[key] ?? 0) + cost;
-    total += cost;
-  }
+  do {
+    const url = new URL('https://api.anthropic.com/v1/organizations/cost_report');
+    url.searchParams.set('starting_at', startIso);
+    url.searchParams.set('ending_at', endIso);
+    url.searchParams.set('bucket_width', '1d');
+    url.searchParams.set('group_by', 'description');
+    url.searchParams.set('limit', '31');
+    if (page) url.searchParams.set('page', page);
+
+    const res = await fetchWithTimeout(url.toString(), {
+      headers: {
+        'x-api-key': adminApiKey,
+        'anthropic-version': '2023-06-01',
+      },
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Anthropic API ${res.status}: ${body.slice(0, 200)}`);
+    }
+
+    const data = (await res.json()) as AnthropicCostResponse;
+
+    for (const bucket of data.data ?? []) {
+      for (const item of bucket.results ?? []) {
+        // amount is cents as a decimal string, e.g. "123.45" = $1.2345
+        const cents = typeof item.amount === 'string' ? parseFloat(item.amount) : 0;
+        if (!Number.isFinite(cents)) continue;
+        const usd = cents / 100;
+        const label = typeof item.description === 'string' ? item.description : 'other';
+        breakdown[label] = (breakdown[label] ?? 0) + usd;
+        total += usd;
+      }
+    }
+
+    page = data.has_more ? data.next_page : undefined;
+  } while (page);
 
   return { providerUsd: total, breakdown };
 }
 
-interface AnthropicUsageBucket {
-  api_key_name?: unknown;
-  cost_usd?: unknown;
+interface AnthropicCostItem {
+  amount?: unknown;
+  description?: unknown;
+  cost_type?: unknown;
+  model?: unknown;
 }
 
-interface AnthropicUsageResponse {
-  data?: AnthropicUsageBucket[];
+interface AnthropicCostBucket {
+  starting_at?: string;
+  ending_at?: string;
+  results?: AnthropicCostItem[];
+}
+
+interface AnthropicCostResponse {
+  data?: AnthropicCostBucket[];
+  has_more?: boolean;
+  next_page?: string;
 }
 
 // -- OpenAI Usage API ---------------------------------------------------
 
 /**
  * OpenAI: GET /v1/organization/costs
- * Requires an admin API key. Returns daily cost buckets with line items.
- * Amounts are in USD (not cents).
+ * Requires an admin API key. Returns daily cost buckets.
+ * Amounts are in USD as decimal numbers (not cents).
+ * bucket_width only supports "1d"; limit defaults to 7 so we must paginate.
  *
- * Docs: https://platform.openai.com/docs/api-reference/usage
- *
- * TODO: paginate via `next_page` cursor for orgs with many line items.
+ * Docs: https://developers.openai.com/cookbook/examples/completions_usage_api
  */
 export async function fetchOpenAISpend(adminApiKey: string, month: string): Promise<ProviderSpendResult | null> {
   if (!adminApiKey || adminApiKey === 'not-configured') return null;
 
   const { startTs, endTs } = monthToTimestampRange(month);
-
-  const url = new URL('https://api.openai.com/v1/organization/costs');
-  url.searchParams.set('start_time', String(startTs));
-  url.searchParams.set('end_time', String(endTs));
-  url.searchParams.set('group_by', 'line_item');
-
-  const res = await fetch(url.toString(), {
-    headers: {
-      Authorization: `Bearer ${adminApiKey}`,
-    },
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    return {
-      providerUsd: 0,
-      breakdown: {},
-      note: `OpenAI API ${res.status}: ${body.slice(0, 200)}`,
-    };
-  }
-
-  const data = (await res.json()) as OpenAICostsResponse;
   const breakdown: Record<string, number> = {};
   let total = 0;
+  let afterTs = startTs;
 
-  for (const bucket of data.data ?? []) {
-    for (const item of bucket.results ?? []) {
-      const lineItem = typeof item.line_item === 'string' ? item.line_item : 'unknown';
-      const cost = typeof item.amount?.value === 'number' ? item.amount.value : 0;
-      breakdown[lineItem] = (breakdown[lineItem] ?? 0) + cost;
-      total += cost;
+  // OpenAI only supports bucket_width=1d and limit defaults to 7. A month
+  // has up to 31 days, so we paginate by advancing start_time past the last
+  // bucket we received.
+  while (afterTs < endTs) {
+    const url = new URL('https://api.openai.com/v1/organization/costs');
+    url.searchParams.set('start_time', String(afterTs));
+    url.searchParams.set('end_time', String(endTs));
+    url.searchParams.set('bucket_width', '1d');
+    url.searchParams.set('limit', '31');
+    url.searchParams.set('group_by', 'line_item');
+
+    const res = await fetchWithTimeout(url.toString(), {
+      headers: { Authorization: `Bearer ${adminApiKey}` },
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`OpenAI API ${res.status}: ${body.slice(0, 200)}`);
     }
+
+    const data = (await res.json()) as OpenAICostsResponse;
+    const buckets = data.data ?? [];
+    if (buckets.length === 0) break;
+
+    for (const bucket of buckets) {
+      for (const item of bucket.results ?? []) {
+        const lineItem = typeof item.line_item === 'string' ? item.line_item : 'other';
+        const cost = typeof item.amount?.value === 'number' ? item.amount.value : 0;
+        breakdown[lineItem] = (breakdown[lineItem] ?? 0) + cost;
+        total += cost;
+      }
+      // Advance past this bucket for the next page.
+      if (typeof bucket.end_time === 'number' && bucket.end_time > afterTs) {
+        afterTs = bucket.end_time;
+      }
+    }
+
+    // If fewer buckets than limit, we have all the data.
+    if (buckets.length < 31) break;
   }
 
   return { providerUsd: total, breakdown };
@@ -130,6 +163,8 @@ interface OpenAICostLineItem {
 }
 
 interface OpenAICostBucket {
+  start_time?: number;
+  end_time?: number;
   results?: OpenAICostLineItem[];
 }
 
@@ -139,14 +174,13 @@ interface OpenAICostsResponse {
 
 // -- Helpers ------------------------------------------------------------
 
-function monthToDateRange(month: string): { startDate: string; endDate: string } {
+function monthToIsoRange(month: string): { startIso: string; endIso: string } {
   const [year, mo] = month.split('-').map(Number);
   const start = new Date(Date.UTC(year, mo - 1, 1));
-  // First day of next month.
   const end = new Date(Date.UTC(year, mo, 1));
   return {
-    startDate: start.toISOString().slice(0, 10),
-    endDate: end.toISOString().slice(0, 10),
+    startIso: start.toISOString(),
+    endIso: end.toISOString(),
   };
 }
 
@@ -155,4 +189,10 @@ function monthToTimestampRange(month: string): { startTs: number; endTs: number 
   const startTs = Math.floor(new Date(Date.UTC(year, mo - 1, 1)).getTime() / 1000);
   const endTs = Math.floor(new Date(Date.UTC(year, mo, 1)).getTime() / 1000);
   return { startTs, endTs };
+}
+
+function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timeoutId));
 }
