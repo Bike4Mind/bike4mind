@@ -228,6 +228,15 @@ const SETTINGS_LABEL_WIDTH = '164px';
 const SETTINGS_ROW_GAP = '24px';
 
 /**
+ * Height of the model details screen's sticky header (16px padding, a 32px control, 16px padding).
+ * Fixed rather than content-driven for two reasons: it stops the bar changing height when "Use this
+ * model" is replaced by the shorter "Current model" label, and it gives the scrollbar track a margin
+ * to sit below - the header is inside the scroll container, so without it the bar runs up alongside
+ * the header instead of starting under it the way the model list's starts under the tabs.
+ */
+const MODEL_DETAILS_HEADER_HEIGHT = '64px';
+
+/**
  * One Advanced Settings row: label (plus optional help icon) in the fixed column, control after it.
  * Controls size themselves via `commonInputStyles` / `settingsSelectSx`, which share a width, so
  * the control column lines up without this needing to constrain its children.
@@ -692,6 +701,71 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   const contextWindow = modelInfo.contextWindow ?? 0;
   const inputTokens = Math.max(0, contextWindow - outputTokens);
 
+  // The session-wide switches, defined once and rendered two ways. Desktop keeps them inline beside
+  // the section title; mobile has no room for four controls on that row, so there the title keeps
+  // only Reset and these become rows at the top of the settings list, aligned with everything below.
+  const coreToggles = [
+    {
+      key: 'ai',
+      label: 'AI',
+      control: (
+        <Checkbox
+          checked={liveAI}
+          onChange={() => setLiveAI(!liveAI)}
+          disabled={voiceOver}
+          title="Use AI"
+          color="success"
+          variant="outlined"
+          sx={liveAI ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
+        />
+      ),
+    },
+    ...(!isImageModel(model)
+      ? [
+          {
+            key: 'stream',
+            label: 'Stream',
+            control: (
+              <Checkbox
+                checkedIcon={<CheckIcon sx={{ color: 'success.main' }} />}
+                checked={stream}
+                onChange={() => setStream(!stream)}
+                disabled={voiceOver}
+                title={stream ? 'Streaming responses' : 'Not streaming'}
+                color="success"
+                variant="outlined"
+                sx={stream ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
+              />
+            ),
+          },
+        ]
+      : []),
+    ...(isQuestMasterFeatureEnabled
+      ? [
+          {
+            key: 'quest-master',
+            label: 'Quest Master',
+            // Wraps the control alone. Around the whole pair it fired from the label too and centred
+            // itself across both, which read as belonging to neither. The native `title` came off the
+            // checkbox with it - it duplicated this one.
+            control: (
+              <Tooltip title="Enable Quest Master">
+                <Checkbox
+                  checked={isQuestMasterEnabled}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    setLLM({ isQuestMasterEnabled: e.target.checked })
+                  }
+                  color="success"
+                  variant="outlined"
+                  sx={isQuestMasterEnabled ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
+                />
+              </Tooltip>
+            ),
+          },
+        ]
+      : []),
+  ];
+
   return (
     <>
       {/* Selected Model Details */}
@@ -853,65 +927,16 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   fontSize: '14px',
                 }}
               >
-                {/* Label before control throughout, matching the Smart tools and Research Mode
-                toggles. */}
-                {/* AI Toggle */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                  <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                    AI
-                  </Typography>
-                  <Checkbox
-                    checked={liveAI}
-                    onChange={() => setLiveAI(!liveAI)}
-                    disabled={voiceOver}
-                    title="Use AI"
-                    color="success"
-                    variant="outlined"
-                    sx={liveAI ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
-                  />
-                </Box>
-
-                {/* Stream Toggle */}
-                {!isImageModel(model) && (
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                    <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                      Stream
-                    </Typography>
-                    <Checkbox
-                      checkedIcon={<CheckIcon sx={{ color: 'success.main' }} />}
-                      checked={stream}
-                      onChange={() => setStream(!stream)}
-                      disabled={voiceOver}
-                      title={stream ? 'Streaming responses' : 'Not streaming'}
-                      color="success"
-                      variant="outlined"
-                      sx={stream ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
-                    />
-                  </Box>
-                )}
-
-                {/* Quest Master Toggle */}
-                {isQuestMasterFeatureEnabled && (
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                    <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                      Quest Master
-                    </Typography>
-                    {/* Wraps the control alone. Around the whole pair it fired from the label too and
-                    centred itself across both, which read as belonging to neither. The native
-                    `title` came off the checkbox with it - it duplicated this one. */}
-                    <Tooltip title="Enable Quest Master">
-                      <Checkbox
-                        checked={isQuestMasterEnabled}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                          setLLM({ isQuestMasterEnabled: e.target.checked })
-                        }
-                        color="success"
-                        variant="outlined"
-                        sx={isQuestMasterEnabled ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
-                      />
-                    </Tooltip>
-                  </Box>
-                )}
+                {/* Label before control, matching the Smart tools and Research Mode toggles. */}
+                {!isMobile &&
+                  coreToggles.map(toggle => (
+                    <Box key={toggle.key} sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
+                      <Typography level="body-sm" sx={{ flexGrow: 0 }}>
+                        {toggle.label}
+                      </Typography>
+                      {toggle.control}
+                    </Box>
+                  ))}
 
                 {/* Sits with the controls it resets. Everything handleReset touches - the token
                 allocation below, temperature, spoken words, response history - lives in this
@@ -950,6 +975,21 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
             >
               These are the settings this model supports. Use this model to adjust them.
             </Typography>
+          )}
+
+          {/* Mobile only: the switches the title row cannot fit, as rows sharing SettingsRow's
+            label column so they line up with the settings below. Each control sits in a box of the
+            shared control width and hugs its right edge, matching the inputs. */}
+          {!readOnly && isMobile && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: SETTINGS_ROW_GAP, mb: SETTINGS_ROW_GAP }}>
+              {coreToggles.map(toggle => (
+                <SettingsRow key={toggle.key} label={toggle.label}>
+                  <Box sx={{ width: SETTINGS_CONTROL_WIDTH, display: 'flex', justifyContent: 'flex-end' }}>
+                    {toggle.control}
+                  </Box>
+                </SettingsRow>
+              ))}
+            </Box>
           )}
 
           {/* An output-token budget only means something for chat models. Image, video and
@@ -1876,13 +1916,22 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                     // Tabs inherit `min-block-size: var(--ListItem-minHeight)` (36px at sizeMd),
                     // which would outgrow the 32px bar.
                     '--ListItem-minHeight': '32px',
+                    // Mobile scrolls the bar sideways rather than squeezing the labels. Explicit
+                    // nowrap because the scroll depends on it, and the scrollbar is hidden: touch
+                    // scrolling has no persistent bar, and a visible one inside a 32px strip would
+                    // crowd the labels.
+                    flexWrap: 'nowrap',
+                    overflowX: { xs: 'auto', sm: 'visible' },
+                    scrollbarWidth: 'none',
+                    '&::-webkit-scrollbar': { display: 'none' },
                     '& .MuiTab-root': {
                       fontSize: '14px',
                       fontWeight: 400,
                       paddingBlock: 0,
                       paddingInline: '12px',
                       color: 'text.primary50',
-                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
+                      // Never shrink: each tab keeps its label's width and the bar scrolls instead.
+                      flex: '0 0 auto',
                       minWidth: 0,
                       whiteSpace: 'nowrap',
                       textAlign: 'center',
@@ -2024,6 +2073,13 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 px: { xs: 2, sm: 3 },
                 pb: { xs: 2, sm: 3 },
                 ...scrollbarStyles,
+                // Starts the bar below the sticky header, matching the model list where the bar
+                // begins under the tabs. Re-states the background because this replaces the track
+                // rule scrollbarStyles just spread in rather than merging with it.
+                '&::-webkit-scrollbar-track': {
+                  background: 'transparent',
+                  marginTop: MODEL_DETAILS_HEADER_HEIGHT,
+                },
               }}
             >
               <Box
@@ -2040,7 +2096,10 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                   // container has no top padding.
                   mx: { xs: '-16px', sm: '-24px' },
                   px: { xs: '16px', sm: '24px' },
-                  py: '16px',
+                  // Fixed so the scrollbar track's matching offset stays correct, and so the header
+                  // does not shrink when "Use this model" becomes the shorter "Current model".
+                  height: MODEL_DETAILS_HEADER_HEIGHT,
+                  flexShrink: 0,
                   backgroundColor: 'background.surface',
                   // Same token as the dialog's own outline: ModalDialog carries no explicit
                   // border, so its window edge is Joy's outlined-variant border.

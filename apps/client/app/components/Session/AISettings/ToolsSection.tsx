@@ -740,11 +740,11 @@ const ToolsSection = ({
           opacity: readOnly ? 0.6 : 1,
         }}
       >
-        <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1, px: '8px' }}>
           {/* Title, help button and description match the model title/description in the
               settings dialog header. The dropdown skips the help button - its own header
               already carries one. */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', mb: stackHeader ? '16px' : '4px' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px', mb: stackHeader ? '12px' : '4px' }}>
             <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>Smart tools</Typography>
             {!onClose && (
               <ContextHelpButton
