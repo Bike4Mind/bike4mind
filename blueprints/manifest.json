@@ -90,9 +90,8 @@
       "blueprintHash": "ef21c4f",
       "appliedAt": "2026-07-02T00:00:00.000Z",
       "generatedFiles": [],
-      "notes": "Source of the sre-autofix blueprint (extracted from b4m-core/services SreAgentService + the applier workflows). Recorded retroactively. Extraction-conformance fixes to apply against this repo: FIX_0001 (idempotency claim after dispatch, not before); FIX_0002 (applier sends received-ack to callbackUrl immediately -- workflow-runs polling cannot attribute a run to a trackingId under concurrent dispatches); FIX_0003 (dryRun must exercise credentials and allowlist -- currently returns before service construction); FIX_0004 (repoSlug must be required with no default -- current default 'MillionOnMars/lumina5' is archived); FIX_0005 (applier must use a GitHub App token or scoped PAT for the fix branch push -- GITHUB_TOKEN push suppression silently breaks the self-heal loop). See MillionOnMars/blueprints PR #54 for the full blueprint."
+      "notes": "Source of the sre-autofix blueprint (extracted from b4m-core/services SreAgentService + the applier workflows). Recorded retroactively."
     }
   ],
-  "skipped": [],
-  "extractionBacklog": []
+  "skipped": []
 }
