@@ -608,6 +608,9 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   const survivors = tools.filter(tool => !denied.has(tool));
   let paired = addPairedTool(survivors, 'image_generation', 'edit_image');
   paired = addPairedTool(paired, 'search_knowledge_base', 'retrieve_knowledge_content');
+  // Cardinality rides along with search: a corpus you can search but not count is what made the
+  // model treat a count question as proof it had no access at all.
+  paired = addPairedTool(paired, 'search_knowledge_base', 'count_knowledge_base');
   return paired.filter(tool => !denied.has(tool));
 }
 
