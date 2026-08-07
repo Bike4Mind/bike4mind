@@ -287,35 +287,42 @@ async function main(): Promise<void> {
 
   const armResults: Record<string, TrialRecord[]> = {};
 
+  // Runs one trial and always pushes a record (a caught error becomes a synthesized FAIL row) so
+  // a thrown trial can never silently vanish from the results/summary.
+  async function runAndRecord(
+    model: string,
+    n: number,
+    phrasing: 'plain' | 'search-my-files',
+    trials: TrialRecord[]
+  ): Promise<void> {
+    const label = phrasing === 'plain' ? `trial ${n}` : 'search-my-files trial';
+    try {
+      const record = await runTrial(args, runId, model, n, phrasing);
+      trials.push(record);
+      console.log(`[${model}] ${label}: ${record.verdict}${record.note ? ` (${record.note})` : ''}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      trials.push({
+        n,
+        model,
+        phrasing,
+        offeredTools: [],
+        refusalMatched: false,
+        canaryFound: false,
+        verdict: 'FAIL',
+        note: message,
+      });
+      console.error(`[${model}] ${label}: ERROR ${message}`);
+    }
+  }
+
   for (const model of args.arms) {
     const trials: TrialRecord[] = [];
     for (let n = 1; n <= args.trials; n++) {
-      try {
-        const record = await runTrial(args, runId, model, n, 'plain');
-        trials.push(record);
-        console.log(`[${model}] trial ${n}: ${record.verdict}${record.note ? ` (${record.note})` : ''}`);
-      } catch (err) {
-        trials.push({
-          n,
-          model,
-          phrasing: 'plain',
-          offeredTools: [],
-          refusalMatched: false,
-          canaryFound: false,
-          verdict: 'FAIL',
-          note: err instanceof Error ? err.message : String(err),
-        });
-        console.error(`[${model}] trial ${n}: ERROR ${(err as Error)?.message}`);
-      }
+      await runAndRecord(model, n, 'plain', trials);
     }
     if (args.searchMyFiles) {
-      try {
-        const record = await runTrial(args, runId, model, args.trials + 1, 'search-my-files');
-        trials.push(record);
-        console.log(`[${model}] search-my-files trial: ${record.verdict}`);
-      } catch (err) {
-        console.error(`[${model}] search-my-files trial: ERROR ${(err as Error)?.message}`);
-      }
+      await runAndRecord(model, args.trials + 1, 'search-my-files', trials);
     }
     armResults[model] = trials;
   }

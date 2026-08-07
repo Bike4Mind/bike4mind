@@ -651,6 +651,9 @@ export function shouldDeferCorpusToRetrieval(input: {
  * `resolveCorpusInlinePlan`'s fully-vectorized-and-same-embedding-space bar, which gates semantic
  * RANKING quality, not whether the tool has any text to hand back at all. Do not tighten this to
  * `vectorizedChunkCount >= chunkCount` - that would withhold the tool from files it can serve fine.
+ * The `!deletedAt && !archivedAt` liveness check mirrors `isLiveVisibleFile` in
+ * knowledgeBaseRetrieve (also re-derived at `resolveCorpusInlinePlan`'s `liveAndReachable`) rather
+ * than importing it - each site pairs the check with a different retrievability bar.
  */
 export function attachmentHasIndexedContent(
   file: Pick<IFabFileDocument, 'vectorized' | 'chunkCount' | 'deletedAt' | 'archivedAt'>
@@ -1438,28 +1441,61 @@ export class ChatCompletionProcess {
       }
       quest.status = 'running';
 
+      const hasAnyAttachment = (session.knowledgeIds?.length ?? 0) > 0;
+      // Any promptMode is an eval/passthrough that must not receive our server-side offers.
+      const skipAutoOffers = Boolean(promptMode);
+      // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
+      // fetch below instead of serializing in front of it - folded into that Promise.all. Skips
+      // the lookup entirely when there's nothing to check (no attachment) or the offer is skipped
+      // anyway (promptMode).
+      const attachedKnowledgeFilesPromise: Promise<IFabFileDocument[] | null> =
+        hasAnyAttachment && !skipAutoOffers
+          ? this.getAttachedKnowledgeFiles(session.knowledgeIds!)
+          : Promise.resolve(null);
+
+      // Generic per-session integration isolation: a curated-surface session (e.g. /opti)
+      // can suppress the user's personal integrations so it runs only its server-owned
+      // toolset - no user MCP servers, no agent delegation. No product-specific branch in
+      // core; mirrors the generic `enabledTools`/`disabledTools` capability above.
+      if (session.disableUserIntegrations) {
+        enableAgents = false;
+        parsedBody.mcpServers = [];
+      }
+
+      // Start model info, admin settings, quest save, and the attached-knowledge lookup in parallel
+      const [, models, defaultAdminSettings, attachedKnowledgeFiles] = await Promise.all([
+        // Quest save can be async - don't block on it
+        timeCall('saveQuest', Promise.resolve(saveQuest(quest))),
+        // Get available models in parallel
+        timeCall('models', getAvailableModels(apiKeyTable)),
+        // Admin settings have NO dependency on models, load in parallel
+        timeCall('adminSettings', this.loadAdminSettingsAsync(logger, processStartTime)),
+        timeCall('attachedKnowledgeFiles', attachedKnowledgeFilesPromise),
+      ]);
+
+      logger.info(
+        `⏱️ [${Date.now() - processStartTime}ms] Essential data + API keys + models fetched in parallel in ${
+          Date.now() - essentialDataStartTime
+        }ms`
+      );
+
       // Finalize the tool-offer list in one place: union the session's forced tools, offer the
       // knowledge-base tool when the caller has retrievable knowledge (documents attached to this
       // session OR one of their own data lakes), pair companion tools, and apply the session
       // denylist last (so a curated "approved sources only" surface still wins). `enabledTools`
       // is the array reference handed to buildTools, so splice the result back in place rather
       // than reassigning the binding.
-      const hasAnyAttachment = (session.knowledgeIds?.length ?? 0) > 0;
-      // Any promptMode is an eval/passthrough that must not receive our server-side offers.
-      const skipAutoOffers = Boolean(promptMode);
+      //
       // "Attached knowledge" for the offer means the caller has an attachment the tool can
       // actually read RIGHT NOW - not merely an attachment. A file still chunking has its raw
       // content already inlined by processFabFilesServer, so offering the tool for it can only
       // return a zero-content reply that a tool-eager model reads as "I cannot access this file",
-      // discarding the content already in front of it. Skips the DB lookup when there's nothing
-      // to check (no attachment) or the offer is skipped anyway (promptMode).
-      let hasAttachedKnowledge = hasAnyAttachment;
-      if (hasAnyAttachment && !skipAutoOffers) {
-        const attachedFiles = await this.getAttachedKnowledgeFiles(session.knowledgeIds!);
-        // null => the lookup failed; fail toward offering rather than stranding a genuinely
-        // indexed corpus with no retrieval path (see getAttachedKnowledgeFiles).
-        hasAttachedKnowledge = attachedFiles === null || attachedFiles.some(attachmentHasIndexedContent);
-      }
+      // discarding the content already in front of it. `attachedKnowledgeFiles` is `null` both
+      // when the lookup was skipped above and when it failed - fail toward offering rather than
+      // stranding a genuinely indexed corpus with no retrieval path (see getAttachedKnowledgeFiles).
+      const hasAttachedKnowledge =
+        hasAnyAttachment &&
+        (attachedKnowledgeFiles === null || attachedKnowledgeFiles.some(attachmentHasIndexedContent));
       // Only pay the accessible-lake lookup when it could change the offer: not skipped
       // (prompt-mode), and attached knowledge hasn't already triggered the offer anyway.
       const hasAccessibleDataLake =
@@ -1476,31 +1512,6 @@ export class ChatCompletionProcess {
 
       // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
       // moved to after buildTools, where the authoritative post-build tool list is known.
-
-      // Generic per-session integration isolation: a curated-surface session (e.g. /opti)
-      // can suppress the user's personal integrations so it runs only its server-owned
-      // toolset - no user MCP servers, no agent delegation. No product-specific branch in
-      // core; mirrors the generic `enabledTools`/`disabledTools` capability above.
-      if (session.disableUserIntegrations) {
-        enableAgents = false;
-        parsedBody.mcpServers = [];
-      }
-
-      // Start model info, admin settings, and quest save in parallel
-      const [, models, defaultAdminSettings] = await Promise.all([
-        // Quest save can be async - don't block on it
-        timeCall('saveQuest', Promise.resolve(saveQuest(quest))),
-        // Get available models in parallel
-        timeCall('models', getAvailableModels(apiKeyTable)),
-        // Admin settings have NO dependency on models, load in parallel
-        timeCall('adminSettings', this.loadAdminSettingsAsync(logger, processStartTime)),
-      ]);
-
-      logger.info(
-        `⏱️ [${Date.now() - processStartTime}ms] Essential data + API keys + models fetched in parallel in ${
-          Date.now() - essentialDataStartTime
-        }ms`
-      );
 
       const throttledSend = DISABLE_SERVER_THROTTLING
         ? () => this.sendStatusUpdate(quest, null) // No throttling - direct send
@@ -5465,9 +5476,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     // offered search_knowledge_base tool fetches those on demand. Only knowledge IDs are affected -
     // message/session fab files and system files always inline.
     const deferred = new Set(deferredKnowledgeIds);
-    const inlineKnowledgeIds = deferred.size
-      ? sessionKnowledgeIds.filter(id => !deferred.has(id))
-      : sessionKnowledgeIds;
+    const inlineKnowledgeIds = sessionKnowledgeIds.filter(id => !deferred.has(id));
 
     // Pre-compute file dedup (synchronous) before deciding whether to skip
     const allFileIdsBeforeDedup = [
