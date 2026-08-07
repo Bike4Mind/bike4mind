@@ -22,6 +22,11 @@ name: pr-bot-review
 # After a label-triggered run, the label is auto-removed so the next "add"
 # cleanly triggers another review.
 #
+# Review-status labels (see Bike4Mind/manifold#44): while the review runs the PR
+# carries `review_ongoing`; on completion that is swapped for the bot's own verdict —
+# `done reviewing` (approved) or `change request` (changes requested). A run that a
+# guard skips or that errors out just clears `review_ongoing` and sets no verdict.
+#
 # NOTE: paths-ignore is intentionally omitted. GitHub does not reliably fire
 # `labeled` events when paths-ignore is combined with mixed activity types in
 # the same pull_request trigger. The label itself is now the primary cost control;
@@ -179,6 +184,23 @@ jobs:
             --repo ${{ github.repository }} \
             --body "🤖 Skipped re-review - the only new commits since the last bot review are the auto-generated changeset (no substantive changes). Push a code change and re-apply \`bot-review\` for a fresh review." || true
 
+      - name: Mark review in progress
+        # A review is now committed to running (both guards passed). Tag it in flight
+        # and clear any stale verdict from a previous run, so the labels reflect THIS
+        # review. Best-effort throughout: a label-API hiccup must never red the job or
+        # block the review. The `review_ongoing` label already exists in the repo.
+        if: steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set +e
+          REPO="${{ github.repository }}"
+          gh pr edit "$PR" --repo "$REPO" --add-label "review_ongoing"
+          gh pr edit "$PR" --repo "$REPO" --remove-label "done reviewing"
+          gh pr edit "$PR" --repo "$REPO" --remove-label "change request"
+          exit 0
+
       # The bot-review skill lives in the PRIVATE b4m-devtools repo (this public repo
       # intentionally carries no .claude/ tooling). Mint a token scoped to ONLY
       # b4m-devtools (the app has org-wide access, but a public workflow should hold
@@ -259,6 +281,50 @@ jobs:
             # post) exhausted the budget mid-review (error_max_turns) before any
             # review was posted. The 100-file size guard caps the upper bound.
             --max-turns 80
+
+      - name: Apply review verdict label
+        # Runs whenever a review was actually started (both guards passed), on success
+        # OR failure. Sets the terminal status from the bot's OWN submitted verdict, but
+        # only when a fresh claude[bot] review exists at the current head SHA — so a
+        # failed / aborted run (which posted nothing new) can never inherit a stale
+        # verdict from a previous review. `review_ongoing` is always cleared. Best-effort:
+        # never red the job over a label call.
+        if: always() && steps.size_check.outputs.skip == 'false' && steps.substantive.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          BOT_REVIEW_LOGIN: 'claude[bot]'
+        run: |
+          set +e
+          REPO="${{ github.repository }}"
+
+          # Latest claude[bot] review (state + reviewed sha). --paginate walks all pages
+          # but --jq runs PER PAGE, so stream ascending and take the global last with
+          # `tail -n1` (same pattern as the substantive-change guard above).
+          LATEST=$(gh api --paginate "repos/${REPO}/pulls/${PR}/reviews" \
+            --jq ".[] | select(.user.login==\"${BOT_REVIEW_LOGIN}\") | \"\(.state) \(.commit_id)\"" 2>/dev/null | tail -n1)
+          read -r STATE RSHA <<< "$LATEST"
+          HEAD_SHA=$(git rev-parse HEAD 2>/dev/null)
+          echo "verdict: state=${STATE:-<none>} reviewed=${RSHA:-<none>} head=${HEAD_SHA:-<none>}"
+
+          if [ -n "$RSHA" ] && [ "$RSHA" = "$HEAD_SHA" ]; then
+            case "$STATE" in
+              APPROVED)
+                gh pr edit "$PR" --repo "$REPO" --add-label "done reviewing"
+                gh pr edit "$PR" --repo "$REPO" --remove-label "change request" ;;
+              CHANGES_REQUESTED)
+                gh pr edit "$PR" --repo "$REPO" --add-label "change request"
+                gh pr edit "$PR" --repo "$REPO" --remove-label "done reviewing" ;;
+              *)
+                echo "verdict: state '$STATE' is neither approve nor changes — leaving terminal labels unchanged" ;;
+            esac
+          else
+            echo "verdict: no fresh claude[bot] review at head (run skipped/errored) — leaving terminal labels unchanged"
+          fi
+
+          # The review is no longer in flight, whatever the outcome.
+          gh pr edit "$PR" --repo "$REPO" --remove-label "review_ongoing"
+          exit 0
 
       - name: Report incomplete review
         # Fires only when the review step actually ran and failed (e.g.
