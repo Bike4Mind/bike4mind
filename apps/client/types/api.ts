@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { CurationType, CurationTypeSchema, CurationArtifactTypeSchema, ExportFormatSchema } from '@bike4mind/common';
+import {
+  CurationType,
+  CurationTypeSchema,
+  CurationArtifactTypeSchema,
+  DATA_LAKE_GROUNDING_MODES,
+  ExportFormatSchema,
+} from '@bike4mind/common';
 import {
   RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH,
   RETRIEVAL_EXCLUDE_MARKERS_MAX,
@@ -52,6 +58,9 @@ export const CreateSessionRequestSchema = z.object({
   disabledTools: z.array(z.string()).optional(),
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
+  // Resolved from the lake by the create route (resolveLakeSessionDefaults), so the merged
+  // create params carry it through to core; declared here for the shared type, not for clients.
+  corpusGroundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
   retrievalExcludeFilenameMarkers: z
     .array(z.string().trim().min(1).max(RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH))
     .max(RETRIEVAL_EXCLUDE_MARKERS_MAX)

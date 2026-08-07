@@ -15,6 +15,30 @@ export const DATALAKE_TAG_PREFIX = 'datalake:';
 export const DATALAKE_TAG_STRENGTH = 1;
 
 /**
+ * How a lake's attached corpus is grounded into a chat turn, as a DELIBERATE per-lake product
+ * choice rather than a side effect of who is asking (see IDataLake.groundingMode):
+ * - `inline`: paste the corpus into the prompt (never defer to the search tool).
+ * - `retrieve`: leave the corpus to the offered search_knowledge_base tool (always defer the
+ *   tool-retrievable subset), so an owner and an entitlement-only reader ground identically.
+ * - `auto-by-size`: keep the size heuristic - defer only when the per-doc even-split inline depth
+ *   falls below the `CorpusRetrievalMinInlineTokensPerDoc` floor (see shouldDeferCorpusToRetrieval).
+ *
+ * The resolution seam is create-time (resolveLakeSessionDefaults -> session.corpusGroundingMode);
+ * the enforcement seam is the completion-path defer plan. Keep this tuple and DataLakeGroundingMode
+ * as the single source both the Zod schema and the Mongoose enum derive from.
+ */
+export const DATA_LAKE_GROUNDING_MODES = ['inline', 'retrieve', 'auto-by-size'] as const;
+export type DataLakeGroundingMode = (typeof DATA_LAKE_GROUNDING_MODES)[number];
+
+/**
+ * Default per-lake grounding mode: `retrieve`. Chosen so inline-vs-retrieve is a deliberate choice
+ * that defaults SAFE - an owner and a reader of the same lake behave identically (retrieval) unless
+ * an editor opts the lake into inlining. Applied to a lake that never set the field (including lakes
+ * that predate it, whose stored value is absent) at the create-time resolution seam.
+ */
+export const DEFAULT_DATA_LAKE_GROUNDING_MODE: DataLakeGroundingMode = 'retrieve';
+
+/**
  * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
  * (non-empty, ends with ':'), else null. An empty prefix would match every tag, so it is
  * rejected rather than honored.
@@ -225,6 +249,13 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * so "not yours to see" and "no preferred prompt" stay distinguishable.
    */
   preferredSystemPromptId?: string;
+  /**
+   * Per-lake grounding mode (see IDataLake.groundingMode). EDITOR-ONLY, like the two prompt fields:
+   * surfaced only when the caller can manage the lake, so the settings picker can seed its current
+   * selection. Absent when the caller can't manage it OR the lake never set the field (readers get
+   * its EFFECT via the create-time resolver, never the setting itself).
+   */
+  groundingMode?: DataLakeGroundingMode;
 }
 
 /**

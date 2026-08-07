@@ -79,7 +79,7 @@ import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
-import { satisfiesTagPrefix } from '@bike4mind/common';
+import { satisfiesTagPrefix, DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
 
 type ManagerLake = NonNullable<ReturnType<typeof useGetDataLakes>['data']>[number];
 
@@ -167,6 +167,9 @@ export default function DataLakeManagerPanel() {
           systemPrompt: l.systemPrompt ?? '',
           // Same as systemPrompt: '' when unset OR withheld from a non-editor; rendered off canManage.
           preferredSystemPromptId: l.preferredSystemPromptId ?? '',
+          // Absent when withheld from a non-editor OR the lake predates the field; seed the default
+          // so the picker always shows a concrete mode (matching how the resolver treats absence).
+          groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
           canManage: !!l.canManage,
         }
       : null;

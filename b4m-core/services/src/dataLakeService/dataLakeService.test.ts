@@ -490,6 +490,37 @@ describe('listDataLakes - preferredSystemPromptId is returned to a lake EDITOR o
   });
 });
 
+// groundingMode is EDITOR-ONLY too (same rule as the prompt fields): a reader gets its EFFECT
+// (inline vs retrieve, resolved server-side on a session created for the lake), never the setting.
+describe('listDataLakes - groundingMode is returned to a lake EDITOR only', () => {
+  it("returns the stored mode for the caller's own lake (seeds the picker)", async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', groundingMode: 'inline' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.groundingMode).toBe('inline');
+  });
+
+  it("WITHHOLDS the mode from a stranger reading someone else's PUBLIC lake", async () => {
+    const theirs = lake({
+      id: 'theirs',
+      slug: 'theirs',
+      createdByUserId: 'other',
+      isPublic: true,
+      groundingMode: 'inline',
+    });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
+    const entry = result.find(l => l.id === 'theirs');
+
+    expect(entry?.groundingMode).toBeUndefined();
+    // Absent, not blanked - a reader must not tell "unset" from "withheld".
+    expect(entry && 'groundingMode' in entry).toBe(false);
+  });
+});
+
 describe('listAllDataLakes - the admin list still gates the prompt on canManage', () => {
   it('returns the prompt on every DB lake, since an admin manages them all', async () => {
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', systemPrompt: 'Cite sources.' });
@@ -632,6 +663,9 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     // The new editor-only binding must never join the reader allow-list either.
     expect((READER_LAKE_FIELDS as readonly string[]).includes('preferredSystemPromptId')).toBe(false);
     expect(LAKE_FIELD_VISIBILITY.preferredSystemPromptId).toBe('withheld');
+    // Same for the grounding mode: editor-only, never shipped to a reader.
+    expect((READER_LAKE_FIELDS as readonly string[]).includes('groundingMode')).toBe(false);
+    expect(LAKE_FIELD_VISIBILITY.groundingMode).toBe('withheld');
   });
 
   it('does not mutate the source document (the caller may still hold it for a write path)', () => {

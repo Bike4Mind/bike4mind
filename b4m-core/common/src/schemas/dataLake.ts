@@ -1,5 +1,10 @@
 import z from 'zod';
-import { DATALAKE_TAG_PREFIX, hasBlankTagPrefixSegment, isReservedTagPrefix } from '../constants/dataLakes';
+import {
+  DATALAKE_TAG_PREFIX,
+  hasBlankTagPrefixSegment,
+  isReservedTagPrefix,
+  DATA_LAKE_GROUNDING_MODES,
+} from '../constants/dataLakes';
 
 // Slug validation
 
@@ -63,6 +68,11 @@ export const UpdateDataLakeRequestInput = z.object({
   // ALLOWLIST check is enforced at the write route (apps/client), which owns the allowlist - core
   // cannot import it. This bound is a crafted-body cap only, not the real constraint.
   preferredSystemPromptId: z.union([z.literal(''), z.string().min(1).max(200)]).optional(),
+  // Per-lake grounding mode (see IDataLake.groundingMode). Constrained to the shared enum tuple so
+  // the request, the Mongoose enum, and the resolver can never drift. Omitting it means "leave
+  // unchanged" (Mongo $set strips undefined); there is no clear sentinel because the field is not
+  // nullable - a lake always has a mode (its stored value or the resolver default).
+  groundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
   // Empty string is the explicit "remove this gate" sentinel, accepted on UPDATE only (a
   // create has no gate to clear). It is stored as-is rather than unset: every read path
   // already treats '' as ungated - the access queries in DataLakeModel carry explicit

@@ -20,6 +20,15 @@ import {
 import { useSetLakeVisibility, useUpdateDataLake } from '@client/app/hooks/data/dataLakes';
 import { useActivatablePrompts } from '@client/app/hooks/data/useActivatablePrompts';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
+import { DATA_LAKE_GROUNDING_MODES, DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
+import type { DataLakeGroundingMode } from '@bike4mind/common';
+
+/** Human-facing labels + helper copy for the grounding-mode picker, keyed by the shared enum. */
+const GROUNDING_MODE_LABELS: Record<DataLakeGroundingMode, string> = {
+  retrieve: 'Retrieve (recommended)',
+  inline: 'Inline into the prompt',
+  'auto-by-size': 'Auto (decide by size)',
+};
 
 export interface EditableLake {
   id: string;
@@ -42,8 +51,14 @@ export interface EditableLake {
    */
   preferredSystemPromptId: string;
   /**
+   * How this lake grounds its corpus into a chat (inline vs retrieve vs auto-by-size). Editor-only,
+   * always a concrete mode: the manager panel seeds the default for a lake that never set it, so
+   * the picker never has to render an empty selection.
+   */
+  groundingMode: DataLakeGroundingMode;
+  /**
    * Whether the caller may manage this lake - server-computed, see DataLakeConfig.canManage.
-   * Gates the editor-only per-lake config fields (System prompt, Preferred prompt).
+   * Gates the editor-only per-lake config fields (System prompt, Preferred prompt, Grounding mode).
    */
   canManage: boolean;
 }
@@ -86,6 +101,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [requiredEntitlement, setRequiredEntitlement] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [preferredSystemPromptId, setPreferredSystemPromptId] = useState('');
+  const [groundingMode, setGroundingMode] = useState<DataLakeGroundingMode>(DEFAULT_DATA_LAKE_GROUNDING_MODE);
   // Only fetch the picker options when an editor is actually viewing the settings (a lake is open
   // and manageable) - a reader never sees the field, so never pays for the list.
   const {
@@ -115,6 +131,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       // undefined and crash the character-count helper text below (`.trim()` on undefined).
       setSystemPrompt(lake.systemPrompt ?? '');
       setPreferredSystemPromptId(lake.preferredSystemPromptId ?? '');
+      setGroundingMode(lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE);
     }
     // Intentional id-keying: seed once per lake, not on every live-object refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -160,6 +177,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         ...(lake.canManage && preferredSystemPromptId !== (lake.preferredSystemPromptId ?? '')
           ? { preferredSystemPromptId }
           : {}),
+        // Editor-only, same manage gate. Always a concrete mode (no clear sentinel - a lake always
+        // has a grounding mode), so it is sent as the chosen enum value.
+        ...(lake.canManage ? { groundingMode } : {}),
       },
       { onSuccess: onClose }
     );
@@ -213,8 +233,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                 </FormControl>
               )}
               {/* Per-lake config, editor-only (canManage). This section is the home for lake-scoped
-                  session defaults - the preferred prompt today, a per-lake grounding mode next -
-                  so new fields join here rather than spawning a second config surface. */}
+                  session defaults - the preferred prompt and the grounding mode - so new fields
+                  join here rather than spawning a second config surface. */}
               {lake?.canManage && (
                 <FormControl>
                   <FormLabel>Preferred prompt</FormLabel>
@@ -251,6 +271,27 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     {promptsFailed
                       ? "Couldn't load the available prompts. Any existing binding is unchanged; reopen settings to try again."
                       : 'Applied when someone starts a chat with this lake, unless they picked their own prompt. Leave as None for the default behavior.'}
+                  </FormHelperText>
+                </FormControl>
+              )}
+              {lake?.canManage && (
+                <FormControl>
+                  <FormLabel>Grounding mode</FormLabel>
+                  <Select
+                    value={groundingMode}
+                    onChange={(_e, value) => setGroundingMode(value ?? DEFAULT_DATA_LAKE_GROUNDING_MODE)}
+                    data-testid="datalake-grounding-mode-select"
+                    slotProps={{ button: { 'data-testid': 'datalake-grounding-mode-button' } }}
+                  >
+                    {DATA_LAKE_GROUNDING_MODES.map(mode => (
+                      <Option key={mode} value={mode} data-testid={`datalake-grounding-mode-${mode}`}>
+                        {GROUNDING_MODE_LABELS[mode]}
+                      </Option>
+                    ))}
+                  </Select>
+                  <FormHelperText data-testid="datalake-grounding-mode-help">
+                    How a chat started with this lake uses its documents. Retrieve searches the lake on demand (same for
+                    owners and readers); Inline pastes the documents into the prompt; Auto decides by corpus size.
                   </FormHelperText>
                 </FormControl>
               )}

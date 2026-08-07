@@ -1,4 +1,5 @@
 import { IBaseRepository, type IMongoDocument } from '.';
+import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 
 // ── Data Lake Status ────────────────────────────────────────────────────────
 
@@ -72,6 +73,20 @@ export interface IDataLake {
    * Editor-only (see LAKE_FIELD_VISIBILITY); absent/empty = no preferred prompt.
    */
   preferredSystemPromptId?: string;
+  /**
+   * How this lake's attached corpus is grounded into a chat turn - a DELIBERATE product choice
+   * (`inline` | `retrieve` | `auto-by-size`), not a side effect of who is asking. This exists
+   * because inline-vs-retrieve otherwise falls out of a per-file CASL read: a lake OWNER gets the
+   * corpus inlined while an entitlement-only READER matches no read arm and gets retrieval-only -
+   * the same lake, opposite behavior. Resolved ONCE when a session is created FOR this lake
+   * (resolveLakeSessionDefaults -> session.corpusGroundingMode) and enforced by the completion
+   * path's corpus defer plan, which generalizes the size-only #1438 rule to honor this mode.
+   *
+   * Absent = the default (DEFAULT_DATA_LAKE_GROUNDING_MODE = 'retrieve'), applied at the resolver
+   * so lakes predating this field ground the same as new ones. Editor-only (see
+   * LAKE_FIELD_VISIBILITY): a reader gets its EFFECT, never reads the setting.
+   */
+  groundingMode?: DataLakeGroundingMode;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */

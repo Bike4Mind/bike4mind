@@ -39,6 +39,10 @@ const toManageableConfig = (dl: IDataLakeDocument, manageable: boolean): Managea
   // Editor-only, same gate as systemPrompt. An empty stored value means "no preferred prompt",
   // so it is reported as absent (never '') - the picker then shows "None".
   ...(manageable && dl.preferredSystemPromptId ? { preferredSystemPromptId: dl.preferredSystemPromptId } : {}),
+  // Editor-only, same gate as the prompt fields. Surfaced so the settings picker can seed the
+  // current selection; absent for a non-editor OR a lake predating the field (the picker then
+  // falls back to the default mode, matching how the resolver treats an absent value).
+  ...(manageable && dl.groundingMode ? { groundingMode: dl.groundingMode } : {}),
 });
 
 /**

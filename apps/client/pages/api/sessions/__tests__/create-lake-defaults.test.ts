@@ -81,7 +81,18 @@ describe('POST /api/sessions/create - lake-derived session defaults', () => {
       forceKnowledgeRetrieval: true,
       retrievalTags: ['datalake:acme'],
       systemPromptId: 'triage_router',
+      // Always resolved onto a lake session; this lake set no mode -> the default.
+      corpusGroundingMode: 'retrieve',
     });
+  });
+
+  it("carries a lake's explicit grounding mode onto the session", async () => {
+    h.assertLakeAccess.mockResolvedValue({ datalakeTag: 'datalake:acme', groundingMode: 'inline' });
+    const { res } = makeRes();
+
+    await run(post({ name: 'N', dataLakeId: 'acme' }), res);
+
+    expect(paramsOf().corpusGroundingMode).toBe('inline');
   });
 
   it('lets an explicit request systemPromptId/retrievalTags win over the lake defaults', async () => {

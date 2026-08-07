@@ -4,6 +4,7 @@ import {
   RETRIEVAL_EXCLUDE_MARKERS_MAX,
 } from '@bike4mind/utils/retrievalExclusion';
 import {
+  DATA_LAKE_GROUNDING_MODES,
   IFabFileRepository,
   IProjectRepository,
   ISessionDocument,
@@ -26,6 +27,10 @@ const createSessionParametersSchema = z.object({
   disableUserIntegrations: z.boolean().optional(),
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
+  // Resolved from the lake at the create route (resolveLakeSessionDefaults), not sent by clients.
+  // secureParameters strips unknown keys, so it MUST be declared here or the lake's grounding mode
+  // is silently dropped and the completion path falls back to size-only behavior.
+  corpusGroundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
   // secureParameters strips unknown keys, so these MUST be declared here or a surface's
   // retrieval-exclusion opt-in is silently dropped at create time.
   retrievalExcludeFilenameMarkers: z

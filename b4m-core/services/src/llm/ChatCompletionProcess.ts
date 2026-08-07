@@ -147,7 +147,7 @@ import {
   AnomalyAlertService,
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
-import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail } from '@bike4mind/common';
+import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail, DataLakeGroundingMode } from '@bike4mind/common';
 import { buildAlwaysOnFloorDetails } from './systemPromptFloorTelemetry';
 import { resolveArtifactsEnabled } from './artifactGating';
 import { resolveMementoGates } from './mementoGating';
@@ -621,25 +621,44 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
  * search_knowledge_base tool fetch it on demand. Pure so it is unit-testable in isolation from the
  * DB reads that produce `retrievableCount`.
  *
- * The condition is the per-doc even-split depth falling below the floor: attachedFileTokenBudget is
- * divided evenly across the inlined files (processFabFilesServer), so a large corpus gives each doc
- * a shallow slice. `retrievableCount` (not the full attached count) is the divisor on purpose - it
- * is the set eligible to defer. The real per-file split divides the same budget across MORE files
- * (the always-inlined message/session/system sources share it too), so with
- * retrievableCount <= totalAttached this estimate is an UPPER bound on the real depth
- * (budget / retrievableCount >= budget / totalAttached). That biases conservatively in the safe
- * direction: an estimate below the floor guarantees the real split is below it too, so we never
- * over-defer - at worst we under-defer a corpus whose real split is shallow but whose estimate
- * is not. Small corpora keep a high per-doc share and stay inlined (strictly better).
+ * `groundingMode` is the per-lake choice resolved at session-create (session.corpusGroundingMode),
+ * and it OVERRIDES the size heuristic:
+ * - `inline`: never defer (keep the corpus inlined).
+ * - `retrieve`: always defer the retrievable subset - so an owner and an entitlement-only reader of
+ *   the same lake ground identically, instead of the behavior falling out of a per-file CASL read.
+ * - `auto-by-size` OR absent (a session NOT created for a lake, which keeps the pre-existing
+ *   behavior): the per-doc even-split depth rule below.
+ *
+ * `retrievableCount <= 0` short-circuits to "never defer" AHEAD of the mode, in every mode
+ * including `retrieve`: deferring content the tool cannot fetch would strand it silently, so the
+ * anti-content-loss invariant wins over an explicit retrieve.
+ *
+ * The size rule: attachedFileTokenBudget is divided evenly across the inlined files
+ * (processFabFilesServer), so a large corpus gives each doc a shallow slice. `retrievableCount`
+ * (not the full attached count) is the divisor on purpose - it is the set eligible to defer. The
+ * real per-file split divides the same budget across MORE files (the always-inlined
+ * message/session/system sources share it too), so with retrievableCount <= totalAttached this
+ * estimate is an UPPER bound on the real depth (budget / retrievableCount >= budget /
+ * totalAttached). That biases conservatively in the safe direction: an estimate below the floor
+ * guarantees the real split is below it too, so we never over-defer - at worst we under-defer a
+ * corpus whose real split is shallow but whose estimate is not. Small corpora keep a high per-doc
+ * share and stay inlined (strictly better).
  */
 export function shouldDeferCorpusToRetrieval(input: {
   retrievableCount: number;
   attachedFileTokenBudget: number;
   minInlineTokensPerDoc: number;
+  groundingMode?: DataLakeGroundingMode;
 }): boolean {
-  const { retrievableCount, attachedFileTokenBudget, minInlineTokensPerDoc } = input;
-  if (minInlineTokensPerDoc <= 0) return false; // feature off -> today's force-inline behavior
-  if (retrievableCount <= 0) return false; // nothing retrievable -> never defer (would lose content)
+  const { retrievableCount, attachedFileTokenBudget, minInlineTokensPerDoc, groundingMode } = input;
+  // Nothing retrievable -> never defer, whatever the mode: deferring would lose content the tool
+  // cannot reach. Precedes the mode branches so an explicit `retrieve` can never strand a corpus.
+  if (retrievableCount <= 0) return false;
+  if (groundingMode === 'inline') return false; // explicit inline: keep the corpus inlined
+  if (groundingMode === 'retrieve') return true; // explicit retrieve: defer the retrievable subset
+  // 'auto-by-size' or absent: the size heuristic. minInlineTokensPerDoc <= 0 is the feature
+  // off-switch -> today's force-inline behavior.
+  if (minInlineTokensPerDoc <= 0) return false;
   return Math.floor(attachedFileTokenBudget / retrievableCount) < minInlineTokensPerDoc;
 }
 
@@ -877,6 +896,13 @@ export class ChatCompletionProcess {
     defaultAdminSettings: Record<string, string>;
     /** The SAME filter the knowledge tools are built with - see the retrievability comment below. */
     retrievalFilter: RetrievalExclusionOptions;
+    /**
+     * The session's resolved per-lake grounding mode (`session.corpusGroundingMode`), set at
+     * create time for a lake session. Overrides the size heuristic: `inline` never defers,
+     * `retrieve` always defers the retrievable subset. Absent on a non-lake session -> the
+     * pre-existing size-only behavior (byte-identical to before this field existed).
+     */
+    groundingMode?: DataLakeGroundingMode;
   }): Promise<{
     deferredKnowledgeIds: string[];
     attachedCount: number;
@@ -891,6 +917,7 @@ export class ChatCompletionProcess {
       knowledgeSearchDisabled,
       defaultAdminSettings,
       retrievalFilter,
+      groundingMode,
     } = input;
     const attachedCount = sessionKnowledgeIds.length;
 
@@ -909,6 +936,17 @@ export class ChatCompletionProcess {
       minInlineTokensPerDoc,
     };
 
+    // These two gates are MODE-INDEPENDENT: they hold even for an explicit `retrieve`, because
+    // deferring to a tool that isn't there strands the corpus with no reader. When a lake asked for
+    // `retrieve` but the tool path is unavailable, log the anti-strand inline fallback: a lake
+    // configured to retrieve silently inlining is otherwise invisible in a smoke test.
+    if ((skipAutoOffers || knowledgeSearchDisabled) && groundingMode === 'retrieve') {
+      this.logger.warn(
+        `[dataLakes] grounding mode 'retrieve' requested but the knowledge tool is ${
+          skipAutoOffers ? 'not offered (promptMode)' : 'disabled for this session'
+        }; inlining the corpus to avoid stranding it.`
+      );
+    }
     // promptMode is an eval/passthrough surface where the tool is NOT offered - deferring there
     // would strand the corpus with no retrieval path. Symmetric with the tool-offer gate.
     if (skipAutoOffers) return noDefer;
@@ -917,7 +955,13 @@ export class ChatCompletionProcess {
     // denied tool loses the corpus outright. Read from the session rather than the resolved tool
     // list because the list is filtered again downstream of this call.
     if (knowledgeSearchDisabled) return noDefer;
-    if (minInlineTokensPerDoc <= 0 || attachedCount === 0) return noDefer;
+    if (attachedCount === 0) return noDefer;
+    // `inline` never defers, so skip the DB reads entirely (gate the work, not just its use).
+    if (groundingMode === 'inline') return noDefer;
+    // The size feature-flag off-switch short-circuits before the reads for auto-by-size and for a
+    // non-lake session (absent mode). `retrieve` deliberately does NOT short-circuit here - it
+    // defers by policy, not by size, so it proceeds even when the size threshold is 0.
+    if (groundingMode !== 'retrieve' && minInlineTokensPerDoc <= 0) return noDefer;
 
     try {
       const access = await this.getAccessibleDataLakeAccess();
@@ -967,6 +1011,7 @@ export class ChatCompletionProcess {
         retrievableCount: retrievableIds.length,
         attachedFileTokenBudget,
         minInlineTokensPerDoc,
+        groundingMode,
       });
 
       return {
@@ -2047,6 +2092,9 @@ export class ChatCompletionProcess {
         // drift between them. Narrower than "the two agree": reachability also depends on the tool
         // surviving the denylist, which is what knowledgeSearchDisabled above covers.
         retrievalFilter: toRetrievalFilter(session),
+        // Per-lake grounding mode, resolved onto the session at create time. Absent on a non-lake
+        // session -> the plan keeps its pre-existing size-only behavior.
+        groundingMode: session.corpusGroundingMode,
       });
 
       const dataSources = await this.buildDataSources({

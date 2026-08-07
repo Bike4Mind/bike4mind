@@ -2897,6 +2897,54 @@ describe('shouldDeferCorpusToRetrieval (per-doc even-split depth floor)', () => 
       shouldDeferCorpusToRetrieval({ retrievableCount: 0, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 500 })
     ).toBe(false);
   });
+
+  describe('per-lake grounding mode overrides the size heuristic', () => {
+    it("'inline' never defers, even when the size rule alone would (large corpus)", () => {
+      // 4000 / 40 = 100 < 500 would defer under auto-by-size; inline suppresses that.
+      expect(
+        shouldDeferCorpusToRetrieval({
+          retrievableCount: 40,
+          attachedFileTokenBudget: 4000,
+          minInlineTokensPerDoc: 500,
+          groundingMode: 'inline',
+        })
+      ).toBe(false);
+    });
+
+    it("'retrieve' always defers the retrievable subset, even with the size feature OFF", () => {
+      // minInlineTokensPerDoc: 0 is the size off-switch; retrieve defers by policy regardless.
+      expect(
+        shouldDeferCorpusToRetrieval({
+          retrievableCount: 3,
+          attachedFileTokenBudget: 4000,
+          minInlineTokensPerDoc: 0,
+          groundingMode: 'retrieve',
+        })
+      ).toBe(true);
+    });
+
+    it("'retrieve' still never defers when nothing is retrievable (anti-strand wins over the mode)", () => {
+      expect(
+        shouldDeferCorpusToRetrieval({
+          retrievableCount: 0,
+          attachedFileTokenBudget: 4000,
+          minInlineTokensPerDoc: 0,
+          groundingMode: 'retrieve',
+        })
+      ).toBe(false);
+    });
+
+    it("'auto-by-size' matches the absent-mode size behavior exactly", () => {
+      const size = { retrievableCount: 40, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 500 };
+      expect(shouldDeferCorpusToRetrieval({ ...size, groundingMode: 'auto-by-size' })).toBe(
+        shouldDeferCorpusToRetrieval(size)
+      );
+      const small = { retrievableCount: 3, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 500 };
+      expect(shouldDeferCorpusToRetrieval({ ...small, groundingMode: 'auto-by-size' })).toBe(
+        shouldDeferCorpusToRetrieval(small)
+      );
+    });
+  });
 });
 
 describe('computeSettlementDelta (zero-balance shortfall clamp)', () => {

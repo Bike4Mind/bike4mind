@@ -1,11 +1,12 @@
-import type { IDataLake } from '@bike4mind/common';
+import type { DataLakeGroundingMode, IDataLake } from '@bike4mind/common';
+import { DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
 
 /**
  * The session fields a data lake contributes when a session is created FOR that lake.
  *
  * MULTI-FIELD BY DESIGN. This is the one seam that maps a lake to its session defaults, and it is
- * meant to grow: a planned per-lake "grounding mode" (inline vs retrieve) resolves here too, onto
- * the same mechanism, rather than as a second disjoint per-lake config path. Keep it a plain
+ * meant to grow: the per-lake grounding mode (inline vs retrieve) resolves here too, onto the same
+ * mechanism, rather than as a second disjoint per-lake config path. Keep it a plain
  * lake -> partial-session-params mapping so new per-lake fields slot in without reshaping callers.
  *
  * Only the fields a lake actually sets are returned; the caller merges them UNDER any explicit
@@ -26,6 +27,15 @@ export interface LakeSessionDefaults {
    * path's resolver, so a stale or non-activatable id injects nothing rather than an arbitrary prompt.
    */
   systemPromptId?: string;
+  /**
+   * How this lake's corpus is grounded (inline vs retrieve vs auto-by-size). ALWAYS set for a lake
+   * session - to the lake's stored mode or the default ('retrieve') - so an owner and an
+   * entitlement-only reader of the same lake ground identically instead of the behavior falling
+   * out of a per-file CASL read. The completion path's corpus defer plan reads
+   * `session.corpusGroundingMode` and honors this explicit mode; a session NOT created for a lake
+   * leaves it unset, which the plan treats as its pre-existing size-only behavior.
+   */
+  corpusGroundingMode?: DataLakeGroundingMode;
 }
 
 /**
@@ -35,7 +45,7 @@ export interface LakeSessionDefaults {
  * across every field-combination shape.
  */
 export function resolveLakeSessionDefaults(
-  lake: Pick<IDataLake, 'datalakeTag' | 'preferredSystemPromptId'>
+  lake: Pick<IDataLake, 'datalakeTag' | 'preferredSystemPromptId' | 'groundingMode'>
 ): LakeSessionDefaults {
   const defaults: LakeSessionDefaults = { forceKnowledgeRetrieval: true };
   // Scope to this lake only when it carries a join tag. Real lakes always do; a static-registry
@@ -48,6 +58,10 @@ export function resolveLakeSessionDefaults(
   if (lake.preferredSystemPromptId) {
     defaults.systemPromptId = lake.preferredSystemPromptId;
   }
-  // FUTURE (per-lake grounding mode): resolve inline-vs-retrieve here, onto this same seam.
+  // Grounding mode is ALWAYS set for a lake session (unlike the two fields above, which are opt-in):
+  // an absent stored value coalesces to the default so a lake predating the field grounds like a new
+  // one, and so a lake session is never left in the plan's "no explicit mode" branch (that branch is
+  // for NON-lake sessions, which must keep the pre-existing size-only behavior).
+  defaults.corpusGroundingMode = lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE;
   return defaults;
 }
