@@ -16,7 +16,7 @@ const AnalyticsTab: React.FC = () => {
 
   const analyticsQuery = useAnalyticsData();
 
-  const isLoading = analyticsQuery.isLoading || analyticsQuery.isFetching;
+  const { isLoading, isFetching } = analyticsQuery;
 
   const handleRefresh = useCallback(() => {
     analyticsQuery.refetch();
@@ -65,7 +65,7 @@ const AnalyticsTab: React.FC = () => {
           </Stack>
         </Grid>
 
-        {isLoading && <LinearProgress size={'lg'} sx={{ marginX: '5px', width: '100%' }} />}
+        {isFetching && <LinearProgress size={'lg'} sx={{ marginX: '5px', width: '100%' }} />}
 
         {!isLoading && (
           <Grid xs={12} mt={0.5}>
@@ -81,21 +81,11 @@ const AnalyticsTab: React.FC = () => {
               )}
 
               {activeSubTab === AnalyticsSubTab.DailyReport && (
-                <DailyReportTab
-                  rawData={analyticsQuery.data?.reports || []}
-                  loading={isLoading}
-                  error={analyticsQuery.error}
-                  onRefresh={handleRefresh}
-                />
+                <DailyReportTab loading={isLoading} error={analyticsQuery.error} onRefresh={handleRefresh} />
               )}
 
               {activeSubTab === AnalyticsSubTab.WeeklyReport && (
-                <WeeklyReportTab
-                  rawData={analyticsQuery.data?.reports || []}
-                  loading={isLoading}
-                  error={analyticsQuery.error}
-                  onRefresh={handleRefresh}
-                />
+                <WeeklyReportTab loading={isLoading} error={analyticsQuery.error} onRefresh={handleRefresh} />
               )}
             </Sheet>
           </Grid>

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import {
   fetchCounterLogs,
   type AnalyticsReport,
@@ -111,5 +111,8 @@ export function useAnalyticsData(params?: UseAnalyticsDataParams) {
       return { logs: logs || [], reports: [], total: total ?? 0 };
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
+    // A page turn or refresh re-runs an 8-9s aggregation; the previous page is still the right
+    // thing to show while it does, rather than blanking the whole tab.
+    placeholderData: keepPreviousData,
   });
 }

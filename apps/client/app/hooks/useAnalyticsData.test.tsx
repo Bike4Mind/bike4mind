@@ -79,6 +79,25 @@ describe('useAnalyticsData - user activity', () => {
     expect(lastCall().metadataFilters).toEqual([{ field: 'source', operator: 'exists' }]);
   });
 
+  it('keeps the previous page on screen while the next page is loading', async () => {
+    fetchCounterLogs.mockResolvedValueOnce({ logs: [{ date: 'page-1' }], total: 4210 });
+    const { result, rerender } = renderHook(() => useAnalyticsData(), { wrapper });
+    await waitFor(() => expect(result.current.data?.logs[0]).toMatchObject({ date: 'page-1' }));
+
+    let resolveNextPage: (value: { logs: { date: string }[]; total: number }) => void = () => {};
+    fetchCounterLogs.mockImplementationOnce(() => new Promise(resolve => (resolveNextPage = resolve)));
+    useAnalyticsStore.getState().setPage(2);
+    rerender();
+
+    await waitFor(() => expect(result.current.isFetching).toBe(true));
+    expect(result.current.data?.logs[0]).toMatchObject({ date: 'page-1' });
+    expect(result.current.isPlaceholderData).toBe(true);
+
+    resolveNextPage({ logs: [{ date: 'page-2' }], total: 4210 });
+    await waitFor(() => expect(result.current.isPlaceholderData).toBe(false));
+    expect(result.current.data?.logs[0]).toMatchObject({ date: 'page-2' });
+  });
+
   it('does not page the report tabs, which return a single cached document', async () => {
     useAnalyticsStore.setState({ activeSubTab: AnalyticsSubTab.DailyReport });
     fetchCounterLogs.mockResolvedValue({ reports: [{ date: '2026-07-28', report: 'x' }] });
