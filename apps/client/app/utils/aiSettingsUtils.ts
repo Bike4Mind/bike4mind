@@ -1,40 +1,6 @@
 import { FIXED_TEMPERATURE_MODELS, ModelInfo } from '@bike4mind/common';
 import dayjs from 'dayjs';
 
-interface ModelMetric {
-  id: string;
-  timestamp: string;
-  model: {
-    name: string;
-    type?: string;
-    backend?: string;
-    parameters?: {
-      temperature?: number;
-      topP?: number;
-      maxTokens?: number;
-    };
-  };
-  tokenUsage: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-    estimatedCost?: number;
-    creditsUsed?: number;
-  };
-  performance: {
-    totalResponseTime?: number;
-    contextRetrievalTime?: number;
-    modelInferenceTime?: number;
-    clientFirstTokenTime?: number;
-  };
-  session: {
-    userId?: string;
-    organizationId?: string;
-    projectId?: string;
-  };
-  status: string;
-}
-
 export const isOpenAIModel = (modelName: string): boolean => {
   const lowerName = modelName.toLowerCase();
   return ['gpt', 'o1', 'o3', 'o4'].some(pattern => lowerName.includes(pattern));
@@ -159,94 +125,24 @@ export const getChipStyles = (variant: ChipVariant, isMaximum: boolean, mode: st
   return { ...baseStyles, ...variantStyles[variant] };
 };
 
-// Model metrics analysis functions (dynamic data with static fallback)
-export const getTopUsedModels = (metrics: ModelMetric[], count: number = 3): string[] => {
-  if (!metrics || metrics.length === 0) {
-    // Fallback to static data when no metrics available
-    return ['GPT-4', 'Claude 3.5 Sonnet', 'GPT-4 Turbo'];
-  }
-
-  // Modelname in metrics is modelid
-  const modelUsage = metrics.reduce(
-    (acc, metric) => {
-      const modelName = metric.model?.name || 'Unknown';
-      acc[modelName] = (acc[modelName] || 0) + 1;
-      return acc;
-    },
-    {} as Record<string, number>
-  );
-
-  return Object.entries(modelUsage)
-    .sort(([, a], [, b]) => (b as number) - (a as number))
-    .slice(0, count)
-    .map(([modelName]) => modelName);
-};
-
-export const getModelSpeed = (modelId: string, metrics: ModelMetric[]): 'fast' | 'medium' | 'slow' | null => {
-  if (!metrics || metrics.length === 0) {
-    // Fallback to static data when no metrics available
-    const staticModelSpeeds: Record<string, 'fast' | 'medium' | 'slow'> = {
-      'GPT-4': 'medium',
-      'Claude 3.5 Sonnet': 'fast',
-      'GPT-4 Turbo': 'fast',
-      'GPT-3.5 Turbo': 'fast',
-      'Claude 3 Haiku': 'fast',
-      'Claude 3 Opus': 'slow',
-      'Gemini Pro': 'medium',
-      'Llama 3': 'medium',
-    };
-    return staticModelSpeeds[modelId] || null;
-  }
-
-  // Modelname in metrics is modelid
-  const modelMetrics = metrics.filter(m => {
-    return m.model?.name === modelId;
-  });
-
-  if (modelMetrics.length === 0) return null;
-
-  const avgResponseTime =
-    modelMetrics.reduce((sum, metric) => {
-      return sum + (metric.performance?.totalResponseTime || 0);
-    }, 0) / modelMetrics.length;
-
-  // Thresholds in milliseconds - adjusted based on tooltip values
-  if (avgResponseTime < 7000) return 'fast'; // < 7s
-  if (avgResponseTime < 15000) return 'medium'; // 7-15s
-  return 'slow'; // > 15s
-};
-
-// Stats-based helpers (used by non-admin components with pre-aggregated data from /api/models/stats)
+// Stats-based helpers (used by non-admin components with pre-aggregated data from /api/models/stats).
+// Keyed by model id like the stats payload and the callers' comparisons - never by display name.
+// Empty stats yield an empty result, not a seed: popularity and speed are claims about observed
+// usage, and a hardcoded seed would go stale silently while still looking authoritative.
 export const getTopUsedModelsFromStats = (popularity: Record<string, number>, count: number = 3): string[] => {
-  if (!popularity || Object.keys(popularity).length === 0) {
-    return ['GPT-4', 'Claude 3.5 Sonnet', 'GPT-4 Turbo'];
-  }
+  if (!popularity) return [];
 
   return Object.entries(popularity)
     .sort(([, a], [, b]) => b - a)
     .slice(0, count)
-    .map(([modelName]) => modelName);
+    .map(([modelId]) => modelId);
 };
 
 export const getModelSpeedFromStats = (
   modelId: string,
   avgResponseTime: Record<string, number>
 ): 'fast' | 'medium' | 'slow' | null => {
-  if (!avgResponseTime || Object.keys(avgResponseTime).length === 0) {
-    const staticModelSpeeds: Record<string, 'fast' | 'medium' | 'slow'> = {
-      'GPT-4': 'medium',
-      'Claude 3.5 Sonnet': 'fast',
-      'GPT-4 Turbo': 'fast',
-      'GPT-3.5 Turbo': 'fast',
-      'Claude 3 Haiku': 'fast',
-      'Claude 3 Opus': 'slow',
-      'Gemini Pro': 'medium',
-      'Llama 3': 'medium',
-    };
-    return staticModelSpeeds[modelId] || null;
-  }
-
-  const avg = avgResponseTime[modelId];
+  const avg = avgResponseTime?.[modelId];
   if (avg == null) return null;
 
   if (avg < 7000) return 'fast';
