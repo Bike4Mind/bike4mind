@@ -13,7 +13,6 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { getAxiosRetryCount } from './ApiContext';
 import { updateAllQueryData, useSubscribeCollection } from '../utils/react-query';
 import { useUser } from './UserContext';
 import { updateUserToServer } from '../utils/userAPICalls';
@@ -122,18 +121,20 @@ const SETTINGS_WRITE_TOAST_ID = 'settings-write-failed';
 /**
  * Whether a failed preferences write is worth telling the user about.
  *
- * A cancel is user-initiated. A 401 is silenced only when the interceptor tore the session
- * down cleanly - `getAxiosRetryCount(error) === 0` means it redirected rather than retried,
- * so a toast would stack noise on a teardown the user cannot act on. A non-zero count means
- * the interceptor attempted a refresh cycle and still failed (a refresh-endpoint outage, or a
- * retry that 401'd again); the user keeps a working page, so their lost change needs saying.
+ * A cancel is user-initiated. For 401s the question is not which interceptor branch ran but
+ * where the user ends up: the two teardown branches leave via a full-page redirect, so a toast
+ * there is destroyed with the page anyway, while the two that keep the user on a working page
+ * (a transient refresh-endpoint failure during a deploy, and a retry that 401'd again) are
+ * exactly the silent data loss this module exists to surface. So only the mid-MFA 401 is
+ * silenced - it is expected during login and no settings surface is mounted then (#804).
  * See ApiContext's response interceptor.
  */
 function shouldNotifyWriteFailure(error: unknown): boolean {
   if (isCancel(error)) return false;
   if (isAxiosError(error)) {
     if (error.code === 'ERR_CANCELED') return false;
-    if (error.response?.status === 401 && getAxiosRetryCount(error) === 0) return false;
+    const data = error.response?.data as { mfaPending?: unknown } | undefined;
+    if (error.response?.status === 401 && data?.mfaPending === true) return false;
   }
   return true;
 }
