@@ -632,7 +632,7 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     // filtering on updatedAt could let a genuinely stuck batch dodge every scan.
     const results = await this.batchModel
       .find({ taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES }, taxonomyStartedAt: { $lt: cutoff } })
-      .sort({ updatedAt: 1 })
+      .sort({ taxonomyStartedAt: 1 })
       .limit(limit);
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);
   }

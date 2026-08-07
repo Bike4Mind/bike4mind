@@ -733,6 +733,27 @@ describe('DataLakeBatchRepository.findStuckTaxonomy - global cross-user stale sc
     const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
     expect(stuck).toEqual([]);
   });
+
+  it('orders oldest-taxonomyStartedAt-first, not by updatedAt - the cron caps results per run and must reconcile the truly-oldest first', async () => {
+    // updatedAt is deliberately the OPPOSITE order of taxonomyStartedAt here: if the query
+    // sorted on updatedAt (the wrong clock, same bug the filter itself was fixed for), this
+    // assertion would see [newest, oldest] instead.
+    const oldest = await seedBatch('analyzing', new Date('2019-01-01T00:00:00Z'));
+    const newest = await seedBatch('analyzing', new Date('2020-06-01T00:00:00Z'));
+    await mongoose.models.DataLakeBatch.updateOne(
+      { _id: oldest.id },
+      { $set: { updatedAt: new Date('2020-12-31T00:00:00Z') } },
+      { timestamps: false }
+    );
+    await mongoose.models.DataLakeBatch.updateOne(
+      { _id: newest.id },
+      { $set: { updatedAt: new Date('2020-01-01T00:00:00Z') } },
+      { timestamps: false }
+    );
+
+    const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
+    expect(stuck.map(b => b.id)).toEqual([oldest.id, newest.id]);
+  });
 });
 
 describe('DataLakeBatchRepository.forceFailStuckTaxonomy - reconciler write, guarded on status AND staleness', () => {
