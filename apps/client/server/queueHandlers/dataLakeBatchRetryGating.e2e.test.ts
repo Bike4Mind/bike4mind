@@ -39,10 +39,17 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/managers/fabFileManager', () => ({ getVector: h.getVector }));
-vi.mock('@bike4mind/services', () => ({
-  apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
-  embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn(async () => undefined) },
-}));
+// fabFilesService is real (via importOriginal): stampChunkEmbeddingModel must actually commit
+// vectorized:true against the real repls set for this test's post-attempt-2 assertions to mean
+// anything - only the LLM-calling services below are mocked.
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return {
+    ...actual,
+    apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
+    embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn(async () => undefined) },
+  };
+});
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
   EmbeddingFactory: class {
@@ -54,6 +61,10 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   resolveEmbeddingConfig: vi.fn(() => ({ config: {}, missing: null })),
   // Mirror the real name-based guard so the failure branch classifies a plain Error correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
+  // Bypassed: this test's mock vectors are 3-wide, not a real model's actual width, and Atlas
+  // dimension validation is covered on its own in atlasSearchIndex.test.ts / the
+  // "embeddingModel discriminator stamp" describe block in fabFileVectorize.test.ts.
+  getAtlasIndexForModel: vi.fn(() => null),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
