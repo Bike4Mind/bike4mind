@@ -449,6 +449,47 @@ describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () =>
   });
 });
 
+// preferredSystemPromptId is EDITOR-ONLY too (same rule as systemPrompt): a reader gets its
+// effect on a session created for the lake, never the binding itself. The list endpoint is where
+// the Settings picker seeds its current selection.
+describe('listDataLakes - preferredSystemPromptId is returned to a lake EDITOR only', () => {
+  it("returns the bound prompt id for the caller's own lake (seeds the picker)", async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', preferredSystemPromptId: 'triage_router' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.preferredSystemPromptId).toBe('triage_router');
+  });
+
+  it("WITHHOLDS the bound prompt id from a stranger reading someone else's PUBLIC lake", async () => {
+    const theirs = lake({
+      id: 'theirs',
+      slug: 'theirs',
+      createdByUserId: 'other',
+      isPublic: true,
+      preferredSystemPromptId: 'triage_router',
+    });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
+    const entry = result.find(l => l.id === 'theirs');
+
+    expect(entry?.preferredSystemPromptId).toBeUndefined();
+    // Absent, not blanked - "unset" and "withheld" must stay indistinguishable to a reader.
+    expect(entry && 'preferredSystemPromptId' in entry).toBe(false);
+  });
+
+  it('omits an empty stored value so the picker shows "None" rather than a blank binding', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', preferredSystemPromptId: '' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.preferredSystemPromptId).toBeUndefined();
+  });
+});
+
 describe('listAllDataLakes - the admin list still gates the prompt on canManage', () => {
   it('returns the prompt on every DB lake, since an admin manages them all', async () => {
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', systemPrompt: 'Cite sources.' });
@@ -588,6 +629,9 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
       ].sort()
     );
     expect((READER_LAKE_FIELDS as readonly string[]).includes('systemPrompt')).toBe(false);
+    // The new editor-only binding must never join the reader allow-list either.
+    expect((READER_LAKE_FIELDS as readonly string[]).includes('preferredSystemPromptId')).toBe(false);
+    expect(LAKE_FIELD_VISIBILITY.preferredSystemPromptId).toBe('withheld');
   });
 
   it('does not mutate the source document (the caller may still hold it for a write path)', () => {

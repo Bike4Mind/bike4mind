@@ -46,6 +46,10 @@ const DataLakeSchema = new mongoose.Schema(
     // Per-lake system prompt (see IDataLake.systemPrompt). Not yet consumed; a later PR (#843)
     // injects it at answer time. Stored uncapped, matching the other system-prompt fields.
     systemPrompt: { type: String },
+    // Preferred registry system-prompt id for sessions created for this lake (see
+    // IDataLake.preferredSystemPromptId). Validated against the session-activatable allowlist at
+    // the write boundary; resolved to session.systemPromptId once at create time.
+    preferredSystemPromptId: { type: String },
     fileTagPrefix: { type: String, required: true },
     datalakeTag: { type: String, required: true },
     requiredUserTag: { type: String },

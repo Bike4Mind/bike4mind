@@ -35,6 +35,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import {
@@ -65,7 +66,9 @@ import {
   useRestoreDeletedDataLake,
   useUnarchiveDataLake,
 } from '@client/app/hooks/data/dataLakes';
+import { toast } from 'sonner';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
@@ -162,6 +165,8 @@ export default function DataLakeManagerPanel() {
           // '' both when unset and when the server withheld it (non-editors never receive
           // the text); the modal renders the field off canManage, never off this value.
           systemPrompt: l.systemPrompt ?? '',
+          // Same as systemPrompt: '' when unset OR withheld from a non-editor; rendered off canManage.
+          preferredSystemPromptId: l.preferredSystemPromptId ?? '',
           canManage: !!l.canManage,
         }
       : null;
@@ -1013,6 +1018,8 @@ function LakeInfoPanel({
 }) {
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const archiveLake = useArchiveDataLake();
+  const startChatWithLake = useStartChatWithLake();
+  const [startingChat, setStartingChat] = useState(false);
   const visibility = lake.isPublic ? 'Public' : lake.organizationId ? 'Organization' : 'Private';
 
   return (
@@ -1026,6 +1033,29 @@ function LakeInfoPanel({
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {lake.name}
           </Typography>
+          {/* Start chat is available to ANY user who can reach the lake (not manage-gated): it
+              opens a session scoped to this lake, applying the lake's preferred prompt server-side.
+              Minimal placement for now - see useStartChatWithLake's note; polish is a design follow-up. */}
+          <Button
+            size="sm"
+            variant="soft"
+            color="primary"
+            startDecorator={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
+            data-testid={`datalake-startchat-btn-${lake.id}`}
+            loading={startingChat}
+            onClick={async () => {
+              setStartingChat(true);
+              try {
+                await startChatWithLake(lake.id);
+              } catch {
+                toast.error('Could not start a chat with this lake');
+                setStartingChat(false);
+              }
+            }}
+            sx={{ flexShrink: 0, fontSize: '13px' }}
+          >
+            Start chat
+          </Button>
           {/* Add files / Settings / Archive are owner-or-admin only (the backend enforces the
               same rule). The nav surfaces other users' read-only public lakes too. */}
           {lake.canManage && (

@@ -170,6 +170,13 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * so "not yours to see" and "set to blank" stay distinguishable).
    */
   systemPrompt?: string;
+  /**
+   * Preferred registry system-prompt id (see IDataLake.preferredSystemPromptId). EDITOR-ONLY,
+   * like `systemPrompt`: surfaced only when the caller can manage the lake, so the settings
+   * picker can seed its current selection. Absent (never an empty-string stand-in) otherwise,
+   * so "not yours to see" and "no preferred prompt" stay distinguishable.
+   */
+  preferredSystemPromptId?: string;
 }
 
 /**

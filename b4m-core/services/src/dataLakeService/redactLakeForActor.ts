@@ -59,6 +59,9 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   description: 'reader',
   // Steers every answer drawn from the lake, editable only by its editors.
   systemPrompt: 'withheld',
+  // Editor-only, like systemPrompt: a reader gets its EFFECT (the prompt activates on a session
+  // created for the lake, resolved server-side) but never reads the binding itself.
+  preferredSystemPromptId: 'withheld',
   fileTagPrefix: 'reader',
   datalakeTag: 'reader',
   requiredUserTag: 'reader',

@@ -49,6 +49,11 @@ export const UpdateDataLakeRequestInput = z.object({
   // Per-lake system prompt (see IDataLake.systemPrompt). Uncapped, matching the other system
   // prompts in the codebase. Edit is gated to creator/admin by updateDataLake (canManageLake).
   systemPrompt: z.string().optional(),
+  // Preferred registry system-prompt id bound to the lake (see IDataLake.preferredSystemPromptId).
+  // Empty string clears it, mirroring the requiredUserTag sentinel below. The session-activatable
+  // ALLOWLIST check is enforced at the write route (apps/client), which owns the allowlist - core
+  // cannot import it. This bound is a crafted-body cap only, not the real constraint.
+  preferredSystemPromptId: z.union([z.literal(''), z.string().min(1).max(200)]).optional(),
   // Empty string is the explicit "remove this gate" sentinel, accepted on UPDATE only (a
   // create has no gate to clear). It is stored as-is rather than unset: every read path
   // already treats '' as ungated - the access queries in DataLakeModel carry explicit
