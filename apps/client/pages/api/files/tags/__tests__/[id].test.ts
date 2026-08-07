@@ -99,7 +99,7 @@ describe('PUT /api/files/tags/[id]', () => {
 
     for (const query of [{}, { id: '' }, { id: ['a', 'b'] }]) {
       await expect(call({ method: 'PUT', query, body: { id: 'from-body' }, user: { id: 'u1' } }, res)).rejects.toThrow(
-        'A tag id is required in the URL'
+        'The URL must carry exactly one tag id'
       );
     }
     expect(h.update).not.toHaveBeenCalled();
@@ -141,7 +141,7 @@ describe('DELETE /api/files/tags/[id]', () => {
 
     for (const query of [{}, { id: '' }, { id: ['a', 'b'] }]) {
       await expect(call({ method: 'DELETE', query, user: { id: 'u1' } }, res)).rejects.toThrow(
-        'A tag id is required in the URL'
+        'The URL must carry exactly one tag id'
       );
     }
     expect(h.remove).not.toHaveBeenCalled();
