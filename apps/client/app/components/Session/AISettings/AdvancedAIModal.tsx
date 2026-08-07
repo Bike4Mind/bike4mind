@@ -111,20 +111,35 @@ import { ImageTemplatePanel } from '../ImageTemplates/ImageTemplatePanel';
 const commonInputStyles = (_mode: string) => ({
   width: '120px',
   height: '36px',
+  // Out of flow deliberately: in flow the spinner reserves ~15px at the right, so `textAlign:
+  // center` centres the value across the remaining width and it lands left of the real centre.
+  // Matches the Select indicator, which is pulled out of flow for the same reason.
   '& input[type=number]::-webkit-inner-spin-button, & input[type=number]::-webkit-outer-spin-button': {
     opacity: 1,
-    marginRight: '-1px',
+    position: 'absolute',
+    right: '6px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    margin: 0,
   },
   '& input': {
     textAlign: 'center',
   },
   borderRadius: 8,
   border: `1px solid`,
-  borderColor: 'border.solid',
-  // `aiSettings.background` (not `.backgroundColor`, which doesn't exist on the palette) -
-  // surfaced by removing the `any` cast that was previously masking this.
-  backgroundColor: (theme: Theme) => theme.palette.aiSettings.background,
+  // Background and border deliberately match the sidenav search field (`Session/SearchBar.tsx`)
+  // so text entry looks the same wherever it appears. Both are palette tokens, so light and dark
+  // follow without a mode branch here.
+  borderColor: 'border.input',
+  backgroundColor: (theme: Theme) => theme.palette.searchbar.background,
   color: 'text.primary',
+  // Same hover as the Reset button in this section's header, so every control here responds
+  // identically. Kept in the shared helper rather than per control - the selects previously
+  // hovered to a neutral border while the inputs did not react at all.
+  '&:hover': {
+    backgroundColor: 'primary.softHoverBg',
+    borderColor: 'primary.main',
+  },
 });
 
 const commonSelectStyles = (mode: string) => ({
@@ -151,18 +166,27 @@ const settingsSelectSx = (mode: string) => ({
   '& .MuiSelect-indicator': {
     color: 'var(--joy-palette-text-tertiary)',
     transition: '0.2s',
-    width: '20px',
-    height: '20px',
-  },
-  '& .MuiSelect-endDecorator': {
-    marginRight: '4px',
+    // Joy sizes the glyph from --Icon-fontSize (fontSize.xl, 20px, for a md Select), so the box
+    // has to shrink with it or the icon overflows. Inset matches the number inputs' spinner.
+    '--Icon-fontSize': '16px',
+    width: '16px',
+    height: '16px',
+    // Joy renders this in flow after the button, and the button is `flex: 1` - so it shrinks by the
+    // chevron's ~25px footprint and a centred value sits ~12px left of the control's real centre,
+    // visibly out of line with the number inputs. Absolute takes it out of the button's width
+    // calculation; `pointerEvents: none` keeps clicks on the chevron opening the listbox.
+    position: 'absolute',
+    right: '6px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    margin: 0,
+    pointerEvents: 'none',
   },
   '&[aria-expanded="true"] .MuiSelect-indicator': {
     transform: 'rotate(180deg)',
   },
-  '&:hover': {
-    borderColor: 'var(--joy-palette-neutral-400)',
-  },
+  // Hover comes from commonInputStyles; a `&:hover` here would replace it wholesale rather than
+  // merge, which is how the selects ended up with a different hover to the inputs.
   '&.Mui-focused': {
     borderColor: 'var(--joy-palette-primary-500)',
     boxShadow: '0 0 0 3px var(--joy-palette-primary-200)',
@@ -192,7 +216,7 @@ const SETTINGS_SELECT_SLOT_PROPS = {
  * opposite edges of the row, leaves ~600px of dead space in this 820px dialog and the eye loses
  * which control belongs to which label.
  */
-const SETTINGS_LABEL_WIDTH = '150px';
+const SETTINGS_LABEL_WIDTH = '164px';
 
 /** Vertical rhythm between rows, and between the text and image-model groups. */
 const SETTINGS_ROW_GAP = '16px';
@@ -212,7 +236,7 @@ const SettingsRow: React.FC<{
       sx={{
         display: 'flex',
         alignItems: 'center',
-        gap: 0.5,
+        gap: '8px',
         // No room for a fixed column on mobile, so the pair splits the row evenly instead.
         width: { xs: 'auto', sm: SETTINGS_LABEL_WIDTH },
         flex: { xs: '1 1 0%', sm: '0 0 auto' },
