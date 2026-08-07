@@ -1,7 +1,7 @@
-import { IDataLakeRepository, IFabFileRepository, ITagRepository, matchesTagPrefixArm } from '@bike4mind/common';
+import { IDataLakeRepository, IFabFileRepository, ITagRepository } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
-import { loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
+import { couldMatchTagPrefixArmLoosely, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import { foldTagName, isDataLakeTagName, normalizeTagName } from './tagName';
 
@@ -109,7 +109,9 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
     // actually crossed the boundary, matching tagService/remove's reasoning. Independent
     // per-lake recomputes, so run them concurrently rather than one at a time.
     const affectedLakes = candidateLakes.filter(
-      lake => matchesTagPrefixArm([tag.name], lake.fileTagPrefix) || matchesTagPrefixArm([newName], lake.fileTagPrefix)
+      lake =>
+        couldMatchTagPrefixArmLoosely(tag.name, lake.fileTagPrefix) ||
+        couldMatchTagPrefixArmLoosely(newName, lake.fileTagPrefix)
     );
     await Promise.all(affectedLakes.map(lake => recomputeLakeStats(lake, { db })));
   }

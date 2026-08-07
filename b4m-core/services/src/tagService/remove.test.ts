@@ -213,6 +213,18 @@ describe('tagService - remove', () => {
       expect(stripOrder).toBeLessThan(recomputeOrder);
     });
 
+    // removeTagByUserId strips a stored name case-INSENSITIVELY, so a mixed-case tag document can
+    // still be the thing that clears a lake's real (correctly-cased) signal tag off some file.
+    // A case-sensitive recompute trigger would miss that and leave fileCount stale.
+    it('recomputes stats for a lake whose prefix the deleted tag matches only case-insensitively', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('LK:Invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+
+      await remove(userId, { id: existingTagId }, adapters);
+
+      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0 });
+    });
+
     it('issues no dataLakes.find call when the tag name has no colon', async () => {
       (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('plain'));
 

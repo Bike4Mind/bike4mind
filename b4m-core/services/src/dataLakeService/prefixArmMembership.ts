@@ -1,5 +1,5 @@
 import type { IDataLakeRepository } from '@bike4mind/common';
-import { prefixArmTagNames } from '@bike4mind/common';
+import { normalizeTagPrefix, prefixArmTagNames } from '@bike4mind/common';
 import type { MembershipLake } from './lakeMembership';
 
 export interface PrefixArmChange {
@@ -22,6 +22,21 @@ export interface PrefixArmAdapters {
    */
   candidateLakes?: readonly MembershipLake[];
 }
+
+/**
+ * Loose, CASE-INSENSITIVE cousin of `prefixArmTagNames`, for the bulk tag-rename/delete doors'
+ * "should this lake's stats be recomputed" decision - not a membership or gating check. Those
+ * doors' underlying writes (`removeTagByUserId`/`updateTagsByUserId`) match tag names
+ * case-INSENSITIVELY, so a differently-cased name than the one the caller supplied can still be
+ * the thing that actually got stripped or renamed. The true (case-sensitive) membership rule
+ * would miss that and skip a recompute a real signal change needs. Erring inclusive is safe here:
+ * `recomputeLakeStats` is idempotent, so a false-positive match just costs one harmless extra
+ * recompute.
+ */
+export const couldMatchTagPrefixArmLoosely = (name: string, fileTagPrefix: string | undefined | null): boolean => {
+  const prefix = normalizeTagPrefix(fileTagPrefix);
+  return !!prefix && name.toLowerCase().startsWith(prefix.toLowerCase());
+};
 
 /**
  * One query for a whole batch: every lake whose prefix arm could reach any of these file owners'
@@ -73,10 +88,13 @@ export interface PrefixArmChanges {
   leaves: PrefixArmChange[];
   /**
    * The mirror case: every lake a file is about to JOIN by newly satisfying a prefix arm it did
-   * not satisfy before. Stats-only - NOT gated by `canManageLake` - because tagging your own file
-   * with your own lake's folder tag is today's already-accepted "automatic membership" model (the
-   * fallback tagger stamps the same content tags with no permission check). Callers only need
-   * this to know which lakes to `recomputeLakeStats` for.
+   * not satisfy before. The MEMBERSHIP itself needs no gate - tagging your own file with your own
+   * lake's folder tag is today's already-accepted "automatic membership" model (the fallback
+   * tagger stamps the same content tags with no permission check) - but callers gate the
+   * `recomputeLakeStats` call this feeds with `canManageLake` anyway: that recompute also flips a
+   * draft lake to active (a one-way, publication-visibility change), and `fileOwnerUserId` above
+   * is the FILE's owner, not necessarily the acting user - an unrelated file-share recipient must
+   * not be able to force-publish a lake they do not manage.
    */
   joins: PrefixArmChange[];
 }
