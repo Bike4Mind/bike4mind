@@ -131,6 +131,8 @@ function buildKpis(current: ISpendSummary, prior: ISpendSummary): SpendKpi[] {
       higherIsBetter: true,
     },
     {
+      // Display card only (carries a vs-prior delta). The tab reads the top-level
+      // SpendData.activeAccounts for truncation, not this KPI - keep them separate.
       key: 'activeAccounts',
       label: 'Active Accounts',
       value: current.activeAccounts,
@@ -226,6 +228,7 @@ async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<Spend
   return {
     periodLabel,
     priorPeriodLabel,
+    // "Some events were counted in this window" - requests is $sum:1 in spendSummary.
     hasData: currentSummary.totals.requests > 0,
     activeAccounts: currentSummary.activeAccounts,
     kpis: buildKpis(currentSummary, priorSummary),
