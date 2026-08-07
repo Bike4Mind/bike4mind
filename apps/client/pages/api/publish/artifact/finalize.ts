@@ -6,6 +6,7 @@ import { PublishedArtifact } from '@bike4mind/database';
 import {
   FinalizeRequestSchema,
   PUBLISH_LIMITS,
+  ArtifactTypeSchema,
   type ArtifactFile,
   type PublishResult,
   type ValidationViolation,
@@ -21,6 +22,7 @@ import {
   toCacheTarget,
   validateEmbedOrigins,
   buildReactArtifactBundle,
+  renderArtifactIndexHtml,
   UnsupportedReactDependencyError,
   ReactArtifactTranspileError,
   type PublishUser,
@@ -55,8 +57,10 @@ const DraftManifestSchema = z.object({
     sessionId: z.string().optional(),
     messageId: z.string().optional(),
     fabFileId: z.string().optional(),
-    // Raw JSX uploaded as index.html; transpiled to an inert bundle below (issue #21).
-    artifactType: z.literal('react').optional(),
+    // Raw artifact content uploaded as index.html; rendered server-side below. `react`
+    // transpiles to an inert bundle (issue #21); every other type is wrapped by
+    // renderArtifactIndexHtml. Absent means the bytes are already the final page.
+    artifactType: ArtifactTypeSchema.optional(),
   }),
   files: z.array(z.object({ path: z.string(), size: z.number(), mimeType: z.string() })),
 });
@@ -181,6 +185,19 @@ const handler = baseApi().post(async (req, res) => {
       }
       throw err;
     }
+  } else if (manifest.source.artifactType) {
+    // Non-react artifact types signal "render this raw content server-side": wrap the uploaded
+    // source into the canonical published page (byte-identical to the web client's pre-render)
+    // so the caps, validateBundle, and promote below all operate on the FINAL served bytes.
+    const rendered = renderArtifactIndexHtml(
+      manifest.source.artifactType,
+      bufferCache.get('index.html')!.toString('utf-8'),
+      manifest.title
+    );
+    const buf = Buffer.from(rendered, 'utf-8');
+    bufferCache.set('index.html', buf);
+    indexEntry.size = buf.length;
+    indexEntry.sha256 = createHash('sha256').update(buf).digest('hex');
   }
 
   // 4b. Size caps (post-transpile, so a React bundle's FINAL size is what's enforced)

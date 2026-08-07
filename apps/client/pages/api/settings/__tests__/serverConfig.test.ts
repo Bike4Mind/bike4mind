@@ -28,6 +28,7 @@ vi.mock('@bike4mind/services/llm/tools/implementation/websearch', () => ({
 
 const getFirecrawlConfig = vi.fn();
 const getEffectiveLLMApiKeys = vi.fn();
+const getEffectiveApiKey = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: {
     getOpenWeatherKey: vi.fn(async () => null),
@@ -35,7 +36,7 @@ vi.mock('@bike4mind/services', () => ({
     getFmpApiKey: vi.fn(async () => null),
     getFirecrawlConfig: (...a: unknown[]) => getFirecrawlConfig(...a),
     getEffectiveLLMApiKeys: (...a: unknown[]) => getEffectiveLLMApiKeys(...a),
-    getEffectiveApiKey: vi.fn(async () => undefined),
+    getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a),
   },
 }));
 
@@ -46,6 +47,7 @@ beforeEach(() => {
   resolveWebSearchProvider.mockResolvedValue(null);
   getFirecrawlConfig.mockResolvedValue({});
   getEffectiveLLMApiKeys.mockResolvedValue(null);
+  getEffectiveApiKey.mockResolvedValue(undefined);
 });
 
 describe('computeToolAvailability - search & scrape providers', () => {
@@ -78,6 +80,27 @@ describe('computeToolAvailability - search & scrape providers', () => {
 
     expect(availability.web_search).toBe(false);
     expect(availability.deep_research).toBe(true);
+  });
+});
+
+describe('computeToolAvailability - music_generation ElevenLabs-key gate', () => {
+  it('is available when an ElevenLabs key resolves', async () => {
+    getEffectiveApiKey.mockImplementation(async (_userId: string, sel: { type: string }) =>
+      sel.type === 'elevenLabs' ? 'el-key' : undefined
+    );
+    const availability = await computeToolAvailability('user-1');
+    expect(availability.music_generation).toBe(true);
+  });
+
+  it('is hidden when no ElevenLabs key is configured', async () => {
+    getEffectiveApiKey.mockResolvedValue(undefined);
+    const availability = await computeToolAvailability('user-1');
+    expect(availability.music_generation).toBe(false);
+  });
+
+  it('is hidden for an anonymous (no-user) request', async () => {
+    const availability = await computeToolAvailability(undefined);
+    expect(availability.music_generation).toBe(false);
   });
 });
 

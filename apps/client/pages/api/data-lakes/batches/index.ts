@@ -16,9 +16,9 @@ const handler = baseApi()
   // are fetched, reconciled, and re-fetched as two separate sets, then merged for the caller.
   .get(async (req: Request, res) => {
     const userId = req.user.id;
-    const [ingestActive, taxonomyAttention] = await Promise.all([
+    const [ingestActive, taxonomyActive] = await Promise.all([
       dataLakeBatchRepository.findActiveByUserId(userId),
-      dataLakeBatchRepository.findTaxonomyAttentionByUserId(userId),
+      dataLakeBatchRepository.findActiveTaxonomyByUserId(userId),
     ]);
 
     // Read-time reconciliation: force non-terminal batches idle past the timeout to a
@@ -41,10 +41,10 @@ const handler = baseApi()
           ]).then(() => {}),
       },
     });
-    // taxonomyAttention includes 'ready'/'failed' (finished, not stuck) alongside the
-    // in-flight phases - reconcileStuckTaxonomy only acts on the latter, so passing the
-    // wider set here is harmless.
-    await dataLakeService.reconcileStuckTaxonomy(taxonomyAttention, dataLakeService.DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS, {
+    // taxonomyActive is the non-terminal working set only (not the capped/sorted list-response
+    // set - see findActiveTaxonomyByUserId), so a batch stuck for hours is never excluded here
+    // just because it's not among the user's most-recently-updated attention batches.
+    await dataLakeService.reconcileStuckTaxonomy(taxonomyActive, dataLakeService.DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS, {
       db: { batches: dataLakeBatchRepository },
       logger: console,
     });
@@ -53,6 +53,9 @@ const handler = baseApi()
       dataLakeBatchRepository.findActiveByUserId(userId),
       dataLakeBatchRepository.findTaxonomyAttentionByUserId(userId),
     ]);
+    // Spread order matters: a batch present in both sets keeps whichever copy is spread last.
+    // Both finders currently project the same fields, so this is not load-bearing for shape
+    // today, but if that symmetry is ever broken again, freshTaxonomyAttention must stay last.
     const byId = new Map([...freshIngestActive, ...freshTaxonomyAttention].map(b => [b.id, b]));
     return res.json({ data: Array.from(byId.values()) });
   })
@@ -61,10 +64,10 @@ const handler = baseApi()
     const userId = req.user.id;
     const data = CreateBatchRequestInput.parse(req.body);
 
-    // Creating a batch flips a draft lake to active and opens it for uploads - a WRITE. Gate it
-    // with the creator/admin check (not just read access) so a read-only member can't inject
-    // files into a lake they don't own. Not-found-style denial when the lake isn't even
-    // readable; manage-denied when readable but not owned.
+    // Creating a batch opens the lake for uploads - a WRITE. Gate it with the creator/admin
+    // check (not just read access) so a read-only member can't inject files into a lake they
+    // don't own. Not-found-style denial when the lake isn't even readable; manage-denied when
+    // readable but not owned.
     const dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeId, await toAccessContext(req), {
       db: { dataLakes: dataLakeRepository },
     });
@@ -95,11 +98,11 @@ const handler = baseApi()
       taxonomyStatus: 'none',
     });
 
-    // Creating the first batch flips a draft lake to active (one-way).
-    if (dataLake.status === 'draft') {
-      await dataLakeRepository.update({ id: dataLake.id, status: 'active' });
-    }
-
+    // No status write here. Activation is `recomputeLakeStats`'s, keyed on the lake actually
+    // having a member file - and `computeDataLakeStats` excludes status:'pending' rows, so a
+    // presigned-but-never-uploaded file (client fails outright, or the tab closes before any
+    // byte lands) cannot count toward that membership no matter which door recomputes the lake
+    // or how long the row survives.
     return res.json(batch);
   });
 

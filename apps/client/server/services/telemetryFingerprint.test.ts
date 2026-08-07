@@ -285,5 +285,6 @@ describe('formatPrimaryAnomaly', () => {
     expect(formatPrimaryAnomaly('slow_response')).toBe('slow response');
     expect(formatPrimaryAnomaly('context_overflow')).toBe('context overflow');
     expect(formatPrimaryAnomaly('tool_failure')).toBe('tool failure');
+    expect(formatPrimaryAnomaly('high_utilization')).toBe('high utilization');
   });
 });

@@ -57,6 +57,12 @@ export interface IFabFileChunk {
   text: string;
   tokenCount: number;
   vector?: number[];
+  /**
+   * Embedding model this chunk's vector was generated with. Chunks can outlive their file's
+   * current `embeddingModel` (re-embedding, backfill), so this is the per-chunk source of truth
+   * an Atlas `$vectorSearch` index lookup keys on - not FabFile.embeddingModel.
+   */
+  embeddingModel?: string;
 }
 
 /**
@@ -83,6 +89,21 @@ export interface IFabFile {
   fileNameLower?: string;
 
   fileSize: number;
+  /**
+   * Characters of TEXT this file extracts to, as opposed to its byte size. Absent until something has
+   * actually extracted it.
+   *
+   * The two are only comparable for text/csv/md; a PDF or DOCX of a given byte size can extract to
+   * almost any length, which is why a caller wanting to know whether a file fits a model's context
+   * cannot infer it from `fileSize`. Written through by the context dry-run route the composer calls,
+   * so the second question about the same file is free.
+   *
+   * Explicitly nullable: an in-place content update sets it to null to invalidate the measurement, and
+   * null rather than undefined because the repository's `$set` strips undefined and would leave the
+   * stale number in place. Readers must treat null as "not measured", not as zero characters.
+   */
+  extractedCharCount?: number | null;
+
   /** This is the path to the file in the storage bucket. Eg: `fab-files/1234.json` */
   filePath?: string;
   mimeType: string;
@@ -120,6 +141,12 @@ export interface IFabFile {
   vectorized?: boolean;
   /** The embedding model used to generate the vectors. */
   embeddingModel?: string;
+  /**
+   * When this file's chunks were last fully re-stamped with their per-chunk `embeddingModel`
+   * (see IFabFileChunk.embeddingModel). Atlas $vectorSearch cutover treats a stamp younger than
+   * ~60s as not-yet-queryable (mongot indexing lag), so this is read-time readiness, not a cache.
+   */
+  chunkEmbeddingModelStampedAt?: Date | null;
 
   system?: boolean;
 
@@ -207,6 +234,23 @@ export interface IFabFile {
 
 export interface IFabFileDocument extends IFabFile, IShareableDocument {}
 
+/**
+ * Spread into the `$set` of EVERY update that rewrites a FabFile's bytes in place.
+ *
+ * A cached `extractedCharCount` describes the previous content, and a stale one makes the pre-send
+ * attachment warning silent about a file that no longer fits - the failure that warning exists to
+ * prevent. An AI edit growing a 4k file to 44k is the live case: the doc would still say 4,000 and the
+ * dry-run would short-circuit to "fits".
+ *
+ * A shared fragment rather than a literal at each site, because the sites are the problem: the first
+ * version of this fix covered only fabFileService/update and missed three live edit routes. A guard
+ * test enumerates the rewrite sites and fails if one does not reference this.
+ *
+ * null, NOT undefined - Mongoose strips undefined from a `$set`, so the undefined form of this leaves
+ * the stale number in place and only looks correct.
+ */
+export const FAB_FILE_CONTENT_REWRITE_PATCH = { extractedCharCount: null } as const;
+
 export interface IFabFileListItem {
   userId: string;
   fileName: string;
@@ -238,6 +282,22 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /** Count chunks that are terminal (have a vector OR are oversized) - for idempotent vectorizedChunkCount recompute. */
   countTerminalChunks(fabFileId: string, contextWindow: number): Promise<number>;
+  /** Bulk-stamp every chunk of a file with the model its vectors were generated under. */
+  updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void>;
+  /** One page of vector-bearing chunks missing `embeddingModel`, ascending by `_id` - backfill's keyset cursor. */
+  findChunksMissingEmbeddingModel(options?: {
+    limit?: number;
+    afterChunkId?: string;
+  }): Promise<Array<{ id: string; fabFileId: string; vectorLength: number }>>;
+  /** Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model. */
+  vectorSearch(
+    fileIds: string[],
+    queryVector: number[],
+    model: string,
+    options?: { limit?: number }
+  ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>>;
+  /** Whether `model`'s Atlas vector index exists and is queryable (cached; see atlasSearchIndex.ts). */
+  getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null>;
   /**
    * One page of vector-bearing chunks (id, fabFileId, text, vector) for the given files,
    * ascending by `_id`. Skips chunks without a vector at the DB layer. Powers semantic search
@@ -252,6 +312,17 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     fabFileIds: string[],
     options?: { limit?: number; afterChunkId?: string }
   ): Promise<FabFileChunkVector[]>;
+  /**
+   * One page of chunk TEXT for a single file, ascending by `_id`, same exact-cursor contract as
+   * `findVectorsByFabFileIds`. Returns vectorless chunks too - a text consumer that inherited the
+   * vector filter would silently drop content.
+   */
+  findTextsByFabFileId(
+    fabFileId: string,
+    options?: { limit?: number; afterChunkId?: string }
+  ): Promise<{ id: string; text: string }[]>;
+  /** Every chunk of a file, vectorless included - lets a paging caller tell a whole file from a slice. */
+  countByFabFileId(fabFileId: string): Promise<number>;
 }
 
 /**
@@ -552,10 +623,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Bulk-writes each file's full tags array in a single round trip via bulkWrite, instead of
    * one findOneAndUpdate per file. Used by applyTaxonomySuggestions, where a batch can hold
    * thousands of files and one write per file risks exceeding the caller's request timeout.
-   * @param updates - Each file's id and its complete resolved tags array.
-   * @returns Number of documents modified.
+   *
+   * Optimistic concurrency: each op is additionally filtered on `expectedTags`, the exact
+   * array the caller read before computing `tags`. If another writer (a direct tag edit, a
+   * lake-membership tag pull, a concurrent apply) changed the file's tags since that read, the
+   * filter no longer matches and this op is a silent no-op instead of clobbering the
+   * concurrent change - the caller's merge logic ran against stale data, so writing it would
+   * be wrong regardless of what it computed.
+   * @param updates - Each file's id, its complete resolved tags array, and the tags snapshot
+   * the resolution was computed from.
+   * @returns Number of documents modified (may be less than `updates.length` - see above).
    */
-  bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number>;
+  bulkUpdateTags(
+    updates: {
+      id: string;
+      tags: { name: string; strength: number }[];
+      expectedTags: { name: string; strength: number }[];
+    }[]
+  ): Promise<number>;
 
   /**
    * Find files by content hashes for a given user (deduplication).
@@ -590,20 +675,50 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * carry only the membership tag and over-counts multi-tagged ones.
    */
   countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>>;
+  // The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
+  // to every row it flips; it records the stamp on the lake and restore passes it back as
+  // `stampedAt` to reverse exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a
+  // lower bound, which would also match a file the creator deleted during the deleted window (the
+  // per-file delete routes stamp `deletedAt` too) and revive it on restore. Omitting `stampedAt`
+  // matches every stamped row: the pre-mark behavior, and the fallback for a lake torn down before
+  // the mark existed. The archive axis is deliberately NOT stamped - archiveByDataLakeTag is the
+  // only writer of a non-null archivedAt, so no independently-archived file exists to protect.
+
   /** Soft-archive (reversible) all live member files. Returns affected count. */
   archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
   /** Reverse archive for all archived member files. */
   unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
   /** Archived member files - used by the unarchive dedup pass. */
   findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]>;
-  /** Soft-deleted member files - used by the deleted->active restore dedup pass. */
-  findDeletedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]>;
-  /** Reverse soft-delete for member files, optionally excluding ids (discarded duplicates). Returns count. */
-  undeleteByDataLakeTag(scope: DataLakeMembershipScope, excludeIds?: string[]): Promise<number>;
-  /** Soft-delete (phase 1) all member files. Returns affected file ids. */
-  softDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
-  /** Hard-delete (phase 2) all member files, including soft-deleted. Returns purged ids. Idempotent. */
+  /** Soft-deleted member files stamped `stampedAt` - used by the deleted->active restore dedup pass. */
+  findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
+  /**
+   * Reverse soft-delete for member files stamped `stampedAt`, minus `excludeIds` (discarded
+   * duplicates). Returns count.
+   */
+  undeleteByDataLakeTag(scope: DataLakeMembershipScope, excludeIds?: string[], stampedAt?: Date): Promise<number>;
+  /** Soft-delete (phase 1) all member files, stamped `at`. Returns affected file ids. */
+  softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<string[]>;
+  /**
+   * Hard-delete (phase 2) all member files, including soft-deleted. Returns purged ids. Idempotent.
+   *
+   * Resolves membership at call time, so it can destroy a file that became a member after the
+   * caller last looked. A caller that has already acted on a resolved id set - deleted its chunks,
+   * told a retrieval index - must purge that same set via `hardDeleteByIds` instead, or it
+   * destroys rows it never accounted for.
+   */
   hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
+  /**
+   * Hard-delete exactly these files, including soft-deleted ones. Idempotent.
+   *
+   * Echoes back the ids it was GIVEN, not the rows it actually removed - a second call with the
+   * same ids returns them again. Do not read the result as "what this call deleted"; if you need
+   * that, count before and after.
+   *
+   * Ids must come from a prior repository read. They go straight into an `_id` query, so a
+   * malformed one throws a CastError partway through the delete.
+   */
+  hardDeleteByIds(fabFileIds: string[]): Promise<string[]>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
 }

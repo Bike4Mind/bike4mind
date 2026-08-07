@@ -89,8 +89,8 @@ describe('fabfilechunks indexes', () => {
 
   it('serves a bare fabFileId read from the compound leftmost prefix', async () => {
     // The load-bearing claim for carrying no standalone `{ fabFileId: 1 }`: findByFabFileId,
-    // deleteManyByFabFileId and countTerminalChunks all filter on fabFileId alone and must still
-    // get an index scan rather than a collection scan.
+    // findTextsByFabFileId, countByFabFileId, deleteManyByFabFileId and countTerminalChunks all
+    // filter on fabFileId alone and must still get an index scan rather than a collection scan.
     await FabFileChunk.create(
       Array.from({ length: 60 }, (_, i) => ({
         fabFileId: i % 12 === 0 ? 'lake' : 'other',

@@ -47,13 +47,20 @@ export interface IFileTag extends IBaseTag {
    */
   type: TagType.FILE;
   /**
-   * The number of files tagged with this tag
-   */
-  fileCount: number;
-  /**
    * The last time this tag was used
    */
   lastActivityAt: Date;
+}
+
+/**
+ * A file tag as served to a client, carrying the count of files that hold it. The count is
+ * recomputed per request by tagService/listFileTags and is deliberately NOT stored on the tag
+ * document: a stored counter has to be maintained by every writer that touches a file's tags, and
+ * several never did, so it drifted permanently. Anything reading `fileCount` must come from
+ * listFileTags - a tag fetched through any other repository method does not have one.
+ */
+export interface IFileTagWithFileCount extends IFileTag {
+  fileCount: number;
 }
 
 export interface ISessionTag extends IBaseTag {
@@ -114,33 +121,19 @@ export interface IFileTagRepository extends IBaseRepository<IFileTag> {
   findAllByIds(ids: string[]): Promise<IFileTag[]>;
 
   /**
-   * Increment the file count for the given tags
+   * Mark a tag as just used, refreshing `lastActivityAt`. Matched case-insensitively on the name.
    * @param name The tag name
    * @param userId The user id
-   * @param count The count to increment
    */
-  incrementFileCountBy(by: { name: string; userId: string }, count?: number): Promise<void>;
-
-  /**
-   * Increment the file count for the given tags
-   * @param ids The tag ids
-   * @param count The count to increment
-   */
-  incrementFileCountByIds(ids: string[], count?: number): Promise<void>;
+  touchLastActivityBy(by: { name: string; userId: string }): Promise<void>;
 
   /**
    * Find or create a tag by name and user id
    * @param name The tag name
    * @param userId The user id
    * @param defaultData Default data for creating the tag
-   * @param incrementFileCount Optional file count to increment
    */
-  findOrCreateByNameAndUserId(
-    name: string,
-    userId: string,
-    defaultData: Partial<IFileTag>,
-    incrementFileCount?: number
-  ): Promise<IFileTag | null>;
+  findOrCreateByNameAndUserId(name: string, userId: string, defaultData: Partial<IFileTag>): Promise<IFileTag | null>;
 }
 
 export interface ISessionTagRepository extends IBaseRepository<ISessionTag> {}

@@ -16,7 +16,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { findLakeAccessibleFabFile } from '@server/dataLakes';
-import { recomputeStatsForDeletedFiles } from '@server/dataLakes/recomputeStatsForDeletedFiles';
+import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
 import { Request } from 'express';
 import { Types } from 'mongoose';
@@ -147,26 +147,24 @@ const handler = baseApi()
       return res.status(404).json({ msg: 'File not found' });
     }
 
-    // Only decrement tag counts for owned files (shared file "delete" = unshare, not removal)
+    // Only touch tag activity for owned files (shared file "delete" = unshare, not removal)
     const fabFile = await fabFileRepository.findById(fabFileId);
     const isOwned = fabFile?.userId === userId;
     if (isOwned && fabFile?.tags?.length) {
       for (const tag of fabFile.tags) {
         try {
           if (tag?.name) {
-            await fileTagRepository.incrementFileCountBy({ name: tag.name, userId }, -1);
+            await fileTagRepository.touchLastActivityBy({ name: tag.name, userId });
           }
         } catch (tagError) {
-          req.logger.error('Error updating tag count during single file delete:', { tagError, tag });
+          req.logger.error('Error touching tag activity during single file delete:', { tagError, tag });
         }
       }
     }
 
     let sizeToDeduct = 0;
 
-    let deleteAction: string = 'not_found';
-
-    await withTransaction(async session => {
+    const deleteAction = await withTransaction(async session => {
       const result = await fabFilesService.deleteFabFile(
         userId,
         { id: fabFileId },
@@ -184,8 +182,6 @@ const handler = baseApi()
         }
       );
 
-      deleteAction = result.action;
-
       if (result.action === 'deleted') {
         await logEvent(
           { userId, type: FileEvents.DELETE_FILE, metadata: { fileId: fabFileId } },
@@ -201,6 +197,8 @@ const handler = baseApi()
           { ability: req.ability, session }
         );
       }
+
+      return result.action;
     });
 
     // Deduct storage size after successful deletion
@@ -224,13 +222,16 @@ const handler = baseApi()
     // After the transaction, so the aggregation sees the committed `deletedAt`. The shared helper
     // also backs bulk-delete; see it for why only the 'deleted' outcome moves lake membership.
     if (deleteAction === 'deleted') {
-      await recomputeStatsForDeletedFiles(
+      await recomputeStatsForLakeTags(
         (fabFile?.tags ?? []).map(tag => tag?.name),
         { logger: req.logger }
       );
     }
 
-    return res.json({ msg: 'Fab file deleted', action: deleteAction });
+    return res.json({
+      msg: 'Fab file deleted',
+      action: fabFilesService.toPublicDeleteAction(deleteAction),
+    });
   });
 
 export const config = {

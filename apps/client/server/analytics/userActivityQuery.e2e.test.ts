@@ -68,7 +68,7 @@ afterAll(async () => {
 
 describe('user activity pipeline against MongoDB', () => {
   it('groups per day, counter and user, and counts the repeats', async () => {
-    const { rows, total } = await run({ ...RANGE, page: 1, limit: 50 });
+    const { rows, total } = await run({ ...RANGE, skip: 0, limit: 50 });
 
     expect(total).toBe(5);
     const login = rows.find((r: any) => r.counterName === 'Login' && r.userEmail === 'ada@example.com');
@@ -76,15 +76,15 @@ describe('user activity pipeline against MongoDB', () => {
   });
 
   it('resolves the email through the user join', async () => {
-    const { rows } = await run({ ...RANGE, page: 1, limit: 50 });
+    const { rows } = await run({ ...RANGE, skip: 0, limit: 50 });
 
     expect(rows.map((r: any) => r.userEmail)).toContain('poy@example.com');
   });
 
   it('returns disjoint pages that add up to the total', async () => {
-    const first = await run({ ...RANGE, page: 1, limit: 2 });
-    const second = await run({ ...RANGE, page: 2, limit: 2 });
-    const third = await run({ ...RANGE, page: 3, limit: 2 });
+    const first = await run({ ...RANGE, skip: 0, limit: 2 });
+    const second = await run({ ...RANGE, skip: 2, limit: 2 });
+    const third = await run({ ...RANGE, skip: 4, limit: 2 });
 
     expect(first.rows).toHaveLength(2);
     expect(first.total).toBe(5);
@@ -95,20 +95,20 @@ describe('user activity pipeline against MongoDB', () => {
   });
 
   it('filters by counter name in Mongo', async () => {
-    const { rows, total } = await run({ ...RANGE, page: 1, limit: 50, counterName: 'logout' });
+    const { rows, total } = await run({ ...RANGE, skip: 0, limit: 50, counterName: 'logout' });
 
     expect(total).toBe(1);
     expect(rows[0].counterName).toBe('Logout');
   });
 
   it('filters by email in Mongo', async () => {
-    const { total } = await run({ ...RANGE, page: 1, limit: 50, userEmail: 'poy@' });
+    const { total } = await run({ ...RANGE, skip: 0, limit: 50, userEmail: 'poy@' });
 
     expect(total).toBe(1);
   });
 
   it('excludes an organization', async () => {
-    const { rows } = await run({ ...RANGE, page: 1, limit: 50, excludeOrgs: ['Personal'] });
+    const { rows } = await run({ ...RANGE, skip: 0, limit: 50, excludeOrgs: ['Personal'] });
 
     expect(rows).toHaveLength(4);
   });
@@ -116,7 +116,7 @@ describe('user activity pipeline against MongoDB', () => {
   it('filters on a metadata field', async () => {
     const { rows, total } = await run({
       ...RANGE,
-      page: 1,
+      skip: 0,
       limit: 50,
       metadataFilters: [{ field: 'source', operator: 'equals', value: 'cli' }],
     });
@@ -126,7 +126,7 @@ describe('user activity pipeline against MongoDB', () => {
   });
 
   it('ignores activity outside the requested range', async () => {
-    const { total } = await run({ startDate: '2026-07-24', endDate: '2026-07-24', page: 1, limit: 50 });
+    const { total } = await run({ startDate: '2026-07-24', endDate: '2026-07-24', skip: 0, limit: 50 });
 
     expect(total).toBe(1);
   });

@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { assertCanWriteDataLakeTags, canManageLake, extractDataLakeMetaTags } from './authorizeLakeWrite';
+import {
+  assertBatchBelongsToLake,
+  assertCanWriteDataLakeTags,
+  assertMetaTagsMatchLake,
+  canManageLake,
+  extractDataLakeMetaTags,
+} from './authorizeLakeWrite';
 
 const LAKE = {
   id: 'lake-1',
@@ -75,6 +81,61 @@ describe('assertCanWriteDataLakeTags - the same rule at the write gate', () => {
     await assertCanWriteDataLakeTags({ userId: 'file-owner', isAdmin: false }, ['notes', 'acme:q1'], adapters as never);
 
     expect(adapters.db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+});
+
+describe('assertBatchBelongsToLake - the batch decides which lake its files join', () => {
+  const MISMATCH = 'This upload must name the data lake its batch belongs to';
+
+  it('accepts a batch bound to the lake the request resolved', () => {
+    expect(() => assertBatchBelongsToLake({ dataLakeId: LAKE.id }, LAKE)).not.toThrow();
+  });
+
+  it('refuses a batch bound to a different lake', () => {
+    expect(() => assertBatchBelongsToLake({ dataLakeId: 'lake-2' }, LAKE)).toThrow(MISMATCH);
+  });
+
+  it('refuses a request that resolved no lake at all', () => {
+    // Otherwise the files land in this lake's batch while joining no lake.
+    expect(() => assertBatchBelongsToLake({ dataLakeId: LAKE.id }, undefined)).toThrow(MISMATCH);
+  });
+
+  it('names the batch, not the caller, when the batch carries no lake binding', () => {
+    // The caller did name a lake here, so telling them to name one would be a lie.
+    expect(() => assertBatchBelongsToLake({ dataLakeId: undefined as unknown as string }, LAKE)).toThrow(
+      'This batch is not attached to a data lake'
+    );
+  });
+});
+
+describe('assertMetaTagsMatchLake - the tag must name the lake being written to', () => {
+  const MISMATCH = 'A data lake tag on these files names a different data lake';
+
+  it('rejects a meta-tag for another lake, even one the caller may write to', () => {
+    // The write gate passes this actor for both lakes (admin), so the disagreement itself is
+    // the only thing left to catch it.
+    expect(() => assertMetaTagsMatchLake(LAKE, ['datalake:orgb:other-lake'])).toThrow(MISMATCH);
+  });
+
+  it('accepts the lake own tag whatever case it arrives in', () => {
+    expect(() => assertMetaTagsMatchLake(LAKE, ['DataLake:OrgA:Acme-2026', 'acme:legal'])).not.toThrow();
+  });
+
+  it("accepts its own tag when the LAKE's stored tag is the mixed-case side", () => {
+    // Nothing lowercases `datalakeTag` on the way into Mongo, so a row can hold mixed case; only
+    // folding the payload would refuse that lake its own tag.
+    expect(() => assertMetaTagsMatchLake({ datalakeTag: 'DataLake:OrgA:Acme-2026' }, [LAKE.datalakeTag])).not.toThrow();
+  });
+
+  it('accepts a payload with no meta-tag at all', () => {
+    expect(() => assertMetaTagsMatchLake(LAKE, [])).not.toThrow();
+    expect(() => assertMetaTagsMatchLake(LAKE, ['acme:legal', null, 42])).not.toThrow();
+  });
+
+  it('refuses every meta-tag when the lake has no tag of its own', () => {
+    expect(() => assertMetaTagsMatchLake({ datalakeTag: undefined as unknown as string }, [LAKE.datalakeTag])).toThrow(
+      MISMATCH
+    );
   });
 });
 

@@ -16,7 +16,15 @@ import { Config, isDevelopment } from '@server/utils/config';
 registerToolGearObserver();
 
 interface BaseAPIOptions {
-  auth: boolean;
+  /**
+   * `true` (default) accepts either a `b4m_live_` API key or a JWT.
+   * `false` leaves the route unauthenticated.
+   * `'jwtOnly'` accepts a JWT ONLY - the api-key middlewares are not installed at
+   * all, so a key-bearing request is never validated, metered, audited, or billed
+   * before it is rejected by the JWT verifier. Rejecting a key *after* the api-key
+   * chain ran would be a compensating control, not auth.
+   */
+  auth: boolean | 'jwtOnly';
   /** Maximum request body size in bytes (default: 1MB) */
   maxBodySize: number;
   /**
@@ -125,17 +133,22 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
   }
 
   if (resolvedOptions.auth) {
-    // Check API key authentication FIRST, before JWT
-    // This allows API keys to work independently without requiring JWT/SST setup.
-    // requiredScopes (when set) makes an under-scoped key 403 here instead of authorizing.
-    router.use(apiKeyAuth(resolvedOptions.requiredScopes));
+    // 'jwtOnly' skips the whole api-key chain, so a presented key is never
+    // validated/metered/billed - it simply isn't a credential this route knows,
+    // and `auth` below rejects the request with 401.
+    if (resolvedOptions.auth !== 'jwtOnly') {
+      // Check API key authentication FIRST, before JWT
+      // This allows API keys to work independently without requiring JWT/SST setup.
+      // requiredScopes (when set) makes an under-scoped key 403 here instead of authorizing.
+      router.use(apiKeyAuth(resolvedOptions.requiredScopes));
 
-    // Detect anomalies in API key usage (runs after apiKeyAuth, before handler)
-    // This runs asynchronously and doesn't block requests
-    router.use(apiKeyAnomalyDetection());
+      // Detect anomalies in API key usage (runs after apiKeyAuth, before handler)
+      // This runs asynchronously and doesn't block requests
+      router.use(apiKeyAnomalyDetection());
 
-    // Enforce per-API-key rate limits (skips non-API-key requests)
-    router.use(apiKeyRateLimit({ exemptReadsFromDailyLimit: resolvedOptions.exemptReadsFromDailyRateLimit }));
+      // Enforce per-API-key rate limits (skips non-API-key requests)
+      router.use(apiKeyRateLimit({ exemptReadsFromDailyLimit: resolvedOptions.exemptReadsFromDailyRateLimit }));
+    }
 
     // Apply JWT authentication middleware (will be skipped if already authenticated via API key)
     router.use(auth);

@@ -417,12 +417,19 @@ describe('toolParallelizer', () => {
     });
   });
 
-  describe('integration: timing verification', () => {
-    it('should complete parallel execution faster than sequential', async () => {
-      const TOOL_DELAY = 50; // ms per tool
-
+  describe('integration: concurrency verification', () => {
+    it('should start every read-only tool before any of them completes', async () => {
+      // Keyed by call index, not tool name: all three tools below are `file_read`,
+      // so the executor cannot tell them apart from its arguments.
+      const executionOrder: string[] = [];
+      let callIndex = 0;
       const executor = vi.fn(async () => {
-        await new Promise(r => setTimeout(r, TOOL_DELAY));
+        const id = callIndex++;
+        executionOrder.push(`start:${id}`);
+        // A real async gap, so serialized execution would be observable as interleaved
+        // start/end pairs. The delay carries no assertion weight.
+        await new Promise(r => setTimeout(r, 10));
+        executionOrder.push(`end:${id}`);
         return 'result';
       });
 
@@ -434,28 +441,23 @@ describe('toolParallelizer', () => {
 
       const plan = categorizeTools(tools);
 
-      // Measure a sequential baseline and the parallel run back-to-back under
-      // the same CPU conditions, then assert the relationship rather than a
-      // fixed wall-clock threshold. An absolute bound (e.g. < 2 * TOOL_DELAY)
-      // is fragile under CI contention - a starved event loop fires the delay
-      // timers late, so the parallel run can drift past the bound (observed:
-      // 102ms vs a 100ms cap). Comparing two measurements taken together is
-      // robust to that variance because both inflate proportionally.
-      const sequentialStart = Date.now();
-      for (let i = 0; i < tools.length; i++) {
-        await executor();
-      }
-      const sequentialDuration = Date.now() - sequentialStart;
-
-      const parallelStart = Date.now();
       await executeToolsInParallel(plan, executor);
-      const parallelDuration = Date.now() - parallelStart;
 
-      // Parallel overlaps the per-tool delays (~TOOL_DELAY total) while
-      // sequential sums them (~tools.length * TOOL_DELAY), so parallel must be
-      // meaningfully faster - half the sequential time leaves wide margin while
-      // still catching a regression that silently serializes execution.
-      expect(parallelDuration).toBeLessThan(sequentialDuration / 2);
+      // Concurrency means every tool starts before any of them finishes; sequential
+      // execution interleaves start/end pairs instead. Asserted on executionOrder (as the
+      // sibling tests above do) rather than on elapsed time. A sequential-vs-parallel
+      // duration ratio is still a wall-clock proxy: a GC pause or scheduler stall landing
+      // between the two measurements skews the ratio without touching real concurrency,
+      // and an absolute bound is worse (observed 102ms against a 100ms cap under CI
+      // contention). Ordering has no such sensitivity.
+      const firstEndIndex = executionOrder.findIndex(entry => entry.startsWith('end:'));
+      // Guard the -1 miss explicitly: slice(0, -1) would silently mean "all but the last
+      // entry" and the count below would then fail for the wrong reason.
+      expect(firstEndIndex).toBeGreaterThan(-1);
+      const startsBeforeFirstEnd = executionOrder.slice(0, firstEndIndex).filter(e => e.startsWith('start:'));
+      expect(startsBeforeFirstEnd).toHaveLength(tools.length);
+
+      expect(executor).toHaveBeenCalledTimes(tools.length);
     });
   });
 });

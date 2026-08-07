@@ -310,4 +310,20 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     expect(updateMutate).toHaveBeenCalledTimes(1);
     expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('systemPrompt');
   });
+
+  // EditableLake types systemPrompt as a required string, but that's a caller contract, not
+  // a runtime guarantee - a caller that forgets to normalize a server response missing this
+  // field would otherwise hand the modal `undefined` here. Pins the fallback, not just the
+  // typical '' case: without it, the character-count helper text below crashes on `.trim()`.
+  it("seeds an empty field when the lake's systemPrompt is missing, without rendering 'undefined'", () => {
+    const lakeWithoutPrompt = { ...promptedLake, systemPrompt: undefined as unknown as string };
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lakeWithoutPrompt} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    const textarea = screen.getByTestId('datalake-systemprompt-input').querySelector('textarea')!;
+    expect(textarea).toHaveValue('');
+  });
 });

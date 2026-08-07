@@ -2,6 +2,7 @@ import { redirect } from '@tanstack/react-router';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildRedirectTo, shouldRedirectToConsent } from './authRedirect';
+import { bootstrapSession } from './sessionBootstrap';
 
 /**
  * Consent-redirect guard shared by the app-shell `layoutRoute` and every standalone
@@ -16,8 +17,18 @@ import { buildRedirectTo, shouldRedirectToConsent } from './authRedirect';
  * in a try/catch. UX only - the server consent-gate middleware (server/auth/auth.ts) is the
  * real enforcement and fails closed. See shouldRedirectToConsent for the gate rationale
  * (issues #369, #386).
+ *
+ * Awaits the cold-load silent refresh first. The access token is memory-only now, so on a fresh
+ * page load neither it nor a server-confirmed currentUser exists until the refresh cookie has
+ * been exchanged - evaluating the gate before that would read a signed-in user as signed-out.
+ * bootstrapSession() is cached, so this is a resolved microtask on every subsequent navigation.
  */
-export function enforceConsentRedirect(location: { pathname: string; searchStr: string; hash: string }): void {
+export async function enforceConsentRedirect(location: {
+  pathname: string;
+  searchStr: string;
+  hash: string;
+}): Promise<void> {
+  await bootstrapSession();
   const { currentUser, isHydrated } = useUser.getState();
   const { accessToken } = useAccessToken.getState();
   if (shouldRedirectToConsent({ currentUser, isHydrated, accessToken })) {

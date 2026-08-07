@@ -116,7 +116,6 @@ const FileBrowserList: FC<FileBrowserListProps> = ({
             icon: tagIcons[iconIndex],
             color: tagColors[colorIndex],
             description: '',
-            fileCount: 1,
             createdAt: new Date(),
             updatedAt: new Date(),
             lastActivityAt: new Date(),

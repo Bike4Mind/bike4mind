@@ -47,6 +47,7 @@ import {
   isSupportedEmbeddingModel,
   resolveHistoryFetchLimit,
   buildMemoryContext,
+  buildLakeMemoryContext,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
@@ -93,7 +94,10 @@ interface DatabaseAdapters {
   };
   adminSettings: IAdminSettingsRepository;
   fabfiles: IFabFileRepository;
-  fabfilechunks: Pick<IFabFileChunkRepository, 'findByFabFileId' | 'findVectorsByFabFileIds'>;
+  fabfilechunks: Pick<
+    IFabFileChunkRepository,
+    'findByFabFileId' | 'findVectorsByFabFileIds' | 'findTextsByFabFileId' | 'countByFabFileId'
+  >;
   mementos: IMementoRepository;
   projects: IProjectRepository;
   organizations: IOrganizationRepository;
@@ -164,6 +168,7 @@ export type featureNames =
   | 'organizationPrompt'
   | 'sessionPrompt'
   | 'knowledgeRetrieval'
+  | 'lakeMemory'
   | 'contextSummarization'
   | 'skills';
 export interface IChatCompletionServiceOptions {
@@ -203,6 +208,26 @@ export interface IChatCompletionServiceOptions {
     query: string,
     opts?: { enabled?: boolean }
   ) => Promise<{ fact: string; relevance: number }[] | null>;
+  /**
+   * Read the lake memory hot-card for a Data-Lake-mode turn (#1440): fold each of the user's entitled
+   * lakes' ledgers, keep beliefs whose source doc is still citable, and recall the top ones for the
+   * query. Distinct from `recallMementosV2` (the USER's own memory) - this reads the `lake` principal,
+   * gated on `session.forceKnowledgeRetrieval`. Injected so the core takes no dependency on the
+   * app-layer ledger/data-lake repositories. Returns [] when nothing qualifies.
+   */
+  recallLakeMemory?: (input: {
+    userId: string;
+    query: string;
+    dataLakeTags: string[];
+    retrievalFilter?: RetrievalExclusionOptions;
+  }) => Promise<{ fact: string; relevance: number; sources: string[] }[]>;
+  /**
+   * Resolve a session-activatable registry prompt's CURRENT content by id (e.g. 'triage_router').
+   * Injected so the core takes no dependency on the app-layer prompt registry; the injector also
+   * enforces the session-activatable allowlist. Returns null for an unknown/disabled/not-allowed id.
+   * Used to turn `session.systemPromptId` into the session's authored prompt on every entry point.
+   */
+  loadSystemPromptById?: (promptId: string) => Promise<string | null>;
   summarizeSession: (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => Promise<void>;
   contextSummarizeSession: (sessionId: string, verbatimWindowStartQuestId: string) => Promise<void>;
   getMcpClient: (server: IMcpServerDocument) => Promise<{
@@ -343,6 +368,7 @@ export type ChatCompletionContext = Pick<
   | 'autoNameSession'
   | 'invokeCreateMemento'
   | 'recallMementosV2'
+  | 'recallLakeMemory'
   | 'logEvent'
   | 'db'
   | 'sessionId'
@@ -443,7 +469,21 @@ export class MementoFeature implements ChatCompletionFeature {
     // time on every chat turn. Must use the Map-aware reader: the bag is a Mongoose Map.
     const isV2 = isExperimentalFeatureEnabled(this.user, 'enableMementosV2');
     if (isV2 && this.chatCompletion.recallMementosV2) {
-      const v2 = await this.chatCompletion.recallMementosV2(this.user.id, message, { enabled: true });
+      // Fail OPEN, and here rather than inside the recall: memory enriches an answer, it does not gate
+      // one, so a recall fault must degrade to the V1 path instead of failing the turn. The V1 scorer
+      // already fails open for the same reason; the V2 store cannot, because it has no logger and its
+      // guards throw (a partial profile would be a subset of the user's memory presented as complete).
+      // This is the boundary that owns the V1/V2 decision AND has a logger, so it is where the two
+      // postures get reconciled.
+      let v2: Awaited<ReturnType<NonNullable<typeof this.chatCompletion.recallMementosV2>>> = null;
+      try {
+        v2 = await this.chatCompletion.recallMementosV2(this.user.id, message, { enabled: true });
+      } catch (error) {
+        this.logger.warn(
+          '[Mementos V2] recall failed; falling back to the V1 memento path for this turn: ' +
+            (error instanceof Error ? `${error.name}: ${error.message}` : String(error))
+        );
+      }
       if (v2 !== null) {
         this.usedMementoIds = [];
         this.logger.log(`[Mementos V2] injecting ${v2.length} belief(s) into context`);
@@ -512,6 +552,102 @@ export class MementoFeature implements ChatCompletionFeature {
       enableMementos: this.writeV1,
       enableMementosV2: this.writeV2,
     });
+  }
+}
+
+/**
+ * Lake memory hot-card (#1440): on a Data-Lake-mode turn (`session.forceKnowledgeRetrieval`), inject a
+ * durable, curated summary of the user's accessible data lakes - the identity/context layer that sits
+ * ALONGSIDE the forced chunk retrieval (KnowledgeRetrievalFeature). Where forced retrieval answers THIS
+ * question from the corpus, the card carries the lake's stable, top-of-mind facts so the model is
+ * grounded before it reads a chunk.
+ *
+ * Constructed only when the session forces retrieval AND the host wired `recallLakeMemory` (the
+ * app-layer ledger read), so it is inert on deployments that have populated no lake profile. The recall
+ * is fail-open: a fault degrades to no card, never a failed turn - memory enriches an answer, it does
+ * not gate one.
+ */
+export class LakeMemoryFeature implements ChatCompletionFeature {
+  private chatCompletion: ChatCompletionContext;
+  private logger: Logger;
+  private user: IUserDocument;
+  private retrievalFilter: RetrievalExclusionOptions;
+  /** Session's lake allowlist. When non-empty, scope the card to these tags (mirrors forced retrieval). */
+  private retrievalTags: string[];
+
+  constructor(
+    chatCompletion: ChatCompletionContext,
+    retrievalTags?: string[],
+    retrievalFilter?: RetrievalExclusionOptions
+  ) {
+    this.chatCompletion = chatCompletion;
+    this.logger = chatCompletion.logger;
+    this.user = chatCompletion.user;
+    this.retrievalTags = Array.isArray(retrievalTags) ? retrievalTags : [];
+    this.retrievalFilter = retrievalFilter ?? {};
+  }
+
+  async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
+    return { shouldContinue: true };
+  }
+
+  // Read-only feature: the hot-card is injected at context-build time and there is nothing to persist
+  // or reconcile once the turn completes (unlike MementoFeature, which WRITES back on completion).
+  async onComplete(): Promise<void> {}
+
+  async getContextMessages(
+    quest: IChatHistoryItemDocument,
+    _embeddingFactory: EmbeddingFactory,
+    message: string
+  ): Promise<IMessage[]> {
+    const query = message?.trim();
+    if (!query || !this.chatCompletion.recallLakeMemory) return [];
+
+    try {
+      // The SAME entitlement-aware resolver forced retrieval and the knowledge tools use, so the card
+      // spans exactly the lakes this user may read - the offer and the read can't disagree.
+      const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
+      const { dataLakeTags: entitledTags } = await getDynamicDataLakeAccess({
+        db: this.chatCompletion.db,
+        user: this.user,
+        entitlementKeys,
+      });
+      // SCOPE to the session's selected lakes, mirroring KnowledgeRetrievalFeature (which narrows by
+      // `retrievalTags`). Without this the card would inject EVERY entitled lake's beliefs into every
+      // turn regardless of which lake the session is about - the always-on injection #1108 removed for
+      // lake prompts. Empty `retrievalTags` means "no per-lake scoping" (the session picker sets none
+      // today), so it falls back to the full entitled set, same as forced retrieval.
+      const dataLakeTags =
+        this.retrievalTags.length > 0 ? entitledTags.filter(tag => this.retrievalTags.includes(tag)) : entitledTags;
+      if (dataLakeTags.length === 0) return [];
+
+      const beliefs = await this.chatCompletion.recallLakeMemory({
+        userId: this.user.id,
+        query,
+        dataLakeTags,
+        retrievalFilter: this.retrievalFilter,
+      });
+      if (beliefs.length === 0) return [];
+
+      // Telemetry: record that the card fired and from which lakes, so an eval row shows lake grounding
+      // independent of whether the model then also called the knowledge tools.
+      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta.context = quest.promptMeta.context ?? {};
+      quest.promptMeta.context.lakeMemory = { beliefCount: beliefs.length, dataLakeTags };
+
+      this.logger.log(`🌊 Lake memory: injecting ${beliefs.length} belief(s) from ${dataLakeTags.length} lake(s)`);
+      // Lake-specific framing (buildLakeMemoryContext): reference material, NOT personal memory, and it
+      // sanitizes + length-bounds each fact (uploaded-doc content is untrusted). Distinct from the
+      // memento framing used above.
+      const context = buildLakeMemoryContext(beliefs.map(b => b.fact));
+      return context ? [{ role: 'system' as const, content: context }] : [];
+    } catch (error) {
+      this.logger.warn(
+        '🌊 Lake memory: recall failed; proceeding without the hot card for this turn: ' +
+          (error instanceof Error ? `${error.name}: ${error.message}` : String(error))
+      );
+      return [];
+    }
   }
 }
 

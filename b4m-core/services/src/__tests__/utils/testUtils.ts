@@ -90,6 +90,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   undeleteByDataLakeTag: vi.fn(),
   softDeleteByDataLakeTag: vi.fn(),
   hardDeleteByDataLakeTag: vi.fn(),
+  hardDeleteByIds: vi.fn(),
   findIdsByDataLakeTag: vi.fn(),
   findByUserId: vi.fn(),
 });
@@ -179,6 +180,8 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     shareable: createMockShareableRepository<IOrganizationDocument>(),
     search: vi.fn(),
     findByStripeCustomerId: vi.fn(),
+    addMemberRaisingSeats: vi.fn(),
+    addMemberIfUnderCeiling: vi.fn(),
     findIdsAdministeredBy: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),

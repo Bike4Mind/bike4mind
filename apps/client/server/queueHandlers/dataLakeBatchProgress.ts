@@ -1,6 +1,12 @@
-import { cacheRepository, dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  cacheRepository,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  fabFileRepository,
+} from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import type { IDataLakeBatchDocument } from '@bike4mind/common';
+import type { IDataLakeBatchDocument, IDataLakeBatchSummary } from '@bike4mind/common';
 import { recordBatchCompletion, recordTaxonomyDailyCapExceeded } from '@server/utils/cloudwatch';
 import { sendToQueue } from '@server/utils/sqs';
 import { sendToClient } from '@server/websocket/utils';
@@ -9,6 +15,11 @@ import {
   TAXONOMY_RATE_LIMIT_WINDOW_MS,
   taxonomyRateLimitKey,
 } from '@server/dataLakes/taxonomyRateLimit';
+import {
+  LAKE_MEMORY_DAILY_CAP,
+  LAKE_MEMORY_RATE_LIMIT_WINDOW_MS,
+  lakeMemoryRateLimitKey,
+} from '@server/dataLakes/lakeMemoryRateLimit';
 import { Resource } from 'sst';
 
 /**
@@ -50,6 +61,11 @@ export async function finalizeBatchIfComplete(
   // is the only other guaranteed-to-run path that can still enqueue taxonomy analysis. Safe to
   // call redundantly with upload-complete.ts's own call - the transition is guarded on 'none'.
   await enqueueTaxonomyAnalysisIfWanted(finalized, logger);
+
+  // Lake memory extraction (#1440 producer) rides the same guaranteed-to-run finalize path. Unlike
+  // taxonomy it needs the RAG pipeline done (it reads chunk text), so finalize - not upload-complete -
+  // is its trigger. Gated on the EnableLakeMemory admin flag + a per-lake daily cap.
+  await enqueueLakeMemoryExtractionIfWanted(finalized, logger);
 }
 
 /** True once a batch has reached its completion threshold. */
@@ -78,7 +94,7 @@ export function isBatchComplete(batch: IDataLakeBatchDocument | null): boolean {
  * the cap first would only have saved a rate-limit slot on those already-harmless no-ops.
  */
 export async function enqueueTaxonomyAnalysisIfWanted(
-  batch: IDataLakeBatchDocument | null,
+  batch: IDataLakeBatchSummary | null,
   logger: { error: (msg: string) => void }
 ): Promise<void> {
   if (!batch || !batch.wantsTaxonomy) return;
@@ -129,5 +145,43 @@ export async function enqueueTaxonomyAnalysisIfWanted(
     });
   } catch (error) {
     logger.error(`Error enqueueing taxonomy analysis for batch ${batch.id}: ${error}`);
+  }
+}
+
+/**
+ * Guarded enqueue for lake memory extraction (#1440 producer). Fires on ingest-finalize (a sibling of
+ * taxonomy analysis) and is gated on:
+ *   - the `EnableLakeMemory` admin flag, off by default - the producer stays dark until an operator
+ *     opts a deployment in for the measurement rollout;
+ *   - a PER-LAKE daily cap, so a burst of batch finalizes triggers at most a few full-lake extractions.
+ * Unlike taxonomy (which only needs file metadata), extraction reads chunk TEXT, so it must run after
+ * the chunk/vectorize pipeline finishes - hence finalize, not upload-complete. The job itself is
+ * idempotent (the ledger de-dups), so a dropped cap slot only delays a re-scan, never loses data.
+ */
+export async function enqueueLakeMemoryExtractionIfWanted(
+  batch: IDataLakeBatchSummary | null,
+  logger: { error: (msg: string) => void }
+): Promise<void> {
+  if (!batch) return;
+
+  try {
+    const enabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory').catch(() => false);
+    if (!enabled) return;
+
+    // Per-lake cap: collapses a burst of finalizes into a bounded number of full-lake extractions.
+    const { success: withinCap } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+      lakeMemoryRateLimitKey(batch.dataLakeId),
+      LAKE_MEMORY_DAILY_CAP,
+      LAKE_MEMORY_RATE_LIMIT_WINDOW_MS
+    );
+    if (!withinCap) return;
+
+    await sendToQueue(Resource.lakeMemoryQueue.url, {
+      batchId: batch.id,
+      dataLakeId: batch.dataLakeId,
+      userId: batch.userId,
+    });
+  } catch (error) {
+    logger.error(`Error enqueueing lake memory extraction for batch ${batch.id}: ${error}`);
   }
 }

@@ -9,6 +9,7 @@ const TOOL_DISPLAY_NAMES: Partial<Record<B4MLLMTools, string>> = {
   wolfram_alpha: 'Wolfram Alpha',
   current_datetime: 'Date/Time',
   image_generation: 'Image Gen',
+  music_generation: 'Music Gen',
   mermaid_chart: 'Diagram',
   recharts: 'Chart',
   dice_roll: 'Dice',
@@ -102,6 +103,16 @@ const TOOL_PATTERNS: ToolPattern[] = [
       // followed an article, so natural "[verb] a <subject> image" phrasing was missed.
       /\b(generate|create|make|draw|paint|render)\s+(?:\w+\s+){0,4}?(image|picture|photo|illustration|artwork|painting|portrait|drawing)\b/i,
       /\b(image|picture|photo|illustration|artwork|portrait|drawing)\s+of\b/i,
+    ],
+  },
+  {
+    tool: 'music_generation',
+    patterns: [
+      // Require a music noun so "generate a track" style phrasing matches without
+      // colliding with image_generation's verbs. "song of" is intentionally excluded
+      // (too broad); a music noun must be present.
+      /\b(generate|create|make|compose|write|produce)\s+(?:\w+\s+){0,4}?(music|song|track|melody|soundtrack|tune|jingle|beat)\b/i,
+      /\b(background\s+music|instrumental\s+track|theme\s+(?:song|music))\b/i,
     ],
   },
   {

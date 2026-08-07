@@ -8,7 +8,7 @@ Everything committed here is public and permanent. Before you commit, ask: *"Wou
 
 - **Never commit secrets** (API keys, tokens, connection strings, `.env`). The gitleaks pre-commit hook + CI scans are a backstop, not the guard. If you leak one: **rotate first, delete second** — history is permanent.
 - No customer/partner names, cloud identifiers (AWS account IDs, ARNs, bucket names — resolve at runtime), internal-tracker issue numbers, or teammate names in code, comments, commits, or branch names.
-- **ASCII only** in code and comments — no curly quotes, em-dashes, or other smart punctuation.
+- **ASCII only** in code and comments - no curly quotes, em-dashes, or other smart punctuation. Two guards enforce this in both the pre-commit hook and CI: `scripts/check-no-control-bytes.sh` rejects raw control bytes anywhere in a changed `.ts`/`.tsx` file, and `scripts/check-no-smart-punctuation.sh` rejects U+2013, U+2014, U+2018, U+2019, U+201C and U+201D in `.ts`/`.tsx`/`.mts`/`.cts` **on added lines only**. So pre-existing prose in a file you touch is not your problem, but every line you add must be ASCII. There is no exemption for user-facing strings: when a typographic character is genuinely wanted, write it as an escape (`'\u2014'`) so it stays visible in review and greppable. Docs (`.md`) are not gated by a script, but the same rule applies by convention.
 - **CRITICAL — never describe premium overlay change details in this public repo.** The premium overlay repos are private, and their change details (features, integrations, fixes, internal codenames) may be sensitive. Commit messages, PR titles, PR bodies, and issues in this repo must never describe *what* changed in an overlay, only that a mechanical, overlay-related change occurred. Put the real "why" (what changed and how it was verified) in the **private** overlay repo's own PR, not here.
 
 ## Commit identity
@@ -122,6 +122,12 @@ userSchema.index({ organizationId: 1, createdAt: -1 });   // performance indexes
 
 - **Always use Tanstack Router** (`@tanstack/react-router`) for client-side routing and its hooks (`useNavigate`, `useRouter`, `useLocation`, `useParams`).
 - **Do not** use Next.js router hooks (`next/router`, `next/navigation`). Next.js serves only the Pages-API backend; the app is a SPA.
+
+## Public API endpoints
+
+- A **public** endpoint (one an API key can call) is defined by a single **contract** — the source of truth the handler, validation, OpenAPI spec, and typed client all derive from. Do not hand-write inline request schemas + separate doc entries for a public route.
+- Add/expose one by following [`b4m-core/common/src/api-contract/README.md`](./b4m-core/common/src/api-contract/README.md); copy the reference (`chat.contract.ts` + `apps/client/pages/api/chat.ts`).
+- Never call `.openapi()` in a shared schema/contract file (crashes the runtime handler); no `.catch()`/top-level `.transform()` in a public request schema (fail-quiet + not OpenAPI-representable).
 
 ## Dependency management
 

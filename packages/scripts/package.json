@@ -19,6 +19,7 @@
     "migrate": "tsx migrate/index.ts",
     "datalake:check-slug-dupes": "tsx migrate/check-datalake-slug-dupes.ts",
     "datalake:check-prefix-overlaps": "tsx migrate/check-datalake-prefix-overlaps.ts",
+    "datalake:check-prefix-dupes": "tsx migrate/check-datalake-prefix-dupes.ts",
     "datalake:ingest-pdfs": "tsx datalake/ingest-pdf-datalake.ts",
     "db:create-user": "tsx createUser.ts",
     "db:list-users": "tsx listUsers.ts",
@@ -70,7 +71,7 @@
     "gray-matter": "^4.0.3",
     "mongoose": "^8.24.1",
     "p-limit": "^7.3.0",
-    "sst": "4.14.1",
+    "sst": "4.17.1",
     "typescript": "^5.9.3",
     "yargs": "^18.0.0",
     "zod": "^4.4.3"

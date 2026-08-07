@@ -13,8 +13,14 @@ import {
 import { NotFoundError } from '@server/utils/errors';
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
-import { ChunkSchema, EmbeddingFactory, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
-import { apiKeyService, embeddingCacheService } from '@bike4mind/services';
+import {
+  ChunkSchema,
+  EmbeddingFactory,
+  resolveEmbeddingConfig,
+  isEmbeddingAuthError,
+  getAtlasIndexForModel,
+} from '@bike4mind/fab-pipeline';
+import { apiKeyService, embeddingCacheService, fabFilesService } from '@bike4mind/services';
 import { finalizeBatchIfComplete, isBatchComplete } from '@server/queueHandlers/dataLakeBatchProgress';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -205,6 +211,24 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     logger.log(`Successfully generated embeddings: ${cacheHitCount} from cache, ${cacheMisses.length} newly generated`);
 
+    // Guards against a future Atlas index/chunk-vector width mismatch (e.g. a Voyage model
+    // called with a non-default outputDimension): a chunk written at the wrong width would
+    // silently corrupt that model's shared Atlas index once embeddingModel is stamped on it.
+    // Validated up front, before any write is dispatched: throwing from inside the `.map()`
+    // below would abort the transaction while sibling `update()` calls it already kicked off
+    // are still in flight, leaving unhandled rejections racing the rollback.
+    const expectedDimensions = getAtlasIndexForModel(embeddingModel)?.numDimensions;
+    if (expectedDimensions !== undefined) {
+      embeddableChunks.forEach((chunk, index) => {
+        const vector = vectors[index];
+        if (vector.length !== expectedDimensions) {
+          throw new Error(
+            `Chunk ${chunk.id} vector has ${vector.length} dimensions, expected ${expectedDimensions} for model ${embeddingModel}`
+          );
+        }
+      });
+    }
+
     // Write this message's chunk vectors in a transaction.
     await withTransaction(async () => {
       await Promise.all(
@@ -225,12 +249,28 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     // >= with chunkCount>0 guard so an under-counted chunk can't permanently block completion.
     const isFileVectorized = !!fabFile.chunkCount && vectorizedChunkCount >= fabFile.chunkCount;
-    await fabFileRepository.update({
-      id: fabFileId,
-      vectorized: true,
-      vectorizedChunkCount,
-      isVectorizing: !isFileVectorized,
-    });
+
+    if (isFileVectorized) {
+      // Stamp every chunk with its embeddingModel only once the WHOLE file is vectorized - a
+      // partial stamp mid-batch would let the Atlas cutover read path treat a still-vectorizing
+      // file as ready. Folds the `vectorized: true` flip into the SAME transaction as the stamp:
+      // writing it separately first would reopen the exact gap the stamp's own transaction
+      // closes, just one level up - a crash between the two writes would mark the file vectorized
+      // with no stamp, and the idempotency check below would then never retry it.
+      await fabFilesService.stampChunkEmbeddingModel(
+        fabFileId,
+        embeddingModel,
+        { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository } },
+        { vectorized: true, vectorizedChunkCount, isVectorizing: false }
+      );
+    } else {
+      await fabFileRepository.update({
+        id: fabFileId,
+        vectorized: true,
+        vectorizedChunkCount,
+        isVectorizing: true,
+      });
+    }
     fabFile.vectorizedChunkCount = vectorizedChunkCount;
     fabFile.isVectorizing = !isFileVectorized;
 
@@ -278,12 +318,29 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // the batch can transition out of 'processing' state when all files are accounted for.
     // Use atomic mark-failed to prevent double-counting on SQS retries.
     const errorMessage = err instanceof Error ? err.message : String(err);
+    // The stored message surfaces to the end user on the file. An embedding-auth failure carries
+    // operator instructions (set OPENAI_API_KEY / OLLAMA_BASE_URL) that a user can neither see nor
+    // act on, so persist user-safe copy instead. The advice differs by file kind: a turn-attached
+    // file falls back to its raw content in chat (see processFabFilesServer / canCosineSearch), so
+    // it is still usable there; a data-lake file (batchId set) is retrieved only by cosine search
+    // over its chunks, so with no vectors it is simply unfindable until re-indexed. The full
+    // operator detail still goes to the logs below. Other failures (e.g. oversized chunk) keep
+    // their specific, user-actionable message.
+    const isAuthFailure = isEmbeddingAuthError(err);
+    const storedError = isAuthFailure
+      ? existingFabFile.batchId
+        ? 'This file could not be indexed for semantic search because the embedding service was unavailable. It will not be found by knowledge search until it is re-indexed.'
+        : 'This file could not be indexed for semantic search because the embedding service was unavailable. You can still ask about it directly in chat.'
+      : errorMessage;
+    if (isAuthFailure) {
+      logger.warn(`Vectorization failed for ${fabFileId} (embedding auth): ${errorMessage}`);
+    }
     // markFailedIfNotAlready is the file-level idempotency guard: only the first
     // failure increments the counter, so SQS redelivery of a failed message is a no-op.
-    const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, errorMessage);
+    const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, storedError);
     if (existingFabFile.batchId && isFirstFailure) {
       try {
-        await dataLakeBatchRepository.updateFileStatus(existingFabFile.batchId, fabFileId, 'failed', errorMessage);
+        await dataLakeBatchRepository.updateFileStatus(existingFabFile.batchId, fabFileId, 'failed', storedError);
         const batch = await dataLakeBatchRepository.incrementCounter(existingFabFile.batchId, 'failedFiles');
         await finalizeBatchIfComplete(batch, logger);
 
