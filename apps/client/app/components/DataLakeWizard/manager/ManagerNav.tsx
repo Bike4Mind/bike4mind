@@ -128,7 +128,10 @@ export default function ManagerNav({
   const { data: deletedLakes } = useGetDeletedDataLakes(showDeleted);
 
   const { data: filesResult, isLoading: filesLoading, isError: filesError } = useDataLakeFiles(activeLake?.id ?? null);
-  const articles = useMemo(() => filesResult?.data ?? [], [filesResult]);
+  // Dep on .data, not the whole result: react-query returns a fresh result object on every
+  // state transition (isFetching flips), which would cascade a new `articles` identity into
+  // the tree/uncategorized memos below on every background refetch.
+  const articles = useMemo(() => filesResult?.data ?? [], [filesResult?.data]);
 
   // Per-lake category tree from the lake's prefix-matching tags (datalake: meta-tags excluded).
   const tree = useMemo(() => {

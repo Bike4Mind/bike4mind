@@ -266,7 +266,9 @@ export class DataLakePage extends BasePage {
 
   // ── Explorer article (deep-linked) ────────────────────────────────────────
   get explorer(): Locator {
-    return this.page.getByTestId('datalake-explorer');
+    // Both surface modes: the page emits 'datalake-explorer', chat mode 'opti-datalake-explorer'
+    // (DataLakeExplorer.tsx) - a bare page-mode id would strand chat-mode specs.
+    return this.page.getByTestId(/^(opti-)?datalake-explorer$/);
   }
   get article(): Locator {
     return this.page.getByTestId('datalake-article');

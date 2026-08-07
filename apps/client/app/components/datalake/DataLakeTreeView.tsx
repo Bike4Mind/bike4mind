@@ -7,8 +7,9 @@ import { getNodesAtPath } from '@client/app/components/Files/Browser/TagView/par
 import type { IFabFileDocument } from '@bike4mind/common';
 
 /**
- * Synthetic breadcrumb key for the Viewer's "files with no prefix-matching tag" bucket.
- * Kept identical to the manager's constant so both surfaces mean the same bucket.
+ * Synthetic breadcrumb key for the "files with no prefix-matching tag" bucket. TreeView owns
+ * the constant; every surface that navigates the bucket (the Viewer, the manager nav) imports
+ * it from here so the two can never drift.
  */
 export const UNCATEGORIZED_KEY = '__uncategorized__';
 
@@ -22,7 +23,7 @@ export type TreeSortMode = 'count' | 'alpha';
  * the discover viewer keeps its neutral look. TreeView itself owns only logic and
  * structure - if a knob here starts encoding BEHAVIOR, it belongs in TreeView instead.
  */
-export interface DataLakeTreeChrome {
+export type DataLakeTreeChrome = {
   /** Outer column: width, borders, background - the surface's visual identity. */
   containerSx: SxProps;
   /** Search + sort toolbar wrapper. */
@@ -34,10 +35,6 @@ export interface DataLakeTreeChrome {
   renderSortButton: (sortBy: TreeSortMode, toggle: () => void) => ReactNode;
   /** Back row (chrome carries data-testid="datalake-back"). */
   renderBackRow: (label: string, onBack: () => void) => ReactNode;
-  /** Where the back row lives: 'above' renders it as a sibling before the scroll pane;
-   *  'sticky' renders it INSIDE the scroll pane wrapped in `stickyBackSx` (required then). */
-  backRowPlacement: 'above' | 'sticky';
-  stickyBackSx?: SxProps;
   scrollSx: SxProps;
   nodeListSx: SxProps;
   fileListSx: SxProps;
@@ -51,7 +48,19 @@ export interface DataLakeTreeChrome {
   allCategoriesLabel: string;
   emptyFilesLabel: string;
   errorLabel: string;
-}
+} & (
+  | {
+      /** The back row renders as a sibling before the scroll pane. */
+      backRowPlacement: 'above';
+      stickyBackSx?: never;
+    }
+  | {
+      /** The back row renders INSIDE the scroll pane, pinned by this sx - the union makes the
+       *  pairing unrepresentable to forget (a sticky placement with no sx silently unpins). */
+      backRowPlacement: 'sticky';
+      stickyBackSx: SxProps;
+    }
+);
 
 export interface DataLakeTreeViewProps {
   tree: TagNode[];
@@ -97,9 +106,10 @@ export interface DataLakeTreeViewProps {
   /**
    * Depth at which the seeded `breadcrumb` root is treated as depth 0 for leaf/bucket gating,
    * so a host (e.g. the manager, seeded at a lake's own root) can nest TreeView below its own
-   * navigation without the seeded root itself being mistaken for a leaf. The seeded root's own
-   * back row is the HOST's concern (e.g. ManagerNav renders its own back row above TreeView);
-   * TreeView's back row still only requires `breadcrumb.length > 0` (or `alwaysShowBackRow`).
+   * navigation without the seeded root itself being mistaken for a leaf. The seeded root's
+   * back SEMANTICS stay the host's concern: its chrome's renderBackRow may ignore TreeView's
+   * label/onBack and bind its own (ManagerNav's exits the lake at the seeded root); TreeView
+   * still owns placement and only requires `breadcrumb.length > 0` (or `alwaysShowBackRow`).
    */
   leafMinDepth?: number;
   /**
@@ -182,7 +192,11 @@ export default function DataLakeTreeView({
       .sort((a, b) => a.fileName.localeCompare(b.fileName));
   }, [isUncategorized, bucketFiles, leafTag, articles]);
 
-  const showBucketRow = !!uncategorized && breadcrumb.length <= leafMinDepth && !searchQuery && bucketFiles!.length > 0;
+  // Equality, not a floor, to stay coherent with isUncategorized above: the bucket lives at
+  // exactly the seeded root. A host must never render TreeView with breadcrumb shorter than
+  // leafMinDepth; the equality means such a state shows no bucket instead of a phantom one.
+  const showBucketRow =
+    !!uncategorized && breadcrumb.length === leafMinDepth && !searchQuery && bucketFiles!.length > 0;
   // The bucket standing in for an empty root is still content - don't show "No categories" under it.
   const showNodeEmpty = filteredNodes.length === 0 && !showBucketRow;
 
@@ -262,13 +276,11 @@ export default function DataLakeTreeView({
                 {chrome.renderNodeRow(node, breadcrumb.length, () => onNavigate([...breadcrumb, node.segment]))}
               </Fragment>
             ))}
-            {showBucketRow && (
-              <Fragment key={UNCATEGORIZED_KEY}>
-                {uncategorized!.renderRow(uncategorized!.files.length, () =>
-                  onNavigate([...breadcrumb, UNCATEGORIZED_KEY])
-                )}
-              </Fragment>
-            )}
+            {/* Single conditional child, not a .map element - a key here would be inert. */}
+            {showBucketRow &&
+              uncategorized!.renderRow(uncategorized!.files.length, () =>
+                onNavigate([...breadcrumb, UNCATEGORIZED_KEY])
+              )}
             {showNodeEmpty && (
               <Box sx={{ p: 2, textAlign: 'center' }}>
                 <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>

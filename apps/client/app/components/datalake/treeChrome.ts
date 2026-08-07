@@ -7,9 +7,9 @@ import type { Hue } from './deckChrome';
 import type { TreeSortMode } from './DataLakeTreeView';
 
 /**
- * Shared chrome for the Data Lake tree surfaces: the in-chat sidebar (DataLakeTree) and the
- * manager modal's navigation (DataLakeManagerPanel). Both must stay visually identical, so
- * the sizing constants, row styling, and tag-namespace display names live here.
+ * Shared chrome for the Data Lake tree surfaces: the in-chat sidebar (DataLakeChatTree) and
+ * the manager modal's navigation (DataLakeWizard/manager/ManagerNav). Both must stay visually
+ * identical, so the sizing constants, row styling, and tag-namespace display names live here.
  * Row/hover styling mirrors the main app sidenav (layouts/Notebook/Sidenav).
  */
 
