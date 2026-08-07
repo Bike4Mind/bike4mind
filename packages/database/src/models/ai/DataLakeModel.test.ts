@@ -822,6 +822,26 @@ describe('DataLakeBatchRepository.forceFailStuckTaxonomy - reconciler write, gua
 
     expect(result).toBeNull();
   });
+
+  it('succeeds when taxonomyStartedAt is missing entirely, not just when it is before the cutoff', async () => {
+    // reconcileStuckTaxonomy.ts treats a missing taxonomyStartedAt as "definitely stuck" (epoch
+    // 0). A plain $lt guard would never match a missing field, silently no-opping forever on
+    // such a batch - this proves the guard's $not/$gte form closes that gap.
+    const b = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'analyzing',
+    } as never);
+
+    const result = await dataLakeBatchRepository.forceFailStuckTaxonomy(
+      b.id,
+      ['queued', 'analyzing', 'applying'],
+      CUTOFF,
+      'Timed out waiting for AI tag suggestion'
+    );
+
+    expect(result?.taxonomyStatus).toBe('failed');
+  });
 });
 
 describe('DataLakeBatchRepository.findActiveByUserId - list-surface query', () => {

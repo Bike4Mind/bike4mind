@@ -474,8 +474,10 @@ DataLakeBatchSchema.index({ userId: 1, status: 1 });
 DataLakeBatchSchema.index({ dataLakeId: 1, status: 1 });
 // Read-time reconciler scan: non-terminal batches ordered by staleness.
 DataLakeBatchSchema.index({ status: 1, updatedAt: 1 });
-// findTaxonomyAttentionByUserId's list-response sort (most-recently-updated first) - NOT the
-// stuck-job reconciler scan, which needs taxonomyStartedAt (see the index below).
+// Pre-existing index, kept for now though no current query shape has taxonomyStatus as an
+// equality-prefix without userId leading it - findTaxonomyAttentionByUserId (the closest
+// candidate) filters on userId first, so this index isn't its equality prefix. NOT the
+// stuck-job reconciler scan either, which needs taxonomyStartedAt (see the index below).
 DataLakeBatchSchema.index({ taxonomyStatus: 1, updatedAt: 1 });
 // findStuckTaxonomy's staleness scan - see its doc comment for why taxonomyStartedAt, not
 // updatedAt, is the correct clock for "how long has this taxonomy attempt been stuck."
@@ -648,7 +650,11 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     taxonomyError: string
   ): Promise<IDataLakeBatchDocument | null> {
     const doc = await this.batchModel.findOneAndUpdate(
-      { _id: batchId, taxonomyStatus: { $in: from }, taxonomyStartedAt: { $lt: startedBefore } },
+      // $not/$gte (not $lt) so a batch with no taxonomyStartedAt at all still matches - every
+      // current writer sets it alongside a non-terminal status, but a doc missing it shouldn't
+      // be able to dodge this guard the way it dodges a plain $lt (Mongo's range operators never
+      // match a missing field).
+      { _id: batchId, taxonomyStatus: { $in: from }, taxonomyStartedAt: { $not: { $gte: startedBefore } } },
       { $set: { taxonomyStatus: 'failed', taxonomyError } },
       { new: true }
     );
