@@ -3,6 +3,7 @@ import {
   IFabFileDocument,
   IUserDocument,
   IOrganizationDocument,
+  FabFileSourceType,
   KnowledgeType,
   SupportedFabFileMimeTypes,
   isStorableFabFileMimeType,
@@ -67,6 +68,19 @@ export interface CreateFabFileAdapters {
       options?: { ContentType?: string; ContentLength?: number }
     ) => Promise<string>;
   };
+  /**
+   * Where this file came from, stamped by the server that ingested it.
+   *
+   * Deliberately an ADAPTER rather than a field on `createFabFileSchema`: that schema is parsed
+   * straight from an HTTP request body, so anything in it is caller-controlled. A client could
+   * then upload its own file and label it `sourceType: SLACK` with someone else's channel and
+   * message ts - forging exactly the audit trail provenance is meant to establish. Only a
+   * server-side caller that actually performed the ingest can pass this.
+   */
+  provenance?: {
+    sourceType: FabFileSourceType;
+    sourceMetadata?: Record<string, unknown>;
+  };
 }
 
 const DEFAULT_MAX_FILE_SIZE = 20;
@@ -75,7 +89,7 @@ const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 export const createFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
-  { db, storage }: CreateFabFileAdapters
+  { db, storage, provenance }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
@@ -111,6 +125,10 @@ export const createFabFile = async (
   const buildData: Omit<IFabFileDocument, 'id'> = {
     userId,
     ...params,
+    ...(provenance && {
+      sourceType: provenance.sourceType,
+      ...(provenance.sourceMetadata && { sourceMetadata: provenance.sourceMetadata }),
+    }),
     mimeType,
     filePath,
     users: [],
