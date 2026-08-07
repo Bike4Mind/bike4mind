@@ -7,8 +7,7 @@ const {
   mockNavigate,
   mockRouterHistory,
   mockSetCurrentUser,
-  mockSetAccessToken,
-  mockSetRefreshToken,
+  mockSetVerifiedSession,
   mockGetState,
   mockParseAuthParams,
   mockApplyRedirect,
@@ -16,8 +15,7 @@ const {
   mockNavigate: vi.fn(),
   mockRouterHistory: { push: vi.fn() },
   mockSetCurrentUser: vi.fn(),
-  mockSetAccessToken: vi.fn(),
-  mockSetRefreshToken: vi.fn(),
+  mockSetVerifiedSession: vi.fn(),
   mockGetState: vi.fn(() => ({ accessToken: null as string | null })),
   mockParseAuthParams: vi.fn(),
   mockApplyRedirect: vi.fn(),
@@ -38,13 +36,17 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 }));
 
 vi.mock('@client/app/hooks/useAccessToken', () => ({
-  useAccessToken: Object.assign(() => ({ setAccessToken: mockSetAccessToken, setRefreshToken: mockSetRefreshToken }), {
+  useAccessToken: Object.assign(() => ({ setVerifiedSession: mockSetVerifiedSession }), {
     getState: mockGetState,
   }),
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
   resetRefreshPromise: vi.fn(),
+}));
+
+vi.mock('@client/app/utils/sessionBootstrap', () => ({
+  resetSessionBootstrap: vi.fn(),
 }));
 
 vi.mock('@client/app/utils/authParams', () => ({
@@ -73,7 +75,7 @@ vi.mock('@mui/joy', () => ({
 
 import AuthSuccessPage from './success';
 
-const TOKENS = { token: 'tok', refreshToken: 'ref', userId: 'u1', error: undefined };
+const TOKENS = { token: 'tok', userId: 'u1', error: undefined };
 const USER_DATA = { id: 'u1', name: 'Test User' };
 
 beforeEach(() => {
@@ -90,8 +92,7 @@ describe('AuthSuccessPage', () => {
     render(<AuthSuccessPage />);
 
     await waitFor(() => expect(mockApplyRedirect).toHaveBeenCalledWith(mockRouterHistory, '/new'));
-    expect(mockSetAccessToken).toHaveBeenCalledWith('tok');
-    expect(mockSetRefreshToken).toHaveBeenCalledWith('ref');
+    expect(mockSetVerifiedSession).toHaveBeenCalledWith('tok');
     expect(mockSetCurrentUser).toHaveBeenCalledWith(USER_DATA);
     expect(mockNavigate).not.toHaveBeenCalled();
     // A routine login is not a signup - no conversion.

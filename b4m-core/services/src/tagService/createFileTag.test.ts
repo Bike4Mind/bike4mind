@@ -29,7 +29,7 @@ describe('tagService - createFileTag', () => {
 
     expect(tag).toEqual({ id: 'new-1', name: 'Research: Q3' });
     expect(repo.create).toHaveBeenCalledWith(
-      expect.objectContaining({ userId, name: 'Research: Q3', color: '#FF0000', fileCount: 0 })
+      expect.objectContaining({ userId, name: 'Research: Q3', color: '#FF0000' })
     );
   });
 

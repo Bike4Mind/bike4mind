@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
+import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -166,6 +167,9 @@ export const SettingKeySchema = z.enum([
   'EnableLatticeDefault',
   'EnableDataLakes',
   'EnableDataLakesDefault',
+  'EnableDataLakeSlackAdd',
+  'EnableLakeMemory',
+  'EnableDataLakeVectorSearch',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -354,6 +358,7 @@ export const SettingKeySchema = z.enum([
   'EnableContextTelemetry',
   'contextTelemetryAlerts',
   'ContextVerbatimWindowFraction',
+  'CorpusRetrievalMinInlineTokensPerDoc',
 
   // SRE AGENT SETTINGS
   'sreAgentConfig',
@@ -428,6 +433,7 @@ export const OrchestrationDefaultsSchema = z.object({
     // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
     'image_generation',
     'edit_image',
+    'music_generation',
     'excel_generation',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
@@ -1752,6 +1758,39 @@ export const settingsMap = {
     order: 89,
     dependsOn: 'EnableDataLakes',
   }),
+  EnableDataLakeSlackAdd: makeBooleanSetting({
+    key: 'EnableDataLakeSlackAdd',
+    name: 'Data Lakes: Slack "@datalake add" path',
+    defaultValue: false,
+    description:
+      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". Off by default - the Slack command is intercepted deterministically but performs no ingest until this is turned on.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 90,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableLakeMemory: makeBooleanSetting({
+    key: 'EnableLakeMemory',
+    name: 'Data Lakes: Lake memory profile (extraction)',
+    defaultValue: false,
+    description:
+      "Server-side gate for the lake memory producer - LLM extraction of a data lake's documents into a durable memory profile on ingest. Off by default (measurement rollout); the consumer that injects the profile is inert until this is on and a lake has been extracted.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 91,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeVectorSearch: makeBooleanSetting({
+    key: 'EnableDataLakeVectorSearch',
+    name: 'Data Lakes: Use Atlas $vectorSearch',
+    defaultValue: false,
+    description:
+      'Kill-switch for the Atlas $vectorSearch cutover on Data Lake semantic search. Off by default; even when on, only files whose chunks are fully re-indexed on an Atlas backend actually use it - everything else keeps using the brute-force scan.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 92,
+    dependsOn: 'EnableDataLakes',
+  }),
   EnableBriefcase: makeBooleanSetting({
     key: 'EnableBriefcase',
     name: 'Enable Briefcase',
@@ -1986,8 +2025,18 @@ export const settingsMap = {
   DefaultChunkSize: makeNumberSetting({
     key: 'DefaultChunkSize',
     name: 'Default Chunk Size',
-    defaultValue: 2100,
-    description: 'The default chunk size for splitting large documents.',
+    // Must equal the chunker's own default, or a reprocess driven through the UI (which sends this
+    // as an explicit chunkSize override) produces a different granularity than one driven through
+    // /api/files/reprocess, which sends none and gets the chunker default. They disagreed by ~4x.
+    defaultValue: DEFAULT_PASSAGE_TOKEN_TARGET,
+    // Floor matches the chunker's own clamp, so the UI cannot report a value the chunker will
+    // silently raise (chunk.ts clamps to MIN_PASSAGE_TOKEN_TARGET).
+    min: MIN_PASSAGE_TOKEN_TARGET,
+    description:
+      'Passage target in TOKENS for splitting large documents. The DEFAULT matches the chunker; a ' +
+      'value stored here overrides it, and a stored value larger than the chunker default makes the ' +
+      'UI reprocess path produce coarser chunks than /api/files/reprocess. Coarser chunks measurably ' +
+      'worsen retrieval.',
     category: 'AI',
     order: 3,
   }),
@@ -3544,6 +3593,17 @@ export const settingsMap = {
       'Fraction of a model usable input budget (context window minus reserved output) kept as verbatim conversation history before older turns are summarized into working memory. Lower = compact sooner (cheaper, less verbatim detail); higher = keep more raw history.',
     category: 'AI',
     order: 121,
+  }),
+  CorpusRetrievalMinInlineTokensPerDoc: makeNumberSetting({
+    key: 'CorpusRetrievalMinInlineTokensPerDoc',
+    name: 'Corpus Retrieval Min Inline Tokens Per Doc',
+    defaultValue: 0,
+    min: 0,
+    max: 100000,
+    description:
+      'When a session has a large RETRIEVABLE knowledge corpus attached, stop force-inlining it and let the offered search_knowledge_base tool fetch the relevant docs on demand, IF the even-split inline depth (attached-content budget / retrievable doc count) would fall below this many tokens per doc. 0 disables (always inline). Only documents the retrieval tool can actually reach are ever deferred; other attachments always inline.',
+    category: 'AI',
+    order: 122,
   }),
   sreAgentConfig: makeObjectSetting({
     key: 'sreAgentConfig',

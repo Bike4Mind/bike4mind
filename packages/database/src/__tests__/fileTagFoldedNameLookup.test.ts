@@ -22,7 +22,6 @@ describe('FileTagRepository.findByFoldedNameAndUserId', () => {
       userId: owner,
       name,
       type: TagType.FILE,
-      fileCount: 0,
       lastActivityAt: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -80,8 +79,9 @@ describe('FileTagRepository.findByFoldedNameAndUserId', () => {
     expect(await fileTagRepository.findByFoldedNameAndUserId('nothing-here', userId)).toBeNull();
   });
 
-  // A pair the guard now prevents but legacy data can hold. findOrCreateByNameAndUserId increments
-  // whichever document this returns, so an unordered read could credit a different one per call.
+  // A pair the guard now prevents but legacy data can hold. findOrCreateByNameAndUserId resolves its
+  // upsert onto whichever document this returns, so an unordered read could settle on a different
+  // one per call.
   it('picks the same, oldest document every time when a legacy pair exists', async () => {
     await seed('run2-alpha');
     await seed('RUN2-Alpha');
@@ -108,48 +108,47 @@ describe('FileTagRepository.findOrCreateByNameAndUserId', () => {
   const countHeld = async () => (await fileTagRepository.findAllByUserId(userId)).length;
 
   it('creates the tag when the user holds no such name', async () => {
-    const tag = await fileTagRepository.findOrCreateByNameAndUserId('invoices', userId, { color: '#FF0000' }, 2);
+    const tag = await fileTagRepository.findOrCreateByNameAndUserId('invoices', userId, { color: '#FF0000' });
 
     expect(tag?.name).toBe('invoices');
-    expect(tag?.fileCount).toBe(2);
+    expect(tag?.color).toBe('#FF0000');
     expect(await countHeld()).toBe(1);
   });
 
-  it('increments the existing document instead of minting a case variant', async () => {
-    await fileTagRepository.findOrCreateByNameAndUserId('invoices', userId, {}, 1);
+  it('reuses the existing document instead of minting a case variant', async () => {
+    await fileTagRepository.findOrCreateByNameAndUserId('invoices', userId, {});
 
-    const tag = await fileTagRepository.findOrCreateByNameAndUserId('INVOICES', userId, {}, 3);
+    const tag = await fileTagRepository.findOrCreateByNameAndUserId('INVOICES', userId, {});
 
     expect(tag?.name).toBe('invoices');
-    expect(tag?.fileCount).toBe(4);
     expect(await countHeld()).toBe(1);
   });
 
   it('keeps the casing the user already holds rather than adopting the caller spelling', async () => {
-    await fileTagRepository.findOrCreateByNameAndUserId('Invoices', userId, {}, 0);
+    await fileTagRepository.findOrCreateByNameAndUserId('Invoices', userId, {});
 
-    const tag = await fileTagRepository.findOrCreateByNameAndUserId('invoices', userId, {}, 0);
+    const tag = await fileTagRepository.findOrCreateByNameAndUserId('invoices', userId, {});
 
     expect(tag?.name).toBe('Invoices');
   });
 
   it('trims a name it is creating fresh', async () => {
-    const tag = await fileTagRepository.findOrCreateByNameAndUserId('  invoices  ', userId, {}, 0);
+    const tag = await fileTagRepository.findOrCreateByNameAndUserId('  invoices  ', userId, {});
 
     expect(tag?.name).toBe('invoices');
   });
 
   it('still treats a genuinely different name as its own tag', async () => {
-    await fileTagRepository.findOrCreateByNameAndUserId('invoices', userId, {}, 0);
-    await fileTagRepository.findOrCreateByNameAndUserId('invoices-2024', userId, {}, 0);
+    await fileTagRepository.findOrCreateByNameAndUserId('invoices', userId, {});
+    await fileTagRepository.findOrCreateByNameAndUserId('invoices-2024', userId, {});
 
     expect(await countHeld()).toBe(2);
   });
 
   it('scopes the reuse to the caller, so one user cannot absorb another name', async () => {
-    await fileTagRepository.findOrCreateByNameAndUserId('invoices', 'somebody-else', {}, 0);
+    await fileTagRepository.findOrCreateByNameAndUserId('invoices', 'somebody-else', {});
 
-    const tag = await fileTagRepository.findOrCreateByNameAndUserId('INVOICES', userId, {}, 0);
+    const tag = await fileTagRepository.findOrCreateByNameAndUserId('INVOICES', userId, {});
 
     expect(tag?.name).toBe('INVOICES');
     expect(await countHeld()).toBe(1);

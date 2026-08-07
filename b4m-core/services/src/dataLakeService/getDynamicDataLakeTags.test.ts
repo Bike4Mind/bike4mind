@@ -73,15 +73,26 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     expect(spy).toHaveBeenCalledWith([], [], undefined, undefined);
   });
 
-  it('string-coerces non-string organizationId + id (hydrated ObjectIds) before querying', async () => {
+  it('normalizes an ObjectId organizationId (and string-coerces id) before querying', async () => {
     const spy = vi.fn().mockResolvedValue([]);
-    // Simulates a hydrated user doc carrying ObjectIds - no cast needed now that the
-    // context type accepts ObjectId-like values.
+    // Simulates a hydrated user doc: organizationId arrives as an ObjectId (exposes toHexString),
+    // id as an ObjectId-like value. normalizeId yields the org hex; id keeps its String() coercion.
     await getDynamicDataLakeAccess({
       db: { dataLakes: { findActiveByUserTagsAndEntitlements: spy } as never },
-      user: { id: { toString: () => 'user-oid' }, tags: [], organizationId: { toString: () => 'org-oid' } },
+      user: { id: { toString: () => 'user-oid' }, tags: [], organizationId: { toHexString: () => 'org-oid' } },
     });
     expect(spy).toHaveBeenCalledWith([], [], 'org-oid', 'user-oid');
+  });
+
+  it('normalizes a POPULATED-document organizationId to its hex, never "[object Object]" (#1343)', async () => {
+    const spy = vi.fn().mockResolvedValue([]);
+    // A .populate('organizationId') upstream would hand a full Organization doc here. Raw String()
+    // would make the org filter "[object Object]" and match no org lake; normalizeId reads its _id.
+    await getDynamicDataLakeAccess({
+      db: { dataLakes: { findActiveByUserTagsAndEntitlements: spy } as never },
+      user: { tags: [], organizationId: { _id: { toHexString: () => 'org-hex' }, name: 'Acme' } },
+    });
+    expect(spy).toHaveBeenCalledWith([], [], 'org-hex', undefined);
   });
 
   it('drops a DB lake that carries a static-registry meta-tag, gate or no gate', async () => {

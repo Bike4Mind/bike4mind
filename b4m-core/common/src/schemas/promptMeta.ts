@@ -148,6 +148,29 @@ const PromptMetaContextSchema = z.object({
   globalSystemFileIds: z.array(z.string()).optional(),
   userSystemFileIds: z.array(z.string()).optional(),
   projectSystemFileIds: z.array(z.string()).optional(),
+  // What the assembler decided about inlining the attached knowledge corpus vs deferring it to
+  // the offered search_knowledge_base tool. Pairs with `offeredTools` + `tokensBySource.fabFiles`
+  // so one row shows: tools offered, docs deferred, resulting inline token cost. `deferredCount`
+  // counts only the RETRIEVABLE subset (docs the tool can actually reach); non-retrievable
+  // attachments are always inlined and never counted here.
+  knowledgeInlining: z
+    .object({
+      attachedCount: z.number(),
+      retrievableCount: z.number(),
+      deferredCount: z.number(),
+      deferredToRetrieval: z.boolean(),
+      minInlineTokensPerDoc: z.number(),
+    })
+    .optional(),
+  // Lake memory hot-card (#1440): the durable lake-profile beliefs injected on a Data-Lake-mode turn,
+  // and which lakes they came from. Present only when the card fired, so an eval row shows lake
+  // grounding independent of whether the model then also called the knowledge tools.
+  lakeMemory: z
+    .object({
+      beliefCount: z.number(),
+      dataLakeTags: z.array(z.string()),
+    })
+    .optional(),
   // Phase 2: Context window debug fields
   contextWindowUsage: z
     .object({

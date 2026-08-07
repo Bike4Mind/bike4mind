@@ -18,7 +18,6 @@ describe('tagService - update', () => {
     icon: 'folder',
     description: 'Original Description',
     color: '#000000',
-    fileCount: 0,
     createdAt: new Date(),
     updatedAt: new Date(),
     lastActivityAt: new Date(),

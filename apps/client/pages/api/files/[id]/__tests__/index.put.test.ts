@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   computeDataLakeStats: vi.fn(),
   find: vi.fn(),
   setStats: vi.fn(),
+  activateIfDraft: vi.fn(),
 }));
 
 // Callable chain routed by req.method, same shape as the batch/generate-presigned-urls-batch

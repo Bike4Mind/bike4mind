@@ -1,5 +1,5 @@
 import type {
-  IDataLakeBatchDocument,
+  IDataLakeBatchSummary,
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
@@ -12,7 +12,7 @@ export const DEFAULT_STUCK_BATCH_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 interface ReconcileStuckBatchesAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
     batches: Pick<IDataLakeBatchRepository, 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'computeDataLakeStats'>;
   };
@@ -29,7 +29,7 @@ interface ReconcileStuckBatchesAdapters {
    * count and is wired only from the cron (a fixed cadence), never the read-time path.
    */
   metrics?: {
-    emitForcedTerminal?: (batch: IDataLakeBatchDocument) => void | Promise<void>;
+    emitForcedTerminal?: (batch: IDataLakeBatchSummary) => void | Promise<void>;
     emitStuckGauge?: (count: number) => void | Promise<void>;
   };
 }
@@ -45,7 +45,7 @@ interface ReconcileStuckBatchesAdapters {
  * "work being lost").
  */
 export const reconcileStuckBatches = async (
-  batches: IDataLakeBatchDocument[],
+  batches: IDataLakeBatchSummary[],
   timeoutMs: number,
   { db, logger, metrics }: ReconcileStuckBatchesAdapters,
   now: number = Date.now()

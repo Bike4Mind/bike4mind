@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
-import { issueSessionForRequest } from '@server/auth/issueSession';
+import { issueBrowserSession } from '@server/auth/issueSession';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import * as z from 'zod';
 
@@ -53,11 +53,11 @@ const handler = baseApi() // Now requires authentication
         // Generate FULL access tokens (remove mfaPending) for login completion
         const tokenUserId = result.user.id;
         // No mfaPending: MFA is satisfied, so mint a full session.
-        const { accessToken, refreshToken } = await issueSessionForRequest(req, tokenUserId, {
+        const { accessToken } = await issueBrowserSession(req, res, tokenUserId, {
           createdVia: 'mfa',
           tokenVersion: result.user.tokenVersion ?? 0,
         });
-        const tokens = { accessToken, refreshToken };
+        const tokens = { accessToken };
 
         res.json({
           verified: true,

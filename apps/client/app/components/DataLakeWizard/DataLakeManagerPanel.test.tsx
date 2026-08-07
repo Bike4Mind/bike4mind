@@ -4,6 +4,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import DataLakeManagerPanel from './DataLakeManagerPanel';
 
 // Archive resolves synchronously so the onSuccess (exit-to-root) wiring is exercised.
@@ -20,6 +21,23 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useGetArchivedDataLakes: () => ({ data: undefined }),
     useGetDeletedDataLakes: () => ({ data: undefined }),
     useActiveDataLakeBatches: () => useActiveDataLakeBatches(),
+    useGetDataLakes: () => useGetDataLakes(),
+    // Per-lake files: only the selected lake queries (id != null).
+    useDataLakeFiles: (id: string | null) => ({
+      data: id ? { data: lakeFiles } : undefined,
+      isLoading: false,
+      isError: false,
+    }),
+    // Per-lake counts come from lakeFileCounts (membership), NOT from the per-prefix tag counts.
+    // The two disagree here on purpose: `theirs` has taxonomy tags but only 2 member files, and
+    // `mine` has member files with NO taxonomy tag at all - the shape that used to display 0.
+    useGetDataLakeTagCounts: () => ({
+      data: {
+        tagCounts: [],
+        uniqueArticleCounts: { total: 4, byPrefix: { 'lk:': 0, 'th:': 9 } },
+        lakeFileCounts: { 'datalake:mine': 3, 'datalake:theirs': 2 },
+      },
+    }),
   };
 });
 
@@ -59,29 +77,7 @@ const lakeFiles = [
   { id: 'f4', fileName: 'bare.md', tags: [{ name: 'datalake:mine' }, { name: 'lk:' }] },
 ];
 
-const useDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
-vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
-  useDataLakes: () => useDataLakes(),
-  // Per-lake files: only the selected lake queries (id != null).
-  useDataLakeFiles: (id: string | null) => ({
-    data: id ? { data: lakeFiles } : undefined,
-    isLoading: false,
-    isError: false,
-  }),
-}));
-
-// Per-lake counts come from lakeFileCounts (membership), NOT from the per-prefix tag counts.
-// The two disagree here on purpose: `theirs` has taxonomy tags but only 2 member files, and
-// `mine` has member files with NO taxonomy tag at all - the shape that used to display 0.
-vi.mock('@client/app/hooks/data/fabFiles', () => ({
-  useGetDataLakeTagCounts: () => ({
-    data: {
-      tagCounts: [],
-      uniqueArticleCounts: { total: 4, byPrefix: { 'lk:': 0, 'th:': 9 } },
-      lakeFileCounts: { 'datalake:mine': 3, 'datalake:theirs': 2 },
-    },
-  }),
-}));
+const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
 
 // Default (flag on) is established per-describe; tests override per-case.
 const isFeatureEnabled = vi.fn();
@@ -147,11 +143,14 @@ const rerenderPanel = (rerender: (ui: ReactNode) => void) =>
 beforeEach(() => {
   isFeatureEnabled.mockReset();
   isFeatureEnabled.mockReturnValue(true);
-  useDataLakes.mockReset();
-  useDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
+  useGetDataLakes.mockReset();
+  useGetDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
   archiveMutate.mockClear();
   useActiveDataLakeBatches.mockReset();
   useActiveDataLakeBatches.mockReturnValue({ data: [] });
+  // managerTab is module state in the real store, so a test left in Discover would otherwise
+  // decide what the next one renders.
+  useDataLakeWizardStore.setState({ managerTab: 'mine' });
 });
 
 describe('DataLakeManagerPanel - EnableDataLakes gating', () => {
@@ -201,6 +200,36 @@ describe('DataLakeManagerPanel - root view', () => {
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
 
+  it('exits the open lake when Discover is clicked, rather than arming the tab invisibly', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    expect(screen.queryByTestId('datalake-manager-overview')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-manager-discover-btn'));
+    // The catalog shows on THIS click: the activeLake branch used to outrank the tab and swallow it.
+    expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
+    // The lake is really closed, so a later Back cannot drop the user into Discover by surprise.
+    expect(screen.queryByTestId('datalake-manager-back')).not.toBeInTheDocument();
+  });
+
+  it('toggles back out of Discover - the one exit that needs no lake of your own to click', async () => {
+    const user = userEvent.setup();
+    // No lakes: selectLake, the only other route back to the overview, has no row to click.
+    useGetDataLakes.mockReturnValue({ data: [], isLoading: false });
+    renderPanel();
+    const discover = screen.getByTestId('datalake-manager-discover-btn');
+    expect(discover).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(discover);
+    expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
+    expect(discover).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(discover);
+    expect(screen.queryByTestId('mock-discover')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
+  });
+
   it('collapses the Data Lakes accordion, hiding the lake rows', async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -208,6 +237,21 @@ describe('DataLakeManagerPanel - root view', () => {
     expect(screen.queryByTestId('datalake-manager-lake-mine')).not.toBeInTheDocument();
     // The lifecycle accordions are unaffected.
     expect(screen.getByTestId('datalake-archived-section')).toBeInTheDocument();
+  });
+
+  // A-Z names itself with the alphabet glyph, so the mode is readable from the button and not
+  // only from the tooltip; count keeps the neutral swap glyph.
+  it('swaps the sort icon to the alphabet glyph when toggled to A-Z', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const toggle = screen.getByTestId('datalake-manager-sort-toggle');
+    expect(toggle).toHaveAttribute('data-sort', 'count');
+    expect(screen.getByTestId('SwapVertIcon')).toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('data-sort', 'alpha');
+    expect(screen.getByTestId('SortByAlphaIcon')).toBeInTheDocument();
+    expect(screen.queryByTestId('SwapVertIcon')).not.toBeInTheDocument();
   });
 
   it('shows a persistent info icon next to the Data Lakes header that reveals the RAG explanation on hover', async () => {
@@ -303,7 +347,7 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     fireEvent.click(screen.getByTestId('datalake-manager-lake-mine'));
     expect(screen.getByTestId('datalake-manager-lakeinfo')).toBeInTheDocument();
 
-    useDataLakes.mockReturnValue({ data: [theirsLake], isLoading: false });
+    useGetDataLakes.mockReturnValue({ data: [theirsLake], isLoading: false });
     rerender(
       <Wrapper>
         <DataLakeManagerPanel />

@@ -5,6 +5,14 @@ export const supportedVoiceGenerationVendor = z.enum(['openai', 'elevenlabs']);
 
 export type VoiceGenerationVendor = z.infer<typeof supportedVoiceGenerationVendor>;
 
+// Display names for the TTS providers. Shared so the provider picker and any
+// message that has to name the vendor that actually produced the audio (e.g. a
+// fallback notice) read identically.
+export const VOICE_VENDOR_LABELS: Record<VoiceGenerationVendor, string> = {
+  openai: 'OpenAI',
+  elevenlabs: 'ElevenLabs',
+};
+
 // Output container the caller wants back. All providers accept mp3; the rest are
 // best-effort per provider (OpenAI supports the full set, ElevenLabs maps a
 // subset). The vendor implementation is responsible for the format -> API param

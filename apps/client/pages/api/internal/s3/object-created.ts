@@ -3,6 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { FabFile, adminSettingsRepository } from '@bike4mind/database';
 import { decodeS3Key, findWithRetry } from '@server/s3/utils';
 import { sendToQueue } from '@server/utils/sqs';
+import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 
@@ -83,6 +84,10 @@ const handler = baseApi({ auth: false }).post(
       metadata.status = 'complete';
       await metadata.save();
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
+
+      // Mirrors the hosted event: the bytes have landed, so the lakes this file joined can be
+      // counted - and, if one is still a draft, activated.
+      await recomputeStatsForUploadedFile(metadata, { logger: req.logger });
 
       if (enableAutoChunk) {
         try {

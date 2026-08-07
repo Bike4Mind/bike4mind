@@ -47,7 +47,10 @@ import {
   FunctionExecutedEvent,
   TOKEN_EXPIRATION_MS,
   buildImageModelPicker,
+  isDataLakeCommand,
 } from '@bike4mind/slack';
+import { adminSettingsRepository, dataLakeRepository } from '@bike4mind/database';
+import { runDataLakeSlackCommand } from '@server/slack/handleDataLakeCommand';
 import { logEvent } from '@server/utils/analyticsLog';
 import { slackChannelConfigRepository } from '@bike4mind/database';
 import { decryptToken } from '@server/security/tokenEncryption';
@@ -702,6 +705,24 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
   // Determine thread_ts for bot reply
   const { replyThreadTs } = determineThreadStrategy({ thread_ts: slackEvent.threadTs, ts: slackEvent.ts });
+
+  // Deterministic @datalake command. Intercepted BEFORE notebook creation and the LLM path
+  // so it NEVER routes through selectAgent. The interception is unconditional (keeping
+  // @datalake off the LLM); the EnableDataLakeSlackAdd flag gates only the work - when off
+  // (PR 1 default) the command is silently consumed and no ingest occurs.
+  if (isDataLakeCommand(commandHandler.parsedCommand)) {
+    await runDataLakeSlackCommand({
+      command: commandHandler.parsedCommand.command,
+      organizationId: user.organizationId ?? undefined,
+      channel: slackEvent.channel,
+      threadTs: replyThreadTs,
+      adminSettings: adminSettingsRepository,
+      dataLakes: dataLakeRepository,
+      sendMessage: args => slackClient.sendMessage(args),
+      logger,
+    });
+    return res.status(200).json({ message: 'Data Lake command handled' });
+  }
 
   const notebookId = await getOrCreateNotebookForSlackUser(
     user!.id,

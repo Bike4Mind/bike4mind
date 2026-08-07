@@ -1,4 +1,4 @@
-import { IFileTag, ITag } from '@bike4mind/common';
+import { IFileTag, IFileTagWithFileCount } from '@bike4mind/common';
 import {
   Box,
   Button,
@@ -36,7 +36,7 @@ import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import TagForm from '../../Tag/Form';
 
 interface TagSidebarProps {
-  tags: IFileTag[];
+  tags: IFileTagWithFileCount[];
   isOpen: boolean;
   onToggle: () => void;
   onTagClick: (tagName: string) => void;
@@ -64,7 +64,7 @@ const TagSidebar: FC<TagSidebarProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'default' | 'name' | 'usage' | 'recent'>('default');
-  const [editingTag, setEditingTag] = useState<IFileTag | null>(null);
+  const [editingTag, setEditingTag] = useState<IFileTagWithFileCount | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const currentUser = useUser(s => s.currentUser);
   const setCurrentUser = useUser(s => s.setCurrentUser);
@@ -171,7 +171,7 @@ const TagSidebar: FC<TagSidebarProps> = ({
     }
   };
 
-  const handleEditTag = (tag: IFileTag) => {
+  const handleEditTag = (tag: IFileTagWithFileCount) => {
     setEditingTag(tag);
     setShowEditModal(true);
   };
@@ -743,7 +743,7 @@ const TagSidebar: FC<TagSidebarProps> = ({
               </Typography>
 
               <TagForm
-                data={editingTag as ITag}
+                data={editingTag ?? undefined}
                 onSubmit={tag => {
                   if (editingTag) {
                     updateTag({
@@ -770,12 +770,12 @@ interface TagGroupProps {
   title: string;
   subtitle: string;
   icon: string;
-  tags: IFileTag[];
+  tags: IFileTagWithFileCount[];
   onTagClick: (tagName: string) => void;
   onAddToSelectedFiles: (tag: IFileTag) => Promise<void>;
   hasSelectedFiles: boolean;
   activeTags: string[];
-  onEditTag: (tag: IFileTag) => void;
+  onEditTag: (tag: IFileTagWithFileCount) => void;
   onDeleteTag: (tag: IFileTag) => void;
   favoriteTags: Set<string>;
   toggleFavorite: (tagId: string) => void;
@@ -857,7 +857,7 @@ const TagGroup: FC<TagGroupProps> = ({
 
 // Individual Tag Item Component
 interface TagItemProps {
-  tag: IFileTag;
+  tag: IFileTagWithFileCount;
   isActive: boolean;
   onClick: () => void;
   onAddToSelectedFiles: () => Promise<void>;

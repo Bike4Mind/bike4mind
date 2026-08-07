@@ -193,16 +193,40 @@ export async function apiLoginViaOtc(
   if (!verifyResponse.ok()) {
     throw new Error(`OTC verify failed: ${verifyResponse.status()} ${verifyResponse.statusText()}`);
   }
+  // The refresh token is no longer in the body - /api/otc/verify sets it as an HttpOnly cookie -
+  // so it has to be read back off Set-Cookie.
+  const refreshToken = refreshTokenFromSetCookie(verifyResponse.headers()['set-cookie']);
+
   // /api/otc/verify returns 200 without tokens in some envs (MFA-enforced ->
   // mfaRequired/mfaSetupRequired; registrationRequired -> no tokens). Fail loud and local
   // here instead of returning undefined tokens that surface later as an opaque auth-seed 401.
-  const body = (await verifyResponse.json()) as { accessToken?: string; refreshToken?: string };
-  if (!body.accessToken || !body.refreshToken) {
+  const body = (await verifyResponse.json()) as { accessToken?: string };
+  if (!body.accessToken || !refreshToken) {
     throw new Error(
-      `OTC verify returned no tokens (mfaRequired/registrationRequired?): keys=${Object.keys(body).join(',')}`
+      `OTC verify returned no tokens (mfaRequired/registrationRequired?): keys=${Object.keys(body).join(',')}, ` +
+        `refreshCookie=${refreshToken ? 'set' : 'missing'}`
     );
   }
-  return { accessToken: body.accessToken, refreshToken: body.refreshToken };
+  return { accessToken: body.accessToken, refreshToken };
+}
+
+/**
+ * Pull the refresh token out of a Set-Cookie response header. Playwright joins multiple
+ * Set-Cookie headers with newlines, so scan line by line. Mirrors REFRESH_COOKIE_NAME in
+ * apps/client/server/auth/refreshCookie.ts - keep in sync.
+ */
+export function refreshTokenFromSetCookie(setCookieHeader: string | undefined): string | null {
+  if (!setCookieHeader) return null;
+  for (const line of setCookieHeader.split('\n')) {
+    const [pair] = line.split(';');
+    const eq = pair.indexOf('=');
+    if (eq === -1) continue;
+    if (pair.slice(0, eq).trim() === 'b4m_rt') {
+      const value = pair.slice(eq + 1).trim();
+      return value.length > 0 ? value : null;
+    }
+  }
+  return null;
 }
 
 export async function apiCreateFile(

@@ -1,3 +1,5 @@
+import type { PromptMeta } from '@bike4mind/common';
+
 // Notebook Export/Import Types
 // This defines the standardized format for exporting and importing notebooks/chat sessions
 
@@ -43,9 +45,17 @@ export interface ExportedNotebook {
 }
 
 export interface ExportedChatMessage {
-  id: string; // Original quest/message ID
+  /**
+   * Required: re-import keys `updateOne` on this. A missing id casts the filter to `{}`, which
+   * upserts over an arbitrary document, so a row without one is not exportable.
+   */
+  id: string;
   timestamp: string; // ISO timestamp
-  type: 'message' | 'oob' | 'error' | 'system';
+  /**
+   * Mirrors IChatHistoryItemDocument['type']. `voice_transcript` was missing here: stored rows
+   * carry it, so exports already contained a value this contract did not admit.
+   */
+  type: 'message' | 'oob' | 'error' | 'system' | 'voice_transcript';
 
   // User input
   prompt: string;
@@ -60,16 +70,17 @@ export interface ExportedChatMessage {
   attachedFiles?: string[]; // References to knowledge files
 
   // Metadata
+  /**
+   * Derived from PromptMeta so it cannot drift from what the mapper passes through. Consumers
+   * already read this nested shape - see the bulk-export spreadsheet builder.
+   */
   promptMeta?: {
-    model?: string;
-    temperature?: number;
-    maxTokens?: number;
-    tokensUsed?: number;
-    inputTokens?: number;
-    outputTokens?: number;
-    cost?: number;
-    responseTime?: number;
-    contextLength?: number;
+    /** Passed through whole, so derived - narrowing here would silently drop emitted fields. */
+    model?: PromptMeta['model'];
+    tokenUsage?: PromptMeta['tokenUsage'];
+    /** Projected by the mapper: the full groups carry raw prompt text this export must not ship. */
+    performance?: { totalResponseTime?: number };
+    context?: { contextWindowUsage?: NonNullable<PromptMeta['context']>['contextWindowUsage'] };
   };
 
   // Status and interaction
@@ -90,35 +101,39 @@ export interface ExportedKnowledgeFile {
   uploadedAt: string; // ISO timestamp
   content?: string; // Base64 encoded content for small files
   contentUrl?: string; // Reference URL for large files
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ExportedArtifact {
   id: string;
   name: string;
   type: string;
-  content: string;
+  /** Optional: the artifact body lives in a separate collection and is not joined by this export. */
+  content?: string;
   createdAt: string; // ISO timestamp
   updatedAt: string; // ISO timestamp
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ExportedTool {
   id: string;
   name: string;
   description?: string;
-  configuration: Record<string, any>;
+  /** Optional: the tool entity has no `configuration` field; `llmParams` is the nearest thing
+   * and is deliberately not exported. */
+  configuration?: Record<string, unknown>;
   createdAt: string; // ISO timestamp
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ExportedAgent {
   id: string;
   name: string;
   description?: string;
-  configuration: Record<string, any>;
+  /** Optional: the agent entity has no `configuration` field to source this from. */
+  configuration?: Record<string, unknown>;
   createdAt: string; // ISO timestamp
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 // Import configuration options
@@ -204,7 +219,7 @@ export class NotebookExportError extends Error {
   constructor(
     message: string,
     public code: string,
-    public details?: any
+    public details?: unknown
   ) {
     super(message);
     this.name = 'NotebookExportError';
@@ -215,9 +230,28 @@ export class NotebookImportError extends Error {
   constructor(
     message: string,
     public code: string,
-    public details?: any
+    public details?: unknown
   ) {
     super(message);
     this.name = 'NotebookImportError';
   }
 }
+
+type Expect<T extends true> = T;
+
+/**
+ * Compile-time guard: these interfaces are re-exported from the package entry point, so re-loosening
+ * one to `any` becomes a consumer's looseness. One row per type, so a failure names the regression.
+ * Lives in src, not a test: tsconfig excludes *.test.ts, so only `turbo:typecheck` enforces it.
+ * Same kind of guard, same placement reason, as common's modelCatalog.ts.
+ */
+export type NotebookExportTypesStayNarrowed = [
+  Expect<0 extends 1 & NonNullable<ExportedKnowledgeFile['metadata']>[string] ? false : true>,
+  Expect<0 extends 1 & NonNullable<ExportedArtifact['metadata']>[string] ? false : true>,
+  Expect<0 extends 1 & NonNullable<ExportedTool['metadata']>[string] ? false : true>,
+  Expect<0 extends 1 & NonNullable<ExportedAgent['metadata']>[string] ? false : true>,
+  Expect<0 extends 1 & NonNullable<ExportedTool['configuration']>[string] ? false : true>,
+  Expect<0 extends 1 & NonNullable<ExportedAgent['configuration']>[string] ? false : true>,
+  Expect<0 extends 1 & NotebookExportError['details'] ? false : true>,
+  Expect<0 extends 1 & NotebookImportError['details'] ? false : true>,
+];

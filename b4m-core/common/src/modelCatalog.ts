@@ -10,6 +10,21 @@ import type { ModelRecord } from './types/entities/ModelCatalogTypes';
 export const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
 
 /**
+ * Input headroom the chat path holds back on top of a request's reserved output.
+ * safeInputWindow (ChatCompletionProcess) subtracts it, so a text entry whose output
+ * reserve leaves less than this has no room for a prompt at all.
+ */
+export const CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS = 1000;
+
+/**
+ * Fallback context window for a media row whose catalog value is not usable (a discovery feed's
+ * literal 0, meaning "not applicable" rather than a real budget - see isMediaModelType). Shared by
+ * effectiveContextWindow (@bike4mind/utils, server) and useTokenLimits (apps/client, browser) so
+ * the two do not drift onto different placeholder numbers for the same "unknown" case.
+ */
+export const DEFAULT_UNKNOWN_CONTEXT_WINDOW = 200000;
+
+/**
  * The model types this build's ModelInfo consumers narrow on. ModelRecord.type is
  * wider (embedding / tts / realtime-voice), so the read path drops and counts any
  * record outside this set: an old build must degrade to "I do not see the new video
@@ -34,6 +49,14 @@ export type RenderableModelRecord = Omit<ModelRecord, 'type'> & { type: ModelInf
 
 export const isRenderableModelType = (type: string): type is ModelInfoType =>
   (MODEL_INFO_TYPES as readonly string[]).includes(type);
+
+/**
+ * Whether a ModelInfo type returns media (image/video) rather than tokens. Shared by
+ * safeInputWindow/effectiveContextWindow (@bike4mind/utils, server) and useTokenLimits
+ * (apps/client, browser) so "what counts as media" cannot drift between the two halves of the
+ * same guard - both need it, and common is the one package already safe to import from either.
+ */
+export const isMediaModelType = (type: ModelInfo['type']): boolean => type === 'image' || type === 'video';
 
 /**
  * Compile-time guard (T1): toModelInfo must turn a record carrying only the

@@ -48,19 +48,13 @@ import {
 } from '@mui/icons-material';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
-import { type BaseArtifact } from '@bike4mind/common';
+import { type ArtifactWithContent } from './types';
 import { useUser } from '@client/app/contexts/UserContext';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
 
 // Types
-interface ArtifactWithContent extends BaseArtifact {
-  content?: string;
-  contentSize: number;
-  contentHash: string;
-}
-
 interface ArtifactListResponse {
   artifacts: ArtifactWithContent[];
   pagination: {
@@ -113,6 +107,42 @@ const ARTIFACT_COLORS = {
   recharts: 'info',
 } as const;
 
+/**
+ * Both Share and Edit need the artifact body, which lives in a separate content collection - only
+ * the :id GET joins it (artifactService/get.ts), so list artifacts never carry `content`. Returns
+ * null having already toasted a reason, so callers just bail.
+ */
+async function hydrateContentOrToast(
+  artifact: ArtifactWithContent,
+  action: 'publish' | 'edit'
+): Promise<string | null> {
+  // Checked before the content short-circuit so it holds on every path: an empty id misses the
+  // lookup and would fetch the list endpoint by accident, and publish additionally persists it as
+  // source.artifactId (see buildArtifactPublishWiring), corrupting the linkage.
+  if (!artifact.id) {
+    toast.error(`This artifact has no stable id to ${action}`);
+    return null;
+  }
+  if (artifact.content) return artifact.content;
+  try {
+    const { data } = await api.get<{ content?: { content?: string } }>(
+      `/api/artifacts/${encodeURIComponent(artifact.id)}?includeContent=true`
+    );
+    const content = data.content?.content ?? '';
+    if (!content) {
+      toast.error(`This artifact has no content to ${action}`);
+      return null;
+    }
+    return content;
+  } catch (err) {
+    // A transport/auth failure is not the same as "empty content" - keep the two distinct so a
+    // transient error doesn't send anyone chasing a data problem.
+    console.error(`Failed to load artifact content for ${action}:`, err);
+    toast.error('Could not load artifact content, please try again');
+    return null;
+  }
+}
+
 interface ArtifactGalleryProps {
   projectId?: string;
   sessionId?: string;
@@ -141,8 +171,10 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
   // rejected action.
   const teamOrg = activeOrg && String(activeOrg.id) === String(currentUser?.organizationId) ? activeOrg : null;
   const { publishAndShare, modal: publishShareModal } = usePublishShare();
-  // Guards against re-entrant Share clicks racing two publishes onto the single dialog.
+  // Guard re-entrant clicks racing two hydrations onto the single dialog/editor slot. Refs, not
+  // state: the check must be synchronous and must not re-render.
   const publishingRef = useRef(false);
+  const editingRef = useRef(false);
   const handlePublishArtifact = useCallback(
     async (artifact: ArtifactWithContent) => {
       if (!currentUser?.id) {
@@ -151,48 +183,17 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
       }
       // The dialog detects a prior publication of this artifact (via resolveExisting) and
       // offers "update existing" (a new version) vs "publish as new". Route through
-      // buildArtifactPublishWiring so the lookup and the publish share one stable id. Guard an
-      // empty id: it both misses the lookup AND gets written as source.artifactId, corrupting
-      // the linkage - mirrors the KnowledgeViewer publish path.
-      const artifactId = artifact.id;
-      if (!artifactId) {
-        toast.error('This artifact has no stable id to publish');
-        return;
-      }
-      // Ignore re-entrant clicks while a hydration fetch is already in flight: there is a
-      // single share dialog, so two racing publishes would let the last-resolved one win it.
-      // A ref (not state) keeps the guard synchronous and free of re-render churn.
+      // buildArtifactPublishWiring so the lookup and the publish share one stable id.
       if (publishingRef.current) return;
       publishingRef.current = true;
       try {
-        // The gallery renders from the list feed (/api/artifacts), which omits `content` to stay
-        // lean. publishArtifactBundle throws on empty content before any network call, so hydrate
-        // the single artifact (the :id GET includes content by default; the string lives at
-        // response.content.content) before wiring up the publish dialog.
-        let content = artifact.content ?? '';
-        if (!content) {
-          try {
-            const { data } = await api.get<{ content?: { content?: string } }>(
-              `/api/artifacts/${encodeURIComponent(artifactId)}?includeContent=true`
-            );
-            content = data.content?.content ?? '';
-          } catch (err) {
-            // A transport/auth failure is not the same as "empty content" - keep the two
-            // distinct so a transient error doesn't send anyone chasing a data problem.
-            console.error('Failed to load artifact content for publish:', err);
-            toast.error('Could not load artifact content, please try again');
-            return;
-          }
-        }
-        if (!content) {
-          toast.error('This artifact has no content to publish');
-          return;
-        }
+        const content = await hydrateContentOrToast(artifact, 'publish');
+        if (!content) return;
         publishAndShare({
           title: artifact.title || 'Shared artifact',
           ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
           ...buildArtifactPublishWiring({
-            artifactId,
+            artifactId: artifact.id,
             type: artifact.type,
             content,
             title: artifact.title,
@@ -207,6 +208,25 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
       }
     },
     [currentUser, teamOrg, publishAndShare]
+  );
+
+  // Edit needs the same hydration as Share: the editor's Save is gated on a non-empty content, so
+  // handing it a list artifact (no `content`) opened an editor that could never save.
+  const handleEditArtifact = useCallback(
+    async (artifact: ArtifactWithContent) => {
+      // Deduplicates double-clicks inside the fetch window. Correctness of the save target rests
+      // on the host keying the editor by artifact id, not on this guard.
+      if (editingRef.current) return;
+      editingRef.current = true;
+      try {
+        const content = await hydrateContentOrToast(artifact, 'edit');
+        if (!content) return;
+        onArtifactEdit?.({ ...artifact, content });
+      } finally {
+        editingRef.current = false;
+      }
+    },
+    [onArtifactEdit]
   );
 
   // State
@@ -441,9 +461,12 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
               </MenuButton>
               <Menu>
                 <MenuItem
+                  data-testid="artifact-edit"
                   onClick={e => {
                     e.stopPropagation();
-                    onArtifactEdit?.(artifact);
+                    // Fire-and-forget: the handler hydrates content, then opens the editor or
+                    // toasts. `void` marks the intent, matching the Share item below.
+                    void handleEditArtifact(artifact);
                   }}
                 >
                   <EditIcon sx={{ mr: 1 }} />

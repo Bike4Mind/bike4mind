@@ -134,8 +134,8 @@ import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage
 import { emitMetric } from '@server/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
-import { publishMementoCompletion } from '@server/utils/publishMementoCompletion';
-import { getFirstIterationMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
+import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveAndBuildMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
 import { getFirstIterationSkillsPreamble } from '@server/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { loadAgentMcpTools, type AgentMcpTools } from '@server/utils/loadAgentMcpTools';
@@ -1879,10 +1879,10 @@ async function processExecution(
       // single materialized string that gets persisted into the checkpoint.
       // Continuation Lambdas, gate-resumes, and DAG-resumes inherit it via
       // the checkpoint replay - same handoff contract as the file preamble.
-      // The helper itself guards on `enableMementos` + `parentExecutionId`,
+      // The helper guards on `parentExecutionId` and the resolved `MementoGates`,
       // matching `publishMementoCompletion` on the write side.
       if (firstIterationQuery !== undefined) {
-        const { preamble: mementoPreamble, mementoIds } = await getFirstIterationMementosPreamble(
+        const { preamble: mementoPreamble, mementoIds } = await resolveAndBuildMementosPreamble(
           execution,
           {
             db: {
@@ -2293,13 +2293,13 @@ async function processExecution(
       allSideEffects
     );
 
-    // Memento parity with chat_completion. Fires only when the user
-    // (or admin default) opted into mementos for this run; skipped for
-    // subagent / DAG children via the `parentExecutionId` guard inside the
-    // helper. Reads `execution` (loaded at the top of this function) so
-    // continuation Lambdas see the persisted flag the WS handler stamped at
-    // dispatch.
-    await publishMementoCompletion(execution, logger);
+    // Memento parity with chat_completion. Resolve the same gates the read side
+    // resolves (one authority, `resolveExecutionMementoGates`) and hand them to the
+    // publisher; it fires only when a gate is live and skips subagent / DAG children
+    // via the `parentExecutionId`/`spawnedByExecutionId` guard inside the helper. Reads `execution` (loaded
+    // at the top of this function) so continuation Lambdas see the persisted tri-state
+    // flag the WS handler stamped at dispatch.
+    await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
 
     logger.info('[Complete] Agent execution finished', {
       iterations: finalCheckpoint.iteration,

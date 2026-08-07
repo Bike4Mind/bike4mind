@@ -55,7 +55,10 @@ const deps = () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- storage is unused on the raw-content path
   storage: {} as any,
   db: {
-    fabfilechunks: { findByFabFileId: vi.fn().mockResolvedValue([]) },
+    fabfilechunks: {
+      findVectorsByFabFileIds: vi.fn().mockResolvedValue([]),
+      countByFabFileId: vi.fn().mockResolvedValue(0),
+    },
     fabfiles: { update: vi.fn().mockResolvedValue(undefined) },
     caches: {},
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape

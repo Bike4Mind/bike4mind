@@ -17,6 +17,14 @@ interface CleanupDeletedDataLakeAdapters {
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
   };
   retrievalIndex?: RetrievalIndexPort;
+  /**
+   * Crypto-shred the lake's memory profile (#1440): destroy the `{ kind: 'lake' }` principal's DEK and
+   * mark its ledger shredded. Injected because the ledger/keyring live in the app layer. Optional so a
+   * host that never wired lake memory is unaffected; when present it runs BEFORE the file sweep, and a
+   * failure aborts (retries) rather than orphaning an unreadable-but-undeletable ledger + DEK behind the
+   * deleted lake.
+   */
+  shredMemory?: (args: { datalakeTag: string; ownerUserId: string }) => Promise<void>;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
   /** Bounds peak concurrency of the per-file/per-batch deletes (background consumer sets this). */
   chunkSize?: number;
@@ -46,7 +54,7 @@ async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<un
 export const cleanupDeletedDataLake = async (
   actor: { userId: string; isAdmin: boolean },
   dataLakeId: string,
-  { db, retrievalIndex, logger, chunkSize = DEFAULT_CLEANUP_CHUNK_SIZE }: CleanupDeletedDataLakeAdapters
+  { db, retrievalIndex, shredMemory, logger, chunkSize = DEFAULT_CLEANUP_CHUNK_SIZE }: CleanupDeletedDataLakeAdapters
 ): Promise<void> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -62,10 +70,22 @@ export const cleanupDeletedDataLake = async (
 
   await warnOnPrefixCollision(db, existing, logger);
   const scope = lakeMembershipScope(existing);
+  // Deliberately unbounded, unlike restore's stamp-keyed reversal: purge destroys the lake and
+  // everything the membership predicate still names, a member the creator deleted on their own
+  // included. The stamp bound only stops restore from reviving what it never deleted; it is not a
+  // claim that such a file outlives its lake.
   const fileIds = await db.fabFiles.findIdsByDataLakeTag(scope);
 
   // 1. Retrieval index first, and strict: a throw here must cost no progress (see ports.ts).
   await strictIndexRemove(retrievalIndex, { scope, fabFileIds: fileIds });
+
+  // 1b. Crypto-shred the lake's memory profile (#1440) BEFORE deleting the lake record - otherwise the
+  // `{ kind: 'lake' }` ledger and its DEK would survive the delete, unreadable but also undeletable
+  // (the memory API 400s on `lake`), leaving facts extracted from a deleted lake alive forever. A throw
+  // here aborts the sweep so a DLQ retry re-runs it (shred is idempotent: destroyDek then markShredded).
+  if (shredMemory && existing.datalakeTag && existing.createdByUserId) {
+    await shredMemory({ datalakeTag: existing.datalakeTag, ownerUserId: existing.createdByUserId });
+  }
 
   // 2. Delete chunks for every member file (covers soft-deleted files too). Chunked so a large
   // lake doesn't fan out unbounded (Lambda timeout/memory); each delete is a no-op on

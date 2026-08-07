@@ -29,7 +29,7 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 const renderList = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
 
 const makeTag = (id: string, name: string): IFileTag =>
-  ({ id, name, userId: 'u1', type: TagType.FILE, fileCount: 0, color: '#FF0000' }) as IFileTag;
+  ({ id, name, userId: 'u1', type: TagType.FILE, color: '#FF0000' }) as IFileTag;
 
 const makeFile = (id: string, tagNames: string[]): IFabFileDocument =>
   ({

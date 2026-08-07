@@ -14,6 +14,8 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getFilesStorage } from '@server/utils/storage';
 import { moderateUploadedFile } from '@server/s3/moderateUploadedFile';
+import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
+import { finalizeBatchIfComplete, isBatchComplete } from '@server/queueHandlers/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
 import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
@@ -194,6 +196,9 @@ export const func = withContext(async (event, context, logger) => {
       }
     }
 
+    // Now that the bytes are in storage, the lakes this file's meta-tags name can count it.
+    await recomputeStatsForUploadedFile(metadata, { logger });
+
     const enableKnowledgeAutoChunk = await adminSettingsRepository.getSettingsValue('enableAutoChunk');
 
     // Audio (generated TTS / sound effects) is never chunked/vectorized - it is
@@ -212,6 +217,35 @@ export const func = withContext(async (event, context, logger) => {
         logger.info(`Sent newly-uploaded FabFile to chunkQueue: ${messageId}`);
       } catch (error) {
         logger.error(`Error sending newly-uploaded FabFile to chunkQueue: ${error}`);
+      }
+    } else if (metadata.batchId) {
+      // A skipped file never reaches the chunk/vectorize handlers, so it would never
+      // satisfy the batch completion threshold on its own - the batch would hang until
+      // the stuck-batch reconciler forces it terminal. Count it here instead, mirroring
+      // the zero-chunk accounting in fabFileChunk.ts.
+      try {
+        const claimed = await dataLakeBatchRepository.claimFileStatus(
+          metadata.batchId,
+          metadata.id,
+          ['uploaded', 'pending'],
+          'skipped'
+        );
+        if (claimed) {
+          const batch = await dataLakeBatchRepository.incrementCounter(metadata.batchId, 'skippedFiles');
+          await finalizeBatchIfComplete(batch, logger);
+          await sendToClient(user.id, wsEndpoint, {
+            action: 'data_lake_batch_progress',
+            batchId: metadata.batchId,
+            skippedFiles: batch?.skippedFiles ?? 1,
+            status: isBatchComplete(batch)
+              ? batch!.failedFiles > 0
+                ? 'completed_with_errors'
+                : 'completed'
+              : undefined,
+          });
+        }
+      } catch (error) {
+        logger.error(`Error finalizing skipped file in batch: ${error}`);
       }
     }
 

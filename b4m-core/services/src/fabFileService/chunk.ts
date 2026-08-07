@@ -57,6 +57,11 @@ export const chunkFabfile = async (
   fabFile.vectorizedChunkCount = 0;
 
   fabFile.embeddingModel = embeddingModel;
+  // The old chunks (and their embeddingModel stamps) are about to be deleted below - a stale
+  // readiness timestamp would make the Atlas cutover read path treat this file as ANN-ready
+  // before the new chunks are re-stamped, silently returning zero results (see
+  // vectorSearchEligibility.ts).
+  fabFile.chunkEmbeddingModelStampedAt = null;
 
   await db.fabFiles.update(fabFile);
 

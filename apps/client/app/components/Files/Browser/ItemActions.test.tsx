@@ -4,14 +4,14 @@ import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { KnowledgeType, SupportedFabFileMimeTypes, TagType } from '@bike4mind/common';
-import type { IFabFileDocument, IFileTag } from '@bike4mind/common';
+import type { IFabFileDocument, IFileTagWithFileCount } from '@bike4mind/common';
 
 /**
  * Which tags the Manage Tags dialog puts in each column. Not cosmetic: fabFileService/toggleTags
  * picks add-vs-remove by folding the name, so a tag offered as "available" whose name folds to one
  * the file already stores un-applies that tag when you click Add.
  */
-const mockTags = vi.fn<() => IFileTag[]>(() => []);
+const mockTags = vi.fn<() => IFileTagWithFileCount[]>(() => []);
 
 vi.mock('@client/app/hooks/data/tag', () => ({
   useGetFileTags: () => ({ data: mockTags() }),
@@ -33,8 +33,8 @@ import { FileTagsModal } from './ItemActions';
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderModal = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
 
-const makeTag = (id: string, name: string): IFileTag =>
-  ({ id, name, userId: 'u1', type: TagType.FILE, fileCount: 0, color: '#FF0000' }) as IFileTag;
+const makeTag = (id: string, name: string): IFileTagWithFileCount =>
+  ({ id, name, userId: 'u1', type: TagType.FILE, fileCount: 0, color: '#FF0000' }) as IFileTagWithFileCount;
 
 const makeFile = (tagNames: string[]): IFabFileDocument =>
   ({

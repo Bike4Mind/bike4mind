@@ -127,6 +127,12 @@ const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
   files_scanned: scan.filesScanned,
   chunks_scanned: scan.chunksScanned,
   chunks_skipped_dimension_mismatch: scan.chunksSkippedDimensionMismatch,
+  // Files served by Atlas $vectorSearch instead of the brute-force scan - additive to
+  // files_scanned, not a replacement (see SemanticSearchScanAccounting.annFilesQueried). Without
+  // these a caller computing coverage from files_scanned alone would undercount an ANN-served file
+  // as unsearched.
+  ann_files_queried: scan.annFilesQueried,
+  ann_hits: scan.annHits,
   budgets: { max_files: scan.budgets.maxFiles, max_chunks: scan.budgets.maxChunks },
 });
 
@@ -295,6 +301,7 @@ const handler = baseApi()
           dataLakeTagPrefixes,
           scopedTagPrefixes, // dynamic-lake prefixes - matched only within owner/org access
           budgets: await dataLakeService.resolveSearchBudgets({ adminSettings: adminSettingsRepository }, req.logger),
+          vectorSearchEnabled: (await adminSettingsRepository.getSettingsValue('EnableDataLakeVectorSearch')) ?? false,
           logger: req.logger,
         },
         { db: { fabfiles: fabFileRepository, fabfilechunks: fabFileChunkRepository } }

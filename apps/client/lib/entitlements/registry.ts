@@ -134,25 +134,18 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // The `opti` tag confers local OptiHashi access via `optihashi:pro` (solver
   // race, problem/run CRUD, UI/routing).
   { tag: 'opti', entitlements: ['optihashi:pro'] },
-  // Remote compute is a SEPARATE, stricter tier from local OptiHashi: the
-  // `opti-compute` tag bridges to `optihashi:compute`. Holding `optihashi:pro`
-  // alone will NOT confer remote compute once the server gate checks
-  // `optihashi:compute` (see M2) - until then this row is inert (no gate reads
-  // the key yet). Granted-only for now (no Stripe price yet); deliberately absent
-  // from DOMAIN_GRANT_ROWS / INTERNAL_STAFF_ENTITLEMENTS / SIGNUP_CREDIT_ROWS -
-  // internal users reach it via admin/developer bypass, and no signup credits
-  // attach to the compute tier.
-  { tag: 'opti-compute', entitlements: ['optihashi:compute'] },
-  // Real hardware compute is the STRICTEST tier: the `opti-hardware` tag bridges to
-  // `optihashi:hardware`. Like `opti-compute` above, no gate in THIS repo reads the key yet -
-  // the hardware submit gate lives in the premium overlay - so this row is inert host-side
-  // until that overlay is composed in; it exists so the key is grantable/known here.
-  // Deliberately its own tier, NOT implied by `optihashi:compute` (classical/simulator) or
-  // `optihashi:pro` (local): a compute-tier user must not silently reach real external-provider
-  // (real-money) spend. Granted-only (no Stripe price yet) and intentionally absent from
-  // DOMAIN_GRANT_ROWS / INTERNAL_STAFF_ENTITLEMENTS / SIGNUP_CREDIT_ROWS - admins reach it via
-  // bypass, and it is granted per-account rather than by domain/signup.
-  { tag: 'opti-hardware', entitlements: ['optihashi:hardware'] },
+  // The `optihashi:compute` / `optihashi:hardware` execution tiers used to be
+  // granted here via the `opti-compute` / `opti-hardware` tags. Retired (#1237):
+  // those tiers now resolve from org group membership (the overlay's group->
+  // capability map, #1178), so `optihashi:pro` is the single product-level grant
+  // and group membership decides what you reach within it. The tag rows were
+  // already inert in open core (no gate here ever read the keys).
+  // INTENDED CONSEQUENCE (deliberate, not a regression): removing the rows also
+  // drops `opti-compute` / `opti-hardware` from `allKnownEntitlementKeys()`, so
+  // `UserPermissions.tsx` no longer classifies them as managed - a leftover
+  // `opti-compute` tag now renders as a removable custom-tag chip in the admin
+  // Users panel (with no Product Access control, because the tier is retired).
+  // That is how an operator strips the inert leftover; see UserPermissions.test.tsx.
   // [DELETION-FOOTPRINT] Overwatch comp grant: the `overwatch` tag bridges to
   // `overwatch:pro`. Admin-only gate was a stopgap before the entitlement model
   // existed (Open Core M0). No Stripe price yet; granted-only initially. Removed

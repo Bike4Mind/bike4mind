@@ -17,9 +17,10 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
  * viewer-independent `fileCount`; an actor-anchored predicate would make the stored count vary
  * by who triggered the recompute.
  *
- * The prefix arm needs an ownership conjunct at all because `fileTagPrefix` is user-chosen with no
- * uniqueness constraint (see DataLakeModel). Without it, minting a lake with prefix `acme:`
- * would permanently delete every file in the database tagged `acme:*`.
+ * The prefix arm needs an ownership conjunct at all because `fileTagPrefix` is user-chosen and only
+ * unique per creator (see DataLakeModel) - a lake in a different org or by a different creator can
+ * still register the same prefix. Without the conjunct, minting a lake with prefix `acme:` would
+ * permanently delete every file in the database tagged `acme:*`.
  *
  * That conjunct is POSITIVE ownership - `userId` equals the creator - and deliberately NOT
  * "anything the creator can access". A read share must not make someone else's file a member:
