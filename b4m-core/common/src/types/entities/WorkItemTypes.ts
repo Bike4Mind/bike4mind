@@ -8,7 +8,9 @@ import { IBaseRepository } from './BaseTypes';
  *
  * Items form a dependency DAG - `dependencies` holds the ids of items that
  * must close before this one can be started. Cycles are rejected at the API
- * layer (see `detectDependencyCycle`), otherwise nothing would ever be ready.
+ * layer on a best-effort basis (see `detectDependencyCycle`): the check reads
+ * the graph and the write happens separately, so two concurrent writes can
+ * still commit a cycle.
  */
 export type WorkItemStatus = 'open' | 'in_progress' | 'blocked' | 'closed';
 
@@ -17,7 +19,11 @@ export const WORK_ITEM_STATUSES: readonly WorkItemStatus[] = ['open', 'in_progre
 export interface IWorkItem {
   id: string;
   userId: string;
-  /** Set when the item belongs to an organization rather than to the user alone. */
+  /**
+   * Scaffolding for a future org-sharing feature. It can be set and filtered
+   * on, but it grants nothing: every read path is hard-scoped to `userId`, so
+   * an org-tagged item is still visible only to its owner.
+   */
   organizationId?: string;
   title: string;
   description?: string;
@@ -35,13 +41,13 @@ export interface IWorkItem {
 }
 
 /**
- * Mutable subset of a WorkItem. `closedAt: null` clears the timestamp (the item
- * was reopened) - the repository translates it into a `$unset`, which a plain
- * `undefined` in a `$set` could not express.
+ * Mutable subset of a WorkItem. A `null` clears the field - the repository
+ * translates it into a `$unset`, which a plain `undefined` in a `$set` could
+ * not express. That is how `closedAt` is cleared when an item reopens, and how
+ * `description` is cleared.
  */
-export type WorkItemPatch = Partial<
-  Pick<IWorkItem, 'title' | 'description' | 'status' | 'dependencies' | 'organizationId'>
-> & {
+export type WorkItemPatch = Partial<Pick<IWorkItem, 'title' | 'status' | 'dependencies' | 'organizationId'>> & {
+  description?: string | null;
   closedAt?: Date | null;
 };
 
@@ -68,12 +74,24 @@ export interface IWorkItemGraph {
   nodes: IWorkItemGraphNode[];
   edges: IWorkItemGraphEdge[];
   /**
-   * Ids participating in a dependency cycle. Always empty for graphs built
-   * only through the API (which rejects cycles), but reported so a graph made
-   * cyclic by older data or a direct DB write is visible rather than silently
-   * starving `ready`.
+   * Ids participating in a dependency cycle. The API rejects cycles on a
+   * best-effort basis only (the check and the write are not atomic), and a
+   * direct DB write bypasses it entirely, so this is reported rather than
+   * assumed empty - a cycle silently starves `ready`.
    */
   cycles: string[];
+  /**
+   * The user has more live items than the whole-graph read window, so edges
+   * and cycles are computed from a prefix. Answers derived from it can be
+   * wrong: a blocker outside the window reads as satisfied.
+   */
+  truncated: boolean;
+}
+
+/** `truncated` carries the same caveat as on IWorkItemGraph. */
+export interface IWorkItemReadyResult {
+  data: IWorkItem[];
+  truncated: boolean;
 }
 
 export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
@@ -97,7 +115,7 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
    * exists. `in_progress` (already picked up) and `blocked` (held back
    * deliberately) are excluded, so this answers "what can I start now".
    */
-  listReadyForUser(userId: string): Promise<IWorkItem[]>;
+  listReadyForUser(userId: string): Promise<IWorkItemReadyResult>;
 
   buildGraphForUser(userId: string): Promise<IWorkItemGraph>;
 

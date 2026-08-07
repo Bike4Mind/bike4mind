@@ -897,8 +897,12 @@ function CliApp() {
       // Create get_file_structure tool for AST-based code overview
       const getFileStructureTool = createGetFileStructureTool();
 
-      // Persistent work tracking - outlives the session, unlike write_todos
-      const workItemTools = createWorkItemTools(new WorkItemsClient(apiClient));
+      // Persistent work tracking - outlives the session, unlike write_todos.
+      // Off by default: six tool schemas in every completion is a real cost for
+      // users who never touch the persistent store.
+      const workItemTools = config.preferences.enableWorkItemTools
+        ? createWorkItemTools(new WorkItemsClient(apiClient))
+        : [];
 
       // Combine B4M, MCP, and CLI-specific tools. Assembled before the feature
       // registry so their names can be reserved against plugin tool-name

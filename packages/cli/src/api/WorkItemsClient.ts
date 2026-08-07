@@ -1,4 +1,4 @@
-import type { IWorkItem, IWorkItemGraph, WorkItemStatus } from '@bike4mind/common';
+import type { IWorkItem, IWorkItemGraph, IWorkItemReadyResult, WorkItemStatus } from '@bike4mind/common';
 import type { ApiClient } from '../auth/ApiClient.js';
 
 /**
@@ -38,7 +38,8 @@ export interface CreateWorkItemInput {
 
 export interface UpdateWorkItemInput {
   title?: string;
-  description?: string;
+  /** `''` or `null` clears the description; omitting it leaves it untouched. */
+  description?: string | null;
   status?: WorkItemStatus;
   dependencies?: string[];
   organizationId?: string;
@@ -88,10 +89,14 @@ export class WorkItemsClient {
     await this.apiClient.delete(`/api/work-items/${encodeURIComponent(id)}`);
   }
 
-  /** Open items whose dependencies are all closed. */
-  async ready(): Promise<IWorkItem[]> {
-    const response = await this.apiClient.get<{ data: IWorkItem[] }>('/api/work-items/ready');
-    return response?.data ?? [];
+  /**
+   * Open items whose dependencies are all closed. `truncated` means the backlog
+   * exceeded the server's whole-graph read window, so the answer is computed
+   * from a prefix and can be wrong (see IWorkItemReadyResult).
+   */
+  async ready(): Promise<IWorkItemReadyResult> {
+    const response = await this.apiClient.get<IWorkItemReadyResult>('/api/work-items/ready');
+    return { data: response?.data ?? [], truncated: response?.truncated ?? false };
   }
 
   async graph(): Promise<IWorkItemGraph> {

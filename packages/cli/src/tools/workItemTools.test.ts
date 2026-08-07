@@ -200,7 +200,9 @@ describe('work_item_update', () => {
     await expect(run('work_item_update', { status: 'closed' })).rejects.toThrow(/id must be a non-empty string/);
   });
 
-  it('allows clearing the description with an empty string', async () => {
+  // Only asserts the call shape. That '' actually clears the stored description
+  // is covered end to end by the route and repository tests.
+  it('forwards an empty description as the clear signal rather than dropping it', async () => {
     client.update.mockResolvedValue(makeItem());
 
     await run('work_item_update', { id: 'a1', description: '' });
@@ -226,15 +228,27 @@ describe('work_item_close', () => {
 
 describe('work_item_ready', () => {
   it('lists ready items', async () => {
-    client.ready.mockResolvedValue([makeItem()]);
+    client.ready.mockResolvedValue({ data: [makeItem()], truncated: false });
 
-    expect(await run('work_item_ready')).toContain('[ ] a1 Ship the thing');
+    const output = await run('work_item_ready');
+
+    expect(output).toContain('[ ] a1 Ship the thing');
+    expect(output).not.toContain('WARNING');
   });
 
   it('says so when nothing is actionable', async () => {
-    client.ready.mockResolvedValue([]);
+    client.ready.mockResolvedValue({ data: [], truncated: false });
 
     expect(await run('work_item_ready')).toBe('No work items are ready to start.');
+  });
+
+  it('warns that a truncated answer may list an item whose blocker is still open', async () => {
+    client.ready.mockResolvedValue({ data: [makeItem()], truncated: true });
+
+    const output = await run('work_item_ready');
+
+    expect(output).toContain('[ ] a1 Ship the thing');
+    expect(output).toContain('computed from the oldest items only');
   });
 });
 
@@ -247,6 +261,7 @@ describe('work_item_graph', () => {
       ],
       edges: [{ from: 'a1', to: 'b2' }],
       cycles: [],
+      truncated: false,
     });
 
     const output = await run('work_item_graph');
@@ -267,14 +282,26 @@ describe('work_item_graph', () => {
         { from: 'b2', to: 'a1' },
       ],
       cycles: ['a1', 'b2'],
+      truncated: false,
     });
 
     expect(await run('work_item_graph')).toContain('WARNING: dependency cycle involving: a1, b2');
   });
 
   it('handles an empty graph', async () => {
-    client.graph.mockResolvedValue({ nodes: [], edges: [], cycles: [] });
+    client.graph.mockResolvedValue({ nodes: [], edges: [], cycles: [], truncated: false });
 
     expect(await run('work_item_graph')).toBe('No work items yet.');
+  });
+
+  it('warns when the graph was built from a prefix of the backlog', async () => {
+    client.graph.mockResolvedValue({
+      nodes: [{ id: 'a1', title: 'First', status: 'open' }],
+      edges: [],
+      cycles: [],
+      truncated: true,
+    });
+
+    expect(await run('work_item_graph')).toContain('computed from the oldest items only');
   });
 });

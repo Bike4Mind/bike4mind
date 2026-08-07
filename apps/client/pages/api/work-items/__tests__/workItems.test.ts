@@ -126,17 +126,18 @@ describe('GET /api/work-items', () => {
     });
   });
 
-  it('checks org membership before filtering by organization', async () => {
+  // The filter can only narrow a result set already scoped to the caller's own
+  // userId, so gating it would 404 a plain org member without protecting anything.
+  it('filters by organization without an org-access check', async () => {
     await call('collection', 'get', { query: { organizationId: 'org1' } }).result;
 
-    expect(verifyOrgAccess).toHaveBeenCalledWith({ id: 'u1', isAdmin: false }, 'org1');
-  });
-
-  it('does not query when the org check fails', async () => {
-    verifyOrgAccess.mockRejectedValue(new Error('forbidden'));
-
-    await expect(call('collection', 'get', { query: { organizationId: 'org1' } }).result).rejects.toThrow('forbidden');
-    expect(repo.listForUser).not.toHaveBeenCalled();
+    expect(verifyOrgAccess).not.toHaveBeenCalled();
+    expect(repo.listForUser).toHaveBeenCalledWith(
+      'u1',
+      { organizationId: 'org1' },
+      expect.anything(),
+      expect.anything()
+    );
   });
 });
 
@@ -245,6 +246,32 @@ describe('PATCH /api/work-items/:id', () => {
     expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' });
   });
 
+  // '' and null are the clearing signal; the repository turns a null into $unset.
+  it('turns an empty description into the clearing value', async () => {
+    await call('item', 'patch', { query: { id: OID_A }, body: { description: '' } }).result;
+
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { description: null });
+  });
+
+  it('turns an explicit null description into the clearing value', async () => {
+    await call('item', 'patch', { query: { id: OID_A }, body: { description: null } }).result;
+
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { description: null });
+  });
+
+  it('leaves description alone when the field is absent', async () => {
+    await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
+
+    expect(repo.updateForUser).toHaveBeenCalledWith(OID_A, 'u1', { title: 'Renamed' });
+  });
+
+  it('rejects an empty status rather than silently ignoring it', async () => {
+    await expect(call('item', 'patch', { query: { id: OID_A }, body: { status: '' } }).result).rejects.toThrow(
+      /status must be one of/
+    );
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
   it('stamps closedAt when the item is closed', async () => {
     await call('item', 'patch', { query: { id: OID_A }, body: { status: 'closed' } }).result;
 
@@ -312,17 +339,31 @@ describe('DELETE /api/work-items/:id', () => {
 
 describe('GET /api/work-items/ready and /graph', () => {
   it('wraps ready items in a data envelope', async () => {
-    repo.listReadyForUser.mockResolvedValue([item()]);
+    repo.listReadyForUser.mockResolvedValue({ data: [item()], truncated: false });
 
     const { res, result } = call('ready', 'get', {});
     await result;
 
     expect(repo.listReadyForUser).toHaveBeenCalledWith('u1');
-    expect(res._getJSONData()).toMatchObject({ data: [{ id: OID_A }] });
+    expect(res._getJSONData()).toMatchObject({ data: [{ id: OID_A }], truncated: false });
+  });
+
+  it('passes the truncation flag through so a partial answer is labelled', async () => {
+    repo.listReadyForUser.mockResolvedValue({ data: [item()], truncated: true });
+
+    const { res, result } = call('ready', 'get', {});
+    await result;
+
+    expect(res._getJSONData()).toMatchObject({ truncated: true });
   });
 
   it('returns the graph for the caller', async () => {
-    const graph = { nodes: [{ id: OID_A, title: 'Ship it', status: 'open' }], edges: [], cycles: [] };
+    const graph = {
+      nodes: [{ id: OID_A, title: 'Ship it', status: 'open' }],
+      edges: [],
+      cycles: [],
+      truncated: false,
+    };
     repo.buildGraphForUser.mockResolvedValue(graph);
 
     const { res, result } = call('graph', 'get', {});

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { WorkItem, workItemRepository } from './WorkItemModel';
+import { MAX_GRAPH_ITEMS, WorkItem, workItemRepository } from './WorkItemModel';
 
 const USER = 'user-1';
 const OTHER_USER = 'user-2';
@@ -146,25 +146,26 @@ describe('WorkItemRepository', () => {
 
       const ready = await workItemRepository.listReadyForUser(USER);
 
-      expect(ready.map(i => i.title)).toEqual(['Standalone']);
+      expect(ready.data.map(i => i.title)).toEqual(['Standalone']);
+      expect(ready.truncated).toBe(false);
     });
 
     it('excludes an item whose dependency is still open, and includes it once closed', async () => {
       const blocker = await create('Blocker');
       await create('Dependent', { dependencies: [blocker.id] });
 
-      expect((await workItemRepository.listReadyForUser(USER)).map(i => i.title)).toEqual(['Blocker']);
+      expect((await workItemRepository.listReadyForUser(USER)).data.map(i => i.title)).toEqual(['Blocker']);
 
       await workItemRepository.updateForUser(blocker.id, USER, { status: 'closed' });
 
-      expect((await workItemRepository.listReadyForUser(USER)).map(i => i.title)).toEqual(['Dependent']);
+      expect((await workItemRepository.listReadyForUser(USER)).data.map(i => i.title)).toEqual(['Dependent']);
     });
 
     it('excludes in_progress and blocked items', async () => {
       await create('Underway', { status: 'in_progress' });
       await create('Held back', { status: 'blocked' });
 
-      expect(await workItemRepository.listReadyForUser(USER)).toEqual([]);
+      expect((await workItemRepository.listReadyForUser(USER)).data).toEqual([]);
     });
 
     it('treats a deleted dependency as satisfied rather than blocking forever', async () => {
@@ -172,7 +173,40 @@ describe('WorkItemRepository', () => {
       await create('Dependent', { dependencies: [blocker.id] });
       await workItemRepository.softDeleteForUser(blocker.id, USER);
 
-      expect((await workItemRepository.listReadyForUser(USER)).map(i => i.title)).toEqual(['Dependent']);
+      expect((await workItemRepository.listReadyForUser(USER)).data.map(i => i.title)).toEqual(['Dependent']);
+    });
+  });
+
+  describe('the whole-graph read window', () => {
+    // Fills the window exactly, so the reported answer is still complete but the
+    // caller has no way to know that - hence the flag rather than silence.
+    const fillWindow = async () =>
+      WorkItem.insertMany(
+        Array.from({ length: MAX_GRAPH_ITEMS }, (_, i) => ({
+          userId: USER,
+          title: `Item ${i}`,
+          status: 'open',
+          dependencies: [],
+        }))
+      );
+
+    it('does not flag a backlog that fits', async () => {
+      await create('Standalone');
+
+      expect((await workItemRepository.listReadyForUser(USER)).truncated).toBe(false);
+      expect((await workItemRepository.buildGraphForUser(USER)).truncated).toBe(false);
+    });
+
+    it('flags ready and graph once the backlog fills the window', async () => {
+      await fillWindow();
+
+      const ready = await workItemRepository.listReadyForUser(USER);
+      const graph = await workItemRepository.buildGraphForUser(USER);
+
+      expect(ready.truncated).toBe(true);
+      expect(ready.data).toHaveLength(MAX_GRAPH_ITEMS);
+      expect(graph.truncated).toBe(true);
+      expect(graph.nodes).toHaveLength(MAX_GRAPH_ITEMS);
     });
   });
 
@@ -252,6 +286,22 @@ describe('WorkItemRepository', () => {
 
       expect(updated?.status).toBe('open');
       expect(updated?.closedAt).toBeUndefined();
+    });
+
+    it('clears description via $unset when passed null', async () => {
+      const itemId = (await create('Documented', { description: 'the old detail' })).id;
+
+      const updated = await workItemRepository.updateForUser(itemId, USER, { description: null });
+
+      expect(updated?.description).toBeUndefined();
+    });
+
+    it('leaves description untouched when the field is omitted', async () => {
+      const itemId = (await create('Documented', { description: 'the old detail' })).id;
+
+      const updated = await workItemRepository.updateForUser(itemId, USER, { title: 'Renamed' });
+
+      expect(updated?.description).toBe('the old detail');
     });
 
     it("refuses to update another user's item", async () => {

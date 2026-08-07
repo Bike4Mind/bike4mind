@@ -4,6 +4,7 @@ import {
   IWorkItemFilters,
   IWorkItemGraph,
   IWorkItemGraphEdge,
+  IWorkItemReadyResult,
   IWorkItemRepository,
   WORK_ITEM_STATUSES,
   WorkItemPatch,
@@ -18,9 +19,11 @@ const ModelName = 'WorkItem';
  * Ceiling on the number of items pulled into memory for the whole-graph
  * operations (`ready`, `graph`). Both need every live item to resolve
  * dependencies, so they cannot be paginated; the cap keeps a runaway backlog
- * from blowing the Lambda's memory. Responses built from a truncated set stay
- * correct for the items they contain - a dependency outside the window reads as
- * "no longer exists", i.e. satisfied.
+ * from blowing the Lambda's memory. A dependency outside the window reads as
+ * "no longer exists", i.e. satisfied, so a truncated read can report an item
+ * ready while a live blocker is still open, and can miss a cycle routed through
+ * an out-of-window item. Truncation is therefore surfaced to the caller
+ * (`truncated`) rather than hidden.
  */
 export const MAX_GRAPH_ITEMS = 2000;
 
@@ -68,11 +71,11 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return results.map(doc => doc.toJSON());
   }
 
-  async listReadyForUser(userId: string): Promise<IWorkItem[]> {
-    const items = await this.loadAllForUser(userId);
+  async listReadyForUser(userId: string): Promise<IWorkItemReadyResult> {
+    const { items, truncated } = await this.loadAllForUser(userId);
     const statusById = new Map(items.map(item => [item.id, item.status]));
 
-    return items.filter(
+    const data = items.filter(
       item =>
         item.status === 'open' &&
         item.dependencies.every(depId => {
@@ -82,10 +85,12 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
           return depStatus === undefined || depStatus === 'closed';
         })
     );
+
+    return { data, truncated };
   }
 
   async buildGraphForUser(userId: string): Promise<IWorkItemGraph> {
-    const items = await this.loadAllForUser(userId);
+    const { items, truncated } = await this.loadAllForUser(userId);
     const known = new Set(items.map(item => item.id));
 
     const edges: IWorkItemGraphEdge[] = [];
@@ -99,6 +104,7 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
       nodes: items.map(item => ({ id: item.id, title: item.title, status: item.status })),
       edges,
       cycles: findCycleMembers(items.map(item => ({ id: item.id, dependencies: item.dependencies }))),
+      truncated,
     };
   }
 
@@ -136,7 +142,7 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   async detectDependencyCycle(userId: string, dependencies: string[], itemId?: string): Promise<boolean> {
     if (dependencies.length === 0) return false;
 
-    const items = await this.loadAllForUser(userId);
+    const { items } = await this.loadAllForUser(userId);
     const adjacency = new Map(items.map(item => [item.id, item.dependencies]));
     // Overlay the proposed edges so the check runs against the post-write graph.
     adjacency.set(itemId ?? PROPOSED_NODE_ID, dependencies);
@@ -168,12 +174,12 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return conditions;
   }
 
-  private async loadAllForUser(userId: string): Promise<IWorkItem[]> {
+  private async loadAllForUser(userId: string): Promise<{ items: IWorkItem[]; truncated: boolean }> {
     const results = await this.workItemModel
       .find({ userId, deletedAt: null })
       .sort({ createdAt: 1 })
       .limit(MAX_GRAPH_ITEMS);
-    return results.map(doc => doc.toJSON());
+    return { items: results.map(doc => doc.toJSON()), truncated: results.length === MAX_GRAPH_ITEMS };
   }
 }
 
@@ -232,6 +238,8 @@ function findCycleMembers(nodes: Array<{ id: string; dependencies: string[] }>):
 export const WorkItemSchema = new Schema<IWorkItem, IWorkItemModel>(
   {
     userId: { type: String, required: true },
+    // Scaffolding for a future org-sharing feature: settable and filterable,
+    // but it grants no access - every read path is hard-scoped to userId.
     organizationId: { type: String },
     title: { type: String, required: true, maxlength: 300 },
     description: { type: String, maxlength: 10_000 },
@@ -252,7 +260,6 @@ WorkItemSchema.plugin(softDeletePlugin);
 // the bottom, never as `index: true` on field definitions.
 WorkItemSchema.index({ userId: 1, deletedAt: 1, status: 1 });
 WorkItemSchema.index({ userId: 1, deletedAt: 1, updatedAt: -1 });
-WorkItemSchema.index({ organizationId: 1, deletedAt: 1 });
 
 export const WorkItem: IWorkItemModel =
   (mongoose.models[ModelName] as unknown as IWorkItemModel) ??

@@ -1,4 +1,5 @@
-import { baseApi } from '@client/server/middlewares/baseApi';
+import { baseApi } from '@server/middlewares/baseApi';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import { workItemRepository } from '@bike4mind/database';
 import { IWorkItem, WorkItemPatch } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
@@ -9,9 +10,14 @@ import {
   validateWorkItemDescription,
   validateWorkItemStatus,
   validateWorkItemTitle,
+  WORK_ITEM_RATE_LIMIT,
+  WORK_ITEM_RATE_WINDOW_MS,
 } from '@server/utils/workItemValidation';
 
 const handler = baseApi()
+  // Explicit bucket: the raw pathname embeds the item id, which would give each
+  // id its own counter and make the limit per-item rather than per-route.
+  .use(rateLimit({ limit: WORK_ITEM_RATE_LIMIT, windowMs: WORK_ITEM_RATE_WINDOW_MS, bucket: 'work-items-item' }))
   .get(async (req, res) => {
     const id = String(req.query.id);
     const item = await workItemRepository.findByIdForUser(id, req.user!.id);
@@ -22,7 +28,8 @@ const handler = baseApi()
   })
   .patch(async (req, res) => {
     const id = String(req.query.id);
-    const body = req.body as Partial<IWorkItem>;
+    // description is widened to allow the explicit null/'' that clears it.
+    const body = req.body as Partial<Omit<IWorkItem, 'description'>> & { description?: string | null };
 
     const existing = await workItemRepository.findByIdForUser(id, req.user!.id);
     if (!existing) {

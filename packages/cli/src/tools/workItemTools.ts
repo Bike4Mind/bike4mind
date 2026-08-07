@@ -9,9 +9,10 @@ import type { WorkItemsClient } from '../api/WorkItemsClient.js';
  * so an agent can pick up work left behind by an earlier run or another
  * machine.
  *
- * Every tool degrades to a readable message rather than an exception when the
- * backend is unreachable: the CLI is expected to stay usable offline, and a
- * hard failure here would derail the ReAct loop mid-task.
+ * Backend failures degrade to a readable message rather than an exception: the
+ * CLI is expected to stay usable offline, and a hard failure here would derail
+ * the ReAct loop mid-task. Malformed tool arguments still throw, so the model
+ * sees them as a call it got wrong rather than as a result.
  */
 
 /** Statuses that represent work still to be done. */
@@ -38,6 +39,18 @@ function formatItems(items: IWorkItem[], emptyMessage: string): string {
   return items.map(formatItem).join('\n');
 }
 
+/**
+ * The server computed the answer from a prefix of the backlog, so a dependency
+ * outside the window read as satisfied. Say so rather than presenting a
+ * possibly-wrong answer as authoritative.
+ */
+const TRUNCATION_WARNING =
+  'WARNING: too many work items to analyse at once, so this was computed from the oldest items only. Some items may be listed as ready while a blocker outside that window is still open. Close or delete old items to get a complete answer.';
+
+function withTruncationWarning(body: string, truncated: boolean): string {
+  return truncated ? `${body}\n\n${TRUNCATION_WARNING}` : body;
+}
+
 function formatGraph(graph: IWorkItemGraph): string {
   if (graph.nodes.length === 0) return 'No work items yet.';
 
@@ -59,7 +72,7 @@ function formatGraph(graph: IWorkItemGraph): string {
     lines.push('', `WARNING: dependency cycle involving: ${graph.cycles.join(', ')}`);
   }
 
-  return lines.join('\n');
+  return withTruncationWarning(lines.join('\n'), graph.truncated);
 }
 
 function errorMessage(error: unknown): string {
@@ -164,8 +177,10 @@ export function createWorkItemTools(client: WorkItemsClient): ICompletionOptionT
       name: 'read_prior_todos',
       description: `List persistent work items left over from earlier sessions or other machines.
 
-Unlike write_todos, these survive a CLI restart. Call this at the start of a
-session to find out what was already in flight before deciding what to do next.
+This is the read half of the work_item_* tools, NOT of write_todos - it reads a
+different, server-backed store, and nothing written with write_todos ever
+appears here. Call it at the start of a session to find out what was already in
+flight before deciding what to do next.
 
 Defaults to unfinished work (open, in_progress, blocked).`,
       parameters: {
@@ -273,7 +288,7 @@ Only the fields you pass are changed. Use work_item_close for the common
         properties: {
           id: { type: 'string', description: 'Id of the work item to update' },
           title: { type: 'string', description: 'New title' },
-          description: { type: 'string', description: 'New description' },
+          description: { type: 'string', description: 'New description. Pass an empty string to clear it.' },
           status: { type: 'string', enum: [...WORK_ITEM_STATUSES], description: 'New status' },
           dependencies: {
             type: 'array',
@@ -318,7 +333,7 @@ afterwards to see what became actionable.`,
       attempt(
         'work_item_ready',
         () => client.ready(),
-        items => formatItems(items, 'No work items are ready to start.')
+        result => withTruncationWarning(formatItems(result.data, 'No work items are ready to start.'), result.truncated)
       ),
     toolSchema: {
       name: 'work_item_ready',

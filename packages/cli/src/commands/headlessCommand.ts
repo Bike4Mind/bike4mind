@@ -382,7 +382,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const writeTodosTool = createWriteTodosTool(todoStore);
     const findDefinitionTool = createFindDefinitionTool();
     const getFileStructureTool = createGetFileStructureTool();
-    const workItemTools = createWorkItemTools(new WorkItemsClient(apiClient));
+    // Off by default - see the matching note in index.tsx.
+    const workItemTools = config.preferences.enableWorkItemTools
+      ? createWorkItemTools(new WorkItemsClient(apiClient))
+      : [];
 
     const enableSkillTool = config.preferences.enableSkillTool !== false;
     const skillTool = enableSkillTool

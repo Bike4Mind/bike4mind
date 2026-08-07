@@ -1,5 +1,6 @@
 import { Request } from 'express';
-import { baseApi } from '@client/server/middlewares/baseApi';
+import { baseApi } from '@server/middlewares/baseApi';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import { workItemRepository } from '@bike4mind/database';
 import { IWorkItem } from '@bike4mind/common';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
@@ -10,6 +11,8 @@ import {
   validateWorkItemDescription,
   validateWorkItemStatus,
   validateWorkItemTitle,
+  WORK_ITEM_RATE_LIMIT,
+  WORK_ITEM_RATE_WINDOW_MS,
 } from '@server/utils/workItemValidation';
 
 const ALLOWED_ORDER_BY = new Set(['createdAt', 'updatedAt', 'title']);
@@ -18,6 +21,7 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
 const handler = baseApi()
+  .use(rateLimit({ limit: WORK_ITEM_RATE_LIMIT, windowMs: WORK_ITEM_RATE_WINDOW_MS, bucket: 'work-items-collection' }))
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
     const {
       status,
@@ -38,10 +42,9 @@ const handler = baseApi()
     const safeOrderDirection = (ALLOWED_ORDER_DIRECTION.has(orderDirection) ? orderDirection : 'desc') as
       'asc' | 'desc';
 
-    if (organizationId) {
-      await verifyOrgAccess({ id: req.user!.id, isAdmin: Boolean(req.user!.isAdmin) }, organizationId);
-    }
-
+    // No org-access check on the read path: the filter can only narrow a result
+    // set that is already hard-scoped to the caller's own userId, so gating it
+    // would 404 a plain org member without protecting anything.
     const statusFilter = parseStatusFilter(status);
 
     const result = await workItemRepository.listForUser(
@@ -75,7 +78,8 @@ const handler = baseApi()
       userId: req.user!.id,
       ...(body.organizationId && { organizationId: body.organizationId }),
       title,
-      ...(description !== undefined && { description }),
+      // On create there is nothing to clear, so the clearing value is just an omission.
+      ...(description ? { description } : {}),
       status,
       dependencies,
       ...(status === 'closed' && { closedAt: new Date() }),
