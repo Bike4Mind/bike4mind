@@ -25,12 +25,16 @@ export const MetadataFilterSchema = z.object({
 
 export type MetadataFilter = z.infer<typeof MetadataFilterSchema>;
 
-// Annotated against MetadataFilter['operator'] so a schema enum value with no matching label
-// (or vice versa) is a type error here, not a silent divergence caught only at runtime.
-export const METADATA_OPERATORS: readonly { value: MetadataFilter['operator']; label: string }[] = [
-  { value: 'equals', label: 'Equals' },
-  { value: 'contains', label: 'Contains' },
-  { value: 'in', label: 'In' },
-  { value: 'exists', label: 'Exists' },
-  { value: 'not_exists', label: 'Does Not Exist' },
-];
+// Keyed on the union so both directions are checked: a missing operator here is a type error,
+// and an operator removed from the schema's z.enum leaves a stale key here that TS also flags.
+const OPERATOR_LABELS: Record<MetadataFilter['operator'], string> = {
+  equals: 'Equals',
+  contains: 'Contains',
+  in: 'In',
+  exists: 'Exists',
+  not_exists: 'Does Not Exist',
+};
+
+export const METADATA_OPERATORS: readonly { value: MetadataFilter['operator']; label: string }[] = (
+  Object.keys(OPERATOR_LABELS) as MetadataFilter['operator'][]
+).map(value => ({ value, label: OPERATOR_LABELS[value] }));

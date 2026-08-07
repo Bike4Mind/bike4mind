@@ -1,4 +1,4 @@
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
   fetchCounterLogs,
   type AnalyticsReport,
@@ -114,7 +114,12 @@ export function useAnalyticsData(params?: UseAnalyticsDataParams) {
     // A page turn or refresh re-runs an 8-9s aggregation; the previous page is still the right
     // thing to show while it does, rather than blanking the whole tab. Scoped to the paged grid:
     // the report tabs have no "stale but visible" affordance wired up, so keeping their previous
-    // range on screen with no progress indicator would read as a stuck request.
-    placeholderData: isReportMode ? undefined : keepPreviousData,
+    // range on screen with no progress indicator would read as a stuck request. Also guarded by
+    // sub-tab: placeholderData is an observer-level option, not a query-key one, so switching
+    // from a report tab back to User Activity would otherwise placeholder the grid with the
+    // report query's `{ logs: [], total: 0 }` and read as "No data found".
+    placeholderData: isReportMode
+      ? undefined
+      : (previousData, previousQuery) => (previousQuery?.queryKey[1] === activeSubTab ? previousData : undefined),
   });
 }

@@ -23,6 +23,8 @@ export type { MetadataFilter } from '../types';
 
 /** A blank field is unfinished, not invalid - buildUserActivityRequest drops it before it reaches the server. */
 const isFieldValid = (field: string) => field.trim() === '' || METADATA_FIELD.test(field.trim());
+/** Unlike isFieldValid, blank is not applicable: a blank-field filter matches nothing and should not gate Apply or render as an active chip. */
+const isFieldApplicable = (field: string) => METADATA_FIELD.test(field.trim());
 const FIELD_ERROR_MESSAGE = 'Field must start with a letter and may use letters, digits, _, - and up to 4 dots.';
 
 interface FilterRowProps {
@@ -186,6 +188,7 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
   };
 
   const hasInvalidField = tempFilters.some(filter => !isFieldValid(filter.field));
+  const hasBlankField = tempFilters.some(filter => filter.field.trim() === '');
 
   return (
     <Card variant="outlined" sx={{ p: 2, mb: 2 }}>
@@ -218,7 +221,7 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
           <Button variant="outlined" color="neutral" onClick={handleReset} disabled={!filterState.isDirty}>
             Reset
           </Button>
-          <Button onClick={handleApply} disabled={!filterState.isDirty || hasInvalidField}>
+          <Button onClick={handleApply} disabled={!filterState.isDirty || hasInvalidField || hasBlankField}>
             Apply Filters
           </Button>
         </Stack>
@@ -230,7 +233,7 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
             </Typography>
             <Stack direction="row" spacing={1} flexWrap="wrap">
               {filterState.filters
-                .filter(filter => isFieldValid(filter.field))
+                .filter(filter => isFieldApplicable(filter.field))
                 .map((filter, index) => (
                   <Chip key={index} variant="soft" color="primary" component="div">
                     {`${filter.field} ${filter.operator} ${filter.value || 'any'}`}
