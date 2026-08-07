@@ -13,6 +13,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { getAxiosRetryCount } from './ApiContext';
 import { updateAllQueryData, useSubscribeCollection } from '../utils/react-query';
 import { useUser } from './UserContext';
 import { updateUserToServer } from '../utils/userAPICalls';
@@ -121,31 +122,43 @@ const SETTINGS_WRITE_TOAST_ID = 'settings-write-failed';
 /**
  * Whether a failed preferences write is worth telling the user about.
  *
- * A cancel is user-initiated, and a 401 is already handled by the api interceptor's
- * refresh-then-redirect - toasting either would add noise to something the app is
- * already resolving. See ApiContext's response interceptor.
+ * A cancel is user-initiated. A 401 is silenced only when the interceptor tore the session
+ * down cleanly - `getAxiosRetryCount(error) === 0` means it redirected rather than retried,
+ * so a toast would stack noise on a teardown the user cannot act on. A non-zero count means
+ * the interceptor attempted a refresh cycle and still failed (a refresh-endpoint outage, or a
+ * retry that 401'd again); the user keeps a working page, so their lost change needs saying.
+ * See ApiContext's response interceptor.
  */
 function shouldNotifyWriteFailure(error: unknown): boolean {
   if (isCancel(error)) return false;
   if (isAxiosError(error)) {
     if (error.code === 'ERR_CANCELED') return false;
-    if (error.response?.status === 401) return false;
+    if (error.response?.status === 401 && getAxiosRetryCount(error) === 0) return false;
   }
   return true;
 }
+
+// Statuses where the handler's own `error` string describes a rejected VALUE, so it is written
+// for the user (a rejected preference names its field). Everything else - notably the 5xx
+// catch-all in server/middlewares/errorHandler.ts, which sets `error: errorObj.message` from
+// whatever was thrown - can carry raw exception text naming hosts, collections or indexes.
+const USER_FACING_ERROR_STATUSES = new Set([400, 409, 422]);
 
 /**
  * The server's own message when it sent a usable one (a rejected preference value says which
  * field it rejected), otherwise the caller's generic line.
  *
- * Our backend's `error` strings are written to be read by users, so they are shown verbatim.
- * What is never shown is client-side exception text (`error.message`, stack frames), which
- * names internals and gives the user nothing to act on.
+ * Gated on status rather than trusting `data.error` outright: the same field carries curated
+ * text on a validation reject and raw exception text on an unmapped 5xx, and the latter is
+ * both internal-detail disclosure and useless to the user.
  */
 function writeFailureMessage(error: unknown, fallback: string): string {
   if (isAxiosError(error)) {
-    const serverError = (error.response?.data as { error?: unknown } | undefined)?.error;
-    if (typeof serverError === 'string' && serverError.trim()) return serverError;
+    const status = error.response?.status;
+    if (status !== undefined && USER_FACING_ERROR_STATUSES.has(status)) {
+      const serverError = (error.response?.data as { error?: unknown } | undefined)?.error;
+      if (typeof serverError === 'string' && serverError.trim()) return serverError;
+    }
   }
   return fallback;
 }
@@ -350,10 +363,15 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
           // Restore only preferences: other fields may have moved since (a credits push, say),
           // and reinstating the whole snapshot would revert those too.
           store.setCurrentUser({ ...store.currentUser, preferences: previousPreferences });
+          // The restored snapshot predates any concurrent write that DID land (see the race
+          // note above). identify is seeded from the store behind a 5-minute staleTime, so
+          // without this the wrong value can be served - and re-persisted - until a socket
+          // push happens to arrive. Ask for a reconcile instead of waiting for one.
+          void queryClient.invalidateQueries({ queryKey: ['identify'] });
         },
       });
     },
-    [currentUser]
+    [currentUser, queryClient]
   );
 
   // --- Language preference: read from server on load ---
