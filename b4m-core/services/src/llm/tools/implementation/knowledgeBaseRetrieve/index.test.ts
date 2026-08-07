@@ -476,6 +476,77 @@ describe('retrieve_knowledge_content bounds its chunk read', () => {
 });
 
 /**
+ * Zero-chunk replies point at content already inlined in the prompt (#1163) instead of implying
+ * the file is unreachable, but only for files the caller actually inlined this turn
+ * (context.inlinedAttachmentIds) - a lake doc genuinely still indexing is not inline anywhere, so
+ * claiming otherwise would be false.
+ */
+describe('retrieve_knowledge_content zero-chunk wording for inlined attachments (#1163)', () => {
+  const zeroChunkRepo = () => pagedTextChunkRepo([]);
+
+  it('a zero-chunk file that IS inlined points the model at the already-provided content', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: [FILE_ID] });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = zeroChunkRepo();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Report.pdf' })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('"Report.pdf"');
+    expect(out).toContain('already provided earlier in this conversation');
+    expect(out).not.toContain('may not have been processed');
+    expect(out).not.toContain('no indexed content');
+  });
+
+  it('a zero-chunk file NOT in inlinedAttachmentIds keeps the honest still-indexing wording', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined }); // inlinedAttachmentIds omitted entirely
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = zeroChunkRepo();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Report.pdf' })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('indexing may still be in progress');
+    expect(out).not.toContain('already provided earlier in this conversation');
+  });
+
+  it('two zero-chunk matches: only the inlined one is named as already-available', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['inlined-file'] });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = zeroChunkRepo();
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: [
+        makeFile({ id: 'inlined-file', fileName: 'Inlined.pdf' }),
+        makeFile({ id: 'deferred-file', fileName: 'Deferred.pdf' }),
+      ],
+    });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'q' })) as string;
+
+    expect(out).toContain('"Inlined.pdf"');
+    expect(out).not.toContain('Deferred.pdf');
+  });
+
+  it('regression: a file with at least one real chunk is unaffected by the zero-chunk wording', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: [FILE_ID] });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = pagedTextChunkRepo([
+      { id: 'c1', text: 'real content body' },
+    ]);
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Report.pdf' })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('Retrieved content from');
+    expect(out).toContain('real content body');
+    expect(out).not.toContain('indexing may still be in progress');
+  });
+});
+
+/**
  * The two guards on the paged read that no other test reaches: the page cap, and the cursor that
  * fails to advance. Both were added with the paging and neither would fail if it were deleted.
  */

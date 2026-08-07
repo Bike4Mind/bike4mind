@@ -121,6 +121,58 @@ describe('search_knowledge_base keyword fallback retrieval exclusion', () => {
   });
 });
 
+/**
+ * attachmentInlineNotice (#1163): a still-chunking attachment must not read as inaccessible when
+ * its raw content is already inlined elsewhere in the prompt. Exercises the keyword-fallback path
+ * (the same one every other test in this file drives via bare makeContext()).
+ */
+describe('search_knowledge_base attachmentInlineNotice for inlined attachments (#1163)', () => {
+  it('zero hits + an inlined attachment: notes it is not yet searchable but already in the conversation', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['f1'] });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('not indexed for search yet');
+    expect(out).toContain('already included directly in the conversation above');
+  });
+
+  it('zero hits + no inlinedAttachmentIds: baseline message with no added suffix (regression)', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+
+    const out = await run(ctx);
+
+    expect(out).toBe('No documents found matching your search query in your knowledge base.');
+  });
+
+  it('a hit that IS inlined: notes retrieve_knowledge_content is unnecessary for it', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['m'] });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('"MARK - retired.pdf" are attached to this conversation');
+    expect(out).toContain('do not need retrieve_knowledge_content');
+  });
+
+  it('a hit that is NOT inlined: no note is appended', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['not-a-match'] });
+
+    const out = await run(ctx);
+
+    expect(out).not.toContain('are attached to this conversation');
+  });
+
+  it('the empty-kbScope early return stays byte-identical even with inlinedAttachmentIds set', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, kbScope: { fileIds: [] }, inlinedAttachmentIds: ['f1'] });
+
+    const out = await run(ctx);
+
+    expect(out).toBe('No documents found matching your search query in your knowledge base.');
+    expect(ctx.db.fabfiles!.search).not.toHaveBeenCalled();
+  });
+});
+
 describe('search_knowledge_base agent kbScope enforcement', () => {
   // Context with full semantic deps so the scoped SEMANTIC arm engages (not just keyword).
   function makeScopedContext(fileIds: string[] | undefined, overrides: Partial<ToolContext> = {}): ToolContext {
