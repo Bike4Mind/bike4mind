@@ -8,8 +8,16 @@ import {
   IUserDocument,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
+import { canManageLake } from '../dataLakeService/authorizeLakeWrite';
 import { createDataLakeFallbackTagger } from '../dataLakeService/fallbackLakeTags';
 import { addFileToLake, removeFileFromLake, type MembershipLake } from '../dataLakeService/lakeMembership';
+import {
+  findPrefixArmJoins,
+  findPrefixArmLeaves,
+  loadPrefixArmCandidateLakes,
+  type PrefixArmChange,
+} from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 
 const fabFileToggleTagsSchema = z.object({
@@ -42,9 +50,10 @@ const isDataLakeTag = (tag: string): boolean => tag.toLowerCase().startsWith(DAT
  *
  * A `datalake:*` meta-tag is NOT an ordinary tag - it is what makes a file a MEMBER of a lake, so
  * toggling one is a lake join or leave and is routed through the shared membership writes instead
- * of being written here. That is what keeps this door honest about leaving: dropping the meta-tag
- * alone left the file matching the lake's `fileTagPrefix` arm, so it kept appearing in the lake's
- * browse and retrieval. Lake stats are recomputed once per touched lake, not once per file.
+ * of being written here. A file's ONLY membership signal for a lake can also be a `fileTagPrefix`
+ * content tag with no meta-tag at all; toggling that off is likewise gated and swept through the
+ * membership writes (see `finalizePrefixArmLeaves`), not left to `toggleOrdinaryTag`'s plain
+ * pull. Lake stats are recomputed once per touched lake, not once per file.
  *
  * Both directions are element-level atomic writes. The whole `tags` array is never rewritten:
  * that let a slow writer's snapshot resurrect a tag a concurrent removal from a DIFFERENT lake
@@ -82,6 +91,61 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   }
 
   const actor = { userId, isAdmin: !!user.isAdmin };
+
+  // A lake a file belongs to ONLY via its prefix arm (no meta-tag) is invisible to
+  // toggleLakeMembership above, which only recognizes `datalake:*` names - so dropping that
+  // file's last tag under the lake's prefix here would otherwise skip both the manage-rights
+  // gate and the stats recompute. Resolved and gated for the WHOLE batch up front, before any
+  // write: files are toggled concurrently below, so a mid-batch throw would leave one file
+  // half-toggled while this gate is meant to be all-or-nothing (mirrors reconcileLakeTags).
+  //
+  // `toggleOrdinaryTag` itself stays lake-unaware: "is this the file's last prefix signal" is not
+  // a per-tag property when a request can drop two tags under the same prefix at once.
+  const predictToggleResult = (currentNames: string[], requestedTags: readonly string[]): string[] => {
+    let result = currentNames;
+    for (const tag of requestedTags) {
+      const key = tag.toLocaleLowerCase();
+      const hadMatch = result.some(name => name.toLocaleLowerCase() === key);
+      result = hadMatch ? result.filter(name => name.toLocaleLowerCase() !== key) : [...result, tag];
+    }
+    return result;
+  };
+
+  const prefixLeavesByFile = new Map<string, PrefixArmChange[]>();
+  const prefixJoinsByFile = new Map<string, PrefixArmChange[]>();
+  // Short-circuits the whole thing (no query) when nothing requested could carry a prefix arm -
+  // every usable prefix ends in ':' (see `prefixArmTagNames`), and a meta-tag never matches one.
+  if (tags.some(tag => !isDataLakeTag(tag) && tag.includes(':'))) {
+    const candidateLakes = await loadPrefixArmCandidateLakes(
+      fabFiles.map(f => f.userId),
+      { db }
+    );
+    for (const file of fabFiles) {
+      const currentTagNames = storedTagNames(file);
+      const resultingTagNames = predictToggleResult(currentTagNames, tags);
+      const [leaves, joins] = await Promise.all([
+        findPrefixArmLeaves(
+          { fileOwnerUserId: file.userId, currentTagNames, resultingTagNames },
+          { db, candidateLakes }
+        ),
+        findPrefixArmJoins(
+          { fileOwnerUserId: file.userId, currentTagNames, resultingTagNames },
+          { db, candidateLakes }
+        ),
+      ]);
+      if (leaves.length > 0) prefixLeavesByFile.set(file.id, leaves);
+      if (joins.length > 0) prefixJoinsByFile.set(file.id, joins);
+    }
+    for (const leaves of prefixLeavesByFile.values()) {
+      for (const { lake } of leaves) {
+        if (!canManageLake(lake, actor)) {
+          throw new BadRequestError('Only the creator can remove files from this data lake');
+        }
+        assertLakeWritable(lake);
+      }
+    }
+  }
+
   const touchedTags = new Set<string>();
   const lakesByTag = new Map<string, Promise<MembershipLake>>();
   const touchedLakes = new Map<string, MembershipLake>();
@@ -154,6 +218,32 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   };
 
   /**
+   * Sweep every prefix-arm leave/join this file was gated for above. Runs AFTER the per-tag
+   * toggle loop (running it first would pull the prefix tags, and then `toggleOrdinaryTag` - a
+   * TOGGLE, not a delete - would find them absent and re-add them) and BEFORE
+   * `backfillLakeContentTags` (which re-reads the document; the sweep's pull must be visible to
+   * that read, or the tagger judges satisfaction against a stale array).
+   */
+  const finalizePrefixArmLeaves = async (file: IFabFileDocument): Promise<void> => {
+    for (const { lake } of prefixLeavesByFile.get(file.id) ?? []) {
+      touchedLakes.set(lake.id, lake);
+      try {
+        await removeFileFromLake(actor, lake, file.id, { db });
+      } catch (error) {
+        // The toggle loop above already pulled the tag, so "nothing to remove" is the NORMAL
+        // outcome here, not a race - this still runs to sweep a signal a concurrent writer
+        // re-added between the loop and here.
+        if (!(error instanceof NotFoundError)) throw error;
+      }
+    }
+    // Stats-only: joining by tagging your own file with your own lake's folder tag needs no gate
+    // (today's accepted "automatic membership" model for content tags), just a recompute.
+    for (const { lake } of prefixJoinsByFile.get(file.id) ?? []) {
+      touchedLakes.set(lake.id, lake);
+    }
+  };
+
+  /**
    * Backfill the lake-content-tag invariant for the WHOLE file, not just lakes this call touched
    * (see `fallbackLakeTags`): a join above stamps only the meta-tag, and an ordinary-tag removal
    * elsewhere in this same loop can strip a file's last qualifying tag for a lake it remains a
@@ -165,6 +255,10 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
    * fires here in practice: a real leave already strips every tag under that lake's prefix inside
    * `removeFileFromLake`, so nothing is left by the time this reads the file back. Handled anyway
    * rather than assumed away, since the tagger's return is the source of truth either way.
+   *
+   * Cannot re-add a fallback tag for a lake `finalizePrefixArmLeaves` just left via its prefix
+   * arm: the tagger derives its stamp set from `extractDataLakeMetaTags(currentTags)`, and a
+   * prefix-arm-only lake has no meta-tag by definition - it was never in that set to begin with.
    */
   const backfillLakeContentTags = async (file: IFabFileDocument): Promise<void> => {
     const priorTags = file.tags ?? [];
@@ -204,6 +298,7 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
           await toggleOrdinaryTag(file, tag);
         }
       }
+      await finalizePrefixArmLeaves(file);
       await backfillLakeContentTags(file);
     })
   );
