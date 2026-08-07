@@ -20,6 +20,7 @@ import {
   buildAndSortMessages,
   getLastBuildDebugInfo,
   calculateTotalTokenLength,
+  ATTACHMENT_DELIVERED_NOTICE,
 } from './utils';
 
 const mockLogger = {
@@ -492,6 +493,34 @@ describe('content cut before assembly is declared to the model', () => {
 
       const text = result.map(m => (typeof m.content === 'string' ? m.content : '')).join('\n');
       expect(text).not.toContain('could not be included');
+    });
+
+    it('does not tell the model it can read attachments when the content is a fetched page, not one', async () => {
+      // The delivered-content assurance is gated on isAttachment, which this WeakSet-based check
+      // already excludes URL-derived content from - a fetched page is not an attachment the user
+      // added, so wording that says "the content below" was attached would misdescribe it.
+      const { userMessages } = await processUrlsFromPrompt(
+        'summarise https://example.com/report',
+        100000,
+        'user-1',
+        async () => {},
+        mockLogger as any
+      );
+
+      const result = await buildAndSortMessages(
+        [],
+        userMessages,
+        [{ role: 'user', content: 'summarise it' }],
+        20000,
+        {},
+        5,
+        mockLogger as any,
+        tokenizer as any
+      );
+
+      const text = result.map(m => (typeof m.content === 'string' ? m.content : '')).join('\n');
+      expect(text).toContain('PAGE-START');
+      expect(text).not.toContain(ATTACHMENT_DELIVERED_NOTICE.trim());
     });
 
     it('cuts content that merely contains the excerpt prefix and ends with a bracket', async () => {
