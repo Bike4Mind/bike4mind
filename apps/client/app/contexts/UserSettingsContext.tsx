@@ -1,6 +1,8 @@
 import { IAdminSettings, IUserPreferences } from '@bike4mind/common';
 import { useShallow } from 'zustand/react/shallow';
 import { useQueryClient } from '@tanstack/react-query';
+import { isAxiosError, isCancel } from 'axios';
+import { toast } from 'sonner';
 import React, {
   createContext,
   PropsWithChildren,
@@ -111,6 +113,63 @@ const defaultSettings: UserSettings = {
   showSplashCards: false,
 };
 
+// One id for every preferences-write failure, so a burst of failing toggles collapses into a
+// single toast instead of stacking one per key.
+const PREFERENCES_WRITE_TOAST_ID = 'preferences-write-failed';
+
+/**
+ * Whether a failed preferences write is worth telling the user about.
+ *
+ * A cancel is user-initiated, and a 401 is already handled by the api interceptor's
+ * refresh-then-redirect - toasting either would add noise to something the app is
+ * already resolving. See ApiContext's response interceptor.
+ */
+function shouldNotifyWriteFailure(error: unknown): boolean {
+  if (isCancel(error)) return false;
+  if (isAxiosError(error)) {
+    if (error.code === 'ERR_CANCELED') return false;
+    if (error.response?.status === 401) return false;
+  }
+  return true;
+}
+
+/**
+ * The server's own message when it sent a usable one (a rejected preference value says which
+ * field it rejected), otherwise the caller's generic line. Never surfaces raw error text.
+ */
+function writeFailureMessage(error: unknown, fallback: string): string {
+  if (isAxiosError(error)) {
+    const serverError = (error.response?.data as { error?: unknown } | undefined)?.error;
+    if (typeof serverError === 'string' && serverError.trim()) return serverError;
+  }
+  return fallback;
+}
+
+/**
+ * Persist a preferences write and make a failure visible instead of console-only.
+ *
+ * Callers apply their optimistic update first, so a rejected write leaves the UI showing a
+ * value the server does not have - which is why `rollback` runs on every failure, not just
+ * the ones we toast. Callers guard their own rollback against clobbering a newer write.
+ */
+async function persistPreferences(
+  userId: string,
+  preferences: IUserPreferences,
+  { logLabel, fallbackMessage, rollback }: { logLabel: string; fallbackMessage: string; rollback: () => void }
+): Promise<void> {
+  try {
+    await updateUserToServer(userId, { preferences });
+  } catch (error) {
+    // The console stays the only place the two write paths are told apart, so keep them named.
+    console.warn(`[UserSettings] Failed to write ${logLabel} to server`, error);
+    // The write did not land, so undo the optimistic value whether or not we say so.
+    rollback();
+    if (shouldNotifyWriteFailure(error)) {
+      toast.error(writeFailureMessage(error, fallbackMessage), { id: PREFERENCES_WRITE_TOAST_ID });
+    }
+  }
+}
+
 /** Scalar keys shared between IUserPreferences and UserSettings. */
 const SCALAR_PREF_KEYS = [
   'showDebug',
@@ -198,11 +257,15 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
     ? JSON.stringify(serverSettingsData.map(s => ({ n: s.settingName, v: s.settingValue })))
     : '';
 
-  // Apply server preferences when content changes (not on every reference change)
+  // Apply server preferences when content changes (not on every reference change).
+  // An absent preferences object is a real state, not just "not loaded yet" - the model
+  // defaults it to null - so it must reset the derived values rather than be skipped.
+  // Skipping it would strand a failed write's optimistic value on screen for any user who
+  // has never saved a preference. serverSettings comes from the admin effect below and is
+  // carried over, since mergeServerPreferences only knows about preference-derived fields.
   useEffect(() => {
-    if (!serverPreferences) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSettings(() => mergeServerPreferences(serverPreferences));
+    setSettings(prev => ({ ...mergeServerPreferences(serverPreferences), serverSettings: prev.serverSettings }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverPreferencesKey]); // gate on content change, not object reference
 
@@ -262,9 +325,20 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
       // Write through to the store, not just the server: otherwise the stale value is persisted and
       // reseeded as identify initialData (5-min staleTime skips the refetch), reverting on reload when
       // the `users` socket is silent. See useGetIdentify initialData guard.
+      const previousPreferences = currentUser.preferences;
       useUser.getState().setCurrentUser({ ...currentUser, preferences: fullPreferences });
-      updateUserToServer(currentUser.id, { preferences: fullPreferences }).catch(() => {
-        console.warn('[UserSettings] Failed to write preferences to server');
+      void persistPreferences(currentUser.id, fullPreferences, {
+        logLabel: 'preferences',
+        fallbackMessage: 'Could not save your preference change. Please try again.',
+        rollback: () => {
+          const store = useUser.getState();
+          // The store holds the very object this write set, so a different reference means a
+          // newer write (or a server echo) landed after us and must not be undone.
+          if (!store.currentUser || store.currentUser.preferences !== fullPreferences) return;
+          // Restore only preferences: other fields may have moved since (a credits push, say),
+          // and reinstating the whole snapshot would revert those too.
+          store.setCurrentUser({ ...store.currentUser, preferences: previousPreferences });
+        },
       });
     },
     [currentUser]
@@ -295,10 +369,21 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
     if (!currentUser?.id) return;
     // TODO: route through updatePreferences to pick up experimentalFeatures deep-merge
     const fullPreferences = { ...currentUser.preferences, language: currentLanguage };
-    updateUserToServer(currentUser.id, { preferences: fullPreferences }).catch(() => {
-      console.warn('[UserSettings] Failed to write language preference to server');
+    void persistPreferences(currentUser.id, fullPreferences, {
+      logLabel: 'language preference',
+      fallbackMessage: 'Could not save your language preference. Please try again.',
+      rollback: () => {
+        // Unlike the preferences write there is no optimistic store entry to undo - the
+        // language lives in its own store, and it is the visible UI language that has to go
+        // back. Skip if the user has since picked another language: theirs must win.
+        if (useLanguage.getState().language !== currentLanguage) return;
+        // Reuse the server-read path's suppression flag so the write-back effect treats this
+        // as a programmatic change and does not echo the rollback to the server.
+        languageSyncedRef.current = true;
+        setLanguage(prev);
+      },
     });
-  }, [currentLanguage, currentUser]);
+  }, [currentLanguage, currentUser, setLanguage]);
 
   // One-time cleanup: remove stale localStorage keys from previous localStorage-based persistence
   useEffect(() => {
