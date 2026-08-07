@@ -308,6 +308,34 @@ describe('UserSettingsContext - preferences write failure feedback', () => {
     );
   });
 
+  // The 5xx catch-all in server/middlewares/errorHandler.ts sets `error` from the thrown
+  // exception, so on an unmapped 500 that field names hosts, collections or indexes. Without the
+  // status gate this would be toasted verbatim - internal-detail disclosure, and unactionable.
+  it('does not surface the server error string on a 5xx', async () => {
+    vi.mocked(updateUserToServer).mockRejectedValue(
+      axiosError(500, { error: 'E11000 duplicate key error collection: b4m-stage.users index: email_1' })
+    );
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    await act(async () => {
+      result.current.updatePreferences({ showSplashCards: true });
+    });
+
+    expect(mockToastError.mock.calls[0][0]).toMatch(/could not save/i);
+    expect(mockToastError.mock.calls[0][0]).not.toMatch(/E11000|b4m-stage/);
+  });
+
+  it('does not surface a bare Forbidden from a 403', async () => {
+    vi.mocked(updateUserToServer).mockRejectedValue(axiosError(403, { error: 'Forbidden' }));
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    await act(async () => {
+      result.current.updatePreferences({ showSplashCards: true });
+    });
+
+    expect(mockToastError.mock.calls[0][0]).toMatch(/could not save/i);
+  });
+
   it('falls back to a generic message when the server error is not a usable string', async () => {
     vi.mocked(updateUserToServer).mockRejectedValue(axiosError(500, { error: { code: 'E_INTERNAL' } }));
     const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
@@ -330,6 +358,22 @@ describe('UserSettingsContext - preferences write failure feedback', () => {
     });
 
     expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  // The interceptor has 401 exits that do NOT redirect: a transient refresh-endpoint failure,
+  // and a retry that 401'd again. The user keeps a working page, so the lost change needs saying.
+  // `_retryCount` is what distinguishes "tore the session down" from "tried and failed".
+  it('toasts a 401 the interceptor tried and failed to recover from', async () => {
+    const err = axiosError(401);
+    (err as unknown as { config: { _retryCount: number } }).config = { _retryCount: 1 };
+    vi.mocked(updateUserToServer).mockRejectedValue(err);
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    await act(async () => {
+      result.current.updatePreferences({ showSplashCards: true });
+    });
+
+    expect(mockToastError).toHaveBeenCalledTimes(1);
   });
 
   it('stays quiet on a cancelled request', async () => {
