@@ -55,7 +55,7 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   isBatchComplete: vi.fn(),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 // Module-load zod schemas used by VectorizePayload.
@@ -77,6 +77,7 @@ vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
 import { fabFileChunkRepository } from '@bike4mind/database';
+import { sendToClient } from '@server/websocket/utils';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from './sqsDelivery';
 import { dispatch } from './fabFileVectorize';
 
@@ -174,6 +175,46 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
     h.deferFailureIfRetryable.mockResolvedValue(false);
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'rate limit exceeded');
+  });
+});
+
+describe('fabFileVectorize handler - notification failures are non-fatal (human review)', () => {
+  // This message must actually complete vectorization DURING this call (not already be
+  // fully vectorized) so it reaches the isFileVectorized branch at lines 233-253 rather than
+  // returning early at the top-of-handler idempotency check (lines 81-88). A throw from the
+  // vectorize-complete push there must not stop the batch claim/increment that follows it:
+  // the file is already persisted vectorized:true by that point, so a stranded claim here
+  // would never get another chance (the next retry hits the idempotency early-return).
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2]);
+    h.countTerminalChunks.mockResolvedValue(1);
+    h.claimFileStatus.mockResolvedValue(true);
+    h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
+  });
+
+  it('a rejecting sendToClient does not prevent the batch claim/increment from completing', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    (sendToClient as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('socket gone'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
   });
 });
 

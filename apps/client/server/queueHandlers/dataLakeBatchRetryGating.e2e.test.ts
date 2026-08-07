@@ -55,7 +55,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   // Mirror the real name-based guard so the failure branch classifies a plain Error correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get: () => 'mock' }) }) }));
 

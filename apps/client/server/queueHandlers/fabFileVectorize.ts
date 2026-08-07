@@ -240,11 +240,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     fabFile.isVectorizing = !isFileVectorized;
 
     if (isFileVectorized) {
+      // Non-fatal: a throw here must never reach the outer catch. This file is ALREADY
+      // persisted vectorized:true above, so a deferred (non-final) retry would hit this
+      // function's own idempotency early-return next attempt and skip straight past the
+      // batch claim below - stranding the batch's vectorizedFiles forever instead of just
+      // missing one UI push (a prior version of this bug: a human reviewer caught it).
       await sendToClient(userId, Resource.websocket.managementEndpoint, {
         action: 'update_file_chunk_vector_status',
         fabFileId,
         vectorizeStatus: 'complete',
-      });
+      }).catch(err => logger.error(`Error notifying vectorize-complete for ${fabFileId}: ${err}`));
 
       // Track batch progress if file belongs to a data lake batch.
       // Atomic claim gates the increment so a redelivered "complete" message is a no-op.

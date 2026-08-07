@@ -25,10 +25,9 @@ export function getDeliveryAttempt(event: SQSEvent): number | undefined {
  * An unknown attempt count (missing attribute, or a malformed/hand-built event) is treated as
  * final: this preserves today's behavior wherever the attribute isn't set, and fails toward a
  * batch reaching a terminal state rather than one that hangs forever. `>=` rather than `===` so
- * a manual DLQ redrive or an over-max count from the self-host worker (which allows one extra
- * delivery past `maxReceiveCount` before giving up) still reads as final - a lower count on a
- * later delivery is also safe: every write this gates is idempotent/guarded, so it can be
- * evaluated repeatedly without double-accounting.
+ * a manually redriven message (its receive count can already be at or past `maxReceiveCount`)
+ * still reads as final - a lower count on a later delivery is also safe: every write this gates
+ * is idempotent/guarded, so it can be evaluated repeatedly without double-accounting.
  */
 export function isFinalDeliveryAttempt(event: SQSEvent, maxReceiveCount: number): boolean {
   const attempt = getDeliveryAttempt(event);

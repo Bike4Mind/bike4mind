@@ -152,12 +152,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       fabFileChunksCount: fabFileChunks.length,
     });
 
+    // Non-fatal: this whole block runs inside a plain try/finally (no catch), so an
+    // uncaught throw here would fail the entire message over a best-effort UI push and
+    // force a wasted re-chunk on redelivery instead of just missing one notification.
     await sendToClient(userId, Resource.websocket.managementEndpoint, {
       action: 'update_file_chunk_vector_status',
       fabFileId,
       chunkStatus: 'complete',
       vectorizeStatus: 'ongoing',
-    });
+    }).catch(err => logger.error(`Error notifying chunk-complete for ${fabFileId}: ${err}`));
 
     // Track batch progress if file belongs to a data lake batch.
     // Reuse the fabFile loaded earlier - batchId is set on upload and doesn't change.

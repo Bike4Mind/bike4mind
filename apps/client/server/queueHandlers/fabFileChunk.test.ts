@@ -18,7 +18,7 @@ const h = vi.hoisted(() => ({
   incrementCounters: vi.fn(),
   claimFileStatus: vi.fn(),
   getSettingsValue: vi.fn(),
-  sendToClient: vi.fn(),
+  sendToClient: vi.fn(async () => undefined),
   finalizeBatchIfComplete: vi.fn(),
   isBatchComplete: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
@@ -193,6 +193,27 @@ describe('fabFileChunk handler - retry gating (#1412)', () => {
     expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['uploaded', 'pending'], 'chunking');
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'chunkedFiles');
     expect(h.incrementCounters).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileChunk handler - notification failures are non-fatal (human review)', () => {
+  // A throw from the chunk-complete push (e.g. a dropped websocket) must not stop the
+  // batch claim/increment that follows it in the same handler run - that push is
+  // best-effort UI feedback, not part of the accounting this fix depends on.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    h.claimFileStatus.mockResolvedValue(true);
+    h.incrementCounter.mockResolvedValue({ chunkedFiles: 1, failedFiles: 0, totalFiles: 1 });
+  });
+
+  it('a rejecting sendToClient does not prevent the batch claim/increment from completing', async () => {
+    h.sendToClient.mockRejectedValue(new Error('socket gone'));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['uploaded', 'pending'], 'chunking');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'chunkedFiles');
   });
 });
 
