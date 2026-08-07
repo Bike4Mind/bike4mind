@@ -311,6 +311,13 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
       // Known race: concurrent toggles may clobber each other if both writes are in-flight
       // simultaneously (second write reads stale currentUser.preferences). Pre-existing behavior,
       // less severe with per-key writes. Fix tracked separately.
+      //
+      // The rollback below interacts with that race a second way: same-tick writes share a stale
+      // snapshot, so if the FIRST succeeds and a LATER one fails, the later rollback passes its
+      // reference guard (the store still holds its own object) and restores the shared pre-race
+      // snapshot - dropping the first write's value from the store even though the server kept
+      // it. Self-heals on the next server echo or reload. Fixing it properly means resolving the
+      // clobber race above, not adding another guard here.
       const fullPreferences = {
         ...currentUser.preferences,
         ...diff,
@@ -367,7 +374,10 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
       languageSyncedRef.current = false;
       return;
     }
-    // TODO: route through updatePreferences to pick up experimentalFeatures deep-merge
+    // TODO: route through updatePreferences to pick up experimentalFeatures deep-merge. Until
+    // then this spread persists whatever experimentalFeatures currentUser held when the effect
+    // ran, so an experimental toggle still in flight when the language changes is dropped from
+    // the persisted set.
     const fullPreferences = { ...currentUser.preferences, language: currentLanguage };
     void persistPreferences(currentUser.id, fullPreferences, {
       logLabel: 'language preference',
