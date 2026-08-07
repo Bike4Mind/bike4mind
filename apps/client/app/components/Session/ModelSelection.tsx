@@ -58,7 +58,6 @@ import {
   formatNumber,
 } from './AISettings/modelIndicators';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
-import { green, greenAlpha } from '@client/app/utils/themes/colors';
 import { useFavoriteModels } from '@client/app/hooks/useFavoriteModels';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 
@@ -81,15 +80,14 @@ const EXCLUDED_MODEL_IDS: ModelName[] = [
   SpeechToTextModels.AWS_TRANSCRIBE,
 ];
 
-const checkBoxStyle = {
-  mr: 1,
-  '&.Mui-checked .MuiRadio-radio': {
-    borderColor: green[800],
-    backgroundColor: greenAlpha[800][20],
-  },
-  '&.Mui-checked .MuiRadio-icon': {
-    color: green[800],
-  },
+/**
+ * Matches the sidenav Filters panel's radios (`Sidenav/FiltersPanel.tsx`) so the two filter menus
+ * read as the same control. No `mr` here - the row's own gap owns the spacing, as it does there.
+ */
+const filterRadioSx = {
+  '--Radio-size': '20px',
+  // Inner checked dot pinned to 12x12; Joy's default scales it off --Radio-size.
+  '& .MuiRadio-icon': { width: '12px', height: '12px', borderRadius: '50%' },
 } as const;
 
 // Function to get backend logo path
@@ -1086,21 +1084,42 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               })}
               slotProps={{
                 listbox: {
-                  sx: {
+                  // Rows mirror the sidenav Filters panel's items (`Sidenav/FiltersPanel.tsx`):
+                  // same 36px height, 8px inset, 12px gap, 8px radius and the same two palette
+                  // tokens for hover and selected.
+                  sx: theme => ({
                     border: 'none !important',
-                    py: '4px !important',
+                    p: '8px !important',
                     backgroundColor: 'var(--joy-palette-background-body)',
+                    // The listbox is a Joy List, which spaces its items via this variable (default
+                    // 0px) rather than `gap` - it becomes marginBlockStart on every item after the
+                    // first. Same 4px the sidenav panel puts between its filter rows.
+                    '--List-gap': '4px',
+                    // Joy drives an Option's hover through its variant vars, and also uses this for
+                    // the keyboard-highlighted row - a plain `&:hover` would style only the mouse
+                    // case and lose to Joy's own rule anyway.
+                    '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+                    '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
                     '& .MuiOption-root': {
                       display: 'flex',
                       alignItems: 'center',
-                      gap: 1,
+                      gap: '12px',
                       justifyContent: 'flex-start',
                       color: 'text.primary',
                       fontSize: '14px',
                       fontWeight: '400',
-                      backgroundColor: 'var(--joy-palette-background-body)',
+                      px: 1,
+                      minHeight: '36px',
+                      borderRadius: '8px',
+                      transition: 'background 0.15s',
+                      // Transparent, not the body colour: an explicit background here would sit on
+                      // top of the hover and selected fills below.
+                      backgroundColor: 'transparent',
                     },
-                  },
+                    '& .MuiOption-root[aria-selected="true"]': {
+                      backgroundColor: theme.palette.notebooklist.focusedBackground,
+                    },
+                  }),
                   placement: 'bottom-end',
                   modifiers: [
                     { name: 'offset', options: { offset: [-0, 4] } },
@@ -1110,19 +1129,43 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
               }}
             >
               <Option value="all" data-testid="model-filter-option-all">
-                <Radio checked={modelFilter === 'all'} onChange={() => {}} size="sm" sx={checkBoxStyle} />
+                <Radio
+                  checked={modelFilter === 'all'}
+                  onChange={() => {}}
+                  size="sm"
+                  color="success"
+                  sx={filterRadioSx}
+                />
                 All models
               </Option>
               <Option value="text" data-testid="model-filter-option-text">
-                <Radio checked={modelFilter === 'text'} onChange={() => {}} size="sm" sx={checkBoxStyle} />
+                <Radio
+                  checked={modelFilter === 'text'}
+                  onChange={() => {}}
+                  size="sm"
+                  color="success"
+                  sx={filterRadioSx}
+                />
                 Text models
               </Option>
               <Option value="image" data-testid="model-filter-option-image">
-                <Radio checked={modelFilter === 'image'} onChange={() => {}} size="sm" sx={checkBoxStyle} />
+                <Radio
+                  checked={modelFilter === 'image'}
+                  onChange={() => {}}
+                  size="sm"
+                  color="success"
+                  sx={filterRadioSx}
+                />
                 Image models
               </Option>
               <Option value="video" data-testid="model-filter-option-video">
-                <Radio checked={modelFilter === 'video'} onChange={() => {}} size="sm" sx={checkBoxStyle} />
+                <Radio
+                  checked={modelFilter === 'video'}
+                  onChange={() => {}}
+                  size="sm"
+                  color="success"
+                  sx={filterRadioSx}
+                />
                 Video models
               </Option>
             </Select>
