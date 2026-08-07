@@ -6,12 +6,14 @@ import { generateMcpToolsFromCache } from '@bike4mind/services';
 export interface LoadAgentMcpToolsDeps {
   mcpServers: {
     find(query: { enabled: boolean; userId: string }): Promise<IMcpServerDocument[]>;
-    update?(doc: { id: string; tools: string[]; toolSchemas: Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }> }): Promise<unknown>;
+    update(doc: {
+      id: string;
+      tools: string[];
+      toolSchemas: Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>;
+    }): Promise<unknown>;
   };
-  getMcpClient: (
-    server: IMcpServerDocument
-  ) => Promise<{
-    getTools?: () => Promise<Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>>;
+  getMcpClient: (server: IMcpServerDocument) => Promise<{
+    getTools: () => Promise<Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>>;
     callTool: (toolName: string, toolArgs: unknown) => Promise<unknown>;
   }>;
   logger: Logger;
@@ -54,19 +56,17 @@ export async function loadAgentMcpTools(
         try {
           logger.info(`[AgentExecutor][MCP] No cached tool schemas for ${server.name} - fetching live`);
           const client = await deps.getMcpClient(server);
-          if (client.getTools) {
-            const liveTools = await client.getTools();
-            if (Array.isArray(liveTools) && liveTools.length > 0) {
-              schemas = liveTools;
-              if (deps.mcpServers.update) {
-                await deps.mcpServers.update({
-                  id: server.id,
-                  tools: liveTools.map((t: { name: string }) => t.name),
-                  toolSchemas: liveTools,
-                });
-              }
-              logger.info(`[AgentExecutor][MCP] Live-fetched and cached ${liveTools.length} tool schemas for ${server.name}`);
-            }
+          const liveTools = await client.getTools();
+          if (Array.isArray(liveTools) && liveTools.length > 0) {
+            schemas = liveTools;
+            await deps.mcpServers.update({
+              id: server.id,
+              tools: liveTools.map((t: { name: string }) => t.name),
+              toolSchemas: liveTools,
+            });
+            logger.info(
+              `[AgentExecutor][MCP] Live-fetched and cached ${liveTools.length} tool schemas for ${server.name}`
+            );
           }
         } catch (fetchError) {
           logger.warn(`[AgentExecutor][MCP] Live tool fetch failed for ${server.name} - skipping`, {
