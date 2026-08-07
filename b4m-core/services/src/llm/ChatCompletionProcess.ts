@@ -2124,7 +2124,7 @@ export class ChatCompletionProcess {
         allFileIdsBeforeDedup,
         dedupedFileIds,
         featureContextMessages,
-        inlineKnowledgeIds,
+        actuallyInlinedKnowledgeIds,
       } = dataSources;
 
       // Step 5b: Build MCP tools and tool prompts before message assembly
@@ -2145,7 +2145,7 @@ export class ChatCompletionProcess {
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
-        inlinedAttachmentIds: inlineKnowledgeIds,
+        inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
@@ -5063,6 +5063,7 @@ export class ChatCompletionProcess {
     );
     const {
       userMessages: promptMessages,
+      deliveredFileIds,
       // errorMessages,
     } = await processFabFilesServer(
       embeddingFactory,
@@ -5104,7 +5105,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       });
     }
 
-    const result = { promptMessages, convertedFabFiles };
+    const result = { promptMessages, convertedFabFiles, deliveredFileIds };
     return result;
   }
 
@@ -5419,9 +5420,11 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     allFileIdsBeforeDedup: string[];
     dedupedFileIds: string[];
     featureContextMessages: { [name: string]: IMessage[] };
-    /** The `sessionKnowledgeIds` subset actually inlined this turn (deferred ids excluded) - the
-     *  set the knowledge tools can truthfully call "already in the conversation above". */
-    inlineKnowledgeIds: string[];
+    /** The `sessionKnowledgeIds` subset NOT deferred to retrieval AND actually delivered into a
+     *  prompt message this turn (excludes a file silently dropped by processFabFilesServer -
+     *  audio, an unserveable image, an unsupported/corrupted file) - the set the knowledge tools
+     *  can truthfully call "already in the conversation above". */
+    actuallyInlinedKnowledgeIds: string[];
   }> {
     // Load feature contexts in parallel with data sources
     const featureContextPromise = Promise.all(
@@ -5559,6 +5562,14 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     }
     const featureContextMessages: { [name: string]: IMessage[] } = Object.fromEntries(featureContextResults);
 
+    // The intersection with `inlineKnowledgeIds` (not `fabResult.deliveredFileIds` alone) matters:
+    // `deliveredFileIds` covers every id `fabFilesToMessages` was given (session/message/system
+    // files too), and a knowledge id can be IN `inlineKnowledgeIds` but still end up undelivered
+    // (audio, an unserveable image, an unsupported/corrupted file - see processFabFilesServer).
+    // Only a knowledge id present in BOTH sets actually has its content in the prompt right now.
+    const deliveredKnowledgeIds = new Set(fabResult?.deliveredFileIds ?? []);
+    const actuallyInlinedKnowledgeIds = inlineKnowledgeIds.filter(id => deliveredKnowledgeIds.has(id));
+
     return {
       urlMessages: urlResult.userMessages,
       remainingUserPrompt: urlResult.remainingPrompt,
@@ -5569,7 +5580,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       allFileIdsBeforeDedup,
       dedupedFileIds,
       featureContextMessages,
-      inlineKnowledgeIds,
+      actuallyInlinedKnowledgeIds,
     };
   }
 }

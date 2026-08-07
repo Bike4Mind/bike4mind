@@ -358,12 +358,16 @@ async function main(): Promise<void> {
   writeFileSync(outPath, JSON.stringify({ runId, args, armResults, summary }, null, 2));
   console.log(`\nWrote ${outPath}`);
 
+  // Rates, not absolute counts - a hardcoded "< 8" or ">= 3" silently stops meaning what it says
+  // the moment --trials is anything other than 10.
   const hardFail =
     anyGateViolation ||
-    summary.some(r => r.invalid >= 3) ||
+    summary.some(r => r.invalid / Math.max(1, r.pass + r.fail + r.invalid) >= 0.3) ||
     // Llama arms are a control (cannot call tools) - do not gate exit status on their pass
-    // count; only fail on a tool-capable arm's pass rate.
-    summary.some(r => !r.model.toLowerCase().includes('llama') && r.pass + r.fail > 0 && r.pass < 8);
+    // rate; only fail on a tool-capable arm's pass rate.
+    summary.some(
+      r => !r.model.toLowerCase().includes('llama') && r.pass + r.fail > 0 && r.pass / (r.pass + r.fail) < 0.8
+    );
 
   if (hardFail) process.exit(1);
 }

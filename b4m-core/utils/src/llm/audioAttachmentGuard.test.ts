@@ -58,6 +58,10 @@ describe('processFabFilesServer — audio is never attached to an LLM', () => {
     // Audio yields neither user content nor an error - it is silently skipped.
     expect(result.userMessages).toEqual([]);
     expect(result.errorMessages).toEqual([]);
+    // #1163: a silently-skipped file must never appear as "delivered" - a caller (e.g. a
+    // knowledge tool reply) trusting this list to mean "already in the prompt" would otherwise
+    // assert something false about a file whose content never reached the model.
+    expect(result.deliveredFileIds).toEqual([]);
     // Proof the guard fired at the top: no attempt to fetch or read the bytes,
     // and no RAG/vector lookup. If the guard regresses, audio falls to the
     // non-image branch and at least one of these is exercised.

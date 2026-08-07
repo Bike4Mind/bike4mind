@@ -431,6 +431,18 @@ describe('search_knowledge_base scoped lake-prompt injection (#1108)', () => {
     expect(out.indexOf('[Data Lake - Lake X]')).toBeLessThan(out.indexOf('pto accrues monthly'));
   });
 
+  it('#1163: appends the inlined-attachment note on the SEMANTIC arm too, not just the keyword fallback', async () => {
+    // A lake-accessible user with a still-chunking attachment now un-short-circuits
+    // userHasAccessibleKnowledgeLake (ChatCompletionProcess.ts), so this arm - not just the
+    // keyword one - is exactly where such a user lands. Ground-truth review caught this arm
+    // returning early with no notice at all.
+    semanticDataLakeSearchMock.mockResolvedValue({ results: [lakeHit(['datalake:x'])], scan });
+    const out = await run(semCtx([makeLake()], { inlinedAttachmentIds: ['f1'] }));
+    expect(out).toContain('pto accrues monthly');
+    expect(out).toContain('"Handbook.pdf"');
+    expect(out).toContain('already included above');
+  });
+
   it('injects nothing when the grounded files carry no lake tag', async () => {
     semanticDataLakeSearchMock.mockResolvedValue({ results: [lakeHit([])], scan });
     const out = await run(semCtx([makeLake()]));

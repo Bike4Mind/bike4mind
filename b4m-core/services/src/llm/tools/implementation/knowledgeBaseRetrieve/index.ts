@@ -204,7 +204,16 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               const searchDesc = [query && `query "${query}"`, tags?.length && `tags [${tags.join(', ')}]`]
                 .filter(Boolean)
                 .join(' and ');
-              return `No documents found matching ${searchDesc}. Try broadening your search with search_knowledge_base.`;
+              // This search is over file NAME/TAGS/NOTES, not content, so a freshly attached file
+              // whose metadata does not match the query lands here even though its raw content is
+              // already in the prompt - the caller cannot tell which specific file that is from a
+              // metadata miss alone, so the note stays generic (see attachmentInlineNotice in
+              // knowledgeBaseSearch for the sibling case where the matched file IS identifiable).
+              const inlinedCount = context.inlinedAttachmentIds?.length ?? 0;
+              const inlinedNote = inlinedCount
+                ? ` ${inlinedCount} file(s) attached to this conversation may not be indexed for search yet - if so, their content was already included directly in the conversation above; answer from that instead of reporting them as inaccessible.`
+                : '';
+              return `No documents found matching ${searchDesc}. Try broadening your search with search_knowledge_base.${inlinedNote}`;
             }
           }
 
@@ -329,9 +338,10 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               return (
                 `The document(s) ${inlinedNames.join(', ')} are attached to this conversation and still ` +
                 `being indexed, so this tool has no stored text for them yet. Their full content was ` +
-                `already provided earlier in this conversation (look for "Here is the content from the ` +
-                `attached file"). Answer the user's question from that content. Do NOT tell the user you ` +
-                `cannot access the attachment.`
+                `already provided earlier in this conversation (look for a message starting with ` +
+                `"Here is the content from the attached file" or, with multiple files, "Here are the ` +
+                `contents from"). Answer the user's question from that content. Do NOT tell the user ` +
+                `you cannot access the attachment.`
               );
             }
             return (

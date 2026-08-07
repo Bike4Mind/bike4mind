@@ -133,12 +133,13 @@ export interface ToolContext {
    */
   kbScope?: KbScope;
   /**
-   * FabFile ids attached to THIS session whose text was actually inlined into this turn's
-   * prompt (the `sessionKnowledgeIds` subset NOT deferred to retrieval - see
-   * `buildDataSources`'s `inlineKnowledgeIds`). The knowledge tools use this to tell a caller
-   * "that file's content is already above" without lying about a deferred (not-inlined)
-   * attachment. Absent/empty on non-chat surfaces (agent executor, embed) where nothing is
-   * inlined this way.
+   * FabFile ids attached to THIS session whose text was actually delivered into this turn's
+   * prompt (the `sessionKnowledgeIds` subset that is both NOT deferred to retrieval and NOT
+   * silently dropped by `processFabFilesServer` - see `buildDataSources`'s
+   * `actuallyInlinedKnowledgeIds`). The knowledge tools use this to tell a caller "that file's
+   * content is already above" without lying about a deferred OR undeliverable (audio,
+   * unserveable image, unsupported/corrupted file) attachment. Absent/empty on non-chat surfaces
+   * (agent executor, embed) where nothing is inlined this way.
    */
   inlinedAttachmentIds?: string[];
   storage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;

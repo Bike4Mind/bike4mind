@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { IFabFileDocument, ModelInfo } from '@bike4mind/common';
+import { CorruptedFileError, type IFabFileDocument, type ModelInfo } from '@bike4mind/common';
 
 const mockGetFileContent = vi.fn();
 vi.mock('../fabfile', () => ({ getFileContent: (...a: unknown[]) => mockGetFileContent(...a) }));
@@ -215,5 +215,72 @@ describe('processFabFilesServer attached-content budget', () => {
     );
 
     expect(emittedChars(userMessages)).toBeLessThan(MAX_FILE_SIZE);
+  });
+});
+
+/**
+ * #1163: `deliveredFileIds` must name only files that actually contributed content, not every
+ * file this call was given - a caller (e.g. a knowledge tool telling the model "this file's
+ * content is already above") trusting the input list instead would assert something false about
+ * a silently-skipped file.
+ */
+describe('processFabFilesServer deliveredFileIds', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetFileContent.mockResolvedValue('hello world');
+  });
+
+  it('lists every text file that was actually delivered', async () => {
+    const { deliveredFileIds } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('a'), textFile('b')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    expect(deliveredFileIds.sort()).toEqual(['a', 'b']);
+  });
+
+  it('excludes an image skipped because the model does not support vision', async () => {
+    const { deliveredFileIds, userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('a'), imageFile('img-1')],
+      'prompt',
+      4000,
+      modelInfo, // supportsVision: false
+      async () => {},
+      deps()
+    );
+
+    // Sanity: the image really did take the silent-skip arm, not an error path.
+    expect(userMessages.some(m => typeof m.content === 'string' && m.content.includes('img-1'))).toBe(false);
+    expect(deliveredFileIds).toEqual(['a']);
+  });
+
+  it('excludes a corrupted file from delivery while a sibling file still succeeds', async () => {
+    // Only this one file's read fails - a shared per-turn mock keyed by call order would let
+    // the corrupted file "succeed" on retry via cache reuse, so key it by filename instead.
+    mockGetFileContent.mockImplementation(async (file: IFabFileDocument) => {
+      if (file.id === 'bad') throw new CorruptedFileError(file.fileName, 'PDF', 'unreadable stream');
+      return 'hello world';
+    });
+
+    const { deliveredFileIds, userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('good'), textFile('bad')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    // The corrupted file is silently skipped (caught, not rethrown) - the turn as a whole
+    // still succeeds and the sibling file's content still reaches the model.
+    expect(deliveredFileIds).toEqual(['good']);
+    expect(emittedChars(userMessages)).toBeGreaterThan(0);
   });
 });

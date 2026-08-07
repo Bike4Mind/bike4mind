@@ -529,6 +529,31 @@ describe('retrieve_knowledge_content zero-chunk wording for inlined attachments 
     expect(out).not.toContain('Deferred.pdf');
   });
 
+  it('a metadata-search miss (Path B) also points at an inlined attachment, not just a zero-chunk match', async () => {
+    // Ground-truth catch: a freshly-attached file whose name/tags/notes do not match the query
+    // never reaches the zero-chunk branch at all - it fails the metadata search itself.
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['f1'] });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'unrelated phrase' })) as string;
+
+    expect(out).toContain('No documents found matching');
+    expect(out).toContain('already included directly in the conversation above');
+  });
+
+  it('a metadata-search miss with no inlined attachments is unchanged', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined }); // inlinedAttachmentIds omitted
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'unrelated phrase' })) as string;
+
+    expect(out).toBe(
+      'No documents found matching query "unrelated phrase". Try broadening your search with search_knowledge_base.'
+    );
+  });
+
   it('regression: a file with at least one real chunk is unaffected by the zero-chunk wording', async () => {
     const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: [FILE_ID] });
     (ctx.db as { fabfilechunks: unknown }).fabfilechunks = pagedTextChunkRepo([

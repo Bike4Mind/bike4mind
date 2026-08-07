@@ -217,10 +217,13 @@ interface SemanticArmResult {
   output: string | null;
   skipNotice: string | null;
   datalakeTags: string[];
+  /** Files this arm actually matched, for attachmentInlineNotice - see its call site. Empty
+   *  whenever `output` is null (nothing matched, or the arm never ran). */
+  fileHits: Array<{ id: string; fileName: string }>;
 }
 
 /** Nothing to report: dependency missing, no accessible corpus, or the arm threw. */
-const NO_SEMANTIC_RESULT: SemanticArmResult = { output: null, skipNotice: null, datalakeTags: [] };
+const NO_SEMANTIC_RESULT: SemanticArmResult = { output: null, skipNotice: null, datalakeTags: [], fileHits: [] };
 
 /**
  * Semantic-first KB search: embed the query and cosine-rank against the pre-computed chunk
@@ -275,7 +278,7 @@ async function trySemanticKbSearch(
 
     const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
     // No hits: the keyword arm answers, but it has to carry the notice with it.
-    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [] };
+    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [], fileHits: [] };
 
     // Honor the max_results contract: topK fetches a wider pool (≥6) so cosine ranking has
     // candidates, but we return at most maxResults passages - parity with the keyword path's
@@ -292,6 +295,7 @@ async function trySemanticKbSearch(
       output: formatSemanticResults(ranked, search.scan, skipNotice),
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
+      fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
@@ -338,13 +342,18 @@ async function tryScopedSemanticKbSearch(
     await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
 
     const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
-    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [] };
+    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [], fileHits: [] };
 
     const ranked = search.results.slice(0, maxResults);
     await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice);
     // Agent-scoped results never carry a lake prompt: this arm must not consult owner-wide access
     // or imply a wider corpus, so its provenance is intentionally empty (no injection downstream).
-    return { output: formatSemanticResults(ranked, search.scan, skipNotice), skipNotice, datalakeTags: [] };
+    return {
+      output: formatSemanticResults(ranked, search.scan, skipNotice),
+      skipNotice,
+      datalakeTags: [],
+      fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
+    };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
     return NO_SEMANTIC_RESULT;
@@ -395,7 +404,7 @@ function formatSearchResults(files: IFabFileDocument[]): string {
  * Returns '' when there is nothing to add, so an unpopulated context (agent/embed surfaces) is a
  * byte-identical no-op.
  */
-function attachmentInlineNotice(context: ToolContext, rankedResults: IFabFileDocument[]): string {
+function attachmentInlineNotice(context: ToolContext, rankedResults: Array<{ id: string; fileName: string }>): string {
   const inlined = context.inlinedAttachmentIds;
   if (!inlined?.length) return '';
 
@@ -448,7 +457,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             `You have already run ${searchCallCount - 1} knowledge-base searches; the relevant passages are in the conversation above. ` +
             `STOP searching and compose your complete answer NOW from those results. Do NOT call search_knowledge_base ` +
             `or retrieve_knowledge_content again unless a specific named fact is genuinely missing.` +
-            formatSkipNotice(lastSkipNotice)
+            formatSkipNotice(lastSkipNotice) +
+            attachmentInlineNotice(context, [])
           );
         }
 
@@ -463,6 +473,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
         // the generic no-results message before either arm runs, never fall back owner-wide.
         const scope = context.kbScope;
         if (scope && scope.fileIds.length === 0) {
+          // Deliberately untouched even if inlinedAttachmentIds were ever set here: an
+          // empty-scope agent surface must read as a pure "nothing in scope" early return, not
+          // acquire new behavior tied to a signal this surface was never designed to receive.
           return formatSearchResults([]);
         }
 
@@ -480,8 +493,15 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
         // enters later via retrieve_knowledge_content, which injects there. Test .output, not the
         // object: the arm always resolves to a truthy result now, so `if (semantic)` would swallow
         // the keyword fallback entirely.
-        if (semantic.output)
-          return prependRetrievedLakePrompts(context, semantic.output, semantic.datalakeTags, injectedLakeTags);
+        if (semantic.output) {
+          const withLakePrompts = await prependRetrievedLakePrompts(
+            context,
+            semantic.output,
+            semantic.datalakeTags,
+            injectedLakeTags
+          );
+          return withLakePrompts + attachmentInlineNotice(context, semantic.fileHits);
+        }
 
         try {
           let searchResults;
