@@ -314,6 +314,8 @@ describe('reconcileLakeTags', () => {
       await expect(result.commit()).resolves.toBeUndefined();
 
       expect(adapters.db.dataLakes.setStats).toHaveBeenCalledTimes(2);
+      // Both lakes' leave list the same signal tag - force-carried once, not twice.
+      expect(result.tagsToPersist).toEqual([tag('lk:shared', 1)]);
     });
 
     it('judges the leave against the post-fallback-tagger array, not the raw desired array', async () => {

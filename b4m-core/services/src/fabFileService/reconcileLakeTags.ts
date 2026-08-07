@@ -179,13 +179,17 @@ export const reconcileLakeTags = async (
   // would see no member and treat the leave as a no-op race instead of actually revoking it.
   // Restores each tag's ORIGINAL strength (a content tag's strength is user-meaningful, unlike a
   // meta-tag's fixed DATALAKE_TAG_STRENGTH), so re-fetch the stored doc only on this rare path.
+  // Deduped by name: two lakes sharing one prefix both list the same tag as their signal, and
+  // `commit()` only needs it force-carried once for the pull to see it.
   let departingPrefixTags: { name: string; strength: number }[] = [];
   if (prefixArmLeaves.length > 0) {
     const storedFile = cachedFile ?? (await db.fabFiles.findById(fabFileId));
     const strengthByName = new Map((storedFile?.tags ?? []).map(t => [t.name, t.strength] as const));
-    departingPrefixTags = prefixArmLeaves
-      .flatMap(l => l.signalTags)
-      .map(name => ({ name, strength: strengthByName.get(name) ?? DATALAKE_TAG_STRENGTH }));
+    const departingNames = new Set(prefixArmLeaves.flatMap(l => l.signalTags));
+    departingPrefixTags = [...departingNames].map(name => ({
+      name,
+      strength: strengthByName.get(name) ?? DATALAKE_TAG_STRENGTH,
+    }));
   }
 
   return {

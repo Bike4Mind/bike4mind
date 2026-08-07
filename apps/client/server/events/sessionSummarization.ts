@@ -230,12 +230,17 @@ export const handler = withEventContext(async (event, logger) => {
         const prefixArmLakes = await dataLakeService.loadPrefixArmCandidateLakes([fabfile.userId], {
           db: { dataLakes: dataLakeRepository },
         });
+        // Computed once, not per tag: prefixArmTagNames re-scans the whole tag list per lake, so
+        // calling it inside the filter below would redo that scan for every tag on the file.
+        const prefixArmSignalNames = new Set(
+          prefixArmLakes.flatMap(lake => prefixArmTagNames(storedTagNames, lake.fileTagPrefix))
+        );
         const lakeTags = (fabfile.tags ?? []).filter(t => {
           if (typeof t?.name !== 'string') return false;
           if (t.name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)) return true;
           // prefixArmLakes is already scoped to fabfile.userId (the $in query above), so no
           // further owner check is needed here.
-          return prefixArmLakes.some(lake => prefixArmTagNames(storedTagNames, lake.fileTagPrefix).includes(t.name));
+          return prefixArmSignalNames.has(t.name);
         });
         await fabFilesService.updateFabFile(
           user,
