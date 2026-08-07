@@ -1544,7 +1544,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
 
   const { settings: userSettings } = useUserSettings();
 
-  const modelSpeed = getModelSpeedFromStats(modelInfo?.id ?? '', stats?.avgResponseTime ?? {});
   const isResearchModeFeatureEnabled = userSettings.experimentalFeatures?.enableResearchMode === true;
 
   // Model detail dialog. `modelDetailsOpen` is lifted to the shared store so the
@@ -1561,6 +1560,14 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   // shared fields, so editing them would silently reconfigure the active model instead.
   const isPreviewingModel = shownModel !== model;
 
+  // The catalog row for the model on screen. Everything the dialog *describes* - name, description,
+  // capability pills, speed, price tier - must read from this rather than from `modelInfo`, which is
+  // the active model. Deriving it once is deliberate: speed and price tier were each computed from
+  // `modelInfo` and so kept showing the active model's numbers under a previewed model's name.
+  const shownModelInfo = detailsModel ?? modelInfo;
+
+  const modelSpeed = getModelSpeedFromStats(shownModelInfo?.id ?? '', stats?.avgResponseTime ?? {});
+
   const isKontextModel = isKontextImageModel(shownModel);
 
   const { maxContextWindow, maxTokens } = useMemo(() => {
@@ -1574,8 +1581,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
     return { maxContextWindow: maxCtx, maxTokens: maxTok };
   }, [modelInfoRepo]);
 
-  const priceTierInfo: { tier: string; variant: ChipVariant } = modelInfo
-    ? getModelPriceTier(modelInfo)
+  const priceTierInfo: { tier: string; variant: ChipVariant } = shownModelInfo
+    ? getModelPriceTier(shownModelInfo)
     : { tier: 'Low', variant: 'green' };
 
   const handleModelSelection = useCallback(
@@ -2056,7 +2063,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                     and pressing it deliberately leaves the dialog open so the settings below can
                     be adjusted straight after. */}
                 {(() => {
-                  const shown = detailsModel ?? modelInfo;
+                  const shown = shownModelInfo;
                   if (!shown) return null;
                   if (shown.id === typedModel) {
                     // Tick trails the label here, unlike the cards: this sits at the row's right
@@ -2091,7 +2098,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
 
               <Box sx={{ mt: '24px' }}>
                 {(() => {
-                  const shown = detailsModel ?? modelInfo;
+                  const shown = shownModelInfo;
                   if (!shown) return null;
                   const showNew = isNewModel(shown);
                   const showBedrock = shown.backend === ModelBackend.Bedrock;
@@ -2118,16 +2125,12 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                   );
                 })()}
 
-                <TabIntro
-                  title={(detailsModel ?? modelInfo)?.name ?? ''}
-                  description={(detailsModel ?? modelInfo)?.description}
-                  mt={0}
-                />
+                <TabIntro title={shownModelInfo?.name ?? ''} description={shownModelInfo?.description} mt={0} />
               </Box>
 
               {/* Selected Model Details */}
               <SelectedModelDetails
-                modelInfo={detailsModel ?? modelInfo}
+                modelInfo={shownModelInfo}
                 // The previewed model, not the session's active one: every gate inside keys off
                 // this, so the screen shows the control set belonging to the model it names.
                 model={shownModel}
