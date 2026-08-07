@@ -197,4 +197,25 @@ describe('sessionSummarization summary-file lookup', () => {
       expect.anything()
     );
   });
+
+  // The doc comment above the carry-through says the session's own tags never overlap a
+  // membership signal - true in the normal case, but not an invariant the code can lean on.
+  it('does not duplicate a membership tag the session itself also carries', async () => {
+    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [{ name: 'lk:invoices' }] };
+    h.fabFileStore.push({
+      id: 'fabfile-owner',
+      userId: OWNER,
+      sessionId: SESSION_ID,
+      fileName: 'Notebook Summary.txt',
+      tags: [{ name: 'lk:invoices', strength: 1 }],
+    });
+    h.findPrefixArmLakes.mockResolvedValueOnce([
+      { createdByUserId: OWNER, fileTagPrefix: 'lk:', datalakeTag: 'datalake:lake1' },
+    ]);
+
+    await run();
+
+    const call = h.updateFabFile.mock.calls[0][1] as { tags: { name: string }[] };
+    expect(call.tags.filter(t => t.name === 'lk:invoices')).toHaveLength(1);
+  });
 });

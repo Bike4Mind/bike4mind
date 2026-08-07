@@ -208,10 +208,13 @@ export const handler = withEventContext(async (event, logger) => {
       const fabfile = await fabFileRepository.findOne({ sessionId: session.id, userId: session.userId });
       if (fabfile) {
         // Re-summarizing must not change which data lakes this file belongs to. The tags here are
-        // the SESSION's, which never carry a `datalake:` meta-tag or a prefix-arm content tag, and
-        // a whole-array tag write omitting one reads as leaving that lake - so without carrying
-        // the file's existing membership tags through, every re-summarization would evict a
-        // lake-indexed summary (and fail outright for a summariser who cannot manage the lake).
+        // the SESSION's, which are not expected to carry a `datalake:` meta-tag or a prefix-arm
+        // content tag, and a whole-array tag write omitting one reads as leaving that lake - so
+        // without carrying the file's existing membership tags through, every re-summarization
+        // would evict a lake-indexed summary (and fail outright for a summariser who cannot
+        // manage the lake). `lakeTags` below drops anything already present in the session's own
+        // tags, so an overlap (an unusual case, not the norm described above) still can't produce
+        // a duplicate entry in the persisted array.
         //
         // Carries BOTH signals: the meta-tag, and any tag under a prefix arm the file's OWNER
         // (session.userId - this query is anchored to it above) runs. Since #1263, a prefix tag
@@ -235,8 +238,10 @@ export const handler = withEventContext(async (event, logger) => {
         const prefixArmSignalNames = new Set(
           prefixArmLakes.flatMap(lake => prefixArmTagNames(storedTagNames, lake.fileTagPrefix))
         );
+        const sessionTagNames = new Set((fabFileData.tags ?? []).map(t => t.name));
         const lakeTags = (fabfile.tags ?? []).filter(t => {
           if (typeof t?.name !== 'string') return false;
+          if (sessionTagNames.has(t.name)) return false;
           if (t.name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)) return true;
           // prefixArmLakes is already scoped to fabfile.userId (the $in query above), so no
           // further owner check is needed here.

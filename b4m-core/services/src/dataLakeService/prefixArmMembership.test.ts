@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MembershipLake } from './lakeMembership';
-import { findPrefixArmChanges, loadPrefixArmCandidateLakes } from './prefixArmMembership';
+import {
+  couldMatchTagPrefixArmLoosely,
+  findPrefixArmChanges,
+  loadPrefixArmCandidateLakes,
+} from './prefixArmMembership';
 
 const lake = (overrides: Partial<MembershipLake> = {}): MembershipLake => ({
   id: 'lake1',
@@ -197,5 +201,21 @@ describe('loadPrefixArmCandidateLakes', () => {
     const result = await loadPrefixArmCandidateLakes([undefined, null], { db: { dataLakes: { find } } });
     expect(find).not.toHaveBeenCalled();
     expect(result).toEqual([]);
+  });
+});
+
+describe('couldMatchTagPrefixArmLoosely', () => {
+  it('matches case-insensitively, unlike the strict prefix-arm predicate', () => {
+    expect(couldMatchTagPrefixArmLoosely('LK:Invoices', 'lk:')).toBe(true);
+  });
+
+  it('is false with no prefix', () => {
+    expect(couldMatchTagPrefixArmLoosely('lk:invoices', null)).toBe(false);
+  });
+
+  // Mirrors prefixArmTagNames closing the reserved datalake: namespace, so the two predicates
+  // never disagree on a lake somehow persisted with a reserved fileTagPrefix.
+  it('never fires for the reserved datalake: namespace', () => {
+    expect(couldMatchTagPrefixArmLoosely('datalake:lake1', 'datalake:')).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import type { IDataLakeRepository } from '@bike4mind/common';
-import { normalizeTagPrefix, prefixArmTagNames } from '@bike4mind/common';
+import { isReservedTagPrefix, normalizeTagPrefix, prefixArmTagNames } from '@bike4mind/common';
 import type { MembershipLake } from './lakeMembership';
 
 export interface PrefixArmChange {
@@ -35,7 +35,8 @@ export interface PrefixArmAdapters {
  */
 export const couldMatchTagPrefixArmLoosely = (name: string, fileTagPrefix: string | undefined | null): boolean => {
   const prefix = normalizeTagPrefix(fileTagPrefix);
-  return !!prefix && name.toLowerCase().startsWith(prefix.toLowerCase());
+  if (!prefix || isReservedTagPrefix(prefix)) return false;
+  return name.toLowerCase().startsWith(prefix.toLowerCase());
 };
 
 /**
