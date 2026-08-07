@@ -20,7 +20,6 @@ import {
   Tooltip,
   Select,
   Option,
-  Switch,
   Divider,
 } from '@mui/joy';
 import {
@@ -108,8 +107,14 @@ import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { ImageTemplatePanel } from '../ImageTemplates/ImageTemplatePanel';
 
+/**
+ * Width shared by every settings control, so the column lines up on both edges. Narrower controls
+ * (the Prompt Upsampling toggle) are right-aligned inside a box of this width rather than resized.
+ */
+const SETTINGS_CONTROL_WIDTH = '120px';
+
 const commonInputStyles = (_mode: string) => ({
-  width: '120px',
+  width: SETTINGS_CONTROL_WIDTH,
   height: '36px',
   // Out of flow deliberately: in flow the spinner reserves ~15px at the right, so `textAlign:
   // center` centres the value across the remaining width and it lands left of the real centre.
@@ -219,7 +224,7 @@ const SETTINGS_SELECT_SLOT_PROPS = {
 const SETTINGS_LABEL_WIDTH = '164px';
 
 /** Vertical rhythm between rows, and between the text and image-model groups. */
-const SETTINGS_ROW_GAP = '16px';
+const SETTINGS_ROW_GAP = '24px';
 
 /**
  * One Advanced Settings row: label (plus optional help icon) in the fixed column, control after it.
@@ -292,6 +297,20 @@ const getModelConstraintKey = (model: string) => {
   if (isBflImageModel(model)) return 'BFL';
   return 'GPT_IMAGE_1';
 };
+
+/**
+ * Every value the BFL safety cap actually allows. Derived from the constant rather than hardcoded so
+ * the list cannot outlive a change to `MAX` - which is exactly how the old slider ended up offering
+ * marks at 4 and 6 after the cap dropped to 2.
+ */
+const SAFETY_TOLERANCE_LABELS = ['Strict', 'Moderate', 'Relaxed'];
+const SAFETY_TOLERANCE_OPTIONS = Array.from(
+  { length: BFL_SAFETY_TOLERANCE.MAX - BFL_SAFETY_TOLERANCE.MIN + 1 },
+  (_, i) => {
+    const value = BFL_SAFETY_TOLERANCE.MIN + i;
+    return { value, label: SAFETY_TOLERANCE_LABELS[i] ?? String(value) };
+  }
+);
 
 const BASE_REASONING_EFFORT_OPTIONS: { value: UserReasoningEffort; label: string }[] = [
   { value: 'auto', label: 'Auto' },
@@ -1164,90 +1183,44 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               ))}
               {isBflImageModel(model) && (
                 <>
-                  <SettingsRow label="Prompt Upsampling" tooltip={FIELD_TOOLTIPS.promptEnhancement}>
-                    <Switch
-                      checked={prompt_upsampling ?? false}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        setLLM({ prompt_upsampling: e.target.checked })
-                      }
-                      color={prompt_upsampling ? 'success' : 'neutral'}
-                    />
-                  </SettingsRow>
-                  {/* The value used to be appended to this label as well, duplicating the input beside
-                    it. The marked slider below is a second control on the same value - left as-is for
-                    now, to be reworked like the token slider was. */}
+                  {/* A dropdown, not a slider: `MAX` is a hard cap of 2, so there are only three
+                    reachable values. The slider that used to be here was min 0 / max 2 with marks at
+                    0/2/4/6, so two of its four labels sat outside the track and could never be
+                    selected, and a pair of captions above it advertised a "Creative & Spicy" end that
+                    the cap forbids. It also duplicated a number input on the same value. */}
                   <SettingsRow label="Safety Tolerance" tooltip={FIELD_TOOLTIPS.safetyTolerance}>
-                    <Input
-                      sx={commonInputStyles(mode || 'light')}
-                      size="sm"
-                      variant="outlined"
-                      color="primary"
-                      type="number"
-                      value={safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        setLLM({ safety_tolerance: parseInt(e.target.value) })
-                      }
-                      slotProps={{
-                        input: {
-                          min: BFL_SAFETY_TOLERANCE.MIN,
-                          max: BFL_SAFETY_TOLERANCE.MAX,
-                          step: 1,
-                        },
-                      }}
-                    />
-                  </SettingsRow>
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, pt: 2 }}>
-                    <Box
-                      sx={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        px: 1,
-                      }}
+                    <Select
+                      // Sessions saved before the cap can hold up to LEGACY_INPUT_MAX; the schema
+                      // clamps them on parse, so clamp here too or the Select renders blank.
+                      value={Math.min(safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT, BFL_SAFETY_TOLERANCE.MAX)}
+                      onChange={(_, newValue) => newValue !== null && setLLM({ safety_tolerance: newValue })}
+                      indicator={<KeyboardArrowDownIcon />}
+                      sx={settingsSelectSx(mode || 'light')}
+                      slotProps={SETTINGS_SELECT_SLOT_PROPS}
+                      data-testid="setting-select-safety-tolerance"
                     >
-                      <Typography level="body-xs" sx={{ color: 'text.secondary', fontWeight: 500 }}>
-                        🛡️ Family-friendly
-                      </Typography>
-                      <Typography level="body-xs" sx={{ color: 'text.secondary', fontWeight: 500 }}>
-                        🌶️ Creative & Spicy
-                      </Typography>
+                      {SAFETY_TOLERANCE_OPTIONS.map(option => (
+                        <Option key={option.value} value={option.value}>
+                          {option.label}
+                        </Option>
+                      ))}
+                    </Select>
+                  </SettingsRow>
+                  {/* Last row on purpose: it is the only toggle among the dropdowns and inputs, so it
+                    reads as an addendum rather than interrupting the column of matching controls. */}
+                  <SettingsRow label="Prompt Upsampling" tooltip={FIELD_TOOLTIPS.promptEnhancement}>
+                    {/* The toggle is narrower than the inputs and selects, so it sits in a box of the
+                      shared control width and hugs the right edge - lining up with their right edge
+                      rather than floating in the middle of the column. */}
+                    <Box sx={{ width: SETTINGS_CONTROL_WIDTH, display: 'flex', justifyContent: 'flex-end' }}>
+                      {/* The same toggle the tools list uses, so on/off reads identically everywhere. */}
+                      <SquareSlideToggle
+                        checked={prompt_upsampling ?? false}
+                        onChange={e => setLLM({ prompt_upsampling: e.target.checked })}
+                        data-testid="setting-toggle-prompt-upsampling"
+                      />
                     </Box>
-                    <Slider
-                      aria-label="Safety Tolerance"
-                      value={safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
-                      min={BFL_SAFETY_TOLERANCE.MIN}
-                      max={BFL_SAFETY_TOLERANCE.MAX}
-                      step={1}
-                      onChange={(_, newValue) => {
-                        if (typeof newValue === 'number') {
-                          setLLM({ safety_tolerance: newValue });
-                        }
-                      }}
-                      valueLabelDisplay="auto"
-                      marks={[
-                        { value: 0, label: '🛡️ Safe' },
-                        { value: 2, label: '📝 Mild' },
-                        { value: 4, label: '🎨 Balanced' },
-                        { value: 6, label: '🌶️ Spicy' },
-                      ]}
-                      sx={{
-                        '--Slider-trackSize': '6px',
-                        '--Slider-thumbSize': '14px',
-                        '--Slider-thumbWidth': '14px',
-                        '& .MuiSlider-mark': {
-                          display: 'block',
-                          height: '8px',
-                          width: '2px',
-                          backgroundColor: 'var(--joy-palette-neutral-400)',
-                        },
-                        '& .MuiSlider-markLabel': {
-                          fontSize: '0.75rem',
-                          fontWeight: 500,
-                          marginTop: '8px',
-                        },
-                      }}
-                    />
-                  </Box>
+                  </SettingsRow>
                 </>
               )}
             </Box>
