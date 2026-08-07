@@ -690,11 +690,20 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       }
     });
 
-    it('states that the library can be searched but not counted, and forbids inventing a total', async () => {
+    it('states that the retrieved content is never a total, and forbids inventing one', async () => {
       const { content } = await run(makeCtx({}));
-      expect(content).toContain('you cannot count');
+      expect(content).toContain('ranked passages - never a total');
       expect(content).toContain('can search this library but cannot count it');
       expect(content).toContain('Never guess a number');
+    });
+
+    it('points a count question at a counting tool before the fallback wording', async () => {
+      // count_knowledge_base is paired with knowledge-base SEARCH, not with forced retrieval, so
+      // this path cannot know whether the turn carries it. The note has to hold either way -
+      // otherwise it talks a tool-carrying turn out of using the capability it has.
+      const { content } = await run(makeCtx({}));
+      expect(content).toContain('use a knowledge-base counting tool if one is available to you');
+      expect(content).toContain('otherwise say plainly');
     });
 
     it('rules out the specific infrastructure answers observed in the wild', async () => {
@@ -716,7 +725,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       // larger than the retrieved set; it must not appear in the prompt.
       const { content } = await run(makeCtx({ total: 585, hasMore: true }));
       expect(content).not.toContain('585');
-      expect(content).toContain('totals are shown on its page in the product');
+      expect(content).toContain('the total is shown on its page in the product');
     });
   });
 

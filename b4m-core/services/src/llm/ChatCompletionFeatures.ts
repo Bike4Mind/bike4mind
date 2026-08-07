@@ -1985,13 +1985,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // retrieval returns ranked passages and never a total, and the coverage note below pushes
       // toward refusal on any comprehensive-survey question. So name the limit explicitly rather
       // than leaving the model to infer "no access" and improvise from there.
+      //
+      // Worded to hold whether or not the turn also carries tools: count_knowledge_base is paired
+      // with knowledge-base SEARCH, not with forced retrieval, so this path cannot know whether it
+      // was sent - and a flat "you cannot count" would talk a tool-carrying turn out of using it.
       const capabilityNote =
         'About this library: it is the curated library, shown in the product as the knowledge base or Data Lake. ' +
-        'The retrieved content above is your only view of it - you can search it semantically, but you cannot count, ' +
-        'list or enumerate its documents, and you have no database, SQL or storage-console access to it. If asked how ' +
-        'many documents it holds or for a full inventory, say plainly that you can search this library but cannot ' +
-        'count it, and that totals are shown on its page in the product. Never guess a number, and never suggest ' +
-        'queries, consoles or other infrastructure steps for counting it.\n\n';
+        'The retrieved content above is your only view of it, and it is ranked passages - never a total - so it ' +
+        'cannot tell you how many documents the library holds. You have no database, SQL or storage-console access ' +
+        'to it. If asked how many documents it holds or for a full inventory: use a knowledge-base counting tool if ' +
+        'one is available to you, and otherwise say plainly that you can search this library but cannot count it, ' +
+        'and that the total is shown on its page in the product. Never guess a number, and never suggest queries, ' +
+        'consoles or other infrastructure steps for counting it.\n\n';
       const header =
         this.citationStyle === 'indexed'
           ? '[Knowledge Base — Retrieved Context]\n' +

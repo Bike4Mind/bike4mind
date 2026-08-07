@@ -34,6 +34,8 @@ export const b4mLLMTools = z.enum([
   // Chess engine
   'chess_engine',
   'retrieve_knowledge_content',
+  // Cardinality - the one knowledge-base question ranked retrieval cannot answer
+  'count_knowledge_base',
   // Agent delegation
   'delegate_to_agent',
   // OptiHashi optimization tools
