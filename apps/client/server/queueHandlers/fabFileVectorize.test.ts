@@ -23,6 +23,8 @@ const h = vi.hoisted(() => ({
   chunkUpdate: vi.fn(),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
   stampChunkEmbeddingModel: vi.fn(),
+  indexChunks: vi.fn(),
+  selfHostOpenSearchEnabled: vi.fn(() => false),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -72,7 +74,9 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   // Mirror the real name-based guard so any test that reaches the failure branch classifies correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
   getAtlasIndexForModel: h.getAtlasIndexForModel,
+  FabFileChunkSearchIndex: { indexChunks: h.indexChunks },
 }));
+vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
 vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get: () => 'mock' }) }) }));
 
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
@@ -358,5 +362,59 @@ describe('fabFileVectorize handler - embeddingModel discriminator stamp', () => 
 
     expect(h.chunkUpdate).not.toHaveBeenCalled();
     expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getAtlasIndexForModel.mockReturnValue({ name: 'idx', numDimensions: 3 });
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.countTerminalChunks.mockResolvedValue(1);
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+  });
+
+  it('indexes the vectorized chunks when self-host OpenSearch is enabled', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(undefined);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.indexChunks).toHaveBeenCalledTimes(1);
+    expect(h.chunkUpdate).toHaveBeenCalled();
+  });
+
+  it('never calls indexChunks when self-host OpenSearch is disabled', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.indexChunks).not.toHaveBeenCalled();
+  });
+
+  it('fails open on an indexing error - the Mongo write and stamp still complete, no throw', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockRejectedValue(new Error('cluster unreachable'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.chunkUpdate).toHaveBeenCalled();
+    expect(h.stampChunkEmbeddingModel).toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
   });
 });

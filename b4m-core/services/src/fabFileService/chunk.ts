@@ -29,12 +29,18 @@ interface ChunkFileAdapters {
     getContentAsBuffer: (filePath: string) => Promise<Buffer>;
   };
   logger: Logger;
+  /**
+   * Self-host OpenSearch only (undefined elsewhere). Re-chunking deletes the old
+   * FabFileChunk rows and their embeddingModel with them - without this, the old chunks'
+   * OpenSearch vectors would survive as permanent orphans in the OLD model's index.
+   */
+  searchIndex?: { deleteByFabFileId: (fabFileId: string, embeddingModel: string) => Promise<void> };
 }
 
 export const chunkFabfile = async (
   user: IUserDocument,
   parameters: ChunkFileParameters,
-  { db, storage, logger }: ChunkFileAdapters
+  { db, storage, logger, searchIndex }: ChunkFileAdapters
 ) => {
   const { fabFileId, embeddingModel, passageTokenTarget } = secureParameters(parameters, chunkFileSchema);
 
@@ -47,6 +53,10 @@ export const chunkFabfile = async (
   const chunks = await chunker.chunkFile(fabFile);
   chunker.freeEncoder();
   Logger.globalInstance.log(`Completed chunking file into ${chunks.length} chunks`);
+
+  // Captured before it's overwritten below - the OLD chunks about to be deleted were indexed
+  // (if at all) under THIS model's OpenSearch index, not the new one.
+  const previousEmbeddingModel = fabFile.embeddingModel;
 
   fabFile.isChunking = false;
   fabFile.chunked = chunks.length > 0;
@@ -66,6 +76,9 @@ export const chunkFabfile = async (
   await db.fabFiles.update(fabFile);
 
   await db.fabFileChunks.deleteManyByFabFileId(fabFileId);
+  if (searchIndex && previousEmbeddingModel) {
+    await searchIndex.deleteByFabFileId(fabFileId, previousEmbeddingModel);
+  }
 
   const fabFileChunks = await Promise.all(
     chunks.map(async chunk => {

@@ -48,6 +48,11 @@ export interface DeleteFabFileAdapter {
     delete: (path: string) => Promise<unknown>;
   };
   onDeleteComplete?: (fabFile: IFabFileDocument, sizeToDeduct: number) => Promise<void>;
+  /**
+   * Self-host OpenSearch only (undefined elsewhere) - without this, a deleted file's chunks
+   * would survive as permanent orphans in its embeddingModel's OpenSearch index.
+   */
+  searchIndex?: { deleteByFabFileId: (fabFileId: string, embeddingModel: string) => Promise<void> };
 }
 
 export const deleteFabFile = async (
@@ -55,7 +60,7 @@ export const deleteFabFile = async (
   parameters: DeleteFabFileParameters,
   adapter: DeleteFabFileAdapter
 ): Promise<DeleteFabFileResult> => {
-  const { db, storage, onDeleteComplete } = adapter;
+  const { db, storage, onDeleteComplete, searchIndex } = adapter;
   const { id } = secureParameters(parameters, deleteFabFileSchema);
 
   const user = await db.users.findById(userId);
@@ -83,6 +88,9 @@ export const deleteFabFile = async (
 
     // Handle deletion of new FabFileChunks
     await db.fabFileChunks.deleteManyByFabFileId(ownedFile.id);
+    if (searchIndex && ownedFile.embeddingModel) {
+      await searchIndex.deleteByFabFileId(ownedFile.id, ownedFile.embeddingModel);
+    }
 
     // Unlink the deleted fabFile from all associated sessions
     const sessions = await db.sessions.findAllWithKnowledgeId(ownedFile.id);

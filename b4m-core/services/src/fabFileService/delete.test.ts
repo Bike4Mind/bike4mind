@@ -51,6 +51,7 @@ describe('deleteFabFile', () => {
       delete: Mock;
     };
     onDeleteComplete?: Mock;
+    searchIndex?: { deleteByFabFileId: Mock };
   };
 
   beforeEach(() => {
@@ -142,6 +143,38 @@ describe('deleteFabFile', () => {
       expect(mockAdapter.db.sessions.update).toHaveBeenCalledWith({
         id: 'session-2',
         knowledgeIds: [],
+      });
+    });
+  });
+
+  describe('searchIndex (self-host OpenSearch mirror)', () => {
+    it('deletes by fabFileId+embeddingModel when searchIndex is provided and the file has a model', async () => {
+      const fileWithModel = { ...mockFabFile, embeddingModel: 'text-embedding-3-small' };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(fileWithModel);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(fileWithModel);
+      mockAdapter.searchIndex = { deleteByFabFileId: vi.fn().mockResolvedValue(undefined) };
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledWith(mockFileId, 'text-embedding-3-small');
+    });
+
+    it('skips the call when the file has no embeddingModel', async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(mockFabFile);
+      mockAdapter.searchIndex = { deleteByFabFileId: vi.fn() };
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.searchIndex.deleteByFabFileId).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op when searchIndex is not provided (non-self-host)', async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(mockFabFile);
+
+      await expect(deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter)).resolves.toMatchObject({
+        action: 'deleted',
       });
     });
   });

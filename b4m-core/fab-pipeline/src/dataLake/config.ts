@@ -18,9 +18,10 @@ export type SearchDocument = {
 };
 
 /**
- * knn_vector's ef_search/ef_construction/m are the HNSW recall/latency tradeoff knobs; the
- * defaults below match the opensearch-js library defaults and are conservative enough for a
- * self-host deployment's likely corpus size.
+ * ef_construction/m are the HNSW build-time recall/latency tradeoff knobs. Left unset
+ * (ef_search) uses OpenSearch's own default at query time; ef_construction/m below are picked,
+ * not verified against a specific library default - retune against a real self-host corpus if
+ * recall or indexing latency looks off in practice.
  */
 const HNSW_METHOD = {
   name: 'hnsw',
