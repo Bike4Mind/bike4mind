@@ -4,6 +4,7 @@ import {
   fetchProjectInvites,
   fetchUserInvites,
   IGetInvitesRequest,
+  INVITE_TYPE_TO_API_PATH,
   IGetInvitesResponse,
   refuseDocument,
   shareDocument,
@@ -187,7 +188,8 @@ export const useCancelInvite = (callbacks: {
 }) => {
   return useMutation({
     mutationFn: async (params: { id: string; type: InviteType; email?: string }) => {
-      await api.delete(`/api/${params.type}/${params.id}/invites`, { data: { email: params.email } });
+      const apiPath = INVITE_TYPE_TO_API_PATH[params.type] ?? params.type;
+      await api.delete(`/api/${apiPath}/${params.id}/invites`, { data: { email: params.email } });
     },
     onSuccess: () => {
       if (callbacks.onSuccess) callbacks.onSuccess();

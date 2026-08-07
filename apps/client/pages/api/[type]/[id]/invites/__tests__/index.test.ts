@@ -9,6 +9,7 @@ import { createMocks } from 'node-mocks-http';
 
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
+  postHandler: null as null | ((req: any, res: any) => unknown),
   deleteHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
@@ -19,7 +20,10 @@ vi.mock('@server/middlewares/baseApi', () => {
       mockRefs.getHandler = fn;
       return chain;
     },
-    post: () => chain,
+    post: (fn: any) => {
+      mockRefs.postHandler = fn;
+      return chain;
+    },
     delete: (fn: any) => {
       mockRefs.deleteHandler = fn;
       return chain;
@@ -30,8 +34,9 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const listInvitesForDocument = vi.hoisted(() => vi.fn());
 const cancelInvite = vi.hoisted(() => vi.fn());
+const createInvite = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/services', () => ({
-  sharingService: { listInvitesForDocument, createInvite: vi.fn(), cancelInvite },
+  sharingService: { listInvitesForDocument, createInvite, cancelInvite },
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -87,13 +92,66 @@ describe('GET /api/[type]/[id]/invites', () => {
     expect(res._getStatusCode()).toBe(400);
     expect(listInvitesForDocument).not.toHaveBeenCalled();
   });
+
+  it('accepts the raw InviteType in the path as well as the alias', async () => {
+    listInvitesForDocument.mockResolvedValue([]);
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'FabFile', id: 'doc-1' } });
+    (req as any).user = { id: 'u1' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(listInvitesForDocument).toHaveBeenCalledWith(
+      req.user,
+      { documentId: 'doc-1', type: 'FabFile' },
+      expect.anything()
+    );
+  });
+});
+
+/**
+ * Both :type vocabularies address the same document on POST: the lowercase alias the client's
+ * shareDocument sends, and the InviteType value itself.
+ */
+describe('POST /api/[type]/[id]/invites', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    createInvite.mockResolvedValue({ id: 'i1', recipients: { pending: [] } });
+  });
+
+  it.each([
+    ['alias', 'files'],
+    ['raw InviteType', 'FabFile'],
+  ])('accepts the %s form and creates against FabFile', async (_label: string, pathType: string) => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: pathType, id: 'doc-1' },
+      body: { permissions: ['Read'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(createInvite).toHaveBeenCalledWith(
+      req.user,
+      expect.objectContaining({ id: 'doc-1', type: 'FabFile' }),
+      expect.anything()
+    );
+  });
+
+  it('rejects an unrecognized type without calling the service', async () => {
+    const { req, res } = createMocks({ method: 'POST', query: { type: 'bogus', id: 'doc-1' }, body: {} });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('Invalid type');
+    expect(createInvite).not.toHaveBeenCalled();
+  });
 });
 
 /**
  * DELETE cancels every open invite for a document, so which document it targets is the whole
  * question. Two properties are pinned here because both are invisible at the service layer:
- * the request body cannot redirect the call away from the URL's document, and this route's
- * :type segment carries the InviteType value itself rather than the alias GET/POST use.
+ * the request body cannot redirect the call away from the URL's document, and the :type segment
+ * accepts the InviteType value itself as well as the lowercase alias.
  */
 describe('DELETE /api/[type]/[id]/invites', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -117,8 +175,8 @@ describe('DELETE /api/[type]/[id]/invites', () => {
   });
 
   it('passes the raw InviteType from the path, not a URL alias', async () => {
-    // Guards against "harmonizing" this handler with GET/POST via URL_PATH_TO_INVITE_TYPE:
-    // 'Organization' is not a key of that map, so every cancel in the product would break.
+    // Guards against resolving this segment through the alias map alone: 'Organization' is not a
+    // key of that map, so every cancel in the product would break.
     cancelInvite.mockResolvedValue([{ id: 'i1', documentId: 'org-1', type: 'Organization' }]);
     const { req, res } = createMocks({
       method: 'DELETE',
@@ -134,6 +192,32 @@ describe('DELETE /api/[type]/[id]/invites', () => {
       { type: 'Organization', id: 'org-1', email: 'a@b.test' },
       expect.anything()
     );
+  });
+
+  it('also accepts the lowercase alias GET/POST use', async () => {
+    cancelInvite.mockResolvedValue([{ id: 'i1', documentId: 'org-1', type: 'Organization' }]);
+    const { req, res } = createMocks({
+      method: 'DELETE',
+      query: { type: 'organizations', id: 'org-1' },
+      body: {},
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(cancelInvite).toHaveBeenCalledWith(
+      req.user,
+      { type: 'Organization', id: 'org-1', email: undefined },
+      expect.anything()
+    );
+  });
+
+  it('rejects an unrecognized type without calling the service', async () => {
+    const { req, res } = createMocks({ method: 'DELETE', query: { type: 'bogus', id: 'doc-1' }, body: {} });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('Invalid cancel invite request');
+    expect(cancelInvite).not.toHaveBeenCalled();
   });
 
   it('rejects a path missing type or id without calling the service', async () => {
