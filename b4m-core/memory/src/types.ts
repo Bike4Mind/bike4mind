@@ -63,6 +63,14 @@ export interface Belief {
    */
   embedding?: number[];
   derivedFrom: string[];
+  /**
+   * Provenance carried from the contributing events' `sources` - for a lake belief, the FabFile ids
+   * the fact was extracted from. Distinct from `derivedFrom` (ledger event hashes): this points OUT
+   * of the ledger at the source documents, so a consumer can gate a belief on whether its source is
+   * still retrievable for citation (#1440 reachability) without re-reading the chain. Empty when the
+   * source events carried none (e.g. legacy user mementos keyed by session/quest only).
+   */
+  sources?: string[];
   /** ISO-8601. */
   lastAffirmedAt: string;
 }

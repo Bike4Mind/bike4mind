@@ -67,6 +67,7 @@ import {
 import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
+import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { decryptToken } from '@server/security/tokenEncryption';
 
@@ -175,6 +176,7 @@ const getStaticOptions = () => {
       });
     },
     recallMementosV2,
+    recallLakeMemory: recallLakeMemoryForSession,
     // Without this the worker resolves session.systemPromptId to undefined, so a triage session
     // gets no authored prompt while the route has already suppressed the brand identity.
     loadSystemPromptById,
