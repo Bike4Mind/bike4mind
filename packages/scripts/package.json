@@ -33,6 +33,7 @@
     "test:email-ingestion": "tsx testEmailIngestLambda.ts",
     "test:api-usage": "tsx test-api-usage-monitoring.ts",
     "test:agent-execute-ws": "tsx testAgentExecuteWs.ts",
+    "test:kb-refusal": "tsx testKnowledgeToolRefusal.ts",
     "create-prod-release": "tsx src/createProductionRelease.ts",
     "help:ingest-datalake": "tsx help/ingest-help-datalake.ts",
     "help:build-index": "tsx help/build-help-index.ts",
