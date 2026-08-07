@@ -212,6 +212,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           let totalCharsUsed = 0;
           const sections: string[] = [];
           const retrievedFiles: IFabFileDocument[] = [];
+          const zeroChunkFiles: IFabFileDocument[] = [];
 
           for (const file of files) {
             if (totalCharsUsed >= charBudget) break;
@@ -275,6 +276,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
             if (chunksRead === 0) {
               context.logger.log(`📖 Knowledge Retrieve: No chunks for file ${file.fileName} (${file.id})`);
+              zeroChunkFiles.push(file);
               continue;
             }
 
@@ -315,7 +317,28 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           }
 
           if (retrievedFiles.length === 0) {
-            return 'Found matching documents but they have no indexed content. The files may not have been processed yet.';
+            // A file already inlined into this turn's prompt (attached but still chunking) has its
+            // content in front of the model regardless of this zero-chunk result - say so explicitly
+            // so a tool-eager model does not read "no indexed content" as "I cannot access this file"
+            // and discard content it already has. A file NOT in inlinedAttachmentIds (e.g. a lake doc
+            // genuinely still indexing) keeps the honest "not yet processed" wording - it is not
+            // inline anywhere, so claiming otherwise would be false.
+            const inlined = new Set(context.inlinedAttachmentIds ?? []);
+            const inlinedNames = zeroChunkFiles.filter(f => inlined.has(f.id)).map(f => `"${f.fileName}"`);
+            if (inlinedNames.length > 0) {
+              return (
+                `The document(s) ${inlinedNames.join(', ')} are attached to this conversation and still ` +
+                `being indexed, so this tool has no stored text for them yet. Their full content was ` +
+                `already provided earlier in this conversation (look for "Here is the content from the ` +
+                `attached file"). Answer the user's question from that content. Do NOT tell the user you ` +
+                `cannot access the attachment.`
+              );
+            }
+            return (
+              'Found matching documents but no stored text for them yet - indexing may still be in ' +
+              'progress. If content for these documents already appears earlier in this conversation, ' +
+              'answer from that; only report them as unavailable if nothing about them appears above.'
+            );
           }
 
           // Create citable source chips for the UI - mirrors web_search pattern

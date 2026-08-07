@@ -2113,6 +2113,7 @@ export class ChatCompletionProcess {
         allFileIdsBeforeDedup,
         dedupedFileIds,
         featureContextMessages,
+        inlineKnowledgeIds,
       } = dataSources;
 
       // Step 5b: Build MCP tools and tool prompts before message assembly
@@ -2133,6 +2134,7 @@ export class ChatCompletionProcess {
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
+        inlinedAttachmentIds: inlineKnowledgeIds,
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
@@ -5406,6 +5408,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     allFileIdsBeforeDedup: string[];
     dedupedFileIds: string[];
     featureContextMessages: { [name: string]: IMessage[] };
+    /** The `sessionKnowledgeIds` subset actually inlined this turn (deferred ids excluded) - the
+     *  set the knowledge tools can truthfully call "already in the conversation above". */
+    inlineKnowledgeIds: string[];
   }> {
     // Load feature contexts in parallel with data sources
     const featureContextPromise = Promise.all(
@@ -5555,6 +5560,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       allFileIdsBeforeDedup,
       dedupedFileIds,
       featureContextMessages,
+      inlineKnowledgeIds,
     };
   }
 }

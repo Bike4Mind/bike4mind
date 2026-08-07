@@ -385,6 +385,39 @@ function formatSearchResults(files: IFabFileDocument[]): string {
   );
 }
 
+/**
+ * Extra note when the session has an attachment still chunking, so the model does not read a
+ * zero/near-zero result as "this file is inaccessible" when its raw content is already inlined
+ * elsewhere in the prompt (see ToolContext.inlinedAttachmentIds). Two shapes:
+ *  - zero hits at all: the attachment cannot be found by search yet, but is already above.
+ *  - a hit IS an inlined attachment: heads off a follow-up retrieve_knowledge_content call that
+ *    would just return the same "not indexed yet" result for content the model already has.
+ * Returns '' when there is nothing to add, so an unpopulated context (agent/embed surfaces) is a
+ * byte-identical no-op.
+ */
+function attachmentInlineNotice(context: ToolContext, rankedResults: IFabFileDocument[]): string {
+  const inlined = context.inlinedAttachmentIds;
+  if (!inlined?.length) return '';
+
+  if (rankedResults.length === 0) {
+    return (
+      `\n\nNOTE: ${inlined.length} file(s) attached to this conversation are not indexed for ` +
+      `search yet, so they cannot be found through this tool. Their content was already included ` +
+      `directly in the conversation above - answer from that rather than telling the user the ` +
+      `attachment is inaccessible.`
+    );
+  }
+
+  const inlinedHits = rankedResults.filter(f => inlined.includes(f.id));
+  if (inlinedHits.length === 0) return '';
+  const names = inlinedHits.map(f => `"${f.fileName}"`).join(', ');
+  return (
+    `\n\nNOTE: ${names} are attached to this conversation and their content is already included ` +
+    `above - you do not need retrieve_knowledge_content for them (it may return nothing while ` +
+    `indexing is still in progress).`
+  );
+}
+
 export const knowledgeBaseSearchTool: ToolDefinition = {
   name: 'search_knowledge_base',
   implementation: context => {
@@ -621,7 +654,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             );
           }
 
-          return formatSearchResults(rankedResults) + formatSkipNotice(semantic.skipNotice);
+          return (
+            formatSearchResults(rankedResults) +
+            formatSkipNotice(semantic.skipNotice) +
+            attachmentInlineNotice(context, rankedResults)
+          );
         } catch (error) {
           context.logger.error('❌ Knowledge Base Search: Error during search:', error);
           return 'An error occurred while searching your knowledge base. Please try again.';

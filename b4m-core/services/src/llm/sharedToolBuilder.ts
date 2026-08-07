@@ -42,6 +42,8 @@ export interface ToolBuilderDeps {
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Agent-scoped KB restriction, forwarded to the tool context (see ToolContext.kbScope). */
   kbScope?: ToolContext['kbScope'];
+  /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
+  inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
   /**
    * Sink for tool-internal LLM spend, forwarded to the tool context. The agent
    * executor wires this to fold nested tool generation into iteration billing (#630);
@@ -259,6 +261,7 @@ export function buildSharedTools(
     entitlementKeys,
     retrievalFilter,
     kbScope,
+    inlinedAttachmentIds,
   } = deps;
 
   // Merge built-in tools with any external tool definitions (e.g., Slack tools)
@@ -268,7 +271,7 @@ export function buildSharedTools(
     userId,
     user,
     logger,
-    { db, retrievalFilter, kbScope },
+    { db, retrievalFilter, kbScope, inlinedAttachmentIds },
     storage,
     imageGenerateStorage,
     callbacks.onStatusUpdate,

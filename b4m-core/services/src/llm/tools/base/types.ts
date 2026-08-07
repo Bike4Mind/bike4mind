@@ -132,6 +132,15 @@ export interface ToolContext {
    * would silently read unscoped.
    */
   kbScope?: KbScope;
+  /**
+   * FabFile ids attached to THIS session whose text was actually inlined into this turn's
+   * prompt (the `sessionKnowledgeIds` subset NOT deferred to retrieval - see
+   * `buildDataSources`'s `inlineKnowledgeIds`). The knowledge tools use this to tell a caller
+   * "that file's content is already above" without lying about a deferred (not-inlined)
+   * attachment. Absent/empty on non-chat surfaces (agent executor, embed) where nothing is
+   * inlined this way.
+   */
+  inlinedAttachmentIds?: string[];
   storage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   imageGenerateStorage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>;
