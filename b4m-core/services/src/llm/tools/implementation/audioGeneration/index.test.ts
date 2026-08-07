@@ -170,6 +170,18 @@ describe('audio_generation tool', () => {
     expect(mockGenerate).not.toHaveBeenCalled();
   });
 
+  it('rejects a model-supplied durationSeconds outside 0.5-30 before any paid call', async () => {
+    // The model's own argument wins over audioConfig at resolution time, so the wire-schema
+    // bound on it is what actually caps SFX cost - an out-of-range value must fail the parse
+    // and never reach the provider (matches the direct /api/ai/sound-effects bound).
+    const context = createFakeContext();
+    const result = await run(context, { kind: 'sound_effect', text: 'dog barking', durationSeconds: 3600 });
+    expect(result).toMatch(/invalid arguments/i);
+    expect(context.onStart).not.toHaveBeenCalled();
+    expect(mockGenerate).not.toHaveBeenCalled();
+    expect(context.onFinish).not.toHaveBeenCalled();
+  });
+
   it('rejects speech longer than the resolved provider cap before the paid call', async () => {
     const context = createFakeContext();
     // OpenAI cap is 4096 chars.

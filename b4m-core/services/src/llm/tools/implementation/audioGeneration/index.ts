@@ -29,10 +29,14 @@ const ttsApiKeyType = (provider: VoiceGenerationVendor): ApiKeyType =>
 // Defensive shape check for the model-supplied tool arguments. `kind` stays a loose string
 // (the toolFn treats anything that is not 'sound_effect' as speech); this only guards the
 // types so a malformed call fails cleanly instead of casting `unknown` and reading garbage.
+// `durationSeconds` carries the same 0.5-30s bound the direct /api/ai/sound-effects endpoint
+// enforces (soundGeneration.ts): the model's own argument wins over audioConfig at resolution
+// time, so bounding it here is what actually caps SFX cost - an out-of-range value fails the
+// parse and returns before any paid provider call.
 const audioArgsSchema = z.object({
   kind: z.string().optional(),
   text: z.string().optional(),
-  durationSeconds: z.number().optional(),
+  durationSeconds: z.number().min(0.5).max(30).optional(),
 });
 
 /**

@@ -105,6 +105,7 @@ import {
   billIteration,
   addToolUsage,
   takeToolUsage,
+  foldGeneratedMediaUsd,
   type BillingCounters,
   type PendingToolUsage,
 } from './agentExecutor.billing';
@@ -1244,50 +1245,40 @@ async function processExecution(
         // per-iteration bucket (`pendingToolUsage.costUsd`) that `onToolLlmUsage` feeds, so
         // `billIteration` charges it on the existing agent rail - otherwise agent-mode
         // generation is free. Image cost is known up front (n/size/quality), so it is read
-        // at start (mirrors classic reserve-on-start); music/audio settle at finish.
+        // at start (mirrors classic reserve-on-start); music/audio settle at finish (see
+        // onToolFinish). The phase->tool routing + `usd > 0` guard live in the billing
+        // module so they are covered by agentExecutor.billing.test.ts.
         // Subagent-dispatch tool cost stays unbilled until its Phase-1 credit deduction
         // lands (see processSubagentDispatch) - tracked as a follow-up.
-        if (toolName === 'image_generation' || toolName === 'edit_image') {
-          try {
-            const usd = estimateGeneratedMediaUsd(toolName, data, models);
-            if (usd > 0) {
-              addToolUsage(pendingToolUsage, {
-                costUsd: usd,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheReadTokens: 0,
-                cacheWriteTokens: 0,
-              });
-            }
-          } catch (err) {
+        foldGeneratedMediaUsd({
+          phase: 'start',
+          toolName,
+          data,
+          models,
+          pending: pendingToolUsage,
+          estimateUsd: estimateGeneratedMediaUsd,
+          onError: err =>
             logger.warn(`[agentExecutor] failed to estimate ${toolName} media cost; not billed this iteration`, {
               err,
-            });
-          }
-        }
+            }),
+        });
       },
       onToolFinish: async (toolName, data) => {
         // Settle music/audio media cost on delivery (see onToolStart for the rail rationale):
         // the tools' failure paths return before onFinish, so an undelivered clip is never
         // billed. Charged into the current iteration's pendingToolUsage.
-        if (toolName === 'music_generation' || toolName === 'audio_generation') {
-          try {
-            const usd = estimateGeneratedMediaUsd(toolName, data, models);
-            if (usd > 0) {
-              addToolUsage(pendingToolUsage, {
-                costUsd: usd,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheReadTokens: 0,
-                cacheWriteTokens: 0,
-              });
-            }
-          } catch (err) {
+        foldGeneratedMediaUsd({
+          phase: 'finish',
+          toolName,
+          data,
+          models,
+          pending: pendingToolUsage,
+          estimateUsd: estimateGeneratedMediaUsd,
+          onError: err =>
             logger.warn(`[agentExecutor] failed to estimate ${toolName} media cost; not billed this iteration`, {
               err,
-            });
-          }
-        }
+            }),
+        });
       },
       onUiSideEffect: async sideEffect => {
         // Fires inside the wrapped toolFn (sharedToolBuilder extraction), i.e. between the
