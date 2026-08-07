@@ -90,6 +90,12 @@ describe('runWithConcurrency', () => {
     await expect(runWithConcurrency([1, 2, 3], 2, worker)).resolves.toBeUndefined();
     expect(worker).toHaveBeenCalledTimes(3);
   });
+
+  it('cannot hang on a non-positive limit', async () => {
+    const worker = vi.fn(async () => {});
+    await expect(runWithConcurrency([1, 2, 3], 0, worker)).resolves.toBeUndefined();
+    expect(worker).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('foldersTagsForBatch', () => {

@@ -26,8 +26,6 @@ export function foldersTagsForBatch(
 
 // -- Constants -----------------------------------------------------------------
 
-export const HASH_CONCURRENCY = 10;
-
 const UPLOAD_CONCURRENCY = 5;
 const BATCH_CHUNK_SIZE = 100; // Max files per presigned URL request
 
@@ -48,8 +46,8 @@ export const UPLOAD_ALL_FAILED_MESSAGE =
  * string to have >=2 characters at 'slug'") must never reach the UI - so a 422 is
  * re-derived here from the config against the same rules to name the real culprit.
  * Keep the rule thresholds in sync with CreateDataLakeRequestInput (common/schemas/dataLake).
- * `snapshot` is the config/isAppend state at the moment the failing request was made,
- * captured by the caller (store reads don't belong in this pure module).
+ * `snapshot` is the config/isAppend state the caller read when classifying - same store,
+ * same tick as the old inline read (store reads don't belong in this pure module).
  */
 export function classifyUploadError(
   error: unknown,

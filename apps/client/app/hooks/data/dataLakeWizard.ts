@@ -10,17 +10,17 @@ import { computeFileHash } from '@client/app/utils/folderTreeParser';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import {
   runWithConcurrency,
-  HASH_CONCURRENCY,
   OFFLINE_MESSAGE,
-  UPLOAD_ALL_FAILED_MESSAGE,
   classifyUploadError,
   runBatchUpload,
 } from '@client/app/hooks/data/dataLakeUploadPipeline';
 
-export { OFFLINE_MESSAGE, UPLOAD_ALL_FAILED_MESSAGE };
+// Re-exported for DataLakeWizardModal's pre-flight check, which imports it from this path.
+export { OFFLINE_MESSAGE };
 
 // ── Hashing & Deduplication ──────────────────────────────────────────────────
 
+const HASH_CONCURRENCY = 10;
 const DEDUP_BATCH_SIZE = 500;
 
 /**
