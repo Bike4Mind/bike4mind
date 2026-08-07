@@ -193,6 +193,12 @@ export interface IFabFile {
   // Data Lake fields
   /** The source where this file originated from */
   sourceType?: FabFileSourceType;
+  /**
+   * Origin details for the `sourceType`, shaped by that source (for SLACK: the channel id and
+   * the message ts the file was posted in). Server-supplied only - never accepted from a request
+   * body, or a caller could forge the audit trail this exists to provide.
+   */
+  sourceMetadata?: Record<string, unknown>;
   /** Whether this file was automatically processed (vs manual upload) */
   automaticallyProcessed?: boolean;
   /** Metadata for data lake files */
