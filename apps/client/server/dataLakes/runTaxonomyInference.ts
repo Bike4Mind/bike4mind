@@ -15,8 +15,9 @@ export interface TaxonomyFolderEntry {
   contentSample?: string;
 }
 
-/** Taxonomy inference is OPTIONAL and non-blocking: on any failure this returns an empty
- * result rather than throwing, so a caller can always proceed with folder-only tags. */
+/** The fallback shape for a malformed/unparseable model response (never for a genuine API-call
+ * failure - see `runTaxonomyInference`'s doc comment for that distinction), so a caller can
+ * always proceed with folder-only tags when the model didn't cooperate with the schema. */
 export const emptyTaxonomyResponse = (existingPrefix?: string): InferTaxonomyResponse => ({
   suggestedPrefix: existingPrefix ?? '',
   suggestedName: '',
@@ -158,7 +159,10 @@ export async function runTaxonomyInference(
     max_tokens: 4000,
   });
 
-  const rawContent = completion.choices[0]?.message?.content;
+  // `?.` all the way through `choices`, not just its elements: a 200 response with a
+  // malformed body (no `choices` array) is a response-format problem, not an API-call
+  // failure, so it belongs in the same "degrade to empty" bucket as blank/unparseable content.
+  const rawContent = completion.choices?.[0]?.message?.content;
   if (!rawContent) return emptyTaxonomyResponse(options?.existingPrefix);
 
   try {
@@ -172,7 +176,11 @@ export async function runTaxonomyInference(
       return emptyTaxonomyResponse(options?.existingPrefix);
     }
 
-    if (!parsed.suggestedPrefix) {
+    // `typeof` guard, not just truthiness: `parsed` is an unchecked cast from untrusted JSON,
+    // so an off-schema value (e.g. a number) must default rather than throw out of
+    // `.endsWith` - a crash here would wipe the already-validated `categories` above via the
+    // outer catch, exactly the "one bad field loses the whole result" bug this fix closes.
+    if (typeof parsed.suggestedPrefix !== 'string' || !parsed.suggestedPrefix) {
       parsed.suggestedPrefix = options?.existingPrefix ?? '';
     } else if (!parsed.suggestedPrefix.endsWith(':')) {
       parsed.suggestedPrefix += ':';

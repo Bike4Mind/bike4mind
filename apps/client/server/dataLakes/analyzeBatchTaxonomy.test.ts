@@ -97,26 +97,18 @@ describe('analyzeBatchTaxonomy', () => {
     expect(result).toMatchObject({ outcome: 'failed', error: 'No OpenAI API key configured' });
   });
 
-  it('fails closed with a curated message (not the raw error) when inference throws, without touching taxonomySuggestions', async () => {
+  it('propagates a genuine inference API failure as an unexpected exception, without touching taxonomySuggestions itself', async () => {
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1' }); // claim
-    h.runTaxonomyInference.mockRejectedValue(new Error('401 Incorrect API key provided: sk-***'));
-    h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1', taxonomyStatus: 'failed' }); // fail transition
+    const apiError = new Error('401 Incorrect API key provided: sk-***');
+    h.runTaxonomyInference.mockRejectedValue(apiError);
 
-    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['ready', 'failed'] });
-
-    expect(result).toEqual({
-      claimed: true,
-      outcome: 'failed',
-      error: 'AI tagging service is temporarily unavailable - try re-analyzing',
-    });
-    // Raw error text never reaches taxonomyError, and - critically - this write has no
-    // taxonomySuggestions key at all, so a batch re-analyzed from 'ready' keeps whatever good
-    // suggestions it already had instead of losing them to a transient API failure.
-    const failCall = h.setTaxonomyStatusIfActive.mock.calls[1];
-    expect(failCall[2]).toBe('failed');
-    expect(failCall[3]).toEqual({ taxonomyError: 'AI tagging service is temporarily unavailable - try re-analyzing' });
-    expect(failCall[3]).not.toHaveProperty('taxonomySuggestions');
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('401 Incorrect API key provided'));
+    await expect(analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['ready', 'failed'] })).rejects.toThrow(
+      apiError
+    );
+    // Left to the caller (queue handler releases the claim for SQS retry; the manual endpoint
+    // marks it failed itself) - this function itself never writes taxonomySuggestions here, so
+    // neither caller's own handling can clobber a prior-good suggestion set either.
+    expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledTimes(1);
   });
 
   it('does not notify a failure if the fail-transition itself lost a concurrent race', async () => {

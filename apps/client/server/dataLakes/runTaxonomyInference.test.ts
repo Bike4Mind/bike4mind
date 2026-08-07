@@ -59,6 +59,26 @@ describe('runTaxonomyInference', () => {
     expect(result).toEqual(emptyTaxonomyResponse('acme:'));
   });
 
+  it('returns an empty result (does not throw) when the response has no choices array at all', async () => {
+    createMock.mockResolvedValue({ choices: undefined });
+
+    const result = await runTaxonomyInference('key', [], { existingPrefix: 'acme:' });
+
+    expect(result).toEqual(emptyTaxonomyResponse('acme:'));
+  });
+
+  it('does not wipe a valid result when suggestedPrefix is off-schema (non-string) - defaults it instead', async () => {
+    const categories = [{ tagName: 'acme:type:contract', description: '', confidence: 0.9, matchingFolders: [] }];
+    createMock.mockResolvedValue(
+      completionWith(JSON.stringify({ suggestedPrefix: 123, categories, fileAssignments: [] }))
+    );
+
+    const result = await runTaxonomyInference('key', [], { existingPrefix: 'acme:' });
+
+    expect(result.categories).toEqual(categories);
+    expect(result.suggestedPrefix).toBe('acme:');
+  });
+
   it('does not wipe a valid result just because suggestedPrefix is missing - defaults it instead', async () => {
     const categories = [{ tagName: 'acme:type:contract', description: '', confidence: 0.9, matchingFolders: [] }];
     createMock.mockResolvedValue(completionWith(JSON.stringify({ categories, fileAssignments: [] })));
