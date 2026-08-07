@@ -32,7 +32,7 @@ import { useCommonStyles } from '@client/app/hooks/useCommonStyles';
 import { useTheme } from '@mui/joy/styles';
 import MFAModal from './common/MFAModal';
 import useGetLogo from '@client/app/hooks/useGetLogo';
-import { useBrandingSettings } from '@client/app/hooks/data/settings';
+import { useBrandingSettings, usePublicConfig } from '@client/app/hooks/data/settings';
 import { gray, brand } from '@client/app/utils/themes/colors';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { getWebsiteUrl, WEBSITE_URL } from '@client/config/general';
@@ -104,6 +104,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
   const verifyMFA = useVerifyMFA();
+  const { data: publicConfig } = usePublicConfig();
   const setupMFA = useSetupMFA();
   const verifyMFASetup = useVerifyMFASetup();
   const { t } = useTranslation();
@@ -254,7 +255,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     }
   };
 
-  const handleMFAVerification = async (token: string) => {
+  const handleMFAVerification = async (token: string, rememberDevice = false) => {
     if (!mfaUserId) return;
     setMfaError(null);
     try {
@@ -262,7 +263,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       if (mfaMode === 'setup') {
         result = await verifyMFASetup.mutateAsync({ token });
       } else {
-        result = await verifyMFA.mutateAsync({ token });
+        result = await verifyMFA.mutateAsync({ token, rememberDevice });
       }
       resetRefreshPromise();
       useAccessToken.getState().setVerifiedTokens(result.accessToken, result.refreshToken);
@@ -1108,6 +1109,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         manualEntryKey={mfaSetupData?.manualEntryKey}
         backupCodes={mfaSetupData?.backupCodes}
         showVerify={true}
+        allowRememberDevice={publicConfig?.allowTrustedDevices ?? false}
       />
     </Box>
   );

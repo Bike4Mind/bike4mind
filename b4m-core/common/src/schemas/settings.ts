@@ -244,6 +244,7 @@ export const SettingKeySchema = z.enum([
 
   // MFA SETTINGS
   'enforceMFA',
+  'allowTrustedDevices',
 
   // VOICE SESSION SETTINGS
   'enableVoiceSession',
@@ -2896,6 +2897,17 @@ export const settingsMap = {
     category: 'Users',
     // publicSafe: gates the startup "Checking security settings..." spinner (M2.5).
     // A policy boolean - exposing it reveals nothing exploitable.
+    publicSafe: true,
+  }),
+  allowTrustedDevices: makeBooleanSetting({
+    key: 'allowTrustedDevices',
+    name: 'Allow "Remember This Device"',
+    description:
+      'Let users mark a device as trusted at the MFA prompt so a fresh login from it skips the TOTP challenge for 30 days. The emailed one-time code is still required every time. Turning this off stops new grants and ignores existing ones immediately.',
+    defaultValue: true,
+    category: 'Users',
+    // publicSafe: the login UI needs it before authentication to decide whether to
+    // render the checkbox. A policy boolean - it reveals nothing exploitable.
     publicSafe: true,
   }),
   FirecrawlApiKey: makeStringSetting({
