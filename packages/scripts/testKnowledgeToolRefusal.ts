@@ -23,8 +23,10 @@
  * exercising the tool-recommender bypass path (a caller-requested tool survives the
  * auto-offer gate) - this is the wording fix's coverage, not the gate's.
  *
- * Auth: mints a throwaway test user via /api/test/create-user - set E2E_CLEANUP_SECRET for
- * the target env. Prerequisites (verify on the target stage, do not assume):
+ * Auth: mints a throwaway test user via /api/test/create-user by default - set E2E_CLEANUP_SECRET
+ * for the target env. Pass --auth=otc on a PR preview instead: /api/test/create-user 500s there
+ * (a stage-config fault), so that mode logs in as the pre-seeded qa-admin-e2e@test.com via OTC.
+ * Prerequisites (verify on the target stage, do not assume):
  *   - the `openaiDemoKey` admin setting is populated - OPENAI_API_KEY env is ignored unless
  *     B4M_SELF_HOST=true, so a plain env var is a no-op on any hosted SST stage.
  *   - AWS Bedrock model access granted for the Llama arn/id in $AWS_REGION (default us-east-2),
@@ -45,6 +47,7 @@ type CliArgs = {
   searchMyFiles: boolean;
   timeoutMs: number;
   outDir: string;
+  auth: 'create-user' | 'otc';
 };
 
 function parseArgs(): CliArgs {
@@ -60,6 +63,8 @@ function parseArgs(): CliArgs {
     .split(',')
     .map(s => s.trim())
     .filter(Boolean);
+  const auth = flags.auth ?? process.env.AUTH ?? 'create-user';
+  if (auth !== 'create-user' && auth !== 'otc') throw new Error(`--auth must be create-user or otc, got: ${auth}`);
   return {
     baseUrl,
     trials: Number(flags.trials ?? process.env.TRIALS ?? 10),
@@ -67,6 +72,7 @@ function parseArgs(): CliArgs {
     searchMyFiles: flags['search-my-files'] === 'true' || process.env.SEARCH_MY_FILES === '1',
     timeoutMs: Number(flags.timeout ?? process.env.TIMEOUT_MS ?? 60_000),
     outDir: flags['out-dir'] ?? process.env.OUT_DIR ?? path.join(process.cwd(), 'out'),
+    auth,
   };
 }
 
@@ -95,7 +101,7 @@ async function httpJson<T>(baseUrl: string, urlPath: string, init: HttpInit = {}
 }
 
 /** Mirrors testAgentExecuteWs.ts's login() - the test-only token-mint path (password login was removed). */
-async function login(baseUrl: string, label: string): Promise<{ token: string }> {
+async function loginViaCreateUser(baseUrl: string, label: string): Promise<{ token: string }> {
   const secret = process.env.E2E_CLEANUP_SECRET;
   if (!secret) {
     throw new Error('E2E_CLEANUP_SECRET env is required to mint a test-user token.');
@@ -110,6 +116,43 @@ async function login(baseUrl: string, label: string): Promise<{ token: string }>
   });
   if (!body.accessToken) throw new Error('create-user response missing accessToken');
   return { token: body.accessToken };
+}
+
+/**
+ * Preview path: /api/test/create-user 500s on previews (a stage-config fault, not a credential
+ * problem), so a preview run logs in as the pre-seeded qa-admin-e2e@test.com via OTC instead.
+ * apiAcceptPolicies is not optional - create-user stamps consent for you and OTC does not, so
+ * skipping it parks every later request behind the "Before you continue" interstitial.
+ */
+async function loginViaOtc(baseUrl: string, email = 'qa-admin-e2e@test.com'): Promise<{ token: string }> {
+  const secret = process.env.E2E_CLEANUP_SECRET;
+  if (!secret) {
+    throw new Error('E2E_CLEANUP_SECRET env is required to fetch the OTC code.');
+  }
+  const sendResponse = await httpJson<{ pendingToken: string }>(baseUrl, '/api/otc/send', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+  const codeResponse = await httpJson<{ code: string }>(
+    baseUrl,
+    `/api/test/otc-code?email=${encodeURIComponent(email)}`,
+    { headers: { 'x-e2e-cleanup-secret': secret } }
+  );
+  const verifyResponse = await httpJson<{ accessToken?: string }>(baseUrl, '/api/otc/verify', {
+    method: 'POST',
+    body: JSON.stringify({ email, code: codeResponse.code, pendingToken: sendResponse.pendingToken }),
+  });
+  if (!verifyResponse.accessToken) throw new Error('OTC verify response missing accessToken');
+  await httpJson(baseUrl, '/api/user/accept-policies', {
+    method: 'POST',
+    token: verifyResponse.accessToken,
+    body: JSON.stringify({ ageAttestation: true }),
+  });
+  return { token: verifyResponse.accessToken };
+}
+
+async function login(baseUrl: string, label: string, auth: 'create-user' | 'otc'): Promise<{ token: string }> {
+  return auth === 'otc' ? loginViaOtc(baseUrl) : loginViaCreateUser(baseUrl, label);
 }
 
 // Normalizes to NFKC and strips invisible Unicode chars before matching - innerText/model
@@ -238,7 +281,7 @@ async function runTrial(
   n: number,
   phrasing: 'plain' | 'search-my-files'
 ): Promise<TrialRecord> {
-  const { token } = await login(args.baseUrl, `${model.replace(/[^a-z0-9]/gi, '')}-${n}-${phrasing}`);
+  const { token } = await login(args.baseUrl, `${model.replace(/[^a-z0-9]/gi, '')}-${n}-${phrasing}`, args.auth);
   const file = await createUnvectorizedFile(args.baseUrl, token, runId, n);
 
   // Precondition: the file must genuinely still be unvectorized when we ask about it.
