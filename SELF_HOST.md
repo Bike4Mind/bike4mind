@@ -501,6 +501,22 @@ Then pick the cloud model under **Settings -> AI -> Default Embedding Model** an
 - **A placeholder value is treated as no key.** If `OPENAI_API_KEY`/`VOYAGE_API_KEY` holds a dummy value (e.g. `sk-oai-dummy-...`, `your-api-key`, `changeme`), self-host ignores it and keeps the keyless local embedder default - a copy-pasted placeholder no longer silently routes embeddings to a cloud provider that then rejects them. A key that is present but genuinely invalid fails fast with an actionable message (see Troubleshooting) instead of an opaque 401.
 - **If you already selected a cloud embedder in Settings**, that choice is persisted and stays selected even after you clear the key. Set a valid key for that provider, or switch **Default Embedding Model** back to a local Ollama embedder for the fully-offline path.
 
+### Faster retrieval with OpenSearch (optional)
+
+By default, self-host Data Lake search ranks every chunk with a bounded brute-force scan - fine for smaller lakes, but it re-scans the whole scoped corpus on every query. An optional bundled OpenSearch container adds real kNN retrieval instead:
+
+1. Uncomment `OPENSEARCH_ENDPOINT` and `B4M_SELF_HOST_OPENSEARCH` in `.env.selfhost` (see the file for the full quick-start, including a Linux host-kernel setting OpenSearch needs).
+2. Bring the stack up with the `opensearch` profile:
+   ```bash
+   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile opensearch up -d
+   ```
+
+Known limitations:
+
+- **No backfill.** Only chunks vectorized AFTER both variables are set get indexed into OpenSearch. Chunks from before that point keep working (still retrievable) but stay on the brute-force scan path until a future re-embed. This is a correctness-neutral gap: retrieval always re-derives which files you can currently access from live data, so a chunk that isn't in OpenSearch yet just gets scanned instead of returning nothing.
+- **Re-embedding a file** under a different embedding model leaves its old vectors behind in that model's OpenSearch index - harmless (never returned; a query only searches the current model's index for files it can currently access), just a small amount of unreclaimed disk on the OpenSearch container.
+- Disable it again by unsetting `B4M_SELF_HOST_OPENSEARCH` - search falls back to the scan path immediately, no data loss.
+
 ## Background worker
 
 The `worker` service is the self-host replacement for the hosted background infrastructure (SST queue consumers + cron). It runs no HTTP server and publishes no ports; it just:
@@ -556,6 +572,7 @@ Discovery uses the provider keys already in `.env.selfhost` (or a user's own key
 - **Image generation is very slow** - with no GPU, Stable Diffusion runs on CPU (~1-3 min/image). Start with SD 1.5, and for NVIDIA GPU acceleration add `-f compose.imagegen-gpu.yaml` (see "Local image generation").
 - **`apt-get install nvidia-container-toolkit` says "Unable to locate package"** - NVIDIA's apt repo isn't set up. Add it first (see "GPU acceleration"), then re-run `sudo apt-get update`.
 - **GPU override fails with "could not select device driver \"nvidia\" with capabilities: [[gpu]]"** - the NVIDIA Container Toolkit isn't installed or wired into Docker. Install it and run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` (see "GPU acceleration"). Without a working GPU runtime, drop the `-f compose.ollama-gpu.yaml` and run CPU-only.
+- **`opensearch` container exits at boot with a "max virtual memory areas" error** - the OpenSearch JVM needs a higher `vm.max_map_count` than most Linux kernels default to. Run once on the HOST (not in the container): `sudo sysctl -w vm.max_map_count=262144`, then restart the `opensearch` service. Not needed on Docker Desktop (macOS/Windows) - its VM already sets this.
 - **Chat replies only appear after a refresh** - realtime isn't connecting. Check the `ws` gateway is up (`docker compose -f compose.selfhost.yaml ps ws`) and healthy, that `INTERNAL_WS_SECRET` is set and identical for the `app` and `ws` services, and that `WEBSOCKET_URL`/`WEBSOCKET_MANAGEMENT_ENDPOINT` point at the gateway. In the browser console you should see `ws connected`; a reconnect loop usually means the gateway can't reach the app (`docker compose -f compose.selfhost.yaml logs ws`).
 - **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - restore the original key; it cannot be rotated in place.
 - **Notebook auto-naming / summaries / mementos never happen** - background enrichment runs on the `worker` service via the event queue. Check the worker is up (`docker compose -f compose.selfhost.yaml ps worker`) and that `SELF_HOST_EVENT_QUEUE` is set in `.env.selfhost` (the app warns and drops enrichment events when it's unset). Watch `docker compose -f compose.selfhost.yaml logs -f worker`.
