@@ -407,14 +407,19 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
     expect(first.slug).toMatch(/^[a-z]+-[a-z]+$/);
   }, 30000);
 
-  it('honors an explicit B4M_HEARTH_LABEL over the derived slug', async () => {
+  // A settable displayName is precisely what splits one session into two
+  // actors, since the cc-bridge names the same session from sessionActorName
+  // and ensureActor upserts on displayName. The old B4M_HEARTH_LABEL override
+  // is gone; this pins that no leftover value in an operator's environment can
+  // resurrect the split.
+  it('ignores a stale B4M_HEARTH_LABEL in the environment', async () => {
     const { port, captured, close } = await startCaptureServer();
     try {
       await runHook({ ...HOOK_ENV(port), B4M_HEARTH_LABEL: 'phase-4 telegram' }, HOOK_INPUT);
       const body = captured.current!.body;
-      expect((body.actor as { displayName: string }).displayName).toBe('phase-4 telegram');
-      // The derived slug still travels in the payload for correlation.
-      expect((body.machine as { payload: { slug: string } }).payload.slug).toMatch(/^[a-z]+-[a-z]+$/);
+      const slug = (body.machine as { payload: { slug: string } }).payload.slug;
+      expect(slug).toMatch(/^[a-z]+-[a-z]+$/);
+      expect((body.actor as { displayName: string }).displayName).toBe(slug);
     } finally {
       close();
     }

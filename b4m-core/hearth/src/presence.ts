@@ -65,6 +65,11 @@ export const presencePayloadSchema = z.object({
       tool: z.string().nullish(),
       permission_mode: z.string().nullish(),
       effort: z.string().nullish(),
+      // Deliberately looser than background_tasks below, which the hook derives
+      // itself (an array length, so non-negative and integral by construction).
+      // duration_ms is forwarded verbatim from the upstream hook payload, so a
+      // constraint here would drop a whole presence update over a value the
+      // reporter does not control.
       duration_ms: z.number().nullish(),
       subagent: z.string().nullish(),
       background_tasks: z.number().int().min(0).nullish(),

@@ -200,12 +200,20 @@ export async function reportCcAgentPresence(input: CcAgentPresenceInput): Promis
     //
     // AFTER the upsert on purpose: the push tells clients to refetch, so
     // emitting it first would race them onto the pre-update row. By the same
-    // reasoning it is inside this block rather than in its own - if the row
+    // reasoning it is ordered after rather than before the row write - if that
     // write failed, nothing changed and there is nothing to announce.
-    await sendToClient(userId, endpoint, {
-      action: 'hearth_event',
-      event: toWireHearthEvent(event, displayName),
-    });
+    //
+    // Caught separately so "wrote the row but could not notify open tabs" stays
+    // distinguishable from "the write itself failed", matching the split the
+    // HTTP route makes. A client that misses the push recovers via catchup.
+    try {
+      await sendToClient(userId, endpoint, {
+        action: 'hearth_event',
+        event: toWireHearthEvent(event, displayName),
+      });
+    } catch (err) {
+      logger.warn(`[CC_AGENT_HEARTH] hearth_event fanout failed for ${instanceId} (non-fatal):`, err as Error);
+    }
   } catch (err) {
     logger.warn(`[CC_AGENT_HEARTH] Presence report failed for ${instanceId} (non-fatal):`, err as Error);
   }

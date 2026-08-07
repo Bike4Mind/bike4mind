@@ -39,7 +39,7 @@
 import { basename, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
-const { B4M_API_URL, B4M_API_KEY, B4M_HEARTH_CHANNEL, B4M_HEARTH_LABEL, B4M_HEARTH_DISCLOSURE } = process.env;
+const { B4M_API_URL, B4M_API_KEY, B4M_HEARTH_CHANNEL, B4M_HEARTH_DISCLOSURE } = process.env;
 
 const DEFAULT_DISCLOSURE = 2;
 const MAX_DISCLOSURE = 2;
@@ -256,7 +256,10 @@ process.stdin.on('end', async () => {
     // the cc-bridge covers these same sessions and ensureActor upserts on
     // displayName, so any disagreement splits one session into two actors. See
     // that function for why neither the workspace nor a client name belongs here.
-    const label = B4M_HEARTH_LABEL || slug;
+    //
+    // No operator override: a configurable displayName is exactly what splits
+    // one session into two actors, so identity is derived and not settable.
+    const label = slug;
 
     const payload = { hook_event_name: eventName, session_id: sessionId, slug, surface: SURFACE };
     const workspace = workspaceOf(hook.cwd);
