@@ -541,7 +541,8 @@ export function useDataLakeArticleCounts(): { total: number; sales: number; opti
  */
 export function useGetDataLakeArticles(params?: DataLakeArticlesParams | null, source: DataLakeBrowseSource = 'opti') {
   return useQuery({
-    queryKey: dataLakeKeys.articles(source, params),
+    // `null` means disabled-below, but the key type takes the params shape or undefined only.
+    queryKey: dataLakeKeys.articles(source, params ?? undefined),
     queryFn: async () => {
       const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
         `${browseBase(source)}/articles`,
