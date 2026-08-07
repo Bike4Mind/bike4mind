@@ -1,6 +1,8 @@
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { extractLakeMemoryForBatch } from '@server/dataLakes/extractLakeMemory';
 import { adminSettingsRepository } from '@bike4mind/database';
+import { sendToQueue } from '@server/utils/sqs';
+import { Resource } from 'sst';
 import { z, ZodError } from 'zod';
 
 const LakeMemoryPayload = z.object({
@@ -39,11 +41,26 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       return;
     }
 
-    await extractLakeMemoryForBatch(
+    const { hasMore } = await extractLakeMemoryForBatch(
       // Real Lambda clock, so the deadline guard accounts for cold start and time already spent.
       { dataLakeId: payload.dataLakeId, getRemainingTimeInMillis: () => context.getRemainingTimeInMillis() },
       logger
     );
+
+    // Bounded continuation: a lake too large for one invocation persisted a cursor and asked for another
+    // run. Re-enqueue the SAME payload; the next invocation resumes from the cursor and re-checks the
+    // kill-switch at entry (above), so a flag flip between slices stops the chain. Progress is monotonic
+    // (the cursor only advances and a no-progress run returns hasMore:false), so the chain terminates.
+    if (hasMore) {
+      await sendToQueue(Resource.lakeMemoryQueue.url, {
+        batchId: payload.batchId,
+        dataLakeId: payload.dataLakeId,
+        userId: payload.userId,
+      });
+      logger.info('[lakeMemory] enqueued continuation run for the remaining docs', {
+        dataLakeId: payload.dataLakeId,
+      });
+    }
   } catch (err) {
     // Permanently-invalid message (malformed payload) - retrying can't fix it.
     if (err instanceof ZodError || err instanceof SyntaxError) {

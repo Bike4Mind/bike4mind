@@ -76,6 +76,12 @@ const DataLakeSchema = new mongoose.Schema(
     // no sweep ever wrote, and the restore keyed to it reverses nothing. Restore clears it to null.
     // No index - the lakes collection is tiny, and it is only ever read from a lake already in hand.
     filesDeletedAt: { type: Date },
+    // Lake-memory producer (#1440) bookkeeping - server-managed, never client-writable. No index
+    // (tiny collection, only read from a lake already in hand, same rationale as filesDeletedAt).
+    // lakeMemoryExtractionAt is a concurrency lease; lakeMemoryCursor is the bounded-continuation
+    // watermark (last attempted doc id). See IDataLake for the full contract.
+    lakeMemoryExtractionAt: { type: Date },
+    lakeMemoryCursor: { type: String },
   },
   {
     timestamps: true,
@@ -396,6 +402,38 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       { $set: { status: 'active' } }
     );
     return res.modifiedCount === 1;
+  }
+
+  async claimLakeMemoryExtraction(id: string, at: Date, staleBefore: Date): Promise<boolean> {
+    // Guard in the FILTER, not a prior read: an unset/missing field OR a stamp older than staleBefore (a
+    // crashed run's expired lease) is claimable. A concurrent claimer that already wrote a FRESH stamp
+    // fails this filter and loses, so exactly one run holds the lease. Mirrors activateIfDraft's
+    // guarded-in-query idiom.
+    const res = await this.dataLakeModel.updateOne(
+      {
+        _id: id,
+        $or: [
+          { lakeMemoryExtractionAt: null },
+          { lakeMemoryExtractionAt: { $exists: false } },
+          { lakeMemoryExtractionAt: { $lt: staleBefore } },
+        ],
+      },
+      { $set: { lakeMemoryExtractionAt: at } }
+    );
+    return res.modifiedCount === 1;
+  }
+
+  async releaseLakeMemoryExtraction(id: string, claimedAt: Date): Promise<void> {
+    // Compare-and-clear: only release if our stamp is still the one in force. If a stale takeover
+    // replaced it, clearing would strand the newer run's lease.
+    await this.dataLakeModel.updateOne(
+      { _id: id, lakeMemoryExtractionAt: claimedAt },
+      { $set: { lakeMemoryExtractionAt: null } }
+    );
+  }
+
+  async setLakeMemoryCursor(id: string, cursor: string | null): Promise<void> {
+    await this.dataLakeModel.updateOne({ _id: id }, { $set: { lakeMemoryCursor: cursor } });
   }
 }
 
