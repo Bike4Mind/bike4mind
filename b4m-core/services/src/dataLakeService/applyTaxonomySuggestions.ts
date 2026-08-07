@@ -8,6 +8,8 @@ interface ApplyTaxonomySuggestionsAdapters {
     batches: Pick<IDataLakeBatchRepository, 'findById' | 'setTaxonomyStatusIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'findByBatchId' | 'bulkUpdateTags'>;
   };
+  logger?: { warn: (msg: string, ...args: unknown[]) => void };
+  metrics?: { recordTagsApplySkipped: (count: number) => Promise<void> };
 }
 
 /**
@@ -28,12 +30,17 @@ interface ApplyTaxonomySuggestionsAdapters {
  * pre-upload behavior this replaces).
  *
  * No lake-stats recompute: tags don't change lake membership/fileCount/totalSizeBytes.
+ *
+ * `filesUpdated` can be less than the number of matched files: bulkUpdateTags applies
+ * optimistic concurrency per file, so one mutated by something else between the read below and
+ * the write (a direct tag edit, a lake-membership pull, another apply) is silently skipped
+ * rather than having its concurrent change clobbered by a merge computed from stale data.
  */
 export const applyTaxonomySuggestions = async (
   actor: { userId: string; isAdmin: boolean },
   batchId: string,
   acceptedTags: TaxonomyTag[],
-  { db }: ApplyTaxonomySuggestionsAdapters
+  { db, logger, metrics }: ApplyTaxonomySuggestionsAdapters
 ): Promise<{ success: true; filesUpdated: number }> => {
   const batch = await db.batches.findById(batchId);
   if (!batch) throw new NotFoundError('Batch not found');
@@ -91,10 +98,33 @@ export const applyTaxonomySuggestions = async (
         if (current === undefined || t.strength > current) merged.set(t.name, t.strength);
       }
 
-      return [{ id: file.id, tags: Array.from(merged, ([name, strength]) => ({ name, strength })) }];
+      return [
+        {
+          id: file.id,
+          tags: Array.from(merged, ([name, strength]) => ({ name, strength })),
+          // The exact snapshot this merge was computed from - bulkUpdateTags uses it for
+          // optimistic concurrency, so a file mutated by something else since this read is
+          // skipped rather than clobbered by a merge that's now stale.
+          expectedTags: existingTags,
+        },
+      ];
     });
 
     const filesUpdated = await db.fabFiles.bulkUpdateTags(updates);
+    const skipped = updates.length - filesUpdated;
+    if (skipped > 0) {
+      // Every op in `updates` matched a file that needed new tags - a lower filesUpdated means
+      // bulkUpdateTags' optimistic-concurrency check lost the race for `skipped` of them (see
+      // its doc comment). Not an error - the concurrent writer's change legitimately wins - but
+      // otherwise invisible: filesUpdated just reaches the caller as a smaller-than-expected
+      // number with no signal why. Log carries batchId for grepping one occurrence; the metric
+      // (deliberately dimensionless, matching this file's low-cardinality convention) is the
+      // aggregate rate an alarm could eventually watch.
+      logger?.warn(
+        `applyTaxonomySuggestions: ${skipped}/${updates.length} file(s) skipped on batch ${batchId} - tags changed since read`
+      );
+      await metrics?.recordTagsApplySkipped(skipped).catch(() => {});
+    }
 
     const finalized = await db.batches.setTaxonomyStatusIfActive(batchId, ['applying'], 'applied');
     if (!finalized) {

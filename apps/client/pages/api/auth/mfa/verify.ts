@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { adminSettingsRepository, userRepository } from '@bike4mind/database';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { issueBrowserSession } from '@server/auth/issueSession';
 import { grantTrustedDevice } from '@server/auth/trustedDevice';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
@@ -56,7 +56,12 @@ const handler = baseApi() // Now requires authentication
 
         // Generate FULL access tokens (remove mfaPending) for login completion
         const tokenUserId = result.user.id;
-        const tokens = authTokenGenerator.createAccessToken(tokenUserId, result.user.tokenVersion ?? 0); // No mfaPending
+        // No mfaPending: MFA is satisfied, so mint a full session.
+        const { accessToken } = await issueBrowserSession(req, res, tokenUserId, {
+          createdVia: 'mfa',
+          tokenVersion: result.user.tokenVersion ?? 0,
+        });
+        const tokens = { accessToken };
 
         // "Remember this device": grant only on a genuine second-factor pass, so the trust
         // can never be established by anything weaker than the challenge it later skips.

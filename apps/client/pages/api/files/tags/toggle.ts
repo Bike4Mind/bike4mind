@@ -25,27 +25,15 @@ const handler = baseApi().post(
       }
     );
 
-    const applyFallbackTags = dataLakeService.createDataLakeFallbackTagger({
-      db: { dataLakes: dataLakeRepository },
+    const result = await fabFilesService.toggleTags(req.user.id, req.body, {
+      db: {
+        fabFiles: fabFileRepository,
+        fileTags: fileTagRepository,
+        dataLakes: dataLakeRepository,
+        users: userRepository,
+      },
       logger: req.logger,
     });
-
-    const result = await fabFilesService.toggleTags(
-      req.user.id,
-      {
-        ...(req.body as any),
-      },
-      {
-        db: {
-          fabFiles: fabFileRepository,
-          fileTags: fileTagRepository,
-          users: userRepository,
-        },
-        // One memoized tagger for the request: this door reconciles every file in the batch, so
-        // the one-shot form would re-read the same lake once per file.
-        reconcileTags: (tags, previousTags) => applyFallbackTags(tags, { previousTags }),
-      }
-    );
 
     return res.json(result);
   })

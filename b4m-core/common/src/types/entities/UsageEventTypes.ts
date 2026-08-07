@@ -3,6 +3,7 @@ import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
 import { NamedApiKeyUsage, ISourceUsage } from './CreditTransactionTypes';
+import { COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
 
 /**
  * Which product surface generated the provider call.
@@ -16,6 +17,7 @@ export const USAGE_EVENT_FEATURES = [
   'transcription',
   'text_to_speech',
   'sound_effects',
+  'music_generation',
   'agent_execution',
   'completion_api',
   'tool',
@@ -81,6 +83,18 @@ export const UsageEvent = z.object({
 
   status: z.enum(USAGE_EVENT_STATUSES).default('ok'),
   latencyMs: z.number().optional(),
+
+  // Denormalized origin, copied from the same call's ledger write so a single
+  // UsageEvent aggregation can co-slice by feature AND source AND consumer with
+  // frozen COGS. Invariant: these must match the paired CreditTransaction's
+  // source/apiKeyId. Both optional: recorders whose ledger write carries no
+  // source leave them unset, and those rows fall into the UNCLASSIFIED_SOURCE
+  // bucket in aggregation (mirrors the ledger).
+  /** Originating surface (web/cli/api/agent/system); unset => unclassified. */
+  source: z.enum(COMPLETION_SOURCES).optional(),
+  /** API key that authed the call; present only for API-key-authed usage. */
+  apiKeyId: z.string().optional(),
+
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -188,6 +202,50 @@ export interface IOwnerUsageSummary {
 export type NamedOwnerSpendMember = IOwnerSpendMember & { userName?: string };
 
 /**
+ * Platform-wide spend attributed to one API-key consumer. Only completion_api
+ * events carry an apiKeyId, so this is the programmatic-consumer cut with frozen
+ * COGS the ledger alone cannot give (the ledger has the key but not COGS/feature).
+ */
+export interface IPlatformConsumerUsage extends IUsageSpendBucket {
+  apiKeyId: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** A consumer bucket with the API key + owner resolved to display labels by the API. */
+export type NamedPlatformConsumerUsage = IPlatformConsumerUsage & {
+  keyName?: string;
+  keyPrefix?: string;
+  ownerId?: string;
+  ownerType?: CreditHolderType;
+  ownerName?: string;
+};
+
+/**
+ * Optional platform-summary filters. `source` and `ownerType` are applied as the
+ * same kind of $match addition - not separate query paths - so omitting either
+ * spans all sources / all owner types.
+ */
+export interface IPlatformUsageParams {
+  days?: number;
+  source?: CompletionSource;
+  ownerType?: CreditHolderType;
+}
+
+/**
+ * Cross-owner platform usage rolled up every way the admin view needs it, in a
+ * single pass so all cuts reconcile against the same event set. `overTime` is
+ * ascending by day; breakdowns are descending by creditsCharged.
+ */
+export interface IPlatformUsageSummary {
+  overTime: IOwnerSpendDay[];
+  byFeature: IOwnerSpendFeature[];
+  byConsumer: IPlatformConsumerUsage[];
+  byModel: IOwnerSpendModel[];
+  totals: IUsageSpendBucket;
+}
+
+/**
  * Owners the usage dashboard serves. Agent-held credit pools have no dashboard,
  * so the wire contract narrows to the two owners a human can view.
  */
@@ -218,6 +276,35 @@ export interface IUsageDashboardResponse {
    */
   bySource: ISourceUsage[];
   totals: IUsageSpendBucket;
+}
+
+/**
+ * Wire shape of GET /api/admin/platform-usage: the platform-wide usage summary
+ * (feature/COGS/credits from UsageEvent, source- and ownerType-filterable) with
+ * consumers resolved to key/owner labels, plus a distinct endpoint/latency
+ * section (request counts only, from ApiKeyUsageLog). The two sections are kept
+ * separate on purpose so the frontend never implies COGS-per-endpoint.
+ */
+export interface IPlatformUsageDashboardResponse {
+  /** Trailing window the UsageEvent summary covers. */
+  days: number;
+  /** Echo of the source filter, if any (default: all sources). */
+  source?: CompletionSource;
+  /** Echo of the ownerType filter, if any (default: all owner types). */
+  ownerType?: CreditHolderType;
+  overTime: IOwnerSpendDay[];
+  byFeature: IOwnerSpendFeature[];
+  byConsumer: NamedPlatformConsumerUsage[];
+  byModel: IOwnerSpendModel[];
+  totals: IUsageSpendBucket;
+  /**
+   * Endpoint/latency section from ApiKeyUsageLog (request counts only, no
+   * COGS/credits). Null when the source filter excludes API-key traffic (only
+   * api/cli requests are logged there). `endpointWindowDays` is clamped to the
+   * collection's 90-day TTL.
+   */
+  endpoints: IPlatformEndpointUsage | null;
+  endpointWindowDays: number;
 }
 
 /** A spend bucket that also carries token quantities, for session-level detail. */
@@ -302,6 +389,15 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    * aggregation. Powers the per-org usage dashboard.
    */
   ownerUsageSummary(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<IOwnerUsageSummary>;
+
+  /**
+   * Cross-owner platform-wide usage over the trailing N days (default 30),
+   * rolled up by day, feature, API-key consumer, and model in a single
+   * aggregation. `source` and `ownerType` are optional $match filters applied
+   * the same way (not separate query paths); omitting them spans all
+   * sources / all owner types. Admin-only surface.
+   */
+  platformUsageSummary(params?: IPlatformUsageParams): Promise<IPlatformUsageSummary>;
 
   /**
    * One session's usage rolled up by quest and by model. Defaults to all events

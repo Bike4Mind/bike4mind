@@ -1,9 +1,10 @@
-import type { IDataLakeBatchDocument, IDataLakeBatchRepository } from '@bike4mind/common';
+import type { IDataLakeBatchSummary, IDataLakeBatchRepository } from '@bike4mind/common';
 import { TAXONOMY_NON_TERMINAL_STATUSES } from '@bike4mind/common';
 
 /** Default stuck-taxonomy timeout: a non-terminal AI-tagging phase idle longer than this is
- * forced to 'failed'. Shorter than DEFAULT_STUCK_BATCH_TIMEOUT_MS (30 min) - this is one
- * bounded LLM call, not a multi-file pipeline, so a real run should never take this long. */
+ * forced to 'failed'. Much shorter than DEFAULT_STUCK_BATCH_TIMEOUT_MS - this is one
+ * bounded LLM call, not a multi-file pipeline with SQS retries to wait out, so a real run
+ * should never take this long. */
 export const DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 interface ReconcileStuckTaxonomyAdapters {
@@ -21,7 +22,7 @@ interface ReconcileStuckTaxonomyAdapters {
  * recompute needed - taxonomy suggestions never change fileCount/totalSizeBytes.
  */
 export const reconcileStuckTaxonomy = async (
-  batches: IDataLakeBatchDocument[],
+  batches: IDataLakeBatchSummary[],
   timeoutMs: number,
   { db, logger }: ReconcileStuckTaxonomyAdapters,
   now: number = Date.now()

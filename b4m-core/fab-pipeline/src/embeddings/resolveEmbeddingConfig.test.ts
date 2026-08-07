@@ -51,6 +51,21 @@ describe('resolveEmbeddingConfig', () => {
     });
   });
 
+  // getEffectiveLLMApiKeys emits the literal 'expired' sentinel for an expired per-user key. It must
+  // be treated as missing here - not forwarded as a bearer token - so an expired key degrades like
+  // every other LLM consumer instead of coming back as an opaque provider 401. Ollama carries a base
+  // URL, not a secret, so the sentinel is not applicable there.
+  describe.each([
+    { provider: ModelBackend.OpenAI, credential: 'openai' as const },
+    { provider: ModelBackend.VoyageAI, credential: 'voyageai' as const },
+  ])('$provider expired sentinel', ({ provider, credential }) => {
+    it("treats the 'expired' sentinel as missing, not as a usable key", () => {
+      const { config, missing } = resolveEmbeddingConfig(provider, { ...FULL, [credential]: 'expired' });
+      expect(missing).toBe(credential);
+      expect(config).toEqual({});
+    });
+  });
+
   // The regression this helper exists for. A keyless provider's ready state is an empty
   // config, which the two broken call-site shapes could not represent: one assumed an
   // unrecognised provider needed a key, the other read "no config fields set" as

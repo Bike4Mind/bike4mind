@@ -40,6 +40,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     toolIds: [{ type: String, required: false }],
     agentIds: [{ type: String, required: false }],
     systemPromptText: { type: String, required: false },
+    systemPromptId: { type: String, required: false },
     surface: { type: String, required: false },
     enabledTools: [{ type: String, required: false }],
     disabledTools: [{ type: String, required: false }],

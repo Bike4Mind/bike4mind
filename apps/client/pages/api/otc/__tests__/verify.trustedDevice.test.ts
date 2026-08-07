@@ -14,8 +14,12 @@ vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
 vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@server/auth/tokenGenerator', () => ({
-  authTokenGenerator: { createAccessToken: () => ({ accessToken: 'full-access', refreshToken: 'full-refresh' }) },
+  authTokenGenerator: { signAccessToken: () => 'full-access' },
 }));
+
+const mockSetRefreshCookie = vi.fn();
+vi.mock('@server/auth/refreshCookie', () => ({ setRefreshCookie: (...a: any[]) => mockSetRefreshCookie(...a) }));
+vi.mock('@server/auth/sessionDevice', () => ({ buildSessionDevice: () => ({}) }));
 
 const mockLogAuthAudit = vi.fn((..._args: any[]) => Promise.resolve());
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: any[]) => mockLogAuthAudit(...a) }));
@@ -53,6 +57,7 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   userRepository: { findByEmail: (...a: any[]) => mockFindByEmail(...a), count: vi.fn(), update: vi.fn() },
   pendingOtcTokenRepository: { validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a) },
+  authSessionRepository: {},
 }));
 
 const mockUserHasMFA = vi.fn();
@@ -63,6 +68,9 @@ vi.mock('@bike4mind/services', () => ({
   },
   creditService: { addCredits: vi.fn() },
   mfaService: { userHasMFAConfigured: (...a: any[]) => mockUserHasMFA(...a) },
+  authSessionService: {
+    issueSession: vi.fn().mockResolvedValue({ accessToken: 'full-access', refreshToken: 'full-refresh', sid: 'sid' }),
+  },
 }));
 
 import handler from '@pages/api/otc/verify';
@@ -122,7 +130,9 @@ describe('/api/otc/verify - trusted device', () => {
     const body = res._getJSONData();
     expect(body.mfaRequired).toBeUndefined();
     expect(body.accessToken).toBe('full-access');
-    expect(body.refreshToken).toBe('full-refresh');
+    // The refresh token rides an HttpOnly cookie, never the response body.
+    expect(body.refreshToken).toBeUndefined();
+    expect(mockSetRefreshCookie).toHaveBeenCalledWith(expect.anything(), 'full-refresh');
     expect(mockConsumeTrustedDevice).toHaveBeenCalledWith(expect.anything(), 'user-1');
   });
 

@@ -39,12 +39,18 @@ export interface DataLakeSurfaceCopy {
   rootLabel: string;
   dropTitle: string;
   dropHint: string;
+  /** Resting affordance, shown while no drag is underway so the capability is discoverable. */
+  dropRestingHint: string;
+  /** Verb phrase completing the post-drop success toast ("3 files ready to add..."). */
+  dropAcceptedHint: string;
   emptyTitle: string;
   emptyHint: string;
   /** Zero-state variants, shown instead of `empty*` when the create-first CTA is offered. */
   zeroTitle: string;
   zeroHint: string;
   createLabel: string;
+  /** Label for the shared manage-knowledge affordance (`ManageKnowledgeButton`). */
+  manageLabel: string;
   askAboutLabel: string;
   askAboutPrompt: (title: string) => string;
   /** Optional second action under an article; omit to render only "ask about". */
@@ -102,11 +108,14 @@ export const DEFAULT_DATA_LAKE_SURFACE_TOKENS: DataLakeSurfaceTokens = {
     rootLabel: DATA_LAKES,
     dropTitle: `Drop to add to a ${DATA_LAKE.toLowerCase()}`,
     dropHint: "Files or folders - you'll pick the destination next",
+    dropRestingHint: 'Drag files here to add',
+    dropAcceptedHint: `ready to add to a ${DATA_LAKE.toLowerCase()}`,
     emptyTitle: 'Nothing selected yet',
     emptyHint: 'Pick a branch from the tree, or jump into one of the largest categories below.',
     zeroTitle: 'Nothing here yet',
     zeroHint: `Create your first ${DATA_LAKE.toLowerCase()} to turn your files into searchable knowledge.`,
     createLabel: `Create ${DATA_LAKE.toLowerCase()}`,
+    manageLabel: 'Manage lakes',
     askAboutLabel: 'Ask about this document',
     askAboutPrompt: title => `Tell me about this document: ${title}`,
     secondaryActionLabel: 'Summarize the key points',

@@ -28,6 +28,7 @@ import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { useVerifyMFA, useSetupMFA, useVerifyMFASetup, MFASetupResponse } from '@client/app/hooks/data/mfa';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { resetRefreshPromise } from '@client/app/contexts/ApiContext';
+import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { useCommonStyles } from '@client/app/hooks/useCommonStyles';
 import { useTheme } from '@mui/joy/styles';
 import MFAModal from './common/MFAModal';
@@ -266,7 +267,10 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         result = await verifyMFA.mutateAsync({ token, rememberDevice });
       }
       resetRefreshPromise();
-      useAccessToken.getState().setVerifiedTokens(result.accessToken, result.refreshToken);
+      // Drop the cached cold-load result: this browser just acquired a session, so the next
+      // protected navigation must not reuse the "no session" answer from before login.
+      resetSessionBootstrap();
+      useAccessToken.getState().setVerifiedSession(result.accessToken);
       setShowMFAModal(false);
       setCurrentUser(result.user);
     } catch (error: unknown) {
@@ -280,11 +284,6 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         setMfaSetupData(null);
         toast.error((errorData.error as string) || 'Too many failed attempts. Please try again.');
         return;
-      }
-      if (errorData?.accessToken && errorData?.refreshToken) {
-        useAccessToken
-          .getState()
-          .setMfaPendingTokens(errorData.accessToken as string, errorData.refreshToken as string);
       }
       const baseError = (errorData?.error as string) || (error as Error).message || 'MFA verification failed';
       const attemptsInfo = errorData?.attemptsRemaining ? ` (${errorData.attemptsRemaining} attempts remaining)` : '';
@@ -377,7 +376,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
       }
 
       // Successful login
-      finishLogin(response as Record<string, unknown> & { accessToken: string; refreshToken: string });
+      finishLogin(response as Record<string, unknown> & { accessToken: string });
     } catch (error: unknown) {
       const errorMessage = (error as Error).message || 'Verification failed';
       // On a wrong code the server re-issues an attempt-tracked pending token with a rotated
@@ -392,10 +391,14 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     }
   };
 
-  // Shared success path: persist tokens, set the user, honor ?redirectTo.
-  const finishLogin = (user: Record<string, unknown> & { accessToken: string; refreshToken: string }) => {
+  // Shared success path: store the access token, set the user, honor ?redirectTo. The refresh
+  // token is not here - the login endpoint set it as an HttpOnly cookie.
+  const finishLogin = (user: Record<string, unknown> & { accessToken: string }) => {
     resetRefreshPromise();
-    useAccessToken.getState().setVerifiedTokens(user.accessToken, user.refreshToken);
+    // Drop the cached cold-load result: this browser just acquired a session, so the next
+    // protected navigation must not reuse the "no session" answer from before login.
+    resetSessionBootstrap();
+    useAccessToken.getState().setVerifiedSession(user.accessToken);
     setCurrentUser(user as unknown as Parameters<typeof setCurrentUser>[0]);
     const searchParams = new URLSearchParams(window.location.search);
     applyRedirect(router.history, searchParams.get('redirectTo'));
@@ -474,7 +477,6 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
           ? {
               ...(response.user as unknown as Record<string, unknown>),
               accessToken: response.accessToken,
-              refreshToken: response.refreshToken,
             }
           : response;
       if ('user' in response) {
@@ -483,7 +485,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
         // already existed, which must not double-count.
         trackSignupConversion('password');
       }
-      finishLogin(flat as Record<string, unknown> & { accessToken: string; refreshToken: string });
+      finishLogin(flat as Record<string, unknown> & { accessToken: string });
     } catch (error: unknown) {
       const errorMessage = (error as Error).message || 'Registration failed';
       // useVerifyOTC surfaces any re-issued pending token (rotated nonce) at the error

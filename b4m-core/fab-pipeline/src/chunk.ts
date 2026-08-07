@@ -1,6 +1,8 @@
 import {
   BedrockEmbeddingModel,
+  DEFAULT_PASSAGE_TOKEN_TARGET,
   IFabFile,
+  MIN_PASSAGE_TOKEN_TARGET,
   OllamaEmbeddingModel,
   isAudioMimeType,
   OpenAIEmbeddingModel,
@@ -28,6 +30,19 @@ export const ChunkSchema = z.object({
 });
 export type Chunk = z.infer<typeof ChunkSchema>;
 
+// Canonical in @bike4mind/common (see constants/chunking) so the admin-settings schema and the
+// React controls can share them without importing this module, which pulls in mammoth, JSZip,
+// tiktoken, unpdf and the S3 client. Re-exported so existing `from './chunk'` importers are
+// unaffected.
+export { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET };
+
+export interface SmartChunkerOptions {
+  /** Buffer as a percent (0-1) or absolute value (if >= 1) to subtract from maxTokens. */
+  bufferPercentOrValue?: number;
+  /** Soft target chunk size in tokens; clamped to [MIN_PASSAGE_TOKEN_TARGET, model limit]. */
+  passageTokenTarget?: number;
+}
+
 type Storage = Pick<S3Storage, 'getContentAsBuffer'>;
 
 const isEmbeddingModel = <T extends SupportedEmbeddingModel>(
@@ -50,14 +65,18 @@ export class SmartChunker {
    * @param model - The embedding model name
    * @param storage - Storage instance for file content
    * @param logger - Logger instance
-   * @param bufferPercentOrValue - Optional. Buffer as a percent (0-1) or absolute value (if >= 1) to subtract from maxTokens. Default: 0.2 (20%) or 32 tokens, whichever is greater.
+   * @param options - Either a bare number (legacy: bufferPercentOrValue) or a SmartChunkerOptions
+   *   object. Buffer default: 0.2 (20%) or 32 tokens, whichever is greater. Passage target
+   *   default: DEFAULT_PASSAGE_TOKEN_TARGET.
    */
   constructor(
     model: string,
     storage: Storage,
     private readonly logger: Logger,
-    bufferPercentOrValue?: number
+    options?: number | SmartChunkerOptions
   ) {
+    const { bufferPercentOrValue, passageTokenTarget } =
+      typeof options === 'number' ? { bufferPercentOrValue: options, passageTokenTarget: undefined } : (options ?? {});
     this.model = model;
 
     if (isEmbeddingModel(model, OpenAIEmbeddingModel)) {
@@ -81,7 +100,15 @@ export class SmartChunker {
     } else {
       buffer = Math.floor(this.bufferPercentOrValue);
     }
-    this.chunkTokenLimit = this.maxTokens - buffer;
+    // The buffered model limit is the HARD cap (an oversized chunk fails the embedding call);
+    // the passage target is a SOFT cap for retrieval granularity. The effective limit is the
+    // smaller of the two, so a caller can never configure a chunk the model would reject.
+    const hardLimit = this.maxTokens - buffer;
+    const target =
+      passageTokenTarget !== undefined && Number.isFinite(passageTokenTarget) && passageTokenTarget > 0
+        ? Math.max(Math.floor(passageTokenTarget), MIN_PASSAGE_TOKEN_TARGET)
+        : DEFAULT_PASSAGE_TOKEN_TARGET;
+    this.chunkTokenLimit = Math.min(hardLimit, target);
 
     this.storage = storage;
 
@@ -90,6 +117,7 @@ export class SmartChunker {
       maxTokens: this.maxTokens,
       chunkTokenLimit: this.chunkTokenLimit,
       bufferPercentOrValue: this.bufferPercentOrValue,
+      passageTokenTarget: target,
     });
   }
 
@@ -751,7 +779,10 @@ export class SmartChunker {
   private async encodeTokens(text: string): Promise<number[]> {
     if (isEmbeddingModel(this.model, OpenAIEmbeddingModel)) {
       await this.initializeEncoder();
-      return Array.from(this.encoder!.encode(text));
+      // encode_ordinary, not encode: file content is untrusted and a special-token literal in it
+      // ("<|endoftext|>") makes encode reject, failing the whole ingest. See TiktokenTokenizer in
+      // @bike4mind/utils for the full reasoning; the same call is used everywhere we tokenize.
+      return Array.from(this.encoder!.encode_ordinary(text));
     }
     // For non-OpenAI models, pseudo-token IDs are character offsets into the original text.
     // decodeTokens() uses these offsets to slice the original string back out.
@@ -857,9 +888,10 @@ export class SmartChunker {
   // Counts the number of tokens in the given text using the appropriate tokenization method
   private async countTokens(text: string): Promise<number> {
     if (isEmbeddingModel(this.model, OpenAIEmbeddingModel)) {
-      // Use tiktoken for OpenAI models
+      // Use tiktoken for OpenAI models. encode_ordinary for the same reason as encodeTokens above:
+      // a special-token literal in file content must be counted, not rejected.
       await this.initializeEncoder();
-      const tokens = this.encoder!.encode(text);
+      const tokens = this.encoder!.encode_ordinary(text);
       return tokens.length;
     } else if (isEmbeddingModel(this.model, VoyageAIEmbeddingModel)) {
       // VoyageAI uses transformers-style subword tokenization unavailable in JS;

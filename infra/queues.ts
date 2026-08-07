@@ -14,6 +14,34 @@ import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
 import { router, whatsNewDistributionId } from './router';
 
+// Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
+// because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
+// call, enqueues taxonomy analysis as a backstop - see the fuller comment further down where
+// the queue's own subscription is wired).
+const dataLakeTaxonomyQueueDLQ = new sst.aws.Queue('dataLakeTaxonomyQueueDLQ', {});
+const dataLakeTaxonomyQueue = new sst.aws.Queue('dataLakeTaxonomyQueue', {
+  visibilityTimeout: '6 minutes',
+  dlq: {
+    queue: dataLakeTaxonomyQueueDLQ.arn,
+    retry: 2, // LLM calls cost money; the stuck-job reconciler is the backstop for the rest.
+  },
+});
+
+// Lake Memory Extraction Queue (#1440 producer). Declared up here alongside taxonomy because the chunk
+// and vectorize Lambdas must link it too: finalizeBatchIfComplete (which they call) enqueues lake
+// memory extraction, so it needs Resource.lakeMemoryQueue.url. Full-lake LLM extraction, so retry: 2
+// like taxonomy (a dropped run is re-covered by the next finalize's whole-lake re-scan).
+const lakeMemoryQueueDLQ = new sst.aws.Queue('lakeMemoryQueueDLQ', {});
+const lakeMemoryQueue = new sst.aws.Queue('lakeMemoryQueue', {
+  // Must exceed the handler's 10-minute timeout (below), or SQS redelivers the message while the run
+  // is still in flight and a duplicate extraction runs concurrently.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: lakeMemoryQueueDLQ.arn,
+    retry: 2,
+  },
+});
+
 // FabFile Vectorize Queue
 const fabFileVectorizeQueueDLQ = new sst.aws.Queue('fabFileVectorizeQueueDLQ', {});
 const fabFileVectorizeQueue = new sst.aws.Queue('fabFileVectorizeQueue', {
@@ -29,7 +57,17 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    // dataLakeTaxonomyQueue + lakeMemoryQueue: finalizeBatchIfComplete (called from this handler)
+    // enqueues taxonomy analysis and lake memory extraction, which need their queue URLs.
+    link: [
+      ...allSecrets,
+      websocketApi,
+      fabFileBucket,
+      generatedImagesBucket,
+      appFilesBucket,
+      dataLakeTaxonomyQueue,
+      lakeMemoryQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -87,7 +125,18 @@ const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '13 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, fabFileVectorizeQueue, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    // dataLakeTaxonomyQueue + lakeMemoryQueue: finalizeBatchIfComplete (called from this handler)
+    // enqueues taxonomy analysis and lake memory extraction, which need their queue URLs.
+    link: [
+      ...allSecrets,
+      websocketApi,
+      fabFileVectorizeQueue,
+      fabFileBucket,
+      generatedImagesBucket,
+      appFilesBucket,
+      dataLakeTaxonomyQueue,
+      lakeMemoryQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -420,6 +469,12 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
         actions: ['rekognition:DetectModerationLabels'],
         resources: ['*'],
       },
+      {
+        // generateAndSend resolves the agent's pinned model, which emits
+        // Lumina5/ModelSunset. PutMetricData takes no resource scope.
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
     ],
     copyFiles: [
       {
@@ -639,24 +694,39 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// Data Lake Taxonomy Analysis Queue
+// Data Lake Taxonomy Analysis Queue (Queue + DLQ declared near the top of this file, since
+// the chunk/vectorize subscriptions above need to link it too)
 // Triggered once per batch (from finalizeBatchIfComplete) when the wizard opted into
 // background AI tag suggestion. A single bounded OpenAI call over already-uploaded
 // FabFiles - no buckets needed (metadata-only sampling in v1), but links websocketApi
 // so the handler can push `data_lake_batch_progress` taxonomyStatus updates live.
-const dataLakeTaxonomyQueueDLQ = new sst.aws.Queue('dataLakeTaxonomyQueueDLQ', {});
-const dataLakeTaxonomyQueue = new sst.aws.Queue('dataLakeTaxonomyQueue', {
-  visibilityTimeout: '6 minutes',
-  dlq: {
-    queue: dataLakeTaxonomyQueueDLQ.arn,
-    retry: 2, // LLM calls cost money; the stuck-job reconciler is the backstop for the rest.
-  },
-});
 const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
   {
     handler: 'apps/client/server/queueHandlers/dataLakeTaxonomyAnalysis.dispatch',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Lake Memory Extraction subscription (#1440 producer). Reads a lake's chunk text and calls the LLM
+// per document (sequential, up to MAX_DOCS_PER_RUN=100), so it gets a 10-minute timeout - longer than
+// taxonomy because it does per-document LLM work across the whole lake, not a single inference (the
+// queue's visibilityTimeout is set to 12 min above to stay ahead of it). SINGLE_RECORD_BATCH so one
+// lake fails in isolation and DLQs on its own.
+const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/lakeMemoryExtraction.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
     logging: {
@@ -1277,6 +1347,7 @@ export {
   questExportQueue,
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
+  lakeMemoryQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1304,6 +1375,7 @@ export {
   questExportQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
+  lakeMemoryQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1333,6 +1405,7 @@ export {
   questExportQueueSubscription,
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
+  lakeMemoryQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,

@@ -33,6 +33,15 @@ const MessageTruncationSchema = subSchema({
   },
 });
 
+// A dedicated sub-schema (not an inline nested object) so `default: undefined` can suppress Mongoose
+// auto-vivification: the `dataLakeTags` array would otherwise default to `[]` and materialize a
+// `lakeMemory: { dataLakeTags: [] }` on EVERY quest, which then fails the Zod re-parse on read (the Zod
+// `beliefCount` is required). Absent-or-fully-present, matching how the feature writes it.
+const LakeMemorySchema = subSchema({
+  beliefCount: { type: Number, required: false },
+  dataLakeTags: [{ type: String, required: false }],
+});
+
 // `content` is deliberately absent - see the exclusion note on the context path below.
 const SystemPromptSourceSchema = subSchema({
   fileId: { type: String, required: false },
@@ -40,6 +49,18 @@ const SystemPromptSourceSchema = subSchema({
   source: { type: String, required: false },
   priority: { type: Number, required: false },
   enabled: { type: Boolean, required: false },
+});
+
+// Per-source system prompt breakdown derived from the tagged assembly (see
+// services systemPromptSources). Declared or Mongoose strict mode silently strips
+// it on save; the API's includePromptDetails and any DB read depend on it persisting.
+// Kept in sync with SystemPromptDetailSchema in @bike4mind/common contextTelemetry.
+const SystemPromptDetailSubSchema = subSchema({
+  source: { type: String, required: false },
+  name: { type: String, required: false },
+  tokenCount: { type: Number, required: false },
+  wasIncluded: { type: Boolean, required: false },
+  exclusionReason: { type: String, required: false },
 });
 
 const ArtifactSchema = subSchema({
@@ -191,6 +212,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       mementoCount: { type: Number, required: false },
       mementoIds: [{ type: String, required: false }],
       systemPromptSources: { type: [SystemPromptSourceSchema], required: false, default: undefined },
+      systemPromptDetails: { type: [SystemPromptDetailSubSchema], required: false, default: undefined },
       dedupedSystemPrompts: { type: [String], required: false, default: undefined },
       totalSystemPromptCount: { type: Number, required: false },
       duplicateSystemPromptCount: { type: Number, required: false },
@@ -199,6 +221,18 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       globalSystemFileIds: { type: [String], required: false, default: undefined },
       userSystemFileIds: { type: [String], required: false, default: undefined },
       projectSystemFileIds: { type: [String], required: false, default: undefined },
+      // Corpus inline-vs-retrieve decision for the turn (ChatCompletionProcess.resolveCorpusInlinePlan).
+      // Must stay in sync with the Zod PromptMeta `context.knowledgeInlining` (parity test enforces it).
+      knowledgeInlining: {
+        attachedCount: { type: Number, required: false },
+        retrievableCount: { type: Number, required: false },
+        deferredCount: { type: Number, required: false },
+        deferredToRetrieval: { type: Boolean, required: false },
+        minInlineTokensPerDoc: { type: Number, required: false },
+      },
+      // Must stay in sync with the Zod PromptMeta `context.lakeMemory` (parity test enforces it).
+      // Sub-schema + default:undefined so it never auto-vivifies to a partial object (see above).
+      lakeMemory: { type: LakeMemorySchema, required: false, default: undefined },
       messageTruncation: { type: MessageTruncationSchema, required: false, default: undefined },
       tokensBySource: {
         systemPrompts: { type: Number, required: false },
@@ -239,6 +273,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         id: { type: String, required: false },
       },
     ],
+    offeredTools: [{ type: String, required: false }],
     performance: {
       totalResponseTime: { type: Number, required: false },
       contextRetrievalTime: { type: Number, required: false },
@@ -563,6 +598,38 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       const doc = d.toJSON();
       return { ...doc } as IChatHistoryItemDocument;
     });
+  }
+
+  /**
+   * One page of a session's turns, oldest-first by default - the read shape a
+   * support view needs (a long notebook must not be loaded whole). Projects only
+   * the conversation fields, so bulk payloads like `structuredReplies` and
+   * `deepResearchState` stay out of the response. `hasMore` comes from fetching
+   * one extra row, matching the pagination contract used by the chat endpoints.
+   *
+   * Sorts on `_id` as a tiebreaker: `timestamp` is required but NOT unique, and
+   * with `.skip()` an ambiguous order lets turns sharing a millisecond repeat
+   * across a page boundary or be skipped entirely - which would also make the
+   * audited page/returned counts an inaccurate record of what was read.
+   */
+  async findPageBySessionId(
+    sessionId: string,
+    options: { limit: number; page: number; sort?: 'asc' | 'desc' }
+  ): Promise<{ data: IChatHistoryItemDocument[]; hasMore: boolean }> {
+    const { limit, page, sort = 'asc' } = options;
+    const result = await this.model
+      .find({ sessionId, deletedAt: null })
+      .select('sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed')
+      .sort({ timestamp: sort, _id: sort })
+      .skip(limit * (page - 1))
+      .limit(limit + 1);
+
+    const hasMore = result.length > limit;
+    const rows = hasMore ? result.slice(0, limit) : result;
+    return {
+      data: rows.map(d => ({ ...d.toJSON() }) as IChatHistoryItemDocument),
+      hasMore,
+    };
   }
 
   async findAllBySessionIdAndLessThanOrEqualToTimestamp(sessionId: string, timestamp: Date) {

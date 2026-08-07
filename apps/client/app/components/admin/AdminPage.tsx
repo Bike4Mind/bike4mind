@@ -66,15 +66,9 @@ import SystemSecretsTab from './SystemSecretsTab';
 import MenuIcon from '@mui/icons-material/Menu';
 import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
-import {
-  AdminTab,
-  SIDEBAR_SECTIONS,
-  SIDEBAR_EXPANDED_STORAGE_KEY,
-  findSectionKeyForTab,
-  type SidebarGate,
-  type SidebarItem,
-} from './adminSidebarConfig';
+import { AdminTab, SIDEBAR_SECTIONS, type SidebarGate, type SidebarItem } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
+import { useAdminSidebarSections } from './useAdminSidebarSections';
 
 export { AdminTab } from './adminSidebarConfig';
 
@@ -137,38 +131,7 @@ const SidebarNav = ({
 }: SidebarNavProps) => {
   const activeTab = useAdminModal(state => state.activeTab);
 
-  // Expand state keyed by section. On mount, restore the user's last choice from
-  // localStorage; otherwise expand only the section containing the active tab so
-  // the sidebar opens scannable instead of fully expanded.
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = window.localStorage.getItem(SIDEBAR_EXPANDED_STORAGE_KEY);
-        if (stored) {
-          const parsed = JSON.parse(stored) as Record<string, boolean>;
-          return Object.fromEntries(SIDEBAR_SECTIONS.map(s => [s.key, parsed[s.key] ?? false]));
-        }
-      } catch {
-        // Ignore malformed storage and fall through to active-section default.
-      }
-    }
-    const activeKey = findSectionKeyForTab(activeTab);
-    return Object.fromEntries(SIDEBAR_SECTIONS.map(s => [s.key, s.key === activeKey]));
-  });
-
-  const toggleSection = (key: string) => {
-    setExpandedSections(prev => {
-      const next = { ...prev, [key]: !prev[key] };
-      if (typeof window !== 'undefined') {
-        try {
-          window.localStorage.setItem(SIDEBAR_EXPANDED_STORAGE_KEY, JSON.stringify(next));
-        } catch {
-          // Persistence is best-effort; ignore quota/serialization failures.
-        }
-      }
-      return next;
-    });
-  };
+  const { isExpanded, toggleSection } = useAdminSidebarSections(activeTab);
 
   const gates: Record<SidebarGate, boolean> = {
     userMigration: !!enableUserMigration,
@@ -223,11 +186,7 @@ const SidebarNav = ({
         const { Icon: SectionIcon } = section;
         const visibleItems = section.items.filter(item => !item.gate || gates[item.gate]);
         return (
-          <Accordion
-            key={section.key}
-            expanded={expandedSections[section.key] ?? false}
-            onChange={() => toggleSection(section.key)}
-          >
+          <Accordion key={section.key} expanded={isExpanded(section.key)} onChange={() => toggleSection(section.key)}>
             <AccordionSummary>
               <SectionIcon color="primary" />
               <Typography color="primary" level="body-md">

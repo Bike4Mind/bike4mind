@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { tagService } from '@bike4mind/services';
-import { fileTagRepository } from '@bike4mind/database';
+import { fabFileRepository, fileTagRepository } from '@bike4mind/database';
 
 const handler = baseApi()
   .put(
@@ -21,6 +21,7 @@ const handler = baseApi()
         {
           db: {
             tags: fileTagRepository as unknown as ITagRepository,
+            fabFiles: fabFileRepository,
           },
         }
       );
@@ -42,6 +43,7 @@ const handler = baseApi()
         {
           db: {
             tags: fileTagRepository,
+            fabFiles: fabFileRepository,
           },
         }
       );

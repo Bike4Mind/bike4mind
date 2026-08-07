@@ -25,6 +25,13 @@ import {
 import type { ToolErrorCategory } from '@bike4mind/common';
 
 /**
+ * The single-cause anomaly types: every PrimaryAnomaly except the two aggregate
+ * verdicts ('none', 'multiple'), which computeAnomalies derives from how many of
+ * these are active rather than detecting directly.
+ */
+type AnomalyCategory = Exclude<AnomaliesTelemetry['primaryAnomaly'], 'none' | 'multiple'>;
+
+/**
  * Categorizes a tool error message into a standardized category
  */
 export function categorizeToolError(errorMessage: string): ToolErrorCategory {
@@ -367,22 +374,27 @@ export class TelemetryBuilder {
     else if (score >= 20) severity = 'medium';
     else severity = 'low';
 
-    // Determine primary anomaly
-    let primaryAnomaly: AnomaliesTelemetry['primaryAnomaly'] = 'none';
-    const activeFlags = Object.entries(flags).filter(([, v]) => v);
-    if (activeFlags.length > 1) {
-      primaryAnomaly = 'multiple';
-    } else if (flags.contextOverflow) {
-      primaryAnomaly = 'context_overflow';
-    } else if (flags.criticalTruncation || flags.highTruncation) {
-      primaryAnomaly = 'high_truncation';
-    } else if (flags.toolFailureSpike || flags.toolTimeout) {
-      primaryAnomaly = 'tool_failure';
-    } else if (flags.subagentTimeout) {
-      primaryAnomaly = 'subagent_timeout';
-    } else if (flags.slowTotalResponse || flags.slowFirstToken) {
-      primaryAnomaly = 'slow_response';
-    }
+    // Classify by category, not by raw flag: every scoring flag maps to exactly one
+    // category, which is what makes score > 0 always imply a primaryAnomaly other than
+    // 'none' -- an equivalence the admin Context Inspector filters and stat counts rely on.
+    // Collapsing the critical*/high* tiers of one condition also keeps a single-cause turn
+    // from being mislabelled 'multiple'. Overflow deliberately suppresses utilization: the
+    // normal capture path derives utilization as inputTokens / maxSafeInputTokens, so
+    // overflow always implies criticalUtilization and counting both would make
+    // 'context_overflow' unreachable. Record<AnomalyCategory> keeps this in sync with
+    // PrimaryAnomalySchema -- a new member there fails to compile until it lands here.
+    const categories: Record<AnomalyCategory, boolean> = {
+      context_overflow: flags.contextOverflow,
+      high_utilization: !flags.contextOverflow && (flags.criticalUtilization || flags.highUtilization),
+      high_truncation: flags.criticalTruncation || flags.highTruncation,
+      tool_failure: flags.toolFailureSpike || flags.toolTimeout,
+      subagent_timeout: flags.subagentTimeout,
+      slow_response: flags.slowTotalResponse || flags.slowFirstToken,
+    };
+
+    const activeCategories = (Object.keys(categories) as AnomalyCategory[]).filter(key => categories[key]);
+    const primaryAnomaly: AnomaliesTelemetry['primaryAnomaly'] =
+      activeCategories.length === 0 ? 'none' : activeCategories.length > 1 ? 'multiple' : activeCategories[0];
 
     // Generate dedup key based on pattern
     const dedupParts = [primaryAnomaly, this.actualModelId];

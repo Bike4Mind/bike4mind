@@ -52,6 +52,7 @@ import {
   type ContextUsageBand,
 } from '@client/app/hooks/useSessionContextUsage';
 import { ContextUsageWarning } from '../ContextUsageWarning';
+import { useAttachmentFitWarning } from '@client/app/hooks/useAttachmentFitWarning';
 import { ContextCompactionNote } from '../ContextCompactionNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
@@ -185,6 +186,18 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // the current input box against the budget.
   const contextUsage = useSessionContextUsage(currentSessionId);
   const modelName = useMemo(() => modelInfo?.find(m => m.id === model)?.name ?? model, [modelInfo, model]);
+  const attachmentFit = useAttachmentFitWarning(
+    model,
+    // Notebook-context files ride EVERY turn on this session, so they spend the budget too.
+    useMemo(() => workBenchFiles.map(f => String(f.id)).filter(Boolean), [workBenchFiles])
+  );
+  // Dismissal is per attachment set: changing the files or the model asks a new question, so the
+  // previous dismissal should not silence the new answer.
+  const [attachmentWarningDismissed, setAttachmentWarningDismissed] = useState(false);
+  const attachmentFitKey = attachmentFit ? `${attachmentFit.fileName}:${attachmentFit.deliveredPercent}` : '';
+  useEffect(() => {
+    setAttachmentWarningDismissed(false);
+  }, [attachmentFitKey]);
   // Show the warning once usage is elevated, until dismissed at that band; a
   // jump from warning -> danger re-surfaces it.
   const showContextWarning =
@@ -259,6 +272,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // The floating chat window frames the input itself, so like docked it drops the
   // outer spacing and rounded card look; unlike docked it keeps a top separator.
   const isFloatingLayout = useSessionLayout(s => s.layout === 'floatingChat');
+  // The Data Lake chat is embedded edge-to-edge in the Explorer (#836), so it drops
+  // the outer bottom gutter like the docked/floating layouts do.
+  const isDataLakeSurface = currentSession?.surface === 'datalake';
 
   // Determine if the stop button should be shown
   const shouldShowStopButton = useMemo(() => {
@@ -428,7 +444,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       ref={ref}
       className="session-bottom"
       sx={{
-        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? '0' : '1.25rem',
+        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout || isDataLakeSurface ? '0' : '1.25rem',
         paddingTop: isDockedLayout || isFloatingLayout ? 0 : '20px',
         position: 'relative',
       }}
@@ -491,6 +507,16 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                     usage={contextUsage}
                     modelName={modelName}
                     onDismiss={() => setContextWarningDismissedBand(contextUsage.band)}
+                  />
+                )}
+                {/* Answers a different question than the meter above: not how full the session is, but
+                    whether the file attached to THIS turn survives the budget. Null whenever it fits. */}
+                {attachmentFit && !attachmentWarningDismissed && (
+                  <ContextUsageWarning
+                    show
+                    attachment={attachmentFit}
+                    modelName={modelName}
+                    onDismiss={() => setAttachmentWarningDismissed(true)}
                   />
                 )}
                 <ContextCompactionNote

@@ -198,7 +198,7 @@ describe('deleteFabFile', () => {
       expect(mockAdapter.storage.delete).not.toHaveBeenCalled();
     });
 
-    it('should return action "not_found" when file exists but user is not in share list', async () => {
+    it('should return action "denied" when file exists but user is not in share list', async () => {
       const fileNotSharedToUser: Partial<IFabFileDocument> = {
         ...createMockSharedFile(),
         users: [{ userId: 'other-user', permissions: ['read'] }],
@@ -208,7 +208,7 @@ describe('deleteFabFile', () => {
 
       const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
 
-      expect(result.action).toBe('not_found');
+      expect(result.action).toBe('denied');
       expect(result.fabFile).toBeNull();
       expect(mockAdapter.db.fabFiles.update).not.toHaveBeenCalled();
     });

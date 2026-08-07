@@ -54,6 +54,9 @@ export interface UploadProgress {
   vectorizedFiles: number;
   failedFiles: number;
   failedFileNames: string[];
+  /** Subset of failedFiles caused by chunk/vectorize (vs a browser upload failure), pushed over
+   * the batch-progress WebSocket channel - lets the UI say which stage a file failed at. */
+  processingFailedFiles: number;
   status: 'idle' | 'uploading' | 'complete' | 'error';
   /** Always a human-friendly, translated message - never raw zod/validator text. */
   errorMessage?: string;
@@ -92,6 +95,7 @@ const DEFAULT_UPLOAD_PROGRESS: UploadProgress = {
   vectorizedFiles: 0,
   failedFiles: 0,
   failedFileNames: [],
+  processingFailedFiles: 0,
   status: 'idle',
 };
 

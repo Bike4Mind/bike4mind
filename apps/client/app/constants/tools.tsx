@@ -2,6 +2,7 @@ import {
   Schedule as DateTimeIcon,
   Casino as DiceIcon,
   Image as ImageIcon,
+  MusicNote as MusicIcon,
   Calculate as MathIcon,
   Schema as MermaidIcon,
   Search as SearchIcon,
@@ -30,6 +31,11 @@ export const TOOLS_MAP = {
     name: 'Image Generation',
     description: 'Generate an image',
     icon: <ImageIcon />,
+  },
+  music_generation: {
+    name: 'Music Generation',
+    description: 'Generate background music',
+    icon: <MusicIcon />,
   },
   mermaid_chart: {
     name: 'Mermaid Chart',

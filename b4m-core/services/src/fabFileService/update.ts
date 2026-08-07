@@ -1,5 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import {
+  FAB_FILE_CONTENT_REWRITE_PATCH,
+  IDataLakeRepository,
   IFabFileDocument,
   IFabFileRepository,
   IUserDocument,
@@ -9,6 +11,7 @@ import {
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
+import { reconcileLakeTags } from './reconcileLakeTags';
 
 import { z } from 'zod';
 
@@ -40,21 +43,14 @@ type UpdateFabFileParameters = z.infer<typeof updateFabFileSchema>;
 
 interface UpdateFabFileAdapters {
   db: {
-    fabFiles: Pick<IFabFileRepository, 'shareable' | 'update'>;
+    fabFiles: Pick<
+      IFabFileRepository,
+      'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
+    >;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
   };
-  /**
-   * Reconcile the REPLACEMENT tag list against data-lake membership before it is persisted
-   * (see dataLakeService `reconcileDataLakeFallbackTags`). Injected rather than imported so
-   * fabFileService keeps no dependency on dataLakeService.
-   *
-   * Required, not optional: a caller that silently omitted it would gate lake tag writes and
-   * then never maintain the invariant they imply, so typecheck should make every caller say
-   * which behavior it wants.
-   */
-  reconcileTags: (
-    tags: { name: string; strength: number }[],
-    previousTags: { name: string }[]
-  ) => Promise<{ name: string; strength: number }[]>;
+  /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void };
   storage: {
     upload: (filePath: string, content: string, metadata?: Record<string, unknown>) => Promise<unknown>;
     generateSignedUrl: (path: string, expireInSeconds: number) => Promise<string>;
@@ -70,21 +66,13 @@ interface UpdateFabFileAdapters {
 export const updateFabFile = async (
   user: IUserDocument,
   parameters: UpdateFabFileParameters,
-  { db, reconcileTags, storage }: UpdateFabFileAdapters
+  { db, logger, storage }: UpdateFabFileAdapters
 ) => {
   const { id, fileContent, ...params } = secureParameters(parameters, updateFabFileSchema);
 
   const fabFile = await db.fabFiles.shareable.findAccessibleById(user, id);
 
   if (!fabFile) throw new NotFoundError('Invalid ID');
-
-  // This update REPLACES the tags array, and the route always sends the key, so an edit that
-  // touches only the name or notes arrives with `tags: undefined`. The reconciler's first act is
-  // `tags.map(...)`, so handing it that would throw a TypeError and turn every rename into a 500.
-  // An explicit `[]` still reconciles: it is a real replacement that can drop a lake's meta-tag.
-  if (params.tags !== undefined) {
-    params.tags = await reconcileTags(params.tags, fabFile.tags ?? []);
-  }
 
   if (fileContent !== undefined && !fabFile.mimeType.startsWith('image/')) {
     const mimeType = params.mimeType ?? fabFile.mimeType;
@@ -109,11 +97,34 @@ export const updateFabFile = async (
 
     fabFile.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
     fabFile.fileUrlExpireAt = new Date(Date.now() + EXPIRE_IN_SECONDS * 1000);
+
+    // The bytes just changed, so any cached extracted length now describes the previous content, and a
+    // stale count leaves the pre-send attachment warning silent about a file that no longer fits.
+    // Invalidated at the write rather than second-guessed at the read.
+    //
+    // The shared patch rather than a literal: this is one of several rewrite sites, not "the one place"
+    // an earlier version of this comment claimed, and a guard test enumerates them all.
+    Object.assign(fabFile, FAB_FILE_CONTENT_REWRITE_PATCH);
   }
+
+  // A tag replacement can join or leave a data lake, which is more than an array write: leaving
+  // has to clear the lake's prefixed content tags as well, and both directions have to leave the
+  // lake's stats correct. Resolved (and gated) BEFORE the write below, applied after it.
+  const lakeTags =
+    params.tags === undefined
+      ? undefined
+      : await reconcileLakeTags(
+          { userId: user.id, isAdmin: !!user.isAdmin },
+          id,
+          (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
+          params.tags,
+          { db, logger }
+        );
 
   const updatedFabFile: Partial<IFabFileDocument> = {
     ...fabFile,
     ...params,
+    ...(lakeTags ? { tags: lakeTags.tagsToPersist } : {}),
     systemPriority: params.system && params.systemPriority === undefined ? 999 : params.systemPriority,
     updatedAt: new Date(),
   };
@@ -131,6 +142,17 @@ export const updateFabFile = async (
   }
 
   await db.fabFiles.update(updatedFabFile);
+
+  // Membership writes land on the persisted array, so they cannot be clobbered by the write
+  // above.
+  if (lakeTags) {
+    await lakeTags.commit();
+    // Leaving a lake also clears its prefixed content tags, so the array assembled above is no
+    // longer what is stored. Report what a subsequent GET would: a caller trusting a response
+    // that still lists tags this call just removed draws the wrong conclusion.
+    const persisted = await db.fabFiles.findById(id);
+    if (persisted) updatedFabFile.tags = persisted.tags;
+  }
 
   return updatedFabFile;
 };

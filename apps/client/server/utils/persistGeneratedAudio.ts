@@ -4,7 +4,14 @@ import { FabFile, User, adminSettingsRepository } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 
-export type GeneratedAudioSource = 'tts' | 'sound-effect';
+export type GeneratedAudioSource = 'tts' | 'sound-effect' | 'music';
+
+/** Human-friendly file-name prefix for each generated-audio source. */
+const FILE_NAME_LABELS: Record<GeneratedAudioSource, string> = {
+  tts: 'speech',
+  'sound-effect': 'sound-effect',
+  music: 'music',
+};
 
 /**
  * Outcome of trying to persist generated audio. `saved: false` is never fatal:
@@ -17,7 +24,9 @@ export type PersistGeneratedAudioResult =
   | { saved: false; reason: 'storage_limit' | 'file_too_large' | 'error' };
 
 /**
- * Persist generated TTS / sound-effect audio as a browsable `AUDIO` FabFile.
+ * Persist generated audio (TTS, sound-effect, or music) as a browsable `AUDIO`
+ * FabFile. `source` only varies the file-name prefix and the `generated` tag;
+ * every source takes the identical storage path.
  *
  * Routes through `fabFilesService.createFabFile`, which enforces the per-user
  * storage quota (`checkStorageLimitForFile`) and the `MaxFileSize` admin
@@ -41,7 +50,7 @@ export async function persistGeneratedAudio(params: {
   const { userId, audio, contentType, source, text, format, logger } = params;
 
   const ext = extensionFromMimeType(contentType) || format || 'mp3';
-  const label = source === 'tts' ? 'speech' : 'sound-effect';
+  const label = FILE_NAME_LABELS[source];
   // Short, sanitized snippet of the prompt (no dots, so the appended extension
   // is the only one getFileExtension can pick up).
   const snippet = text

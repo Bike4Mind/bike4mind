@@ -21,7 +21,12 @@ import { createKeyProvider } from '@server/memory/factCipher';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
 import { createUserMementoMemoryStore } from '@server/memory/userMementoMemoryStore';
 
-const PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'system'];
+// The kinds this endpoint will read/delete. A deliberate subset of PrincipalKind: `lake` is
+// persistable and now produced/consumed (#1440), but still has no HTTP read/delete surface here - a
+// lake is org-shared, so its authz is not the owner-scoped rule the other kinds use, and defining it
+// is deferred to a follow-up (#1501). Its retention is handled OUT of band: lake deletion crypto-shreds
+// the ledger in cleanupDeletedDataLake, so a missing read surface does not strand undeletable data.
+const READABLE_PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'system'];
 
 /**
  * GET /api/memory/:kind/:id - read a principal's unified memory profile (Mementos 2.0).
@@ -57,8 +62,8 @@ handler.delete(async (req, res) => {
 
   const kind = String(req.query.kind);
   const id = String(req.query.id);
-  if (!PRINCIPAL_KINDS.includes(kind as PrincipalKind)) {
-    return res.status(400).json({ error: `Unknown principal kind '${kind}'.` });
+  if (!READABLE_PRINCIPAL_KINDS.includes(kind as PrincipalKind)) {
+    return res.status(400).json({ error: `Unsupported principal kind '${kind}'.` });
   }
   if (kind !== 'user' || id !== ownerUserId) {
     return res.status(403).json({ error: 'You can only delete your own user memory for now.' });
@@ -119,10 +124,10 @@ handler.get(async (req, res) => {
 
   const kind = String(req.query.kind);
   const id = String(req.query.id);
-  if (!PRINCIPAL_KINDS.includes(kind as PrincipalKind)) {
-    return res
-      .status(400)
-      .json({ error: `Unknown principal kind '${kind}'. Expected one of: ${PRINCIPAL_KINDS.join(', ')}.` });
+  if (!READABLE_PRINCIPAL_KINDS.includes(kind as PrincipalKind)) {
+    return res.status(400).json({
+      error: `Unsupported principal kind '${kind}'. Expected one of: ${READABLE_PRINCIPAL_KINDS.join(', ')}.`,
+    });
   }
 
   // Defense-in-depth: a user may only read their OWN user-memory. Each store already owner-scopes its

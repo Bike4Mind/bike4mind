@@ -93,6 +93,11 @@ packages/premium/bob/
 # PUBLIC repo. Same near-miss the optihashi and bob entries above record.
 packages/premium/interactive-meetings/
 
+# Premium overlay snapshot for b4m-arnold — hydrated at the pinned ref by the deploy
+# pipeline before pnpm install. Without this entry a local clone leaves private overlay
+# source untracked, one bulk `git add` away from publishing it.
+packages/premium/arnold/
+
 # Docusaurus
 docs-site/build/
 docs-site/.docusaurus/

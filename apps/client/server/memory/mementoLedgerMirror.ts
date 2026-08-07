@@ -4,7 +4,7 @@ import {
   MEMENTO_DEDUP_SIMILARITY,
   type HasExperimentalFeatures,
 } from '@bike4mind/common';
-import { cosineSimilarity, resolveSubject } from '@bike4mind/memory';
+import { cosineSimilarity, resolveSubject, type EvidenceTier, type Principal } from '@bike4mind/memory';
 import { appendMemoryEvent, createLedgerMemoryStore } from './ledgerMemoryStore';
 import { createKeyProvider } from './factCipher';
 
@@ -54,9 +54,28 @@ export async function isMementosV2Enabled(userId: string): Promise<boolean> {
  * the re-mention makes it hotter - which is exactly what a user repeating themselves should do, and
  * strictly more than V1 managed (it bumped a weight and lost the frequency signal entirely).
  */
-export async function writeFactToLedger(params: {
-  userId: string;
+/**
+ * Write one extracted fact into an ARBITRARY principal's ledger as an `assert`. The principal-generic
+ * core of the write path: `writeFactToLedger` is its user specialization, and the lake-memory producer
+ * (#1440) is the other caller, writing under `{ kind: 'lake', id: datalakeTag }` owned by the lake's
+ * creator. `ownerUserId` is the DEK owner (whose key encrypts the fact + vector at rest), which is a
+ * user even when the principal is not - a lake's beliefs are readable only to a chat resolving that
+ * owner's key, exactly as owner-scoped reads require.
+ *
+ * SUBJECT SELECTION is the whole game here, because the subject is the belief's identity: the fold
+ * keys beliefs by it, so an assert on an EXISTING subject replaces that belief's content and counts as
+ * another presentation of it (raising its ACT-R activation), while an assert on a NEW subject creates
+ * a second belief. The default subject is derived from the fact's words (`resolveSubject`), a sorted
+ * token bag that coalesces only on near-identical wording; when an embedding is supplied we first look
+ * for a semantic near-duplicate among the principal's existing beliefs and, if one exists, assert under
+ * ITS subject so the fact updates in place and the re-mention makes it hotter.
+ */
+export async function appendFactToLedger(params: {
+  principal: Principal;
+  /** DEK owner - the user whose key seals this principal's facts at rest. */
+  ownerUserId: string;
   summary: string;
+  evidenceTier: EvidenceTier;
   sources?: string[];
   embedding?: number[];
 }): Promise<void> {
@@ -64,18 +83,20 @@ export async function writeFactToLedger(params: {
   if (!derivedSubject) return; // nothing to key on (content-free summary)
 
   const keys = createKeyProvider(memoryPrincipalKeyRepository);
-  const existing = params.embedding?.length ? await findExistingSubject(params.userId, keys, params.embedding) : null;
+  const existing = params.embedding?.length
+    ? await findExistingSubject(params.principal, params.ownerUserId, keys, params.embedding)
+    : null;
 
   await appendMemoryEvent(
     memoryLedgerRepository,
     keys,
-    params.userId,
+    params.ownerUserId,
     {
-      principal: { kind: 'user', id: params.userId },
+      principal: params.principal,
       kind: 'assert',
       subject: existing ?? derivedSubject,
       fact: params.summary,
-      evidenceTier: 'engineering-proxy',
+      evidenceTier: params.evidenceTier,
       at: new Date().toISOString(),
       sources: params.sources,
       embedding: params.embedding,
@@ -89,7 +110,33 @@ export async function writeFactToLedger(params: {
 }
 
 /**
- * The subject of the user's existing belief that this fact is a restatement of, or null if it is new.
+ * Write one extracted fact into the user's ledger as an `assert`. This is V2's OWN write path - it
+ * does not require, read, or produce a V1 memento, which is what lets V1 be switched off (and one day
+ * deleted) without memory going deaf.
+ *
+ * The fact is the LLM's summary; the evidence tier is the lowest (`engineering-proxy`) because a
+ * memento is an unverified extraction. The fact and its vector are encrypted at rest under the user's
+ * key, so a crypto-shred takes both. Thin user specialization of `appendFactToLedger`.
+ */
+export async function writeFactToLedger(params: {
+  userId: string;
+  summary: string;
+  sources?: string[];
+  embedding?: number[];
+}): Promise<void> {
+  return appendFactToLedger({
+    principal: { kind: 'user', id: params.userId },
+    ownerUserId: params.userId,
+    summary: params.summary,
+    evidenceTier: 'engineering-proxy',
+    sources: params.sources,
+    embedding: params.embedding,
+  });
+}
+
+/**
+ * The subject of the principal's existing belief that this fact is a restatement of, or null if it is
+ * new.
  *
  * Compares against the LEDGER's own beliefs only - not the V1 union. A V1 memento's belief id is a
  * Mongo id, not a subject key, so asserting under it would mint a belief the fold can never coalesce.
@@ -105,13 +152,14 @@ export async function writeFactToLedger(params: {
  * themselves a lot, which is to say it looks like nothing at all.
  */
 async function findExistingSubject(
-  userId: string,
+  principal: Principal,
+  ownerUserId: string,
   keys: ReturnType<typeof createKeyProvider>,
   embedding: number[]
 ): Promise<string | null> {
   try {
-    const store = createLedgerMemoryStore({ ledger: memoryLedgerRepository, keys, ownerUserId: userId });
-    const profile = await store.readProfile({ kind: 'user', id: userId });
+    const store = createLedgerMemoryStore({ ledger: memoryLedgerRepository, keys, ownerUserId });
+    const profile = await store.readProfile(principal);
     if (!profile) return null;
 
     let best: { subject: string; similarity: number } | null = null;
