@@ -75,22 +75,33 @@ export class OpenSearchClient {
    */
   public client: Client;
 
-  constructor(endpoint: string) {
-    this.client = new Client({
-      ...AwsSigv4Signer({
-        region: 'us-east-2',
-        service: 'es',
-        getCredentials: () => {
-          const credentialsProvider = defaultProvider();
-          return credentialsProvider();
-        },
-      }),
-      node: `https://${endpoint}`,
-      requestTimeout: OPENSEARCH_REQUEST_TIMEOUT_MS,
-      // Disable the client's built-in retry - it does not retry 429 and skips non-idempotent
-      // writes, so it gives a pressured cluster no relief. We own retry via `withRetry` below.
-      maxRetries: 0,
-    });
+  /**
+   * `selfHosted: true` builds a plain client for a docker-compose self-host container reachable
+   * over HTTP with security disabled (see compose.selfhost.yaml) - it has no AWS endpoint to
+   * sign requests against, unlike the managed AWS OpenSearch Service the default path targets.
+   */
+  constructor(endpoint: string, options?: { selfHosted?: boolean }) {
+    this.client = options?.selfHosted
+      ? new Client({
+          node: `http://${endpoint}`,
+          requestTimeout: OPENSEARCH_REQUEST_TIMEOUT_MS,
+          maxRetries: 0,
+        })
+      : new Client({
+          ...AwsSigv4Signer({
+            region: 'us-east-2',
+            service: 'es',
+            getCredentials: () => {
+              const credentialsProvider = defaultProvider();
+              return credentialsProvider();
+            },
+          }),
+          node: `https://${endpoint}`,
+          requestTimeout: OPENSEARCH_REQUEST_TIMEOUT_MS,
+          // Disable the client's built-in retry - it does not retry 429 and skips non-idempotent
+          // writes, so it gives a pressured cluster no relief. We own retry via `withRetry` below.
+          maxRetries: 0,
+        });
   }
 
   /**
@@ -117,9 +128,9 @@ export class OpenSearchClient {
       this.client.indices.create({
         index: indexName,
         body: {
-          settings: {
-            knn: true,
-          },
+          // knn:true is the baseline every vector index needs; merge in any caller-provided
+          // index-level settings (e.g. knn.algo_param.ef_search) instead of discarding them.
+          settings: { knn: true, ...settings.settings },
           mappings: settings.mappings,
         },
       })
@@ -129,6 +140,32 @@ export class OpenSearchClient {
   async indexExists(indexName: string): Promise<boolean> {
     const response = await this.withRetry(() => this.client.indices.exists({ index: indexName }));
     return response.body;
+  }
+
+  /**
+   * k-NN vector search. `filter` restricts candidates to a subset (e.g. fabFileId/embeddingModel)
+   * before k-NN ranks them - required so a self-host retrieval query only searches the caller's
+   * accessible files, not the whole index.
+   */
+  async knnQuery(
+    indexName: string,
+    vector: number[],
+    k: number,
+    filter?: Record<string, any>
+  ): Promise<Array<{ id: string; score: number; source: Record<string, any> }>> {
+    const knnClause = { vector: { vector, k } };
+    const query = filter ? { bool: { must: [{ knn: knnClause }], filter: [filter] } } : { knn: knnClause };
+    const response = await this.withRetry(() =>
+      this.client.search({
+        index: indexName,
+        body: { size: k, query },
+      })
+    );
+    return response.body.hits.hits.map((hit: { _id: string; _score: number; _source: Record<string, any> }) => ({
+      id: hit._id,
+      score: hit._score,
+      source: hit._source,
+    }));
   }
 
   async deleteIndex(indexName: string) {

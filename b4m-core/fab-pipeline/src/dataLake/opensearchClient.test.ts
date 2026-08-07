@@ -7,14 +7,18 @@ const mockClient = {
   update: vi.fn(),
   delete: vi.fn(),
   deleteByQuery: vi.fn(),
+  search: vi.fn(),
   indices: { create: vi.fn(), delete: vi.fn(), exists: vi.fn() },
   transport: { request: vi.fn() },
   close: vi.fn(),
 };
 
+let lastClientConstructorArgs: unknown;
+
 vi.mock('@opensearch-project/opensearch', () => ({
   // Regular function (not arrow) so `new Client(...)` works as a constructor.
-  Client: vi.fn(function MockClient() {
+  Client: vi.fn(function MockClient(args: unknown) {
+    lastClientConstructorArgs = args;
     return mockClient;
   }),
 }));
@@ -160,5 +164,82 @@ describe('OpenSearchClient retry/backoff', () => {
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toBe(true);
     expect(mockClient.indices.exists).toHaveBeenCalledTimes(2);
+  });
+
+  it('createIndex merges caller-provided settings with the baseline knn:true', async () => {
+    mockClient.indices.create.mockResolvedValueOnce({ statusCode: 200 });
+
+    await client.createIndex('idx', {
+      mappings: { properties: { vector: { type: 'knn_vector' } } },
+      settings: { 'index.knn.algo_param.ef_search': 100 },
+    });
+
+    expect(mockClient.indices.create).toHaveBeenCalledWith({
+      index: 'idx',
+      body: {
+        settings: { knn: true, 'index.knn.algo_param.ef_search': 100 },
+        mappings: { properties: { vector: { type: 'knn_vector' } } },
+      },
+    });
+  });
+
+  it('knnQuery runs a plain knn search and maps hits when no filter is given', async () => {
+    mockClient.search.mockResolvedValueOnce({
+      body: { hits: { hits: [{ _id: 'chunk-1', _score: 0.9, _source: { text: 'hello' } }] } },
+    });
+
+    const results = await client.knnQuery('idx', [0.1, 0.2], 5);
+
+    expect(mockClient.search).toHaveBeenCalledWith({
+      index: 'idx',
+      body: { size: 5, query: { knn: { vector: { vector: [0.1, 0.2], k: 5 } } } },
+    });
+    expect(results).toEqual([{ id: 'chunk-1', score: 0.9, source: { text: 'hello' } }]);
+  });
+
+  it('knnQuery wraps the knn clause in a bool filter when a filter is given', async () => {
+    mockClient.search.mockResolvedValueOnce({ body: { hits: { hits: [] } } });
+    const filter = { terms: { fabFileId: ['f1', 'f2'] } };
+
+    await client.knnQuery('idx', [0.1, 0.2], 5, filter);
+
+    expect(mockClient.search).toHaveBeenCalledWith({
+      index: 'idx',
+      body: {
+        size: 5,
+        query: { bool: { must: [{ knn: { vector: { vector: [0.1, 0.2], k: 5 } } }], filter: [filter] } },
+      },
+    });
+  });
+
+  it('knnQuery retries on a transient error', async () => {
+    mockClient.search.mockRejectedValueOnce(responseError(503)).mockResolvedValueOnce({ body: { hits: { hits: [] } } });
+
+    const promise = client.knnQuery('idx', [0.1], 1);
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toEqual([]);
+    expect(mockClient.search).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('OpenSearchClient self-host construction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('the default constructor signs requests with AWS SigV4 over https', async () => {
+    const { AwsSigv4Signer } = await import('@opensearch-project/opensearch/aws-v3');
+    new OpenSearchClient('search.example.com');
+
+    expect(AwsSigv4Signer).toHaveBeenCalled();
+    expect(lastClientConstructorArgs).toMatchObject({ node: 'https://search.example.com' });
+  });
+
+  it('selfHosted skips AWS SigV4 and connects over plain http', async () => {
+    const { AwsSigv4Signer } = await import('@opensearch-project/opensearch/aws-v3');
+    new OpenSearchClient('localhost:9200', { selfHosted: true });
+
+    expect(AwsSigv4Signer).not.toHaveBeenCalled();
+    expect(lastClientConstructorArgs).toMatchObject({ node: 'http://localhost:9200' });
   });
 });
