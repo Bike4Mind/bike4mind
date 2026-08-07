@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
-import type { SpendData } from '../utils/spendMockData';
+import type { SpendData } from '@bike4mind/common';
 
 interface SpendFilters {
   dateFrom?: string;
@@ -25,7 +25,7 @@ export const fetchSpend = async (filters?: SpendFilters, recache = false): Promi
   return response.data;
 };
 
-export const useSpend = (filters?: SpendFilters) => {
+export const useSpend = (filters?: SpendFilters, options?: { enabled?: boolean }) => {
   const isAdmin = useUser(s => s.isAdmin);
   const queryClient = useQueryClient();
 
@@ -33,7 +33,8 @@ export const useSpend = (filters?: SpendFilters) => {
     queryKey: ['admin-spend', filters],
     queryFn: () => fetchSpend(filters),
     staleTime: 1000 * 60 * 60, // 1 hour
-    enabled: isAdmin,
+    // Gate on the caller (e.g. only the active Spend tab) so the query stays lazy.
+    enabled: isAdmin && (options?.enabled ?? true),
   });
 
   // Force a server-side recache (bypasses the 12h response cache) and refresh the

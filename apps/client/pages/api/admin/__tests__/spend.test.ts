@@ -26,9 +26,11 @@ vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: { find: (...a: unknown[]) => mockOrgFind(...a) },
 }));
 
-// Pass the factory straight through so buildSpendData actually runs (no real cache).
+// Pass the factory straight through so buildSpendData actually runs (no real cache),
+// while capturing the key/options so the recache plumbing is testable.
+const mockGetCachedData = vi.fn((_key: string, factory: () => unknown) => factory());
 vi.mock('@bike4mind/services', () => ({
-  cacheService: { getCachedData: (_key: string, factory: () => unknown) => factory() },
+  cacheService: { getCachedData: (...a: unknown[]) => mockGetCachedData(...(a as [string, () => unknown])) },
 }));
 
 const mockResolveUserNames = vi.fn();
@@ -108,6 +110,24 @@ describe('GET /api/admin/spend', () => {
     expect(data.byAccount[0]).toMatchObject({ accountId: 'user-1', accountName: 'Ada Lovelace' });
     expect(data.byModel[0]).toMatchObject({ modelId: 'opus', share: 12 / 20 });
     expect(data.periodLabel).toBe('Last 30 days');
+  });
+
+  it('threads recache=true through to the cache envelope', async () => {
+    const { run } = call({ query: { recache: 'true' } });
+    await run();
+    expect(mockGetCachedData.mock.calls[0][2]).toMatchObject({ recache: true });
+  });
+
+  it('does not bust the cache for a non-true recache value', async () => {
+    const { run } = call({ query: { recache: 'false' } });
+    await run();
+    expect(mockGetCachedData.mock.calls[0][2]).toMatchObject({ recache: false });
+  });
+
+  it('rejects an inverted date range instead of silently blanking the deltas', async () => {
+    const { run } = call({ query: { dateFrom: '2026-08-07', dateTo: '2026-07-08' } });
+    await expect(run()).rejects.toThrow(/dateFrom must not be after dateTo/);
+    expect(mockSpendSummary).not.toHaveBeenCalled();
   });
 
   it('resolves organization owners to their org name', async () => {

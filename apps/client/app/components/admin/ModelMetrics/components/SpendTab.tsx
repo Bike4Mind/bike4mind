@@ -2,20 +2,16 @@ import React from 'react';
 import { Box, Chip, LinearProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
 import { ResponsiveLine } from '@nivo/line';
-import { type SpendData, type SpendKpi, type SpendKpiFormat } from '../utils/spendMockData';
-import { useSpend } from '../hooks/useSpend';
+import { type SpendData, type SpendKpi, type SpendKpiFormat } from '@bike4mind/common';
 
 // Nivo's generics fight strict TS here; the same assertion is used in AnalyticsTab.
 const ResponsiveLineChart = ResponsiveLine as any;
 
 interface SpendTabProps {
-  /** Shared ModelMetrics filter bar state; drives the useSpend query window. */
-  filters?: {
-    dateFrom?: string;
-    dateTo?: string;
-    userFilter?: string;
-    modelFilter?: string;
-  };
+  /** Live spend for the selected window; the parent owns the useSpend query. */
+  data?: SpendData;
+  isLoading?: boolean;
+  isError?: boolean;
 }
 
 interface SpendTabViewProps {
@@ -118,6 +114,11 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
 
   const maxModelCost = Math.max(...data.byModel.map(m => m.estCost), 0);
 
+  // The by-account table is capped server-side; the Active Accounts KPI holds the
+  // true distinct count, so surface "top N of M" when the list is partial.
+  const totalActiveAccounts = data.kpis.find(k => k.key === 'activeAccounts')?.value;
+  const accountsTruncated = totalActiveAccounts != null && data.byAccount.length < totalActiveAccounts;
+
   const lineData = [
     {
       id: 'Daily Cost',
@@ -147,9 +148,15 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
 
       {/* Section 2: Spend by account */}
       <Box>
-        <Typography level="h4" sx={{ mb: 2 }}>
-          Spend by Account
+        <Typography level="h4" sx={{ mb: accountsTruncated ? 0.5 : 2 }}>
+          {accountsTruncated ? 'Top Spend by Account' : 'Spend by Account'}
         </Typography>
+        {accountsTruncated && (
+          <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 2 }} data-testid="spend-account-truncation">
+            Showing top {data.byAccount.length.toLocaleString('en-US')} of{' '}
+            {totalActiveAccounts!.toLocaleString('en-US')} accounts by spend.
+          </Typography>
+        )}
         {/* Bounded height gives Table stickyHeader a scroll container to stick within. */}
         <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto', maxHeight: 480 }}>
           <Table stickyHeader hoverRow size="sm" data-testid="spend-by-account-table">
@@ -266,24 +273,8 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
   );
 };
 
-export const SpendTab: React.FC<SpendTabProps> = ({ filters }) => {
-  const { data, isLoading, isError } = useSpend({
-    dateFrom: filters?.dateFrom,
-    dateTo: filters?.dateTo,
-    userFilter: filters?.userFilter,
-    modelFilter: filters?.modelFilter,
-  });
-
-  if (isLoading) {
-    return (
-      <Box sx={{ p: 2 }} data-testid="spend-loading">
-        <LinearProgress />
-        <Typography sx={{ mt: 2 }}>Loading spend data...</Typography>
-      </Box>
-    );
-  }
-
-  if (isError || !data) {
+export const SpendTab: React.FC<SpendTabProps> = ({ data, isLoading, isError }) => {
+  if (isError) {
     return (
       <Box sx={{ p: 2 }}>
         <Chip color="danger" variant="soft" size="sm" data-testid="spend-error">
@@ -293,8 +284,18 @@ export const SpendTab: React.FC<SpendTabProps> = ({ filters }) => {
     );
   }
 
-  // No accounts means no events settled in the window (dailyCost is empty too).
-  if (data.byAccount.length === 0) {
+  // No data yet (fetching, or the query is gated off) reads as loading.
+  if (isLoading || !data) {
+    return (
+      <Box sx={{ p: 2 }} data-testid="spend-loading">
+        <LinearProgress />
+        <Typography sx={{ mt: 2 }}>Loading spend data...</Typography>
+      </Box>
+    );
+  }
+
+  // Nothing settled in the window: both the account and daily-cost cuts are empty.
+  if (data.byAccount.length === 0 && data.dailyCost.length === 0) {
     return (
       <Box sx={{ p: 2 }} data-testid="spend-empty">
         <Typography level="body-sm" sx={{ color: 'text.secondary' }}>

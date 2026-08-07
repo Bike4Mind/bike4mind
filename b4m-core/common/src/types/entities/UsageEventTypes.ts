@@ -397,6 +397,78 @@ export interface ISpendSummary {
   dailyCost: ISpendCostDay[];
 }
 
+/*
+ * Spend-tab wire contract. This is the shape GET /api/admin/spend returns and the
+ * admin Spend tab renders - the single source of truth shared by the handler and
+ * the client. The handler maps the raw ISpendSummary rollups (above) into this,
+ * layering display labels, formatting hints, and vs-prior deltas.
+ */
+
+/** How a KPI's raw numeric value should be rendered. */
+export type SpendKpiFormat = 'currency' | 'currencyPrecise' | 'number' | 'ms' | 'percent';
+
+/** Stable identifier for each KPI card so wiring can map query results by key. */
+export type SpendKpiKey =
+  | 'estCost'
+  | 'requests'
+  | 'costPerRequest'
+  | 'creditsUsed'
+  | 'activeAccounts'
+  | 'p50Latency'
+  | 'p95Latency'
+  | 'errorRate'
+  | 'refusalRate';
+
+export interface SpendKpi {
+  key: SpendKpiKey;
+  label: string;
+  /** Raw value for the current period; the component handles formatting. */
+  value: number;
+  /** Raw value for the immediately prior period, used to compute the delta. */
+  priorValue: number;
+  format: SpendKpiFormat;
+  /**
+   * Whether an increase is a good thing. Drives the delta color: cost/latency
+   * rising is bad (red), requests/credits rising is good (green).
+   */
+  higherIsBetter: boolean;
+}
+
+export interface SpendByAccountRow {
+  accountId: string;
+  accountName: string;
+  estCost: number;
+  requests: number;
+  creditsUsed: number;
+  costPerRequest: number;
+}
+
+export interface CostByModelRow {
+  modelId: string;
+  modelName: string;
+  estCost: number;
+  requests: number;
+  /** Share of total est. cost across all models, 0..1. */
+  share: number;
+}
+
+export interface DailyCostPoint {
+  /** ISO date, YYYY-MM-DD. */
+  date: string;
+  cost: number;
+}
+
+export interface SpendData {
+  /** Human label for the selected period (echoes the ControlPanel range). */
+  periodLabel: string;
+  /** Human label for the prior comparison period. */
+  priorPeriodLabel: string;
+  kpis: SpendKpi[];
+  byAccount: SpendByAccountRow[];
+  byModel: CostByModelRow[];
+  dailyCost: DailyCostPoint[];
+}
+
 /** One model's slice of an agent execution's iteration billing. */
 export interface ISessionAgentModelUsage {
   model: string;

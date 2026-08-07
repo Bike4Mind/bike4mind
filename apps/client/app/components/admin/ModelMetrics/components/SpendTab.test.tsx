@@ -1,16 +1,11 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SpendTab, SpendTabView } from './SpendTab';
-import { spendMockData, type SpendData } from '../utils/spendMockData';
-
-// Controls what the container's data hook returns per test.
-const mockUseSpend = vi.fn();
-vi.mock('../hooks/useSpend', () => ({
-  useSpend: (...args: unknown[]) => mockUseSpend(...args),
-}));
+import type { SpendData } from '@bike4mind/common';
+import { spendMockData } from '../utils/spendMockData';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -37,6 +32,33 @@ describe('SpendTabView', () => {
     for (const account of spendMockData.byAccount) {
       expect(within(table).getByText(account.accountName)).toBeInTheDocument();
     }
+  });
+
+  it('flags a truncated account list as "top N of M" (byAccount < Active Accounts KPI)', () => {
+    // spendMockData: 7 account rows, Active Accounts KPI = 47.
+    render(<SpendTabView data={spendMockData} />, { wrapper: TestWrapper });
+    expect(screen.getByText('Top Spend by Account')).toBeInTheDocument();
+    expect(screen.getByTestId('spend-account-truncation')).toHaveTextContent('Showing top 7 of 47 accounts by spend.');
+  });
+
+  it('does not flag truncation when every account is shown', () => {
+    const data: SpendData = {
+      ...spendMockData,
+      kpis: [
+        {
+          key: 'activeAccounts',
+          label: 'Active Accounts',
+          value: 2,
+          priorValue: 2,
+          format: 'number',
+          higherIsBetter: true,
+        },
+      ],
+      byAccount: spendMockData.byAccount.slice(0, 2),
+    };
+    render(<SpendTabView data={data} />, { wrapper: TestWrapper });
+    expect(screen.getByText('Spend by Account')).toBeInTheDocument();
+    expect(screen.queryByTestId('spend-account-truncation')).not.toBeInTheDocument();
   });
 
   it('renders a cost-by-model bar for every model', () => {
@@ -119,47 +141,29 @@ describe('SpendTabView', () => {
   });
 });
 
-describe('SpendTab (container)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('passes the shared filters through to useSpend', () => {
-    mockUseSpend.mockReturnValue({ data: undefined, isLoading: true, isError: false });
-    render(<SpendTab filters={{ dateFrom: '2026-01-01', userFilter: 'u-1' }} />, { wrapper: TestWrapper });
-    expect(mockUseSpend).toHaveBeenCalledWith({
-      dateFrom: '2026-01-01',
-      dateTo: undefined,
-      userFilter: 'u-1',
-      modelFilter: undefined,
-    });
-  });
-
+describe('SpendTab (states)', () => {
   it('renders a loading state while fetching', () => {
-    mockUseSpend.mockReturnValue({ data: undefined, isLoading: true, isError: false });
-    render(<SpendTab />, { wrapper: TestWrapper });
+    render(<SpendTab isLoading />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('spend-loading')).toBeInTheDocument();
+  });
+
+  it('renders a loading state when data has not arrived yet', () => {
+    render(<SpendTab data={undefined} isLoading={false} />, { wrapper: TestWrapper });
     expect(screen.getByTestId('spend-loading')).toBeInTheDocument();
   });
 
   it('renders an error state when the query fails', () => {
-    mockUseSpend.mockReturnValue({ data: undefined, isLoading: false, isError: true });
-    render(<SpendTab />, { wrapper: TestWrapper });
+    render(<SpendTab isError />, { wrapper: TestWrapper });
     expect(screen.getByTestId('spend-error')).toBeInTheDocument();
   });
 
   it('renders an empty state when there is no spend in the window', () => {
-    mockUseSpend.mockReturnValue({
-      data: { ...spendMockData, byAccount: [], dailyCost: [] },
-      isLoading: false,
-      isError: false,
-    });
-    render(<SpendTab />, { wrapper: TestWrapper });
+    render(<SpendTab data={{ ...spendMockData, byAccount: [], dailyCost: [] }} />, { wrapper: TestWrapper });
     expect(screen.getByTestId('spend-empty')).toBeInTheDocument();
   });
 
   it('renders the view once data arrives', () => {
-    mockUseSpend.mockReturnValue({ data: spendMockData, isLoading: false, isError: false });
-    render(<SpendTab />, { wrapper: TestWrapper });
+    render(<SpendTab data={spendMockData} />, { wrapper: TestWrapper });
     expect(screen.getByTestId('spend-kpi-row')).toBeInTheDocument();
   });
 });

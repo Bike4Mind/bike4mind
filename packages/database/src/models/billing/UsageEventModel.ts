@@ -206,6 +206,9 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     ]);
   }
 
+  // Requires MongoDB 7.0+ for the $percentile accumulator (latency facet) and uses
+  // $facet like the sibling summaries here - both unsupported under DocumentDB
+  // (USE_DOCUMENTDB_COMPATIBILITY), which those methods already assume against.
   async spendSummary(filters: ISpendSummaryFilters = {}): Promise<ISpendSummary> {
     const { from, to, userId, model } = filters;
 

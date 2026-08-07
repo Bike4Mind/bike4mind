@@ -2,17 +2,18 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { usageEventRepository, cacheRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { cacheService } from '@bike4mind/services';
-import { CreditHolderType, type ISpendSummary } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  type CostByModelRow,
+  type DailyCostPoint,
+  type ISpendSummary,
+  type SpendByAccountRow,
+  type SpendData,
+  type SpendKpi,
+} from '@bike4mind/common';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { ForbiddenError } from '@server/utils/errors';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
-import type {
-  CostByModelRow,
-  DailyCostPoint,
-  SpendByAccountRow,
-  SpendData,
-  SpendKpi,
-} from '@client/app/components/admin/ModelMetrics/utils/spendMockData';
 import { Request } from 'express';
 import { z } from 'zod';
 
@@ -22,18 +23,35 @@ const DEFAULT_WINDOW_DAYS = 30;
 /** Guards org-id casts in the $in lookup from a BSONError 500 (see resolveUserNames). */
 const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
 
-const QuerySchema = z.object({
-  dateFrom: z.string().optional(),
-  dateTo: z.string().optional(),
-  userFilter: z.string().optional(),
-  modelFilter: z.string().optional(),
-  // Accepted for parity with the shared ModelMetrics filter bar but not applied:
-  // UsageEvent statuses (ok|error|timeout|refusal) do not map to the quest statuses
-  // this filter offers, and filtering here would distort the error/refusal KPIs.
-  statusFilter: z.string().optional(),
-  // Busts the server's 12h cache entry so a Refresh returns live data.
-  recache: z.coerce.boolean().optional(),
-});
+const QuerySchema = z
+  .object({
+    dateFrom: z.string().optional(),
+    dateTo: z.string().optional(),
+    userFilter: z.string().optional(),
+    modelFilter: z.string().optional(),
+    // Accepted for parity with the shared ModelMetrics filter bar but not applied:
+    // UsageEvent statuses (ok|error|timeout|refusal) do not map to the quest statuses
+    // this filter offers, and filtering here would distort the error/refusal KPIs.
+    statusFilter: z.string().optional(),
+    // Busts the server's 12h cache entry so a Refresh returns live data. Only the
+    // literal "true" busts it (z.coerce.boolean would treat "false" as truthy).
+    recache: z
+      .string()
+      .optional()
+      .transform(v => v === 'true'),
+  })
+  .refine(
+    q => {
+      // Reject an inverted range up front; otherwise the prior window collapses to
+      // zero length and every delta silently blanks with no signal to the caller.
+      if (!q.dateFrom || !q.dateTo) return true;
+      const from = new Date(q.dateFrom);
+      const to = new Date(q.dateTo);
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return true;
+      return from.getTime() <= to.getTime();
+    },
+    { message: 'dateFrom must not be after dateTo', path: ['dateFrom'] }
+  );
 
 type SpendQuery = z.infer<typeof QuerySchema>;
 
@@ -182,7 +200,7 @@ async function resolveAccountRows(current: ISpendSummary): Promise<SpendByAccoun
   });
 }
 
-async function buildSpendData(query: SpendQuery): Promise<SpendData> {
+async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<SpendData> {
   const { current, prior, periodLabel, priorPeriodLabel } = resolveWindows(query.dateFrom, query.dateTo);
   const baseFilters = { userId: query.userFilter || undefined, model: query.modelFilter || undefined };
 
