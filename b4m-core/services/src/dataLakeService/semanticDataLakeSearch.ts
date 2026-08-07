@@ -600,6 +600,7 @@ async function rankChunksForFiles(args: {
     results: [],
     hitsReturned: 0,
     hitsSkippedUnknownFile: 0,
+    filesWithHits: new Set(),
   };
   if (annEligible.length > 0) {
     try {
@@ -623,6 +624,23 @@ async function rankChunksForFiles(args: {
       });
       scanEligible = [...scanEligible, ...annEligible];
       annEligible = [];
+    }
+
+    // A queryable index does not guarantee a given file's chunks are actually IN it yet: mongot's
+    // indexing lag can exceed VECTOR_SEARCH_READY_LAG_MS during a bulk backfill, or a re-embed
+    // mid-file can label chunks under the wrong model so mongot never indexes them. Either way the
+    // file returns zero raw hits (not "nothing scored well", since Atlas ranks by similarity
+    // before minScore is applied) and, with no scan fallback, would silently contribute zero
+    // results. Rebucket per file rather than all-or-nothing, so one un-indexed file in a batch
+    // does not cost the rest their ANN path.
+    const missedFiles = annEligible.filter(f => !annResult.filesWithHits.has(f.id));
+    if (missedFiles.length > 0) {
+      logger?.warn?.('[semanticSearch] $vectorSearch returned no hits for ready files, scanning them instead', {
+        embeddingModel,
+        fileCount: missedFiles.length,
+      });
+      scanEligible = [...scanEligible, ...missedFiles];
+      annEligible = annEligible.filter(f => annResult.filesWithHits.has(f.id));
     }
   }
   for (let i = 0; i < annResult.hitsSkippedUnknownFile; i++) mismatch.skip('unknownFile');

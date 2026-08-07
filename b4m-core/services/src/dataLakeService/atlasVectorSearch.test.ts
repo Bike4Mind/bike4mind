@@ -18,7 +18,7 @@ describe('atlasVectorSearch', () => {
       minScore: 0,
       adapters: { vectorSearch },
     });
-    expect(result).toEqual({ results: [], hitsReturned: 0, hitsSkippedUnknownFile: 0 });
+    expect(result).toEqual({ results: [], hitsReturned: 0, hitsSkippedUnknownFile: 0, filesWithHits: new Set() });
     expect(vectorSearch).not.toHaveBeenCalled();
   });
 
@@ -102,5 +102,22 @@ describe('atlasVectorSearch', () => {
       adapters: { vectorSearch },
     });
     expect(vectorSearch).toHaveBeenCalledWith(['f1'], [1, 2, 3], 'text-embedding-3-small', { limit: 7 });
+  });
+
+  it('marks a file as covered by a raw hit even when minScore then filters that hit out', async () => {
+    // filesWithHits answers "did the index return anything for this file", not "did it score
+    // well" - a low-scoring hit still proves the file's chunks are indexed.
+    const vectorSearch = vi.fn().mockResolvedValue([{ id: 'c1', fabFileId: 'f2', text: 'weak', score: 0.1 }]);
+    const result = await atlasVectorSearch({
+      fileIds: ['f1', 'f2'],
+      fileById,
+      queryVector: [1, 2, 3],
+      model: 'text-embedding-3-small',
+      limit: 10,
+      minScore: 0.5,
+      adapters: { vectorSearch },
+    });
+    expect(result.results).toEqual([]);
+    expect(result.filesWithHits).toEqual(new Set(['f2']));
   });
 });

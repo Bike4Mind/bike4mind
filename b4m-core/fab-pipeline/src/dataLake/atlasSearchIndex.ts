@@ -127,15 +127,26 @@ export const ensureAtlasVectorSearchIndexes = async (conn: Connection, logger: L
     return;
   }
 
+  // Eager, one-per-registered-model provisioning means most stages will never query most of
+  // these indexes - a deliberate trade-off (idempotent-on-deploy, no lazy-creation race on first
+  // query) but one that makes a shared cluster's search-index quota worth watching. A quota
+  // failure here is swallowed per-index (below) so it never blocks the deploy, so this summary is
+  // the only signal an operator gets without grepping per-model warn lines.
+  let created = 0;
+  let failed = 0;
+  const skipped = allAtlasVectorIndexDefinitions().filter(d => existing.has(d.name)).length;
   for (const definition of allAtlasVectorIndexDefinitions()) {
     if (existing.has(definition.name)) continue;
     try {
       await collection.createSearchIndex(definition);
       logger.log(`[ensureAtlasVectorSearchIndexes] created index ${definition.name}`);
+      created++;
     } catch (error) {
       logger.warn(`[ensureAtlasVectorSearchIndexes] failed to create index ${definition.name}: ${error}`);
+      failed++;
     }
   }
+  logger.log(`[ensureAtlasVectorSearchIndexes] created=${created} already-existed=${skipped} failed=${failed}`);
 };
 
 interface CachedIndexStatus {

@@ -19,6 +19,13 @@ export interface AtlasVectorSearchResult {
   results: SemanticChunkResult[];
   hitsReturned: number;
   hitsSkippedUnknownFile: number;
+  /**
+   * fabFileIds that produced at least one raw hit, BEFORE minScore filtering. A file absent here
+   * returned zero indexed chunks for this query - not "nothing scored well enough" - so the
+   * caller can tell "queryable index, no matches" apart from "not actually indexed yet" and
+   * rebucket the latter onto the scan path instead of silently returning zero results for it.
+   */
+  filesWithHits: Set<string>;
 }
 
 /**
@@ -45,9 +52,12 @@ export async function atlasVectorSearch(args: {
   adapters: AtlasVectorSearchAdapters;
 }): Promise<AtlasVectorSearchResult> {
   const { fileIds, fileById, queryVector, model, limit, minScore, adapters } = args;
-  if (fileIds.length === 0) return { results: [], hitsReturned: 0, hitsSkippedUnknownFile: 0 };
+  if (fileIds.length === 0) {
+    return { results: [], hitsReturned: 0, hitsSkippedUnknownFile: 0, filesWithHits: new Set() };
+  }
 
   const hits = await adapters.vectorSearch(fileIds, queryVector, model, { limit });
+  const filesWithHits = new Set(hits.map(h => h.fabFileId));
 
   const results: SemanticChunkResult[] = [];
   let hitsSkippedUnknownFile = 0;
@@ -78,5 +88,5 @@ export async function atlasVectorSearch(args: {
     });
   }
 
-  return { results, hitsReturned: hits.length, hitsSkippedUnknownFile };
+  return { results, hitsReturned: hits.length, hitsSkippedUnknownFile, filesWithHits };
 }

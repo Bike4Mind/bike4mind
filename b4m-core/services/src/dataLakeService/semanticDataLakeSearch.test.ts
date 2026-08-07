@@ -798,4 +798,44 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
       expect.objectContaining({ fileCount: 1 })
     );
   });
+
+  it('rebuckets a ready file onto scan when the index is queryable but returns zero hits for it (indexing lag, not a throw)', async () => {
+    const logger = makeLogger();
+    const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+      files: [annFile('ready')],
+      scanChunks: chunkRows('ready', 2),
+      annHits: [],
+    });
+
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), vectorSearchEnabled: true, logger: logger as never },
+      {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never
+    );
+
+    expect(result.scan.annFilesQueried).toBe(0);
+    expect(result.scan.chunksScanned).toBe(2);
+    expect(result.results.map(r => r.fileId)).toEqual(['ready', 'ready']);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('returned no hits for ready files'),
+      expect.objectContaining({ fileCount: 1 })
+    );
+  });
+
+  it('rebuckets only the ready file Atlas actually missed, not the whole batch', async () => {
+    const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+      files: [annFile('covered'), annFile('missed')],
+      scanChunks: chunkRows('missed', 1),
+      annHits: [{ id: 'covered-c0', fabFileId: 'covered', text: 'ann hit', score: 0.95 }],
+    });
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+    } as never);
+
+    expect(result.scan.annFilesQueried).toBe(1);
+    expect(result.scan.chunksScanned).toBe(1);
+    expect(result.results.map(r => r.fileId).sort()).toEqual(['covered', 'missed']);
+  });
 });

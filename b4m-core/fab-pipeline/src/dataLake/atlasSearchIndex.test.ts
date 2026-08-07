@@ -155,6 +155,18 @@ describe('atlasSearchIndex', () => {
       expect(warn).toHaveBeenCalled();
       expect(collection.createSearchIndex.mock.calls.length).toBe(allAtlasVectorIndexDefinitions().length);
     });
+
+    it('logs a created/already-existed/failed summary so a swallowed quota failure is visible without grepping', async () => {
+      const allNames = allAtlasVectorIndexDefinitions().map(d => d.name);
+      const collection = makeMockCollection([allNames[0]]);
+      collection.createSearchIndex.mockRejectedValueOnce(new Error('quota exceeded')).mockResolvedValue('created');
+      const conn = { collection: vi.fn(() => collection) } as any;
+      const log = vi.fn();
+      await ensureAtlasVectorSearchIndexes(conn, { log, warn: vi.fn() } as any);
+
+      const remaining = allNames.length - 1; // one already existed
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(`created=${remaining - 1} already-existed=1 failed=1`));
+    });
   });
 
   describe('getAtlasIndexStatus', () => {

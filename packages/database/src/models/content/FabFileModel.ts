@@ -196,9 +196,14 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     if (!target) return [];
 
     const { limit = 50 } = options;
-    // Atlas requires numCandidates >= limit; a wider candidate pool improves ANN recall at
-    // the cost of more work per query. 10x limit, floored at 100, capped at Atlas's 10_000 max.
-    const numCandidates = Math.min(10_000, Math.max(limit * 10, 100));
+    // Atlas applies `filter` DURING HNSW traversal, not as a post-filter, but recall still
+    // degrades as the filter gets more selective relative to the collection - and `fabfilechunks`
+    // holds every user's chunks, while `fileIds` here is usually a handful of files out of that
+    // whole collection. Scaling candidates with the file-set size (not just `limit`) keeps the
+    // pool wide enough for a highly selective query; the per-file multiplier is a starting point,
+    // not a measured constant - retune against a real lake if recall still looks low in practice.
+    // Floored at 100, capped at Atlas's 10_000 max.
+    const numCandidates = Math.min(10_000, Math.max(limit * 10, fileIds.length * 50, 100));
 
     const pipeline = [
       {
