@@ -1,5 +1,6 @@
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { extractLakeMemoryForBatch } from '@server/dataLakes/extractLakeMemory';
+import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@server/dataLakes/lakeMemoryRateLimit';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
@@ -9,6 +10,10 @@ const LakeMemoryPayload = z.object({
   batchId: z.string(),
   dataLakeId: z.string(),
   userId: z.string(),
+  // Continuation depth: 0 for the finalize-triggered run, incremented on each self-re-enqueue. Bounds
+  // the chain length (LAKE_MEMORY_MAX_CONTINUATION_SLICES) so a huge lake cannot chain unbounded. Absent
+  // on the finalize enqueue, so it defaults to 0.
+  slice: z.number().int().nonnegative().default(0),
 });
 
 /**
@@ -48,17 +53,33 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     );
 
     // Bounded continuation: a lake too large for one invocation persisted a cursor and asked for another
-    // run. Re-enqueue the SAME payload; the next invocation resumes from the cursor and re-checks the
-    // kill-switch at entry (above), so a flag flip between slices stops the chain. Progress is monotonic
-    // (the cursor only advances and a no-progress run returns hasMore:false), so the chain terminates.
+    // run. Re-enqueue the same payload with an incremented slice; the next invocation resumes from the
+    // cursor and re-checks the kill-switch at entry (above), so a flag flip between slices stops the
+    // chain. Progress is monotonic (the cursor only advances and a no-progress run returns hasMore:false),
+    // so the chain terminates - but a pathologically large lake could still chain far enough to run up a
+    // surprising LLM bill, so cap the chain length independently of that.
     if (hasMore) {
+      const nextSlice = payload.slice + 1;
+      if (nextSlice >= LAKE_MEMORY_MAX_CONTINUATION_SLICES) {
+        // The daily cap bounds how often a chain starts; this bounds how long one chain runs. Coverage is
+        // not lost: the persisted cursor lets the next batch finalize resume from where this chain
+        // stopped. Log loudly so an oversized lake surfaces here rather than on a bill.
+        logger.warn('[lakeMemory] continuation chain hit the slice ceiling; not enqueuing further', {
+          dataLakeId: payload.dataLakeId,
+          slice: payload.slice,
+          maxSlices: LAKE_MEMORY_MAX_CONTINUATION_SLICES,
+        });
+        return;
+      }
       await sendToQueue(Resource.lakeMemoryQueue.url, {
         batchId: payload.batchId,
         dataLakeId: payload.dataLakeId,
         userId: payload.userId,
+        slice: nextSlice,
       });
       logger.info('[lakeMemory] enqueued continuation run for the remaining docs', {
         dataLakeId: payload.dataLakeId,
+        slice: nextSlice,
       });
     }
   } catch (err) {

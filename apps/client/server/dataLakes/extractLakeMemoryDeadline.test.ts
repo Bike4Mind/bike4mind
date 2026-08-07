@@ -256,6 +256,41 @@ describe('extractLakeMemoryForBatch continuation + concurrency guard (#1501)', (
     expect(setLakeMemoryCursorMock).toHaveBeenCalledWith('lake-1', null);
   });
 
+  it('reads the continuation cursor from the post-claim snapshot, not the pre-claim read', async () => {
+    // The pre-claim findById can be stale: a run that just released the lease may have advanced the
+    // cursor in the window before this run wins the claim. Resuming from the stale value would re-scan
+    // (and re-bill) an already-covered slice. Pre-claim read reports cursor doc-0; the post-claim read
+    // reports the advanced doc-3, and the run must honor the latter.
+    const ids = ['doc-0', 'doc-1', 'doc-2', 'doc-3', 'doc-4'];
+    findIdsByDataLakeTagMock.mockResolvedValue(ids);
+    findAllByIdsMock.mockResolvedValue(ids.map(id => ({ id, fileName: `${id}.md`, tags: [] })));
+    findTextsByFabFileIdMock.mockResolvedValue([{ text: 'durable reference text' }]);
+    evaluateMock.mockResolvedValue([{ fact: 'a durable fact' }]);
+    findByIdMock
+      .mockResolvedValueOnce({
+        id: 'lake-1',
+        createdByUserId: 'owner-1',
+        datalakeTag: 'datalake:test',
+        lakeMemoryCursor: 'doc-0',
+      })
+      .mockResolvedValueOnce({
+        id: 'lake-1',
+        createdByUserId: 'owner-1',
+        datalakeTag: 'datalake:test',
+        lakeMemoryCursor: 'doc-3',
+      });
+    const logger = makeLogger();
+
+    const result = await extractLakeMemoryForBatch(
+      { dataLakeId: 'lake-1', getRemainingTimeInMillis: () => 10 * 60_000 },
+      logger as never
+    );
+
+    // Post-claim cursor doc-3 leaves only doc-4; the stale doc-0 would have reprocessed doc-1..doc-4.
+    expect(result.docsProcessed).toBe(1);
+    expect(appendMock).toHaveBeenCalledTimes(1);
+  });
+
   it('releases the lease even when every doc throws mid-run', async () => {
     seedLake(3);
     evaluateMock.mockRejectedValue(new Error('LLM 500'));

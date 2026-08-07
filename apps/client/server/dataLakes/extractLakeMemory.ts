@@ -177,7 +177,14 @@ export async function extractLakeMemoryForBatch(
     // Bounded continuation: resume AFTER the last document a prior interrupted run attempted (the
     // persisted cursor), not from the cap boundary - the deadline guard can end a run mid-slice, so the
     // cap is not the only place a run stops. Absent cursor = start from the beginning.
-    const cursor = lake.lakeMemoryCursor ?? null;
+    //
+    // Read the cursor from a POST-claim snapshot, not the pre-claim `lake` read above: in the window
+    // between that read and winning the lease, a run that just released the lease may have advanced the
+    // cursor. Resuming from the stale pre-claim value would re-scan (and re-bill the LLM for) an
+    // already-covered slice - the ledger de-dup keeps it correct, but the wasted cost is exactly what the
+    // lease exists to prevent. Falls back to the pre-claim value if the re-read fails.
+    const claimedLake = await dataLakeRepository.findById(lake.id).catch(() => null);
+    const cursor = (claimedLake ?? lake).lakeMemoryCursor ?? null;
     const remainingDocs = cursor ? liveDocs.filter(f => f.id > cursor) : liveDocs;
     const docs = remainingDocs.slice(0, MAX_DOCS_PER_RUN);
     if (remainingDocs.length > docs.length) {

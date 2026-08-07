@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Context, SQSEvent } from 'aws-lambda';
+import { LAKE_MEMORY_MAX_CONTINUATION_SLICES } from '@server/dataLakes/lakeMemoryRateLimit';
 
 const getSettingsValueMock = vi.fn();
 const extractMock = vi.fn();
@@ -59,8 +60,21 @@ describe('lakeMemoryExtraction handler (#1440)', () => {
 
     await dispatch(event(PAYLOAD), context());
 
-    // Same payload re-queued; the next invocation resumes from the persisted cursor.
-    expect(sendToQueueMock).toHaveBeenCalledWith('https://sqs.example/lake-memory', PAYLOAD);
+    // Same payload re-queued with the next slice; the next invocation resumes from the persisted cursor.
+    expect(sendToQueueMock).toHaveBeenCalledWith('https://sqs.example/lake-memory', { ...PAYLOAD, slice: 1 });
+  });
+
+  it('stops the continuation chain at the slice ceiling instead of re-enqueuing unbounded', async () => {
+    // A pathologically large lake keeps returning hasMore. The chain must not grow without limit: once
+    // the slice count reaches LAKE_MEMORY_MAX_CONTINUATION_SLICES the handler stops re-enqueuing and logs,
+    // leaving the persisted cursor for the next finalize to resume from.
+    getSettingsValueMock.mockResolvedValue(true);
+    extractMock.mockResolvedValue({ docsProcessed: 100, factsWritten: 250, hasMore: true });
+
+    await dispatch(event({ ...PAYLOAD, slice: LAKE_MEMORY_MAX_CONTINUATION_SLICES - 1 }), context());
+
+    expect(extractMock).toHaveBeenCalledTimes(1);
+    expect(sendToQueueMock).not.toHaveBeenCalled();
   });
 
   it('does not re-enqueue a continuation when the flag was turned off after enqueue', async () => {
