@@ -113,9 +113,10 @@ const defaultSettings: UserSettings = {
   showSplashCards: false,
 };
 
-// One id for every preferences-write failure, so a burst of failing toggles collapses into a
-// single toast instead of stacking one per key.
-const PREFERENCES_WRITE_TOAST_ID = 'preferences-write-failed';
+// One id for every settings-write failure - preferences AND language - so a burst of failures
+// collapses into a single toast instead of stacking one per key. Sharing it across both paths is
+// deliberate: the user only needs to know a save failed, not how many did.
+const SETTINGS_WRITE_TOAST_ID = 'settings-write-failed';
 
 /**
  * Whether a failed preferences write is worth telling the user about.
@@ -165,7 +166,7 @@ async function persistPreferences(
     // The write did not land, so undo the optimistic value whether or not we say so.
     rollback();
     if (shouldNotifyWriteFailure(error)) {
-      toast.error(writeFailureMessage(error, fallbackMessage), { id: PREFERENCES_WRITE_TOAST_ID });
+      toast.error(writeFailureMessage(error, fallbackMessage), { id: SETTINGS_WRITE_TOAST_ID });
     }
   }
 }
@@ -366,7 +367,6 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
       languageSyncedRef.current = false;
       return;
     }
-    if (!currentUser?.id) return;
     // TODO: route through updatePreferences to pick up experimentalFeatures deep-merge
     const fullPreferences = { ...currentUser.preferences, language: currentLanguage };
     void persistPreferences(currentUser.id, fullPreferences, {
