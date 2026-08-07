@@ -136,7 +136,11 @@ function shouldNotifyWriteFailure(error: unknown): boolean {
 
 /**
  * The server's own message when it sent a usable one (a rejected preference value says which
- * field it rejected), otherwise the caller's generic line. Never surfaces raw error text.
+ * field it rejected), otherwise the caller's generic line.
+ *
+ * Our backend's `error` strings are written to be read by users, so they are shown verbatim.
+ * What is never shown is client-side exception text (`error.message`, stack frames), which
+ * names internals and gives the user nothing to act on.
  */
 function writeFailureMessage(error: unknown, fallback: string): string {
   if (isAxiosError(error)) {
