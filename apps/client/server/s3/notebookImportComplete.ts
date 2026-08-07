@@ -214,23 +214,11 @@ const processNotebookImport = async (
       logger.info('Notebook import completed successfully', { userId, result });
       return result;
     } catch (error) {
+      // Reporting the failure happens in the caller, not here. A failed write aborts the
+      // transaction server-side, and every write in this scope picks that session up from
+      // async-local storage, so a status update or inbox message written here would itself fail
+      // and the user would hear nothing.
       logger.error('Notebook import failed', { userId, dataKey, error });
-
-      await markImportFailed(importHistoryJobId, userId, {
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-
-      await inboxRepository.createInboxMessage({
-        type: InboxType.COMMON,
-        title: '❌ Notebook Import Failed',
-        message: `Failed to import notebooks. Error: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }. Please try again or contact support if the issue persists.`,
-        receiverId: userId,
-        userId,
-      });
-
       throw error;
     } finally {
       await Promise.all([
@@ -353,6 +341,8 @@ export const dispatch = withContext(async (event, context, logger) => {
         error,
       });
 
+      // Outside the import's transaction, so these still land when it is the transaction that
+      // failed - which is the usual reason to be here.
       try {
         const existingJob = await importHistoryJobRepository.findByS3Key(key);
         if (existingJob && existingJob.status !== 'failed') {
@@ -361,8 +351,18 @@ export const dispatch = withContext(async (event, context, logger) => {
             stack: error instanceof Error ? error.stack : undefined,
           });
         }
+
+        await inboxRepository.createInboxMessage({
+          type: InboxType.COMMON,
+          title: '❌ Notebook Import Failed',
+          message: `Failed to import notebooks. Error: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }. Please try again or contact support if the issue persists.`,
+          receiverId: userId,
+          userId,
+        });
       } catch (markFailedErr) {
-        logger.error('Failed to mark import as failed:', markFailedErr);
+        logger.error('Failed to report import failure:', markFailedErr);
       }
     }
   }
