@@ -138,7 +138,14 @@ function periodicRunLength(tail: string, period: number): number {
 }
 
 export function createDegenerateStreamGuard(options: DegenerateStreamGuardOptions = {}): DegenerateStreamGuard {
-  const cfg = { ...DEFAULTS, ...options };
+  // Drop explicitly-undefined keys before merging: a caller spreading a partial
+  // config (`{ minRepeats: someMaybeUndefined }`) would otherwise overwrite a
+  // default with undefined, and every threshold comparison against undefined is
+  // false - inverting the guard into tripping on almost anything.
+  const provided = Object.fromEntries(
+    Object.entries(options).filter(([, value]) => value !== undefined)
+  ) as DegenerateStreamGuardOptions;
+  const cfg = { ...DEFAULTS, ...provided };
   let tail = '';
   let total = 0;
   let sinceCheck = 0;

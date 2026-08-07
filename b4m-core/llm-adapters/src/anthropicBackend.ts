@@ -1052,6 +1052,14 @@ export class AnthropicBackend implements ICompletionBackend {
     // Setup the actual API call with API-specific options
     try {
       const func: { name?: string; id?: string; parameters?: string }[] = [];
+      // Set when the degeneration guard aborts this turn's stream. Declared HERE,
+      // outside the streaming promise, because the tool-execution branch below is
+      // what must honour it: a turn that had already collected a tool call before
+      // degenerating would otherwise execute those tools and recurse, so the run
+      // would continue after the abort - overwriting the stop reason and replaying
+      // stale assistant content. The in-promise `degenerateVerdict` is invisible
+      // from there.
+      let degeneratedThisTurn = false;
       // Capture per-turn token usage so the post-stream tool-recursion site
       // can carry it forward as accumulated multi-turn billable usage.
       // Populated from the message_delta event inside the streaming Promise.
@@ -1188,6 +1196,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 const verdict = degenerateGuard.push(emitted);
                 if (!verdict) return;
                 degenerateVerdict = verdict;
+                degeneratedThisTurn = true;
                 // WARN, not error: this is a benign, handled abort that returns
                 // partial content - error severity would page LiveOps.
                 this.logger.warn('[AnthropicBackend] Stream aborted - output degenerated into repetition', {
@@ -1320,6 +1329,13 @@ export class AnthropicBackend implements ICompletionBackend {
                         if (func[event.index]) {
                           func[event.index].parameters += event.delta.partial_json || '';
                         }
+                        // Tool ARGUMENTS count against the same output ceiling, so a
+                        // model that degenerates while writing a tool call would
+                        // otherwise run to the ceiling unwatched. Feed these deltas
+                        // too; the abort then also skips tool execution (see
+                        // `degeneratedThisTurn`), since half-written arguments from a
+                        // cut-off stream must not be executed.
+                        checkDegenerate(event.delta.partial_json || '');
                         // Also accumulate in collected content
                         if (collectedContent[event.index] && collectedContent[event.index].type === 'tool_use') {
                           // We'll parse the complete JSON at the end
@@ -1384,6 +1400,31 @@ export class AnthropicBackend implements ICompletionBackend {
               } finally {
                 // CRITICAL: Always cleanup idle timer to prevent memory leaks
                 if (idleTimer) clearTimeout(idleTimer);
+              }
+
+              // Same shape as the idle-timeout check below: the guard aborted, but the
+              // stream ended naturally instead of throwing AbortError, so the catch
+              // block never ran. Emit the degeneration stop reason and stop here
+              // rather than falling through to the clean terminal path, which would
+              // report this turn as a normal finish.
+              if (degenerateVerdict) {
+                this.logger.warn('[AnthropicBackend] Stream ended after degeneration abort - reporting partial reply', {
+                  model,
+                  charsBeforeAbort: degenerateVerdict.totalChars,
+                });
+                await cb([], {
+                  toolsUsed,
+                  stopReason: DEGENERATE_STREAM_STOP_REASON,
+                  // Forward the accumulated usage the clean terminal path forwards.
+                  // Omitting it drops settlement to the local tokenizer estimate, and a
+                  // degenerate turn is the worst case for an estimate: real output is large.
+                  inputTokens:
+                    accumInputTokens + ((usageInfo as { input_tokens?: number } | undefined)?.input_tokens ?? 0),
+                  outputTokens:
+                    accumOutputTokens + ((usageInfo as { output_tokens?: number } | undefined)?.output_tokens ?? 0),
+                });
+                resolve();
+                return;
               }
 
               // If idle timeout was triggered but the stream ended naturally (e.g., HTTP connection dropped
@@ -1556,7 +1597,16 @@ export class AnthropicBackend implements ICompletionBackend {
                     charsBeforeAbort: degenerateVerdict.totalChars,
                     repeats: degenerateVerdict.repeats,
                   });
-                  await cb([], { toolsUsed, stopReason: DEGENERATE_STREAM_STOP_REASON });
+                  await cb([], {
+                    toolsUsed,
+                    stopReason: DEGENERATE_STREAM_STOP_REASON,
+                    // No usage forwarded here: this is the AbortError path, so the
+                    // terminal message_delta that carries provider usage never arrived
+                    // and `usageInfo` is out of scope. The post-loop site above (stream
+                    // ended without throwing) does forward it.
+                    inputTokens: accumInputTokens,
+                    outputTokens: accumOutputTokens,
+                  });
                   resolve();
                 } else if (isIdleTimeout) {
                   // Idle timeout - the stream was aborted due to no events being received
@@ -1587,8 +1637,13 @@ export class AnthropicBackend implements ICompletionBackend {
           })();
         });
 
-        // If there are tool calls, execute them and continue the conversation
-        if (func.some(f => f && f.name)) {
+        // If there are tool calls, execute them and continue the conversation.
+        // Skipped entirely when the guard aborted this turn: the point of the abort
+        // is that the run STOPS, and any tool call collected before the loop began
+        // is from a stream we deliberately cut off, so executing it and recursing
+        // would resume the run, overwrite the degeneration stop reason, and replay
+        // stale assistant content.
+        if (!degeneratedThisTurn && func.some(f => f && f.name)) {
           // Track tool usage first (including ID for history reconstruction)
           const toolCallNames = func.filter(t => t?.name).map(t => t.name);
           this.logger.info('[Tool Execution] Model requested tool calls', {

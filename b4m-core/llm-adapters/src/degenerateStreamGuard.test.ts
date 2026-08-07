@@ -138,3 +138,18 @@ describe('createDegenerateStreamGuard', () => {
     expect(['end_turn', 'stop', 'tool_use', 'stop_sequence']).not.toContain(DEGENERATE_STREAM_STOP_REASON);
   });
 });
+
+describe('option merging', () => {
+  it('ignores explicitly-undefined options instead of nulling a default', () => {
+    // A caller spreading a partial config would otherwise overwrite a threshold
+    // with undefined, and every comparison against undefined is false - which
+    // inverts the guard into tripping on almost anything.
+    const verdict = stream(healthyText(20_000), 40, {
+      minRepeats: undefined,
+      minRunChars: undefined,
+      maxPeriodChars: undefined,
+      enabled: undefined,
+    });
+    expect(verdict).toBeNull();
+  });
+});
