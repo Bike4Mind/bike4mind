@@ -18,9 +18,10 @@ import {
   DATALAKE_TAG_PREFIX,
   IMessage,
   KnowledgeType,
+  prefixArmTagNames,
   SupportedFabFileMimeTypes,
 } from '@bike4mind/common';
-import { fabFilesService } from '@bike4mind/services';
+import { fabFilesService, loadPrefixArmCandidateLakes } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
@@ -207,19 +208,37 @@ export const handler = withEventContext(async (event, logger) => {
       const fabfile = await fabFileRepository.findOne({ sessionId: session.id, userId: session.userId });
       if (fabfile) {
         // Re-summarizing must not change which data lakes this file belongs to. The tags here are
-        // the SESSION's, which never carry a `datalake:` meta-tag, and a whole-array tag write
-        // omitting one reads as leaving that lake - so without carrying the file's existing
-        // meta-tags through, every re-summarization would evict a lake-indexed summary (and fail
-        // outright for a summariser who cannot manage the lake).
+        // the SESSION's, which never carry a `datalake:` meta-tag or a prefix-arm content tag, and
+        // a whole-array tag write omitting one reads as leaving that lake - so without carrying
+        // the file's existing membership tags through, every re-summarization would evict a
+        // lake-indexed summary (and fail outright for a summariser who cannot manage the lake).
+        //
+        // Carries BOTH signals: the meta-tag, and any tag under a prefix arm the file's OWNER
+        // (session.userId - this query is anchored to it above) runs. Since #1263, a prefix tag
+        // alone is membership too, and reconcileLakeTags now gates its loss the same as a
+        // meta-tag's - this file must round-trip both or a re-summarization silently (or, for a
+        // non-managing summariser, loudly) evicts it.
         //
         // reconcileLakeTags may stamp a content tag for one of these lakes if this file lacks
         // one - never a NEW membership, since `lakeTags` only ever carries through tags already
         // stored on the file. Harmless either way: this FabFile always carries a sessionId,
         // which both tag counters exclude unless it is a curated notebook, so a stamp here could
         // never reach the tag tree.
-        const lakeTags = (fabfile.tags ?? []).filter(
-          t => typeof t?.name === 'string' && t.name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)
-        );
+        const storedTagNames = (fabfile.tags ?? [])
+          .map(t => t?.name)
+          .filter((name): name is string => typeof name === 'string');
+        const prefixArmLakes = await loadPrefixArmCandidateLakes([fabfile.userId], {
+          db: { dataLakes: dataLakeRepository },
+        });
+        const lakeTags = (fabfile.tags ?? []).filter(t => {
+          if (typeof t?.name !== 'string') return false;
+          if (t.name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)) return true;
+          return prefixArmLakes.some(
+            lake =>
+              lake.createdByUserId === fabfile.userId &&
+              prefixArmTagNames(storedTagNames, lake.fileTagPrefix).includes(t.name)
+          );
+        });
         await fabFilesService.updateFabFile(
           user,
           {

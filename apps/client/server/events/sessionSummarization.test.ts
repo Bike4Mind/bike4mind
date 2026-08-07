@@ -17,6 +17,9 @@ const h = vi.hoisted(() => ({
   publishTag: vi.fn(),
   logEvent: vi.fn(),
   upload: vi.fn(),
+  findPrefixArmLakes: vi.fn(
+    async () => [] as { createdByUserId: string; fileTagPrefix: string; datalakeTag: string }[]
+  ),
   session: {} as Record<string, unknown>,
 }));
 
@@ -42,7 +45,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   sessionRepository: { update: h.sessionUpdate },
   fabFileRepository: { findOne: h.findOne },
-  dataLakeRepository: {},
+  dataLakeRepository: { find: vi.fn() },
   adminSettingsRepository: {},
   userRepository: {},
   withTransaction: (fn: () => Promise<unknown>) => fn(),
@@ -50,6 +53,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: { updateFabFile: h.updateFabFile, createFabFile: h.createFabFile },
+  loadPrefixArmCandidateLakes: h.findPrefixArmLakes,
 }));
 
 vi.mock('@client/services/operationsModelService', () => ({
@@ -166,6 +170,30 @@ describe('sessionSummarization summary-file lookup', () => {
     expect(h.updateFabFile).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ id: 'fabfile-owner' }),
+      expect.anything()
+    );
+  });
+
+  // Since #1263, a prefix-arm content tag is lake membership on its own (no meta-tag required),
+  // and reconcileLakeTags now gates losing it the same as a meta-tag leave. Re-summarizing must
+  // carry that tag through too, or it silently evicts the file from a lake it never left.
+  it('carries a prefix-arm-only membership tag through re-summarization', async () => {
+    h.fabFileStore.push({
+      id: 'fabfile-owner',
+      userId: OWNER,
+      sessionId: SESSION_ID,
+      fileName: 'Notebook Summary.txt',
+      tags: [{ name: 'lk:invoices', strength: 1 }],
+    });
+    h.findPrefixArmLakes.mockResolvedValueOnce([
+      { createdByUserId: OWNER, fileTagPrefix: 'lk:', datalakeTag: 'datalake:lake1' },
+    ]);
+
+    await run();
+
+    expect(h.updateFabFile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tags: expect.arrayContaining([expect.objectContaining({ name: 'lk:invoices' })]) }),
       expect.anything()
     );
   });

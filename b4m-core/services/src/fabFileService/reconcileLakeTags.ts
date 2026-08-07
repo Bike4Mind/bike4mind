@@ -5,6 +5,7 @@ import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
 import { canManageLake, extractDataLakeMetaTags } from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import { removeFileFromLake, type MembershipActor, type MembershipLake } from '../dataLakeService/lakeMembership';
+import { findPrefixArmJoins, findPrefixArmLeaves } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 
 interface ReconcileLakeTagsAdapters {
@@ -14,6 +15,13 @@ interface ReconcileLakeTagsAdapters {
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
+  /**
+   * The FILE's owner - the prefix-arm membership predicate is anchored here, NOT the acting
+   * user (a shared-edit file's owner can differ from whoever is editing it). Omitted, it is
+   * resolved via `db.fabFiles.findById`, so a caller that forgets to pass it does not silently
+   * lose the check.
+   */
+  fileOwnerUserId?: string;
 }
 
 export interface LakeTagReconciliation {
@@ -68,7 +76,7 @@ export const reconcileLakeTags = async (
   fabFileId: string,
   currentTagNames: string[],
   desiredTags: { name: string; strength: number }[],
-  { db, logger }: ReconcileLakeTagsAdapters
+  { db, logger, fileOwnerUserId }: ReconcileLakeTagsAdapters
 ): Promise<LakeTagReconciliation> => {
   const ordinaryTags = desiredTags.filter(tag => !isMetaTag(tag.name));
   const desiredKeys = new Set(extractDataLakeMetaTags(desiredTags.map(tag => tag.name)));
@@ -130,8 +138,53 @@ export const reconcileLakeTags = async (
     previousTags: currentTagNames.map(name => ({ name })),
   });
 
+  // A lake a file belongs to ONLY via its prefix arm (no meta-tag) never appears in the loop
+  // above, which is keyed by meta-tag - so a write that drops that file's last tag under the
+  // lake's prefix would otherwise skip both the manage-rights gate and the stats recompute.
+  // Evaluated against `reconciledTags` (post-tagger), not the raw array: the fallback tagger can
+  // mint a nested stamp that re-satisfies a departing lake's prefix, and judging the leave
+  // against the pre-tagger array could evict a file the persisted array actually keeps as a
+  // member. Nothing has been persisted yet, so "every gate evaluated up front" still holds.
+  const cachedFile = fileOwnerUserId === undefined ? await db.fabFiles.findById(fabFileId) : undefined;
+  const owner = fileOwnerUserId ?? cachedFile?.userId;
+  const resultingTagNames = reconciledTags.map(t => t.name);
+  const prefixArmLeaves = await findPrefixArmLeaves(
+    { fileOwnerUserId: owner, currentTagNames, resultingTagNames },
+    { db }
+  );
+  for (const { lake } of prefixArmLeaves) {
+    if (!canManageLake(lake, actor)) {
+      throw new BadRequestError('Only the creator can remove files from this data lake');
+    }
+    assertLakeWritable(lake);
+  }
+  leaves.push(...prefixArmLeaves.map(l => l.lake));
+
+  // Force-carried, mirroring metaTagsToPersist above: removeFileFromLake checks membership
+  // against the STORED document, so if the persisted array already dropped every prefix tag it
+  // would see no member and treat the leave as a no-op race instead of actually revoking it.
+  // Restores each tag's ORIGINAL strength (a content tag's strength is user-meaningful, unlike a
+  // meta-tag's fixed DATALAKE_TAG_STRENGTH), so re-fetch the stored doc only on this rare path.
+  let departingPrefixTags: { name: string; strength: number }[] = [];
+  if (prefixArmLeaves.length > 0) {
+    const storedFile = cachedFile ?? (await db.fabFiles.findById(fabFileId));
+    const strengthByName = new Map((storedFile?.tags ?? []).map(t => [t.name, t.strength] as const));
+    departingPrefixTags = prefixArmLeaves
+      .flatMap(l => l.signalTags)
+      .map(name => ({ name, strength: strengthByName.get(name) ?? DATALAKE_TAG_STRENGTH }));
+  }
+
+  // The mirror case: a write that newly satisfies a lake's prefix arm is automatic membership
+  // (today's accepted model for content tags - no manage-rights gate), but it still needs its
+  // stats recomputed, or fileCount stays stale until an unrelated recompute happens to run.
+  const prefixArmJoins = await findPrefixArmJoins(
+    { fileOwnerUserId: owner, currentTagNames, resultingTagNames },
+    { db }
+  );
+  joins.push(...prefixArmJoins.map(j => j.lake));
+
   return {
-    tagsToPersist: reconciledTags,
+    tagsToPersist: departingPrefixTags.length > 0 ? [...reconciledTags, ...departingPrefixTags] : reconciledTags,
     commit: async () => {
       for (const lake of leaves) {
         try {
@@ -145,8 +198,9 @@ export const reconcileLakeTags = async (
           if (!(error instanceof NotFoundError)) throw error;
         }
       }
-      // Joins need no write here: the caller has already persisted the canonical meta-tag as part
-      // of `tagsToPersist`, and their gate ran above, before that write. They still need stats.
+      // Joins need no write here: the caller has already persisted the canonical meta-tag (or,
+      // for a prefix-arm join, the qualifying content tag) as part of `tagsToPersist`, and their
+      // gate (where one applies) ran above, before that write. They still need stats.
       for (const lake of [...leaves, ...joins]) {
         await recomputeLakeStats(lake, { db });
       }

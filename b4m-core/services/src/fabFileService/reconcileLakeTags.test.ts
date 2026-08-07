@@ -208,4 +208,161 @@ describe('reconcileLakeTags', () => {
 
     await expect(run(adapters, [], [tag(DATA_LAKES[0].datalakeTag, 1)])).rejects.toThrow(/read-only/i);
   });
+
+  describe('prefix-arm-only membership (no meta-tag on the file)', () => {
+    const withPrefixLakes = (storedTags: { name: string; strength: number }[], prefixLakes: IDataLakeDocument[]) => {
+      const adapters = makeAdapters(storedTags, null);
+      adapters.db.dataLakes.find = vi.fn().mockResolvedValue(prefixLakes);
+      return adapters;
+    };
+
+    // The headline bug: the file carries no meta-tag for this lake at all, only its prefixed
+    // content tag - so the caller dropping it must still be gated and recomputed exactly like a
+    // meta-tag leave.
+    it('leaves a lake whose sole membership signal is a dropped prefix tag', async () => {
+      const adapters = withPrefixLakes([tag('lk:invoices', 1)], [lake()]);
+
+      const result = await run(adapters, ['lk:invoices'], []);
+      await result.commit();
+
+      // removeFileFromLake pulls the meta-tag unconditionally alongside the prefix tags (a no-op
+      // for a name the file never carried) - see its own doc comment on the atomic $pull.
+      expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+    });
+
+    it('refuses a prefix-arm leave by a caller who cannot manage the lake, before any write', async () => {
+      // The file is owned by (and the lake created by) 'owner' - a DIFFERENT actor ('editor', with
+      // shared edit access to the file but no lake-manage rights) is the one dropping the tag.
+      const adapters = withPrefixLakes([tag('lk:invoices', 1)], [lake({ createdByUserId: 'owner' })]);
+
+      await expect(
+        reconcileLakeTags({ userId: 'editor', isAdmin: false }, 'f1', ['lk:invoices'], [], adapters as any)
+      ).rejects.toThrow(/only the creator can remove/i);
+      expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+    });
+
+    it("an admin may drop another user's sole prefix-arm tag", async () => {
+      const adapters = withPrefixLakes([tag('lk:invoices', 1)], [lake({ createdByUserId: 'someone-else' })]);
+      adapters.db.fabFiles.findById = vi
+        .fn()
+        .mockResolvedValue({ id: 'f1', userId: 'someone-else', tags: [tag('lk:invoices', 1)] });
+
+      const result = await reconcileLakeTags(
+        { userId: 'admin', isAdmin: true },
+        'f1',
+        ['lk:invoices'],
+        [],
+        adapters as any
+      );
+      await result.commit();
+
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+    });
+
+    it('keeps membership when a sibling tag under the same prefix survives', async () => {
+      const adapters = withPrefixLakes([tag('lk:a', 1), tag('lk:b', 1)], [lake()]);
+
+      const result = await run(adapters, ['lk:a', 'lk:b'], [tag('lk:b', 1)]);
+      await result.commit();
+
+      expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+    });
+
+    it('force-carries the departing prefix tag into tagsToPersist, at its original strength', async () => {
+      const adapters = withPrefixLakes([tag('lk:invoices', 3)], [lake()]);
+
+      const result = await run(adapters, ['lk:invoices'], []);
+
+      expect(result.tagsToPersist).toEqual([tag('lk:invoices', 3)]);
+    });
+
+    it('does not double-enqueue a lake already leaving via its meta-tag', async () => {
+      const stored = [tag('datalake:lake', 1), tag('lk:invoices', 1)];
+      const adapters = withPrefixLakes(stored, [lake()]);
+      adapters.db.dataLakes.findByDatalakeTag = vi.fn().mockResolvedValue(lake());
+
+      const result = await run(adapters, ['datalake:lake', 'lk:invoices'], []);
+      await result.commit();
+
+      // One recompute, not two, for the same lake.
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledTimes(1);
+    });
+
+    it('anchors on the file OWNER, not the acting user', async () => {
+      const adapters = withPrefixLakes([tag('lk:invoices', 1)], [lake({ createdByUserId: 'owner' })]);
+      adapters.db.fabFiles.findById = vi
+        .fn()
+        .mockResolvedValue({ id: 'f1', userId: 'someone-else', tags: [tag('lk:invoices', 1)] });
+
+      // Actor is 'owner' (manages the lake), but the FILE is owned by someone-else, so this lake
+      // is never a candidate for this file and no leave fires.
+      const result = await reconcileLakeTags(owner, 'f1', ['lk:invoices'], [], adapters as any);
+      await result.commit();
+
+      expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    });
+
+    it('two lakes sharing one prefix both recompute on a shared leave', async () => {
+      const a = lake({ id: 'a', datalakeTag: 'datalake:a' });
+      const b = lake({ id: 'b', datalakeTag: 'datalake:b' });
+      const adapters = withPrefixLakes([tag('lk:shared', 1)], [a, b]);
+
+      const result = await run(adapters, ['lk:shared'], []);
+      await expect(result.commit()).resolves.toBeUndefined();
+
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledTimes(2);
+    });
+
+    it('judges the leave against the post-fallback-tagger array, not the raw desired array', async () => {
+      // Nested prefixes: dropping a:x:foo but adding a:bar - the outer lake (a:) is still
+      // satisfied by a:bar, so it must NOT be treated as a leave even though the raw payload
+      // never explicitly re-lists it.
+      const outer = lake({ id: 'outer', datalakeTag: 'datalake:outer', fileTagPrefix: 'a:' });
+      const adapters = withPrefixLakes([tag('a:x:foo', 1)], [outer]);
+
+      const result = await run(adapters, ['a:x:foo'], [tag('a:bar', 1)]);
+      await result.commit();
+
+      expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    });
+
+    it('issues no dataLakes.find call for a plain edit whose dropped names contain no colon', async () => {
+      const adapters = withPrefixLakes([tag('plain', 1)], [lake()]);
+
+      const result = await run(adapters, ['plain'], []);
+      await result.commit();
+
+      expect(adapters.db.dataLakes.find).not.toHaveBeenCalled();
+    });
+
+    it('resolves the owner via findById when fileOwnerUserId is omitted', async () => {
+      const adapters = withPrefixLakes([tag('lk:invoices', 1)], [lake()]);
+
+      const result = await reconcileLakeTags(owner, 'f1', ['lk:invoices'], [], {
+        db: adapters.db,
+        logger: undefined,
+      } as any);
+      await result.commit();
+
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+    });
+
+    it('recomputes stats on a prefix-arm join with no manage-rights gate', async () => {
+      const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner' })]);
+
+      const result = await reconcileLakeTags(
+        { userId: 'not-the-owner', isAdmin: false },
+        'f1',
+        [],
+        [tag('lk:invoices', 1)],
+        adapters as any
+      );
+      await result.commit();
+
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+    });
+  });
 });
