@@ -12,7 +12,6 @@ import { AnalyticsErrorCard } from '../AnalyticsErrorCard';
 dayjs.extend(isSameOrBefore);
 
 interface DailyReportTabProps {
-  rawData: any[];
   loading: boolean;
   error?: unknown;
   onRefresh: () => void;
